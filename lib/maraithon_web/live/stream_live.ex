@@ -1,34 +1,63 @@
 defmodule MaraithonWeb.StreamLive do
   use MaraithonWeb, :live_view
 
+  alias Maraithon.BriefingSchedules
+  alias Maraithon.Timezones
   alias Maraithon.Todos
 
   @event_limit 200
 
   @impl true
   def mount(_params, _session, socket) do
-    events = Todos.list_activity_for_user(socket.assigns.current_user.id, limit: @event_limit)
+    user_id = socket.assigns.current_user.id
+    offset_hours = timezone_offset_hours(user_id)
+    events = Todos.list_activity_for_user(user_id, limit: @event_limit)
 
-    {:ok, assign(socket, :days, group_by_day(events))}
+    {:ok,
+     socket
+     |> assign(:current_path, "/stream")
+     |> assign(:offset_hours, offset_hours)
+     |> assign(:days, group_by_day(events, offset_hours))}
   end
 
-  defp group_by_day(events) do
+  defp timezone_offset_hours(user_id) do
+    case BriefingSchedules.summarize_for_prompt(user_id) do
+      %{timezone_name: name, timezone_offset_hours: offset_hours} ->
+        Timezones.offset_at(name, DateTime.utc_now(), offset_hours) ||
+          Timezones.normalize_offset(offset_hours)
+
+      _other ->
+        0
+    end
+  rescue
+    _exception -> 0
+  end
+
+  defp local_time(datetime, offset_hours) do
+    DateTime.add(datetime, offset_hours, :hour)
+  end
+
+  defp group_by_day(events, offset_hours) do
+    today = DateTime.utc_now() |> local_time(offset_hours) |> DateTime.to_date()
+
     events
-    |> Enum.group_by(fn event -> DateTime.to_date(event.occurred_at) end)
+    |> Enum.group_by(fn event ->
+      event.occurred_at |> local_time(offset_hours) |> DateTime.to_date()
+    end)
     |> Enum.sort_by(fn {date, _events} -> date end, {:desc, Date})
     |> Enum.map(fn {date, day_events} ->
       %{
         date: date,
-        title: day_title(date),
+        title: day_title(date, today),
         events: Enum.sort_by(day_events, & &1.occurred_at, {:desc, DateTime})
       }
     end)
   end
 
-  defp day_title(date) do
+  defp day_title(date, today) do
     cond do
-      date == Date.utc_today() -> "Today"
-      date == Date.add(Date.utc_today(), -1) -> "Yesterday"
+      date == today -> "Today"
+      date == Date.add(today, -1) -> "Yesterday"
       true -> Calendar.strftime(date, "%A, %b %-d")
     end
   end
@@ -55,7 +84,8 @@ defmodule MaraithonWeb.StreamLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+    <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+      <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <h1 class="text-2xl font-semibold text-zinc-900">Stream</h1>
       <p class="mt-1 text-sm text-zinc-500">
         Work items being added and checked off, by you or by Maraithon.
@@ -78,13 +108,17 @@ defmodule MaraithonWeb.StreamLive do
                 {event_note(event)}
               </p>
               <p class="mt-0.5 text-xs text-zinc-400">
-                {event_phrase(event)} · {Calendar.strftime(event.occurred_at, "%-I:%M %p")}
+                {event_phrase(event)} · {Calendar.strftime(
+                  local_time(event.occurred_at, @offset_hours),
+                  "%-I:%M %p"
+                )}
               </p>
             </div>
           </li>
         </ul>
       </section>
-    </div>
+      </div>
+    </Layouts.app>
     """
   end
 end

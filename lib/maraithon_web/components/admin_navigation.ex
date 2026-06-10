@@ -19,6 +19,7 @@ defmodule MaraithonWeb.AdminNavigation do
     %{label: "Work", path: "/todos", icon: :todos},
     %{label: "Stream", path: "/stream", icon: :insights},
     %{label: "People", path: "/operator/people", icon: :people},
+    %{label: "Chat", path: "/chat", icon: :search},
     %{label: "Dashboard", path: "/dashboard", icon: :home},
     %{label: "Insights", path: "/insights", icon: :insights},
     %{label: "Agents", path: "/agents", icon: :agents},
@@ -31,7 +32,8 @@ defmodule MaraithonWeb.AdminNavigation do
     %{label: "Today", path: "/briefing", icon: :home},
     %{label: "Work", path: "/todos", icon: :todos},
     %{label: "Stream", path: "/stream", icon: :insights},
-    %{label: "People", path: "/operator/people", icon: :people}
+    %{label: "People", path: "/operator/people", icon: :people},
+    %{label: "Chat", path: "/chat", icon: :search}
   ]
 
   @admin_nav [
@@ -129,7 +131,7 @@ defmodule MaraithonWeb.AdminNavigation do
         class="fixed inset-x-0 bottom-0 z-30 border-t border-zinc-950/10 bg-white/95 px-2 pt-1.5 pb-[calc(0.35rem+env(safe-area-inset-bottom))] shadow-[0_-1px_12px_rgba(24,24,27,0.08)] backdrop-blur lg:hidden"
         aria-label="Primary navigation"
       >
-        <div class="mx-auto grid max-w-md grid-cols-5 gap-1">
+        <div class="mx-auto grid max-w-md grid-cols-6 gap-1">
           <.link
             :for={item <- @mobile_nav}
             navigate={item.path}

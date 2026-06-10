@@ -10,7 +10,7 @@ defmodule MaraithonWeb.BriefingLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, refresh(socket)}
+    {:ok, socket |> assign(:current_path, "/briefing") |> refresh()}
   end
 
   @impl true
@@ -96,7 +96,8 @@ defmodule MaraithonWeb.BriefingLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+    <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+      <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div class="flex items-baseline justify-between">
         <div>
           <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Morning briefing</p>
@@ -120,7 +121,17 @@ defmodule MaraithonWeb.BriefingLive do
         Your first morning briefing will appear here after the next scheduled run.
       </div>
 
-      <div :if={today?(@selected_brief)} class="mt-8 space-y-8">
+      <p
+        :if={@selected_brief != nil and @selected_brief == @latest_brief and not today?(@selected_brief)}
+        class="mt-3 text-sm text-zinc-500"
+      >
+        No briefing yet today — this is your most recent one. The next briefing arrives on the morning schedule.
+      </p>
+
+      <div :if={@selected_brief == @latest_brief} class="mt-8 space-y-8">
+        <h2 class="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Your open work right now
+        </h2>
         <section :for={group <- @groups}>
           <div class="flex items-center gap-2">
             <h2 class="text-sm font-semibold text-zinc-900">{group.title}</h2>
@@ -180,7 +191,8 @@ defmodule MaraithonWeb.BriefingLive do
           </li>
         </ul>
       </section>
-    </div>
+      </div>
+    </Layouts.app>
     """
   end
 end

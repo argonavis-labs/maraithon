@@ -25,6 +25,7 @@ defmodule MaraithonWeb.TodoChatLive do
           {:ok, %{thread: thread}} ->
             socket =
               socket
+              |> assign(:current_path, "/todos")
               |> assign(:todo, todo)
               |> assign(:thread, thread)
               |> assign(:polls_left, 0)
@@ -125,7 +126,8 @@ defmodule MaraithonWeb.TodoChatLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="mx-auto flex h-[calc(100vh-8rem)] max-w-3xl flex-col px-4 py-6 sm:px-6">
+    <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+      <div class="mx-auto flex h-[calc(100vh-10rem)] max-w-3xl flex-col px-4 py-6 sm:px-6">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
           <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Work item chat</p>
@@ -198,7 +200,8 @@ defmodule MaraithonWeb.TodoChatLive do
           Send
         </button>
       </.form>
-    </div>
+      </div>
+    </Layouts.app>
     """
   end
 end
