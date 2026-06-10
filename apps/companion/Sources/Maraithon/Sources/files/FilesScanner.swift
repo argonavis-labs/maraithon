@@ -32,9 +32,16 @@ struct FilesScanner: Sendable {
     /// gzip bytes on the wire and base64 inflation along the way.
     static let maxExtractedBytes: Int = 200 * 1024
 
-    /// Filesystem roots scanned for files. Default: `~/Documents`,
+    /// Roots injected by tests; nil means "follow the user's folder
+    /// settings live" so edits apply on the next cycle without a restart.
+    private let injectedRoots: [URL]?
+
+    /// Filesystem roots scanned for files. Default: the user's configured
+    /// folders (`FilesFolderSettings`), falling back to `~/Documents`,
     /// `~/Desktop`, `~/Downloads`. Tests inject synthetic roots.
-    let roots: [URL]
+    var roots: [URL] {
+        injectedRoots ?? FilesFolderSettings.effectiveRoots()
+    }
 
     /// Maximum number of files emitted per scan call. The source
     /// passes this through from its batch-limit configuration so the
@@ -46,11 +53,11 @@ struct FilesScanner: Sendable {
     let clock: @Sendable () -> Date
 
     init(
-        roots: [URL] = FilesScanner.defaultRoots,
+        roots: [URL]? = nil,
         limit: Int = 200,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.roots = roots
+        self.injectedRoots = roots
         self.limit = limit
         self.clock = clock
     }

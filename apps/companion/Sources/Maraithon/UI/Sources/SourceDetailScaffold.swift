@@ -15,6 +15,9 @@ struct SourceDetailScaffold: View {
     var syncedItemSingular: String = "item"
     var syncedItemPlural: String = "items"
     var emptyDescription: String = "After the first check, this view shows recent activity and recent checks."
+    /// Optional source-specific section (e.g. the Files folder picker),
+    /// rendered between capabilities and stats on the healthy view.
+    var extraSection: AnyView?
 
     @Environment(AppEnvironment.self) var env
 
@@ -46,6 +49,10 @@ struct SourceDetailScaffold: View {
                 overviewSection
                 Divider()
                 capabilitiesSection
+                if let extraSection {
+                    Divider()
+                    extraSection
+                }
                 Divider()
                 statsSection
                 Divider()
