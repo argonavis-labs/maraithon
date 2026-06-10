@@ -11,6 +11,7 @@ defmodule Maraithon.Briefs.Email do
 
   alias Maraithon.AppUrl
   alias Maraithon.Briefs.Brief
+  alias Maraithon.Briefs.Markdown
   alias Maraithon.EmailDelivery
   alias Maraithon.Repo
 
@@ -96,7 +97,7 @@ defmodule Maraithon.Briefs.Email do
 
       #{summary}
 
-      #{body}
+      #{Markdown.to_text(body)}
 
       Open your briefing and take action:
       #{briefing_url}
@@ -110,7 +111,7 @@ defmodule Maraithon.Briefs.Email do
               <p style="margin:0 0 4px;font-size:13px;letter-spacing:0.04em;text-transform:uppercase;color:#71717a;">Morning briefing</p>
               <h1 style="margin:0 0 12px;font-size:22px;line-height:1.3;color:#18181b;">#{escape(title)}</h1>
               <p style="margin:0 0 20px;font-size:15px;line-height:1.5;color:#3f3f46;">#{escape(summary)}</p>
-              <div style="font-size:14px;line-height:1.6;color:#3f3f46;">#{paragraphs(body)}</div>
+              <div style="font-size:14px;line-height:1.6;color:#3f3f46;">#{Markdown.to_html(body)}</div>
               <a href="#{briefing_url}" style="display:inline-block;margin-top:24px;background:#18181b;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;padding:12px 24px;border-radius:8px;">Open your briefing</a>
             </div>
             <p style="margin:16px 4px 0;font-size:12px;color:#a1a1aa;">Sent by Maraithon, your chief of staff.</p>
@@ -120,17 +121,6 @@ defmodule Maraithon.Briefs.Email do
       """
     }
   end
-
-  defp paragraphs(body) when is_binary(body) do
-    body
-    |> String.split(~r/\n{2,}/, trim: true)
-    |> Enum.map(fn paragraph ->
-      "<p style=\"margin:0 0 12px;\">#{paragraph |> escape() |> String.replace("\n", "<br/>")}</p>"
-    end)
-    |> Enum.join()
-  end
-
-  defp paragraphs(_body), do: ""
 
   defp escape(value) when is_binary(value) do
     value

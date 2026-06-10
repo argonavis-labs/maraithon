@@ -95,6 +95,7 @@ enum ProductionDataSync {
         if let contactsByID {
             todo.contact = relatedContact(for: remoteTodo, contactsByID: contactsByID)
         }
+        todo.sourceSystem = cleanedText(remoteTodo.source)
         // A cards-omitted refresh must not wipe existing decision-card context; those
         // fields are filled by the background card pass.
         if includeCards {
@@ -242,6 +243,7 @@ enum ProductionDataSync {
             nextBestAction: cleanedText(remoteTodo.actionCard?.nextBestAction),
             draftPreview: cleanedText(remoteTodo.actionCard?.draftPreview),
             evidenceExcerpt: cleanedText(remoteTodo.actionCard?.evidenceExcerpt),
+            sourceSystem: cleanedText(remoteTodo.source),
             sourceProvider: cleanedText(remoteTodo.actionCard?.sourceAction?.provider),
             sourceProviderLabel: cleanedText(remoteTodo.actionCard?.sourceAction?.providerLabel),
             sourceOpenURLString: cleanedText(remoteTodo.actionCard?.sourceAction?.openURL),

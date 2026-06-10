@@ -11,6 +11,7 @@ struct TodayView: View {
     @State private var refreshErrorMessage: String?
     @State private var actionErrorMessage: String?
     @State private var isRefreshing = false
+    @State private var briefs: [MobileAPIClient.RemoteBrief] = []
 
     private var metrics: TodayMetrics {
         TodayWorkEngine.metrics(todos: todos)
@@ -26,6 +27,25 @@ struct TodayView: View {
 
     private var recentThreads: [ChatThread] {
         Array(threads.prefix(3))
+    }
+
+    private var todayBrief: MobileAPIClient.RemoteBrief? {
+        briefs.first { brief in
+            guard let date = brief.referenceDate else { return false }
+            return Calendar.current.isDateInToday(date)
+        }
+    }
+
+    private var previousBriefs: [MobileAPIClient.RemoteBrief] {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        return briefs.filter { brief in
+            guard let date = brief.referenceDate else { return false }
+            return !Calendar.current.isDateInToday(date) && date >= cutoff
+        }
+    }
+
+    private var briefingGroups: [BriefingGroups.Group] {
+        BriefingGroups.groups(todos: todos)
     }
 
     var body: some View {
@@ -58,16 +78,8 @@ struct TodayView: View {
                     }
                 }
 
-                Section {
-                    TodayBriefCard(
-                        greeting: greeting,
-                        brief: brief
-                    ) {
-                        navigate(to: brief.destination)
-                    }
-                }
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
-                .listRowSeparator(.hidden)
+                briefingHeroSection
+                briefingGroupSections
 
                 Section(TodayViewCopy.actionSectionTitle) {
                     VStack(spacing: 1) {
@@ -140,6 +152,8 @@ struct TodayView: View {
                     }
                 }
 
+                previousBriefingsSection
+
                 Section(TodayViewCopy.recentChatsSectionTitle) {
                     if recentThreads.isEmpty {
                         ContentUnavailableView(
@@ -199,6 +213,69 @@ struct TodayView: View {
             modelContext: modelContext,
             includeCards: true
         )
+
+        await refreshBriefs()
+    }
+
+    private func refreshBriefs() async {
+        guard let sessionToken = sessionStore.user?.sessionToken else { return }
+
+        if let fetched = try? await MobileAPIClient().listBriefs(sessionToken: sessionToken) {
+            briefs = fetched
+        }
+    }
+
+    private var briefingHeroSection: some View {
+        Section {
+            if let todayBrief {
+                NavigationLink {
+                    BriefDetailView(brief: todayBrief)
+                } label: {
+                    MorningBriefingCard(brief: todayBrief)
+                }
+                .buttonStyle(.plain)
+            } else {
+                TodayBriefCard(
+                    greeting: greeting,
+                    brief: brief
+                ) {
+                    navigate(to: brief.destination)
+                }
+            }
+        }
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
+        .listRowSeparator(.hidden)
+    }
+
+    private var briefingGroupSections: some View {
+        ForEach(briefingGroups) { group in
+            Section(group.title) {
+                ForEach(group.todos) { todo in
+                    NavigationLink {
+                        TodoDetailView(todo: todo)
+                    } label: {
+                        TodoRow(todo: todo) {
+                            completeFocusTodo(todo)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var previousBriefingsSection: some View {
+        if !previousBriefs.isEmpty {
+            Section(MorningBriefingCopy.previousSectionTitle) {
+                ForEach(previousBriefs) { pastBrief in
+                    NavigationLink {
+                        BriefDetailView(brief: pastBrief)
+                    } label: {
+                        PreviousBriefRow(brief: pastBrief)
+                    }
+                }
+            }
+        }
     }
 
     private func navigate(to destination: TodayDestination) {

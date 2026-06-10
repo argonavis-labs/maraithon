@@ -3,6 +3,7 @@ defmodule MaraithonWeb.BriefingLive do
 
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Digest
+  alias Maraithon.Briefs.Markdown
   alias Maraithon.Todos
 
   @history_limit 14
@@ -92,15 +93,6 @@ defmodule MaraithonWeb.BriefingLive do
     end
   end
 
-  defp body_paragraphs(nil), do: []
-
-  defp body_paragraphs(body) when is_binary(body) do
-    body
-    |> String.split(~r/\n{2,}/, trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-  end
-
   @impl true
   def render(assigns) do
     ~H"""
@@ -119,8 +111,8 @@ defmodule MaraithonWeb.BriefingLive do
 
       <div :if={@selected_brief} class="mt-4 rounded-xl border border-zinc-200 bg-white p-6">
         <p class="text-sm font-medium text-zinc-700">{@selected_brief.summary}</p>
-        <div class="mt-4 space-y-3 text-sm leading-6 text-zinc-600">
-          <p :for={paragraph <- body_paragraphs(@selected_brief.body)}>{paragraph}</p>
+        <div class="mt-4 text-sm leading-6 text-zinc-600">
+          {Phoenix.HTML.raw(Markdown.to_html(@selected_brief.body))}
         </div>
       </div>
 

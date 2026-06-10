@@ -19,6 +19,7 @@ final class TodoItem {
     var nextBestAction: String?
     var draftPreview: String?
     var evidenceExcerpt: String?
+    var sourceSystem: String?
     var sourceProvider: String?
     var sourceProviderLabel: String?
     var sourceOpenURLString: String?
@@ -51,6 +52,7 @@ final class TodoItem {
         nextBestAction: String? = nil,
         draftPreview: String? = nil,
         evidenceExcerpt: String? = nil,
+        sourceSystem: String? = nil,
         sourceProvider: String? = nil,
         sourceProviderLabel: String? = nil,
         sourceOpenURLString: String? = nil,
@@ -77,6 +79,7 @@ final class TodoItem {
         self.nextBestAction = nextBestAction
         self.draftPreview = draftPreview
         self.evidenceExcerpt = evidenceExcerpt
+        self.sourceSystem = sourceSystem
         self.sourceProvider = sourceProvider
         self.sourceProviderLabel = sourceProviderLabel
         self.sourceOpenURLString = sourceOpenURLString

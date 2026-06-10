@@ -112,6 +112,7 @@ struct MobileAPIClient: Sendable {
 
     struct RemoteTodo: Decodable, Equatable, Sendable {
         let id: String
+        let source: String?
         let title: String
         let summary: String?
         let nextAction: String?
@@ -125,6 +126,7 @@ struct MobileAPIClient: Sendable {
 
         enum CodingKeys: String, CodingKey {
             case id
+            case source
             case title
             case summary
             case nextAction = "next_action"
@@ -140,6 +142,7 @@ struct MobileAPIClient: Sendable {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(String.self, forKey: .id)
+            source = try container.decodeIfPresent(String.self, forKey: .source)
             title = try container.decode(String.self, forKey: .title)
             summary = try container.decodeIfPresent(String.self, forKey: .summary)
             nextAction = try container.decodeIfPresent(String.self, forKey: .nextAction)
@@ -154,6 +157,7 @@ struct MobileAPIClient: Sendable {
 
         init(
             id: String,
+            source: String? = nil,
             title: String,
             summary: String?,
             nextAction: String?,
@@ -166,6 +170,7 @@ struct MobileAPIClient: Sendable {
             relatedPeople: [RemoteRelatedPerson] = []
         ) {
             self.id = id
+            self.source = source
             self.title = title
             self.summary = summary
             self.nextAction = nextAction
@@ -177,6 +182,64 @@ struct MobileAPIClient: Sendable {
             self.actionCard = actionCard
             self.relatedPeople = relatedPeople
         }
+    }
+
+    struct RemoteBrief: Decodable, Equatable, Identifiable, Sendable {
+        let id: String
+        let cadence: String
+        let title: String
+        let summary: String?
+        let body: String?
+        let status: String
+        let scheduledFor: Date?
+        let sentAt: Date?
+        let linkedTodoIDs: [String]
+        let insertedAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case cadence
+            case title
+            case summary
+            case body
+            case status
+            case scheduledFor = "scheduled_for"
+            case sentAt = "sent_at"
+            case linkedTodoIDs = "linked_todo_ids"
+            case insertedAt = "inserted_at"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            cadence = try container.decode(String.self, forKey: .cadence)
+            title = try container.decode(String.self, forKey: .title)
+            summary = try container.decodeIfPresent(String.self, forKey: .summary)
+            body = try container.decodeIfPresent(String.self, forKey: .body)
+            status = try container.decodeIfPresent(String.self, forKey: .status) ?? "pending"
+            scheduledFor = try container.decodeIfPresent(Date.self, forKey: .scheduledFor)
+            sentAt = try container.decodeIfPresent(Date.self, forKey: .sentAt)
+            linkedTodoIDs = try container.decodeIfPresent([String].self, forKey: .linkedTodoIDs) ?? []
+            insertedAt = try container.decodeIfPresent(Date.self, forKey: .insertedAt)
+        }
+
+        var referenceDate: Date? {
+            scheduledFor ?? insertedAt
+        }
+    }
+
+    private struct BriefsResponse: Decodable, Sendable {
+        let briefs: [RemoteBrief]
+    }
+
+    func listBriefs(sessionToken: String, limit: Int = 8) async throws -> [RemoteBrief] {
+        let clampedLimit = max(1, min(limit, 30))
+        let response: BriefsResponse = try await send(
+            path: "/briefs?limit=\(clampedLimit)",
+            sessionToken: sessionToken,
+            responseType: BriefsResponse.self
+        )
+        return response.briefs
     }
 
     struct RemoteRelatedPerson: Decodable, Equatable, Sendable {
