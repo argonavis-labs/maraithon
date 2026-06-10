@@ -12,22 +12,26 @@ defmodule MaraithonWeb.AdminNavigation do
   import MaraithonWeb.Components.CommandPalette
   import MaraithonWeb.Components.Sidebar
 
+  # Mirrors the mobile app's tab order (Today, Work, Stream, People) so
+  # the two surfaces feel like one product; web-only utilities follow.
   @primary_nav [
-    %{label: "Dashboard", path: "/dashboard", icon: :home},
+    %{label: "Today", path: "/briefing", icon: :home},
     %{label: "Work", path: "/todos", icon: :todos},
+    %{label: "Stream", path: "/stream", icon: :insights},
+    %{label: "People", path: "/operator/people", icon: :people},
+    %{label: "Dashboard", path: "/dashboard", icon: :home},
     %{label: "Insights", path: "/insights", icon: :insights},
     %{label: "Automations", path: "/agents", icon: :agents},
     %{label: "Apps", path: "/connectors", icon: :connectors},
-    %{label: "People", path: "/operator/people", icon: :people},
     %{label: "Saved Context", path: "/operator/memories", icon: :memory},
     %{label: "How it works", path: "/how-it-works", icon: :book}
   ]
 
   @mobile_nav [
-    %{label: "Home", path: "/dashboard", icon: :home},
+    %{label: "Today", path: "/briefing", icon: :home},
     %{label: "Work", path: "/todos", icon: :todos},
-    %{label: "People", path: "/operator/people", icon: :people},
-    %{label: "Automations", path: "/agents", icon: :agents}
+    %{label: "Stream", path: "/stream", icon: :insights},
+    %{label: "People", path: "/operator/people", icon: :people}
   ]
 
   @admin_nav [
