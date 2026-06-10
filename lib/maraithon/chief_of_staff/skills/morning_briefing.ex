@@ -53,6 +53,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @prompt_default_list_limit 500
   @prompt_gmail_list_limit 50
   @prompt_gmail_body_limit 1_500
+  # Hard caps on list sections embedded in the briefing prompt. Fetch limits
+  # bound the database reads; these bound the context window — without them
+  # sections like slack mentions and local files shipped wholesale.
+  @prompt_section_limit 60
+  @prompt_mentions_limit 40
+  @prompt_voice_memos_limit 25
   @prompt_gmail_snippet_limit 400
   @prompt_meeting_list_limit 60
   @prompt_meeting_string_limit 6_000
@@ -644,6 +650,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "tomorrow_first_event" => tomorrow_first_event,
         "upcoming_local" =>
           local_calendar_events
+          |> Enum.take(@prompt_section_limit)
           |> Enum.map(&calendar_event_for_prompt(&1, state))
       },
       "meeting_prep" => meeting_prep,
@@ -652,24 +659,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "imessage" => %{
         "chats" =>
           imessage_chats
+          |> Enum.take(@prompt_section_limit)
           |> Enum.map(&imessage_chat_for_prompt/1),
         "counts" => %{"chats" => length(imessage_chats)}
       },
       "notes" => %{
         "items" =>
           notes
+          |> Enum.take(@prompt_section_limit)
           |> Enum.map(&note_for_prompt/1),
         "counts" => %{"count" => length(notes)}
       },
       "voice_memos" => %{
         "items" =>
           voice_memos
+          |> Enum.take(@prompt_voice_memos_limit)
           |> Enum.map(&voice_memo_for_prompt/1),
         "counts" => %{"count" => length(voice_memos)}
       },
       "reminders" => %{
         "due_soon" =>
           reminders
+          |> Enum.take(@prompt_section_limit)
           |> Enum.map(&reminder_for_prompt/1),
         "counts" => %{
           "open" => length(reminders),
@@ -679,6 +690,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "files" => %{
         "items" =>
           files
+          |> Enum.take(@prompt_section_limit)
           |> Enum.map(&file_for_prompt/1),
         "counts" => %{"recent_count" => length(files)}
       },
@@ -696,10 +708,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "recent_inbox" =>
           gmail_inbox_messages
           |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
+          |> Enum.take(@prompt_section_limit)
           |> Enum.map(&gmail_message_for_prompt/1),
         "recent_unread" =>
           gmail_inbox_messages
           |> Enum.filter(&recent_unread_message?(&1, lookback_start))
+          |> Enum.take(@prompt_section_limit)
           |> Enum.map(&gmail_message_for_prompt/1),
         "counts" => %{
           "messages" => length(gmail_messages),
@@ -716,8 +730,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           slack_messages
           |> Enum.filter(&recent_slack_message?(&1, lookback_start))
           |> Enum.reject(&blank?(read_string(&1, "text", nil)))
+          |> Enum.take(@prompt_section_limit)
           |> Enum.map(&slack_message_for_prompt/1),
-        "mentions" => SourceBundle.slack_mentions(source_bundle),
+        "mentions" =>
+          source_bundle
+          |> SourceBundle.slack_mentions()
+          |> Enum.take(@prompt_mentions_limit),
         "counts" => %{
           "messages" => length(slack_messages),
           "recent_messages" => length(recent_slack_messages),

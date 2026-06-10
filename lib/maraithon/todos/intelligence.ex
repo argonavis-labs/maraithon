@@ -112,11 +112,17 @@ defmodule Maraithon.Todos.Intelligence do
       "candidate_todos" => candidates
     }
 
+    # existing_todos, relevance memories, and candidates get their own
+    # sections below — re-encoding them inside the shared context doubled
+    # the prompt size for no information gain.
+    shared_context =
+      Map.drop(payload, ["existing_todos", "todo_relevance_memories", "candidate_todos"])
+
     with {:ok, existing_json} <- Jason.encode(normalize_json_value(payload["existing_todos"])),
          {:ok, candidates_json} <- Jason.encode(normalize_json_value(candidates)),
          {:ok, todo_relevance_memories_json} <-
            Jason.encode(normalize_json_value(payload["todo_relevance_memories"])),
-         {:ok, payload_json} <- Jason.encode(normalize_json_value(payload)) do
+         {:ok, payload_json} <- Jason.encode(normalize_json_value(shared_context)) do
       {:ok,
        """
        #{@sentinel}
@@ -302,7 +308,8 @@ defmodule Maraithon.Todos.Intelligence do
          ]
        }
 
-       FULL_PAYLOAD_JSON:
+       SHARED_CONTEXT_JSON (user, people, memory context — work items and
+       candidates are in their own sections below):
        #{payload_json}
 
        EXISTING_TODOS_JSON:
@@ -977,6 +984,19 @@ defmodule Maraithon.Todos.Intelligence do
     end)
   end
 
+  # Metadata keys that matter for same-work recognition. Existing items are
+  # dedup reference, not regeneration input — embedding their full metadata
+  # maps (intelligence trails, surface-quality annotations, CRM blobs) was
+  # the largest single source of prompt bloat.
+  @existing_prompt_metadata_keys ~w(
+    channel_id channel_name chat_display_name chat_key commitment_direction company
+    completion_check detector gmail_message_id gmail_thread_id life_domain message_id
+    obligation_type organization person reminder_title team_id thread_id thread_ts
+    why_it_matters
+  )
+
+  @existing_prompt_text_limit 400
+
   defp existing_todo_for_prompt(%Todo{} = todo) do
     %{
       "id" => todo.id,
@@ -987,22 +1007,45 @@ defmodule Maraithon.Todos.Intelligence do
       "attention_mode" => todo.attention_mode,
       "status" => todo.status,
       "title" => todo.title,
-      "summary" => todo.summary,
-      "next_action" => todo.next_action,
+      "summary" => clip_prompt_text(todo.summary),
+      "next_action" => clip_prompt_text(todo.next_action),
       "due_at" => normalize_json_value(todo.due_at),
-      "notes" => todo.notes,
-      "action_plan" => todo.action_plan,
+      "notes" => clip_prompt_text(todo.notes),
+      "action_plan" => clip_prompt_text(todo.action_plan),
       "owner_user_id" => todo.owner_user_id,
       "owner_label" => todo.owner_label,
       "priority" => todo.priority,
       "source_item_id" => todo.source_item_id,
       "source_occurred_at" => normalize_json_value(todo.source_occurred_at),
       "dedupe_key" => todo.dedupe_key,
-      "metadata" => todo.metadata || %{},
+      "metadata" => existing_metadata_for_prompt(todo.metadata),
       "updated_at" => normalize_json_value(todo.updated_at)
     }
     |> compact_map()
   end
+
+  defp existing_metadata_for_prompt(metadata) when is_map(metadata) do
+    Enum.reduce(@existing_prompt_metadata_keys, %{}, fn key, acc ->
+      case Map.get(metadata, key) do
+        nil -> acc
+        value when is_binary(value) -> Map.put(acc, key, clip_prompt_text(value))
+        value when is_map(value) or is_number(value) or is_boolean(value) -> Map.put(acc, key, value)
+        _other -> acc
+      end
+    end)
+  end
+
+  defp existing_metadata_for_prompt(_metadata), do: %{}
+
+  defp clip_prompt_text(value) when is_binary(value) do
+    if String.length(value) <= @existing_prompt_text_limit do
+      value
+    else
+      String.slice(value, 0, @existing_prompt_text_limit - 1) <> "…"
+    end
+  end
+
+  defp clip_prompt_text(value), do: value
 
   defp read_string(attrs, key, default) when is_map(attrs) do
     case fetch_attr(attrs, key) do
