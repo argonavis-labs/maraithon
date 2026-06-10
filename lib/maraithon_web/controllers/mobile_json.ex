@@ -6,7 +6,7 @@ defmodule MaraithonWeb.MobileJSON do
   alias Maraithon.Crm
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.RelationshipPresentation
-  alias Maraithon.Todos.{ActivityEvent, PublicMetadata, Todo, UserFacingCopy}
+  alias Maraithon.Todos.{ActivityEvent, PublicMetadata, SourceActions, Todo, UserFacingCopy}
   alias MaraithonWeb.ApiErrorCopy
 
   def user(%User{} = user, %UserSession{} = session) do
@@ -128,7 +128,8 @@ defmodule MaraithonWeb.MobileJSON do
       prepared_actions: card["prepared_actions"] || [],
       available_buttons: format_buttons(card["available_buttons"] || []),
       estimated_effort: card["estimated_effort"],
-      source_context: source_context(card)
+      source_context: source_context(card),
+      source_action: SourceActions.for_todo(todo)
     }
   end
 
