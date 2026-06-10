@@ -756,6 +756,7 @@ defmodule Maraithon.Todos.Intelligence do
       todo_attrs
       |> Map.put("dedupe_key", dedupe_key)
       |> preserve_candidate_completion_check(candidate)
+      |> preserve_candidate_source_identifiers(candidate)
       |> put_intelligence_metadata(
         action,
         candidate_index,
@@ -875,6 +876,43 @@ defmodule Maraithon.Todos.Intelligence do
       reasoning: decision.reasoning
     }
     |> compact_map()
+  end
+
+  # Deep links and completion sweeps need the raw source identifiers; the model
+  # often rewrites metadata, so carry these over mechanically instead of
+  # trusting the response to copy them.
+  @source_identifier_keys ~w(
+    channel_id channel_name chat_display_name chat_key event_link gmail_message_id
+    gmail_thread_id html_link message_id permalink person_slack_user_id phone
+    sender_handle sender_phone source_message_id source_thread_id source_url
+    team_id thread_id thread_ts url wa_phone
+  )
+
+  defp preserve_candidate_source_identifiers(todo_attrs, candidate) do
+    candidate_metadata = read_map(candidate || %{}, "metadata")
+
+    if candidate_metadata == %{} do
+      todo_attrs
+    else
+      todo_metadata =
+        case fetch_attr(todo_attrs, "metadata") do
+          value when is_map(value) -> stringify_top_level_keys(value)
+          _other -> %{}
+        end
+
+      preserved =
+        Enum.reduce(@source_identifier_keys, todo_metadata, fn key, acc ->
+          value = read_string(candidate_metadata, key, nil)
+
+          if is_binary(value) and not Map.has_key?(acc, key) do
+            Map.put(acc, key, value)
+          else
+            acc
+          end
+        end)
+
+      Map.put(todo_attrs, "metadata", preserved)
+    end
   end
 
   defp put_intelligence_metadata(
