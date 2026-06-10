@@ -27,7 +27,7 @@ defmodule MaraithonWeb.AgentsLive do
   def mount(_params, _session, socket) do
     socket =
       assign(socket,
-        page_title: "Automations",
+        page_title: "Agents",
         current_path: "/agents",
         diagnostics_visible: admin_user?(socket.assigns.current_user),
         status_options: @status_options,

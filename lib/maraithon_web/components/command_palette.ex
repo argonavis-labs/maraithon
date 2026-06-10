@@ -438,7 +438,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         keywords: "running active automations status",
         priority: 140
       ),
-      command("Automations needing attention", "/agents?status=degraded", :agents, "Suggested",
+      command("Agents needing attention", "/agents?status=degraded", :agents, "Suggested",
         description: "Show automations that need attention.",
         keywords: "degraded unhealthy failed automations status",
         priority: 135
@@ -579,12 +579,12 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp agent_commands do
     [
-      command("Automations", "/agents", :agents, "Automations",
+      command("Agents", "/agents", :agents, "Agents",
         description: "Inspect installed automations, status, cost, and logs.",
         keywords: "automations status logs cost",
         priority: 84
       ),
-      command("New automation", "/agents/new", :plus, "Automations",
+      command("New agent", "/agents/new", :plus, "Agents",
         description: "Build, configure, or install a new automation.",
         keywords: "new create install automation builder",
         priority: 82
@@ -612,7 +612,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         shortcut: "G I",
         priority: 59
       ),
-      command("Automations", "/agents", :agents, "Navigate",
+      command("Agents", "/agents", :agents, "Navigate",
         description: "Manage running automations.",
         keywords: "automations status",
         shortcut: "G A",

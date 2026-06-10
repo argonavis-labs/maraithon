@@ -757,6 +757,13 @@ defmodule MaraithonWeb.TodosLive do
         </.link>
       </div>
 
+      <.link
+        navigate={~p"/todos/#{@todo.id}/chat"}
+        class="mt-3 inline-flex items-center gap-1.5 rounded-md bg-zinc-900 px-3 py-1.5 text-xs/5 font-semibold text-white hover:bg-zinc-700"
+      >
+        Chat about this
+      </.link>
+
       <div :if={@decision_review_fields != []} class="mt-4 border-t border-zinc-950/10 pt-4">
         <p class="text-xs/5 font-medium text-zinc-500">Decision to make</p>
         <dl class="mt-2 divide-y divide-zinc-950/5">
@@ -1210,8 +1217,10 @@ defmodule MaraithonWeb.TodosLive do
     |> Enum.reject(fn field -> blank?(field.value) end)
   end
 
+  # Context renders for every open todo, not only decision-flagged ones —
+  # the detail panel is the web counterpart of the mobile work-item view.
   defp todo_decision_review_fields(%Todo{} = todo) do
-    if todo_decision_signal?(todo) do
+    if todo.status in ["open", "snoozed"] or todo_decision_signal?(todo) do
       card = ActionCards.for_todo(todo, include_disconnected: true)
       context = Map.get(card, "context_pack") || %{}
 

@@ -491,11 +491,12 @@ defmodule MaraithonWeb.PeopleLive do
     user_id = current_user_id(socket)
     timezone_info = user_timezone_info(user_id)
 
+    query_text = normalize_text(socket.assigns.filters["q"])
+
     people =
-      Crm.list_people(user_id,
-        query: normalize_text(socket.assigns.filters["q"]),
-        limit: 100
-      )
+      user_id
+      |> Crm.list_people(query: query_text, limit: 100)
+      |> rank_people(query_text)
 
     family_context_people = Crm.list_family_context(user_id, limit: 100)
     visible_ids = people |> Enum.map(& &1.id) |> MapSet.new()
@@ -512,6 +513,42 @@ defmodule MaraithonWeb.PeopleLive do
       selected_person: selected_person_for_user(user_id, socket.assigns.selected_person_id),
       timezone_info: timezone_info
     )
+  end
+
+  # Smart-CRM ordering: who matters most right now. Relationship strength
+  # leads, rapport and interaction volume reinforce it, and recent contact
+  # boosts while long silence decays. Search queries keep their semantic
+  # relevance order instead.
+  defp rank_people(people, query_text) when query_text in [nil, ""] do
+    now = DateTime.utc_now()
+    Enum.sort_by(people, &(-relationship_rank(&1, now)))
+  end
+
+  defp rank_people(people, _query_text), do: people
+
+  defp relationship_rank(person, now) do
+    strength = person.relationship_strength || 0
+    affinity = person.affinity_score || 0
+    interactions = min(person.interaction_count || 0, 200)
+
+    recency =
+      case person.last_interaction_at do
+        %DateTime{} = at ->
+          days = max(DateTime.diff(now, at, :day), 0)
+
+          cond do
+            days <= 3 -> 40
+            days <= 7 -> 30
+            days <= 30 -> 18
+            days <= 90 -> 6
+            true -> -10
+          end
+
+        _other ->
+          0
+      end
+
+    strength * 2 + affinity + interactions / 4 + recency
   end
 
   attr :family_context_people, :list, required: true
