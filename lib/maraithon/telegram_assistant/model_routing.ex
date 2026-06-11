@@ -54,6 +54,17 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bwordsmith\s+this\b/u
   ]
 
+  # Whole-message whitelist for the fast tier: every word must be a light
+  # conversational token, so anything that names data or asks for action
+  # ("ok cancel my 3pm") falls through to the chat tier.
+  @fast_ack_words ~w(
+    thanks thank you thx ty ok okay k cool nice great perfect awesome amazing
+    love it sounds good got will do done yes yep yeah no nope sure please
+    appreciate appreciated that was is helpful hi hello hey yo good morning
+    afternoon evening night bye goodbye later cheers haha lol wow this so much
+    very really works for me all right alright fine
+  )
+
   @today_mode_patterns [
     ~r/\bwhat\s+matters\s+today\b/u,
     ~r/\bwhat\s+can\s+i\s+handle\b.*\b(\d+\s*)?(minutes?|mins?)\b/u,
@@ -161,8 +172,11 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     normalized = normalize_text(text)
 
     cond do
+      light_chat?(normalized) ->
+        :fast
+
       Enum.any?(@quick_chat_patterns, &Regex.match?(&1, normalized)) ->
-        :chat
+        :fast
 
       source_hint_person_question?(normalized) ->
         :chat
@@ -179,6 +193,12 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   end
 
   def tier_for_text(_text), do: :chat
+
+  defp light_chat?(normalized) when is_binary(normalized) do
+    words = String.split(normalized, " ", trim: true)
+
+    words != [] and length(words) <= 8 and Enum.all?(words, &(&1 in @fast_ack_words))
+  end
 
   defp request_focus_for_attrs(attrs, text) do
     cond do
@@ -264,7 +284,20 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> maybe_put(:reasoning_effort, reasoning_effort)
     |> maybe_put(:max_tokens, max_tokens_for_tier(tier))
     |> maybe_put_focus(request_focus)
+    |> maybe_put_fast_tier_limits(tier)
   end
+
+  # The fast tier is for turns that should finish in one or two quick steps;
+  # anything heavier escalates rather than grinding on the small model.
+  # Focus-specific limits win because they are already set by this point.
+  defp maybe_put_fast_tier_limits(keyword, :fast) do
+    keyword
+    |> Keyword.put_new(:max_wall_clock_ms, 25_000)
+    |> Keyword.put_new(:max_llm_turns, 3)
+    |> Keyword.put_new(:max_tool_steps, 2)
+  end
+
+  defp maybe_put_fast_tier_limits(keyword, _tier), do: keyword
 
   defp maybe_put_focus(keyword, :connector_status) do
     keyword
@@ -420,6 +453,8 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     end
   end
 
+  defp task_class_for(:fast, _focus, _text), do: :light_chat
+
   defp task_class_for(:chat, _focus, text) when is_binary(text) do
     normalized = normalize_text(text)
 
@@ -457,6 +492,8 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     end
   end
 
+  defp route_reason_for(:fast, _focus, _text), do: "light_conversational_turn_fast_tier"
+
   defp route_reason_for(:chat, _focus, text) when is_binary(text) do
     normalized = normalize_text(text)
 
@@ -475,7 +512,12 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   defp model_for_tier(:reasoning), do: non_empty(LLM.model()) || non_empty(LLM.chat_model())
   defp model_for_tier(:chat), do: non_empty(LLM.chat_model()) || non_empty(LLM.model())
 
+  defp model_for_tier(:fast),
+    do: non_empty(LLM.fast_model()) || non_empty(LLM.chat_model()) || non_empty(LLM.model())
+
   defp reasoning_effort_for_tier(:reasoning), do: non_empty(LLM.intelligence()) || "high"
+
+  defp reasoning_effort_for_tier(:fast), do: reasoning_effort_for_tier(:chat)
 
   defp reasoning_effort_for_tier(:chat) do
     config()
@@ -494,6 +536,7 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   end
 
   defp max_tokens_for_tier(:chat), do: nil
+  defp max_tokens_for_tier(:fast), do: nil
 
   defp reasoning_wall_clock_ms do
     config()

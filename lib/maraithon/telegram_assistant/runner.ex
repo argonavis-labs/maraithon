@@ -121,7 +121,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
          %Conversation{} = conversation,
          model_profile
        ) do
-    if escalatable_reason?(reason) and Map.get(model_profile, :tier) == :chat do
+    if escalatable_reason?(reason) and Map.get(model_profile, :tier) in [:chat, :fast] do
       _ = TelegramAssistant.cancel_liveness_session(original_run.id)
 
       escalated_profile = ModelRouting.escalated_profile_for(model_profile)
@@ -226,6 +226,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
     end
   end
 
+  defp escalatable_reason?(:deeper_analysis_requested), do: true
   defp escalatable_reason?(:timeout), do: true
   defp escalatable_reason?(:llm_turn_limit), do: true
   defp escalatable_reason?(:tool_step_limit), do: true
@@ -333,6 +334,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
           runtime_context
           |> Map.put(:tools, ContextEngine.tool_catalog(runtime_context.context))
           |> AssistantHarness.build_loop_request_payload(state, policy_opts)
+          |> maybe_offer_deeper_analysis(runtime_context)
           |> Map.put(:_stream_target, runtime_context.run_id)
           |> Map.put(:_llm_opts, Map.get(runtime_context, :llm_opts, []))
 
@@ -398,8 +400,50 @@ defmodule Maraithon.TelegramAssistant.Runner do
     end
   end
 
+  @deeper_analysis_tool_name "request_deeper_analysis"
+  @deeper_analysis_tool %{
+    "name" => @deeper_analysis_tool_name,
+    "description" =>
+      "Hand this request to the deeper reasoning model. Call this instead of attempting a " <>
+        "weak answer when the request needs multi-source analysis, planning, prioritization, " <>
+        "or careful judgment beyond a quick reply. The turn restarts on the stronger model " <>
+        "with full context, so call it before doing other work.",
+    "parameters" => %{
+      "type" => "object",
+      "properties" => %{
+        "reason" => %{
+          "type" => "string",
+          "description" => "One sentence on why deeper analysis is needed."
+        }
+      }
+    }
+  }
+
+  # Offered only on the fast/chat tiers (after focus filtering, so every
+  # scope can still escalate); the reasoning tier has nowhere to go.
+  defp maybe_offer_deeper_analysis(payload, runtime_context) do
+    if escalation_capable?(runtime_context) do
+      Map.update(payload, :tools, [@deeper_analysis_tool], &(&1 ++ [@deeper_analysis_tool]))
+    else
+      payload
+    end
+  end
+
+  defp escalation_capable?(runtime_context) do
+    Map.get(runtime_context, :model_tier) in [:chat, :fast]
+  end
+
+  defp deeper_analysis_requested?(tool_calls) when is_list(tool_calls) do
+    Enum.any?(tool_calls, &(Map.get(&1, "tool") == @deeper_analysis_tool_name))
+  end
+
+  defp deeper_analysis_requested?(_tool_calls), do: false
+
   defp execute_tool_calls(run, runtime_context, tool_calls, state, started_monotonic_ms) do
     cond do
+      deeper_analysis_requested?(tool_calls) and escalation_capable?(runtime_context) ->
+        {:error, run, :deeper_analysis_requested, state}
+
       state.tool_steps + length(tool_calls) > max_tool_steps(runtime_context) ->
         {:error, run, :tool_step_limit, state}
 

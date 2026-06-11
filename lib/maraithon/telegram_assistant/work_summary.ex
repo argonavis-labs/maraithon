@@ -823,6 +823,12 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp run_headline(%Run{status: "queued"}, _steps, _tool_calls), do: "Waiting to start"
 
+  defp run_headline(%Run{result_summary: %{} = result_summary}, _steps, _tool_calls)
+       when is_map_key(result_summary, "escalated_to_reasoning") or
+              is_map_key(result_summary, :escalated_to_reasoning) do
+    "Switched to deeper analysis"
+  end
+
   defp run_headline(%Run{status: "running"}, steps, _tool_calls) do
     case List.last(steps) do
       %Step{step_type: "context_fetch"} ->

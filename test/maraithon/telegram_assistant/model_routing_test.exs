@@ -148,6 +148,55 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
     assert profile.reasoning_effort == "low"
   end
 
+  test "routes light conversational turns to the fast tier" do
+    :maraithon
+    |> Application.get_env(Maraithon.Runtime, [])
+    |> Keyword.put(:llm_fast_model, "fast-tier")
+    |> then(&Application.put_env(:maraithon, Maraithon.Runtime, &1))
+
+    for text <- ["Perfect, thanks so much!", "sounds good, will do", "love it"] do
+      profile = ModelRouting.profile_for(%{text: text})
+
+      assert profile.tier == :fast
+      assert profile.model == "fast-tier"
+      assert profile.task_class == :light_chat
+      assert profile.route_reason == "light_conversational_turn_fast_tier"
+      assert Keyword.fetch!(profile.llm_opts, :max_tool_steps) == 2
+    end
+  end
+
+  test "fast tier falls back to the chat model when no fast model is configured" do
+    profile = ModelRouting.profile_for(%{text: "thanks!"})
+
+    assert profile.tier == :fast
+    assert profile.model == "chat-tier"
+  end
+
+  test "keeps action-bearing short messages off the fast tier" do
+    for text <- ["ok cancel my 3pm", "thanks, now archive that email", "yes delete it"] do
+      profile = ModelRouting.profile_for(%{text: text})
+
+      refute profile.tier == :fast
+    end
+  end
+
+  test "routes quick wording asks to the fast tier with quick chat focus" do
+    profile = ModelRouting.profile_for(%{text: "Rewrite this to sound friendlier"})
+
+    assert profile.tier == :fast
+    assert profile.request_focus == :quick_chat
+    assert Keyword.fetch!(profile.llm_opts, :tool_scope) == :quick_chat
+  end
+
+  test "escalates a fast profile to the reasoning tier" do
+    profile = ModelRouting.profile_for(%{text: "thanks!"})
+    escalated = ModelRouting.escalated_profile_for(profile)
+
+    assert escalated.tier == :reasoning
+    assert escalated.model == "reasoning-tier"
+    assert escalated.route_reason == "escalated_to_reasoning:light_conversational_turn_fast_tier"
+  end
+
   test "preserves route metadata when escalating a chat profile" do
     profile = ModelRouting.profile_for(%{text: "What is 2+2?"})
     escalated = ModelRouting.escalated_profile_for(profile)

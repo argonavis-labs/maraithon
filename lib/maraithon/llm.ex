@@ -62,6 +62,22 @@ defmodule Maraithon.LLM do
   end
 
   @doc """
+  Get the active fast-tier model — the lowest-latency option for turns that
+  clearly do not need full intelligence (acknowledgements, quick wording).
+
+  Falls back to `chat_model/0` when not configured.
+  """
+  def fast_model do
+    runtime_config()
+    |> Keyword.get(:llm_fast_model)
+    |> case do
+      nil -> chat_model()
+      "" -> chat_model()
+      other -> other
+    end
+  end
+
+  @doc """
   Get the active reasoning/intelligence setting for model calls.
   """
   def intelligence do

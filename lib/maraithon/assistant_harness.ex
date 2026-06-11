@@ -191,6 +191,10 @@ defmodule Maraithon.AssistantHarness do
     compact_tool_history(tool_history, runtime_policy(opts))
   end
 
+  def failure_message(:deeper_analysis_requested) do
+    "Maraithon flagged this for deeper analysis but could not finish it. Ask again in a moment."
+  end
+
   def failure_message(:timeout) do
     "Maraithon saved what it found and stopped before making a weak call from incomplete evidence."
   end

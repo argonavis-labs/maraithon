@@ -326,6 +326,21 @@ llm_chat_model =
     _ -> nil
   end
 
+# Fast tier: lowest-latency model for turns that clearly do not need full
+# intelligence. Unset means the fast tier falls back to the chat model.
+llm_fast_model =
+  case llm_provider_name do
+    "anthropic" -> System.get_env("ANTHROPIC_FAST_MODEL", "") |> String.trim()
+    "openai" -> System.get_env("OPENAI_FAST_MODEL", "") |> String.trim()
+    "openrouter" -> System.get_env("OPENROUTER_FAST_MODEL", "") |> String.trim()
+    "mock" -> "mock-v1"
+    _ -> nil
+  end
+  |> case do
+    "" -> nil
+    value -> value
+  end
+
 llm_api_key =
   case llm_provider_name do
     "anthropic" -> anthropic_api_key
@@ -364,6 +379,7 @@ config :maraithon, Maraithon.Runtime,
   llm_model_selector: selected_llm_model,
   llm_routing_model: llm_routing_model,
   llm_chat_model: llm_chat_model,
+  llm_fast_model: llm_fast_model,
   llm_api_key: llm_api_key,
   anthropic_api_key: anthropic_api_key,
   anthropic_model: anthropic_model,
