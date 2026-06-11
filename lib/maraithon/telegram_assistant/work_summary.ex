@@ -17,8 +17,12 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   @max_detail_chars 140
   @max_headline_chars 96
-  @max_steps 12
-  @max_tool_calls 8
+  @max_steps 24
+  @max_tool_calls 12
+  @max_context_chars 60
+
+  @context_account_keys ~w(google_account_email account_email account mailbox source_account_label)
+  @context_subject_keys ~w(query q search email_or_substring person name title subject channel_name channel)
   @internal_result_fragments [
     "argumenterror",
     "badmaperror",
@@ -88,7 +92,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   defp run_steps(%Run{id: run_id, steps: steps}) when is_list(steps) do
     steps
     |> Enum.sort_by(& &1.sequence)
-    |> Enum.take(@max_steps)
+    |> Enum.take(-@max_steps)
     |> maybe_query_steps(run_id)
   end
 
@@ -100,11 +104,13 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   defp maybe_query_steps(steps, _run_id), do: steps
 
   defp query_steps(run_id) when is_binary(run_id) do
+    # Keep the most recent steps so live progress reflects the tail of long runs.
     Step
     |> where([step], step.run_id == ^run_id)
-    |> order_by([step], asc: step.sequence)
+    |> order_by([step], desc: step.sequence)
     |> limit(@max_steps)
     |> Repo.all()
+    |> Enum.reverse()
   end
 
   defp query_steps(_run_id), do: []
@@ -123,6 +129,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
         "label" => tool_label(tool),
         "status" => step.status || "completed",
         "summary" => tool_step_summary(step),
+        "detail" => tool_args_context(step.request_payload),
         "started_at" => json_time(step.started_at),
         "finished_at" => json_time(step.finished_at)
       }
@@ -146,7 +153,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
         "tool" => public_tool_key(tool),
         "label" => tool_label(tool),
         "status" => status,
-        "summary" => tool_history_summary(entry)
+        "summary" => tool_history_summary(entry),
+        "detail" => tool_args_context(entry)
       }
       |> drop_blank_values()
     end)
@@ -201,7 +209,17 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   defp public_step_type(%Step{step_type: "tool_call"}), do: "supporting_check"
   defp public_step_type(_step), do: "supporting_work"
 
-  defp step_detail(%Step{step_type: "tool_call"} = step), do: tool_step_summary(step)
+  defp step_detail(%Step{step_type: "tool_call"} = step) do
+    context = tool_args_context(step.request_payload)
+    summary = tool_step_summary(step)
+
+    case {context, summary} do
+      {nil, summary} -> summary
+      {context, nil} -> context
+      {context, "Checking now."} -> context
+      {context, summary} -> truncate("#{context} — #{summary}")
+    end
+  end
 
   defp step_detail(%Step{error: error}) when not is_nil(error) and error != "",
     do: "This step could not finish."
@@ -220,6 +238,65 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     case step.response_payload || %{} do
       %{} = response when map_size(response) > 0 -> result_summary(response)
       _ -> nil
+    end
+  end
+
+  # Connected-account and request context for a tool call, extracted only from
+  # whitelisted, user-meaningful argument keys (e.g. "kent@runner.now · “team summit”").
+  defp tool_args_context(request) when is_map(request) do
+    args =
+      case map_value(request, "arguments", %{}) do
+        %{} = arguments when map_size(arguments) > 0 -> arguments
+        _ -> request
+      end
+
+    account = args |> first_arg_value(@context_account_keys) |> context_account()
+    subject = args |> first_arg_value(@context_subject_keys) |> context_subject()
+
+    case Enum.reject([account, subject], &is_nil/1) do
+      [] -> nil
+      parts -> Enum.join(parts, " · ")
+    end
+  end
+
+  defp tool_args_context(_request), do: nil
+
+  defp first_arg_value(args, keys) when is_map(args) do
+    Enum.find_value(keys, fn key ->
+      case map_value(args, key) do
+        value when is_binary(value) and value != "" -> value
+        _ -> nil
+      end
+    end)
+  end
+
+  defp first_arg_value(_args, _keys), do: nil
+
+  defp context_account(value) when is_binary(value) do
+    case Regex.run(~r/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i, value) do
+      [email] -> String.downcase(email)
+      _ -> value |> clean_item_text() |> limit_context()
+    end
+  end
+
+  defp context_account(_value), do: nil
+
+  defp context_subject(value) when is_binary(value) do
+    case value |> clean_item_text() |> limit_context() do
+      nil -> nil
+      subject -> "“#{subject}”"
+    end
+  end
+
+  defp context_subject(_value), do: nil
+
+  defp limit_context(nil), do: nil
+
+  defp limit_context(value) when is_binary(value) do
+    if String.length(value) > @max_context_chars do
+      String.slice(value, 0, @max_context_chars) <> "..."
+    else
+      value
     end
   end
 
@@ -758,7 +835,12 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
         "Checking the plan"
 
       %Step{step_type: "tool_call", request_payload: request} ->
-        tool_running_headline(map_value(request || %{}, "tool", "tool"))
+        headline = tool_running_headline(map_value(request || %{}, "tool", "tool"))
+
+        case tool_args_context(request) do
+          nil -> headline
+          context -> truncate_headline("#{headline} · #{context}")
+        end
 
       _ ->
         "Maraithon is working"
