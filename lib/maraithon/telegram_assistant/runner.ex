@@ -175,6 +175,11 @@ defmodule Maraithon.TelegramAssistant.Runner do
     do: :pass
 
   defp run_escalated_turn(attrs, context, conversation, model_profile, original_run, reason) do
+    # The queued run carried in attrs belongs to the original attempt; reusing
+    # it here collides on the (run_id, sequence) step index. The escalated
+    # turn gets its own run row.
+    attrs = Map.delete(attrs, :run)
+
     case start_run(attrs, context, model_profile) do
       {:ok, run} ->
         runtime_context = build_runtime_context(run, attrs, context, model_profile)
