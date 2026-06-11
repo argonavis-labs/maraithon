@@ -40,6 +40,11 @@ COPY lib lib
 # Compile the application
 RUN mix compile
 
+# Build and digest static assets (tailwind + esbuild standalone binaries).
+# Runs after compile so colocated LiveView hooks are extracted for bundling.
+COPY assets assets
+RUN mix assets.deploy
+
 # Copy runtime config
 COPY config/runtime.exs config/
 

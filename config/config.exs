@@ -11,6 +11,31 @@ config :maraithon,
   ecto_repos: [Maraithon.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# Build-time asset pipeline. Tailwind stays on 3.4 so compiled output matches
+# the classes the templates were written against (the old CDN runtime was v3).
+config :esbuild,
+  version: "0.25.4",
+  app: [
+    args:
+      ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
+    cd: Path.expand("../assets", __DIR__),
+    env: %{
+      "NODE_PATH" =>
+        Enum.join([Path.expand("../deps", __DIR__), Mix.Project.build_path()], ":")
+    }
+  ]
+
+config :tailwind,
+  version: "3.4.17",
+  app: [
+    args: ~w(
+      --config=tailwind.config.js
+      --input=css/app.css
+      --output=../priv/static/assets/app.css
+    ),
+    cd: Path.expand("../assets", __DIR__)
+  ]
+
 # Use a custom Postgrex types module so pgvector types are registered.
 config :maraithon, Maraithon.Repo, types: Maraithon.PostgrexTypes
 

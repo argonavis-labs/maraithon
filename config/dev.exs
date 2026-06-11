@@ -24,7 +24,10 @@ config :maraithon, MaraithonWeb.Endpoint,
   code_reloader: true,
   debug_errors: true,
   secret_key_base: "3IadP309K00mRFjtXDTLWZHczvFZSP3Ztsi89n2acYMuFc4vlfJ2fFZgxHxo3vUx",
-  watchers: []
+  watchers: [
+    esbuild: {Esbuild, :install_and_run, [:app, ~w(--sourcemap=inline --watch)]},
+    tailwind: {Tailwind, :install_and_run, [:app, ~w(--watch)]}
+  ]
 
 # ## SSL Support
 #

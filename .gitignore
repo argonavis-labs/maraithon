@@ -142,3 +142,7 @@ Thumbs.db
 # =============================================================================
 
 /priv/*.pem
+
+# Built/digested web assets
+/priv/static/assets/
+/priv/static/cache_manifest.json
