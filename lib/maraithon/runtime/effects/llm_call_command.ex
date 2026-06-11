@@ -21,6 +21,10 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
   # Total attempts including the first call. 3 = first try + 2 retries.
   @max_retry_attempts 3
+  # Busy-slot waits are cheap; allow up to ~5 minutes of patience overall.
+  @max_busy_retry_attempts 20
+  @busy_retry_floor_ms 3_000
+  @busy_retry_cap_ms 15_000
   # Hard ceiling on a single retry-after to keep the effect process from
   # blocking on the provider for an unreasonable stretch.
   @max_retry_after_ms 120_000
@@ -278,6 +282,24 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   end
 
   defp record_provider_limit(_reason), do: :ok
+
+  # llm_busy is the local concurrency gate (one slot per bucket), not a
+  # provider limit: another effect simply holds the slot, sometimes for
+  # minutes. Giving up immediately silently dropped whole briefings, so
+  # busy gets its own patient retry lane ahead of the global attempt cap.
+  defp retry_backoff_ms({:llm_busy, retry_after}, attempt)
+       when attempt < @max_busy_retry_attempts do
+    retry_after
+    |> case do
+      ms when is_integer(ms) and ms > 0 -> ms
+      _other -> @busy_retry_floor_ms
+    end
+    |> max(@busy_retry_floor_ms)
+    |> min(@busy_retry_cap_ms)
+  end
+
+  defp retry_backoff_ms(:llm_busy, attempt) when attempt < @max_busy_retry_attempts,
+    do: @busy_retry_floor_ms
 
   defp retry_backoff_ms(_reason, attempt) when attempt >= @max_retry_attempts, do: nil
 
