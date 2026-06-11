@@ -12,20 +12,25 @@ defmodule MaraithonWeb.AdminNavigation do
   import MaraithonWeb.Components.CommandPalette
   import MaraithonWeb.Components.Sidebar
 
-  # Mirrors the mobile app's tab order (Today, Work, Stream, People) so
-  # the two surfaces feel like one product; web-only utilities follow.
+  # Mirrors the mobile app's tab order (Today, Work, Stream, People, Chat)
+  # so the two surfaces feel like one product. The daily product surfaces
+  # stay primary; the control plane lives in the System section below.
   @primary_nav [
     %{label: "Today", path: "/briefing", icon: :home},
     %{label: "Work", path: "/todos", icon: :todos},
     %{label: "Stream", path: "/stream", icon: :insights},
     %{label: "People", path: "/operator/people", icon: :people},
-    %{label: "Chat", path: "/chat", icon: :search},
-    %{label: "Dashboard", path: "/dashboard", icon: :home},
-    %{label: "Insights", path: "/insights", icon: :insights},
-    %{label: "Agents", path: "/agents", icon: :agents},
+    %{label: "Chat", path: "/chat", icon: :search}
+  ]
+
+  # Control plane: setup, automation, and assistant internals. Useful, but
+  # not part of running the day.
+  @system_nav [
     %{label: "Apps", path: "/connectors", icon: :connectors},
+    %{label: "Agents", path: "/agents", icon: :agents},
+    %{label: "Insights", path: "/insights", icon: :insights},
     %{label: "Saved Context", path: "/operator/memories", icon: :memory},
-    %{label: "How it works", path: "/how-it-works", icon: :book}
+    %{label: "Dashboard", path: "/dashboard", icon: :home}
   ]
 
   @mobile_nav [
@@ -50,6 +55,7 @@ defmodule MaraithonWeb.AdminNavigation do
       assigns
       |> assign(:normalized_path, normalize_path(assigns.current_path))
       |> assign(:primary_nav, @primary_nav)
+      |> assign(:system_nav, @system_nav)
       |> assign(:mobile_nav, @mobile_nav)
       |> assign(:secondary_nav, secondary_nav())
       |> assign(:admin_nav, if(admin_user?(assigns.current_user), do: @admin_nav, else: []))
@@ -67,6 +73,7 @@ defmodule MaraithonWeb.AdminNavigation do
       >
         <.maraithon_sidebar
           primary_nav={@primary_nav}
+          system_nav={@system_nav}
           secondary_nav={@secondary_nav}
           admin_nav={@admin_nav}
           normalized_path={@normalized_path}
@@ -86,6 +93,7 @@ defmodule MaraithonWeb.AdminNavigation do
       >
         <.maraithon_sidebar
           primary_nav={@primary_nav}
+          system_nav={@system_nav}
           secondary_nav={@secondary_nav}
           admin_nav={@admin_nav}
           normalized_path={@normalized_path}
@@ -158,6 +166,7 @@ defmodule MaraithonWeb.AdminNavigation do
 
   defp secondary_nav do
     [
+      %{label: "How it works", path: "/how-it-works", icon: :book},
       %{label: "Support", path: "mailto:#{support_email()}", icon: :lifebuoy},
       %{label: "Changelog", path: "/changelog", icon: :bolt}
     ]
@@ -170,6 +179,7 @@ defmodule MaraithonWeb.AdminNavigation do
   end
 
   attr :primary_nav, :list, required: true
+  attr :system_nav, :list, required: true
   attr :secondary_nav, :list, required: true
   attr :admin_nav, :list, required: true
   attr :normalized_path, :string, required: true
@@ -202,6 +212,18 @@ defmodule MaraithonWeb.AdminNavigation do
         <.sidebar_section>
           <.sidebar_item
             :for={item <- @primary_nav}
+            navigate={item.path}
+            current={active?(@normalized_path, item.path)}
+          >
+            <.icon name={item.icon} class="size-5" />
+            <.sidebar_label><%= item.label %></.sidebar_label>
+          </.sidebar_item>
+        </.sidebar_section>
+
+        <.sidebar_section>
+          <.sidebar_heading>System</.sidebar_heading>
+          <.sidebar_item
+            :for={item <- @system_nav}
             navigate={item.path}
             current={active?(@normalized_path, item.path)}
           >

@@ -30,7 +30,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias MaraithonWeb.OperationFailureCopy
   alias MaraithonWeb.TodoActionCopy
 
-  @refresh_interval 5_000
+  @refresh_interval 30_000
   @event_limit 50
   @activity_limit 40
   @failure_limit 20
@@ -155,7 +155,7 @@ defmodule MaraithonWeb.DashboardLive do
 
   @impl true
   def handle_info(:refresh, socket) do
-    {:noreply, refresh_dashboard(socket)}
+    {:noreply, refresh_dashboard(socket, scope: :light)}
   end
 
   def handle_info(:load_fly_logs, socket) do
@@ -2264,11 +2264,21 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp refresh_dashboard(socket, opts \\ []) do
-    socket = refresh_chief_of_staff_install(socket)
-    socket = refresh_insights(socket)
-    socket = refresh_connections(socket)
-    socket = refresh_projects(socket)
-    socket = refresh_global_memory(socket)
+    # Timer ticks use :light scope: the slow, rarely-changing panels
+    # (install state, insights, connections, projects, memory) reload only
+    # on mount, navigation, and user actions.
+    socket =
+      if Keyword.get(opts, :scope, :full) == :full do
+        socket
+        |> refresh_chief_of_staff_install()
+        |> refresh_insights()
+        |> refresh_connections()
+        |> refresh_projects()
+        |> refresh_global_memory()
+      else
+        socket
+      end
+
     socket = refresh_todos(socket)
 
     user_id = current_user_id(socket)

@@ -19,7 +19,7 @@ defmodule MaraithonWeb.AgentsLive do
   alias MaraithonWeb.LocalTime
   alias MaraithonWeb.OperationFailureCopy
 
-  @refresh_interval 5_000
+  @refresh_interval 30_000
   @event_limit 50
   @status_options ~w(all running degraded stopped)
 
