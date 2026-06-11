@@ -704,17 +704,17 @@ private enum ChatWorkSummaryCopy {
     static func stepTitle(for type: String?) -> String {
         switch type {
         case "context":
-            "Loaded context"
+            "Got up to speed"
         case "answer_preparation":
-            "Choosing next action"
+            "Decided what to check"
         case "supporting_plan":
-            "Planned supporting checks"
+            "Planned the checks"
         case "reply":
-            "Drafted reply"
+            "Wrote the reply"
         case "supporting_check":
             "Completed a check"
         default:
-            "Updated progress"
+            "Made progress"
         }
     }
 

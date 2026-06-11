@@ -62,10 +62,11 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       "headline" => run_headline(run, steps, tool_calls),
       "status" => run.status,
       "tool_calls" => tool_calls,
-      "steps" => Enum.map(Enum.take(steps, @max_steps), &step_summary/1)
+      "steps" => steps |> Enum.filter(&visible_step?/1) |> Enum.map(&step_summary/1)
     }
     |> drop_blank_values()
   end
+
 
   def for_run(_run), do: nil
 
@@ -88,6 +89,12 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   end
 
   def for_message(_turn), do: nil
+
+  # Only surface steps that read as work a chief of staff actually did.
+  # Plumbing (context loads, model turns) stays internal; the live headline
+  # already narrates that state.
+  defp visible_step?(%Step{step_type: "tool_call"}), do: true
+  defp visible_step?(_step), do: false
 
   defp run_steps(%Run{id: run_id, steps: steps}) when is_list(steps) do
     steps
@@ -176,13 +183,13 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     |> drop_blank_values()
   end
 
-  defp step_title(%Step{step_type: "context_fetch"}), do: "Loaded context"
-  defp step_title(%Step{step_type: "llm_request"}), do: "Choosing next action"
+  defp step_title(%Step{step_type: "context_fetch"}), do: "Got up to speed"
+  defp step_title(%Step{step_type: "llm_request"}), do: "Decided what to check"
 
   defp step_title(%Step{step_type: "llm_response", response_payload: response}) do
     case map_value(response || %{}, "status") do
-      "tool_calls" -> "Planned supporting checks"
-      _ -> "Drafted reply"
+      "tool_calls" -> "Planned the checks"
+      _ -> "Wrote the reply"
     end
   end
 
@@ -548,7 +555,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       labels ->
         noun = pluralize(singular, count, plural)
         suffix = if count > length(labels), do: "; and #{count - length(labels)} more", else: ""
-        truncate("#{count} #{noun}: #{Enum.join(labels, "; ")}#{suffix}")
+        truncate("Found #{count} #{noun}: #{Enum.join(labels, "; ")}#{suffix}")
     end
   end
 
@@ -832,13 +839,13 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   defp run_headline(%Run{status: "running"}, steps, _tool_calls) do
     case List.last(steps) do
       %Step{step_type: "context_fetch"} ->
-        "Reading context"
+        "Getting up to speed"
 
       %Step{step_type: "llm_request"} ->
-        "Choosing the next action"
+        "Working out the next step"
 
       %Step{step_type: "llm_response"} ->
-        "Checking the plan"
+        "Reviewing what came back"
 
       %Step{step_type: "tool_call", request_payload: request} ->
         headline = tool_running_headline(map_value(request || %{}, "tool", "tool"))
@@ -920,7 +927,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   end
 
   defp listed_summary_subject(summary) do
-    case Regex.run(~r/^\d+\s+[^:]+:\s+(.+)$/u, summary) do
+    case Regex.run(~r/^(?:Found\s+)?\d+\s+[^:]+:\s+(.+)$/iu, summary) do
       [_match, items] ->
         items
         |> String.split(";")

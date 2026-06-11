@@ -49,11 +49,15 @@ struct ChatWorkSummaryDisclosure: View {
     }
 
     private var disclosureTitle: String {
+        if let headline = summary.headline, !headline.isEmpty {
+            return headline
+        }
+
         if stepCount > 0 {
             return ChatWorkSummaryViewCopy.stepsCompletedTitle(for: stepCount)
         }
 
-        return summary.headline ?? summary.summary ?? ChatWorkSummaryViewCopy.completedFallbackTitle
+        return summary.summary ?? ChatWorkSummaryViewCopy.completedFallbackTitle
     }
 }
 
