@@ -21,9 +21,11 @@ defmodule Maraithon.Cards.SourceContext do
   @bcc_keys ~w(bcc)
   @person_keys ~w(person contact requested_by sender_name recipient_name matching_person chat_display_name)
 
+  # Only true source text qualifies as conversation; analysis fields like
+  # "evidence" read as the assistant's own notes and would mis-attribute.
   @excerpt_keys ~w(
     matching_message_excerpt source_excerpt source_quote quote body_excerpt
-    excerpt snippet source_body evidence
+    excerpt snippet source_body
   )
 
   @doc """
