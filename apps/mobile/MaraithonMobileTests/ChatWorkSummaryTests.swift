@@ -6,14 +6,15 @@ import Testing
 struct ChatWorkSummaryTests {
     @Test
     func visibleProgressCopyAvoidsAnthropomorphicOrGenericLabels() {
-        #expect(ChatWorkSummaryViewCopy.checkedSectionTitle == "Sources and actions")
         #expect(ChatWorkSummaryViewCopy.progressSectionTitle == "Assistant activity")
         #expect(ChatWorkSummaryViewCopy.completedFallbackTitle == "How Maraithon answered")
-        #expect(ChatWorkSummaryViewCopy.pendingFallbackTitle == "Preparing your answer")
+        #expect(ChatWorkSummaryViewCopy.pendingFallbackTitle == "Starting assistant work")
         #expect(ChatWorkSummaryViewCopy.pendingFallbackTitle != "Maraithon is thinking")
-        #expect(ChatWorkSummaryViewCopy.checkedSectionTitle != "Checks")
         #expect(ChatWorkSummaryViewCopy.progressSectionTitle != "Work")
         #expect(ChatWorkSummaryViewCopy.completedFallbackTitle != "What Maraithon checked")
+        #expect(ChatWorkSummaryViewCopy.stepsCompletedTitle(for: 1) == "1 step completed")
+        #expect(ChatWorkSummaryViewCopy.stepsCompletedTitle(for: 8) == "8 steps completed")
+        #expect(ChatWorkSummaryViewCopy.earlierStepsTitle(for: 3) == "3 earlier steps")
     }
 
     @Test

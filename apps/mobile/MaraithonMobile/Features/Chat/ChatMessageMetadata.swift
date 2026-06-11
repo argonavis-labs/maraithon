@@ -273,6 +273,7 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable, Sendable {
     var label: String
     var status: String?
     var summary: String?
+    var detail: String?
     var startedAt: Date?
     var finishedAt: Date?
 
@@ -282,6 +283,7 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable, Sendable {
         case label
         case status
         case summary
+        case detail
         case startedAt = "started_at"
         case finishedAt = "finished_at"
     }
@@ -292,6 +294,7 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable, Sendable {
         label: String,
         status: String? = nil,
         summary: String? = nil,
+        detail: String? = nil,
         startedAt: Date? = nil,
         finishedAt: Date? = nil
     ) {
@@ -305,6 +308,7 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable, Sendable {
         self.summary =
             ChatWorkSummaryCopy.safeToolSummary(summary, tool: publicTool, label: displayLabel) ??
             ChatWorkSummaryCopy.fallbackToolSummary(status: normalizedStatus, label: displayLabel)
+        self.detail = ChatWorkSummaryCopy.safeDetail(detail)
         self.startedAt = startedAt
         self.finishedAt = finishedAt
     }
@@ -328,6 +332,7 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable, Sendable {
                 label: displayLabel
             ) ??
             ChatWorkSummaryCopy.fallbackToolSummary(status: normalizedStatus, label: displayLabel)
+        detail = ChatWorkSummaryCopy.safeDetail(try container.decodeIfPresent(String.self, forKey: .detail))
         startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
         finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
     }

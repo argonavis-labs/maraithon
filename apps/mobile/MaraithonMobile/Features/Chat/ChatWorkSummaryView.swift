@@ -15,38 +15,45 @@ struct ChatWorkSummaryDisclosure: View {
                 }
 
                 if !summary.toolCalls.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(ChatWorkSummaryViewCopy.checkedSectionTitle)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
+                    VStack(alignment: .leading, spacing: 7) {
                         ForEach(summary.toolCalls) { toolCall in
                             ChatToolCallRow(toolCall: toolCall)
                         }
                     }
                 } else if !summary.steps.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(ChatWorkSummaryViewCopy.progressSectionTitle)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
-                        ForEach(summary.steps.prefix(4)) { step in
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(summary.steps) { step in
                             ChatWorkStepRow(step: step)
                         }
                     }
                 }
             }
-            .padding(.top, 6)
+            .padding(.top, 8)
         } label: {
-            Label(
-                summary.headline ?? summary.summary ?? ChatWorkSummaryViewCopy.completedFallbackTitle,
-                systemImage: "checklist"
-            )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+            HStack(spacing: 7) {
+                if stepCount > 0 {
+                    ChatStepCountBadge(count: stepCount)
+                }
+
+                Text(disclosureTitle)
+                    .lineLimit(2)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
         }
         .tint(.secondary)
+    }
+
+    private var stepCount: Int {
+        max(summary.toolCalls.count, summary.steps.count)
+    }
+
+    private var disclosureTitle: String {
+        if stepCount > 0 {
+            return ChatWorkSummaryViewCopy.stepsCompletedTitle(for: stepCount)
+        }
+
+        return summary.headline ?? summary.summary ?? ChatWorkSummaryViewCopy.completedFallbackTitle
     }
 }
 
@@ -54,7 +61,7 @@ struct ChatPendingWorkSummary: View {
     let summary: ChatWorkSummary?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
@@ -65,82 +72,109 @@ struct ChatPendingWorkSummary: View {
                     .lineLimit(2)
             }
 
-            if let summary, !summary.toolCalls.isEmpty {
-                ChatToolCallStrip(toolCalls: summary.toolCalls)
-            } else if let summary, !summary.steps.isEmpty {
-                ChatWorkStepStrip(steps: summary.steps)
+            if !visibleSteps.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    if hiddenStepCount > 0 {
+                        Text(ChatWorkSummaryViewCopy.earlierStepsTitle(for: hiddenStepCount))
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    ForEach(visibleSteps) { step in
+                        ChatLiveStepRow(step: step)
+                    }
+                }
+            } else if let toolCalls = summary?.toolCalls, !toolCalls.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(toolCalls.suffix(Self.maxVisibleSteps)) { toolCall in
+                        ChatToolCallRow(toolCall: toolCall)
+                    }
+                }
             }
         }
+        .animation(.snappy, value: summary?.steps.count ?? 0)
+    }
+
+    private static let maxVisibleSteps = 6
+
+    private var visibleSteps: [ChatWorkStepSummary] {
+        Array((summary?.steps ?? []).suffix(Self.maxVisibleSteps))
+    }
+
+    private var hiddenStepCount: Int {
+        max((summary?.steps.count ?? 0) - Self.maxVisibleSteps, 0)
     }
 }
 
 enum ChatWorkSummaryViewCopy {
-    static let checkedSectionTitle = "Sources and actions"
     static let progressSectionTitle = "Assistant activity"
     static let completedFallbackTitle = "How Maraithon answered"
     static let pendingFallbackTitle = "Starting assistant work"
-}
 
-private struct ChatToolCallStrip: View {
-    let toolCalls: [ChatToolCallSummary]
-
-    var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 6) {
-                ForEach(toolCalls.prefix(4)) { toolCall in
-                    Label(toolCall.label, systemImage: statusSymbol(for: toolCall.status))
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Capsule())
-                }
-            }
-        }
-        .scrollIndicators(.hidden)
+    static func stepsCompletedTitle(for count: Int) -> String {
+        count == 1 ? "1 step completed" : "\(count) steps completed"
     }
 
-    private func statusSymbol(for status: String?) -> String {
-        switch status {
-        case "failed":
-            "exclamationmark.triangle"
-        case "running":
-            "arrow.triangle.2.circlepath"
-        default:
-            "checkmark.circle"
-        }
+    static func earlierStepsTitle(for count: Int) -> String {
+        count == 1 ? "1 earlier step" : "\(count) earlier steps"
     }
 }
 
-private struct ChatWorkStepStrip: View {
-    let steps: [ChatWorkStepSummary]
+private struct ChatStepCountBadge: View {
+    let count: Int
 
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 6) {
-                ForEach(steps.prefix(4)) { step in
-                    Label(step.displayTitle, systemImage: statusSymbol(for: step.status))
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Capsule())
+        Text("\(count)")
+            .font(.caption2.weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(Color(uiColor: .separator), lineWidth: 1)
+            )
+    }
+}
+
+private struct ChatLiveStepRow: View {
+    let step: ChatWorkStepSummary
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            statusIcon
+                .frame(width: 14)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(step.displayTitle)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(step.status == "running" ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .lineLimit(1)
+
+                if let detail = step.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
                 }
             }
         }
-        .scrollIndicators(.hidden)
     }
 
-    private func statusSymbol(for status: String?) -> String {
-        switch status {
-        case "failed":
-            "exclamationmark.triangle"
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch step.status {
         case "running":
-            "arrow.triangle.2.circlepath"
+            ProgressView()
+                .controlSize(.mini)
+        case "failed":
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(.orange)
         default:
-            "checkmark.circle"
+            Image(systemName: ChatStepIconography.systemImage(for: step.type))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -149,17 +183,30 @@ private struct ChatToolCallRow: View {
     let toolCall: ChatToolCallSummary
 
     var body: some View {
-        HStack(alignment: .top, spacing: 7) {
-            Image(systemName: statusSymbol)
-                .font(.caption)
-                .foregroundStyle(statusColor)
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            statusIcon
                 .frame(width: 14)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(toolCall.label)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(toolCall.label)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+
+                    if let detail = toolCall.detail, !detail.isEmpty {
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
 
                 if let summary = toolCall.summary, !summary.isEmpty {
                     Text(summary)
@@ -171,25 +218,20 @@ private struct ChatToolCallRow: View {
         }
     }
 
-    private var statusSymbol: String {
+    @ViewBuilder
+    private var statusIcon: some View {
         switch toolCall.status {
-        case "failed":
-            "exclamationmark.triangle.fill"
         case "running":
-            "arrow.triangle.2.circlepath"
-        default:
-            "checkmark.circle.fill"
-        }
-    }
-
-    private var statusColor: Color {
-        switch toolCall.status {
+            ProgressView()
+                .controlSize(.mini)
         case "failed":
-            .red
-        case "running":
-            .secondary
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(.orange)
         default:
-            .green
+            Image(systemName: ChatStepIconography.toolSystemImage(for: toolCall.tool))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -198,17 +240,88 @@ private struct ChatWorkStepRow: View {
     let step: ChatWorkStepSummary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(step.displayTitle)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.primary)
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Image(systemName: step.status == "failed" ? "exclamationmark.triangle.fill" : ChatStepIconography.systemImage(for: step.type))
+                .font(.caption2)
+                .foregroundStyle(step.status == "failed" ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                .frame(width: 14)
 
-            if let detail = step.detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(step.displayTitle)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
+
+                if let detail = step.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
+        }
+    }
+}
+
+enum ChatStepIconography {
+    static func systemImage(for stepType: String?) -> String {
+        switch stepType {
+        case "context":
+            "tray.full"
+        case "answer_preparation":
+            "sparkles"
+        case "supporting_plan":
+            "list.bullet.rectangle"
+        case "reply":
+            "text.bubble"
+        case "supporting_check":
+            "checkmark.circle"
+        default:
+            "circle.dashed"
+        }
+    }
+
+    static func toolSystemImage(for tool: String) -> String {
+        switch tool {
+        case "calendar":
+            "calendar"
+        case "gmail":
+            "envelope"
+        case "slack":
+            "number"
+        case "messages":
+            "message"
+        case "people", "people_update", "relationship_context", "relationship_learning":
+            "person.2"
+        case "open_work", "open_work_review", "work_update", "linked_item":
+            "checklist"
+        case "open_loops", "action_history":
+            "arrow.triangle.branch"
+        case "memory_check", "memory_update", "memory":
+            "brain"
+        case "preferences", "preference", "preference_update", "feedback":
+            "slider.horizontal.3"
+        case "connected_accounts", "connected_sources":
+            "link"
+        case "draft", "prepared_action":
+            "square.and.pencil"
+        case "scheduled_task", "scheduled_followups", "briefing_schedule":
+            "clock"
+        case "notes":
+            "note.text"
+        case "voice_memos":
+            "waveform"
+        case "files":
+            "doc"
+        case "reminders":
+            "list.bullet"
+        case "browser_history", "local_context":
+            "magnifyingglass"
+        case "linear", "notaui", "projects", "project_update", "project_run":
+            "hammer"
+        case "automations", "automation_update", "automation_query":
+            "gearshape.2"
+        default:
+            "checkmark.circle"
         }
     }
 }
