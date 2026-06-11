@@ -25,6 +25,7 @@ defmodule Maraithon.Application do
       Maraithon.LogBuffer,
       Maraithon.ContextCache,
       Maraithon.TelegramAssistant.LivenessSupervisor,
+      Maraithon.TelegramAssistant.RunStreamPreview,
       # Per-chat inbound-message workers: keep webhook acks fast and serialize
       # concurrent messages within a chat.
       {Registry, keys: :unique, name: Maraithon.TelegramAssistant.ChatRegistry},

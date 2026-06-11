@@ -62,7 +62,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       "headline" => run_headline(run, steps, tool_calls),
       "status" => run.status,
       "tool_calls" => tool_calls,
-      "steps" => steps |> Enum.filter(&visible_step?/1) |> Enum.map(&step_summary/1)
+      "steps" => steps |> Enum.filter(&visible_step?/1) |> Enum.map(&step_summary/1),
+      "preview" => live_preview(run)
     }
     |> drop_blank_values()
   end
@@ -95,6 +96,21 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   # already narrates that state.
   defp visible_step?(%Step{step_type: "tool_call"}), do: true
   defp visible_step?(_step), do: false
+
+  # Rolling text of the reply currently being streamed, so polling clients
+  # can show the answer being written instead of a bare spinner.
+  defp live_preview(%Run{status: "running", id: run_id}) do
+    case Maraithon.TelegramAssistant.RunStreamPreview.snapshot(run_id) do
+      text when is_binary(text) ->
+        text = String.trim(text)
+        if text != "" and not technical_result_text?(text), do: text
+
+      _ ->
+        nil
+    end
+  end
+
+  defp live_preview(_run), do: nil
 
   defp run_steps(%Run{id: run_id, steps: steps}) when is_list(steps) do
     steps

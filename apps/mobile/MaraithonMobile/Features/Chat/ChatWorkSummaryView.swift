@@ -95,6 +95,14 @@ struct ChatPendingWorkSummary: View {
                     }
                 }
             }
+
+            if let preview = summary?.preview, !preview.isEmpty {
+                Text(preview + " ▍")
+                    .font(.subheadline)
+                    .foregroundStyle(.primary.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentTransition(.interpolate)
+            }
         }
         .animation(.snappy, value: summary?.steps.count ?? 0)
     }

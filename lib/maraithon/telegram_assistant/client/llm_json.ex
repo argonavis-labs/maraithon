@@ -9,6 +9,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
   alias Maraithon.LLM
   alias Maraithon.LLM.JsonFieldStreamer
   alias Maraithon.TelegramAssistant.LivenessSession
+  alias Maraithon.TelegramAssistant.RunStreamPreview
 
   @allowed_llm_opt_keys [
     :chat_model,
@@ -47,6 +48,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
     fn params ->
       streamer_table = :ets.new(:json_streamer, [:set, :public])
       :ets.insert(streamer_table, {:state, JsonFieldStreamer.new()})
+      RunStreamPreview.reset(run_id)
 
       on_chunk = fn delta ->
         try do
@@ -56,6 +58,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
 
           if emit != "" do
             LivenessSession.stream_chunk(run_id, emit)
+            RunStreamPreview.append(run_id, emit)
           end
         rescue
           _error -> :ok

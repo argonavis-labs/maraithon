@@ -190,6 +190,8 @@ defmodule Maraithon.TelegramAssistant do
     finish_at =
       Map.get(attrs, :finished_at) || Map.get(attrs, "finished_at") || DateTime.utc_now()
 
+    _ = Maraithon.TelegramAssistant.RunStreamPreview.delete(run.id)
+
     run
     |> Ecto.Changeset.change(%{
       status: Map.get(attrs, :status) || Map.get(attrs, "status") || "completed",

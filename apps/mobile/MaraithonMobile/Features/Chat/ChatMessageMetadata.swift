@@ -235,6 +235,7 @@ struct ChatWorkSummary: Codable, Equatable, Sendable {
     var headline: String?
     var status: String?
     var summary: String?
+    var preview: String?
     var toolCalls: [ChatToolCallSummary] = []
     var steps: [ChatWorkStepSummary] = []
 
@@ -246,6 +247,7 @@ struct ChatWorkSummary: Codable, Equatable, Sendable {
         case headline
         case status
         case summary
+        case preview
         case toolCalls = "tool_calls"
         case steps
     }
@@ -254,12 +256,14 @@ struct ChatWorkSummary: Codable, Equatable, Sendable {
         headline: String? = nil,
         status: String? = nil,
         summary: String? = nil,
+        preview: String? = nil,
         toolCalls: [ChatToolCallSummary] = [],
         steps: [ChatWorkStepSummary] = []
     ) {
         self.headline = ChatWorkSummaryCopy.safeHeadline(headline)
         self.status = ChatWorkSummaryCopy.safeStatus(status)
         self.summary = ChatWorkSummaryCopy.safeDetail(summary)
+        self.preview = ChatWorkSummaryCopy.safePreview(preview)
         self.toolCalls = toolCalls
         self.steps = steps
     }
@@ -269,6 +273,7 @@ struct ChatWorkSummary: Codable, Equatable, Sendable {
         headline = ChatWorkSummaryCopy.safeHeadline(try container.decodeIfPresent(String.self, forKey: .headline))
         status = ChatWorkSummaryCopy.safeStatus(try container.decodeIfPresent(String.self, forKey: .status))
         summary = ChatWorkSummaryCopy.safeDetail(try container.decodeIfPresent(String.self, forKey: .summary))
+        preview = ChatWorkSummaryCopy.safePreview(try container.decodeIfPresent(String.self, forKey: .preview))
         toolCalls = try container.decodeIfPresent([ChatToolCallSummary].self, forKey: .toolCalls) ?? []
         steps = try container.decodeIfPresent([ChatWorkStepSummary].self, forKey: .steps) ?? []
     }
@@ -641,6 +646,20 @@ private enum ChatWorkSummaryCopy {
         }
 
         return polishLegacyDetail(detail)
+    }
+
+    /// Live streamed reply text: trimmed and capped, but not rewritten —
+    /// it's the assistant's own in-progress wording.
+    static func safePreview(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !looksTechnical(trimmed) else { return nil }
+
+        if trimmed.count > 600 {
+            return String(trimmed.suffix(600))
+        }
+
+        return trimmed
     }
 
     static func safeToolSummary(_ value: String?, tool: String, label: String) -> String? {
