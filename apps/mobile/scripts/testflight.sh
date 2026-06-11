@@ -28,7 +28,10 @@ current_build_number() {
 next_build_number() {
   local current candidate
   current="$(current_build_number)"
-  candidate="${MARAITHON_MOBILE_BUILD_NUMBER:-$(date -u +%Y%m%d%H%M)}"
+  # 14-digit (with seconds): App Store Connect sorts builds numerically, and
+  # historical uploads used this format — a shorter timestamp would sort as
+  # an OLDER build and never reach testers.
+  candidate="${MARAITHON_MOBILE_BUILD_NUMBER:-$(date -u +%Y%m%d%H%M%S)}"
 
   if [[ ! "${candidate}" =~ ^[0-9]+$ ]]; then
     echo "Build number must be numeric: ${candidate}" >&2
