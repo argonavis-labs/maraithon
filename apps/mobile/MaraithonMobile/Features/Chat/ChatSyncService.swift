@@ -34,11 +34,13 @@ struct ChatSyncService {
     private let pollIntervalNanoseconds: UInt64
     private let maxPollAttempts: Int
 
+    private let maxConsecutivePollFailures = 5
+
     init(
         api: any MobileChatAPI = MobileAPIClient(),
         now: @escaping () -> Date = Date.init,
-        pollIntervalNanoseconds: UInt64 = 1_500_000_000,
-        maxPollAttempts: Int = 45
+        pollIntervalNanoseconds: UInt64 = 1_000_000_000,
+        maxPollAttempts: Int = 180
     ) {
         self.api = api
         self.now = now
@@ -209,23 +211,41 @@ struct ChatSyncService {
     ) async throws {
         guard let runID = thread.pendingRunID else { return }
         let sessionToken = try sessionToken(from: sessionStore)
+        var consecutiveFailures = 0
 
         for _ in 0..<maxPollAttempts {
             try Task.checkCancellation()
 
-            let run = try await api.getChatRun(sessionToken: sessionToken, id: runID)
-            apply(run, to: thread)
-            try modelContext.save()
+            do {
+                let run = try await api.getChatRun(sessionToken: sessionToken, id: runID)
 
-            if !run.runStatus.isPending {
-                try await refreshThread(thread, modelContext: modelContext, sessionStore: sessionStore)
-                if shouldSurfaceRunFailure(run, in: thread) {
-                    throw ChatSyncError.assistantResponseFailed(run.error)
+                if run.runStatus.isPending {
+                    apply(run, to: thread)
+                    try modelContext.save()
+                } else {
+                    // Refresh the thread first so the assistant reply and the
+                    // pending-state clear land in one merge.
+                    try await refreshThread(thread, modelContext: modelContext, sessionStore: sessionStore)
+                    if shouldSurfaceRunFailure(run, in: thread) {
+                        throw ChatSyncError.assistantResponseFailed(run.error)
+                    }
+                    return
                 }
-                return
+
+                consecutiveFailures = 0
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as ChatSyncError {
+                throw error
+            } catch {
+                // Transient request failures must not strand the chat in a
+                // frozen pending state; keep polling unless they persist.
+                consecutiveFailures += 1
+                if consecutiveFailures >= maxConsecutivePollFailures {
+                    throw error
+                }
             }
 
-            try await refreshThread(thread, modelContext: modelContext, sessionStore: sessionStore)
             try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
         }
 

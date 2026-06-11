@@ -5,6 +5,7 @@ import UIKit
 struct ChatDetailView: View {
     @Environment(SessionStore.self) private var sessionStore
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Bindable var thread: ChatThread
     var focusComposerOnAppear = false
     var initialPrompt: String?
@@ -17,6 +18,7 @@ struct ChatDetailView: View {
     @State private var errorMessage: String?
     @State private var lastFailedMessage: String?
     @State private var isSending = false
+    @State private var isPollingRun = false
     @State private var isRenamingThread = false
     @State private var draftThreadTitle = ""
     @State private var didConsumeInitialPrompt = false
@@ -134,6 +136,16 @@ struct ChatDetailView: View {
         }
         .task {
             await refreshAndPollIfNeeded()
+        }
+        .task(id: thread.pendingRunID) {
+            guard thread.pendingRunID != nil else { return }
+            await pollPendingRunIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task {
+                await pollPendingRunIfNeeded()
+            }
         }
         .onDisappear {
             sendTask?.cancel()
@@ -331,16 +343,15 @@ struct ChatDetailView: View {
                     modelContext: modelContext,
                     sessionStore: sessionStore
                 )
-                try await chatSyncService.pollPendingRun(
-                    in: thread,
-                    modelContext: modelContext,
-                    sessionStore: sessionStore
-                )
             } catch is CancellationError {
+                return
             } catch {
                 lastFailedMessage = body
                 errorMessage = MobileErrorCopy.message(for: error)
+                return
             }
+
+            await pollPendingRunIfNeeded()
         }
     }
 
@@ -395,13 +406,32 @@ struct ChatDetailView: View {
                 modelContext: modelContext,
                 sessionStore: sessionStore
             )
+            errorMessage = nil
+            lastFailedMessage = nil
+        } catch is CancellationError {
+            return
+        } catch ChatSyncError.missingSession {
+            return
+        } catch {
+            errorMessage = MobileErrorCopy.message(for: error)
+            return
+        }
+
+        await pollPendingRunIfNeeded()
+    }
+
+    private func pollPendingRunIfNeeded() async {
+        guard !isPollingRun, thread.pendingRunID != nil else { return }
+        isPollingRun = true
+        defer { isPollingRun = false }
+
+        do {
             try await chatSyncService.pollPendingRun(
                 in: thread,
                 modelContext: modelContext,
                 sessionStore: sessionStore
             )
             errorMessage = nil
-            lastFailedMessage = nil
         } catch is CancellationError {
         } catch ChatSyncError.missingSession {
         } catch {
