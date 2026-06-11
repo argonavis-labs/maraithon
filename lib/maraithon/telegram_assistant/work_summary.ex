@@ -546,6 +546,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       items
       |> Enum.map(item_summary)
       |> Enum.reject(&(is_nil(&1) or &1 == ""))
+      |> Enum.uniq()
       |> Enum.take(2)
 
     case labels do
