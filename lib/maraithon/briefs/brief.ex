@@ -71,7 +71,7 @@ defmodule Maraithon.Briefs.Brief do
     |> validate_inclusion(:status, @statuses)
     |> validate_length(:title, min: 4, max: 180)
     |> validate_length(:summary, min: 8, max: 500)
-    |> validate_length(:body, min: 12, max: 4000)
+    |> validate_length(:body, min: 12, max: 20_000)
     |> validate_length(:dedupe_key, min: 4, max: 255)
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:agent_id)

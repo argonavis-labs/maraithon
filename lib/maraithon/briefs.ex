@@ -369,14 +369,18 @@ defmodule Maraithon.Briefs do
 
   def todo_digest_prefix_text(%Brief{} = _brief, _todo), do: nil
 
+  # A generated briefing one character over a schema cap must be clamped,
+  # never rejected — a too-long body used to silently drop the whole day's
+  # briefing at the persistence boundary.
   defp normalize_attrs(attrs, user_id, agent_id) do
     %{
       "user_id" => user_id,
       "agent_id" => agent_id,
       "cadence" => read_string(attrs, "cadence", "morning"),
-      "title" => read_string(attrs, "title", @brief_title_fallback),
-      "summary" => read_string(attrs, "summary", @brief_summary_default),
-      "body" => read_string(attrs, "body", @brief_body_default),
+      "title" => attrs |> read_string("title", @brief_title_fallback) |> clamp_length(180),
+      "summary" =>
+        attrs |> read_string("summary", @brief_summary_default) |> clamp_length(500),
+      "body" => attrs |> read_string("body", @brief_body_default) |> clamp_length(20_000),
       "status" => read_string(attrs, "status", "pending"),
       "scheduled_for" => read_datetime(attrs, "scheduled_for") || DateTime.utc_now(),
       "dedupe_key" => read_string(attrs, "dedupe_key", Ecto.UUID.generate()),
@@ -384,6 +388,16 @@ defmodule Maraithon.Briefs do
       "metadata" => read_map(attrs, "metadata")
     }
   end
+
+  defp clamp_length(value, max) when is_binary(value) do
+    if String.length(value) > max do
+      String.slice(value, 0, max - 1) <> "…"
+    else
+      value
+    end
+  end
+
+  defp clamp_length(value, _max), do: value
 
   defp preserve_status("sent"), do: "sent"
   defp preserve_status(_), do: "pending"

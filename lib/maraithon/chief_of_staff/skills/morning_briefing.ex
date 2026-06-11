@@ -463,7 +463,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
                  last_generated_keys: Map.put(state.last_generated_keys, "morning", period_key)
              }}
 
-          {:error, _reason} ->
+          {:error, reason} ->
+            # Never fail this silently again: a lost record means a lost
+            # briefing day.
+            Tracing.record_error(
+              "morning_briefing record failed: " <> inspect(reason, printable_limit: 500)
+            )
+
+            Logger.warning("Morning briefing record failed",
+              user_id: context[:user_id] || state.user_id,
+              dedupe_key: state.pending_dedupe_key,
+              reason: inspect(reason, printable_limit: 500)
+            )
+
             {:idle, %{state | pending_brief_input: nil, pending_dedupe_key: nil}}
         end
       end

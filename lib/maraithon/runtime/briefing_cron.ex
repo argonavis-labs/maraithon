@@ -21,10 +21,15 @@ defmodule Maraithon.Runtime.BriefingCron do
     GenServer.start_link(__MODULE__, opts, name: @name)
   end
 
+  # If the briefing still has not landed this long after its scheduled
+  # time, tell the user by email instead of leaving an empty inbox.
+  @late_alert_after_minutes 60
+
   @impl true
   def init(_opts) do
     state = %{
-      interval_ms: Config.positive_integer(:briefing_cron_interval_ms, 60_000)
+      interval_ms: Config.positive_integer(:briefing_cron_interval_ms, 60_000),
+      alerted_keys: MapSet.new()
     }
 
     schedule_tick(5_000)
@@ -33,7 +38,8 @@ defmodule Maraithon.Runtime.BriefingCron do
 
   @impl true
   def handle_info(:tick, state) do
-    result = schedule_due_morning_briefings(DateTime.utc_now())
+    now = DateTime.utc_now()
+    result = schedule_due_morning_briefings(now)
 
     if result.scheduled > 0 or result.skipped > 0 do
       Logger.info("Briefing cron cycle",
@@ -42,6 +48,8 @@ defmodule Maraithon.Runtime.BriefingCron do
       )
     end
 
+    state = alert_late_briefings(now, state)
+
     schedule_tick(state.interval_ms)
     {:noreply, state}
   rescue
@@ -49,6 +57,59 @@ defmodule Maraithon.Runtime.BriefingCron do
       Logger.warning("Briefing cron cycle failed", reason: Exception.message(error))
       schedule_tick(state.interval_ms)
       {:noreply, state}
+  end
+
+  defp alert_late_briefings(now, state) do
+    BriefingSchedules.list_due_morning_agents(now)
+    |> Enum.filter(&briefing_late?(&1, now))
+    |> Enum.reduce(state, fn due, acc ->
+      if MapSet.member?(acc.alerted_keys, due.dedupe_key) do
+        acc
+      else
+        deliver_late_alert(due)
+        %{acc | alerted_keys: MapSet.put(acc.alerted_keys, due.dedupe_key)}
+      end
+    end)
+  end
+
+  defp briefing_late?(due, now) do
+    local_now = DateTime.add(now, due.timezone_offset_hours, :hour)
+
+    scheduled_minutes = due.morning_brief_hour_local * 60 + due.morning_brief_minute_local
+    now_minutes = local_now.hour * 60 + local_now.minute
+
+    now_minutes - scheduled_minutes >= @late_alert_after_minutes
+  end
+
+  defp deliver_late_alert(due) do
+    user_id = due.user_id
+
+    if is_binary(user_id) and String.contains?(user_id, "@") do
+      Logger.warning("Morning briefing is late; alerting user",
+        user_id: user_id,
+        dedupe_key: due.dedupe_key
+      )
+
+      Maraithon.EmailDelivery.send(user_id, %{
+        subject: "Your morning briefing is running late",
+        text_body: """
+        Your Maraithon morning briefing has not been generated yet today.
+
+        Maraithon keeps retrying automatically every 30 minutes and will email
+        the briefing as soon as it is ready. If this keeps happening, check
+        the Agents page in the web app.
+        """,
+        html_body: """
+        <p>Your Maraithon morning briefing has not been generated yet today.</p>
+        <p>Maraithon keeps retrying automatically every 30 minutes and will email
+        the briefing as soon as it is ready. If this keeps happening, check the
+        Agents page in the web app.</p>
+        """
+      })
+    end
+  rescue
+    exception ->
+      Logger.warning("Late-briefing alert failed", reason: Exception.message(exception))
   end
 
   # Briefings deliver by email and Telegram; generation must never be
