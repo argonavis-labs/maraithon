@@ -8,6 +8,7 @@ defmodule Maraithon.Todos.SourceActions do
   without hunting for the source thread.
   """
 
+  alias Maraithon.Cards.SourceContext
   alias Maraithon.Todos.{ActionDrafts, PublicMetadata, Todo}
 
   @max_draft_length 2_000
@@ -52,8 +53,10 @@ defmodule Maraithon.Todos.SourceActions do
         "draft_text" => draft,
         "draft_kind" => draft_kind(todo),
         "recipient" => recipient(metadata),
-        "recipient_handle" => recipient_handle(provider, metadata)
+        "recipient_handle" => recipient_handle(provider, metadata),
+        "subject" => card_subject(metadata)
       }
+      |> SourceContext.merge_into(SourceContext.for_todo(todo))
       |> compact()
     end
   end
@@ -197,6 +200,13 @@ defmodule Maraithon.Todos.SourceActions do
 
   defp recipient(metadata) do
     Enum.find_value(@recipient_keys, fn key ->
+      value = read_string(metadata, key)
+      if is_binary(value) and PublicMetadata.public_text?(value), do: value
+    end)
+  end
+
+  defp card_subject(metadata) do
+    Enum.find_value(~w(subject email_subject thread_subject), fn key ->
       value = read_string(metadata, key)
       if is_binary(value) and PublicMetadata.public_text?(value), do: value
     end)

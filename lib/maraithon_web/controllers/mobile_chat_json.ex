@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.MobileChatJSON do
   @moduledoc false
 
+  alias Maraithon.Cards.SourceContext
   alias Maraithon.TelegramAssistant.{PreparedAction, Run}
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.WorkSummary
@@ -417,6 +418,7 @@ defmodule MaraithonWeb.MobileChatJSON do
     base =
       %{"status" => prepared_action_status_label(prepared_action)}
       |> maybe_put_action(prepared_action)
+      |> SourceContext.merge_into(SourceContext.for_payload(payload))
 
     case prepared_action.action_type do
       "gmail_draft_send" ->
@@ -604,12 +606,19 @@ defmodule MaraithonWeb.MobileChatJSON do
         "whatsapp" -> todo_primer_whatsapp_card(user_id, structured_data, linked_todo)
         _ -> nil
       end
+      |> enrich_card_with_source_context(linked_todo, user_id)
     else
       _ -> nil
     end
   end
 
   defp todo_primer_draft_card(_user_id, _structured_data), do: nil
+
+  defp enrich_card_with_source_context(nil, _linked_todo, _user_id), do: nil
+
+  defp enrich_card_with_source_context(%{} = card, linked_todo, user_id) do
+    SourceContext.merge_into(card, SourceContext.for_todo(linked_todo, user_id: user_id))
+  end
 
   defp todo_primer_gmail_card(user_id, structured_data, linked_todo) do
     draft = read_map(linked_todo, "action_draft")

@@ -12,13 +12,21 @@ defmodule Maraithon.Todos.PublicMetadata do
   @public_todo_keys MapSet.new(~w(
     account
     account_email
+    bcc
     body_excerpt
+    cc
+    channel_name
     company
     contact
     context_brief
+    conversation_name
     due_context
     email_subject
     from
+    recipient
+    team_name
+    to
+    workspace_name
     holiday_date
     holiday_name
     life_domain
