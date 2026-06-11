@@ -1071,6 +1071,7 @@ defmodule Maraithon.Crm do
     order_by(
       query,
       [person],
+      desc: person.communication_score,
       desc: person.relationship_strength,
       desc: person.affinity_score,
       desc_nulls_last: person.last_interaction_at,
@@ -1091,6 +1092,7 @@ defmodule Maraithon.Crm do
           person.last_name,
           ^query_text
         ),
+      desc: person.communication_score,
       desc: person.relationship_strength,
       desc: person.affinity_score,
       desc_nulls_last: person.last_interaction_at,

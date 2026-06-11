@@ -54,6 +54,17 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     enqueue("relationship_learning", attrs)
   end
 
+  def enqueue_communication_score_refresh(user_id, attrs \\ %{}) when is_binary(user_id) do
+    attrs =
+      attrs
+      |> normalize_map()
+      |> Map.put("user_id", user_id)
+      |> Map.put_new("queue", "relationships")
+      |> Map.put_new("dedupe_key", "#{user_id}:communication_score_refresh")
+
+    enqueue("communication_score_refresh", attrs)
+  end
+
   def enqueue_open_loop_check(user_id, attrs \\ %{}) when is_binary(user_id) do
     attrs =
       attrs

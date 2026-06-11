@@ -347,6 +347,38 @@ defmodule MaraithonWeb.PeopleLive do
           family_proxy_form={@family_proxy_form}
         />
 
+        <.panel :if={keep_in_touch_people(@people) != []} body_class="px-5 py-0">
+          <:header>
+            <div>
+              <h2 class="text-sm/6 font-semibold text-zinc-950">Keep in touch</h2>
+              <p class="text-sm/6 text-zinc-500">
+                Important relationships drifting past their usual rhythm.
+              </p>
+            </div>
+          </:header>
+          <ul role="list" class="divide-y divide-zinc-950/5">
+            <li
+              :for={person <- keep_in_touch_people(@people)}
+              class="flex items-center justify-between gap-3 py-3"
+            >
+              <button
+                type="button"
+                phx-click="open_person_detail"
+                phx-value-id={person.id}
+                class="min-w-0 flex-1 text-left"
+              >
+                <span class="block truncate text-sm/6 font-medium text-zinc-950">
+                  <%= person.display_name %>
+                </span>
+                <span class="block truncate text-xs/5 text-zinc-500">
+                  <%= keep_in_touch_note(person) %>
+                </span>
+              </button>
+              <.badge color="amber">Overdue</.badge>
+            </li>
+          </ul>
+        </.panel>
+
         <.panel body_class="px-5 py-4">
           <.form
             for={@filter_form}
@@ -515,10 +547,11 @@ defmodule MaraithonWeb.PeopleLive do
     )
   end
 
-  # Smart-CRM ordering: who matters most right now. Relationship strength
-  # leads, rapport and interaction volume reinforce it, and recent contact
-  # boosts while long silence decays. Search queries keep their semantic
-  # relevance order instead.
+  # Smart-CRM ordering: who matters most right now. The communication score
+  # (computed from real messages, meetings, and todos with recency decay)
+  # leads, relationship strength and rapport reinforce it, and recent
+  # contact boosts while long silence decays. Search queries keep their
+  # semantic relevance order instead.
   defp rank_people(people, query_text) when query_text in [nil, ""] do
     now = DateTime.utc_now()
     Enum.sort_by(people, &(-relationship_rank(&1, now)))
@@ -527,6 +560,7 @@ defmodule MaraithonWeb.PeopleLive do
   defp rank_people(people, _query_text), do: people
 
   defp relationship_rank(person, now) do
+    communication = person.communication_score || 0
     strength = person.relationship_strength || 0
     affinity = person.affinity_score || 0
     interactions = min(person.interaction_count || 0, 200)
@@ -548,8 +582,40 @@ defmodule MaraithonWeb.PeopleLive do
           0
       end
 
-    strength * 2 + affinity + interactions / 4 + recency
+    communication * 3 + strength * 2 + affinity + interactions / 4 + recency
   end
+
+  @doc false
+  def keep_in_touch_people(people) do
+    people
+    |> Enum.filter(fn person ->
+      get_in(person.metadata || %{}, ["communication_signals", "overdue"]) == true
+    end)
+    |> Enum.take(5)
+  end
+
+  defp keep_in_touch_note(person) do
+    signals = get_in(person.metadata || %{}, ["communication_signals"]) || %{}
+    days = signals["days_since_last"]
+    cadence = signals["cadence_days"]
+
+    cond do
+      is_integer(days) and is_integer(cadence) ->
+        "#{days} days since last touch · usually every #{cadence_label(cadence)}"
+
+      is_integer(days) ->
+        "#{days} days since last touch"
+
+      true ->
+        "No recent contact"
+    end
+  end
+
+  defp cadence_label(days) when days <= 1, do: "day"
+  defp cadence_label(days) when days <= 9, do: "#{days} days"
+  defp cadence_label(days) when days <= 13, do: "week or two"
+  defp cadence_label(days) when days <= 35, do: "month"
+  defp cadence_label(_days), do: "few months"
 
   attr :family_context_people, :list, required: true
   attr :family_onboarding_mode, :string, default: nil

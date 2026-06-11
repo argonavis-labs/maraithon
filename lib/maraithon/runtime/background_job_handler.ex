@@ -88,10 +88,27 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   def execute(%BackgroundJob{job_type: "relationship_ingestion"} = job) do
     case payload_string(job, "window_id", nil) do
       window_id when is_binary(window_id) ->
-        process_ingestion_window(window_id)
+        result = process_ingestion_window(window_id)
+
+        # New communications change who matters; refresh the activity-based
+        # ranking after each learned window.
+        with {:ok, user_id} <- require_user_id(job) do
+          _ = Maraithon.Runtime.BackgroundJobs.enqueue_communication_score_refresh(user_id)
+        end
+
+        result
 
       _ ->
         {:error, :missing_window_id}
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "communication_score_refresh"} = job) do
+    with {:ok, user_id} <- require_user_id(job) do
+      case Maraithon.Crm.CommunicationScore.refresh_for_user(user_id) do
+        {:ok, summary} -> {:ok, Map.put(summary, :source, "communication_score_refresh")}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
