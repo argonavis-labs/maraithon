@@ -52,6 +52,20 @@ defmodule Maraithon.Crm.CommunicationScore do
   def refresh_for_user(user_id) when is_binary(user_id) do
     people = active_people(user_id)
     own_handles = own_handles(user_id)
+
+    # A person record holding one of the user's own handles is the user;
+    # their own traffic must not rank them in their own CRM. Their handles
+    # also extend the own-handle set (personal phone, personal email).
+    {self_people, people} =
+      Enum.split_with(people, fn person ->
+        person |> person_handles() |> Enum.any?(&MapSet.member?(own_handles, &1))
+      end)
+
+    own_handles =
+      self_people
+      |> Enum.flat_map(&person_handles/1)
+      |> Enum.into(own_handles)
+
     handle_index = handle_index(people)
 
     events =
@@ -62,6 +76,10 @@ defmodule Maraithon.Crm.CommunicationScore do
 
     events_by_person = Enum.group_by(events, & &1.person_id)
     now = DateTime.utc_now()
+
+    Enum.each(self_people, fn person ->
+      persist(person, %{score: 0, signals: nil}, now)
+    end)
 
     scored =
       people
