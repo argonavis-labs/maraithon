@@ -123,10 +123,18 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   def profile_for(attrs) when is_map(attrs) do
     text = Map.get(attrs, :text) || Map.get(attrs, "text")
-    tier = tier_for_text(text)
+    routed_tier = tier_for_text(text)
+    tier = cap_tier_for_interactive_surface(routed_tier, attrs)
     request_focus = request_focus_for_attrs(attrs, text)
     task_class = task_class_for(tier, request_focus, text)
-    route_reason = route_reason_for(tier, request_focus, text)
+
+    route_reason =
+      if tier == routed_tier do
+        route_reason_for(tier, request_focus, text)
+      else
+        "interactive_chat_starts_fast:#{route_label(route_reason_for(routed_tier, request_focus, text))}"
+      end
+
     model = model_for_tier(tier)
     reasoning_effort = reasoning_effort_for_tier(tier)
 
@@ -193,6 +201,18 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   end
 
   def tier_for_text(_text), do: :chat
+
+  # Interactive chat (mobile/web) starts on the chat tier even for
+  # reasoning-pattern asks: the user is watching, and the chat model can
+  # still hand off via request_deeper_analysis when depth is truly needed.
+  # Telegram and background runs keep pattern-based reasoning routing.
+  defp cap_tier_for_interactive_surface(:reasoning, attrs) do
+    surface = Map.get(attrs, :surface) || Map.get(attrs, "surface")
+
+    if surface == "mobile", do: :chat, else: :reasoning
+  end
+
+  defp cap_tier_for_interactive_surface(tier, _attrs), do: tier
 
   defp light_chat?(normalized) when is_binary(normalized) do
     words = String.split(normalized, " ", trim: true)

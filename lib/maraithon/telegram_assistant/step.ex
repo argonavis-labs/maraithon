@@ -41,5 +41,6 @@ defmodule Maraithon.TelegramAssistant.Step do
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:run_id)
     |> unique_constraint([:run_id, :sequence])
+    |> unique_constraint(:id, name: :telegram_assistant_steps_pkey)
   end
 end

@@ -236,6 +236,23 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   def create_step(attrs) when is_map(attrs) do
+    case insert_step(attrs) do
+      {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+        # A primary-key collision means the generated id raced an existing
+        # row (seen once during deploy churn); retry once with a fresh id
+        # instead of failing the whole run.
+        if Keyword.has_key?(errors, :id) do
+          insert_step(attrs)
+        else
+          {:error, changeset}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp insert_step(attrs) do
     %Step{}
     |> Step.changeset(attrs)
     |> Repo.insert()

@@ -123,13 +123,10 @@ defmodule Maraithon.AssistantChat do
            }}
 
         nil ->
-          case TelegramConversations.active_run_for_conversation(conversation.id) do
-            %Run{} = run ->
-              {:error, :assistant_run_in_progress, run, reload_thread(conversation)}
-
-            nil ->
-              insert_message_and_run(conversation, body, client_message_id)
-          end
+          # Messages sent while a run is active queue behind it — the
+          # per-conversation ThreadWorker processes runs FIFO, so a busy
+          # assistant must never drop a message on the floor.
+          insert_message_and_run(conversation, body, client_message_id)
       end
     else
       nil -> {:error, :not_found}
