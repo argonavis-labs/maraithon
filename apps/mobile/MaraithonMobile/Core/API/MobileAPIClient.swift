@@ -333,6 +333,9 @@ struct MobileAPIClient: Sendable {
             let draftKind: String?
             let recipient: String?
             let recipientHandle: String?
+            let subject: String?
+            let participants: [CardParticipant]
+            let conversation: [CardConversationMessage]
 
             enum CodingKeys: String, CodingKey {
                 case provider
@@ -343,6 +346,24 @@ struct MobileAPIClient: Sendable {
                 case draftKind = "draft_kind"
                 case recipient
                 case recipientHandle = "recipient_handle"
+                case subject
+                case participants
+                case conversation
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                provider = try container.decodeIfPresent(String.self, forKey: .provider)
+                providerLabel = try container.decodeIfPresent(String.self, forKey: .providerLabel)
+                openURL = try container.decodeIfPresent(String.self, forKey: .openURL)
+                openLabel = try container.decodeIfPresent(String.self, forKey: .openLabel)
+                draftText = try container.decodeIfPresent(String.self, forKey: .draftText)
+                draftKind = try container.decodeIfPresent(String.self, forKey: .draftKind)
+                recipient = try container.decodeIfPresent(String.self, forKey: .recipient)
+                recipientHandle = try container.decodeIfPresent(String.self, forKey: .recipientHandle)
+                subject = try container.decodeIfPresent(String.self, forKey: .subject)
+                participants = try container.decodeIfPresent([CardParticipant].self, forKey: .participants) ?? []
+                conversation = try container.decodeIfPresent([CardConversationMessage].self, forKey: .conversation) ?? []
             }
         }
 

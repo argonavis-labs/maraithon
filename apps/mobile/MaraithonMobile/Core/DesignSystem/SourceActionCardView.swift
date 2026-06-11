@@ -33,7 +33,22 @@ struct SourceActionCardView: View {
                 Spacer(minLength: 8)
             }
 
+            if !action.participants.isEmpty {
+                CardParticipantsSection(participants: action.participants)
+            }
+
+            if !action.conversation.isEmpty {
+                CardConversationSection(messages: action.conversation)
+            }
+
             if let draftText = action.draftText, action.hasDraft {
+                if !action.conversation.isEmpty {
+                    Text(SourceActionCopy.draftSectionTitle)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                }
+
                 Text(draftText)
                     .font(.subheadline)
                     .foregroundStyle(.primary)
@@ -121,4 +136,5 @@ enum SourceActionCopy {
     static let copyTitle = "Copy draft"
     static let copiedTitle = "Copied"
     static let openFallbackTitle = "Open source"
+    static let draftSectionTitle = "Suggested reply"
 }

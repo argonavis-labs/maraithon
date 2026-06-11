@@ -252,7 +252,26 @@ enum ProductionDataSync {
             draftKind: cleanedText(remoteTodo.actionCard?.sourceAction?.draftKind),
             draftRecipient: cleanedText(remoteTodo.actionCard?.sourceAction?.recipient),
             draftRecipientHandle: cleanedText(remoteTodo.actionCard?.sourceAction?.recipientHandle),
+            sourceSubject: cleanedText(remoteTodo.actionCard?.sourceAction?.subject),
+            sourceContextData: encodedSourceContext(remoteTodo.actionCard?.sourceAction),
             contact: contactsByID.flatMap { relatedContact(for: remoteTodo, contactsByID: $0) }
+        )
+    }
+
+    private static func encodedSourceContext(
+        _ sourceAction: MobileAPIClient.RemoteActionCard.SourceAction?
+    ) -> Data? {
+        guard let sourceAction,
+              !(sourceAction.participants.isEmpty && sourceAction.conversation.isEmpty)
+        else {
+            return nil
+        }
+
+        return try? JSONEncoder().encode(
+            TodoStoredSourceContext(
+                participants: sourceAction.participants,
+                conversation: sourceAction.conversation
+            )
         )
     }
 
@@ -272,6 +291,8 @@ enum ProductionDataSync {
         todo.draftKind = cleanedText(actionCard?.sourceAction?.draftKind)
         todo.draftRecipient = cleanedText(actionCard?.sourceAction?.recipient)
         todo.draftRecipientHandle = cleanedText(actionCard?.sourceAction?.recipientHandle)
+        todo.sourceSubject = cleanedText(actionCard?.sourceAction?.subject)
+        todo.sourceContextData = encodedSourceContext(actionCard?.sourceAction)
     }
 
     static func contact(from remotePerson: MobileAPIClient.RemotePerson, id: UUID) -> CRMContact {

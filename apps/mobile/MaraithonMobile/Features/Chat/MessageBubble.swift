@@ -178,6 +178,21 @@ private struct ChatDraftCardView: View {
 
             Divider()
 
+            if !card.isTerminal, !card.conversation.isEmpty || !contextParticipants.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !contextParticipants.isEmpty {
+                        CardParticipantsSection(participants: contextParticipants)
+                    }
+
+                    if !card.conversation.isEmpty {
+                        CardConversationSection(messages: card.conversation)
+                    }
+                }
+                .padding(12)
+
+                Divider()
+            }
+
             Group {
                 if card.isTerminal {
                     completedDraft
@@ -242,6 +257,16 @@ private struct ChatDraftCardView: View {
         .sheet(item: $messageComposeDraft) { draft in
             MessageComposeView(draft: draft)
         }
+    }
+
+    /// Gmail drafts already render editable From/To/Cc/Bcc rows, so only the
+    /// additional people show there; other providers show everyone.
+    private var contextParticipants: [CardParticipant] {
+        if card.providerKey == "gmail" {
+            return card.participants.filter { ($0.role ?? "participant") == "participant" }
+        }
+
+        return card.participants
     }
 
     private var header: some View {

@@ -88,4 +88,13 @@ enum JSONValue: Codable, Equatable, Sendable {
             nil
         }
     }
+
+    var array: [JSONValue]? {
+        switch self {
+        case .array(let value):
+            value
+        case .string, .int, .double, .bool, .object, .null:
+            nil
+        }
+    }
 }

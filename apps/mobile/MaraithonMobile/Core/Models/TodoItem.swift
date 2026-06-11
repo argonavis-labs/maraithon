@@ -28,6 +28,8 @@ final class TodoItem {
     var draftKind: String?
     var draftRecipient: String?
     var draftRecipientHandle: String?
+    var sourceSubject: String?
+    var sourceContextData: Data?
     @Relationship(deleteRule: .nullify, inverse: \CRMContact.todos) var contact: CRMContact?
 
     var priority: TodoPriority {
@@ -61,6 +63,8 @@ final class TodoItem {
         draftKind: String? = nil,
         draftRecipient: String? = nil,
         draftRecipientHandle: String? = nil,
+        sourceSubject: String? = nil,
+        sourceContextData: Data? = nil,
         contact: CRMContact? = nil
     ) {
         self.id = id
@@ -88,10 +92,13 @@ final class TodoItem {
         self.draftKind = draftKind
         self.draftRecipient = draftRecipient
         self.draftRecipientHandle = draftRecipientHandle
+        self.sourceSubject = sourceSubject
+        self.sourceContextData = sourceContextData
         self.contact = contact
     }
 
     var sourceAction: TodoSourceAction? {
+        let context = storedSourceContext
         let action = TodoSourceAction(
             provider: sourceProvider,
             providerLabel: sourceProviderLabel,
@@ -100,9 +107,28 @@ final class TodoItem {
             draftText: draftText,
             draftKind: draftKind,
             recipient: draftRecipient,
-            recipientHandle: draftRecipientHandle
+            recipientHandle: draftRecipientHandle,
+            subject: sourceSubject,
+            participants: context?.participants ?? [],
+            conversation: context?.conversation ?? []
         )
         return action.isEmpty ? nil : action
+    }
+
+    var storedSourceContext: TodoStoredSourceContext? {
+        guard let sourceContextData else { return nil }
+        return try? JSONDecoder().decode(TodoStoredSourceContext.self, from: sourceContextData)
+    }
+
+    func setSourceContext(participants: [CardParticipant], conversation: [CardConversationMessage]) {
+        if participants.isEmpty && conversation.isEmpty {
+            sourceContextData = nil
+            return
+        }
+
+        sourceContextData = try? JSONEncoder().encode(
+            TodoStoredSourceContext(participants: participants, conversation: conversation)
+        )
     }
 
     var displayNextAction: String? {
@@ -126,4 +152,10 @@ final class TodoItem {
         isCompleted = completed
         completedAt = completed ? date : nil
     }
+}
+
+/// Codable bundle persisted on TodoItem for participants + conversation.
+struct TodoStoredSourceContext: Codable, Equatable, Sendable {
+    var participants: [CardParticipant] = []
+    var conversation: [CardConversationMessage] = []
 }

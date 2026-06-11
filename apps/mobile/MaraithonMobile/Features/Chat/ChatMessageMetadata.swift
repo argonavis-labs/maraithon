@@ -32,6 +32,8 @@ struct ChatDraftCard: Codable, Equatable, Sendable {
     var sendLabel: String?
     var openLabel: String?
     var openURL: URL?
+    var participants: [CardParticipant] = []
+    var conversation: [CardConversationMessage] = []
 
     enum CodingKeys: String, CodingKey {
         case provider
@@ -49,6 +51,8 @@ struct ChatDraftCard: Codable, Equatable, Sendable {
         case sendLabel = "send_label"
         case openLabel = "open_label"
         case openURL = "open_url"
+        case participants
+        case conversation
     }
 
     init?(_ value: JSONValue?) {
@@ -80,6 +84,9 @@ struct ChatDraftCard: Codable, Equatable, Sendable {
         if let urlText = Self.clean(object["open_url"]?.string) {
             openURL = URL(string: urlText)
         }
+
+        participants = CardSourceContextParsing.participants(object["participants"])
+        conversation = CardSourceContextParsing.conversation(object["conversation"])
     }
 
     init(

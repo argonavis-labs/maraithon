@@ -11,6 +11,9 @@ struct TodoSourceAction: Equatable {
     var draftKind: String?
     var recipient: String?
     var recipientHandle: String?
+    var subject: String?
+    var participants: [CardParticipant] = []
+    var conversation: [CardConversationMessage] = []
 
     var openURL: URL? {
         guard let openURLString, !openURLString.isEmpty else { return nil }
@@ -35,7 +38,7 @@ struct TodoSourceAction: Equatable {
     }
 
     var subtitle: String? {
-        let parts = [providerLabel, recipient].compactMap { value in
+        let parts = [providerLabel, recipient, subject].compactMap { value in
             value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? value : nil
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
