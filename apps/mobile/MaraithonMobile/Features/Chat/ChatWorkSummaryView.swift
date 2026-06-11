@@ -102,6 +102,14 @@ struct ChatPendingWorkSummary: View {
                     .foregroundStyle(.primary.opacity(0.8))
                     .fixedSize(horizontal: false, vertical: true)
                     .contentTransition(.interpolate)
+            } else if let thinking = summary?.thinking, !thinking.isEmpty {
+                Text(thinking + " ▍")
+                    .font(.caption)
+                    .italic()
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(4)
+                    .contentTransition(.interpolate)
             }
         }
         .animation(.snappy, value: summary?.steps.count ?? 0)

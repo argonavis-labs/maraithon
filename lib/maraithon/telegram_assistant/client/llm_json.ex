@@ -65,6 +65,11 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
         end
       end
 
+      params =
+        Map.put(params, "_on_reasoning", fn delta ->
+          RunStreamPreview.append_thinking(run_id, delta)
+        end)
+
       try do
         LLM.stream_complete(params, on_chunk)
       after

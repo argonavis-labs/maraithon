@@ -100,6 +100,9 @@ defmodule Maraithon.LLM.OpenRouterProvider do
   end
 
   defp do_stream_complete(params, api_key, on_chunk) do
+    # Optional callback for model reasoning deltas; never sent to the API.
+    {on_reasoning, params} = Map.pop(params, "_on_reasoning")
+
     body =
       params
       |> build_body()
@@ -108,7 +111,7 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     model = body.model
 
     Tracing.with_span("llm.request", request_span_attributes(body, true), fn ->
-      do_stream_request(body, params, api_key, on_chunk, model)
+      do_stream_request(body, params, api_key, {on_chunk, on_reasoning}, model)
     end)
   end
 
@@ -224,7 +227,9 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     get_in(response, ["usage", primary_key]) || get_in(response, ["usage", fallback_key]) || 0
   end
 
-  defp stream_collector(on_chunk) do
+  defp stream_collector(callbacks) do
+    callbacks = normalize_stream_callbacks(callbacks)
+
     fn {:data, data}, {req, resp} ->
       acc =
         Map.get(resp.private, :stream_acc, %{
@@ -238,21 +243,24 @@ defmodule Maraithon.LLM.OpenRouterProvider do
       next_acc =
         acc
         |> Map.update!(:buffer, &(&1 <> data))
-        |> drain_events(on_chunk)
+        |> drain_events(callbacks)
 
       {:cont, {req, Req.Response.put_private(resp, :stream_acc, next_acc)}}
     end
   end
 
-  defp drain_events(%{buffer: buffer} = acc, on_chunk) do
+  defp normalize_stream_callbacks({on_chunk, on_reasoning}), do: {on_chunk, on_reasoning}
+  defp normalize_stream_callbacks(on_chunk), do: {on_chunk, nil}
+
+  defp drain_events(%{buffer: buffer} = acc, callbacks) do
     case :binary.split(buffer, "\n\n") do
       [event_block, rest] ->
         next_acc =
           acc
           |> Map.put(:buffer, rest)
-          |> apply_event(event_block, on_chunk)
+          |> apply_event(event_block, callbacks)
 
-        drain_events(next_acc, on_chunk)
+        drain_events(next_acc, callbacks)
 
       [_partial] ->
         acc
@@ -289,16 +297,17 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     end
   end
 
-  defp apply_decoded_event(acc, %{"choices" => choices} = event, on_chunk) do
+  defp apply_decoded_event(acc, %{"choices" => choices} = event, {on_chunk, on_reasoning}) do
     delta = extract_stream_delta(choices)
 
     if delta != "" do
-      try do
-        on_chunk.(delta)
-      rescue
-        error ->
-          Logger.warning("Stream chunk callback raised", reason: Exception.message(error))
-      end
+      safe_callback(on_chunk, delta)
+    end
+
+    reasoning_delta = extract_reasoning_delta(choices)
+
+    if reasoning_delta != "" and is_function(on_reasoning, 1) do
+      safe_callback(on_reasoning, reasoning_delta)
     end
 
     acc
@@ -316,10 +325,27 @@ defmodule Maraithon.LLM.OpenRouterProvider do
 
   defp apply_decoded_event(acc, _event, _on_chunk), do: acc
 
+  defp safe_callback(callback, delta) do
+    callback.(delta)
+  rescue
+    error ->
+      Logger.warning("Stream chunk callback raised", reason: Exception.message(error))
+  end
+
   defp extract_stream_delta([%{"delta" => %{"content" => content}} | _]),
     do: normalize_content(content)
 
   defp extract_stream_delta(_choices), do: ""
+
+  defp extract_reasoning_delta([%{"delta" => %{"reasoning" => reasoning}} | _])
+       when is_binary(reasoning),
+       do: reasoning
+
+  defp extract_reasoning_delta([%{"delta" => %{"reasoning_content" => reasoning}} | _])
+       when is_binary(reasoning),
+       do: reasoning
+
+  defp extract_reasoning_delta(_choices), do: ""
 
   defp extract_stream_finish_reason([%{"finish_reason" => reason} | _])
        when is_binary(reason),

@@ -236,6 +236,7 @@ struct ChatWorkSummary: Codable, Equatable, Sendable {
     var status: String?
     var summary: String?
     var preview: String?
+    var thinking: String?
     var toolCalls: [ChatToolCallSummary] = []
     var steps: [ChatWorkStepSummary] = []
 
@@ -248,6 +249,7 @@ struct ChatWorkSummary: Codable, Equatable, Sendable {
         case status
         case summary
         case preview
+        case thinking
         case toolCalls = "tool_calls"
         case steps
     }
@@ -257,6 +259,7 @@ struct ChatWorkSummary: Codable, Equatable, Sendable {
         status: String? = nil,
         summary: String? = nil,
         preview: String? = nil,
+        thinking: String? = nil,
         toolCalls: [ChatToolCallSummary] = [],
         steps: [ChatWorkStepSummary] = []
     ) {
@@ -264,6 +267,7 @@ struct ChatWorkSummary: Codable, Equatable, Sendable {
         self.status = ChatWorkSummaryCopy.safeStatus(status)
         self.summary = ChatWorkSummaryCopy.safeDetail(summary)
         self.preview = ChatWorkSummaryCopy.safePreview(preview)
+        self.thinking = ChatWorkSummaryCopy.safePreview(thinking)
         self.toolCalls = toolCalls
         self.steps = steps
     }
@@ -274,6 +278,7 @@ struct ChatWorkSummary: Codable, Equatable, Sendable {
         status = ChatWorkSummaryCopy.safeStatus(try container.decodeIfPresent(String.self, forKey: .status))
         summary = ChatWorkSummaryCopy.safeDetail(try container.decodeIfPresent(String.self, forKey: .summary))
         preview = ChatWorkSummaryCopy.safePreview(try container.decodeIfPresent(String.self, forKey: .preview))
+        thinking = ChatWorkSummaryCopy.safePreview(try container.decodeIfPresent(String.self, forKey: .thinking))
         toolCalls = try container.decodeIfPresent([ChatToolCallSummary].self, forKey: .toolCalls) ?? []
         steps = try container.decodeIfPresent([ChatWorkStepSummary].self, forKey: .steps) ?? []
     }

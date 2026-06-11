@@ -21,34 +21,47 @@ defmodule Maraithon.TelegramAssistant.RunStreamPreview do
 
   @doc "Clears the preview for a run; called when a model turn starts streaming."
   def reset(run_id) when is_binary(run_id) do
-    safe_insert(run_id, "")
+    safe_insert(run_id, "", "")
   end
 
   def reset(_run_id), do: :ok
 
   @doc "Appends streamed reply text to a run's preview."
   def append(run_id, delta) when is_binary(run_id) and is_binary(delta) and delta != "" do
-    current =
-      case safe_lookup(run_id) do
-        {text, _at} -> text
-        nil -> ""
-      end
-
-    safe_insert(run_id, tail_text(current <> delta))
+    {reply, thinking} = current(run_id)
+    safe_insert(run_id, tail_text(reply <> delta), thinking)
   end
 
   def append(_run_id, _delta), do: :ok
 
-  @doc "Returns the current preview text for a run, or nil."
+  @doc "Appends streamed model reasoning to a run's preview."
+  def append_thinking(run_id, delta)
+      when is_binary(run_id) and is_binary(delta) and delta != "" do
+    {reply, thinking} = current(run_id)
+    safe_insert(run_id, reply, tail_text(thinking <> delta))
+  end
+
+  def append_thinking(_run_id, _delta), do: :ok
+
+  @doc "Returns `%{reply: text | nil, thinking: text | nil}` for a run, or nil."
   def snapshot(run_id) when is_binary(run_id) do
-    case safe_lookup(run_id) do
-      {"", _at} -> nil
-      {text, _at} -> text
-      nil -> nil
+    case current(run_id) do
+      {"", ""} -> nil
+      {reply, thinking} -> %{reply: presence(reply), thinking: presence(thinking)}
     end
   end
 
   def snapshot(_run_id), do: nil
+
+  defp current(run_id) do
+    case safe_lookup(run_id) do
+      {reply, thinking, _at} -> {reply, thinking}
+      nil -> {"", ""}
+    end
+  end
+
+  defp presence(""), do: nil
+  defp presence(text), do: text
 
   @doc "Drops the preview once a run finishes."
   def delete(run_id) when is_binary(run_id) do
@@ -71,7 +84,7 @@ defmodule Maraithon.TelegramAssistant.RunStreamPreview do
   def handle_info(:sweep, state) do
     cutoff = System.monotonic_time(:millisecond) - @max_age_ms
 
-    :ets.select_delete(@table, [{{:_, :_, :"$1"}, [{:<, :"$1", cutoff}], [true]}])
+    :ets.select_delete(@table, [{{:_, :_, :_, :"$1"}, [{:<, :"$1", cutoff}], [true]}])
 
     schedule_sweep()
     {:noreply, state}
@@ -81,8 +94,8 @@ defmodule Maraithon.TelegramAssistant.RunStreamPreview do
     Process.send_after(self(), :sweep, @sweep_interval)
   end
 
-  defp safe_insert(run_id, text) do
-    :ets.insert(@table, {run_id, text, System.monotonic_time(:millisecond)})
+  defp safe_insert(run_id, reply, thinking) do
+    :ets.insert(@table, {run_id, reply, thinking, System.monotonic_time(:millisecond)})
     :ok
   rescue
     ArgumentError -> :ok
@@ -90,7 +103,7 @@ defmodule Maraithon.TelegramAssistant.RunStreamPreview do
 
   defp safe_lookup(run_id) do
     case :ets.lookup(@table, run_id) do
-      [{^run_id, text, at}] -> {text, at}
+      [{^run_id, reply, thinking, at}] -> {reply, thinking, at}
       _ -> nil
     end
   rescue

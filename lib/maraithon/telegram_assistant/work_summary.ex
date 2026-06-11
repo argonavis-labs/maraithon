@@ -58,12 +58,15 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     steps = run_steps(run)
     tool_calls = tool_calls_from_steps(steps)
 
+    live = live_preview(run)
+
     %{
       "headline" => run_headline(run, steps, tool_calls),
       "status" => run.status,
       "tool_calls" => tool_calls,
       "steps" => steps |> Enum.filter(&visible_step?/1) |> Enum.map(&step_summary/1),
-      "preview" => live_preview(run)
+      "preview" => live[:reply],
+      "thinking" => live[:thinking]
     }
     |> drop_blank_values()
   end
@@ -97,20 +100,40 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   defp visible_step?(%Step{step_type: "tool_call"}), do: true
   defp visible_step?(_step), do: false
 
-  # Rolling text of the reply currently being streamed, so polling clients
-  # can show the answer being written instead of a bare spinner.
+  # Rolling text of the reply (and model thinking) currently being streamed,
+  # so polling clients can show the answer being written instead of a spinner.
+  # Thinking is only sent while no reply text exists yet, and only its tail.
   defp live_preview(%Run{status: "running", id: run_id}) do
     case Maraithon.TelegramAssistant.RunStreamPreview.snapshot(run_id) do
-      text when is_binary(text) ->
-        text = String.trim(text)
-        if text != "" and not technical_result_text?(text), do: text
+      %{} = snapshot ->
+        reply = clean_live_text(snapshot[:reply])
+        thinking = if is_nil(reply), do: clean_live_text(tail_live_text(snapshot[:thinking]))
+
+        %{reply: reply, thinking: thinking}
 
       _ ->
-        nil
+        %{}
     end
   end
 
-  defp live_preview(_run), do: nil
+  defp live_preview(_run), do: %{}
+
+  defp clean_live_text(value) when is_binary(value) do
+    text = String.trim(value)
+    if text != "" and not technical_result_text?(text), do: text
+  end
+
+  defp clean_live_text(_value), do: nil
+
+  defp tail_live_text(value) when is_binary(value) do
+    if String.length(value) > 240 do
+      String.slice(value, -240, 240)
+    else
+      value
+    end
+  end
+
+  defp tail_live_text(_value), do: nil
 
   defp run_steps(%Run{id: run_id, steps: steps}) when is_list(steps) do
     steps
