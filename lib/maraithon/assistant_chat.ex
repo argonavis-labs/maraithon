@@ -194,18 +194,24 @@ defmodule Maraithon.AssistantChat do
     with %Run{} = run <- Repo.get(Run, run_id),
          %Conversation{} = conversation <- Repo.get(Conversation, conversation_id),
          %Turn{} = user_turn <- Repo.get(Turn, user_turn_id) do
-      Runner.run_inbound(%{
-        user_id: run.user_id,
-        chat_id: run.chat_id,
-        text: user_turn.text,
-        conversation: conversation,
-        user_turn: user_turn,
-        surface: "mobile",
-        request_focus: request_focus_for(conversation),
-        linked_todo_id: linked_todo_id(conversation),
-        run: run,
-        started_at: run.started_at
-      })
+      # Recovery sweeps may re-dispatch a run the original cast already
+      # handled; only queued runs execute.
+      if run.status == "queued" do
+        Runner.run_inbound(%{
+          user_id: run.user_id,
+          chat_id: run.chat_id,
+          text: user_turn.text,
+          conversation: conversation,
+          user_turn: user_turn,
+          surface: "mobile",
+          request_focus: request_focus_for(conversation),
+          linked_todo_id: linked_todo_id(conversation),
+          run: run,
+          started_at: run.started_at
+        })
+      else
+        {:ok, :already_processed}
+      end
     else
       _ -> {:error, :queued_request_not_found}
     end

@@ -33,6 +33,7 @@ defmodule Maraithon.Application do
        strategy: :one_for_one, name: Maraithon.TelegramAssistant.ChatSupervisor},
       {Registry, keys: :unique, name: Maraithon.AssistantChat.ThreadRegistry},
       {DynamicSupervisor, strategy: :one_for_one, name: Maraithon.AssistantChat.ThreadSupervisor},
+      Maraithon.AssistantChat.RunRecovery,
       # Maraithon runtime supervisor (agents, scheduler, effect runner)
       Maraithon.Runtime.Supervisor,
       # Start to serve requests, typically the last entry

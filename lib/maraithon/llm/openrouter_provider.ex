@@ -433,6 +433,10 @@ defmodule Maraithon.LLM.OpenRouterProvider do
   defp maybe_put_reasoning(body, params) do
     case reasoning_value(params) do
       nil -> body
+      # Hybrid-thinking models (qwen3.x) reason by default when the field is
+      # omitted; "none" must be an explicit opt-out or chat-tier calls burn
+      # a full hidden thinking phase per turn.
+      :disabled -> Map.put(body, :reasoning, %{enabled: false})
       %{} = reasoning -> Map.put(body, :reasoning, reasoning)
       effort -> Map.put(body, :reasoning, %{effort: effort})
     end
@@ -459,6 +463,9 @@ defmodule Maraithon.LLM.OpenRouterProvider do
       {"exclude", value}, acc ->
         Map.put(acc, :exclude, value)
 
+      {"enabled", value}, acc when is_boolean(value) ->
+        Map.put(acc, :enabled, value)
+
       {key, value}, acc when is_atom(key) ->
         Map.put(acc, key, value)
 
@@ -477,7 +484,8 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     normalized = effort |> String.downcase() |> String.trim()
 
     cond do
-      normalized in ["", "none", "off"] -> nil
+      normalized == "" -> nil
+      normalized in ["none", "off"] -> :disabled
       normalized in @reasoning_efforts -> normalized
       true -> "medium"
     end
