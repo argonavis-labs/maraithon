@@ -183,8 +183,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         %{
           "name" => "Hacker News",
           "url" => "https://hnrss.org/frontpage"
+        },
+        %{
+          "name" => "BBC News",
+          "url" => "https://feeds.bbci.co.uk/news/rss.xml"
+        },
+        %{
+          "name" => "NYT Top Stories",
+          "url" => "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"
         }
       ],
+      "weather_enabled" => true,
       "lookback_hours" => @default_lookback_hours,
       "llm_max_tokens" => @default_llm_max_tokens,
       "llm_reasoning_effort" => @default_llm_reasoning_effort,
@@ -763,6 +772,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           "feeds" => length(SourceBundle.news_feeds(source_bundle))
         }
       },
+      "weather" => SourceBundle.weather(source_bundle),
       "commitments" =>
         Commitments.bucket_for_brief(user_id,
           now: now,
@@ -2173,6 +2183,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "model_todo_next_actions_visible_in_primary_brief",
         "non_draft_dashboard_payment_review_and_decision_jobs_separated",
         "source_gaps_are_visible_when_connectors_are_stale_or_unavailable",
+        "weather_for_operator_location_present_when_available",
+        "top_headlines_selected_for_operator_when_news_available",
         "brief_ends_with_today_move_directive",
         "structured_open_work_available_behind_review_button_and_sent_one_at_a_time"
       ]
@@ -2270,6 +2282,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       :missing_source_gaps
     )
     |> maybe_finding(
+      generation_mode == "llm" and weather_data_present?(brief_input) and
+        not weather_present_in_body?(body),
+      :missing_weather
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and brief_input_news_items(brief_input) != [] and
+        not top_headlines_present?(body),
+      :missing_top_headlines
+    )
+    |> maybe_finding(
       generation_mode == "llm" and not todays_move_final_directive_present?(body),
       :missing_today_move
     )
@@ -2295,11 +2317,126 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_append_open_commitments(brief_input, findings)
     |> maybe_append_action_stack(brief_input, findings)
     |> maybe_append_non_draft_jobs(brief_input, findings)
+    |> maybe_append_top_headlines(brief_input, findings)
     |> maybe_append_source_gaps(brief_input, findings)
     |> maybe_append_todays_move(brief_input, findings)
     |> maybe_scrub_assistant_first_person_copy(findings)
+    |> maybe_prepend_weather(brief_input, findings)
     |> maybe_prepend_temperature_read(brief_input, findings)
   end
+
+  defp maybe_prepend_weather(brief, brief_input, findings) do
+    if :missing_weather in findings and
+         not weather_present_in_body?(read_string(brief, "body", "")) do
+      case weather_brief_line(brief_input) do
+        nil -> brief
+        line -> prepend_body_section(brief, line)
+      end
+    else
+      brief
+    end
+  end
+
+  defp maybe_append_top_headlines(brief, brief_input, findings) do
+    if :missing_top_headlines in findings and
+         not top_headlines_present?(read_string(brief, "body", "")) do
+      lines =
+        brief_input
+        |> brief_input_news_items()
+        |> Enum.take(3)
+        |> Enum.map(&fallback_headline_line/1)
+        |> Enum.reject(&blank?/1)
+
+      case lines do
+        [] ->
+          brief
+
+        lines ->
+          append_body_section_before_today_move(
+            brief,
+            "## Top Headlines\n" <> Enum.join(lines, "\n")
+          )
+      end
+    else
+      brief
+    end
+  end
+
+  defp fallback_headline_line(item) when is_map(item) do
+    title = read_string(item, "title", nil)
+    source = read_string(item, "source", nil)
+
+    cond do
+      blank?(title) -> nil
+      blank?(source) -> "- **#{title}**"
+      true -> "- **#{title}** (#{source})"
+    end
+  end
+
+  defp fallback_headline_line(_item), do: nil
+
+  defp weather_data_present?(brief_input) do
+    weather = read_map(brief_input, "weather")
+
+    not map_empty?(read_map(weather, "current")) or not map_empty?(read_map(weather, "today"))
+  end
+
+  defp weather_present_in_body?(body) when is_binary(body) do
+    body =~ ~r/°|\bweather\b|\bdegrees\b/iu
+  end
+
+  defp weather_present_in_body?(_body), do: false
+
+  defp weather_brief_line(brief_input) do
+    weather = read_map(brief_input, "weather")
+    current = read_map(weather, "current")
+    today = read_map(weather, "today")
+    location = read_string(weather, "location", nil)
+
+    parts =
+      [
+        read_string(today, "conditions", nil) || read_string(current, "conditions", nil),
+        format_temperature(Map.get(current, "temperature_c"), " now"),
+        format_temperature_range(Map.get(today, "high_c"), Map.get(today, "low_c")),
+        format_precipitation_chance(Map.get(today, "precipitation_chance_pct"))
+      ]
+      |> Enum.reject(&blank?/1)
+
+    cond do
+      parts == [] -> nil
+      blank?(location) -> "Weather: #{Enum.join(parts, ", ")}."
+      true -> "Weather (#{location}): #{Enum.join(parts, ", ")}."
+    end
+  end
+
+  defp format_temperature(value, suffix) when is_number(value),
+    do: "#{round(value)}°C#{suffix}"
+
+  defp format_temperature(_value, _suffix), do: nil
+
+  defp format_temperature_range(high, low) when is_number(high) and is_number(low),
+    do: "high #{round(high)}° / low #{round(low)}°"
+
+  defp format_temperature_range(high, _low) when is_number(high), do: "high #{round(high)}°"
+  defp format_temperature_range(_high, low) when is_number(low), do: "low #{round(low)}°"
+  defp format_temperature_range(_high, _low), do: nil
+
+  defp format_precipitation_chance(value) when is_number(value) and value > 0,
+    do: "#{round(value)}% chance of precipitation"
+
+  defp format_precipitation_chance(_value), do: nil
+
+  defp brief_input_news_items(brief_input) do
+    brief_input
+    |> read_map("news")
+    |> read_list("items")
+  end
+
+  defp top_headlines_present?(body) when is_binary(body) do
+    body =~ ~r/headline/i
+  end
+
+  defp top_headlines_present?(_body), do: false
 
   defp maybe_prepend_temperature_read(brief, brief_input, findings) do
     if :missing_temperature_read in findings and
@@ -5537,6 +5674,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       {"gmail", %{}, &compact_gmail_for_prompt/1},
       {"slack", %{}, &compact_slack_for_prompt/1},
       {"news", %{}, &compact_news_for_prompt/1},
+      {"weather", %{}, &compact_prompt_value/1},
+      {"user_identity", "", &compact_prompt_value/1},
       {"commitments", %{}, &compact_prompt_value/1},
       {"open_work", %{}, &compact_prompt_value/1},
       {"relationships", [], &compact_relationships_for_prompt/1},

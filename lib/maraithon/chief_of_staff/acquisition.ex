@@ -54,6 +54,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> maybe_fetch_slack(user_id, source_scope, plan, context)
       |> maybe_fetch_companion_sources(user_id, plan, context)
       |> maybe_fetch_news(user_id, source_scope, plan, context)
+      |> maybe_fetch_weather(user_id, source_scope, plan, context)
       |> then(fn {telemetry, bundle} -> {bundle, telemetry} end)
 
     {bundle, telemetry}
@@ -461,6 +462,45 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         telemetry =
           put_source_summary(telemetry, "news", %{
             "mode" => "rss",
+            "status" => "error",
+            "reason" => inspect(reason)
+          })
+
+        {telemetry, bundle}
+    end
+  end
+
+  defp maybe_fetch_weather(
+         {telemetry, bundle},
+         _user_id,
+         _source_scope,
+         %{weather: false},
+         _context
+       ),
+       do: {telemetry, bundle}
+
+  defp maybe_fetch_weather({telemetry, bundle}, _user_id, _source_scope, plan, context) do
+    now = context[:timestamp] || DateTime.utc_now()
+
+    case weather_module().fetch_for_brief(Map.get(plan, :weather_config, %{}), now) do
+      {:ok, %{} = result} ->
+        bundle = SourceBundle.put_weather(bundle, result)
+
+        telemetry =
+          put_source_summary(telemetry, "weather", %{
+            "mode" => "open_meteo",
+            "status" => Map.get(result, "status", "ready"),
+            "location" => Map.get(result, "location")
+          })
+
+        {telemetry, bundle}
+
+      {:error, reason} ->
+        bundle = SourceBundle.mark_unavailable(bundle, "weather", inspect(reason))
+
+        telemetry =
+          put_source_summary(telemetry, "weather", %{
+            "mode" => "open_meteo",
             "status" => "error",
             "reason" => inspect(reason)
           })
@@ -880,6 +920,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       max_skill_integer(skill_ids, skill_configs, "lookback_hours", @default_lookback_hours)
 
     news_config = news_config(skill_ids, skill_configs)
+    weather_config = weather_config(skill_ids, skill_configs)
     morning_brief? = morning_brief_trigger?(skill_ids, context)
 
     %{
@@ -892,6 +933,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       slack: true,
       news: morning_brief_trigger?(skill_ids, context) and news_enabled?(news_config),
       news_config: news_config,
+      weather: morning_brief_trigger?(skill_ids, context) and weather_enabled?(weather_config),
+      weather_config: weather_config,
       web_context: morning_brief_trigger?(skill_ids, context),
       inbox_limit: max(max_email_scan_limit, 100),
       sent_limit: max(max_email_scan_limit * 2, 100),
@@ -994,6 +1037,24 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     |> local_day_start_utc(timezone_offset_hours)
     |> DateTime.to_iso8601()
   end
+
+  defp weather_config(skill_ids, skill_configs) do
+    skill_ids
+    |> Enum.map(fn skill_id -> Map.get(skill_configs, skill_id, %{}) end)
+    |> Enum.reduce(%{}, fn config, acc ->
+      acc
+      |> maybe_put("weather_enabled", Map.get(config, "weather_enabled"))
+      |> maybe_put("weather_location", Map.get(config, "weather_location"))
+      |> maybe_put("weather_latitude", Map.get(config, "weather_latitude"))
+      |> maybe_put("weather_longitude", Map.get(config, "weather_longitude"))
+      |> maybe_put("timezone", Map.get(config, "timezone") || Map.get(config, "timezone_name"))
+    end)
+  end
+
+  defp weather_enabled?(%{"weather_enabled" => false}), do: false
+  defp weather_enabled?(%{"weather_enabled" => "false"}), do: false
+  defp weather_enabled?(%{"weather_enabled" => "0"}), do: false
+  defp weather_enabled?(config) when is_map(config), do: true
 
   defp news_enabled?(%{"news_enabled" => false}), do: false
   defp news_enabled?(%{"news_enabled" => "false"}), do: false
@@ -1973,6 +2034,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp news_module do
     Application.get_env(:maraithon, __MODULE__, [])
     |> Keyword.get(:news_module, News)
+  end
+
+  defp weather_module do
+    Application.get_env(:maraithon, __MODULE__, [])
+    |> Keyword.get(:weather_module, Maraithon.Weather)
   end
 
   defp account_provider(%{"provider" => provider}) when is_binary(provider), do: provider

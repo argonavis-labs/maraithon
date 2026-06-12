@@ -122,6 +122,31 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
     |> put_freshness("news", freshness)
   end
 
+  def put_weather(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    report =
+      attrs
+      |> Map.take([
+        "source",
+        "location",
+        "latitude",
+        "longitude",
+        "units",
+        "current",
+        "today",
+        "tomorrow"
+      ])
+      |> stringify_keys()
+
+    freshness =
+      build_freshness("weather", attrs, %{
+        "location" => Map.get(report, "location")
+      })
+
+    bundle
+    |> Map.put("weather", report)
+    |> put_freshness("weather", freshness)
+  end
+
   @doc """
   Stores a local-calendar (macOS Calendar.app via companion device) snapshot.
 
@@ -262,6 +287,7 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
   def slack_mentions(bundle), do: bundle |> read_map("slack") |> read_list("mentions")
   def news_items(bundle), do: bundle |> read_map("news") |> read_list("items")
   def news_feeds(bundle), do: bundle |> read_map("news") |> read_list("feeds")
+  def weather(bundle), do: read_map(bundle, "weather")
 
   def calendar_local_events(bundle),
     do: bundle |> read_map("calendar_local") |> read_list("events")
