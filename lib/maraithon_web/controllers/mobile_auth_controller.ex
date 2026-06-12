@@ -11,6 +11,21 @@ defmodule MaraithonWeb.MobileAuthController do
     email = extract_email(params)
 
     case Accounts.request_magic_code(email, request_metadata(conn)) do
+      # App Store review demo account: the reviewer already has the code
+      # (it is listed in App Store Connect), so skip email delivery but
+      # return the standard payload — the client flow stays identical.
+      {:ok, %{user: user, code: :bypass}} ->
+        delivery = %{
+          email: user.email,
+          expires_in_seconds: @magic_link_ttl_seconds,
+          delivery: "email_code"
+        }
+
+        json(conn, %{
+          magic_code: delivery,
+          magic_link: delivery
+        })
+
       {:ok, %{user: user, code: code}} ->
         case MagicLinkSender.deliver_code(user.email, code) do
           :ok ->

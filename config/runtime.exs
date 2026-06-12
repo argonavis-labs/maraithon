@@ -36,6 +36,14 @@ config :maraithon, :api_auth, bearer_token: api_bearer_token
 
 config :maraithon, :support, email: System.get_env("SUPPORT_EMAIL", "support@maraithon.app")
 
+# App Store review demo account. When both are set, the reviewer email skips
+# Postmark delivery and the listed code acts as the magic code (see
+# Accounts.app_review_bypass_config/0). Leave unset in dev/test — the bypass
+# no-ops unless both are present. Rotate by changing the env vars.
+config :maraithon, :app_review_bypass,
+  email: System.get_env("APP_REVIEW_BYPASS_EMAIL"),
+  code: System.get_env("APP_REVIEW_BYPASS_CODE")
+
 admin_default_user_id =
   case System.get_env("ADMIN_DEFAULT_USER_ID", admin_username) do
     "" -> "operator"
