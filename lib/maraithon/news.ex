@@ -20,15 +20,15 @@ defmodule Maraithon.News do
   def fetch_for_brief(config, now) when is_map(config) do
     if enabled?(config) do
       feeds = configured_feeds(config)
-      limit = integer_in_range(config["news_limit"], @default_limit, 1, 20)
+      limit = integer_in_range(config["news_limit"], @default_limit, 1, 40)
 
-      {items, fetches} =
+      {feed_item_lists, fetches} =
         feeds
         |> Enum.take(@max_feeds)
         |> Enum.reduce({[], []}, fn feed, {item_acc, fetch_acc} ->
           case fetch_feed(feed, now) do
             {:ok, feed_items} ->
-              {item_acc ++ feed_items,
+              {[feed_items | item_acc],
                [
                  %{
                    "source" => "news",
@@ -57,9 +57,14 @@ defmodule Maraithon.News do
           end
         end)
 
+      # Interleave feeds instead of globally sorting by recency: a
+      # fast-publishing feed (Techmeme) would otherwise crowd every other
+      # source out of the limit, leaving the brief a single-feed digest.
       items =
-        items
-        |> Enum.sort_by(&published_sort_key/1, :desc)
+        feed_item_lists
+        |> Enum.reverse()
+        |> Enum.map(&Enum.sort_by(&1, fn item -> published_sort_key(item) end, :desc))
+        |> interleave()
         |> Enum.take(limit)
 
       {:ok,
@@ -231,6 +236,25 @@ defmodule Maraithon.News do
     value
     |> String.replace(~r/<[^>]+>/, " ")
     |> normalize_string()
+  end
+
+  defp interleave(lists) do
+    if Enum.all?(lists, &(&1 == [])) do
+      []
+    else
+      heads =
+        lists
+        |> Enum.map(&List.first/1)
+        |> Enum.reject(&is_nil/1)
+
+      tails =
+        Enum.map(lists, fn
+          [] -> []
+          [_head | tail] -> tail
+        end)
+
+      heads ++ interleave(tails)
+    end
   end
 
   defp published_sort_key(%{"published_at" => published_at}) when is_binary(published_at) do
