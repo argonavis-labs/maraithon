@@ -100,7 +100,51 @@ defmodule Maraithon.Accounts do
     end
   end
 
+  @doc """
+  App Store review demo account ("bypass") configuration.
+
+  Apple's reviewer signs in with the email + code listed in App Store
+  Connect; the email skips Postmark delivery and the listed code acts as
+  the magic code. Returns `{:ok, %{email: ..., code_hash: ...}}` when both
+  `APP_REVIEW_BYPASS_EMAIL` and `APP_REVIEW_BYPASS_CODE` are configured,
+  `:disabled` otherwise — dev/test leave them unset so the bypass no-ops.
+  """
+  def app_review_bypass_config do
+    config = Application.get_env(:maraithon, :app_review_bypass) || []
+    email = normalize_email(config[:email] || "")
+    code = normalize_magic_code(config[:code] || "")
+
+    if valid_email?(email) and valid_magic_code?(code) do
+      {:ok, %{email: email, code_hash: hash_token(code)}}
+    else
+      :disabled
+    end
+  end
+
   def request_magic_code(email, opts \\ []) when is_binary(email) do
+    case app_review_bypass_config() do
+      {:ok, %{email: bypass_email}} ->
+        if normalize_email(email) == bypass_email do
+          request_bypass_magic_code(email)
+        else
+          request_real_magic_code(email, opts)
+        end
+
+      :disabled ->
+        request_real_magic_code(email, opts)
+    end
+  end
+
+  # The reviewer gets a real user row but no MagicLink insert and no email:
+  # the code they already have (from App Store Connect) is the bypass code.
+  defp request_bypass_magic_code(email) do
+    with {:ok, user} <- get_or_create_user_by_email(email) do
+      expires_at = DateTime.add(DateTime.utc_now(), @magic_link_ttl_seconds, :second)
+      {:ok, %{user: user, code: :bypass, expires_at: expires_at}}
+    end
+  end
+
+  defp request_real_magic_code(email, opts) do
     with {:ok, user} <- get_or_create_user_by_email(email) do
       token = generate_token()
       code = generate_magic_code()
@@ -145,6 +189,32 @@ defmodule Maraithon.Accounts do
   def consume_magic_code(code, opts \\ []) when is_binary(code) do
     normalized_code = normalize_magic_code(code)
 
+    case app_review_bypass_config() do
+      {:ok, %{email: bypass_email, code_hash: code_hash}} ->
+        if valid_magic_code?(normalized_code) and
+             Plug.Crypto.secure_compare(hash_token(normalized_code), code_hash) do
+          consume_bypass_magic_code(bypass_email, opts)
+        else
+          consume_real_magic_code(normalized_code, opts)
+        end
+
+      :disabled ->
+        consume_real_magic_code(normalized_code, opts)
+    end
+  end
+
+  defp consume_bypass_magic_code(bypass_email, opts) do
+    case get_user_by_email(bypass_email) do
+      nil ->
+        {:error, :invalid_or_expired_code}
+
+      user ->
+        maybe_confirm_user(user)
+        create_session_for_user(user, opts)
+    end
+  end
+
+  defp consume_real_magic_code(normalized_code, opts) do
     if valid_magic_code?(normalized_code) do
       now = DateTime.utc_now()
       code_hash = hash_token(normalized_code)

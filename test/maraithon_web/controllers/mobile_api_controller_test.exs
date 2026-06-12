@@ -76,6 +76,54 @@ defmodule MaraithonWeb.MobileApiControllerTest do
            }
   end
 
+  describe "app review bypass" do
+    @bypass_email "reviewer@maraithon.test"
+    @bypass_code "L9TYK4V5"
+
+    setup do
+      prev = Application.get_env(:maraithon, :app_review_bypass)
+
+      Application.put_env(:maraithon, :app_review_bypass,
+        email: @bypass_email,
+        code: @bypass_code
+      )
+
+      on_exit(fn -> Application.put_env(:maraithon, :app_review_bypass, prev) end)
+      :ok
+    end
+
+    test "magic-code request for the reviewer returns 200 and inserts no MagicLink", %{conn: conn} do
+      conn =
+        post(conn, ~p"/api/mobile/auth/magic-link", %{"email" => @bypass_email})
+
+      assert %{
+               "magic_code" => %{
+                 "email" => @bypass_email,
+                 "expires_in_seconds" => 900,
+                 "delivery" => "email_code"
+               }
+             } = json_response(conn, 200)
+
+      # No MagicLink row means Postmark delivery was never attempted: the
+      # bypass path skips both the insert and MagicLinkSender.deliver_code/2.
+      assert Repo.get_by(MagicLink, sent_to_email: @bypass_email) == nil
+    end
+
+    test "magic-code consume with the bypass code returns a session token", %{conn: conn} do
+      {:ok, user} = Accounts.get_or_create_user_by_email(@bypass_email)
+
+      conn = post(conn, ~p"/api/mobile/auth/magic-code", %{"code" => @bypass_code})
+
+      assert %{
+               "session_token" => session_token,
+               "user" => %{"id" => user_id}
+             } = json_response(conn, 200)
+
+      assert user_id == user.id
+      assert Accounts.get_active_session(session_token)
+    end
+  end
+
   test "magic-link request returns clean validation errors", %{conn: conn} do
     conn =
       post(conn, ~p"/api/mobile/auth/magic-link", %{
