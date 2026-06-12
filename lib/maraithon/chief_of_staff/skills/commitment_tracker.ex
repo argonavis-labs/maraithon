@@ -641,6 +641,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
           |> Todos.list_open_for_user(limit: 40)
           |> Enum.map(&todo_for_prompt/1)
       },
+      "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
       "relationships" => Crm.summarize_for_prompt(user_id, 24),
       "deep_memory" =>
         Memory.prompt_context(user_id,
@@ -755,6 +756,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
          user-facing work-item copy. Never write that a raw phone number or
          handle "wants", "needs", or "is asking" when the supplied context
          identifies the person.
+       - `user_identity` states who the operator is, including their own
+         phone numbers and emails. Messages from those handles (or with
+         is_from_me true) are the operator speaking. In group conversations,
+         only create a work item when the ask is directed AT the operator
+         and still open; if the operator already answered, committed, or
+         someone else owns it, it is not the operator's open loop.
        - Before returning any work item, reconcile the original ask/promise against
          later evidence in every available supplied source: Gmail inbox and sent,
          Calendar, Slack, iMessage/Messages, voice notes, Notes, Reminders,

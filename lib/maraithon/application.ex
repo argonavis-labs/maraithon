@@ -24,6 +24,7 @@ defmodule Maraithon.Application do
       {Phoenix.PubSub, name: Maraithon.PubSub},
       Maraithon.LogBuffer,
       Maraithon.ContextCache,
+      Maraithon.UserIdentity,
       Maraithon.TelegramAssistant.LivenessSupervisor,
       Maraithon.TelegramAssistant.RunStreamPreview,
       # Per-chat inbound-message workers: keep webhook acks fast and serialize

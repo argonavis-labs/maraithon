@@ -9,7 +9,10 @@ enum AppTab: Hashable {
 }
 
 struct AppShellView: View {
+    @Environment(SessionStore.self) private var sessionStore
     @State private var navigation = AppNavigation()
+    @State private var identityPrefill: MobileAPIClient.IdentityResponse.Identity?
+    @State private var didCheckIdentity = false
 
     var body: some View {
         TabView(selection: Binding(
@@ -38,5 +41,27 @@ struct AppShellView: View {
         }
         .tabBarMinimizeBehavior(.onScrollDown)
         .environment(navigation)
+        .task {
+            await checkIdentity()
+        }
+        .sheet(item: $identityPrefill) { prefill in
+            IdentityOnboardingView(prefill: prefill) {
+                identityPrefill = nil
+            }
+        }
+    }
+
+    private func checkIdentity() async {
+        guard !didCheckIdentity, let sessionToken = sessionStore.user?.sessionToken else { return }
+        didCheckIdentity = true
+
+        do {
+            let identity = try await MobileAPIClient().getIdentity(sessionToken: sessionToken)
+            if !identity.confirmed {
+                identityPrefill = identity
+            }
+        } catch {
+            // Identity onboarding is best-effort; the next launch retries.
+        }
     }
 }

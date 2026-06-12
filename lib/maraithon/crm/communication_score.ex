@@ -366,30 +366,8 @@ defmodule Maraithon.Crm.CommunicationScore do
 
   # The user's own addresses must never count as a counterparty.
   defp own_handles(user_id) do
-    oauth_emails =
-      try do
-        user_id
-        |> Maraithon.OAuth.list_user_tokens()
-        |> Enum.flat_map(fn token ->
-          [
-            provider_email(token.provider),
-            get_in(token.metadata || %{}, ["email"]),
-            get_in(token.metadata || %{}, ["account_email"]),
-            get_in(token.metadata || %{}, ["google_account_email"])
-          ]
-        end)
-      rescue
-        _ -> []
-      end
-
-    [user_id | oauth_emails]
-    |> Enum.map(&normalize_handle/1)
-    |> Enum.reject(&is_nil/1)
-    |> MapSet.new()
+    Maraithon.UserIdentity.handle_set(user_id)
   end
-
-  defp provider_email("google:" <> email), do: email
-  defp provider_email(_provider), do: nil
 
   defp normalize_handle(value) when is_binary(value) do
     value = String.trim(value)

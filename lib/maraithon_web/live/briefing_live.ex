@@ -5,12 +5,13 @@ defmodule MaraithonWeb.BriefingLive do
   alias Maraithon.Briefs.Digest
   alias Maraithon.Briefs.Markdown
   alias Maraithon.Todos
+  alias Maraithon.UserIdentity
 
   @history_limit 14
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, socket |> assign(:current_path, "/briefing") |> refresh()}
+    {:ok, socket |> assign(:current_path, "/briefing") |> assign_identity_onboarding() |> refresh()}
   end
 
   @impl true
@@ -35,6 +36,42 @@ defmodule MaraithonWeb.BriefingLive do
       {:ok, _todo} -> {:noreply, refresh(socket)}
       {:error, _reason} -> {:noreply, put_flash(socket, :error, "Could not dismiss that item.")}
     end
+  end
+
+  def handle_event("confirm_identity", %{"identity" => params}, socket) do
+    user_id = socket.assigns.current_user.id
+
+    phones =
+      (params["phones"] || "")
+      |> String.split([",", "\n", ";"], trim: true)
+      |> Enum.map(&String.trim/1)
+
+    case UserIdentity.confirm(user_id, %{
+           display_name: params["display_name"],
+           emails: socket.assigns.identity_prefill.emails,
+           phones: phones
+         }) do
+      {:ok, _profile} ->
+        {:noreply,
+         socket
+         |> assign(:identity_confirmed?, true)
+         |> put_flash(:info, "Identity saved. Maraithon now knows which messages are yours.")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not save identity details.")}
+    end
+  end
+
+  defp assign_identity_onboarding(socket) do
+    user_id = socket.assigns.current_user.id
+    confirmed? = UserIdentity.confirmed?(user_id)
+
+    socket
+    |> assign(:identity_confirmed?, confirmed?)
+    |> assign(
+      :identity_prefill,
+      if(confirmed?, do: %{display_name: nil, emails: [], phones: []}, else: UserIdentity.onboarding_prefill(user_id))
+    )
   end
 
   defp refresh(socket) do
@@ -98,6 +135,66 @@ defmodule MaraithonWeb.BriefingLive do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+      <section
+        :if={not @identity_confirmed?}
+        class="mb-8 rounded-xl border border-zinc-200 bg-white p-6"
+      >
+        <h2 class="text-sm font-semibold text-zinc-900">Confirm who you are</h2>
+        <p class="mt-1 text-sm text-zinc-600">
+          Maraithon uses this to tell your own messages apart from people contacting you —
+          especially in group chats. Connected accounts are filled in; add your phone number.
+        </p>
+
+        <form phx-submit="confirm_identity" class="mt-4 space-y-4">
+          <div>
+            <label for="identity-name" class="block text-xs font-semibold text-zinc-700">Your name</label>
+            <input
+              id="identity-name"
+              type="text"
+              name="identity[display_name]"
+              value={@identity_prefill.display_name}
+              class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div :if={@identity_prefill.emails != []}>
+            <span class="block text-xs font-semibold text-zinc-700">Your emails (from connected accounts)</span>
+            <div class="mt-1 flex flex-wrap gap-2">
+              <span
+                :for={email <- @identity_prefill.emails}
+                class="rounded-md bg-zinc-100 px-2 py-1 text-xs text-zinc-700"
+              >
+                {email}
+              </span>
+            </div>
+          </div>
+
+          <div>
+            <label for="identity-phones" class="block text-xs font-semibold text-zinc-700">
+              Your phone numbers
+            </label>
+            <input
+              id="identity-phones"
+              type="text"
+              name="identity[phones]"
+              value={Enum.join(@identity_prefill.phones, ", ")}
+              placeholder="e.g. 416-555-0123, 647-555-0456"
+              class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm"
+            />
+            <p class="mt-1 text-xs text-zinc-500">
+              Detected from messages you've sent; correct or add as needed.
+            </p>
+          </div>
+
+          <button
+            type="submit"
+            class="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-800"
+          >
+            Confirm identity
+          </button>
+        </form>
+      </section>
+
       <div class="flex items-baseline justify-between">
         <div>
           <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Morning briefing</p>

@@ -571,6 +571,57 @@ struct MobileAPIClient: Sendable {
         )
     }
 
+    struct IdentityResponse: Decodable, Sendable {
+        struct Identity: Decodable, Sendable, Identifiable {
+            let confirmed: Bool
+            let displayName: String?
+            let emails: [String]
+            let phones: [String]
+
+            var id: String {
+                ([displayName ?? ""] + emails + phones).joined(separator: "|")
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case confirmed
+                case displayName = "display_name"
+                case emails
+                case phones
+            }
+        }
+
+        let identity: Identity
+    }
+
+    func getIdentity(sessionToken: String) async throws -> IdentityResponse.Identity {
+        let response: IdentityResponse = try await send(
+            path: "/identity",
+            sessionToken: sessionToken,
+            responseType: IdentityResponse.self
+        )
+        return response.identity
+    }
+
+    func confirmIdentity(
+        sessionToken: String,
+        displayName: String?,
+        emails: [String],
+        phones: [String]
+    ) async throws -> IdentityResponse.Identity {
+        let response: IdentityResponse = try await send(
+            path: "/identity",
+            method: "PUT",
+            sessionToken: sessionToken,
+            body: [
+                "display_name": .string(displayName ?? ""),
+                "emails": .array(emails.map { .string($0) }),
+                "phones": .array(phones.map { .string($0) })
+            ],
+            responseType: IdentityResponse.self
+        )
+        return response.identity
+    }
+
     func listTodos(sessionToken: String, includeCards: Bool = true) async throws -> [RemoteTodo] {
         let response: TodosResponse = try await send(
             path: "/todos?limit=500&status=all&sort=updated&dir=desc&include_cards=\(includeCards)",

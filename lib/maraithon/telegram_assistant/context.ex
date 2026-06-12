@@ -62,7 +62,7 @@ defmodule Maraithon.TelegramAssistant.Context do
     fetched = parallel_fetch(user_id, user_text, request_focus)
 
     %{
-      user: %{id: user_id},
+      user: user_identity_context(user_id),
       chat: %{id: fetch_string!(attrs, :chat_id)},
       conversation: serialize_conversation(conversation),
       linked_item:
@@ -1158,6 +1158,21 @@ defmodule Maraithon.TelegramAssistant.Context do
   end
 
   defp linked_travel_itinerary(_conversation, _user_id), do: nil
+
+  # Who the user is across channels, so the assistant never mistakes the
+  # user's own messages (group chats especially) for someone contacting them.
+  defp user_identity_context(user_id) do
+    identity = Maraithon.UserIdentity.identity(user_id)
+
+    %{
+      id: user_id,
+      name: List.first(identity.names),
+      emails: identity.emails,
+      phones: identity.phones,
+      identity_note:
+        "Messages from these handles are the user speaking, not someone contacting the user."
+    }
+  end
 
   defp fetch_string!(attrs, key) do
     value = Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))

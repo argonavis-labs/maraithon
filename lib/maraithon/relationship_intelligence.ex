@@ -92,6 +92,7 @@ defmodule Maraithon.RelationshipIntelligence do
 
     payload = %{
       "user_id" => user_id,
+      "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
       "source" => source,
       "generated_at" => normalize_json_value(now),
       "existing_people" => existing_people,
@@ -110,6 +111,11 @@ defmodule Maraithon.RelationshipIntelligence do
     relationships. Do not use keyword heuristics as decision rules. Frequency,
     channel, source body, relationship language, roles, asks, and user history
     are evidence for you to reason over.
+
+    `user_identity` states who the user is, including their own phone
+    numbers and emails. Never create or enrich a person record for the
+    user's own handles, and never read the user's own messages (including
+    in group conversations) as someone asking the user for something.
 
     Goals:
     - Keep a useful CRM of every real human the user interacts with, then let

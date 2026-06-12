@@ -780,6 +780,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Todos.list_open_for_user(limit: 100)
           |> Enum.map(&todo_for_prompt/1)
       },
+      "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
       "relationships" =>
         user_id
         |> Crm.summarize_for_prompt(100),
