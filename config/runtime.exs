@@ -399,6 +399,14 @@ config :maraithon, Maraithon.Runtime,
   llm_model_fallbacks: llm_model_fallbacks,
   openai_reasoning_effort: openai_reasoning_effort,
   openai_stream_replies: System.get_env("OPENAI_STREAM_REPLIES", "true") == "true",
+  # LLM concurrency per bucket. The old default of 1 serialized every model
+  # call on the node, so interactive chat queued behind chief-of-staff and
+  # briefing work and burned llm_busy retries. The shared 429 cooldown in
+  # LLMRateLimiter still guards against provider retry storms.
+  llm_max_concurrency: String.to_integer(System.get_env("LLM_MAX_CONCURRENCY", "2")),
+  llm_chat_max_concurrency: String.to_integer(System.get_env("LLM_CHAT_MAX_CONCURRENCY", "4")),
+  llm_reasoning_max_concurrency:
+    String.to_integer(System.get_env("LLM_REASONING_MAX_CONCURRENCY", "2")),
   # Timing
   heartbeat_interval_ms: heartbeat_interval_ms,
   checkpoint_interval_ms: checkpoint_interval_ms,
