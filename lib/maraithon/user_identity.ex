@@ -19,13 +19,11 @@ defmodule Maraithon.UserIdentity do
   import Ecto.Query
 
   alias Maraithon.Crm.Person
-  alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.Repo
   alias Maraithon.UserIdentity.Profile
 
   @table __MODULE__
   @cache_ttl_ms :timer.minutes(15)
-  @max_own_message_handles 20
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)
@@ -208,6 +206,10 @@ defmodule Maraithon.UserIdentity do
   # Assembly
   # ---------------------------------------------------------------------------
 
+  # Seeds must be handles that are unambiguously the user: their account
+  # email, OAuth account emails, and anything they explicitly confirmed.
+  # (iMessage sender_handle on is_from_me rows is the counterparty, NOT the
+  # user — learned the hard way; never seed identity from it.)
   defp build(user_id) do
     profile = safe_profile(user_id)
 
@@ -216,14 +218,13 @@ defmodule Maraithon.UserIdentity do
       |> Enum.map(&normalize_handle/1)
       |> Enum.reject(&is_nil/1)
 
-    seed_emails = [user_id | oauth_emails(user_id)]
-    own_message_handles = own_message_handles(user_id)
-
-    seeds =
-      (confirmed_handles ++ seed_emails ++ own_message_handles)
+    seed_emails =
+      [user_id | oauth_emails(user_id)]
       |> Enum.map(&normalize_handle/1)
       |> Enum.reject(&is_nil/1)
-      |> MapSet.new()
+      |> Enum.filter(&email?/1)
+
+    seeds = MapSet.new(confirmed_handles ++ seed_emails)
 
     {self_people_handles, derived_names} = self_person_data(user_id, seeds)
 
@@ -267,19 +268,6 @@ defmodule Maraithon.UserIdentity do
   defp provider_email("google:" <> email), do: email
   defp provider_email(_provider), do: nil
 
-  # The handles the user's OWN messages send from — phones and Apple IDs —
-  # learned directly from is_from_me message rows.
-  defp own_message_handles(user_id) do
-    LocalMessage
-    |> where([m], m.user_id == ^user_id and m.is_from_me == true)
-    |> where([m], not is_nil(m.sender_handle) and m.sender_handle != "")
-    |> distinct([m], m.sender_handle)
-    |> select([m], m.sender_handle)
-    |> limit(@max_own_message_handles)
-    |> Repo.all()
-  rescue
-    _ -> []
-  end
 
   # CRM person records holding any seed handle are the user; absorb their
   # other handles and their display names.
