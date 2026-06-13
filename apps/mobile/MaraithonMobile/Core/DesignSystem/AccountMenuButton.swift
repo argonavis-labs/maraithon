@@ -6,6 +6,7 @@ struct AccountMenuButton: View {
     @Environment(SessionStore.self) private var sessionStore
     @State private var isConfirmingReset = false
     @State private var isShowingActivityLog = false
+    @State private var isShowingGoals = false
     @State private var resetError: String?
 
     var body: some View {
@@ -15,6 +16,13 @@ struct AccountMenuButton: View {
             }
 
             if sessionStore.user?.sessionToken != nil {
+                Button {
+                    isShowingGoals = true
+                } label: {
+                    Label(AccountMenuCopy.goalsLabel, systemImage: "target")
+                }
+                .accessibilityIdentifier("profile-goals-button")
+
                 Button {
                     isShowingActivityLog = true
                 } label: {
@@ -65,6 +73,9 @@ struct AccountMenuButton: View {
         .sheet(isPresented: $isShowingActivityLog) {
             TodoActivityLogView()
         }
+        .sheet(isPresented: $isShowingGoals) {
+            GoalsProfileView()
+        }
     }
 
     private var showsStarterDataReset: Bool {
@@ -85,6 +96,7 @@ struct AccountMenuButton: View {
 }
 
 enum AccountMenuCopy {
+    static let goalsLabel = "Goals"
     static let activityLogLabel = "Activity Log"
     static let resetLocalWorkspaceLabel = "Reset Local Workspace"
     static let resetLocalWorkspaceTitle = "Reset local workspace?"
@@ -94,6 +106,7 @@ enum AccountMenuCopy {
     static let resetFailedFallback = "Reset did not complete. Close and reopen Maraithon before resetting local workspace."
 
     static let resetVisibleStrings = [
+        goalsLabel,
         resetLocalWorkspaceLabel,
         resetLocalWorkspaceTitle,
         resetLocalWorkspaceMessage,
