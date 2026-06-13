@@ -235,6 +235,36 @@ defmodule Maraithon.GoalsTest do
           "source_refs" => ["notes:n1"],
           "confidence" => 0.91,
           "urgency" => "now"
+        },
+        %{
+          "goal_id" => goal.id,
+          "headline" => "Generic motivation",
+          "summary" => "Try harder on the goal this week.",
+          "confidence" => 0.91,
+          "urgency" => "soon"
+        },
+        %{
+          "goal_id" => goal.id,
+          "headline" => "Malformed summary",
+          "summary" => %{"nested" => "not text"},
+          "source_refs" => ["notes:n1"],
+          "confidence" => 0.88,
+          "urgency" => "soon"
+        }
+      ],
+      "findings" => [
+        %{
+          "goal_id" => goal.id,
+          "kind" => "blocks",
+          "summary" => "The pricing artifact is the current source-backed blocker.",
+          "source_refs" => ["notes:n1"],
+          "confidence" => 0.9
+        },
+        %{
+          "goal_id" => goal.id,
+          "kind" => "opportunity",
+          "summary" => "This ungrounded finding should not be saved.",
+          "confidence" => 0.88
         }
       ],
       "reviewed_goal_ids" => [goal.id]
@@ -246,9 +276,16 @@ defmodule Maraithon.GoalsTest do
     assert applied.summary["progress_updates_count"] == 1
     assert applied.summary["links_count"] == 2
     assert applied.summary["todos_count"] == 1
-    assert applied.summary["skipped_outputs_count"] == 3
+    assert applied.summary["skipped_outputs_count"] == 6
 
-    assert ["resource_link", "todo_candidate", "todo_candidate"] =
+    assert [
+             "advice",
+             "advice",
+             "finding",
+             "resource_link",
+             "todo_candidate",
+             "todo_candidate"
+           ] =
              applied.summary["skipped_outputs"]
              |> Enum.map(& &1["kind"])
              |> Enum.sort()
@@ -257,6 +294,22 @@ defmodule Maraithon.GoalsTest do
              applied.summary["skipped_outputs"],
              &(&1["kind"] == "todo_candidate" and
                  &1["reason"] == "invalid_goal_todo_candidate_confidence")
+           )
+
+    assert Enum.any?(
+             applied.summary["skipped_outputs"],
+             &(&1["kind"] == "advice" and &1["reason"] == "review_advice_missing_source_refs")
+           )
+
+    assert Enum.any?(
+             applied.summary["skipped_outputs"],
+             &(&1["kind"] == "advice" and &1["reason"] == "invalid_review_advice")
+           )
+
+    assert Enum.any?(
+             applied.summary["skipped_outputs"],
+             &(&1["kind"] == "finding" and
+                 &1["reason"] == "review_finding_missing_source_refs")
            )
 
     assert [todo] = Todos.list_for_user(user.id, source: "goals", limit: 5)
@@ -272,8 +325,16 @@ defmodule Maraithon.GoalsTest do
 
     review_run = Enum.find(detail.review_runs, &(&1.id == run.id))
     assert review_run.status == "partial"
-    assert review_run.result["skipped_outputs_count"] == 3
+    assert review_run.result["skipped_outputs_count"] == 6
     assert [%{"headline" => "Unblock pricing"}] = review_run.result["advice"]
+
+    assert [
+             %{
+               "kind" => "blocks",
+               "summary" => "The pricing artifact is the current source-backed blocker."
+             }
+           ] =
+             review_run.result["findings"]
   end
 
   test "reviewing a missing selected goal fails closed", %{user: user} do

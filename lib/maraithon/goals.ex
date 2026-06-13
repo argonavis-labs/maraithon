@@ -21,6 +21,8 @@ defmodule Maraithon.Goals do
   @context_limit 12
   @open_statuses ~w(open snoozed)
   @internal_goal_attrs ~w(user_id last_reviewed_at next_review_at metadata)
+  @review_advice_urgencies ~w(now soon later)
+  @review_finding_kinds ~w(supports blocks drift opportunity source_gap)
 
   def list_goals(user_id, opts \\ [])
 
@@ -399,9 +401,18 @@ defmodule Maraithon.Goals do
             |> reviewed_goal_ids(run, progress_updates, resource_links, todo_links)
             |> update_reviewed_goals!(user_id, now)
 
-          advice = output |> read_list("advice") |> normalize_review_advice()
-          findings = output |> read_list("findings") |> normalize_review_findings()
-          skipped_outputs = progress_skips ++ link_skips ++ todo_skips
+          {advice, advice_skips} =
+            output
+            |> read_list("advice")
+            |> normalize_review_advice(user_id)
+
+          {findings, finding_skips} =
+            output
+            |> read_list("findings")
+            |> normalize_review_findings(user_id)
+
+          skipped_outputs =
+            progress_skips ++ link_skips ++ todo_skips ++ advice_skips ++ finding_skips
 
           summary = %{
             "progress_updates_count" => length(progress_updates),
@@ -1077,52 +1088,151 @@ defmodule Maraithon.Goals do
     |> Enum.reverse()
   end
 
-  defp normalize_review_advice(items) when is_list(items) do
+  defp normalize_review_advice(items, user_id) when is_list(items) do
     items
-    |> Enum.filter(&is_map/1)
-    |> Enum.map(&stringify_keys/1)
-    |> Enum.map(fn item ->
-      item
-      |> Map.take(~w(goal_id headline summary source_refs confidence urgency))
-      |> Map.update("source_refs", [], fn refs ->
-        refs
-        |> List.wrap()
-        |> Enum.filter(&is_binary/1)
-        |> Enum.take(8)
-      end)
+    |> Enum.reduce({[], []}, fn item, {valid, skipped} ->
+      case normalize_review_advice_item(item, user_id) do
+        {:ok, normalized} ->
+          {[normalized | valid], skipped}
+
+        {:error, reason} ->
+          {valid, [skipped_review_output("advice", item, reason) | skipped]}
+      end
     end)
-    |> Enum.reject(&map_empty_or_missing_text?(&1, "summary"))
-    |> Enum.take(12)
+    |> then(fn {valid, skipped} ->
+      {valid |> Enum.reverse() |> Enum.take(12), Enum.reverse(skipped)}
+    end)
   end
 
-  defp normalize_review_advice(_items), do: []
+  defp normalize_review_advice(_items, _user_id), do: {[], []}
 
-  defp normalize_review_findings(items) when is_list(items) do
-    items
-    |> Enum.filter(&is_map/1)
-    |> Enum.map(&stringify_keys/1)
-    |> Enum.map(fn item ->
-      item
-      |> Map.take(~w(goal_id kind summary source_refs confidence))
-      |> Map.update("source_refs", [], fn refs ->
-        refs
-        |> List.wrap()
-        |> Enum.filter(&is_binary/1)
-        |> Enum.take(8)
-      end)
-    end)
-    |> Enum.reject(&map_empty_or_missing_text?(&1, "summary"))
-    |> Enum.take(20)
-  end
+  defp normalize_review_advice_item(item, user_id) when is_map(item) do
+    item = stringify_keys(item)
+    goal_id = read_string(item, "goal_id")
+    headline = read_string(item, "headline")
+    summary = read_string(item, "summary")
+    source_refs = normalized_source_refs(item)
+    urgency = item |> read_string("urgency", "soon") |> normalize_enum_string("soon")
+    confidence = read_float(item, "confidence")
 
-  defp normalize_review_findings(_items), do: []
+    cond do
+      is_nil(goal_id) ->
+        {:error, :review_advice_missing_goal_id}
 
-  defp map_empty_or_missing_text?(map, key) do
-    case Map.get(map, key) do
-      value when is_binary(value) -> String.trim(value) == ""
-      _other -> true
+      is_nil(get_goal(user_id, goal_id, preload: false)) ->
+        {:error, :not_found}
+
+      text_too_short?(headline) ->
+        {:error, :invalid_review_advice}
+
+      text_too_short?(summary) ->
+        {:error, :invalid_review_advice}
+
+      source_refs == [] ->
+        {:error, :review_advice_missing_source_refs}
+
+      urgency not in @review_advice_urgencies ->
+        {:error, :invalid_review_advice_urgency}
+
+      not confidence_valid?(item, confidence) ->
+        {:error, :invalid_review_advice_confidence}
+
+      true ->
+        {:ok,
+         %{
+           "goal_id" => goal_id,
+           "headline" => headline,
+           "summary" => summary,
+           "source_refs" => source_refs,
+           "urgency" => urgency
+         }
+         |> maybe_put_float("confidence", confidence)}
     end
   end
+
+  defp normalize_review_advice_item(_item, _user_id), do: {:error, :invalid_review_advice}
+
+  defp normalize_review_findings(items, user_id) when is_list(items) do
+    items
+    |> Enum.reduce({[], []}, fn item, {valid, skipped} ->
+      case normalize_review_finding_item(item, user_id) do
+        {:ok, normalized} ->
+          {[normalized | valid], skipped}
+
+        {:error, reason} ->
+          {valid, [skipped_review_output("finding", item, reason) | skipped]}
+      end
+    end)
+    |> then(fn {valid, skipped} ->
+      {valid |> Enum.reverse() |> Enum.take(20), Enum.reverse(skipped)}
+    end)
+  end
+
+  defp normalize_review_findings(_items, _user_id), do: {[], []}
+
+  defp normalize_review_finding_item(item, user_id) when is_map(item) do
+    item = stringify_keys(item)
+    goal_id = read_string(item, "goal_id")
+    kind = item |> read_string("kind") |> normalize_enum_string(nil)
+    summary = read_string(item, "summary")
+    source_refs = normalized_source_refs(item)
+    confidence = read_float(item, "confidence")
+
+    cond do
+      is_nil(goal_id) ->
+        {:error, :review_finding_missing_goal_id}
+
+      is_nil(get_goal(user_id, goal_id, preload: false)) ->
+        {:error, :not_found}
+
+      kind not in @review_finding_kinds ->
+        {:error, :invalid_review_finding_kind}
+
+      text_too_short?(summary) ->
+        {:error, :invalid_review_finding}
+
+      kind != "source_gap" and source_refs == [] ->
+        {:error, :review_finding_missing_source_refs}
+
+      not confidence_valid?(item, confidence) ->
+        {:error, :invalid_review_finding_confidence}
+
+      true ->
+        {:ok,
+         %{
+           "goal_id" => goal_id,
+           "kind" => kind,
+           "summary" => summary,
+           "source_refs" => source_refs
+         }
+         |> maybe_put_float("confidence", confidence)}
+    end
+  end
+
+  defp normalize_review_finding_item(_item, _user_id), do: {:error, :invalid_review_finding}
+
+  defp normalized_source_refs(item) do
+    case Map.get(item, "source_refs") || Map.get(item, safe_existing_atom("source_refs")) do
+      refs when is_list(refs) -> refs
+      ref when is_binary(ref) -> [ref]
+      _other -> []
+    end
+    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+    |> Enum.map(&String.trim/1)
+    |> Enum.uniq()
+    |> Enum.take(8)
+  end
+
+  defp text_too_short?(value) when is_binary(value), do: String.length(String.trim(value)) < 4
+  defp text_too_short?(_value), do: true
+
+  defp confidence_valid?(item, confidence) do
+    not attr_present?(item, "confidence") or
+      (is_float(confidence) and confidence >= 0.0 and confidence <= 1.0)
+  end
+
+  defp maybe_put_float(map, _key, nil), do: map
+  defp maybe_put_float(map, key, value), do: Map.put(map, key, value)
 
   defp linked_open_work(user_id, limit) do
     links =
@@ -1268,6 +1378,10 @@ defmodule Maraithon.Goals do
     if is_map(value), do: value, else: %{}
   end
 
+  defp attr_present?(map, key) when is_map(map) and is_binary(key) do
+    Map.has_key?(map, key) or Map.has_key?(map, safe_existing_atom(key))
+  end
+
   defp read_string(map, key, default \\ nil)
 
   defp read_string(map, key, default) when is_map(map) do
@@ -1283,8 +1397,11 @@ defmodule Maraithon.Goals do
       nil ->
         default
 
-      value ->
+      value when is_atom(value) or is_number(value) or is_boolean(value) ->
         to_string(value)
+
+      _other ->
+        default
     end
   end
 
