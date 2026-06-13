@@ -86,6 +86,8 @@ defmodule Maraithon.Todos.SignalGate do
   ]
   @action_phrases [
     "asked you",
+    "asked for",
+    "asked to",
     "awaiting your",
     "blocked on you",
     "can you",
@@ -95,6 +97,9 @@ defmodule Maraithon.Todos.SignalGate do
     "due ",
     "needs your approval",
     "needs your decision",
+    "needs a",
+    "needs an",
+    "needs the",
     "please review",
     "please send",
     "reply owed",

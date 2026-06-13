@@ -14,7 +14,7 @@ defmodule Maraithon.Goals do
   alias Maraithon.ScheduledTasks.Task, as: ScheduledTask
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
-  alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.{SurfaceQuality, Todo}
 
   @default_limit 50
   @max_limit 200
@@ -758,6 +758,7 @@ defmodule Maraithon.Goals do
     goal_id = read_string(attrs, "goal_id")
 
     with %Goal{} = goal <- get_goal(user_id, goal_id, preload: false),
+         :ok <- validate_goal_link_confidence(attrs),
          {:ok, todo_attrs} <- review_todo_attrs(user_id, goal, run, attrs, now),
          {:ok, [todo]} <- Todos.upsert_many(user_id, [todo_attrs], actor_opts(user_id)) do
       case link_resource(user_id, goal.id, %{
@@ -774,6 +775,14 @@ defmodule Maraithon.Goals do
     else
       nil -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_goal_link_confidence(attrs) do
+    case read_float(attrs, "confidence") do
+      nil -> :ok
+      value when value >= 0.0 and value <= 1.0 -> :ok
+      _value -> {:error, :invalid_goal_todo_candidate_confidence}
     end
   end
 
@@ -829,27 +838,30 @@ defmodule Maraithon.Goals do
         {:error, :goal_todo_candidate_missing_evidence}
 
       true ->
-        {:ok,
-         %{
-           "user_id" => user_id,
-           "source" => "goals",
-           "kind" => "general",
-           "attention_mode" => read_string(attrs, "attention_mode", "act_now"),
-           "title" => title,
-           "summary" => summary,
-           "next_action" => next_action,
-           "priority" => read_integer(attrs, "priority", goal.priority || 50),
-           "due_at" => Map.get(attrs, "due_at"),
-           "dedupe_key" =>
-             read_string(attrs, "dedupe_key") || goal_todo_dedupe_key(goal, title, next_action),
-           "metadata" => %{
-             "goal_id" => goal.id,
-             "goal_category" => goal.category,
-             "goal_review_run_id" => run.id,
-             "evidence_summary" => evidence_summary,
-             "source_refs" => read_list(evidence, "source_refs")
-           }
-         }}
+        todo_attrs =
+          %{
+            "user_id" => user_id,
+            "source" => "goals",
+            "kind" => "general",
+            "attention_mode" => read_string(attrs, "attention_mode", "act_now"),
+            "title" => title,
+            "summary" => summary,
+            "next_action" => next_action,
+            "priority" => read_integer(attrs, "priority", goal.priority || 50),
+            "due_at" => Map.get(attrs, "due_at"),
+            "dedupe_key" =>
+              read_string(attrs, "dedupe_key") || goal_todo_dedupe_key(goal, title, next_action),
+            "metadata" => %{
+              "goal_id" => goal.id,
+              "goal_category" => goal.category,
+              "goal_review_run_id" => run.id,
+              "evidence_summary" => evidence_summary,
+              "source_refs" => read_list(evidence, "source_refs")
+            }
+          }
+          |> SurfaceQuality.annotate_attrs()
+
+        {:ok, todo_attrs}
     end
   end
 

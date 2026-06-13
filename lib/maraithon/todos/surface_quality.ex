@@ -8,24 +8,27 @@ defmodule Maraithon.Todos.SurfaceQuality do
   alias Maraithon.Todos.Todo
 
   @source_context_keys ~w(
-    body_excerpt checked_evidence evidence excerpt gmail_message_id gmail_thread_id html_link
-    message_id permalink quote source_body source_evidence source_excerpt source_ref source_url
-    thread_id url
+    body_excerpt checked_evidence evidence evidence_summary excerpt gmail_message_id
+    gmail_thread_id html_link message_id permalink quote source_body source_evidence
+    source_excerpt source_ref source_refs source_url thread_id url
   )
 
   @human_context_keys ~w(
-    company context context_brief life_domain organization person people project project_name
-    relationship relationship_context source_tags why_it_matters why_now
+    company context context_brief family_member family_role life_domain organization person
+    people project project_name relationship relationship_context relationship_domain
+    sensitivity source_tags todo_policy user_requested why_it_matters why_now
   )
 
   @why_now_keys ~w(
     deadline due_by due_date due_at next_event_at source_insight_due_at why_it_matters why_now
+    user_requested
   )
 
   @specific_context_keys ~w(
-    body_excerpt context context_brief email_subject evidence excerpt message_subject project
-    project_name quote relationship_context source_evidence source_excerpt source_subject subject
-    thread_subject topic why_it_matters why_now
+    body_excerpt context context_brief email_subject evidence evidence_summary excerpt
+    goal_category message_subject project project_name quote relationship_context
+    source_evidence source_excerpt source_refs source_subject subject thread_subject topic
+    todo_policy why_it_matters why_now
   )
 
   @confidence_keys ~w(confidence false_positive_risk scope_confidence telegram_fit_score)
@@ -110,7 +113,7 @@ defmodule Maraithon.Todos.SurfaceQuality do
     present?(read_field(todo, "source_item_id")) or
       any_present?(
         metadata,
-        ~w(body_excerpt checked_evidence evidence excerpt quote source_body source_evidence source_excerpt)
+        ~w(body_excerpt checked_evidence evidence evidence_summary excerpt quote source_body source_evidence source_excerpt source_refs)
       ) or
       record_has_context?(read_map(metadata, "record"))
   end
@@ -229,6 +232,13 @@ defmodule Maraithon.Todos.SurfaceQuality do
     not generic_copy?(text) and
       (String.contains?(text, " about ") or
          String.contains?(text, " on ") or
+         String.contains?(text, " asked for ") or
+         String.contains?(text, " asked to ") or
+         String.contains?(text, " needs ") or
+         String.contains?(text, " due ") or
+         String.contains?(text, " before ") or
+         String.contains?(text, " blocked until ") or
+         String.contains?(text, " waiting on ") or
          String.contains?(text, " because ") or
          String.contains?(text, " context: "))
   end
@@ -336,6 +346,7 @@ defmodule Maraithon.Todos.SurfaceQuality do
   defp present?(%DateTime{}), do: true
   defp present?(%Date{}), do: true
   defp present?(%NaiveDateTime{}), do: true
+  defp present?(true), do: true
   defp present?(value) when is_integer(value), do: true
   defp present?(value) when is_float(value), do: true
   defp present?(_value), do: false

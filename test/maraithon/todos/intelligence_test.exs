@@ -123,6 +123,66 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert get_in(created.metadata, ["todo_intelligence", "source"]) == "test"
   end
 
+  test "ingest_many preserves source context metadata before quality scoring" do
+    user_id = unique_user_email("todo-intelligence-source-context")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "gmail",
+        "title" => "Reply to Dana about board packet",
+        "summary" => "Dana asked for the board packet before the partner meeting.",
+        "next_action" => "Reply to Dana with the board packet timing.",
+        "dedupe_key" => "gmail:dana-board-packet",
+        "metadata" => %{
+          "source_evidence" => "Dana asked for the board packet before the partner meeting.",
+          "source_refs" => ["gmail:thread-dana-board"],
+          "why_it_matters" => "The partner meeting is waiting on this packet.",
+          "direct_ask" => true,
+          "confidence" => 0.92
+        }
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created one source-backed follow-up.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "dedupe_key" => "gmail:dana-board-packet",
+                 "reasoning" => "Dana made a direct request.",
+                 "todo" => %{
+                   "source" => "gmail",
+                   "title" => "Reply to Dana about board packet",
+                   "summary" => "Dana needs the board packet before the partner meeting.",
+                   "next_action" => "Reply to Dana with the board packet timing.",
+                   "dedupe_key" => "gmail:dana-board-packet"
+                 }
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test"
+             )
+
+    assert [%{title: "Reply to Dana about board packet"} = created] = result.todos
+    assert created.metadata["source_evidence"] =~ "Dana asked"
+    assert created.metadata["source_refs"] == ["gmail:thread-dana-board"]
+    assert created.metadata["why_it_matters"] =~ "partner meeting"
+    assert created.metadata["direct_ask"] == true
+    assert get_in(created.metadata, ["surface_quality", "surfaceable"]) == true
+  end
+
   test "prompt frames generated copy as work items while preserving internal todo contracts" do
     user_id = unique_user_email("todo-intelligence-copy")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

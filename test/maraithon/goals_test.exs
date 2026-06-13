@@ -213,6 +213,18 @@ defmodule Maraithon.GoalsTest do
           "title" => "Too vague",
           "summary" => "Missing evidence should not stop useful candidates.",
           "next_action" => "Review this malformed candidate."
+        },
+        %{
+          "goal_id" => goal.id,
+          "title" => "Do not leave orphaned goal work",
+          "summary" => "This candidate has evidence but an invalid link confidence.",
+          "next_action" => "Confirm invalid linked goal work is not persisted.",
+          "priority" => 70,
+          "confidence" => 1.7,
+          "evidence" => %{
+            "redacted_summary" => "A connected note says this candidate should fail linking.",
+            "source_refs" => ["notes:n2"]
+          }
         }
       ],
       "advice" => [
@@ -234,16 +246,24 @@ defmodule Maraithon.GoalsTest do
     assert applied.summary["progress_updates_count"] == 1
     assert applied.summary["links_count"] == 2
     assert applied.summary["todos_count"] == 1
-    assert applied.summary["skipped_outputs_count"] == 2
+    assert applied.summary["skipped_outputs_count"] == 3
 
-    assert ["resource_link", "todo_candidate"] =
+    assert ["resource_link", "todo_candidate", "todo_candidate"] =
              applied.summary["skipped_outputs"]
              |> Enum.map(& &1["kind"])
              |> Enum.sort()
 
+    assert Enum.any?(
+             applied.summary["skipped_outputs"],
+             &(&1["kind"] == "todo_candidate" and
+                 &1["reason"] == "invalid_goal_todo_candidate_confidence")
+           )
+
     assert [todo] = Todos.list_for_user(user.id, source: "goals", limit: 5)
     assert todo.title == "Finish the pricing artifact"
     assert todo.next_action == "Draft and send the pricing artifact to the launch thread."
+    assert get_in(todo.metadata, ["surface_quality", "surfaceable"]) == true
+    assert get_in(todo.metadata, ["surface_quality", "source_backed"]) == true
 
     detail = Goals.get_goal(user.id, goal.id)
     assert Enum.any?(detail.progress_updates, &(&1.progress_state == "blocked"))
@@ -252,7 +272,7 @@ defmodule Maraithon.GoalsTest do
 
     review_run = Enum.find(detail.review_runs, &(&1.id == run.id))
     assert review_run.status == "partial"
-    assert review_run.result["skipped_outputs_count"] == 2
+    assert review_run.result["skipped_outputs_count"] == 3
     assert [%{"headline" => "Unblock pricing"}] = review_run.result["advice"]
   end
 

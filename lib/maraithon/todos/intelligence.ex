@@ -779,6 +779,7 @@ defmodule Maraithon.Todos.Intelligence do
       |> Map.put("dedupe_key", dedupe_key)
       |> preserve_candidate_completion_check(candidate)
       |> preserve_candidate_source_identifiers(candidate)
+      |> preserve_candidate_source_context(candidate)
       |> put_intelligence_metadata(
         action,
         candidate_index,
@@ -910,17 +911,23 @@ defmodule Maraithon.Todos.Intelligence do
     team_id thread_id thread_ts url wa_phone
   )
 
+  @source_context_metadata_keys ~w(
+    body_excerpt checked_evidence context context_brief conversation_context direct_ask
+    evidence evidence_summary excerpt explicit_user_commitment false_positive_risk family_member
+    family_role fyi_class importance importance_hint life_domain missing_followthrough_evidence
+    obligation_type organization people person project project_name quote record
+    relationship_context relationship_domain reply_obligation sensitivity source_body
+    source_evidence source_excerpt source_ref source_refs source_subject subject thread_subject
+    todo_policy user_requested why_it_matters why_now work_item_admission
+  )
+
   defp preserve_candidate_source_identifiers(todo_attrs, candidate) do
     candidate_metadata = read_map(candidate || %{}, "metadata")
 
     if candidate_metadata == %{} do
       todo_attrs
     else
-      todo_metadata =
-        case fetch_attr(todo_attrs, "metadata") do
-          value when is_map(value) -> stringify_top_level_keys(value)
-          _other -> %{}
-        end
+      todo_metadata = todo_metadata_for_preservation(todo_attrs)
 
       preserved =
         Enum.reduce(@source_identifier_keys, todo_metadata, fn key, acc ->
@@ -936,6 +943,50 @@ defmodule Maraithon.Todos.Intelligence do
       Map.put(todo_attrs, "metadata", preserved)
     end
   end
+
+  defp preserve_candidate_source_context(todo_attrs, candidate) do
+    candidate_metadata = read_map(candidate || %{}, "metadata")
+
+    if candidate_metadata == %{} do
+      todo_attrs
+    else
+      preserved =
+        Enum.reduce(
+          @source_context_metadata_keys,
+          todo_metadata_for_preservation(todo_attrs),
+          fn key, acc ->
+            value = fetch_attr(candidate_metadata, key)
+
+            cond do
+              Map.has_key?(acc, key) ->
+                acc
+
+              preservable_metadata_value?(value) ->
+                Map.put(acc, key, normalize_json_value(value))
+
+              true ->
+                acc
+            end
+          end
+        )
+
+      Map.put(todo_attrs, "metadata", preserved)
+    end
+  end
+
+  defp todo_metadata_for_preservation(todo_attrs) do
+    case fetch_attr(todo_attrs, "metadata") do
+      value when is_map(value) -> stringify_top_level_keys(value)
+      _other -> %{}
+    end
+  end
+
+  defp preservable_metadata_value?(value) when is_binary(value), do: String.trim(value) != ""
+  defp preservable_metadata_value?(value) when is_list(value), do: value != []
+  defp preservable_metadata_value?(value) when is_map(value), do: map_size(value) > 0
+  defp preservable_metadata_value?(value) when is_number(value), do: true
+  defp preservable_metadata_value?(true), do: true
+  defp preservable_metadata_value?(_value), do: false
 
   defp put_intelligence_metadata(
          todo_attrs,
@@ -1027,10 +1078,17 @@ defmodule Maraithon.Todos.Intelligence do
   defp existing_metadata_for_prompt(metadata) when is_map(metadata) do
     Enum.reduce(@existing_prompt_metadata_keys, %{}, fn key, acc ->
       case Map.get(metadata, key) do
-        nil -> acc
-        value when is_binary(value) -> Map.put(acc, key, clip_prompt_text(value))
-        value when is_map(value) or is_number(value) or is_boolean(value) -> Map.put(acc, key, value)
-        _other -> acc
+        nil ->
+          acc
+
+        value when is_binary(value) ->
+          Map.put(acc, key, clip_prompt_text(value))
+
+        value when is_map(value) or is_number(value) or is_boolean(value) ->
+          Map.put(acc, key, value)
+
+        _other ->
+          acc
       end
     end)
   end
