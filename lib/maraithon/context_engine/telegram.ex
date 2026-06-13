@@ -13,7 +13,7 @@ defmodule Maraithon.ContextEngine.Telegram do
     tool_results: %{max_items: 20, fields: []},
     memory: %{max_items: 12, fields: [:deep_memory, :operator_memory, :user_memory]},
     crm: %{max_items: 20, fields: [:relationships]},
-    open_loops: %{max_items: 20, fields: [:open_loops, :todos, :open_insights]},
+    open_loops: %{max_items: 20, fields: [:open_loops, :goals, :todos, :open_insights]},
     projects: %{max_items: 25, fields: [:projects, :active_agents]},
     conversation: %{max_items: 16, fields: [:recent_turns]}
   }
@@ -50,6 +50,7 @@ defmodule Maraithon.ContextEngine.Telegram do
   def open_loop_context(context) when is_map(context) do
     %{
       open_loops: read(context, :open_loops, %{}),
+      goals: read(context, :goals, %{}),
       todos: read(context, :todos, []),
       open_insights: read(context, :open_insights, [])
     }

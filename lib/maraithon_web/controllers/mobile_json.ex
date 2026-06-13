@@ -7,6 +7,8 @@ defmodule MaraithonWeb.MobileJSON do
   alias Maraithon.Crm
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.RelationshipPresentation
+  alias Maraithon.Goals
+  alias Maraithon.Goals.{Goal, GoalLink, ProgressUpdate, ReviewRun}
   alias Maraithon.Todos.{ActivityEvent, PublicMetadata, SourceActions, Todo, UserFacingCopy}
   alias MaraithonWeb.ApiErrorCopy
 
@@ -76,6 +78,46 @@ defmodule MaraithonWeb.MobileJSON do
       linked_todo_ids: brief_linked_todo_ids(brief),
       inserted_at: json_value(brief.inserted_at)
     }
+  end
+
+  def goal(%Goal{} = goal, opts \\ []) do
+    base = Goals.serialize_goal(goal)
+
+    if Keyword.get(opts, :include_detail, false) do
+      base
+      |> Map.put(
+        :progress_updates,
+        goal_association(goal, :progress_updates)
+        |> Enum.map(&goal_progress_update(&1, include_evidence: true))
+      )
+      |> Map.put(
+        :links,
+        goal_association(goal, :links)
+        |> Enum.map(&goal_link/1)
+      )
+      |> Map.put(
+        :review_runs,
+        goal_association(goal, :review_runs)
+        |> Enum.map(&goal_review_run/1)
+      )
+    else
+      base
+    end
+  end
+
+  def goal_progress_update(%ProgressUpdate{} = progress_update, opts \\ []) do
+    Goals.serialize_progress(progress_update, opts)
+  end
+
+  def goal_link(%GoalLink{} = link), do: Goals.serialize_link(link)
+
+  def goal_review_run(%ReviewRun{} = review_run), do: Goals.serialize_review_run(review_run)
+
+  defp goal_association(%Goal{} = goal, field) do
+    case Map.get(goal, field) do
+      values when is_list(values) -> values
+      _other -> []
+    end
   end
 
   defp brief_linked_todo_ids(%Brief{metadata: %{"linked_todo_ids" => ids}}) when is_list(ids) do

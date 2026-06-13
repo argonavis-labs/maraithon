@@ -90,6 +90,30 @@ struct MobileAPIClient: Sendable {
         let todo: RemoteTodo
     }
 
+    struct GoalsResponse: Decodable, Sendable {
+        let goals: [RemoteGoal]
+    }
+
+    struct GoalResponse: Decodable, Sendable {
+        let goal: RemoteGoal
+    }
+
+    struct GoalProgressResponse: Decodable, Sendable {
+        let progressUpdate: RemoteGoalProgressUpdate
+
+        enum CodingKeys: String, CodingKey {
+            case progressUpdate = "progress_update"
+        }
+    }
+
+    struct GoalReviewRunResponse: Decodable, Sendable {
+        let reviewRun: RemoteGoalReviewRun
+
+        enum CodingKeys: String, CodingKey {
+            case reviewRun = "review_run"
+        }
+    }
+
     struct PeopleResponse: Decodable, Sendable {
         let people: [RemotePerson]
     }
@@ -232,6 +256,223 @@ struct MobileAPIClient: Sendable {
             self.closedAt = closedAt
             self.actionCard = actionCard
             self.relatedPeople = relatedPeople
+        }
+    }
+
+    struct RemoteGoal: Decodable, Equatable, Identifiable, Sendable {
+        let id: String
+        let category: String
+        let status: String
+        let title: String
+        let desiredOutcome: String?
+        let why: String?
+        let successMetric: String?
+        let priority: Int?
+        let sensitivity: String
+        let proactiveVisibility: String
+        let reviewCadence: String
+        let startsOn: String?
+        let targetAt: String?
+        let lastReviewedAt: String?
+        let nextReviewAt: String?
+        let linkedWorkCount: Int
+        let linkedPeopleCount: Int
+        let latestProgress: RemoteGoalProgressSummary?
+        let progressUpdates: [RemoteGoalProgressUpdate]
+        let links: [RemoteGoalLink]
+        let reviewRuns: [RemoteGoalReviewRun]
+        let insertedAt: String?
+        let updatedAt: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case category
+            case status
+            case title
+            case desiredOutcome = "desired_outcome"
+            case why
+            case successMetric = "success_metric"
+            case priority
+            case sensitivity
+            case proactiveVisibility = "proactive_visibility"
+            case reviewCadence = "review_cadence"
+            case startsOn = "starts_on"
+            case targetAt = "target_at"
+            case lastReviewedAt = "last_reviewed_at"
+            case nextReviewAt = "next_review_at"
+            case linkedWorkCount = "linked_work_count"
+            case linkedPeopleCount = "linked_people_count"
+            case latestProgress = "latest_progress"
+            case progressUpdates = "progress_updates"
+            case links
+            case reviewRuns = "review_runs"
+            case insertedAt = "inserted_at"
+            case updatedAt = "updated_at"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            category = try container.decode(String.self, forKey: .category)
+            status = try container.decode(String.self, forKey: .status)
+            title = try container.decode(String.self, forKey: .title)
+            desiredOutcome = try container.decodeIfPresent(String.self, forKey: .desiredOutcome)
+            why = try container.decodeIfPresent(String.self, forKey: .why)
+            successMetric = try container.decodeIfPresent(String.self, forKey: .successMetric)
+            priority = try container.decodeIfPresent(Int.self, forKey: .priority)
+            sensitivity = try container.decode(String.self, forKey: .sensitivity)
+            proactiveVisibility = try container.decode(String.self, forKey: .proactiveVisibility)
+            reviewCadence = try container.decode(String.self, forKey: .reviewCadence)
+            startsOn = try container.decodeIfPresent(String.self, forKey: .startsOn)
+            targetAt = try container.decodeIfPresent(String.self, forKey: .targetAt)
+            lastReviewedAt = try container.decodeIfPresent(String.self, forKey: .lastReviewedAt)
+            nextReviewAt = try container.decodeIfPresent(String.self, forKey: .nextReviewAt)
+            linkedWorkCount = try container.decodeIfPresent(Int.self, forKey: .linkedWorkCount) ?? 0
+            linkedPeopleCount = try container.decodeIfPresent(Int.self, forKey: .linkedPeopleCount) ?? 0
+            latestProgress = try container.decodeIfPresent(RemoteGoalProgressSummary.self, forKey: .latestProgress)
+            progressUpdates = try container.decodeIfPresent([RemoteGoalProgressUpdate].self, forKey: .progressUpdates) ?? []
+            links = try container.decodeIfPresent([RemoteGoalLink].self, forKey: .links) ?? []
+            reviewRuns = try container.decodeIfPresent([RemoteGoalReviewRun].self, forKey: .reviewRuns) ?? []
+            insertedAt = try container.decodeIfPresent(String.self, forKey: .insertedAt)
+            updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        }
+    }
+
+    struct RemoteGoalProgressSummary: Decodable, Equatable, Sendable {
+        let progressState: String?
+        let summary: String?
+        let occurredAt: String?
+
+        enum CodingKeys: String, CodingKey {
+            case progressState = "progress_state"
+            case summary
+            case occurredAt = "occurred_at"
+        }
+    }
+
+    struct RemoteGoalProgressUpdate: Decodable, Equatable, Identifiable, Sendable {
+        let id: String
+        let goalID: String
+        let source: String
+        let summary: String
+        let progressState: String
+        let confidence: Double?
+        let evidence: [String: JSONValue]
+        let metadata: [String: JSONValue]
+        let occurredAt: String?
+        let insertedAt: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case goalID = "goal_id"
+            case source
+            case summary
+            case progressState = "progress_state"
+            case confidence
+            case evidence
+            case metadata
+            case occurredAt = "occurred_at"
+            case insertedAt = "inserted_at"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            goalID = try container.decode(String.self, forKey: .goalID)
+            source = try container.decode(String.self, forKey: .source)
+            summary = try container.decode(String.self, forKey: .summary)
+            progressState = try container.decode(String.self, forKey: .progressState)
+            confidence = try container.decodeIfPresent(Double.self, forKey: .confidence)
+            evidence = try container.decodeIfPresent([String: JSONValue].self, forKey: .evidence) ?? [:]
+            metadata = try container.decodeIfPresent([String: JSONValue].self, forKey: .metadata) ?? [:]
+            occurredAt = try container.decodeIfPresent(String.self, forKey: .occurredAt)
+            insertedAt = try container.decodeIfPresent(String.self, forKey: .insertedAt)
+        }
+    }
+
+    struct RemoteGoalLink: Decodable, Equatable, Identifiable, Sendable {
+        let id: String
+        let goalID: String
+        let resourceType: String
+        let resourceID: String
+        let relationship: String
+        let source: String
+        let confidence: Double?
+        let metadata: [String: JSONValue]
+        let insertedAt: String?
+        let updatedAt: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case goalID = "goal_id"
+            case resourceType = "resource_type"
+            case resourceID = "resource_id"
+            case relationship
+            case source
+            case confidence
+            case metadata
+            case insertedAt = "inserted_at"
+            case updatedAt = "updated_at"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            goalID = try container.decode(String.self, forKey: .goalID)
+            resourceType = try container.decode(String.self, forKey: .resourceType)
+            resourceID = try container.decode(String.self, forKey: .resourceID)
+            relationship = try container.decode(String.self, forKey: .relationship)
+            source = try container.decode(String.self, forKey: .source)
+            confidence = try container.decodeIfPresent(Double.self, forKey: .confidence)
+            metadata = try container.decodeIfPresent([String: JSONValue].self, forKey: .metadata) ?? [:]
+            insertedAt = try container.decodeIfPresent(String.self, forKey: .insertedAt)
+            updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        }
+    }
+
+    struct RemoteGoalReviewRun: Decodable, Equatable, Identifiable, Sendable {
+        let id: String
+        let goalID: String?
+        let trigger: String
+        let status: String
+        let startedAt: String?
+        let finishedAt: String?
+        let sourceSummary: [String: JSONValue]
+        let result: [String: JSONValue]
+        let error: [String: JSONValue]
+        let metadata: [String: JSONValue]
+        let insertedAt: String?
+        let updatedAt: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case goalID = "goal_id"
+            case trigger
+            case status
+            case startedAt = "started_at"
+            case finishedAt = "finished_at"
+            case sourceSummary = "source_summary"
+            case result
+            case error
+            case metadata
+            case insertedAt = "inserted_at"
+            case updatedAt = "updated_at"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            goalID = try container.decodeIfPresent(String.self, forKey: .goalID)
+            trigger = try container.decode(String.self, forKey: .trigger)
+            status = try container.decode(String.self, forKey: .status)
+            startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
+            finishedAt = try container.decodeIfPresent(String.self, forKey: .finishedAt)
+            sourceSummary = try container.decodeIfPresent([String: JSONValue].self, forKey: .sourceSummary) ?? [:]
+            result = try container.decodeIfPresent([String: JSONValue].self, forKey: .result) ?? [:]
+            error = try container.decodeIfPresent([String: JSONValue].self, forKey: .error) ?? [:]
+            metadata = try container.decodeIfPresent([String: JSONValue].self, forKey: .metadata) ?? [:]
+            insertedAt = try container.decodeIfPresent(String.self, forKey: .insertedAt)
+            updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
         }
     }
 
@@ -682,6 +923,97 @@ struct MobileAPIClient: Sendable {
         return response.todos
     }
 
+    func listGoals(
+        sessionToken: String,
+        status: String = "active",
+        category: String = "all",
+        query: String? = nil,
+        limit: Int = 200
+    ) async throws -> [RemoteGoal] {
+        let clampedLimit = max(1, min(limit, 200))
+        var queryItems = [
+            URLQueryItem(name: "status", value: status),
+            URLQueryItem(name: "category", value: category),
+            URLQueryItem(name: "limit", value: String(clampedLimit))
+        ]
+        if let query, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            queryItems.append(URLQueryItem(name: "q", value: query))
+        }
+
+        let response: GoalsResponse = try await send(
+            path: Self.path("/goals", queryItems: queryItems),
+            sessionToken: sessionToken,
+            responseType: GoalsResponse.self
+        )
+        return response.goals
+    }
+
+    func getGoal(sessionToken: String, id: String) async throws -> RemoteGoal {
+        let response: GoalResponse = try await send(
+            path: "/goals/\(id)",
+            sessionToken: sessionToken,
+            responseType: GoalResponse.self
+        )
+        return response.goal
+    }
+
+    func createGoal(sessionToken: String, payload: RequestBody) async throws -> RemoteGoal {
+        let response: GoalResponse = try await send(
+            path: "/goals",
+            method: "POST",
+            sessionToken: sessionToken,
+            body: ["goal": .object(payload)],
+            responseType: GoalResponse.self
+        )
+        return response.goal
+    }
+
+    func updateGoal(sessionToken: String, id: String, payload: RequestBody) async throws -> RemoteGoal {
+        let response: GoalResponse = try await send(
+            path: "/goals/\(id)",
+            method: "PATCH",
+            sessionToken: sessionToken,
+            body: ["goal": .object(payload)],
+            responseType: GoalResponse.self
+        )
+        return response.goal
+    }
+
+    func archiveGoal(sessionToken: String, id: String) async throws -> RemoteGoal {
+        let response: GoalResponse = try await send(
+            path: "/goals/\(id)",
+            method: "DELETE",
+            sessionToken: sessionToken,
+            responseType: GoalResponse.self
+        )
+        return response.goal
+    }
+
+    func recordGoalProgress(
+        sessionToken: String,
+        goalID: String,
+        payload: RequestBody
+    ) async throws -> RemoteGoalProgressUpdate {
+        let response: GoalProgressResponse = try await send(
+            path: "/goals/\(goalID)/progress",
+            method: "POST",
+            sessionToken: sessionToken,
+            body: ["progress": .object(payload)],
+            responseType: GoalProgressResponse.self
+        )
+        return response.progressUpdate
+    }
+
+    func reviewGoal(sessionToken: String, goalID: String) async throws -> RemoteGoalReviewRun {
+        let response: GoalReviewRunResponse = try await send(
+            path: "/goals/\(goalID)/review",
+            method: "POST",
+            sessionToken: sessionToken,
+            responseType: GoalReviewRunResponse.self
+        )
+        return response.reviewRun
+    }
+
     func listTodoActivity(sessionToken: String, limit: Int = 100) async throws -> [RemoteTodoActivity] {
         let clampedLimit = max(1, min(limit, 200))
         let response: TodoActivityResponse = try await send(
@@ -859,6 +1191,13 @@ struct MobileAPIClient: Sendable {
 
     private struct EmptyResponse: Decodable, Sendable {
         init() {}
+    }
+
+    nonisolated private static func path(_ path: String, queryItems: [URLQueryItem]) -> String {
+        var components = URLComponents()
+        components.path = path
+        components.queryItems = queryItems
+        return components.string ?? path
     }
 
     private static let iso8601WithFractionalSeconds = Date.ISO8601FormatStyle(includingFractionalSeconds: true)

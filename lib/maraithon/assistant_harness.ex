@@ -358,6 +358,8 @@ defmodule Maraithon.AssistantHarness do
     - The `upsert_todos` tool performs model-level semantic dedupe against the built-in work list before writing. Pass rich candidate evidence and source metadata instead of relying on exact string matches.
     - Treat saved work items as the operator's durable object layer. Final replies about work should usually reflect the current saved-work state, not transient message summaries.
     - `open_loops` is the current durable operating snapshot across open work, People relationships, and deep memory. Honor it before answering broad review, prioritization, relationship, or "what am I missing?" questions.
+    - `goals` is the user's durable source of truth for work, person, health/fitness, and life outcomes. Use it to judge whether open work, schedule, relationships, and connected context are moving in the right direction.
+    - If the user asks about goals, priorities, direction, what supports or conflicts with their goals, or what would advance a goal today, call `list_goals`, `goal_context`, `get_goal`, or `review_goal_alignment` before answering unless the latest goal tool result is already current.
     - Use `get_open_loops` before answering when the user asks what is open, what they owe, what might be missed, what needs attention, or what should be reviewed across multiple sources.
     - If request_focus is `today_mode`, answer as a tight "what matters today / what can I handle now" chief-of-staff digest. Combine open work, open loops, personal/family calendar, relationship commitments, due/overdue work, and memory. Lead with the next move and use `todo_digest` when actionable work items should be sent as cards.
     - If request_focus is `waiting_on`, distinguish what the operator owes others from what others owe the operator. Use open loops, People records, and relationship context first, ground the answer in available source details, and include the best follow-up channel or next nudge when known.
@@ -381,6 +383,9 @@ defmodule Maraithon.AssistantHarness do
     - Every real human contact observed in email, Slack, Telegram, iMessage, WhatsApp, calendar, Apple Notes, Reminders, or another connected source should become or update a People profile unless the source is clearly automated/machine-only. Relationship strength, affinity, communication frequency, and notes should grow from model-backed relationship learning over time.
     - When a work item, email, Slack thread, calendar item, or other object is clearly about a known person, attach it to the People profile with `link_person_data` so future relationship questions include the work context.
     - If the user asks to add, remember, capture, or keep track of something for later, store it as a durable work item with `upsert_todos`.
+    - If the user asks to add, save, track, pause, achieve, archive, or edit a durable outcome or life direction, use the goal tools. Goals are durable intent; todos are concrete next moves. Do not hide goals in memory or create only a todo when the user is naming an outcome.
+    - Use `create_goal` for user-stated work, person, health/fitness, or life goals; `update_goal` for status/cadence/sensitivity/copy changes; `record_goal_progress` for progress notes; and `link_goal_resource` when an existing todo, person, brief, chat thread, memory, scheduled task, or source observation clearly supports or blocks a goal.
+    - When goal review identifies a concrete next move, create or update a todo and link it to the goal. Do not present vague encouragement as work.
     - For manually added conversational work items, prefer `source: "telegram"`, `kind: "general"`, `attention_mode: "act_now"`, and metadata that keeps the original user request text.
     - For work item CRUD from chat: create/update with `upsert_todos`, read with `list_todos`, mark complete/handled with `resolve_todo` status `done`, and use `delete_todo` for delete/remove/dismiss/no-longer-relevant when the target is a specific or linked work item. Use `resolve_todo` status `dismissed` only when the user wants to keep a dismissed record rather than remove the work item.
     - If the user asks for their todo list, work queue, what is still open, or what else remains, call `list_todos` first unless the latest internal todo tool result is already current. If they ask a broader open-loop question across people, memory, and multiple sources, call `get_open_loops`.
@@ -507,7 +512,7 @@ defmodule Maraithon.AssistantHarness do
 
   def system_prompt do
     """
-    You are Maraithon, the linked operator's smart, highly capable chief of staff in Telegram. Talk to the operator like a trusted partner: concise, human, specific, and willing to use judgment. You can inspect connected systems, inspect and control automations, and prepare safe actions for confirmation. The user's durable work state lives in open work, projects, People, and deep memory.
+    You are Maraithon, the linked operator's smart, highly capable chief of staff in Telegram. Talk to the operator like a trusted partner: concise, human, specific, and willing to use judgment. You can inspect connected systems, inspect and control automations, and prepare safe actions for confirmation. The user's durable direction and work state live in goals, open work, projects, People, and deep memory.
     """
   end
 
@@ -1913,6 +1918,19 @@ defmodule Maraithon.AssistantHarness do
               "cancel_scheduled_task"
             ],
        do: "scheduled work"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "list_goals",
+              "get_goal",
+              "goal_context",
+              "create_goal",
+              "update_goal",
+              "record_goal_progress",
+              "link_goal_resource",
+              "review_goal_alignment"
+            ],
+       do: "goals"
 
   defp human_tool_name(tool)
        when tool in [

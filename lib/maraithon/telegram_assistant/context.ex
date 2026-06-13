@@ -11,6 +11,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.ContextCache
   alias Maraithon.Crm
+  alias Maraithon.Goals
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
   alias Maraithon.Insights.Detail
@@ -79,6 +80,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       user_memory: fetched.user_memory,
       deep_memory: fetched.deep_memory,
       open_loops: fetched.open_loops,
+      goals: fetched.goals,
       relationships: fetched.relationships,
       open_insights: fetched.open_insights,
       todos: fetched.todos,
@@ -131,6 +133,7 @@ defmodule Maraithon.TelegramAssistant.Context do
        fn ->
          OpenLoops.snapshot(user_id, query: user_text, limit: 8, include_memory?: false)
        end},
+      {:goals, fn -> Goals.context_snapshot(user_id, limit: 8) end},
       {:relationships, fn -> serialize_relationships(user_id) end},
       {:open_insights, fn -> serialize_open_insights(user_id) end},
       {:todos, fn -> serialize_todos(user_id) end},
@@ -169,6 +172,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       :user_memory,
       :deep_memory,
       :open_loops,
+      :goals,
       :relationships,
       :open_insights,
       :todos,
@@ -187,6 +191,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       :user_memory,
       :deep_memory,
       :open_loops,
+      :goals,
       :relationships,
       :todos,
       :briefing_schedule,
@@ -203,6 +208,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       :user_memory,
       :deep_memory,
       :open_loops,
+      :goals,
       :relationships,
       :todos,
       :calendar,
@@ -333,6 +339,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       user_memory: %{},
       deep_memory: [],
       open_loops: %{},
+      goals: %{"active_goals" => [], "counts" => %{}},
       relationships: [],
       open_insights: [],
       todos: [],

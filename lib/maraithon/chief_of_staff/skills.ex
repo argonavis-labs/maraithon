@@ -12,6 +12,7 @@ defmodule Maraithon.ChiefOfStaff.Skills do
     "commitment_tracker" => Maraithon.ChiefOfStaff.Skills.CommitmentTracker,
     "calendar_check_in" => Maraithon.ChiefOfStaff.Skills.CalendarCheckIn,
     "briefing" => Maraithon.ChiefOfStaff.Skills.Briefing,
+    "goal_alignment" => Maraithon.ChiefOfStaff.Skills.GoalAlignment,
     "project_scope_alignment" => Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment,
     "holiday_radar" => Maraithon.ChiefOfStaff.Skills.HolidayRadar
   }
@@ -22,6 +23,7 @@ defmodule Maraithon.ChiefOfStaff.Skills do
     "morning_briefing",
     "commitment_tracker",
     "calendar_check_in",
+    "goal_alignment",
     "project_scope_alignment",
     "holiday_radar"
   ]

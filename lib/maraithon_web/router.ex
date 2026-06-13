@@ -113,6 +113,7 @@ defmodule MaraithonWeb.Router do
       live "/agents/library/:behavior", AgentLibraryLive, :show
       live "/agents/new", AgentBuilderLive, :new
       live "/agents", AgentsLive, :index
+      live "/goals", GoalsLive, :index
       live "/briefing", BriefingLive, :index
       live "/stream", StreamLive, :index
       live "/dashboard", DashboardLive, :index
@@ -160,6 +161,13 @@ defmodule MaraithonWeb.Router do
     patch "/people/:id", MobilePeopleController, :update
     delete "/people/:id", MobilePeopleController, :delete
     post "/people/:id/merge", MobilePeopleController, :merge
+    get "/goals", MobileGoalController, :index
+    post "/goals", MobileGoalController, :create
+    get "/goals/:id", MobileGoalController, :show
+    patch "/goals/:id", MobileGoalController, :update
+    delete "/goals/:id", MobileGoalController, :delete
+    post "/goals/:id/progress", MobileGoalController, :progress
+    post "/goals/:id/review", MobileGoalController, :review
     get "/chat/threads", MobileChatController, :index
     post "/chat/threads", MobileChatController, :create
     get "/chat/threads/:id", MobileChatController, :show

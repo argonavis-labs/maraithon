@@ -12,6 +12,11 @@ defmodule Maraithon.TelegramAssistant.ToolboxTest do
     messages_search messages_get messages_list_recent messages_chats_recent
   )
 
+  @goal_tools ~w(
+    list_goals get_goal goal_context create_goal update_goal record_goal_progress
+    link_goal_resource review_goal_alignment
+  )
+
   describe "tool_definitions/1" do
     test "exposes the six Apple Notes and Voice Memos tools" do
       names =
@@ -45,6 +50,16 @@ defmodule Maraithon.TelegramAssistant.ToolboxTest do
       assert definition["parameters"]["properties"]["sources"]["type"] == "array"
       assert definition["parameters"]["properties"]["limit"]["type"] == "integer"
       assert definition["description"] =~ "open-ended"
+    end
+
+    test "exposes goal management and review tools" do
+      names =
+        Toolbox.tool_definitions(%{})
+        |> Enum.map(&Map.get(&1, "name"))
+
+      for tool <- @goal_tools do
+        assert tool in names, "expected #{tool} to be registered in the toolbox"
+      end
     end
 
     test "each new tool exposes a non-empty description and input schema" do

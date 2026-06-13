@@ -12,6 +12,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.Linear
+  alias Maraithon.Goals
   alias Maraithon.Insights
   alias Maraithon.Memory
   alias Maraithon.OperatorMemory
@@ -103,7 +104,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     review_connected_context gmail_search_messages gmail_get_message calendar_list_events
     slack_search_messages slack_get_thread_context linear_list_or_lookup notaui_list_tasks
     list_projects inspect_project list_implementation_runs list_agents inspect_agent
-    list_scheduled_tasks
+    list_scheduled_tasks list_goals get_goal goal_context
     explain_action_ledger
     notes_search notes_get notes_list_recent
     voice_memos_search voice_memos_get voice_memos_list_recent
@@ -123,7 +124,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     decide_project_recommendation grant_project_repo_access start_implementation_run
     update_implementation_run prepare_project_action prepare_agent_action
     prepare_external_action query_agent create_scheduled_task pause_scheduled_task
-    cancel_scheduled_task gmail_drafts draft_message
+    cancel_scheduled_task gmail_drafts draft_message create_goal update_goal
+    record_goal_progress link_goal_resource review_goal_alignment
   ))
 
   def tool_definitions(_context) do
@@ -152,12 +154,137 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "get_open_loops",
-        "Fetch the linked user's durable open-loop snapshot across open work, relationships, and memory.",
+        "Fetch the linked user's durable open-loop snapshot across goals, open work, relationships, and memory.",
         %{
           "type" => "object",
           "properties" => %{
             "query" => %{"type" => "string"},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "list_goals",
+        "List the linked user's saved goals with optional status, category, sensitivity, and search filters.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "status" => %{"type" => "string"},
+            "category" => %{"type" => "string"},
+            "sensitivity" => %{"type" => "string"},
+            "query" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "get_goal",
+        "Fetch one linked user's goal with progress updates, goal links, and review history.",
+        %{
+          "type" => "object",
+          "required" => ["goal_id"],
+          "properties" => %{
+            "goal_id" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "goal_context",
+        "Fetch a bounded active-goals context snapshot for prioritization and review.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 12},
+            "include_private" => %{"type" => "boolean"}
+          }
+        }
+      ),
+      tool_definition(
+        "create_goal",
+        "Create a durable user-scoped goal. Use this when the operator asks Maraithon to add, save, or track a goal.",
+        %{
+          "type" => "object",
+          "required" => ["title", "desired_outcome"],
+          "properties" => %{
+            "title" => %{"type" => "string"},
+            "category" => %{"type" => "string"},
+            "desired_outcome" => %{"type" => "string"},
+            "why" => %{"type" => "string"},
+            "success_metric" => %{"type" => "string"},
+            "priority" => %{"type" => "integer", "minimum" => 0, "maximum" => 100},
+            "sensitivity" => %{"type" => "string"},
+            "proactive_visibility" => %{"type" => "string"},
+            "review_cadence" => %{"type" => "string"},
+            "target_at" => %{"type" => "string"},
+            "metadata" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
+        "update_goal",
+        "Update one linked user's goal status, copy, cadence, priority, sensitivity, or target.",
+        %{
+          "type" => "object",
+          "required" => ["goal_id"],
+          "properties" => %{
+            "goal_id" => %{"type" => "string"},
+            "title" => %{"type" => "string"},
+            "category" => %{"type" => "string"},
+            "status" => %{"type" => "string"},
+            "desired_outcome" => %{"type" => "string"},
+            "why" => %{"type" => "string"},
+            "success_metric" => %{"type" => "string"},
+            "priority" => %{"type" => "integer", "minimum" => 0, "maximum" => 100},
+            "sensitivity" => %{"type" => "string"},
+            "proactive_visibility" => %{"type" => "string"},
+            "review_cadence" => %{"type" => "string"},
+            "target_at" => %{"type" => "string"},
+            "metadata" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
+        "record_goal_progress",
+        "Record a manual or source-backed progress note for one goal.",
+        %{
+          "type" => "object",
+          "required" => ["goal_id", "summary"],
+          "properties" => %{
+            "goal_id" => %{"type" => "string"},
+            "summary" => %{"type" => "string"},
+            "progress_state" => %{"type" => "string"},
+            "confidence" => %{"type" => "number", "minimum" => 0, "maximum" => 1},
+            "evidence" => %{"type" => "object"},
+            "metadata" => %{"type" => "object"},
+            "occurred_at" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "link_goal_resource",
+        "Link one goal to a todo, person, brief, chat thread, memory, scheduled task, or source observation.",
+        %{
+          "type" => "object",
+          "required" => ["goal_id", "resource_type", "resource_id"],
+          "properties" => %{
+            "goal_id" => %{"type" => "string"},
+            "resource_type" => %{"type" => "string"},
+            "resource_id" => %{"type" => "string"},
+            "relationship" => %{"type" => "string"},
+            "confidence" => %{"type" => "number", "minimum" => 0, "maximum" => 1},
+            "metadata" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
+        "review_goal_alignment",
+        "Record or trigger an on-demand goal-alignment review for one goal or all active goals.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "goal_id" => %{"type" => "string"},
+            "trigger" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 20}
           }
         }
       ),
@@ -1389,6 +1516,30 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "get_open_loops" ->
         get_open_loops(runtime_context, args)
 
+      "list_goals" ->
+        list_goals(runtime_context, args)
+
+      "get_goal" ->
+        get_goal(runtime_context, args)
+
+      "goal_context" ->
+        goal_context(runtime_context, args)
+
+      "create_goal" ->
+        create_goal(runtime_context, args)
+
+      "update_goal" ->
+        update_goal(runtime_context, args)
+
+      "record_goal_progress" ->
+        record_goal_progress(runtime_context, args)
+
+      "link_goal_resource" ->
+        link_goal_resource(runtime_context, args)
+
+      "review_goal_alignment" ->
+        review_goal_alignment(runtime_context, args)
+
       "inspect_open_insight" ->
         inspect_open_insight(runtime_context, args)
 
@@ -1728,6 +1879,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       upsert_todos update_todo resolve_todo upsert_person link_person_data learn_relationship_context
       update_project_scope decide_project_recommendation update_implementation_run
       create_scheduled_task pause_scheduled_task cancel_scheduled_task
+      create_goal update_goal record_goal_progress link_goal_resource review_goal_alignment
     )
   end
 
@@ -1852,6 +2004,143 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
        limit: limit
      )}
   end
+
+  defp list_goals(runtime_context, args) do
+    limit = normalize_limit(Map.get(args, "limit"), 20, 50)
+
+    goals =
+      Goals.list_goals(runtime_context.user_id,
+        status: Map.get(args, "status", "active"),
+        category: Map.get(args, "category", "all"),
+        sensitivity: Map.get(args, "sensitivity", "all"),
+        query: Map.get(args, "query"),
+        limit: limit
+      )
+
+    {:ok, %{count: length(goals), goals: Enum.map(goals, &Goals.serialize_goal/1)}}
+  end
+
+  defp get_goal(runtime_context, args) do
+    with {:ok, goal_id} <- required_string(args, "goal_id") do
+      case Goals.get_goal(runtime_context.user_id, goal_id) do
+        nil ->
+          {:error, "goal_not_found"}
+
+        goal ->
+          {:ok, %{goal: serialize_goal_detail(goal)}}
+      end
+    end
+  end
+
+  defp goal_context(runtime_context, args) do
+    limit = normalize_limit(Map.get(args, "limit"), 8, 12)
+
+    {:ok,
+     Goals.context_snapshot(runtime_context.user_id,
+       limit: limit,
+       include_private: Map.get(args, "include_private") == true
+     )}
+  end
+
+  defp create_goal(runtime_context, args) do
+    case Goals.create_goal(runtime_context.user_id, goal_attrs(args)) do
+      {:ok, goal} -> {:ok, %{goal: Goals.serialize_goal(goal)}}
+      {:error, reason} -> {:error, normalize_error(reason)}
+    end
+  end
+
+  defp update_goal(runtime_context, args) do
+    with {:ok, goal_id} <- required_string(args, "goal_id") do
+      case Goals.update_goal(runtime_context.user_id, goal_id, goal_attrs(args)) do
+        {:ok, goal} -> {:ok, %{goal: Goals.serialize_goal(goal)}}
+        {:error, :not_found} -> {:error, "goal_not_found"}
+        {:error, reason} -> {:error, normalize_error(reason)}
+      end
+    end
+  end
+
+  defp record_goal_progress(runtime_context, args) do
+    with {:ok, goal_id} <- required_string(args, "goal_id") do
+      case Goals.record_progress(runtime_context.user_id, goal_id, progress_attrs(args),
+             source: "chat"
+           ) do
+        {:ok, progress} -> {:ok, %{progress_update: Goals.serialize_progress(progress)}}
+        {:error, :not_found} -> {:error, "goal_not_found"}
+        {:error, reason} -> {:error, normalize_error(reason)}
+      end
+    end
+  end
+
+  defp link_goal_resource(runtime_context, args) do
+    with {:ok, goal_id} <- required_string(args, "goal_id") do
+      case Goals.link_resource(runtime_context.user_id, goal_id, goal_link_attrs(args),
+             source: "chat"
+           ) do
+        {:ok, link} -> {:ok, %{link: Goals.serialize_link(link)}}
+        {:error, :not_found} -> {:error, "goal_not_found"}
+        {:error, reason} -> {:error, normalize_error(reason)}
+      end
+    end
+  end
+
+  defp review_goal_alignment(runtime_context, args) do
+    goal_id = optional_string(args, "goal_id")
+    trigger = optional_string(args, "trigger") || "chat"
+    limit = normalize_limit(Map.get(args, "limit"), 20, 20)
+
+    opts =
+      [trigger: trigger, limit: limit]
+      |> maybe_put_goal_id(goal_id)
+
+    case Goals.review_goal_alignment(runtime_context.user_id, opts) do
+      {:ok, run} -> {:ok, %{review_run: Goals.serialize_review_run(run)}}
+      {:error, :not_found} -> {:error, "goal_not_found"}
+      {:error, reason} -> {:error, normalize_error(reason)}
+    end
+  end
+
+  defp serialize_goal_detail(goal) do
+    goal
+    |> Goals.serialize_goal()
+    |> Map.put(
+      :progress_updates,
+      Enum.map(
+        goal_assoc(goal, :progress_updates),
+        &Goals.serialize_progress(&1, include_evidence: true)
+      )
+    )
+    |> Map.put(:links, Enum.map(goal_assoc(goal, :links), &Goals.serialize_link/1))
+    |> Map.put(
+      :review_runs,
+      Enum.map(goal_assoc(goal, :review_runs), &Goals.serialize_review_run/1)
+    )
+  end
+
+  defp goal_assoc(goal, field) do
+    case Map.get(goal, field) do
+      values when is_list(values) -> values
+      _other -> []
+    end
+  end
+
+  defp goal_attrs(args) do
+    Map.take(args, ~w(
+      category status title desired_outcome why success_metric priority sensitivity
+      proactive_visibility review_cadence starts_on target_at last_reviewed_at
+      next_review_at metadata
+    ))
+  end
+
+  defp progress_attrs(args) do
+    Map.take(args, ~w(summary progress_state confidence evidence metadata occurred_at))
+  end
+
+  defp goal_link_attrs(args) do
+    Map.take(args, ~w(resource_type resource_id relationship confidence metadata))
+  end
+
+  defp maybe_put_goal_id(opts, nil), do: opts
+  defp maybe_put_goal_id(opts, goal_id), do: Keyword.put(opts, :goal_id, goal_id)
 
   defp list_todos(runtime_context, args) do
     limit = normalize_limit(Map.get(args, "limit"), 50, 50)

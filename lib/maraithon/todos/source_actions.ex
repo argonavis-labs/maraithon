@@ -132,9 +132,10 @@ defmodule Maraithon.Todos.SourceActions do
 
   defp gmail_source_item_id(%Todo{source: "gmail", source_item_id: id})
        when is_binary(id) and id != "" do
-    # Gmail source_item_id values are raw API ids; anything with separators is
-    # a composite tracking key, not an id Gmail web can open.
-    if String.match?(id, ~r/^[A-Za-z0-9_-]+$/), do: id
+    # Gmail source_item_id values should be raw Gmail API ids. Composite
+    # tracking keys often contain provider names or separators and must not be
+    # surfaced in user-facing mobile payloads.
+    if String.match?(id, ~r/^[A-Fa-f0-9]+$/), do: id
   end
 
   defp gmail_source_item_id(_todo), do: nil

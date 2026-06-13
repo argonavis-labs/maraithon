@@ -17,6 +17,7 @@ defmodule MaraithonWeb.AdminNavigation do
   # stay primary; the control plane lives in the System section below.
   @primary_nav [
     %{label: "Today", path: "/briefing", icon: :home},
+    %{label: "Goals", path: "/goals", icon: :goals},
     %{label: "Work", path: "/todos", icon: :todos},
     %{label: "Stream", path: "/stream", icon: :insights},
     %{label: "People", path: "/operator/people", icon: :people},
@@ -35,8 +36,8 @@ defmodule MaraithonWeb.AdminNavigation do
 
   @mobile_nav [
     %{label: "Today", path: "/briefing", icon: :home},
+    %{label: "Goals", path: "/goals", icon: :goals},
     %{label: "Work", path: "/todos", icon: :todos},
-    %{label: "Stream", path: "/stream", icon: :insights},
     %{label: "People", path: "/operator/people", icon: :people},
     %{label: "Chat", path: "/chat", icon: :search}
   ]
@@ -311,6 +312,9 @@ defmodule MaraithonWeb.AdminNavigation do
 
   defp active?(current_path, "/connectors"),
     do: String.starts_with?(current_path, "/connectors")
+
+  defp active?(current_path, "/goals"),
+    do: String.starts_with?(current_path, "/goals")
 
   defp active?(current_path, "/insights"),
     do: String.starts_with?(current_path, "/insights")

@@ -8,6 +8,7 @@ defmodule Maraithon.OpenLoops do
 
   alias Maraithon.Crm
   alias Maraithon.Crm.{Person, PersonLink}
+  alias Maraithon.Goals
   alias Maraithon.LocalMessages
   alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
@@ -81,6 +82,7 @@ defmodule Maraithon.OpenLoops do
 
     bucketed = bucket_todos(todos, now)
     people = relationship_snapshots(user_id, query, limit)
+    goals = Goals.open_loop_snapshot(user_id, query: query, limit: limit, now: now)
 
     memory =
       if include_memory?(opts) do
@@ -93,9 +95,10 @@ defmodule Maraithon.OpenLoops do
       source: "maraithon_open_loops",
       generated_at: DateTime.to_iso8601(now),
       query: query,
-      totals: totals(bucketed, people, memory),
+      totals: totals(bucketed, people, memory, goals),
       buckets: trim_buckets(bucketed, limit),
       people: people,
+      goals: goals,
       memory: memory
     }
   end
@@ -856,6 +859,8 @@ defmodule Maraithon.OpenLoops do
       #{format_buckets(Map.get(snapshot, :buckets, %{}))}
 
       #{format_people(Map.get(snapshot, :people, []))}
+
+      #{format_goals(Map.get(snapshot, :goals, %{}))}
       """
       |> String.trim()
     end
@@ -1202,7 +1207,9 @@ defmodule Maraithon.OpenLoops do
     end)
   end
 
-  defp totals(bucketed, people, memory) do
+  defp totals(bucketed, people, memory, goals) do
+    goal_counts = Map.get(goals, :counts, %{})
+
     %{
       open_todos: Enum.reduce(bucketed, 0, fn {_bucket, todos}, acc -> acc + length(todos) end),
       overdue: bucketed |> Map.get(:overdue, []) |> length(),
@@ -1213,7 +1220,10 @@ defmodule Maraithon.OpenLoops do
       snoozed: bucketed |> Map.get(:snoozed, []) |> length(),
       people_with_open_todos:
         Enum.count(people, fn person -> Map.get(person, :open_todo_count, 0) > 0 end),
-      recalled_memories: Map.get(memory, :count, 0)
+      recalled_memories: Map.get(memory, :count, 0),
+      active_goals: Map.get(goal_counts, "active", 0),
+      goals_due_for_review: Map.get(goal_counts, "review_due", 0),
+      at_risk_goals: Map.get(goal_counts, "at_risk", 0)
     }
   end
 
@@ -1355,6 +1365,56 @@ defmodule Maraithon.OpenLoops do
       end)
 
     "People:\n#{rendered}"
+  end
+
+  defp format_goals(%{} = goals) do
+    active_goals = Map.get(goals, :active_goals, [])
+    review_due_goals = Map.get(goals, :review_due_goals, [])
+    linked_open_work = Map.get(goals, :linked_open_work, [])
+
+    cond do
+      active_goals == [] and review_due_goals == [] and linked_open_work == [] ->
+        "Goals:\nNo active goals saved."
+
+      true ->
+        [
+          format_goal_list("Active Goals", active_goals),
+          format_goal_list("Goals Due For Review", review_due_goals),
+          format_goal_linked_work(linked_open_work)
+        ]
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.join("\n")
+    end
+  end
+
+  defp format_goals(_goals), do: "Goals:\nNo active goals saved."
+
+  defp format_goal_list(_label, []), do: ""
+
+  defp format_goal_list(label, goals) do
+    rendered =
+      goals
+      |> Enum.take(@prompt_limit)
+      |> Enum.map_join("\n", fn goal ->
+        "- #{Map.get(goal, :title) || Map.get(goal, "title")} (#{Map.get(goal, :category) || Map.get(goal, "category")})"
+      end)
+
+    "#{label}:\n#{rendered}"
+  end
+
+  defp format_goal_linked_work([]), do: ""
+
+  defp format_goal_linked_work(items) do
+    rendered =
+      items
+      |> Enum.take(@prompt_limit)
+      |> Enum.map_join("\n", fn item ->
+        goal = Map.get(item, :goal, %{})
+        todo = Map.get(item, :todo, %{})
+        "- #{Map.get(goal, :title)} -> #{Map.get(todo, :title)}: #{Map.get(todo, :next_action)}"
+      end)
+
+    "Goal-Linked Open Work:\n#{rendered}"
   end
 
   defp inject_open_loop_message(messages, section) when is_list(messages) do
@@ -1532,10 +1592,14 @@ defmodule Maraithon.OpenLoops do
         monitor: 0,
         snoozed: 0,
         people_with_open_todos: 0,
-        recalled_memories: 0
+        recalled_memories: 0,
+        active_goals: 0,
+        goals_due_for_review: 0,
+        at_risk_goals: 0
       },
       buckets: %{overdue: [], today: [], upcoming: [], no_due_date: [], monitor: [], snoozed: []},
       people: [],
+      goals: Goals.open_loop_snapshot(nil),
       memory: empty_memory_context()
     }
   end
