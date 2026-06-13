@@ -98,6 +98,57 @@ struct MobileAPIClient: Sendable {
         let person: RemotePerson
     }
 
+    struct ReconnectResponse: Decodable, Sendable {
+        let suggestions: [RemoteReconnectSuggestion]
+    }
+
+    struct RemoteReconnectSuggestion: Decodable, Equatable, Sendable, Identifiable {
+        let person: RemotePerson
+        let category: String
+        let headline: String
+        let reason: String
+        let suggestedAction: String?
+        let daysSinceLast: Int?
+        let cadenceDays: Int?
+        let communicationScore: Int?
+        let overdue: Bool
+        let openWork: [RemoteOpenWork]
+
+        var id: String { person.id }
+
+        enum CodingKeys: String, CodingKey {
+            case person
+            case category
+            case headline
+            case reason
+            case suggestedAction = "suggested_action"
+            case daysSinceLast = "days_since_last"
+            case cadenceDays = "cadence_days"
+            case communicationScore = "communication_score"
+            case overdue
+            case openWork = "open_work"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            person = try container.decode(RemotePerson.self, forKey: .person)
+            category = try container.decode(String.self, forKey: .category)
+            headline = try container.decode(String.self, forKey: .headline)
+            reason = try container.decode(String.self, forKey: .reason)
+            suggestedAction = try container.decodeIfPresent(String.self, forKey: .suggestedAction)
+            daysSinceLast = try container.decodeIfPresent(Int.self, forKey: .daysSinceLast)
+            cadenceDays = try container.decodeIfPresent(Int.self, forKey: .cadenceDays)
+            communicationScore = try container.decodeIfPresent(Int.self, forKey: .communicationScore)
+            overdue = try container.decodeIfPresent(Bool.self, forKey: .overdue) ?? false
+            openWork = try container.decodeIfPresent([RemoteOpenWork].self, forKey: .openWork) ?? []
+        }
+    }
+
+    struct RemoteOpenWork: Decodable, Equatable, Sendable, Identifiable {
+        let id: String
+        let title: String
+    }
+
     struct RemoteUser: Decodable, Equatable, Sendable {
         let id: String
         let email: String
@@ -693,6 +744,18 @@ struct MobileAPIClient: Sendable {
 
             offset += pageSize
         }
+    }
+
+    func reconnectSuggestions(
+        sessionToken: String,
+        limit: Int = 12
+    ) async throws -> [RemoteReconnectSuggestion] {
+        let response: ReconnectResponse = try await send(
+            path: "/people/reconnect?limit=\(limit)",
+            sessionToken: sessionToken,
+            responseType: ReconnectResponse.self
+        )
+        return response.suggestions
     }
 
     func createPerson(sessionToken: String, payload: RequestBody) async throws -> RemotePerson {

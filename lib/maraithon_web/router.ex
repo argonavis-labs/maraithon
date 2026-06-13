@@ -154,6 +154,7 @@ defmodule MaraithonWeb.Router do
     delete "/todos/:id", MobileTodoController, :delete
     post "/todos/:id/actions/:action", MobileTodoController, :perform_action
     get "/people", MobilePeopleController, :index
+    get "/people/reconnect", MobilePeopleController, :reconnect
     post "/people", MobilePeopleController, :create
     get "/people/:id", MobilePeopleController, :show
     patch "/people/:id", MobilePeopleController, :update

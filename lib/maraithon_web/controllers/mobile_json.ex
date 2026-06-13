@@ -124,6 +124,28 @@ defmodule MaraithonWeb.MobileJSON do
 
   def public_person_metadata(metadata), do: PublicMetadata.person(metadata)
 
+  @doc """
+  Serializes a reconnect suggestion (from `Crm.reconnect_suggestions/2`):
+  the full person plus the reconnect reasoning the mobile People tab leads with.
+  """
+  def reconnect_suggestion(%{person: %Person{} = suggestion_person} = suggestion) do
+    %{
+      person: person(suggestion_person),
+      category: suggestion[:category],
+      headline: suggestion[:headline],
+      reason: suggestion[:reason],
+      suggested_action: suggestion[:suggested_action],
+      days_since_last: suggestion[:days_since_last],
+      cadence_days: suggestion[:cadence_days],
+      communication_score: suggestion[:communication_score],
+      overdue: suggestion[:overdue] || false,
+      open_work:
+        suggestion
+        |> Map.get(:open_work, [])
+        |> Enum.map(fn item -> %{id: to_string(item.id), title: item.title} end)
+    }
+  end
+
   def error(reason) do
     ApiErrorCopy.mobile(reason)
   end

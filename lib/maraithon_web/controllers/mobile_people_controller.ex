@@ -36,6 +36,16 @@ defmodule MaraithonWeb.MobilePeopleController do
     })
   end
 
+  def reconnect(conn, params) do
+    user_id = conn.assigns.current_user.id
+
+    suggestions = Crm.reconnect_suggestions(user_id, limit: reconnect_limit(params))
+
+    json(conn, %{
+      suggestions: Enum.map(suggestions, &MobileJSON.reconnect_suggestion/1)
+    })
+  end
+
   def create(conn, params) do
     user_id = conn.assigns.current_user.id
 
@@ -191,6 +201,13 @@ defmodule MaraithonWeb.MobilePeopleController do
     case Integer.parse(to_string(Map.get(params, "offset", "0"))) do
       {value, ""} -> max(value, 0)
       _ -> 0
+    end
+  end
+
+  defp reconnect_limit(params) do
+    case Integer.parse(to_string(Map.get(params, "limit", "12"))) do
+      {value, ""} -> value |> max(1) |> min(50)
+      _ -> 12
     end
   end
 

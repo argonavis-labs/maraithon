@@ -41,6 +41,20 @@ defmodule Maraithon.Crm do
 
   def list_people(_user_id, _opts), do: []
 
+  @doc """
+  Ranked "who should I reconnect with" suggestions for the user, each with a
+  concrete reason tied to open work, an overdue cadence, or a strong
+  relationship going quiet. Delegates to
+  `Maraithon.Crm.ReconnectSuggestions.suggestions/2`.
+  """
+  def reconnect_suggestions(user_id, opts \\ [])
+
+  def reconnect_suggestions(user_id, opts) when is_binary(user_id) do
+    Maraithon.Crm.ReconnectSuggestions.suggestions(user_id, opts)
+  end
+
+  def reconnect_suggestions(_user_id, _opts), do: []
+
   def people_for_resource(user_id, resource_type, resource_id, opts \\ [])
 
   def people_for_resource(user_id, resource_type, resource_id, opts)

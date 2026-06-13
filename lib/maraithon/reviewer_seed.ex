@@ -41,6 +41,8 @@ defmodule Maraithon.ReviewerSeed do
         seed_people(user.id)
         seed_projects(user.id)
         seed_todos(user.id)
+        seed_person_work_links(user.id)
+        seed_reconnect_signals(user.id)
         seed_chat(user.id)
         seed_brief(user.id)
 
@@ -237,6 +239,82 @@ defmodule Maraithon.ReviewerSeed do
       end)
 
     Todos.upsert_many(user_id, attrs_list)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Reconnect surface — link work to people and seed cadence signals so the
+  # intelligent People tab has real "who to reach out to" suggestions to show.
+  # ---------------------------------------------------------------------------
+
+  # Link seeded todos to the people they concern. Open work is the strongest
+  # reconnect signal: "you have an open item with Jane" is the reason to
+  # reach out, and this is what the People tab leads with.
+  defp seed_person_work_links(user_id) do
+    [
+      {"person-3", "reviewer-seed-todo-1", "Reply to Jane Thuet about the Team plan"},
+      {"person-4", "reviewer-seed-todo-2", "Confirm the benefits renewal with Laura"},
+      {"person-2", "reviewer-seed-todo-3", "Align with Charlie on trial gating"}
+    ]
+    |> Enum.each(fn {person_seed_id, todo_dedupe_key, title} ->
+      with %Person{} = person <- find_seeded(Person, user_id, person_seed_id),
+           %{id: todo_id} <- find_todo(user_id, todo_dedupe_key) do
+        Crm.attach_resource(user_id, person.id, %{
+          "resource_type" => "todo",
+          "resource_id" => todo_id,
+          "role" => "owed_to",
+          "title" => title
+        })
+      end
+    end)
+  end
+
+  # Seed communication signals + last-contact dates directly so the People tab
+  # shows an overdue cadence and a strong-but-quiet relationship alongside the
+  # open-work suggestions. communication_score is system-owned (not in the
+  # changeset), so it is set with a direct update.
+  defp seed_reconnect_signals(user_id) do
+    # Sam: an overdue cadence — you usually talk weekly, it has been a month.
+    seed_signal(user_id, "person-5", 60, %{
+      "overdue" => true,
+      "days_since_last" => 31,
+      "cadence_days" => 7,
+      "score" => 60
+    })
+
+    # Emma stays warm via family logistics; no overdue flag needed. Give the
+    # remaining strong relationship (Charlie) a recent-but-aging touch so the
+    # open-work link carries the reconnect reason rather than a cadence gap.
+    :ok
+  end
+
+  defp seed_signal(user_id, person_seed_id, score, signals) do
+    import Ecto.Query
+
+    case find_seeded(Person, user_id, person_seed_id) do
+      %Person{} = person ->
+        metadata = Map.put(person.metadata || %{}, "communication_signals", signals)
+        {:ok, _} = Crm.update_person(person, %{"metadata" => metadata})
+
+        Repo.update_all(
+          from(p in Person, where: p.id == ^person.id),
+          set: [communication_score: score]
+        )
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp find_todo(user_id, dedupe_key) do
+    import Ecto.Query
+    alias Maraithon.Todos.Todo
+
+    Repo.one(
+      from(t in Todo,
+        where: t.user_id == ^user_id and t.dedupe_key == ^dedupe_key,
+        limit: 1
+      )
+    )
   end
 
   # ---------------------------------------------------------------------------

@@ -13,9 +13,23 @@ struct CRMView: View {
     @State private var refreshErrorMessage: String?
     @State private var actionErrorMessage: String?
     @State private var isRefreshing = false
+    @State private var reconnectSuggestions: [MobileAPIClient.RemoteReconnectSuggestion] = []
 
     private var filteredContacts: [CRMContact] {
         CRMFiltering.filter(contacts, statusFilter: statusFilter, searchText: searchText)
+    }
+
+    private var contactsByID: [UUID: CRMContact] {
+        Dictionary(contacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    // Only lead with the Reconnect surface when the user is browsing the whole
+    // list (no active search or status filter); a filtered view is a focused
+    // lookup, not the "who should I reach out to" hero.
+    private var showsReconnectSection: Bool {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            statusFilter == .all &&
+            !reconnectSuggestions.isEmpty
     }
 
     private var statusCounts: CRMStatusCounts {
@@ -56,6 +70,17 @@ struct CRMView: View {
                     }
                 }
 
+                if showsReconnectSection {
+                    ReconnectSuggestionsSection(
+                        suggestions: reconnectSuggestions,
+                        contactsByID: contactsByID,
+                        onReachedOut: { contact in
+                            apply(.logContact(Date()), to: contact)
+                            Task { await refreshReconnectSuggestions() }
+                        }
+                    )
+                }
+
                 Section {
                     FilterCountStrip(
                         selection: $statusFilter,
@@ -74,7 +99,7 @@ struct CRMView: View {
                     .listRowSeparator(.hidden)
                 }
 
-                Section("People") {
+                Section(showsReconnectSection ? "All People" : "People") {
                     if filteredContacts.isEmpty {
                         ContentUnavailableView(
                             emptyState.title,
@@ -145,6 +170,7 @@ struct CRMView: View {
             }
             .task {
                 await refreshLatestPeople()
+                await refreshReconnectSuggestions()
             }
             .onAppear(perform: applyRequestedFilterIfNeeded)
             .onChange(of: appNavigation.requestedPeopleFilter) { _, _ in
@@ -194,6 +220,20 @@ struct CRMView: View {
             refreshErrorMessage = nil
         } catch {
             refreshErrorMessage = "Could not refresh people. \(MobileErrorCopy.message(for: error))"
+        }
+    }
+
+    private func refreshReconnectSuggestions() async {
+        guard let sessionToken = sessionStore.user?.sessionToken else { return }
+
+        do {
+            let suggestions = try await MobileAPIClient().reconnectSuggestions(sessionToken: sessionToken)
+            await MainActor.run { reconnectSuggestions = suggestions }
+        } catch {
+            // The reconnect surface is additive intelligence on top of the
+            // directory; if it cannot load we silently fall back to the list
+            // rather than blocking people management with an error banner.
+            await MainActor.run { reconnectSuggestions = [] }
         }
     }
 
