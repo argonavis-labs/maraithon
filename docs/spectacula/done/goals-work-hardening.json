@@ -1,0 +1,61 @@
+{
+  "spec_id": "goals-work-hardening",
+  "slug": "goals-work-hardening",
+  "title": "Goals Work Hardening",
+  "stage": "done",
+  "spec_path": "../specs/goals-work-hardening.md",
+  "created_at": "2026-06-13T03:22:26Z",
+  "approved_at": "2026-06-13T03:22:26Z",
+  "started_at": "2026-06-13T03:22:26Z",
+  "completed_at": "2026-06-13T03:31:18Z",
+  "updated_at": "2026-06-13T03:31:18Z",
+  "summary": "Hardened Goals public write boundaries, made review output partial-safe, covered mobile/chat/domain regressions, and uploaded mobile build 20260613032937 to TestFlight.",
+  "next_action": "Monitor TestFlight processing and live product feedback.",
+  "blockers": [],
+  "review_policy": {
+    "final_vetting": "off"
+  },
+  "verification": {
+    "format": "passed: mix format on touched Elixir files",
+    "lint": "passed: git diff --check",
+    "typecheck": "passed: mix compile",
+    "build": "passed: make build-mobile; make testflight-mobile archived/exported/uploaded IPA",
+    "tests": "passed: mix test test/maraithon/goals_test.exs test/maraithon_web/controllers/mobile_goal_controller_test.exs test/maraithon/telegram_assistant/goal_toolbox_test.exs test/maraithon/telegram_assistant/toolbox_test.exs test/maraithon/chief_of_staff/skills/goal_alignment_test.exs",
+    "spec_review": "passed: acceptance checks reviewed against implementation",
+    "final_vetting": "skipped",
+    "notes": "Broad mix test/precommit/make verify intentionally skipped under production-first verification mode. TestFlight upload accepted for version 1.0 build 20260613032937, delivery UUID 6250d280-186a-41cd-a75b-c945315a16d7, upload log apps/mobile/build/testflight/upload-20260613032937.log."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented, verified, and uploaded mobile build 20260613032937.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "6. Implementation Contract",
+      "7. Verification Plan",
+      "8. Acceptance Checks"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/goals-work-hardening.md",
+      "docs/spectacula/done/goals-work-hardening.json",
+      "apps/mobile/project.yml",
+      "apps/mobile/build/testflight/upload-20260613032937.log"
+    ],
+    "notes": "Unrelated untracked docs/spectacula/specs/apple-reviewer-bypass-credentials.md was intentionally left untouched."
+  },
+  "history": [
+    {
+      "at": "2026-06-13T03:22:26Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "inprogress",
+      "note": "Created and started hardening spec in one pass because the user explicitly requested design, implementation, and verification."
+    },
+    {
+      "at": "2026-06-13T03:31:18Z",
+      "event": "completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Focused tests, compile, mobile build, diff hygiene, and TestFlight upload passed."
+    }
+  ]
+}

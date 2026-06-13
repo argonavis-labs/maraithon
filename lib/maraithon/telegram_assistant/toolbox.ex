@@ -215,8 +215,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "sensitivity" => %{"type" => "string"},
             "proactive_visibility" => %{"type" => "string"},
             "review_cadence" => %{"type" => "string"},
-            "target_at" => %{"type" => "string"},
-            "metadata" => %{"type" => "object"}
+            "target_at" => %{"type" => "string"}
           }
         }
       ),
@@ -238,8 +237,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "sensitivity" => %{"type" => "string"},
             "proactive_visibility" => %{"type" => "string"},
             "review_cadence" => %{"type" => "string"},
-            "target_at" => %{"type" => "string"},
-            "metadata" => %{"type" => "object"}
+            "target_at" => %{"type" => "string"}
           }
         }
       ),
@@ -2126,8 +2124,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp goal_attrs(args) do
     Map.take(args, ~w(
       category status title desired_outcome why success_metric priority sensitivity
-      proactive_visibility review_cadence starts_on target_at last_reviewed_at
-      next_review_at metadata
+      proactive_visibility review_cadence starts_on target_at
     ))
   end
 

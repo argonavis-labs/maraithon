@@ -8,7 +8,7 @@ defmodule MaraithonWeb.MobileGoalController do
 
   @goal_param_keys ~w(
     category status title desired_outcome why success_metric priority sensitivity
-    proactive_visibility review_cadence starts_on target_at last_reviewed_at next_review_at metadata
+    proactive_visibility review_cadence starts_on target_at
   )
   @progress_param_keys ~w(source summary progress_state confidence evidence metadata occurred_at)
 

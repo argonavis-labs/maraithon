@@ -16,6 +16,9 @@ defmodule MaraithonWeb.MobileGoalControllerTest do
     user: user,
     session_token: session_token
   } do
+    spoof_reviewed_at = "2001-02-03T04:05:06Z"
+    spoof_next_review_at = "2099-01-01T00:00:00Z"
+
     conn =
       conn
       |> auth(session_token)
@@ -25,20 +28,31 @@ defmodule MaraithonWeb.MobileGoalControllerTest do
           "category" => "health_fitness",
           "title" => "Run three times a week",
           "desired_outcome" => "Build a steady weekly running habit.",
-          "review_cadence" => "weekly"
+          "review_cadence" => "weekly",
+          "last_reviewed_at" => spoof_reviewed_at,
+          "next_review_at" => spoof_next_review_at,
+          "metadata" => %{"unsafe" => true}
         }
       })
+
+    response = json_response(conn, 201)
 
     assert %{
              "goal" => %{
                "id" => goal_id,
                "title" => "Run three times a week",
                "category" => "health_fitness",
-               "sensitivity" => "sensitive"
+               "sensitivity" => "sensitive",
+               "last_reviewed_at" => nil
              }
-           } = json_response(conn, 201)
+           } = response
 
-    assert Goals.get_goal(user.id, goal_id, preload: false).user_id == user.id
+    refute response["goal"]["next_review_at"] == spoof_next_review_at
+
+    created_goal = Goals.get_goal(user.id, goal_id, preload: false)
+    assert created_goal.user_id == user.id
+    assert created_goal.last_reviewed_at == nil
+    assert created_goal.metadata == %{}
 
     conn =
       build_conn()
@@ -51,11 +65,30 @@ defmodule MaraithonWeb.MobileGoalControllerTest do
       build_conn()
       |> auth(session_token)
       |> patch(~p"/api/mobile/goals/#{goal_id}", %{
-        "goal" => %{"title" => "Run four times a week", "priority" => 85}
+        "goal" => %{
+          "title" => "Run four times a week",
+          "priority" => 85,
+          "last_reviewed_at" => spoof_reviewed_at,
+          "next_review_at" => spoof_next_review_at,
+          "metadata" => %{"unsafe" => true}
+        }
       })
 
-    assert %{"goal" => %{"title" => "Run four times a week", "priority" => 85}} =
-             json_response(conn, 200)
+    response = json_response(conn, 200)
+
+    assert %{
+             "goal" => %{
+               "title" => "Run four times a week",
+               "priority" => 85,
+               "last_reviewed_at" => nil
+             }
+           } = response
+
+    refute response["goal"]["next_review_at"] == spoof_next_review_at
+
+    updated_goal = Goals.get_goal(user.id, goal_id, preload: false)
+    assert updated_goal.last_reviewed_at == nil
+    assert updated_goal.metadata == %{}
 
     conn =
       build_conn()

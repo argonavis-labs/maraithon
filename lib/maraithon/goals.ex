@@ -20,6 +20,7 @@ defmodule Maraithon.Goals do
   @max_limit 200
   @context_limit 12
   @open_statuses ~w(open snoozed)
+  @internal_goal_attrs ~w(user_id last_reviewed_at next_review_at metadata)
 
   def list_goals(user_id, opts \\ [])
 
@@ -378,20 +379,20 @@ defmodule Maraithon.Goals do
         Repo.transaction(fn ->
           now = Keyword.get(opts, :now, DateTime.utc_now())
 
-          progress_updates =
+          {progress_updates, progress_skips} =
             output
             |> read_list("progress_updates")
-            |> Enum.map(&insert_review_progress!(user_id, &1, now))
+            |> apply_review_items("progress_update", &insert_review_progress(user_id, &1, now))
 
-          resource_links =
+          {resource_links, link_skips} =
             output
             |> read_list("resource_links")
-            |> Enum.map(&insert_review_link!(user_id, &1))
+            |> apply_review_items("resource_link", &insert_review_link(user_id, &1))
 
-          todo_links =
+          {todo_links, todo_skips} =
             output
             |> read_list("todo_candidates")
-            |> Enum.map(&insert_review_todo!(user_id, run, &1, now))
+            |> apply_review_items("todo_candidate", &insert_review_todo(user_id, run, &1, now))
 
           reviewed_goal_ids =
             output
@@ -400,11 +401,14 @@ defmodule Maraithon.Goals do
 
           advice = output |> read_list("advice") |> normalize_review_advice()
           findings = output |> read_list("findings") |> normalize_review_findings()
+          skipped_outputs = progress_skips ++ link_skips ++ todo_skips
 
           summary = %{
             "progress_updates_count" => length(progress_updates),
             "links_count" => length(resource_links) + length(todo_links),
             "todos_count" => length(todo_links),
+            "skipped_outputs_count" => length(skipped_outputs),
+            "skipped_outputs" => skipped_outputs,
             "reviewed_goal_ids" => reviewed_goal_ids,
             "advice" => advice,
             "findings" => findings
@@ -412,7 +416,7 @@ defmodule Maraithon.Goals do
 
           {:ok, updated_run} =
             complete_review_run(user_id, run.id, %{
-              "status" => "completed",
+              "status" => if(skipped_outputs == [], do: "completed", else: "partial"),
               "finished_at" => now,
               "result" => Map.merge(run.result || %{}, summary)
             })
@@ -533,7 +537,11 @@ defmodule Maraithon.Goals do
   end
 
   defp normalize_goal_create_attrs(user_id, attrs, opts) do
-    attrs = stringify_keys(attrs)
+    attrs =
+      attrs
+      |> stringify_keys()
+      |> strip_public_goal_attrs(opts)
+
     now = Keyword.get(opts, :now, DateTime.utc_now())
     category = attrs |> read_string("category", "work") |> normalize_enum_string("work")
     status = attrs |> read_string("status", "active") |> normalize_enum_string("active")
@@ -567,7 +575,11 @@ defmodule Maraithon.Goals do
   end
 
   defp normalize_goal_update_attrs(%Goal{} = goal, attrs, opts) do
-    attrs = stringify_keys(attrs)
+    attrs =
+      attrs
+      |> stringify_keys()
+      |> strip_public_goal_attrs(opts)
+
     now = Keyword.get(opts, :now, DateTime.utc_now())
 
     recompute_review? =
@@ -721,27 +733,27 @@ defmodule Maraithon.Goals do
 
   defp owned_uuid?(_schema, _user_id, _resource_id), do: {:error, :linked_resource_not_found}
 
-  defp insert_review_progress!(user_id, attrs, now) do
+  defp insert_review_progress(user_id, attrs, now) do
     attrs = stringify_keys(attrs)
     goal_id = read_string(attrs, "goal_id")
 
     case record_progress(user_id, goal_id, attrs, now: now, source: "agent") do
-      {:ok, progress_update} -> progress_update
-      {:error, reason} -> Repo.rollback(reason)
+      {:ok, progress_update} -> {:ok, progress_update}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp insert_review_link!(user_id, attrs) do
+  defp insert_review_link(user_id, attrs) do
     attrs = stringify_keys(attrs)
     goal_id = read_string(attrs, "goal_id")
 
     case link_resource(user_id, goal_id, Map.put_new(attrs, "source", "agent")) do
-      {:ok, link} -> link
-      {:error, reason} -> Repo.rollback(reason)
+      {:ok, link} -> {:ok, link}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp insert_review_todo!(user_id, %ReviewRun{} = run, attrs, now) do
+  defp insert_review_todo(user_id, %ReviewRun{} = run, attrs, now) do
     attrs = stringify_keys(attrs)
     goal_id = read_string(attrs, "goal_id")
 
@@ -756,14 +768,45 @@ defmodule Maraithon.Goals do
              "confidence" => read_float(attrs, "confidence"),
              "metadata" => %{"goal_review_run_id" => run.id}
            }) do
-        {:ok, link} -> link
-        {:error, reason} -> Repo.rollback(reason)
+        {:ok, link} -> {:ok, link}
+        {:error, reason} -> {:error, reason}
       end
     else
-      nil -> Repo.rollback(:not_found)
-      {:error, reason} -> Repo.rollback(reason)
+      nil -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
     end
   end
+
+  defp apply_review_items(items, kind, apply_fun) do
+    items
+    |> Enum.reduce({[], []}, fn item, {applied, skipped} ->
+      case apply_fun.(item) do
+        {:ok, value} ->
+          {[value | applied], skipped}
+
+        {:error, reason} ->
+          {applied, [skipped_review_output(kind, item, reason) | skipped]}
+      end
+    end)
+    |> then(fn {applied, skipped} -> {Enum.reverse(applied), Enum.reverse(skipped)} end)
+  end
+
+  defp skipped_review_output(kind, item, reason) do
+    item = stringify_keys(item)
+
+    %{
+      "kind" => kind,
+      "goal_id" => read_string(item, "goal_id"),
+      "reason" => review_skip_reason(reason)
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp review_skip_reason(%Ecto.Changeset{}), do: "invalid_changeset"
+  defp review_skip_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp review_skip_reason(reason) when is_binary(reason), do: reason
+  defp review_skip_reason(_reason), do: "invalid_review_output"
 
   defp review_todo_attrs(user_id, %Goal{} = goal, %ReviewRun{} = run, attrs, _now) do
     title = read_string(attrs, "title")
@@ -999,16 +1042,21 @@ defmodule Maraithon.Goals do
   defp update_reviewed_goals!(goal_ids, user_id, now) do
     goal_ids
     |> Enum.reduce([], fn goal_id, acc ->
-      case update_goal(user_id, goal_id, %{
-             "last_reviewed_at" => now,
-             "next_review_at" =>
-               user_id
-               |> get_goal(goal_id, preload: false)
-               |> case do
-                 %Goal{} = goal -> next_review_at(goal.review_cadence, now)
-                 nil -> nil
-               end
-           }) do
+      case update_goal(
+             user_id,
+             goal_id,
+             %{
+               "last_reviewed_at" => now,
+               "next_review_at" =>
+                 user_id
+                 |> get_goal(goal_id, preload: false)
+                 |> case do
+                   %Goal{} = goal -> next_review_at(goal.review_cadence, now)
+                   nil -> nil
+                 end
+             },
+             allow_internal_fields: true
+           ) do
         {:ok, goal} -> [goal.id | acc]
         {:error, :not_found} -> acc
         {:error, reason} -> Repo.rollback(reason)
@@ -1152,10 +1200,15 @@ defmodule Maraithon.Goals do
        when status in ["completed", "partial"] and is_binary(goal_id) do
     case get_goal(user_id, goal_id, preload: false) do
       %Goal{} = goal ->
-        update_goal(user_id, goal.id, %{
-          "last_reviewed_at" => finished_at,
-          "next_review_at" => next_review_at(goal.review_cadence, finished_at)
-        })
+        update_goal(
+          user_id,
+          goal.id,
+          %{
+            "last_reviewed_at" => finished_at,
+            "next_review_at" => next_review_at(goal.review_cadence, finished_at)
+          },
+          allow_internal_fields: true
+        )
 
       nil ->
         :ok
@@ -1181,6 +1234,16 @@ defmodule Maraithon.Goals do
       {key, value}, acc when is_binary(key) -> Map.put(acc, key, value)
       {_key, _value}, acc -> acc
     end)
+  end
+
+  defp stringify_keys(_value), do: %{}
+
+  defp strip_public_goal_attrs(attrs, opts) do
+    if Keyword.get(opts, :allow_internal_fields, false) do
+      attrs
+    else
+      Map.drop(attrs, @internal_goal_attrs)
+    end
   end
 
   defp read_list(map, key) when is_map(map) do

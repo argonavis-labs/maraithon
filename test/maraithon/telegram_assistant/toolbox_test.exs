@@ -62,6 +62,20 @@ defmodule Maraithon.TelegramAssistant.ToolboxTest do
       end
     end
 
+    test "goal create and update tools do not expose internal review fields" do
+      definitions =
+        Toolbox.tool_definitions(%{})
+        |> Map.new(fn definition -> {definition["name"], definition} end)
+
+      for tool <- ["create_goal", "update_goal"] do
+        properties = definitions[tool]["parameters"]["properties"]
+
+        refute Map.has_key?(properties, "metadata")
+        refute Map.has_key?(properties, "last_reviewed_at")
+        refute Map.has_key?(properties, "next_review_at")
+      end
+    end
+
     test "each new tool exposes a non-empty description and input schema" do
       all_new = @new_tools ++ @messages_tools
 

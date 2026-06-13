@@ -2,6 +2,7 @@ defmodule Maraithon.TelegramAssistant.GoalToolboxTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.Accounts
+  alias Maraithon.Goals
   alias Maraithon.TelegramAssistant.Toolbox
 
   setup do
@@ -19,13 +20,37 @@ defmodule Maraithon.TelegramAssistant.GoalToolboxTest do
                %{
                  "title" => "Ship goal-aware reviews",
                  "category" => "work",
-                 "desired_outcome" => "Maraithon checks work against saved goals."
+                 "desired_outcome" => "Maraithon checks work against saved goals.",
+                 "last_reviewed_at" => "2001-02-03T04:05:06Z",
+                 "next_review_at" => "2099-01-01T00:00:00Z",
+                 "metadata" => %{"unsafe" => true}
                },
                runtime_context
              )
 
+    persisted_goal = Goals.get_goal(runtime_context.user_id, goal_id, preload: false)
+    assert persisted_goal.last_reviewed_at == nil
+    assert persisted_goal.metadata == %{}
+
     assert {:ok, %{count: 1, goals: [%{id: ^goal_id}]}} =
              Toolbox.execute("list_goals", %{"status" => "active"}, runtime_context)
+
+    assert {:ok, %{goal: %{title: "Ship goal-aware reviews safely"}}} =
+             Toolbox.execute(
+               "update_goal",
+               %{
+                 "goal_id" => goal_id,
+                 "title" => "Ship goal-aware reviews safely",
+                 "last_reviewed_at" => "2001-02-03T04:05:06Z",
+                 "next_review_at" => "2099-01-01T00:00:00Z",
+                 "metadata" => %{"unsafe" => true}
+               },
+               runtime_context
+             )
+
+    persisted_goal = Goals.get_goal(runtime_context.user_id, goal_id, preload: false)
+    assert persisted_goal.last_reviewed_at == nil
+    assert persisted_goal.metadata == %{}
 
     assert {:ok, %{progress_update: %{progress_state: "on_track"}}} =
              Toolbox.execute(
