@@ -419,15 +419,15 @@ defmodule MaraithonWeb.AdminControllerTest do
       Application.put_env(:maraithon, :google,
         client_id: "google-client",
         client_secret: "google-secret",
-        redirect_uri: "https://maraithon.fly.dev/auth/google/callback",
-        calendar_webhook_url: "https://maraithon.fly.dev/webhooks/google/calendar",
+        redirect_uri: "https://maraithon.com/auth/google/callback",
+        calendar_webhook_url: "https://maraithon.com/webhooks/google/calendar",
         pubsub_topic: "projects/acme/topics/gmail"
       )
 
       Application.put_env(:maraithon, :github,
         client_id: "github-client",
         client_secret: "github-secret",
-        redirect_uri: "https://maraithon.fly.dev/auth/github/callback",
+        redirect_uri: "https://maraithon.com/auth/github/callback",
         webhook_secret: "github-webhook",
         api_token: ""
       )
@@ -435,20 +435,20 @@ defmodule MaraithonWeb.AdminControllerTest do
       Application.put_env(:maraithon, :linear,
         client_id: "linear-client",
         client_secret: "linear-secret",
-        redirect_uri: "https://maraithon.fly.dev/auth/linear/callback",
+        redirect_uri: "https://maraithon.com/auth/linear/callback",
         webhook_secret: "linear-webhook"
       )
 
       Application.put_env(:maraithon, :notion,
         client_id: "notion-client",
         client_secret: "notion-secret",
-        redirect_uri: "https://maraithon.fly.dev/auth/notion/callback"
+        redirect_uri: "https://maraithon.com/auth/notion/callback"
       )
 
       Application.put_env(:maraithon, :notaui,
         client_id: "notaui-client",
         client_secret: "notaui-secret",
-        redirect_uri: "https://maraithon.fly.dev/auth/notaui/callback",
+        redirect_uri: "https://maraithon.com/auth/notaui/callback",
         issuer: "https://api.notaui.com",
         auth_url: "https://api.notaui.com/oauth/authorize",
         token_url: "https://api.notaui.com/oauth/token",
@@ -458,7 +458,7 @@ defmodule MaraithonWeb.AdminControllerTest do
       Application.put_env(:maraithon, :slack,
         client_id: "slack-client",
         client_secret: "slack-secret",
-        redirect_uri: "https://maraithon.fly.dev/auth/slack/callback",
+        redirect_uri: "https://maraithon.com/auth/slack/callback",
         signing_secret: "slack-signing"
       )
 

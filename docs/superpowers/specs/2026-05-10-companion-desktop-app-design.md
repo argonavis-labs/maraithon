@@ -112,11 +112,11 @@ For iMessage:
 ## Auth: device-pair flow
 
 1. App opens for the first time → "Connect to Maraithon" CTA.
-2. App generates a `device_id` (UUID, persisted to Keychain) and opens `https://maraithon.fly.dev/companion/auth?device_id=<uuid>&device_name=<MacBook%20-%20Kent>` in the default browser.
+2. App generates a `device_id` (UUID, persisted to Keychain) and opens `https://maraithon.com/companion/auth?device_id=<uuid>&device_name=<MacBook%20-%20Kent>` in the default browser.
 3. User logs in to Maraithon (existing session usually already present), then sees a one-screen consent: "Maraithon Companion on Kent's MacBook wants to sync iMessages to your account. Approve / Deny."
 4. On approve, server issues a long-lived `device_token` and redirects to `maraithon://device-token/<token>`.
 5. The custom URL scheme is registered by the app's `Info.plist`. App receives the token, stores it in macOS Keychain (`maraithon.device_token`), and shows "Connected as kent@runner.now".
-6. Token revocation lives at `https://maraithon.fly.dev/admin/companion-devices` — list, name, last-seen, revoke.
+6. Token revocation lives at `https://maraithon.com/admin/companion-devices` — list, name, last-seen, revoke.
 
 Token is per-device. No refresh dance — long-lived bearer is fine for a single-user trusted-device model. Revocation is the kill switch.
 

@@ -52,7 +52,7 @@ The file-write and git commands need approval, but the required deliverable is t
 
 A brand-new (non-Kent) user can complete, with **no code changes, seeds, or admin API calls**:
 
-1. Land on `maraithon.fly.dev` → sign in via magic link.
+1. Land on `maraithon.com` → sign in via magic link.
 2. Connect the required connectors — **Telegram** (delivery) and **Google / Gmail + Calendar** (content) — entirely in-app.
 3. Create a project.
 4. Click **Install Chief of Staff** on the project dashboard.

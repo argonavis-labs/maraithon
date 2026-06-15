@@ -30,7 +30,7 @@ Production usage was not queried in this local run. I did not have a verified pr
 
 Known local facts:
 
-- Maraithon is deployed at `maraithon.fly.dev`.
+- Maraithon is deployed at `maraithon.com`.
 - The codebase supports Telegram, Google, Slack, CRM, todos, memory, Chief of Staff skills, and installable agents.
 - There is no committed usage report showing external weekly active users.
 - The current active dogfood spec requires 30 days of daily digest evidence before it can be marked done.
@@ -111,7 +111,7 @@ Maraithon remains active through 2026-06-19 to complete the 30-day Chief of Staf
 ## Consequences
 
 - The active backlog should prioritize dogfood telemetry, install reliability, Telegram Chief of Staff quality, source-backed todos, CRM, memory, and correction loops.
-- `maraithon.fly.dev` stays running through at least 2026-06-19.
+- `maraithon.com` stays running through at least 2026-06-19.
 - `GOALS.md` stays active, but with a status banner that names the proof window.
 - Future PM runs should not generate broad product ideas until the dogfood/alpha proof is complete.
 - Runner remains the likely home for any Maraithon primitives that prove useful but do not justify a standalone product.

@@ -7,7 +7,7 @@ defmodule Mix.Tasks.Companion.Release do
       mix companion.release \\
         --version 0.1.1 \\
         --build 2 \\
-        --url https://maraithon.fly.dev/releases/Maraithon-0.1.1.dmg \\
+        --url https://maraithon.com/releases/Maraithon-0.1.1.dmg \\
         --signature "<EdDSA signature from sign_update>" \\
         --notes "Initial Sparkle release."
 

@@ -173,7 +173,7 @@ build/Maraithon-0.1.0.dmg
 ```
 
 Upload this artifact to the Maraithon server and bump the Sparkle
-appcast (`https://maraithon.fly.dev/companion/appcast.xml`).
+appcast (`https://maraithon.com/companion/appcast.xml`).
 
 ### Bumping the version
 

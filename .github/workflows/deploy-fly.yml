@@ -37,6 +37,6 @@ jobs:
           MARAITHON_FLY_APP: maraithon
 
       - name: Verify health
-        run: curl --fail --silent --show-error "https://${MARAITHON_FLY_APP}.fly.dev/health"
+        run: curl --fail --silent --show-error "${MARAITHON_BASE_URL}/health"
         env:
-          MARAITHON_FLY_APP: maraithon
+          MARAITHON_BASE_URL: https://maraithon.com

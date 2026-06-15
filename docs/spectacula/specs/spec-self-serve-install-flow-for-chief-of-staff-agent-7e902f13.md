@@ -39,7 +39,7 @@ No repository workflow instructions were found. Use the existing codebase conven
 
 ## Objective
 
-Ship a self-serve install flow so any non-Kent user can land on `maraithon.fly.dev`, sign in via magic link, connect the required connectors (Telegram + Google), create a project, click **Install Chief of Staff** on the project dashboard, and receive their first day-brief within 24 hours — with no code changes, seeds, or admin calls. Install must gate on connector readiness (never produce a silently brief-less "running" agent), attach the agent to the user's project, and the first brief must contain no Kent- or Runner-specific copy baked into code.
+Ship a self-serve install flow so any non-Kent user can land on `maraithon.com`, sign in via magic link, connect the required connectors (Telegram + Google), create a project, click **Install Chief of Staff** on the project dashboard, and receive their first day-brief within 24 hours — with no code changes, seeds, or admin calls. Install must gate on connector readiness (never produce a silently brief-less "running" agent), attach the agent to the user's project, and the first brief must contain no Kent- or Runner-specific copy baked into code.
 
 ---
 

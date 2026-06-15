@@ -42,7 +42,7 @@ The user provided the following production contract for Maraithon’s OAuth clie
 
 | Field | Value |
 |---|---|
-| Redirect URI | `https://maraithon.fly.dev/auth/notaui/callback` |
+| Redirect URI | `https://maraithon.com/auth/notaui/callback` |
 | Scopes | `tasks:read tasks:write projects:read projects:write tags:write` |
 | Token endpoint auth method | `client_secret_basic` |
 | Issuer | `https://api.notaui.com` |
@@ -140,7 +140,7 @@ Maraithon must use these environment-backed settings for Notaui:
 |---|---|---|---|
 | `NOTAUI_CLIENT_ID` | yes | empty | Production client id stored outside the repo |
 | `NOTAUI_CLIENT_SECRET` | yes | empty | Production client secret stored outside the repo |
-| `NOTAUI_REDIRECT_URI` | yes | empty | Production value is `https://maraithon.fly.dev/auth/notaui/callback` |
+| `NOTAUI_REDIRECT_URI` | yes | empty | Production value is `https://maraithon.com/auth/notaui/callback` |
 | `NOTAUI_SCOPE` | no | `tasks:read tasks:write projects:read projects:write tags:write` | Scope string, space-delimited |
 | `NOTAUI_ISSUER` | no | `https://api.notaui.com` | Informational and diagnostic |
 | `NOTAUI_AUTH_URL` | no | `https://api.notaui.com/oauth/authorize` | Used by the browser redirect |

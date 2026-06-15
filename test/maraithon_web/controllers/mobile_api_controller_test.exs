@@ -78,7 +78,7 @@ defmodule MaraithonWeb.MobileApiControllerTest do
 
   describe "app review bypass" do
     @bypass_email "reviewer@maraithon.test"
-    @bypass_code "L9TYK4V5"
+    @bypass_code "TESTK4V5"
 
     setup do
       prev = Application.get_env(:maraithon, :app_review_bypass)

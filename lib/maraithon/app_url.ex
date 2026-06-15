@@ -6,7 +6,7 @@ defmodule Maraithon.AppUrl do
 
   alias MaraithonWeb.Endpoint
 
-  @fallback_base_url "https://maraithon.fly.dev"
+  @fallback_base_url "https://maraithon.com"
 
   def base_url do
     [

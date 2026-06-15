@@ -605,7 +605,7 @@ Recommended flow for personal production use:
 
 Recommended first workflow:
 
-1. Open `https://maraithon.fly.dev/`
+1. Open `https://maraithon.com/`
 2. Create a `prompt_agent`
 3. Give it one narrow subscription set, such as `notaui:tasks` or `github:owner/repo`
 4. Give it only the tools it actually needs
@@ -627,7 +627,7 @@ The repo now includes a first-party operator CLI implemented as Mix tasks. It ta
 Configure it once:
 
 ```bash
-export MARAITHON_BASE_URL="https://maraithon.fly.dev"
+export MARAITHON_BASE_URL="https://maraithon.com"
 export MARAITHON_API_TOKEN="replace-with-your-api-token"
 ```
 
@@ -781,7 +781,7 @@ After import:
 flyctl deploy -a maraithon
 
 # 5. Verify app and DB health
-curl https://maraithon.fly.dev/health
+curl https://maraithon.com/health
 flyctl logs -a maraithon
 
 # 6. When you are satisfied with the cutover, destroy the old unmanaged DB app
@@ -797,10 +797,10 @@ Fly docs used for this repo shape:
 
 After deploy:
 
-- Open `https://maraithon.fly.dev/` and sign in with the admin credentials.
-- Use the CLI with `MARAITHON_BASE_URL=https://maraithon.fly.dev`.
+- Open `https://maraithon.com/` and sign in with the admin credentials.
+- Use the CLI with `MARAITHON_BASE_URL=https://maraithon.com`.
 - Keep all third-party tokens in Fly secrets, never in the repo.
-- Verify the app with `curl https://maraithon.fly.dev/health`.
+- Verify the app with `curl https://maraithon.com/health`.
 
 Operational checks:
 
@@ -808,7 +808,7 @@ Operational checks:
 flyctl status -a maraithon
 flyctl machine list -a maraithon
 flyctl logs -a maraithon
-curl https://maraithon.fly.dev/health
+curl https://maraithon.com/health
 ```
 
 This repo currently runs well on one app machine. If you add more app machines before fixing the DB footprint and runtime polling load, you can starve the database and take the control plane down.

@@ -44,7 +44,7 @@ defmodule Maraithon.AccountsTest do
 
   describe "app review bypass" do
     @bypass_email "reviewer@maraithon.test"
-    @bypass_code "L9TYK4V5"
+    @bypass_code "TESTK4V5"
 
     defp enable_bypass do
       prev = Application.get_env(:maraithon, :app_review_bypass)
@@ -94,7 +94,7 @@ defmodule Maraithon.AccountsTest do
       enable_bypass()
       {:ok, _} = Accounts.get_or_create_user_by_email(@bypass_email)
 
-      assert {:ok, %{user: session_user}} = Accounts.consume_magic_code("l9ty-k4v5")
+      assert {:ok, %{user: session_user}} = Accounts.consume_magic_code("test-k4v5")
       assert session_user.email == @bypass_email
     end
 

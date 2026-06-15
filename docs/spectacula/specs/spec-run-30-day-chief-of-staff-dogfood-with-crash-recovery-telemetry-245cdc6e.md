@@ -53,7 +53,7 @@ While verifying the codebase anchors, I found that **the entire code scope this 
 
 ## Objective
 
-Deliver a 30-day continuous production run of the Chief of Staff agent on Kent's single-tenant deployment (`maraithon.fly.dev`), backed by structured crash-recovery telemetry and a daily Telegram digest, ending in a written report plus one demo-able crash-and-recover capture.
+Deliver a 30-day continuous production run of the Chief of Staff agent on Kent's single-tenant deployment (`maraithon.com`), backed by structured crash-recovery telemetry and a daily Telegram digest, ending in a written report plus one demo-able crash-and-recover capture.
 
 **Material change from the original spec:** the telemetry/recovery/digest code the ticket asks to *build* is **already present and tested**. Verified during planning:
 

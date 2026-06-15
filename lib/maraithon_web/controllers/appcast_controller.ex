@@ -42,7 +42,7 @@ defmodule MaraithonWeb.AppcastController do
     <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
       <channel>
         <title>Maraithon</title>
-        <link>https://maraithon.fly.dev/companion/appcast.xml</link>
+        <link>https://maraithon.com/companion/appcast.xml</link>
         <description>Maraithon companion app updates.</description>
         <language>en</language>
     #{items}

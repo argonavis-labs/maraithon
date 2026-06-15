@@ -36,7 +36,7 @@ Under **OAuth & Permissions**:
 
 **Redirect URL** (must match `SLACK_REDIRECT_URI`):
 ```
-https://maraithon.fly.dev/auth/slack/callback
+https://maraithon.com/auth/slack/callback
 ```
 
 **Bot Token Scopes** (Events API + posting):
@@ -75,7 +75,7 @@ These match `@default_scopes` and `@default_user_scopes` in `lib/maraithon/oauth
 
 If you want Slack to push events to Maraithon:
 
-- **Request URL:** `https://maraithon.fly.dev/webhooks/slack`
+- **Request URL:** `https://maraithon.com/webhooks/slack`
 - **Subscribe to bot events:** `message.channels`, `message.groups`, `message.im`, `message.mpim`, `app_mention`, `reaction_added`, `reaction_removed`, `member_joined_channel`, `member_left_channel`
 
 Slack will hit the URL with a `url_verification` challenge first; `Maraithon.Connectors.Slack.handle_webhook/2` handles it.
@@ -88,7 +88,7 @@ From the Slack app's **Basic Information** page, copy Client ID, Client Secret, 
 fly secrets set \
   SLACK_CLIENT_ID=<client_id> \
   SLACK_CLIENT_SECRET=<client_secret> \
-  SLACK_REDIRECT_URI=https://maraithon.fly.dev/auth/slack/callback \
+  SLACK_REDIRECT_URI=https://maraithon.com/auth/slack/callback \
   SLACK_SIGNING_SECRET=<signing_secret>
 ```
 
@@ -99,7 +99,7 @@ Local dev: put the same values in your dev env (e.g. `.env`).
 Open in a browser:
 
 ```
-https://maraithon.fly.dev/auth/slack?user_id=<maraithon_user_id>
+https://maraithon.com/auth/slack?user_id=<maraithon_user_id>
 ```
 
 This hits `OAuthController.slack/2`, redirects to Slack consent, comes back to `/auth/slack/callback`, and `store_slack_user_token/2` persists the user token.

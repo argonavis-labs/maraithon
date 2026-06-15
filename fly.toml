@@ -21,7 +21,7 @@ primary_region = 'yyz'
   processes = ['app']
 
 [env]
-  PHX_HOST = 'maraithon.fly.dev'
+  PHX_HOST = 'maraithon.com'
   PHX_SERVER = 'true'
   PORT = '8080'
   ECTO_IPV6 = 'true'

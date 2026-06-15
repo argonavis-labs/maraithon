@@ -4,7 +4,7 @@ defmodule Maraithon.Accounts.EmailTemplatesTest do
   alias Maraithon.Accounts.EmailTemplates
 
   test "magic_link returns branded reusable content" do
-    link = "https://maraithon.fly.dev/auth/magic/test-token"
+    link = "https://maraithon.com/auth/magic/test-token"
 
     email = EmailTemplates.magic_link(link)
 

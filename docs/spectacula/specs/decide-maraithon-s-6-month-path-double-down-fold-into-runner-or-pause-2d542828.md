@@ -109,7 +109,7 @@ For each of {double down, fold, pause}, fill in:
 Pick one path. Then write the 1-page conditional plan for the chosen path only:
 
 - **If double-down:** named first 3 alpha-cohort candidates (real people Kent could ask this week), what they'd use Maraithon for, and what the smallest credible "install Chief of Staff" demo looks like. First-week action and first-month target.
-- **If fold:** which Maraithon learnings/code/patterns get ported into Runner, in what order, and what gets frozen vs. archived. What happens to `maraithon.fly.dev` (kept running, sunset date, or shut down).
+- **If fold:** which Maraithon learnings/code/patterns get ported into Runner, in what order, and what gets frozen vs. archived. What happens to `maraithon.com` (kept running, sunset date, or shut down).
 - **If pause:** calendar checkpoint date (90 days = 2026-08-09), what state Kent expects the world to be in by then, and the specific signal(s) that would flip the answer to double-down or fold. Schedule the checkpoint as a calendar event/cron now so it actually fires.
 
 ### 6. Update `goals.md` (10 min)
@@ -168,7 +168,7 @@ Single commit with message: `decide: maraithon 6-month path — [chosen path]`. 
 
 ## Consequences
 - What changes in the backlog
-- What changes for `maraithon.fly.dev`
+- What changes for `maraithon.com`
 - What changes for goals.md
 - What the next PM run on Maraithon should optimize for
 ```

@@ -172,7 +172,7 @@ Wire `IncidentLog.record/1` into existing code — do **not** duplicate data alr
 Cybrus writes a local review packet. For the human reviewer moving the task Planned → Approved → Done:
 
 - **Pre-run (code review checkpoint):** diff of all new/modified files; `mix precommit` output clean; full test run output, with the crash → resume integration test result called out explicitly; the migration shown applied locally (`mix ecto.migrate` output); a sample `DogfoodDigest` message body rendered from seeded data.
-- **Deploy:** confirmation the release deployed to `maraithon.fly.dev`, the day-0 `node_boot` incident row with its baseline metadata, and the first digest delivered to Telegram.
+- **Deploy:** confirmation the release deployed to `maraithon.com`, the day-0 `node_boot` incident row with its baseline metadata, and the first digest delivered to Telegram.
 - **During run:** archived daily digests (the running record).
 - **End of run:** the captured crash-and-recover clip/transcript, and the committed `docs/dogfood/2026-chief-of-staff-30-day.md` covering — total uptime, incident counts by kind, MTBF/MTTR, every crash (cause + recovery outcome + in-flight work lost vs. preserved), user-visible regressions, what worked / what broke, and the explicit list of what the runtime still needs before external users (snapshot/replay, supervisor restart strategy, crash-loop handling).
 

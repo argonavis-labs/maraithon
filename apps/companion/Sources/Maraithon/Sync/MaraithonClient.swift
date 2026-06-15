@@ -190,7 +190,7 @@ struct MaraithonClient: Sendable {
             return url
         }
         // Force-unwrap is fine here: literal URL known at compile time.
-        return URL(string: "https://maraithon.fly.dev")!
+        return URL(string: "https://maraithon.com")!
     }()
 
     static let defaultTransport: Transport = { request in

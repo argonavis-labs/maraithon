@@ -40,7 +40,7 @@ final class DeviceAuthTests: XCTestCase {
             XCTFail("Expected awaitingApproval, got \(auth.state)")
         }
         let opened = try? XCTUnwrap(openedURL)
-        XCTAssertEqual(opened?.host, "maraithon.fly.dev")
+        XCTAssertEqual(opened?.host, "maraithon.com")
         XCTAssertEqual(opened?.path, "/companion/auth")
         let q = URLComponents(url: opened!, resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertTrue(q.contains(URLQueryItem(name: "device_id", value: auth.deviceId.uuidString)))

@@ -58,7 +58,7 @@ Maraithon wins if it becomes the trusted place where the user can ask:
 
 ## Current State
 
-Maraithon is live in production at `maraithon.fly.dev`.
+Maraithon is live in production at `maraithon.com`.
 
 The production shape is:
 
