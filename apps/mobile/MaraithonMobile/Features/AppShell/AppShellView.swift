@@ -13,8 +13,19 @@ struct AppShellView: View {
     @State private var navigation = AppNavigation()
     @State private var identityPrefill: MobileAPIClient.IdentityResponse.Identity?
     @State private var didCheckIdentity = false
+    @AppStorage("aiDataSharingConsentAccepted") private var aiConsentAccepted = false
 
     var body: some View {
+        if aiConsentAccepted {
+            shell
+        } else {
+            AIDataDisclosureView {
+                aiConsentAccepted = true
+            }
+        }
+    }
+
+    private var shell: some View {
         TabView(selection: Binding(
             get: { navigation.selectedTab },
             set: { navigation.selectedTab = $0 }
