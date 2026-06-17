@@ -2301,7 +2301,13 @@ defmodule MaraithonWeb.MobileChatJSON do
   end
 
   defp json_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
-  defp json_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+
+  defp json_value(%NaiveDateTime{} = value) do
+    value
+    |> DateTime.from_naive!("Etc/UTC")
+    |> DateTime.to_iso8601()
+  end
+
   defp json_value(value), do: value
 
   defp summary_value(summary, key) when is_map(summary) and is_atom(key) do

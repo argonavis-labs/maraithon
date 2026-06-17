@@ -6,6 +6,7 @@ defmodule Maraithon.Todos.PublicPayloadTest do
   describe "todo/1" do
     test "keeps client-facing fields and removes prompt/runtime fields" do
       now = DateTime.utc_now() |> DateTime.truncate(:second)
+      naive_now = DateTime.to_naive(now)
 
       todo = %Todo{
         id: Ecto.UUID.generate(),
@@ -19,6 +20,7 @@ defmodule Maraithon.Todos.PublicPayloadTest do
         owner_user_id: "owner@example.com",
         priority: 90,
         status: "open",
+        due_at: naive_now,
         source_item_id: "gmail-thread-private-1",
         dedupe_key: "gmail:private-thread-1",
         inserted_at: now,
@@ -37,6 +39,7 @@ defmodule Maraithon.Todos.PublicPayloadTest do
       assert payload["title"] == "Reply to investor terms"
       assert payload["metadata"] == %{"subject" => "Financing terms"}
       assert payload["inserted_at"] == DateTime.to_iso8601(now)
+      assert payload["due_at"] == DateTime.to_iso8601(now)
       refute Map.has_key?(payload, "owner_user_id")
       refute Map.has_key?(payload, "source_item_id")
       refute Map.has_key?(payload, "dedupe_key")

@@ -162,7 +162,13 @@ defmodule Maraithon.Normalization do
   def clamp_limit(_value, default, _max_value, _min_value), do: default
 
   def normalize_json_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
-  def normalize_json_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+
+  def normalize_json_value(%NaiveDateTime{} = value) do
+    value
+    |> DateTime.from_naive!("Etc/UTC")
+    |> DateTime.to_iso8601()
+  end
+
   def normalize_json_value(%Date{} = value), do: Date.to_iso8601(value)
   def normalize_json_value(%Time{} = value), do: Time.to_iso8601(value)
   def normalize_json_value(value) when is_atom(value), do: Atom.to_string(value)

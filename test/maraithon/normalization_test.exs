@@ -32,8 +32,13 @@ defmodule Maraithon.NormalizationTest do
 
   test "normalize_json_value emits JSON-safe map keys and temporal values" do
     at = ~U[2026-05-10 12:00:00Z]
+    naive_at = ~N[2026-05-10 12:00:00]
 
-    assert %{"at" => "2026-05-10T12:00:00Z", "status" => "ok"} =
-             Normalization.normalize_json_value(%{at: at, status: :ok})
+    assert %{
+             "at" => "2026-05-10T12:00:00Z",
+             "naive_at" => "2026-05-10T12:00:00Z",
+             "status" => "ok"
+           } =
+             Normalization.normalize_json_value(%{at: at, naive_at: naive_at, status: :ok})
   end
 end

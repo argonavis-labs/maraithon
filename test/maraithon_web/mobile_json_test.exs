@@ -1,8 +1,32 @@
 defmodule MaraithonWeb.MobileJSONTest do
-  use ExUnit.Case, async: true
+  use Maraithon.DataCase, async: true
 
   alias Maraithon.Todos.Todo
   alias MaraithonWeb.MobileJSON
+
+  test "mobile payload timestamps always include an explicit UTC timezone" do
+    now = ~N[2026-06-17 09:30:00]
+
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: "mobile-json-timestamps@example.com",
+      source: "gmail",
+      title: "Send investor update",
+      summary: "Send investor update",
+      next_action: "Send investor update.",
+      priority: 55,
+      status: "open",
+      due_at: now,
+      inserted_at: now,
+      updated_at: now
+    }
+
+    response = MobileJSON.todo(todo)
+
+    assert response.due_at == "2026-06-17T09:30:00Z"
+    assert response.inserted_at == "2026-06-17T09:30:00Z"
+    assert response.updated_at == "2026-06-17T09:30:00Z"
+  end
 
   test "fresh action card buttons use completion and feedback actions" do
     now = DateTime.utc_now()
