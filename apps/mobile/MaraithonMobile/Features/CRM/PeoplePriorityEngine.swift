@@ -376,7 +376,7 @@ enum PeoplePriorityEngine {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return true }
 
-        let values = [
+        let contactValues: [String] = [
             context.contact.name,
             context.contact.company,
             context.contact.email,
@@ -387,9 +387,14 @@ enum PeoplePriorityEngine {
             context.suggestion?.headline ?? "",
             context.suggestion?.reason ?? "",
             context.suggestion?.suggestedAction ?? ""
-        ] +
-            context.goals.flatMap { [$0.title, $0.desiredOutcome ?? "", $0.why ?? ""] } +
-            context.openTodos.flatMap { [$0.title, $0.notes, $0.nextAction ?? ""] }
+        ]
+        let goalValues: [String] = context.goals.flatMap { goal in
+            [goal.title, goal.desiredOutcome ?? "", goal.why ?? ""]
+        }
+        let todoValues: [String] = context.openTodos.flatMap { todo in
+            [todo.title, todo.notes, todo.nextAction ?? ""]
+        }
+        let values = contactValues + goalValues + todoValues
 
         return values.contains { value in
             value.lowercased().contains(query)
