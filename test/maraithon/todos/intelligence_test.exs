@@ -123,6 +123,84 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert get_in(created.metadata, ["todo_intelligence", "source"]) == "test"
   end
 
+  test "ingest_many forces update decisions to reuse the existing dedupe key" do
+    user_id = unique_user_email("todo-intelligence-update-dedupe")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [existing]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "imessage",
+          "title" => "Confirm Emma pickup and painting with Christina",
+          "summary" => "Christina asked if you can get Emma and reminded you about the painting.",
+          "next_action" => "Reply to Christina confirming you will pick up Emma.",
+          "priority" => 80,
+          "source_item_id" => "imessage-source-1",
+          "dedupe_key" => "commitment:imessage:imessage-source-1:original"
+        }
+      ])
+
+    candidates = [
+      %{
+        "source" => "imessage",
+        "title" => "Confirm you have the painting for Emma's pickup",
+        "summary" => "The same iMessage thread still needs painting confirmation.",
+        "next_action" => "Reply to Christina confirming you have the painting.",
+        "source_item_id" => "imessage-source-1",
+        "dedupe_key" => "commitment:imessage:imessage-source-1:model-fresh-key",
+        "metadata" => %{
+          "direct_ask" => true,
+          "source_evidence" =>
+            "Christina asked if you can get Emma and whether you have the painting.",
+          "why_it_matters" => "Christina is waiting on your confirmation before pickup."
+        }
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Updated the existing family logistics item.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "update",
+                 "existing_todo_id" => existing.id,
+                 "dedupe_key" => "commitment:imessage:imessage-source-1:decision-fresh-key",
+                 "reasoning" => "Same underlying pickup and painting loop.",
+                 "todo" => %{
+                   "source" => "imessage",
+                   "title" => "Confirm you have the painting for Emma's pickup",
+                   "summary" => "Christina reminded you about the painting.",
+                   "next_action" => "Reply to Christina confirming you have the painting.",
+                   "source_item_id" => "imessage-source-1",
+                   "dedupe_key" => "commitment:imessage:imessage-source-1:todo-fresh-key"
+                 }
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test"
+             )
+
+    assert [%{id: existing_id, dedupe_key: existing_dedupe_key}] = result.todos
+    assert existing_id == existing.id
+    assert existing_dedupe_key == existing.dedupe_key
+
+    assert [persisted] = Todos.list_recent_for_user(user_id, limit: 10)
+    assert persisted.id == existing.id
+    assert persisted.title == "Confirm you have the painting for Emma's pickup"
+    assert persisted.dedupe_key == existing.dedupe_key
+    refute persisted.dedupe_key =~ "fresh-key"
+  end
+
   test "ingest_many preserves source context metadata before quality scoring" do
     user_id = unique_user_email("todo-intelligence-source-context")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

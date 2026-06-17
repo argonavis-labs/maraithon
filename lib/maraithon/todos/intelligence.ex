@@ -144,6 +144,8 @@ defmodule Maraithon.Todos.Intelligence do
          Favor fewer, sharper items over broad capture.
        - Use action "update" with existing_todo_id when the candidate is the same
          underlying work as an existing saved work item and should refresh it.
+       - For update decisions, use the existing saved work item's current
+         dedupe_key exactly. Do not invent a new dedupe_key for an update.
        - Use action "skip" only when no write should happen.
        - For create/update, provide a complete work item object in the `todo` field
          with source, title, summary, next_action, and dedupe_key.
@@ -771,8 +773,11 @@ defmodule Maraithon.Todos.Intelligence do
       end
 
     dedupe_key =
-      read_string(todo_attrs, "dedupe_key", read_string(decision, "dedupe_key", nil)) ||
-        if(existing_todo, do: existing_todo.dedupe_key)
+      if existing_todo do
+        existing_todo.dedupe_key
+      else
+        read_string(todo_attrs, "dedupe_key", read_string(decision, "dedupe_key", nil))
+      end
 
     todo_attrs =
       todo_attrs
