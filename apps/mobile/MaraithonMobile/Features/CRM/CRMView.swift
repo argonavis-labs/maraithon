@@ -211,15 +211,19 @@ struct CRMView: View {
                 sessionStore: sessionStore,
                 modelContext: modelContext
             )
-            try await ProductionDataSync.refreshTodos(
-                sessionStore: sessionStore,
-                modelContext: modelContext,
-                includeCards: false
-            )
             refreshErrorMessage = nil
         } catch {
-            refreshErrorMessage = "Could not refresh people and work. \(MobileErrorCopy.message(for: error))"
+            refreshErrorMessage = "Could not refresh people. \(MobileErrorCopy.message(for: error))"
         }
+
+        // Open work is useful context for People, but it is additive. Keep the
+        // relationship directory usable even if the work endpoint is slow or
+        // one remote work item cannot be decoded.
+        try? await ProductionDataSync.refreshTodos(
+            sessionStore: sessionStore,
+            modelContext: modelContext,
+            includeCards: false
+        )
 
         await refreshGoals()
         await refreshReconnectSuggestions()

@@ -10,7 +10,10 @@ enum ProductionDataSync {
         modelContext: ModelContext,
         includeCards: Bool = true
     ) async throws {
-        try await refreshPeople(sessionStore: sessionStore, modelContext: modelContext)
+        // People enrich todo rows, but Today's core freshness is the work queue.
+        // Do not let a relationship refresh hiccup block the todo refresh and
+        // surface a stale-data warning for the whole screen.
+        try? await refreshPeople(sessionStore: sessionStore, modelContext: modelContext)
         try await refreshTodos(
             sessionStore: sessionStore,
             modelContext: modelContext,
@@ -66,14 +69,20 @@ enum ProductionDataSync {
         let remotePeople = try await MobileAPIClient().listPeople(sessionToken: sessionToken)
         let localContacts = try modelContext.fetch(FetchDescriptor<CRMContact>())
         let localByID = Dictionary(uniqueKeysWithValues: localContacts.map { ($0.id, $0) })
+        var seenRemoteIDs = Set<UUID>()
 
         for remotePerson in remotePeople {
             guard let id = UUID(uuidString: remotePerson.id) else { continue }
+            seenRemoteIDs.insert(id)
             if let contact = localByID[id] {
                 apply(remotePerson, to: contact)
             } else {
                 modelContext.insert(contact(from: remotePerson, id: id))
             }
+        }
+
+        for contact in localContacts where !seenRemoteIDs.contains(contact.id) {
+            modelContext.delete(contact)
         }
 
         try modelContext.save()

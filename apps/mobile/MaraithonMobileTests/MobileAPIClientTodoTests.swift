@@ -142,6 +142,41 @@ struct MobileAPIClientTodoTests {
     }
 
     @Test
+    func listTodosAcceptsServerTimestampsWithoutExplicitTimeZone() async throws {
+        let recorder = HTTPRequestRecorder()
+        let client = MobileAPIClient(
+            baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
+            session: recorder.session(
+            statusCode: 200,
+            body:
+                """
+                {
+                  "todos": [
+                    {
+                      "id": "11111111-2222-3333-4444-555555555555",
+                      "title": "Send investor update",
+                      "summary": "Send investor update",
+                      "next_action": "Send investor update",
+                      "due_at": "2026-06-17T09:30:00",
+                      "notes": null,
+                      "priority": 55,
+                      "status": "open",
+                      "closed_at": null,
+                      "related_people": []
+                    }
+                  ]
+                }
+                """
+            )
+        )
+
+        let todos = try await client.listTodos(sessionToken: "session-token", includeCards: false)
+        let todo = try #require(todos.first)
+
+        #expect(todo.dueAt != nil)
+    }
+
+    @Test
     func listTodoActivityRequestsDebugActivityLog() async throws {
         let recorder = HTTPRequestRecorder()
         let client = MobileAPIClient(

@@ -1208,6 +1208,22 @@ struct MobileAPIClient: Sendable {
             return date
         }
 
-        return try? iso8601.parse(value)
+        if let date = try? iso8601.parse(value) {
+            return date
+        }
+
+        guard !hasExplicitTimeZone(value) else { return nil }
+        let utcValue = value + "Z"
+
+        if let date = try? iso8601WithFractionalSeconds.parse(utcValue) {
+            return date
+        }
+
+        return try? iso8601.parse(utcValue)
+    }
+
+    nonisolated private static func hasExplicitTimeZone(_ value: String) -> Bool {
+        value.hasSuffix("Z") ||
+            value.range(of: #"[+-][0-9]{2}:[0-9]{2}$"#, options: .regularExpression) != nil
     }
 }
