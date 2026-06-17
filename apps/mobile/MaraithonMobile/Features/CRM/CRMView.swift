@@ -6,38 +6,41 @@ struct CRMView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(SessionStore.self) private var sessionStore
     @Query(sort: \CRMContact.name) private var contacts: [CRMContact]
+    @Query(sort: \TodoItem.createdAt, order: .reverse) private var todos: [TodoItem]
     @State private var isAddingContact = false
     @State private var editingContact: CRMContact?
     @State private var searchText = ""
-    @State private var statusFilter: CRMStatusFilter = .all
+    @State private var selectedTab: PeopleFocusTab = .suggested
     @State private var refreshErrorMessage: String?
     @State private var actionErrorMessage: String?
     @State private var isRefreshing = false
+    @State private var goals: [MobileAPIClient.RemoteGoal] = []
     @State private var reconnectSuggestions: [MobileAPIClient.RemoteReconnectSuggestion] = []
 
-    private var filteredContacts: [CRMContact] {
-        CRMFiltering.filter(contacts, statusFilter: statusFilter, searchText: searchText)
+    private var peopleContexts: [PeopleContactContext] {
+        PeoplePriorityEngine.contexts(
+            contacts: contacts,
+            todos: todos,
+            goals: goals,
+            suggestions: reconnectSuggestions,
+            searchText: searchText
+        )
     }
 
-    private var contactsByID: [UUID: CRMContact] {
-        Dictionary(contacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    private var selectedPeopleContexts: [PeopleContactContext] {
+        PeoplePriorityEngine.contexts(
+            for: selectedTab,
+            contexts: peopleContexts,
+            suggestions: reconnectSuggestions
+        )
     }
 
-    // Only lead with the Reconnect surface when the user is browsing the whole
-    // list (no active search or status filter); a filtered view is a focused
-    // lookup, not the "who should I reach out to" hero.
-    private var showsReconnectSection: Bool {
-        searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            statusFilter == .all &&
-            !reconnectSuggestions.isEmpty
-    }
-
-    private var statusCounts: CRMStatusCounts {
-        CRMFiltering.counts(contacts, searchText: searchText)
+    private var focusCounts: PeopleFocusCounts {
+        PeoplePriorityEngine.counts(from: peopleContexts)
     }
 
     private var emptyState: PeopleEmptyState {
-        statusFilter.emptyState(searchText: searchText, hasAnyPeople: !contacts.isEmpty)
+        selectedTab.emptyState(searchText: searchText, hasAnyPeople: !contacts.isEmpty)
     }
 
     var body: some View {
@@ -47,7 +50,7 @@ struct CRMView: View {
                     Section {
                         SyncIssueBanner(
                             message: refreshErrorMessage,
-                            retry: { Task { await refreshLatestPeople() } },
+                            retry: { Task { await refreshPriorityPeople() } },
                             dismiss: { self.refreshErrorMessage = nil }
                         )
                         .listRowInsets(EdgeInsets())
@@ -70,26 +73,15 @@ struct CRMView: View {
                     }
                 }
 
-                if showsReconnectSection {
-                    ReconnectSuggestionsSection(
-                        suggestions: reconnectSuggestions,
-                        contactsByID: contactsByID,
-                        onReachedOut: { contact in
-                            apply(.logContact(Date()), to: contact)
-                            Task { await refreshReconnectSuggestions() }
-                        }
-                    )
-                }
-
                 Section {
                     FilterCountStrip(
-                        selection: $statusFilter,
-                        options: CRMStatusFilter.allCases.map { filter in
+                        selection: $selectedTab,
+                        options: PeopleFocusTab.allCases.map { tab in
                             FilterCountOption(
-                                value: filter,
-                                title: filter.title,
-                                count: statusCounts.value(for: filter),
-                                tint: tint(for: filter)
+                                value: tab,
+                                title: tab.title,
+                                count: focusCounts.value(for: tab),
+                                tint: tab.tint
                             )
                         },
                         accessibilityNoun: "people"
@@ -99,30 +91,30 @@ struct CRMView: View {
                     .listRowSeparator(.hidden)
                 }
 
-                Section(showsReconnectSection ? "All People" : "People") {
-                    if filteredContacts.isEmpty {
+                Section(selectedTab.sectionTitle) {
+                    if selectedPeopleContexts.isEmpty {
                         ContentUnavailableView(
                             emptyState.title,
                             systemImage: emptyState.systemImage,
                             description: Text(emptyState.description)
                         )
                     } else {
-                        ForEach(filteredContacts) { contact in
+                        ForEach(selectedPeopleContexts) { context in
                             NavigationLink {
-                                ContactDetailView(contact: contact)
+                                ContactDetailView(contact: context.contact)
                             } label: {
-                                ContactRow(contact: contact)
+                                PeopleContactRow(context: context, tab: selectedTab)
                             }
                             .swipeActions(edge: .leading) {
                                 Button {
-                                    apply(.markActive, to: contact)
+                                    apply(.markActive, to: context.contact)
                                 } label: {
                                     Label("Active", systemImage: "person.crop.circle.fill.badge.checkmark")
                                 }
                                 .tint(.green)
 
                                 Button {
-                                    apply(.logContact(Date()), to: contact)
+                                    apply(.logContact(Date()), to: context.contact)
                                 } label: {
                                     Label(CRMViewCopy.reachedOutActionTitle, systemImage: "phone.arrow.up.right")
                                 }
@@ -130,14 +122,14 @@ struct CRMView: View {
                             }
                             .swipeActions(edge: .trailing) {
                                 Button {
-                                    apply(.archive, to: contact)
+                                    apply(.archive, to: context.contact)
                                 } label: {
                                     Label("Archive", systemImage: "archivebox")
                                 }
                                 .tint(.gray)
 
                                 Button {
-                                    editingContact = contact
+                                    editingContact = context.contact
                                 } label: {
                                     Label("Edit", systemImage: "pencil")
                                 }
@@ -169,8 +161,10 @@ struct CRMView: View {
                 ContactEditorView(contact: contact)
             }
             .task {
-                await refreshLatestPeople()
-                await refreshReconnectSuggestions()
+                await refreshPriorityPeople()
+            }
+            .refreshable {
+                await refreshPriorityPeople()
             }
             .onAppear(perform: applyRequestedFilterIfNeeded)
             .onChange(of: appNavigation.requestedPeopleFilter) { _, _ in
@@ -207,7 +201,7 @@ struct CRMView: View {
         }
     }
 
-    private func refreshLatestPeople() async {
+    private func refreshPriorityPeople() async {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -217,9 +211,36 @@ struct CRMView: View {
                 sessionStore: sessionStore,
                 modelContext: modelContext
             )
+            try await ProductionDataSync.refreshTodos(
+                sessionStore: sessionStore,
+                modelContext: modelContext,
+                includeCards: false
+            )
             refreshErrorMessage = nil
         } catch {
-            refreshErrorMessage = "Could not refresh people. \(MobileErrorCopy.message(for: error))"
+            refreshErrorMessage = "Could not refresh people and work. \(MobileErrorCopy.message(for: error))"
+        }
+
+        await refreshGoals()
+        await refreshReconnectSuggestions()
+    }
+
+    private func refreshGoals() async {
+        guard let sessionToken = sessionStore.user?.sessionToken else {
+            goals = []
+            return
+        }
+
+        do {
+            let remoteGoals = try await MobileAPIClient().listGoals(
+                sessionToken: sessionToken,
+                status: "active",
+                category: "all",
+                limit: 100
+            )
+            await MainActor.run { goals = remoteGoals }
+        } catch {
+            await MainActor.run { goals = [] }
         }
     }
 
@@ -237,19 +258,9 @@ struct CRMView: View {
         }
     }
 
-    private func tint(for filter: CRMStatusFilter) -> Color {
-        switch filter {
-        case .all: .accentColor
-        case .lead: ContactStatus.lead.tint
-        case .active: ContactStatus.active.tint
-        case .atRisk: ContactStatus.atRisk.tint
-        case .closed: ContactStatus.closed.tint
-        }
-    }
-
     private func applyRequestedFilterIfNeeded() {
         guard let requestedFilter = appNavigation.requestedPeopleFilter else { return }
-        statusFilter = requestedFilter
+        selectedTab = PeopleFocusTab(requestedStatusFilter: requestedFilter)
         appNavigation.requestedPeopleFilter = nil
     }
 
