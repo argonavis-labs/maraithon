@@ -10,6 +10,12 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
   end
 
   def fetch_message_content(_user_id, message_id) when is_binary(message_id) do
+    if message_id in config(:content_hang_ids, []) do
+      receive do
+        :never -> :ok
+      end
+    end
+
     case config(:contents, %{}) do
       %{^message_id => content} -> {:ok, content}
       _ -> {:error, :not_found}

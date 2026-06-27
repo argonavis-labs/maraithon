@@ -195,6 +195,116 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert get_in(telemetry, ["sources", "slack", "message_count"]) == 4
   end
 
+  test "limits Slack history scans after priority sorting" do
+    now = ~U[2026-06-18 15:00:00Z]
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("chief-slack-limit@example.com", "slack:T123:user:UKENT", %{
+               access_token: "xoxp-user-token",
+               scopes: ["channels:read", "channels:history", "groups:history"]
+             })
+
+    Bypass.expect(bypass, "GET", "/api/conversations.list", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "channels" => [
+            %{"id" => "CLOW", "name" => "random", "is_private" => false},
+            %{"id" => "CEXEC", "name" => "exec-real-estate", "is_private" => true},
+            %{"id" => "CDM", "name" => nil, "is_im" => true, "user" => "UBENJI"}
+          ]
+        })
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/conversations.history", fn conn ->
+      params = Plug.Conn.Query.decode(conn.query_string)
+      assert params["channel"] == "CEXEC"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => [
+            %{
+              "ts" => "1781125242.926539",
+              "user" => "UBENJI",
+              "text" => "Real estate webinar Luma is live."
+            }
+          ]
+        })
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/search.messages", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"ok" => true, "messages" => %{"total" => 0, "matches" => []}})
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/users.info", fn conn ->
+      user =
+        conn.query_string
+        |> Plug.Conn.Query.decode()
+        |> Map.get("user")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"ok" => true, "user" => %{"id" => user, "profile" => %{}}})
+      )
+    end)
+
+    source_scope = %{
+      "slack_workspaces" => [
+        %{"team_id" => "T123", "team_name" => "Agora", "services" => ["channels"]}
+      ]
+    }
+
+    skill_configs = %{
+      "commitment_tracker" => %{
+        "source_scope" => source_scope,
+        "lookback_hours" => 24,
+        "slack_channel_scan_limit" => 1,
+        "slack_message_scan_limit" => 10
+      }
+    }
+
+    context = %{
+      agent_id: "chief-agent-slack-limit",
+      user_id: "chief-slack-limit@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry} =
+      Acquisition.build(
+        "chief-slack-limit@example.com",
+        ["commitment_tracker"],
+        skill_configs,
+        context
+      )
+
+    messages = SourceBundle.slack_messages(bundle)
+    assert Enum.map(messages, & &1["channel_id"]) == ["CEXEC"]
+    assert get_in(telemetry, ["sources", "slack", "conversation_count"]) == 1
+  end
+
   test "adds self-authored Slack search matches when private channel history is not enumerable" do
     now = ~U[2026-06-18 21:24:00Z]
     bypass = Bypass.open()
@@ -446,6 +556,86 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert get_in(telemetry, ["sources", "gmail", "full_body_count"]) == 2
     assert get_in(telemetry, ["sources", "gmail", "body_missing_count"]) == 0
     assert get_in(telemetry, ["sources", "calendar", "status"]) == "ready"
+  end
+
+  test "marks Gmail bodies unavailable when body enrichment times out" do
+    now = ~U[2026-04-02 13:00:00Z]
+
+    current_config = Application.get_env(:maraithon, Acquisition, [])
+
+    Application.put_env(
+      :maraithon,
+      Acquisition,
+      Keyword.put(current_config, :gmail_body_fetch_timeout_ms, 5)
+    )
+
+    TravelGmailStub.configure(
+      messages: [
+        %{
+          message_id: "slow-msg",
+          thread_id: "thread-1",
+          subject: "Slow body",
+          labels: ["INBOX"],
+          internal_date: now
+        },
+        %{
+          message_id: "fast-msg",
+          thread_id: "thread-2",
+          subject: "Fast body",
+          labels: ["INBOX"],
+          internal_date: DateTime.add(now, -1, :minute)
+        }
+      ],
+      content_hang_ids: ["slow-msg"],
+      contents: %{
+        "fast-msg" => %{
+          message_id: "fast-msg",
+          thread_id: "thread-2",
+          subject: "Fast body",
+          labels: ["INBOX"],
+          internal_date: DateTime.add(now, -1, :minute),
+          text_body: "This body was fetched."
+        }
+      }
+    )
+
+    source_scope = %{
+      "google_accounts" => [
+        %{
+          "provider" => "google:shared@example.com",
+          "account_email" => "shared@example.com",
+          "services" => ["gmail"]
+        }
+      ]
+    }
+
+    skill_configs = %{
+      "followthrough" => %{"source_scope" => source_scope, "email_scan_limit" => 10}
+    }
+
+    context = %{
+      agent_id: "chief-agent-gmail-timeout",
+      user_id: "chief@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry} =
+      Acquisition.build("chief@example.com", ["followthrough"], skill_configs, context)
+
+    messages = SourceBundle.gmail_messages(bundle)
+    slow = Enum.find(messages, &(&1["message_id"] == "slow-msg"))
+    fast = Enum.find(messages, &(&1["message_id"] == "fast-msg"))
+
+    assert slow["body_available"] == false
+    assert slow["body_status"] == "fetch_failed"
+    assert fast["body_available"] == true
+    assert fast["body_text"] == "This body was fetched."
+    assert get_in(telemetry, ["sources", "gmail", "full_body_count"]) == 1
+    assert get_in(telemetry, ["sources", "gmail", "body_missing_count"]) == 1
   end
 
   test "enriches event Gmail payloads with full bodies before model synthesis" do

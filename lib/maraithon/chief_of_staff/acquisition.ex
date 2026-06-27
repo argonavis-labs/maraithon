@@ -21,6 +21,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   require Logger
 
   @default_gmail_message_limit 250
+  @default_gmail_body_fetch_timeout_ms 5_000
   @default_calendar_limit 250
   @default_slack_channel_limit 12
   @default_slack_message_limit 100
@@ -535,6 +536,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       conversations =
         conversations
         |> Enum.sort_by(&slack_channel_priority(&1, plan.slack_key_channels))
+        |> Enum.take(max(plan.slack_channel_limit, 0))
 
       {channels, fetches, _user_directory} =
         Enum.reduce(conversations, {[], [], %{}}, fn channel,
@@ -1600,15 +1602,26 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp enrich_gmail_messages(messages, user_id, default_provider)
        when is_list(messages) and is_binary(user_id) do
+    results =
+      Task.async_stream(
+        messages,
+        fn message -> enrich_gmail_message(user_id, message, default_provider) end,
+        max_concurrency: 4,
+        timeout: gmail_body_fetch_timeout_ms(),
+        on_timeout: :kill_task
+      )
+
     messages
-    |> Task.async_stream(
-      fn message -> enrich_gmail_message(user_id, message, default_provider) end,
-      max_concurrency: 4,
-      timeout: :infinity
-    )
+    |> Enum.zip(results)
     |> Enum.map(fn
-      {:ok, message} -> message
-      {:exit, _reason} -> %{"body_available" => false, "body_status" => "fetch_failed"}
+      {_original, {:ok, message}} ->
+        message
+
+      {original, {:exit, _reason}} ->
+        original
+        |> stringify_keys()
+        |> Map.put("body_available", false)
+        |> Map.put("body_status", "fetch_failed")
     end)
   end
 
@@ -1616,6 +1629,17 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     do: Enum.map(messages, &stringify_keys/1)
 
   defp enrich_gmail_messages(_messages, _user_id, _default_provider), do: []
+
+  defp gmail_body_fetch_timeout_ms do
+    :maraithon
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:gmail_body_fetch_timeout_ms, @default_gmail_body_fetch_timeout_ms)
+    |> parse_integer()
+    |> case do
+      value when is_integer(value) and value > 0 -> value
+      _other -> @default_gmail_body_fetch_timeout_ms
+    end
+  end
 
   defp fetch_commercial_gmail_messages(_user_id, _provider, []), do: []
 
