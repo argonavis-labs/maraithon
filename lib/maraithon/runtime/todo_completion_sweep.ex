@@ -19,7 +19,11 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   end
 
   def run_once(opts \\ []) do
-    CompletionSweep.run_for_all_users(opts)
+    cross_source_opts = Keyword.put_new(opts, :user_limit, @default_batch_size)
+
+    opts
+    |> CompletionSweep.run_for_all_users()
+    |> Map.put(:cross_source, run_cross_source_pass(cross_source_opts))
   end
 
   @impl true
@@ -69,8 +73,6 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
       )
     end
 
-    run_cross_source_pass(state.user_limit)
-
     schedule_tick(state.interval_ms)
     {:noreply, state}
   rescue
@@ -82,8 +84,19 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
   # Cross-channel LLM pass after the deterministic sweep. Failures here must
   # never break the sweep cadence, so everything is rescued.
-  defp run_cross_source_pass(user_limit) do
-    summary = CrossSourceCompletion.run_for_all_users(user_limit: user_limit)
+  defp run_cross_source_pass(opts) do
+    summary =
+      opts
+      |> Keyword.take([
+        :user_limit,
+        :user_ids,
+        :now,
+        :llm_complete,
+        :live_sources,
+        :source_bundle,
+        :source_skill_config
+      ])
+      |> CrossSourceCompletion.run_for_all_users()
 
     if summary.completed > 0 or summary.errors > 0 do
       Logger.info("Cross-source completion cycle",
@@ -94,11 +107,15 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         errors: summary.errors
       )
     end
+
+    summary
   rescue
     error ->
       Logger.warning("Cross-source completion cycle failed",
         reason: Exception.message(error)
       )
+
+      %{users: 0, checked: 0, completed: 0, skipped: 0, errors: 1}
   end
 
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do

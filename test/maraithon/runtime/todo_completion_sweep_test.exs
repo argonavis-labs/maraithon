@@ -52,4 +52,22 @@ defmodule Maraithon.Runtime.TodoCompletionSweepTest do
     assert state.initial_delay_ms == 5_000
     assert state.user_limit == 23
   end
+
+  test "manual run includes the cross-source completion pass" do
+    summary = TodoCompletionSweep.run_once(user_ids: [], live_sources: false)
+
+    assert %{
+             users: 0,
+             checked: 0,
+             completed: 0,
+             errors: 0,
+             cross_source: %{
+               users: 0,
+               checked: 0,
+               completed: 0,
+               skipped: 0,
+               errors: 0
+             }
+           } = summary
+  end
 end
