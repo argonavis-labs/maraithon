@@ -37,19 +37,22 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   @max_excerpt 280
   @default_max_tokens 2_048
   @default_timeout_ms 60_000
-  @source_acquisition_timeout_ms 45_000
+  @source_acquisition_timeout_ms 90_000
   @source_skill_id "commitment_tracker"
   @source_skill_config %{
-    "email_scan_limit" => 200,
-    "event_scan_limit" => 120,
-    "slack_message_scan_limit" => 220,
-    "local_message_limit" => 300,
-    "local_chat_limit" => 140,
-    "local_voice_memo_limit" => 120,
-    "local_note_limit" => 140,
-    "local_reminder_limit" => 140,
-    "local_file_limit" => 120,
-    "local_browser_visit_limit" => 240,
+    "email_scan_limit" => 40,
+    "event_scan_limit" => 40,
+    "gmail_body_fetch_limit" => 24,
+    "gmail_body_fetch_timeout_ms" => 750,
+    "slack_channel_scan_limit" => 4,
+    "slack_message_scan_limit" => 60,
+    "local_message_limit" => 180,
+    "local_chat_limit" => 80,
+    "local_voice_memo_limit" => 60,
+    "local_note_limit" => 80,
+    "local_reminder_limit" => 80,
+    "local_file_limit" => 80,
+    "local_browser_visit_limit" => 160,
     "lookback_hours" => @evidence_window_days * 24 * 2
   }
 

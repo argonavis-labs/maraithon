@@ -21,6 +21,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   require Logger
 
   @default_gmail_message_limit 250
+  @default_gmail_body_fetch_limit 40
   @default_gmail_body_fetch_timeout_ms 5_000
   @default_calendar_limit 250
   @default_slack_channel_limit 12
@@ -92,7 +93,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp maybe_fetch_gmail({telemetry, bundle}, user_id, source_scope, plan, context) do
     case event_gmail_messages(context, source_scope) do
       {:ok, %{messages: messages, providers: providers}} ->
-        messages = enrich_gmail_messages(messages, user_id, nil)
+        messages = enrich_gmail_messages(messages, user_id, nil, plan)
 
         bundle =
           SourceBundle.put_gmail(bundle, %{
@@ -1020,7 +1021,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 (messages ++ commercial_messages)
                 |> dedupe_messages()
                 |> annotate_google_items(source_scope, provider)
-                |> enrich_gmail_messages(user_id, provider)
+                |> enrich_gmail_messages(user_id, provider, plan)
 
               {
                 Map.put(message_acc, provider, annotated),
@@ -1256,6 +1257,20 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       inbox_limit: max(max_email_scan_limit, 100),
       sent_limit: max(max_email_scan_limit * 2, 100),
       gmail_message_limit: max(max_email_scan_limit * 4, @default_gmail_message_limit),
+      gmail_body_fetch_limit:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "gmail_body_fetch_limit",
+          @default_gmail_body_fetch_limit
+        ),
+      gmail_body_fetch_timeout_ms:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "gmail_body_fetch_timeout_ms",
+          configured_gmail_body_fetch_timeout_ms()
+        ),
       calendar_limit:
         if(morning_brief?,
           do: max(max_event_scan_limit * 10, @default_calendar_limit),
@@ -1600,14 +1615,30 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp annotate_google_items(_items, _source_scope, _provider), do: []
 
-  defp enrich_gmail_messages(messages, user_id, default_provider)
+  defp enrich_gmail_messages(messages, user_id, default_provider, plan)
        when is_list(messages) and is_binary(user_id) do
+    {body_candidates, metadata_only} = Enum.split(messages, gmail_body_fetch_limit(plan))
+
+    enriched =
+      enrich_gmail_message_bodies(body_candidates, user_id, default_provider, plan)
+
+    skipped = Enum.map(metadata_only, &mark_gmail_body_unavailable(&1, "not_fetched"))
+
+    enriched ++ skipped
+  end
+
+  defp enrich_gmail_messages(messages, _user_id, _default_provider, _plan) when is_list(messages),
+    do: Enum.map(messages, &stringify_keys/1)
+
+  defp enrich_gmail_messages(_messages, _user_id, _default_provider, _plan), do: []
+
+  defp enrich_gmail_message_bodies(messages, user_id, default_provider, plan) do
     results =
       Task.async_stream(
         messages,
         fn message -> enrich_gmail_message(user_id, message, default_provider) end,
         max_concurrency: 4,
-        timeout: gmail_body_fetch_timeout_ms(),
+        timeout: gmail_body_fetch_timeout_ms(plan),
         on_timeout: :kill_task
       )
 
@@ -1618,19 +1649,42 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         message
 
       {original, {:exit, _reason}} ->
-        original
-        |> stringify_keys()
-        |> Map.put("body_available", false)
-        |> Map.put("body_status", "fetch_failed")
+        mark_gmail_body_unavailable(original, "fetch_failed")
     end)
   end
 
-  defp enrich_gmail_messages(messages, _user_id, _default_provider) when is_list(messages),
-    do: Enum.map(messages, &stringify_keys/1)
+  defp mark_gmail_body_unavailable(message, status) do
+    message
+    |> stringify_keys()
+    |> Map.put("body_available", false)
+    |> Map.put("body_status", status)
+  end
 
-  defp enrich_gmail_messages(_messages, _user_id, _default_provider), do: []
+  defp gmail_body_fetch_limit(plan) when is_map(plan) do
+    plan
+    |> Map.get(:gmail_body_fetch_limit, @default_gmail_body_fetch_limit)
+    |> parse_integer()
+    |> case do
+      value when is_integer(value) and value > 0 -> value
+      _other -> @default_gmail_body_fetch_limit
+    end
+  end
 
-  defp gmail_body_fetch_timeout_ms do
+  defp gmail_body_fetch_limit(_plan), do: @default_gmail_body_fetch_limit
+
+  defp gmail_body_fetch_timeout_ms(plan) when is_map(plan) do
+    plan
+    |> Map.get(:gmail_body_fetch_timeout_ms, configured_gmail_body_fetch_timeout_ms())
+    |> parse_integer()
+    |> case do
+      value when is_integer(value) and value > 0 -> value
+      _other -> configured_gmail_body_fetch_timeout_ms()
+    end
+  end
+
+  defp gmail_body_fetch_timeout_ms(_plan), do: configured_gmail_body_fetch_timeout_ms()
+
+  defp configured_gmail_body_fetch_timeout_ms do
     :maraithon
     |> Application.get_env(__MODULE__, [])
     |> Keyword.get(:gmail_body_fetch_timeout_ms, @default_gmail_body_fetch_timeout_ms)
