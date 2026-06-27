@@ -112,23 +112,34 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   defp do_deliver_check_in(user_id, opts) do
     chat_id = Keyword.get(opts, :chat_id) || ConnectedAccounts.telegram_destination(user_id)
 
-    case plan_check_in(user_id, Keyword.put(opts, :chat_id, chat_id)) do
+    context =
+      Keyword.get(opts, :context) ||
+        Context.build(%{user_id: user_id, chat_id: chat_id || "unavailable"})
+
+    case plan_check_in(
+           user_id,
+           opts |> Keyword.put(:chat_id, chat_id) |> Keyword.put(:context, context)
+         ) do
       {:ok, %{"decision" => "send_now"} = plan} ->
         deliver_plan(user_id, chat_id, plan, opts)
 
       {:ok, %{"decision" => "hold"} = plan} ->
-        record_proactive_decision(
-          user_id,
-          nil,
-          plan,
-          proactive_trigger(user_id, chat_id, opts),
-          %{
-            event_type: "proactive.held",
-            status: "held"
-          }
-        )
+        if no_review_todos?(context) do
+          deliver_no_review_notice(user_id, chat_id, context, opts)
+        else
+          record_proactive_decision(
+            user_id,
+            nil,
+            plan,
+            proactive_trigger(user_id, chat_id, opts),
+            %{
+              event_type: "proactive.held",
+              status: "held"
+            }
+          )
 
-        {:ok, Map.put(plan, "decision", "hold")}
+          {:ok, Map.put(plan, "decision", "hold")}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -144,6 +155,24 @@ defmodule Maraithon.TelegramAssistant.Proactive do
     else
       deliver_plan_now(user_id, chat_id, plan, trigger, dedupe_key)
     end
+  end
+
+  defp deliver_no_review_notice(user_id, chat_id, context, opts) do
+    trigger = proactive_trigger(user_id, chat_id, opts)
+    dedupe_key = no_review_notice_dedupe_key(user_id, trigger)
+
+    plan = %{
+      "decision" => "send_now",
+      "assistant_message" => no_review_notice_message(context),
+      "message_class" => "system_notice",
+      "urgency" => 0.35,
+      "interrupt_now" => true,
+      "dedupe_key" => dedupe_key,
+      "todo_ids" => [],
+      "summary" => "No saved open work is ready for review, so an all-clear check-in was sent."
+    }
+
+    deliver_plan_now(user_id, chat_id, plan, trigger, dedupe_key)
   end
 
   defp deliver_plan_now(user_id, chat_id, plan, trigger, dedupe_key) do
@@ -268,6 +297,49 @@ defmodule Maraithon.TelegramAssistant.Proactive do
 
   defp delivery_text(value) when is_binary(value), do: UserFacingCopy.polish_text(value)
   defp delivery_text(value), do: value
+
+  defp no_review_todos?(context) when is_map(context) do
+    with todos when is_list(todos) <- read_field(context, "todos"),
+         true <- todos == [],
+         true <- context_fetch_ready_for?(context, "todos") do
+      true
+    else
+      _other -> false
+    end
+  end
+
+  defp no_review_todos?(_context), do: false
+
+  defp context_fetch_ready_for?(context, key) do
+    context
+    |> read_field("context_fetch")
+    |> read_field("failures")
+    |> case do
+      failures when is_list(failures) ->
+        not Enum.any?(failures, &(read_field(&1, "key") == key))
+
+      _other ->
+        true
+    end
+  end
+
+  defp no_review_notice_dedupe_key(user_id, trigger) do
+    local_date =
+      trigger
+      |> read_field("local_time")
+      |> read_field("date")
+
+    date = local_date || Date.utc_today() |> Date.to_iso8601()
+    "proactive:no_open_work_review:#{user_id}:#{date}"
+  end
+
+  defp no_review_notice_message(_context) do
+    [
+      "No open work is waiting for review right now.",
+      "I'll keep watching and send something when there's a concrete next move."
+    ]
+    |> Enum.join(" ")
+  end
 
   defp recent_pushes(user_id, limit) when is_binary(user_id) do
     PushReceipt
@@ -413,10 +485,16 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   defp read_field(_map, _key), do: nil
 
   defp atom_field_key("briefing_schedule"), do: :briefing_schedule
+  defp atom_field_key("context_fetch"), do: :context_fetch
+  defp atom_field_key("date"), do: :date
+  defp atom_field_key("failures"), do: :failures
+  defp atom_field_key("key"), do: :key
+  defp atom_field_key("local_time"), do: :local_time
   defp atom_field_key("local_timezone"), do: :local_timezone
   defp atom_field_key("timezone"), do: :timezone
   defp atom_field_key("timezone_name"), do: :timezone_name
   defp atom_field_key("timezone_offset_hours"), do: :timezone_offset_hours
+  defp atom_field_key("todos"), do: :todos
   defp atom_field_key(_key), do: :unknown
 
   defp plan_dedupe_key(_user_id, %{"dedupe_key" => key}, _trigger)

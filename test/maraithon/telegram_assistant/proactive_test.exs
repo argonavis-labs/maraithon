@@ -193,6 +193,15 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
     assert {:ok, %{"decision" => "hold"}} =
              TelegramAssistant.deliver_proactive_check_in(user_id,
                force: true,
+               context: %{
+                 todos: [
+                   %{
+                     "id" => "reviewable-work",
+                     "title" => "Review a low-priority work item",
+                     "status" => "open"
+                   }
+                 ]
+               },
                llm_complete: llm_complete
              )
 

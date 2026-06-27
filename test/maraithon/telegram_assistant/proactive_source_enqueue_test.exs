@@ -12,6 +12,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ProactiveCandidate
+  alias Maraithon.TelegramAssistant.PushReceipt
   alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.Todos
 
@@ -277,6 +278,91 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
     assert candidate.status == "pending"
     assert candidate.body =~ "Rippling"
     assert candidate.structured_data["interrupt_now"] == true
+  end
+
+  test "proactive check-ins send a deduped all-clear push when no work is ready", %{
+    user_id: user_id
+  } do
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "hold",
+             "assistant_message" => "",
+             "message_class" => "assistant_push",
+             "urgency" => 0.1,
+             "interrupt_now" => false,
+             "dedupe_key" => "proactive:hold:no-open-work",
+             "todo_ids" => [],
+             "summary" => "No saved open work is ready for review."
+           })
+       }}
+    end
+
+    opts = [
+      force: true,
+      now: ~U[2026-05-10 14:00:00Z],
+      context: %{todos: []},
+      llm_complete: llm_complete
+    ]
+
+    assert {:ok, %{"decision" => "sent_now"} = result} =
+             TelegramAssistant.deliver_proactive_check_in(user_id, opts)
+
+    assert result["dedupe_key"] == "proactive:no_open_work_review:#{user_id}:2026-05-10"
+
+    [message] = telegram_messages()
+    assert message.text =~ "No open work is waiting for review right now."
+    assert message.text =~ "concrete next move"
+
+    receipt =
+      Repo.get_by!(PushReceipt,
+        user_id: user_id,
+        dedupe_key: "proactive:no_open_work_review:#{user_id}:2026-05-10"
+      )
+
+    assert receipt.decision == "sent_now"
+    assert receipt.origin_type == "assistant_digest"
+
+    assert {:ok, %{"decision" => "suppressed"}} =
+             TelegramAssistant.deliver_proactive_check_in(user_id, opts)
+
+    assert length(telegram_messages()) == 1
+  end
+
+  test "proactive check-ins do not send an all-clear when todo context failed", %{
+    user_id: user_id
+  } do
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "hold",
+             "assistant_message" => "",
+             "message_class" => "assistant_push",
+             "urgency" => 0.1,
+             "interrupt_now" => false,
+             "dedupe_key" => "proactive:hold:degraded-context",
+             "todo_ids" => [],
+             "summary" => "Context is insufficient to send."
+           })
+       }}
+    end
+
+    assert {:ok, %{"decision" => "hold"}} =
+             TelegramAssistant.deliver_proactive_check_in(user_id,
+               force: true,
+               now: ~U[2026-05-10 14:00:00Z],
+               context: %{
+                 todos: [],
+                 context_fetch: %{failures: [%{key: "todos", reason: "timeout"}]}
+               },
+               llm_complete: llm_complete
+             )
+
+    assert telegram_messages() == []
   end
 
   defp telegram_messages do
