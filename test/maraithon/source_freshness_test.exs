@@ -5,7 +5,33 @@ defmodule Maraithon.SourceFreshnessTest do
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ConnectedAccounts
   alias Maraithon.SourceFreshness
+  alias Maraithon.TestSupport.CapturingEmail
+  alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.TelegramAssistant.Context
+
+  setup do
+    start_supervised!(%{
+      id: :capturing_telegram_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
+    })
+
+    start_supervised!(%{
+      id: :capturing_email_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_email_recorder]]}
+    })
+
+    Application.put_env(:maraithon, :connected_accounts,
+      telegram_module: CapturingTelegram,
+      email_module: CapturingEmail,
+      reconnect_base_url: "https://maraithon.test"
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:maraithon, :connected_accounts)
+    end)
+
+    :ok
+  end
 
   test "computes fresh, stale, and reauth-required source states" do
     user_id = "source-freshness-#{System.unique_integer([:positive])}@example.com"
@@ -27,6 +53,17 @@ defmodule Maraithon.SourceFreshnessTest do
              SourceFreshness.mark_error(user_id, "telegram", "invalid_grant reauth required",
                at: now
              )
+
+    assert Agent.get(:capturing_telegram_recorder, &Enum.reverse/1) == []
+
+    assert [
+             %{
+               to: ^user_id,
+               content: email
+             }
+           ] = Agent.get(:capturing_email_recorder, &Enum.reverse/1)
+
+    assert email.subject == "Reconnect Telegram in Maraithon"
 
     snapshots = SourceFreshness.for_user(user_id, now: now)
 

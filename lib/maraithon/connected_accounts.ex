@@ -7,6 +7,7 @@ defmodule Maraithon.ConnectedAccounts do
 
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Connectors.Telegram
+  alias Maraithon.EmailDelivery
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Token
   alias Maraithon.Repo
@@ -216,6 +217,27 @@ defmodule Maraithon.ConnectedAccounts do
     end
   end
 
+  def notify_reconnect_required(user_id, provider, reason, opts \\ [])
+
+  def notify_reconnect_required(user_id, provider, reason, opts)
+      when is_binary(user_id) and is_binary(provider) and is_list(opts) do
+    case normalize_access_issue_reason(reason) do
+      nil ->
+        :ok
+
+      normalized_reason ->
+        case get(user_id, provider) do
+          %ConnectedAccount{} = account ->
+            maybe_send_reconnect_notification(account, normalized_reason, opts)
+
+          nil ->
+            :ok
+        end
+    end
+  end
+
+  def notify_reconnect_required(_user_id, _provider, _reason, _opts), do: :ok
+
   def sync_from_oauth_tokens(user_id) when is_binary(user_id) do
     OAuth.list_user_tokens(user_id)
     |> Enum.map(&sync_token/1)
@@ -382,15 +404,13 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp maybe_send_reconnect_notification(%ConnectedAccount{} = account, reason, opts)
        when is_binary(reason) do
-    if reconnect_notification_enabled?(opts) and reconnect_notification_reason?(reason) and
-         reconnect_notification_pending?(account.metadata, reason) do
-      case telegram_destination(account.user_id) do
-        nil ->
-          :ok
+    if reconnect_notification_enabled?(opts) and reconnect_notification_reason?(reason) do
+      channels =
+        account
+        |> reconnect_notification_channels(reason)
+        |> pending_reconnect_notification_channels(account.metadata, reason)
 
-        destination ->
-          send_reconnect_notification(account, destination, reason)
-      end
+      send_reconnect_notifications(account, channels, reason)
     else
       :ok
     end
@@ -398,17 +418,118 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp maybe_send_reconnect_notification(_account, _reason, _opts), do: :ok
 
-  defp send_reconnect_notification(%ConnectedAccount{} = account, destination, reason) do
-    module = telegram_module()
+  defp reconnect_notification_channels(%ConnectedAccount{} = account, reason) do
     reconnect_url = reconnect_url(account.provider)
-    message = reconnect_notification_message(account, reconnect_url, reason)
+    push_message = reconnect_notification_message(account, reconnect_url, reason)
+    email_content = reconnect_notification_email(account, reconnect_url, reason)
+
+    [
+      reconnect_push_channel(account, push_message),
+      reconnect_email_channel(account, email_content)
+    ]
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp reconnect_push_channel(%ConnectedAccount{} = account, message) do
+    case telegram_destination(account.user_id) do
+      nil ->
+        nil
+
+      destination ->
+        %{
+          "channel" => "push",
+          "destination" => destination,
+          "message" => message
+        }
+    end
+  end
+
+  defp reconnect_email_channel(%ConnectedAccount{} = account, content) do
+    with true <- email_configured?(),
+         destination when is_binary(destination) <- email_destination(account.user_id) do
+      %{
+        "channel" => "email",
+        "destination" => destination,
+        "content" => content
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp pending_reconnect_notification_channels(channels, _metadata, _reason)
+       when not is_list(channels),
+       do: []
+
+  defp pending_reconnect_notification_channels([], _metadata, _reason), do: []
+
+  defp pending_reconnect_notification_channels(channels, metadata, reason) do
+    notification =
+      metadata
+      |> normalize_metadata()
+      |> then(fn value ->
+        fetch_map_value(value, "reconnect_notification") ||
+          fetch_map_value(value, "reauth_notification")
+      end)
+
+    sent_reason = is_map(notification) && fetch_map_value(notification, "reason")
+
+    if sent_reason == reason do
+      Enum.reject(channels, &reconnect_channel_sent?(notification, &1["channel"]))
+    else
+      channels
+    end
+  end
+
+  defp reconnect_channel_sent?(notification, channel) when is_map(notification) do
+    channels = fetch_map_value(notification, "channels")
+
+    cond do
+      is_map(channels) ->
+        channel_entry = fetch_map_value(channels, channel)
+        sent_at = is_map(channel_entry) && fetch_map_value(channel_entry, "sent_at")
+        is_binary(sent_at) and sent_at != ""
+
+      # Legacy rows only prove the old Telegram push path already ran.
+      is_binary(fetch_map_value(notification, "sent_at")) ->
+        channel == "push"
+
+      true ->
+        false
+    end
+  end
+
+  defp reconnect_channel_sent?(_notification, _channel), do: false
+
+  defp send_reconnect_notifications(%ConnectedAccount{} = account, channels, reason)
+       when is_list(channels) do
+    sent_channels =
+      channels
+      |> Enum.map(&send_reconnect_notification_channel(account, &1))
+      |> Enum.filter(&match?({:ok, _channel}, &1))
+      |> Enum.map(fn {:ok, channel} -> channel end)
+
+    if sent_channels == [] do
+      :ok
+    else
+      mark_reconnect_notification_sent(account, sent_channels, reason)
+    end
+  end
+
+  defp send_reconnect_notifications(_account, _channels, _reason), do: :ok
+
+  defp send_reconnect_notification_channel(
+         %ConnectedAccount{} = account,
+         %{"channel" => "push", "destination" => destination, "message" => message}
+       ) do
+    module = telegram_module()
 
     case module.send_message(destination, message, parse_mode: "HTML") do
       {:ok, _result} ->
-        mark_reconnect_notification_sent(account, destination, reason)
+        {:ok, %{"channel" => "push", "destination" => to_string(destination)}}
 
       {:error, notification_error} ->
-        Logger.warning("Failed to send reconnect Telegram notification",
+        Logger.warning("Failed to send reconnect push notification",
           user_id: account.user_id,
           provider: account.provider,
           reason: inspect(notification_error)
@@ -418,7 +539,7 @@ defmodule Maraithon.ConnectedAccounts do
     end
   rescue
     notification_error ->
-      Logger.warning("Reconnect Telegram notification crashed",
+      Logger.warning("Reconnect push notification crashed",
         user_id: account.user_id,
         provider: account.provider,
         reason: Exception.message(notification_error)
@@ -427,25 +548,43 @@ defmodule Maraithon.ConnectedAccounts do
       :ok
   end
 
+  defp send_reconnect_notification_channel(
+         %ConnectedAccount{} = account,
+         %{"channel" => "email", "destination" => destination, "content" => content}
+       ) do
+    case email_module().send(destination, content) do
+      :ok ->
+        {:ok, %{"channel" => "email", "destination" => destination}}
+
+      :disabled ->
+        :ok
+
+      {:error, notification_error} ->
+        Logger.warning("Failed to send reconnect email notification",
+          user_id: account.user_id,
+          provider: account.provider,
+          reason: inspect(notification_error)
+        )
+
+        :ok
+    end
+  rescue
+    notification_error ->
+      Logger.warning("Reconnect email notification crashed",
+        user_id: account.user_id,
+        provider: account.provider,
+        reason: Exception.message(notification_error)
+      )
+
+      :ok
+  end
+
+  defp send_reconnect_notification_channel(_account, _channel), do: :ok
+
   defp reconnect_notification_reason?("oauth_reauth_required"), do: true
   defp reconnect_notification_reason?("oauth_missing_refresh_token"), do: true
   defp reconnect_notification_reason?("disconnected"), do: true
   defp reconnect_notification_reason?(_reason), do: false
-
-  defp reconnect_notification_pending?(metadata, reason) do
-    notification =
-      metadata
-      |> normalize_metadata()
-      |> then(fn value ->
-        fetch_map_value(value, "reconnect_notification") ||
-          fetch_map_value(value, "reauth_notification")
-      end)
-
-    sent_at = is_map(notification) && fetch_map_value(notification, "sent_at")
-    sent_reason = is_map(notification) && fetch_map_value(notification, "reason")
-
-    not (is_binary(sent_at) and sent_at != "" and sent_reason == reason)
-  end
 
   def telegram_destination(user_id) when is_binary(user_id) do
     case get(user_id, "telegram") do
@@ -466,6 +605,23 @@ defmodule Maraithon.ConnectedAccounts do
   defp telegram_module do
     Application.get_env(:maraithon, :connected_accounts, [])
     |> Keyword.get(:telegram_module, Telegram)
+  end
+
+  defp email_module do
+    Application.get_env(:maraithon, :connected_accounts, [])
+    |> Keyword.get(:email_module, EmailDelivery)
+  end
+
+  defp email_configured? do
+    module = email_module()
+
+    if function_exported?(module, :configured?, 0) do
+      module.configured?()
+    else
+      true
+    end
+  rescue
+    _ -> false
   end
 
   defp reconnect_url(provider) when is_binary(provider) do
@@ -514,6 +670,33 @@ defmodule Maraithon.ConnectedAccounts do
     |> String.trim()
   end
 
+  defp reconnect_notification_email(%ConnectedAccount{} = account, reconnect_url, reason) do
+    provider_label = provider_label(account.provider)
+    account_label = account_label(account)
+    action_text = reconnect_action_text(reason)
+
+    subject = "Reconnect #{provider_label} in Maraithon"
+
+    text_body = """
+    Maraithon action required
+
+    #{provider_label} account #{account_label} #{action_text}.
+    Reconnect in Maraithon: #{reconnect_url}
+    """
+
+    html_body = """
+    <p><strong>Maraithon action required</strong></p>
+    <p>#{html_escape(provider_label)} account #{html_escape(account_label)} #{html_escape(action_text)}.</p>
+    <p><a href="#{html_escape(reconnect_url)}">Reconnect in Maraithon</a></p>
+    """
+
+    %{
+      subject: subject,
+      text_body: String.trim(text_body),
+      html_body: String.trim(html_body)
+    }
+  end
+
   defp reconnect_action_text("disconnected"), do: "was disconnected"
   defp reconnect_action_text(_reason), do: "needs re-authentication"
 
@@ -541,14 +724,47 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp provider_suffix(_provider), do: nil
 
-  defp mark_reconnect_notification_sent(%ConnectedAccount{} = account, destination, reason) do
+  defp mark_reconnect_notification_sent(%ConnectedAccount{} = account, sent_channels, reason)
+       when is_list(sent_channels) do
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    existing_notification =
+      account.metadata |> normalize_metadata() |> fetch_map_value("reconnect_notification")
+
+    existing_channels =
+      if is_map(existing_notification),
+        do: fetch_map_value(existing_notification, "channels"),
+        else: %{}
+
+    existing_channels = if is_map(existing_channels), do: existing_channels, else: %{}
+
+    channel_metadata =
+      Map.new(sent_channels, fn channel ->
+        channel_name = fetch_map_value(channel, "channel") || "unknown"
+
+        {channel_name,
+         %{
+           "sent_at" => now,
+           "destination" => fetch_map_value(channel, "destination")
+         }}
+      end)
+
+    destination =
+      sent_channels
+      |> Enum.find(&(fetch_map_value(&1, "channel") == "push"))
+      |> case do
+        channel when is_map(channel) -> fetch_map_value(channel, "destination")
+        _ -> sent_channels |> List.first() |> fetch_map_value("destination")
+      end
+
     metadata =
       account.metadata
       |> normalize_metadata()
       |> Map.put("reconnect_notification", %{
         "reason" => reason,
-        "sent_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
-        "destination" => to_string(destination)
+        "sent_at" => now,
+        "destination" => destination && to_string(destination),
+        "channels" => Map.merge(existing_channels, channel_metadata)
       })
 
     _ =
@@ -558,6 +774,19 @@ defmodule Maraithon.ConnectedAccounts do
 
     :ok
   end
+
+  defp mark_reconnect_notification_sent(_account, _sent_channels, _reason), do: :ok
+
+  defp email_destination(user_id) when is_binary(user_id) do
+    user_id
+    |> String.trim()
+    |> case do
+      "" -> nil
+      value -> if String.contains?(value, "@"), do: value
+    end
+  end
+
+  defp email_destination(_user_id), do: nil
 
   defp normalize_destination(value) when is_binary(value) do
     case String.trim(value) do

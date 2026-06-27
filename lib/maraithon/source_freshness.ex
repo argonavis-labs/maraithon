@@ -12,6 +12,7 @@ defmodule Maraithon.SourceFreshness do
 
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Companion.Devices
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Normalization
   alias Maraithon.Repo
   alias Maraithon.SourceErrorCopy
@@ -168,7 +169,7 @@ defmodule Maraithon.SourceFreshness do
 
         metadata =
           (account.metadata || %{})
-          |> Map.drop(["last_error"])
+          |> Map.drop(["last_error", "reconnect_notification", "reauth_notification"])
           |> put_iso("last_successful_sync_at", now)
           |> maybe_put_iso("last_webhook_at", read_datetime(attrs, :last_webhook_at))
           |> maybe_put_iso("last_full_scan_at", read_datetime(attrs, :last_full_scan_at))
@@ -205,13 +206,23 @@ defmodule Maraithon.SourceFreshness do
             "at" => DateTime.to_iso8601(DateTime.truncate(now, :second))
           })
 
-        account
-        |> ConnectedAccount.changeset(%{
-          status: error_status(reason),
-          metadata: metadata,
-          last_refreshed_at: now
-        })
-        |> Repo.update()
+        result =
+          account
+          |> ConnectedAccount.changeset(%{
+            status: error_status(reason),
+            metadata: metadata,
+            last_refreshed_at: now
+          })
+          |> Repo.update()
+
+        case result do
+          {:ok, _updated_account} = ok ->
+            ConnectedAccounts.notify_reconnect_required(user_id, provider, reason)
+            ok
+
+          error ->
+            error
+        end
 
       nil ->
         {:error, :connected_account_not_found}
