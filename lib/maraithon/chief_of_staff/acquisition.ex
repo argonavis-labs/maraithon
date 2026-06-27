@@ -23,9 +23,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_gmail_message_limit 250
   @default_gmail_body_fetch_limit 40
   @default_gmail_body_fetch_timeout_ms 5_000
+  @default_gmail_fetch_timeout_ms 20_000
   @default_calendar_limit 250
+  @default_calendar_fetch_timeout_ms 15_000
   @default_slack_channel_limit 12
   @default_slack_message_limit 100
+  @default_slack_fetch_timeout_ms 45_000
+  @default_slack_channel_fetch_timeout_ms 6_000
+  @default_slack_search_timeout_ms 6_000
   @slack_thread_fetch_limit 6
   @slack_thread_reply_limit 40
   @slack_user_directory_limit 80
@@ -41,6 +46,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     "\"I have to\"",
     "\"follow up\""
   ]
+  @default_slack_self_authored_query_limit length(@slack_self_authored_search_queries)
   @default_lookback_hours 24 * 14
   @default_timezone_offset_hours -5
   @commercial_gmail_lookback_days 7
@@ -56,6 +62,24 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_local_reminder_limit 100
   @default_local_file_limit 100
   @default_local_browser_visit_limit 250
+  @default_companion_fetch_timeout_ms 5_000
+  @default_news_fetch_timeout_ms 5_000
+  @default_weather_fetch_timeout_ms 5_000
+
+  @source_bundle_keys %{
+    "gmail" => "gmail",
+    "calendar" => "calendar",
+    "slack" => "slack",
+    "calendar_local" => "calendar_local",
+    "imessage" => "imessage",
+    "voice_memos" => "voice_memos",
+    "notes" => "notes",
+    "reminders" => "reminders",
+    "files" => "files",
+    "browser_history" => "browser_history",
+    "news" => "news",
+    "weather" => "weather"
+  }
 
   def build(user_id, skill_ids, skill_configs, context)
       when is_binary(user_id) and is_list(skill_ids) and is_map(skill_configs) and is_map(context) do
@@ -63,15 +87,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     bundle = SourceBundle.empty(context, source_scope)
     plan = build_plan(skill_ids, skill_configs, context)
 
-    {bundle, telemetry} =
+    {telemetry, bundle} =
       {%{"fetches" => [], "sources" => %{}, "plan" => plan}, bundle}
-      |> maybe_fetch_gmail(user_id, source_scope, plan, context)
-      |> maybe_fetch_calendar(user_id, source_scope, plan, context)
-      |> maybe_fetch_slack(user_id, source_scope, plan, context)
-      |> maybe_fetch_companion_sources(user_id, plan, context)
-      |> maybe_fetch_news(user_id, source_scope, plan, context)
-      |> maybe_fetch_weather(user_id, source_scope, plan, context)
-      |> then(fn {telemetry, bundle} -> {bundle, telemetry} end)
+      |> run_source_fetches(source_fetchers(user_id, source_scope, plan, context))
 
     {bundle, telemetry}
   end
@@ -85,6 +103,175 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
        "sources" => %{},
        "plan" => %{}
      }}
+  end
+
+  defp source_fetchers(user_id, source_scope, plan, context) do
+    [
+      source_fetcher("gmail", gmail_fetch_timeout_ms(plan), fn state ->
+        maybe_fetch_gmail(state, user_id, source_scope, plan, context)
+      end),
+      source_fetcher("calendar", calendar_fetch_timeout_ms(plan), fn state ->
+        maybe_fetch_calendar(state, user_id, source_scope, plan, context)
+      end),
+      source_fetcher("slack", slack_fetch_timeout_ms(plan), fn state ->
+        maybe_fetch_slack(state, user_id, source_scope, plan, context)
+      end),
+      source_fetcher("news", news_fetch_timeout_ms(plan), fn state ->
+        maybe_fetch_news(state, user_id, source_scope, plan, context)
+      end),
+      source_fetcher("weather", weather_fetch_timeout_ms(plan), fn state ->
+        maybe_fetch_weather(state, user_id, source_scope, plan, context)
+      end)
+    ] ++ companion_source_fetchers(user_id, plan, context)
+  end
+
+  defp source_fetcher(source, timeout_ms, fun)
+       when is_binary(source) and is_integer(timeout_ms) and is_function(fun, 1) do
+    %{source: source, timeout_ms: max(timeout_ms, 1), fun: fun}
+  end
+
+  defp run_source_fetches({telemetry, bundle} = state, fetchers) when is_list(fetchers) do
+    started_at = System.monotonic_time(:millisecond)
+
+    fetchers
+    |> Enum.map(fn fetcher ->
+      Map.put(fetcher, :task, Task.async(fn -> safe_fetch(fetcher.fun, state) end))
+    end)
+    |> Enum.sort_by(& &1.timeout_ms)
+    |> Enum.reduce({telemetry, bundle}, fn fetcher, acc ->
+      remaining_ms =
+        fetcher.timeout_ms - (System.monotonic_time(:millisecond) - started_at)
+
+      case Task.yield(fetcher.task, max(remaining_ms, 0)) ||
+             Task.shutdown(fetcher.task, :brutal_kill) do
+        {:ok, {:ok, {source_telemetry, source_bundle}}}
+        when is_map(source_telemetry) and is_map(source_bundle) ->
+          merge_source_result(acc, source_telemetry, source_bundle)
+
+        {:ok, {:error, reason}} ->
+          mark_source_fetch_failed(acc, fetcher.source, reason)
+
+        {:exit, reason} ->
+          mark_source_fetch_failed(acc, fetcher.source, "exited: #{inspect(reason)}")
+
+        nil ->
+          mark_source_fetch_timeout(acc, fetcher.source, fetcher.timeout_ms)
+
+        other ->
+          mark_source_fetch_failed(acc, fetcher.source, "unexpected result: #{inspect(other)}")
+      end
+    end)
+  end
+
+  defp safe_fetch(fun, state) when is_function(fun, 1) do
+    {:ok, fun.(state)}
+  rescue
+    exception ->
+      {:error, Exception.message(exception)}
+  catch
+    kind, reason ->
+      {:error, "#{kind}: #{inspect(reason)}"}
+  end
+
+  defp merge_source_result({telemetry, bundle}, source_telemetry, source_bundle) do
+    fetches = Map.get(telemetry, "fetches", []) ++ Map.get(source_telemetry, "fetches", [])
+
+    telemetry =
+      telemetry
+      |> Map.put("fetches", fetches)
+      |> Map.update("sources", Map.get(source_telemetry, "sources", %{}), fn sources ->
+        Map.merge(sources, Map.get(source_telemetry, "sources", %{}))
+      end)
+
+    {telemetry, merge_source_bundle(bundle, source_bundle)}
+  end
+
+  defp merge_source_bundle(bundle, source_bundle) do
+    source_bundle
+    |> SourceBundle.freshness()
+    |> Enum.reduce(bundle, fn {source, freshness}, acc ->
+      acc
+      |> put_bundle_freshness(source, freshness)
+      |> maybe_merge_source_payload(source, source_bundle)
+    end)
+  end
+
+  defp put_bundle_freshness(bundle, source, freshness) do
+    Map.update(bundle, "freshness", %{source => freshness}, &Map.put(&1, source, freshness))
+  end
+
+  defp maybe_merge_source_payload(bundle, source, source_bundle) do
+    case Map.get(@source_bundle_keys, source) do
+      key when is_binary(key) ->
+        if Map.has_key?(source_bundle, key) do
+          Map.put(bundle, key, Map.get(source_bundle, key))
+        else
+          bundle
+        end
+
+      _other ->
+        bundle
+    end
+  end
+
+  defp mark_source_fetch_timeout({telemetry, bundle}, source, timeout_ms) do
+    mark_source_fetch_failed(
+      {telemetry, bundle},
+      source,
+      "source fetch timed out after #{timeout_ms}ms",
+      "timeout",
+      %{"timeout_ms" => timeout_ms}
+    )
+  end
+
+  defp mark_source_fetch_failed({telemetry, bundle}, source, reason) do
+    mark_source_fetch_failed({telemetry, bundle}, source, reason, "error", %{})
+  end
+
+  defp mark_source_fetch_failed({telemetry, bundle}, source, reason, status, metadata) do
+    bundle = SourceBundle.mark_unavailable(bundle, source, reason, metadata)
+
+    telemetry =
+      telemetry
+      |> Map.update("fetches", [], fn fetches ->
+        [
+          %{
+            "source" => source,
+            "mode" => "connector",
+            "status" => status,
+            "reason" => reason
+          }
+          |> Map.merge(metadata)
+          | fetches
+        ]
+      end)
+      |> put_source_summary(
+        source,
+        %{"status" => status, "reason" => reason} |> Map.merge(metadata)
+      )
+
+    {telemetry, bundle}
+  end
+
+  defp call_with_timeout(fun, timeout_ms) when is_function(fun, 0) do
+    task = Task.async(fn -> safe_call(fun) end)
+
+    case Task.yield(task, max(timeout_ms, 1)) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, result}} -> result
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:exit, reason} -> {:error, {:exit, reason}}
+      nil -> {:error, :timeout}
+    end
+  end
+
+  defp safe_call(fun) when is_function(fun, 0) do
+    {:ok, fun.()}
+  rescue
+    exception ->
+      {:error, Exception.message(exception)}
+  catch
+    kind, reason ->
+      {:error, {kind, reason}}
   end
 
   defp maybe_fetch_gmail({telemetry, bundle}, _user_id, _source_scope, %{gmail: false}, _context),
@@ -242,142 +429,135 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
-  defp maybe_fetch_companion_sources({telemetry, bundle}, user_id, plan, context)
-       when is_binary(user_id) do
+  defp companion_source_fetchers(user_id, plan, context) when is_binary(user_id) do
     now = context[:timestamp] || DateTime.utc_now()
     lookback_start = DateTime.add(now, -plan.lookback_hours, :hour)
     calendar_end = DateTime.add(now, plan.forward_days, :day)
+    timeout_ms = companion_fetch_timeout_ms(plan)
 
-    {telemetry, bundle}
-    |> fetch_companion_source(
-      "calendar_local",
-      fn ->
-        events =
-          user_id
-          |> LocalCalendar.events_around(
-            since: lookback_start,
-            until: calendar_end,
-            limit: plan.local_calendar_limit
-          )
-          |> Enum.map(&local_calendar_event_for_bundle/1)
+    [
+      source_fetcher("calendar_local", timeout_ms, fn state ->
+        fetch_companion_source(state, "calendar_local", fn ->
+          events =
+            user_id
+            |> LocalCalendar.events_around(
+              since: lookback_start,
+              until: calendar_end,
+              limit: plan.local_calendar_limit
+            )
+            |> Enum.map(&local_calendar_event_for_bundle/1)
 
-        {:ok,
-         &SourceBundle.put_calendar_local(&1, %{
-           "events" => events,
-           "counts" => %{"event_count" => length(events)},
-           "metadata" => %{"mode" => "companion"}
-         }), %{"event_count" => length(events)}}
-      end
-    )
-    |> fetch_companion_source(
-      "imessage",
-      fn ->
-        messages =
-          user_id
-          |> LocalMessages.recent_for_user(limit: plan.local_message_limit)
-          |> Enum.map(&local_message_for_bundle(user_id, &1))
+          {:ok,
+           &SourceBundle.put_calendar_local(&1, %{
+             "events" => events,
+             "counts" => %{"event_count" => length(events)},
+             "metadata" => %{"mode" => "companion"}
+           }), %{"event_count" => length(events)}}
+        end)
+      end),
+      source_fetcher("imessage", timeout_ms, fn state ->
+        fetch_companion_source(state, "imessage", fn ->
+          messages =
+            user_id
+            |> LocalMessages.recent_for_user(limit: plan.local_message_limit)
+            |> Enum.map(&local_message_for_bundle(user_id, &1))
 
-        chats =
-          user_id
-          |> LocalMessages.chats_recent(limit: plan.local_chat_limit, now: now)
-          |> Enum.map(&local_chat_for_bundle(user_id, &1))
+          chats =
+            user_id
+            |> LocalMessages.chats_recent(limit: plan.local_chat_limit, now: now)
+            |> Enum.map(&local_chat_for_bundle(user_id, &1))
 
-        {:ok,
-         &SourceBundle.put_imessage(&1, %{
-           "messages" => messages,
-           "chats" => chats,
-           "counts" => %{"message_count" => length(messages), "chat_count" => length(chats)},
-           "metadata" => %{"mode" => "companion"}
-         }), %{"message_count" => length(messages), "chat_count" => length(chats)}}
-      end
-    )
-    |> fetch_companion_source(
-      "voice_memos",
-      fn ->
-        memos =
-          user_id
-          |> LocalVoiceMemos.recent_for_user(limit: plan.local_voice_memo_limit)
-          |> Enum.map(&voice_memo_for_bundle/1)
+          {:ok,
+           &SourceBundle.put_imessage(&1, %{
+             "messages" => messages,
+             "chats" => chats,
+             "counts" => %{"message_count" => length(messages), "chat_count" => length(chats)},
+             "metadata" => %{"mode" => "companion"}
+           }), %{"message_count" => length(messages), "chat_count" => length(chats)}}
+        end)
+      end),
+      source_fetcher("voice_memos", timeout_ms, fn state ->
+        fetch_companion_source(state, "voice_memos", fn ->
+          memos =
+            user_id
+            |> LocalVoiceMemos.recent_for_user(limit: plan.local_voice_memo_limit)
+            |> Enum.map(&voice_memo_for_bundle/1)
 
-        {:ok,
-         &SourceBundle.put_voice_memos(&1, %{
-           "memos" => memos,
-           "counts" => %{"memo_count" => length(memos)},
-           "metadata" => %{"mode" => "companion"}
-         }), %{"memo_count" => length(memos)}}
-      end
-    )
-    |> fetch_companion_source(
-      "notes",
-      fn ->
-        notes =
-          user_id
-          |> LocalNotes.recent_for_user(limit: plan.local_note_limit)
-          |> Enum.map(&note_for_bundle/1)
+          {:ok,
+           &SourceBundle.put_voice_memos(&1, %{
+             "memos" => memos,
+             "counts" => %{"memo_count" => length(memos)},
+             "metadata" => %{"mode" => "companion"}
+           }), %{"memo_count" => length(memos)}}
+        end)
+      end),
+      source_fetcher("notes", timeout_ms, fn state ->
+        fetch_companion_source(state, "notes", fn ->
+          notes =
+            user_id
+            |> LocalNotes.recent_for_user(limit: plan.local_note_limit)
+            |> Enum.map(&note_for_bundle/1)
 
-        {:ok,
-         &SourceBundle.put_notes(&1, %{
-           "notes" => notes,
-           "counts" => %{"note_count" => length(notes)},
-           "metadata" => %{"mode" => "companion"}
-         }), %{"note_count" => length(notes)}}
-      end
-    )
-    |> fetch_companion_source(
-      "reminders",
-      fn ->
-        reminders =
-          user_id
-          |> LocalReminders.due_soon(
-            days_ahead: plan.forward_days,
-            limit: plan.local_reminder_limit
-          )
-          |> Enum.map(&reminder_for_bundle/1)
+          {:ok,
+           &SourceBundle.put_notes(&1, %{
+             "notes" => notes,
+             "counts" => %{"note_count" => length(notes)},
+             "metadata" => %{"mode" => "companion"}
+           }), %{"note_count" => length(notes)}}
+        end)
+      end),
+      source_fetcher("reminders", timeout_ms, fn state ->
+        fetch_companion_source(state, "reminders", fn ->
+          reminders =
+            user_id
+            |> LocalReminders.due_soon(
+              days_ahead: plan.forward_days,
+              limit: plan.local_reminder_limit
+            )
+            |> Enum.map(&reminder_for_bundle/1)
 
-        {:ok,
-         &SourceBundle.put_reminders(&1, %{
-           "reminders" => reminders,
-           "counts" => %{"open_due_soon" => length(reminders)},
-           "metadata" => %{"mode" => "companion"}
-         }), %{"open_due_soon" => length(reminders)}}
-      end
-    )
-    |> fetch_companion_source(
-      "files",
-      fn ->
-        files =
-          user_id
-          |> LocalFiles.recent_for_user(limit: plan.local_file_limit)
-          |> Enum.map(&file_for_bundle/1)
+          {:ok,
+           &SourceBundle.put_reminders(&1, %{
+             "reminders" => reminders,
+             "counts" => %{"open_due_soon" => length(reminders)},
+             "metadata" => %{"mode" => "companion"}
+           }), %{"open_due_soon" => length(reminders)}}
+        end)
+      end),
+      source_fetcher("files", timeout_ms, fn state ->
+        fetch_companion_source(state, "files", fn ->
+          files =
+            user_id
+            |> LocalFiles.recent_for_user(limit: plan.local_file_limit)
+            |> Enum.map(&file_for_bundle/1)
 
-        {:ok,
-         &SourceBundle.put_files(&1, %{
-           "files" => files,
-           "counts" => %{"recent_count" => length(files)},
-           "metadata" => %{"mode" => "companion"}
-         }), %{"recent_count" => length(files)}}
-      end
-    )
-    |> fetch_companion_source(
-      "browser_history",
-      fn ->
-        visits =
-          user_id
-          |> LocalBrowserHistory.recent_visits(limit: plan.local_browser_visit_limit)
-          |> Enum.map(&browser_visit_for_bundle/1)
+          {:ok,
+           &SourceBundle.put_files(&1, %{
+             "files" => files,
+             "counts" => %{"recent_count" => length(files)},
+             "metadata" => %{"mode" => "companion"}
+           }), %{"recent_count" => length(files)}}
+        end)
+      end),
+      source_fetcher("browser_history", timeout_ms, fn state ->
+        fetch_companion_source(state, "browser_history", fn ->
+          visits =
+            user_id
+            |> LocalBrowserHistory.recent_visits(limit: plan.local_browser_visit_limit)
+            |> Enum.map(&browser_visit_for_bundle/1)
 
-        {:ok,
-         &SourceBundle.put_browser_history(&1, %{
-           "visits" => visits,
-           "counts" => %{"visit_count" => length(visits)},
-           "metadata" => %{"mode" => "companion"}
-         }), %{"visit_count" => length(visits)}}
-      end
-    )
+          {:ok,
+           &SourceBundle.put_browser_history(&1, %{
+             "visits" => visits,
+             "counts" => %{"visit_count" => length(visits)},
+             "metadata" => %{"mode" => "companion"}
+           }), %{"visit_count" => length(visits)}}
+        end)
+      end)
+    ]
   end
 
-  defp maybe_fetch_companion_sources({telemetry, bundle}, _user_id, _plan, _context),
-    do: {telemetry, bundle}
+  defp companion_source_fetchers(_user_id, _plan, _context), do: []
 
   defp fetch_companion_source({telemetry, bundle}, source, fetch_fun) do
     case fetch_fun.() do
@@ -539,14 +719,25 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> Enum.sort_by(&slack_channel_priority(&1, plan.slack_key_channels))
         |> Enum.take(max(plan.slack_channel_limit, 0))
 
+      {mentions, mention_fetches} =
+        fetch_slack_mentions(user_id, team_id, workspace, plan, oldest)
+
+      {self_authored_messages, self_authored_fetches} =
+        fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest)
+
       {channels, fetches, _user_directory} =
         Enum.reduce(conversations, {[], [], %{}}, fn channel,
                                                      {channel_acc, fetch_acc, directory_acc} ->
           channel_id = channel["id"]
 
-          case slack_module().get_conversation_history(token.access_token, channel_id,
-                 limit: plan.slack_message_limit,
-                 oldest: oldest
+          case call_with_timeout(
+                 fn ->
+                   slack_module().get_conversation_history(token.access_token, channel_id,
+                     limit: plan.slack_message_limit,
+                     oldest: oldest
+                   )
+                 end,
+                 slack_channel_fetch_timeout_ms(plan)
                ) do
             {:ok, history} ->
               raw_messages =
@@ -611,12 +802,6 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           end
         end)
 
-      {mentions, mention_fetches} =
-        fetch_slack_mentions(user_id, team_id, workspace, plan, oldest)
-
-      {self_authored_messages, self_authored_fetches} =
-        fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest)
-
       channels =
         maybe_prepend_slack_search_channel(channels, self_authored_messages)
 
@@ -654,10 +839,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                slack_user_id: slack_user_id
              ),
            {:ok, response} <-
-             slack_module().search_messages(token.access_token, query,
-               count: plan.slack_message_limit,
-               sort: "timestamp",
-               sort_dir: "desc"
+             call_with_timeout(
+               fn ->
+                 slack_module().search_messages(token.access_token, query,
+                   count: plan.slack_message_limit,
+                   sort: "timestamp",
+                   sort_dir: "desc"
+                 )
+               end,
+               slack_search_timeout_ms(plan)
              ) do
         raw_matches =
           response
@@ -707,6 +897,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest) do
     user_ids = slack_user_ids_for_team(user_id, team_id)
     search_limit = slack_self_authored_search_limit(plan)
+    search_timeout_ms = slack_search_timeout_ms(plan)
+    queries = slack_self_authored_search_queries(plan)
 
     user_ids
     |> Enum.take(3)
@@ -723,6 +915,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               workspace,
               slack_user_id,
               search_limit,
+              search_timeout_ms,
+              queries,
               oldest
             )
 
@@ -754,14 +948,20 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          workspace,
          slack_user_id,
          search_limit,
+         search_timeout_ms,
+         queries,
          oldest
        ) do
-    Enum.reduce(@slack_self_authored_search_queries, {[], []}, fn query,
-                                                                  {message_acc, fetch_acc} ->
-      case slack_module().search_messages(access_token, query,
-             count: search_limit,
-             sort: "timestamp",
-             sort_dir: "desc"
+    Enum.reduce(queries, {[], []}, fn query, {message_acc, fetch_acc} ->
+      case call_with_timeout(
+             fn ->
+               slack_module().search_messages(access_token, query,
+                 count: search_limit,
+                 sort: "timestamp",
+                 sort_dir: "desc"
+               )
+             end,
+             search_timeout_ms
            ) do
         {:ok, response} ->
           raw_matches =
@@ -836,6 +1036,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp slack_self_authored_search_limit(_plan), do: @default_slack_message_limit
 
+  defp slack_self_authored_search_queries(plan) do
+    @slack_self_authored_search_queries
+    |> Enum.take(slack_self_authored_query_limit(plan))
+  end
+
   defp slack_search_match_for_user?(match, slack_user_id) when is_map(match) do
     normalize_string(match["user"]) == slack_user_id
   end
@@ -859,8 +1064,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     |> slack_thread_ids_from_messages()
     |> Enum.take(@slack_thread_fetch_limit)
     |> Enum.reduce({raw_messages, []}, fn thread_ts, {message_acc, fetch_acc} ->
-      case slack_module().get_thread_replies(access_token, channel_id, thread_ts,
-             limit: slack_thread_reply_limit(plan)
+      case call_with_timeout(
+             fn ->
+               slack_module().get_thread_replies(access_token, channel_id, thread_ts,
+                 limit: slack_thread_reply_limit(plan)
+               )
+             end,
+             slack_channel_fetch_timeout_ms(plan)
            ) do
         {:ok, response} ->
           replies =
@@ -1271,6 +1481,20 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           "gmail_body_fetch_timeout_ms",
           configured_gmail_body_fetch_timeout_ms()
         ),
+      gmail_fetch_timeout_ms:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "gmail_fetch_timeout_ms",
+          @default_gmail_fetch_timeout_ms
+        ),
+      calendar_fetch_timeout_ms:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "calendar_fetch_timeout_ms",
+          @default_calendar_fetch_timeout_ms
+        ),
       calendar_limit:
         if(morning_brief?,
           do: max(max_event_scan_limit * 10, @default_calendar_limit),
@@ -1278,6 +1502,34 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         ),
       calendar_time_min: calendar_time_min(skill_ids, skill_configs, context, morning_brief?),
       slack_channel_limit: max_slack_channel_limit,
+      slack_fetch_timeout_ms:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "slack_fetch_timeout_ms",
+          @default_slack_fetch_timeout_ms
+        ),
+      slack_channel_fetch_timeout_ms:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "slack_channel_fetch_timeout_ms",
+          @default_slack_channel_fetch_timeout_ms
+        ),
+      slack_search_timeout_ms:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "slack_search_timeout_ms",
+          @default_slack_search_timeout_ms
+        ),
+      slack_self_authored_query_limit:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "slack_self_authored_query_limit",
+          @default_slack_self_authored_query_limit
+        ),
       slack_message_limit:
         if(morning_brief?,
           do: max(max_slack_message_limit, @default_slack_message_limit),
@@ -1335,6 +1587,27 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           skill_configs,
           "local_browser_visit_limit",
           @default_local_browser_visit_limit
+        ),
+      companion_fetch_timeout_ms:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "companion_fetch_timeout_ms",
+          @default_companion_fetch_timeout_ms
+        ),
+      news_fetch_timeout_ms:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "news_fetch_timeout_ms",
+          @default_news_fetch_timeout_ms
+        ),
+      weather_fetch_timeout_ms:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "weather_fetch_timeout_ms",
+          @default_weather_fetch_timeout_ms
         ),
       lookback_hours: max(max_lookback_hours, 24),
       forward_days: @default_forward_days
@@ -1683,6 +1956,61 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp gmail_body_fetch_timeout_ms(_plan), do: configured_gmail_body_fetch_timeout_ms()
+
+  defp gmail_fetch_timeout_ms(plan),
+    do: plan_positive_integer(plan, :gmail_fetch_timeout_ms, @default_gmail_fetch_timeout_ms)
+
+  defp calendar_fetch_timeout_ms(plan),
+    do:
+      plan_positive_integer(plan, :calendar_fetch_timeout_ms, @default_calendar_fetch_timeout_ms)
+
+  defp slack_fetch_timeout_ms(plan),
+    do: plan_positive_integer(plan, :slack_fetch_timeout_ms, @default_slack_fetch_timeout_ms)
+
+  defp slack_channel_fetch_timeout_ms(plan),
+    do:
+      plan_positive_integer(
+        plan,
+        :slack_channel_fetch_timeout_ms,
+        @default_slack_channel_fetch_timeout_ms
+      )
+
+  defp slack_search_timeout_ms(plan),
+    do: plan_positive_integer(plan, :slack_search_timeout_ms, @default_slack_search_timeout_ms)
+
+  defp slack_self_authored_query_limit(plan),
+    do:
+      plan_positive_integer(
+        plan,
+        :slack_self_authored_query_limit,
+        @default_slack_self_authored_query_limit
+      )
+
+  defp companion_fetch_timeout_ms(plan),
+    do:
+      plan_positive_integer(
+        plan,
+        :companion_fetch_timeout_ms,
+        @default_companion_fetch_timeout_ms
+      )
+
+  defp news_fetch_timeout_ms(plan),
+    do: plan_positive_integer(plan, :news_fetch_timeout_ms, @default_news_fetch_timeout_ms)
+
+  defp weather_fetch_timeout_ms(plan),
+    do: plan_positive_integer(plan, :weather_fetch_timeout_ms, @default_weather_fetch_timeout_ms)
+
+  defp plan_positive_integer(plan, key, default) when is_map(plan) do
+    plan
+    |> Map.get(key, default)
+    |> parse_integer()
+    |> case do
+      value when is_integer(value) and value > 0 -> value
+      _other -> default
+    end
+  end
+
+  defp plan_positive_integer(_plan, _key, default), do: default
 
   defp configured_gmail_body_fetch_timeout_ms do
     :maraithon

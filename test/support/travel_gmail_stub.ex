@@ -6,6 +6,12 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
   end
 
   def fetch_messages(_user_id, _opts \\ []) do
+    if config(:fetch_messages_hang, false) do
+      receive do
+        :never -> :ok
+      end
+    end
+
     {:ok, config(:messages, [])}
   end
 

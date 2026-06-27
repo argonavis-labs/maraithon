@@ -558,6 +558,67 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert get_in(telemetry, ["sources", "calendar", "status"]) == "ready"
   end
 
+  test "keeps other source evidence when one provider times out" do
+    now = ~U[2026-04-02 13:00:00Z]
+
+    TravelGmailStub.configure(fetch_messages_hang: true)
+
+    TravelCalendarStub.configure(
+      events: [
+        %{
+          event_id: "evt-current",
+          summary: "Current customer webinar",
+          start: DateTime.add(now, 2, :hour),
+          end: DateTime.add(now, 3, :hour)
+        }
+      ]
+    )
+
+    source_scope = %{
+      "google_accounts" => [
+        %{
+          "provider" => "google:shared@example.com",
+          "account_email" => "shared@example.com",
+          "services" => ["gmail", "calendar"]
+        }
+      ]
+    }
+
+    skill_configs = %{
+      "followthrough" => %{
+        "source_scope" => source_scope,
+        "email_scan_limit" => 10,
+        "event_scan_limit" => 10,
+        "gmail_fetch_timeout_ms" => 5,
+        "calendar_fetch_timeout_ms" => 100,
+        "companion_fetch_timeout_ms" => 5,
+        "slack_fetch_timeout_ms" => 5
+      }
+    }
+
+    context = %{
+      agent_id: "chief-agent-source-timeout",
+      user_id: "chief@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry} =
+      Acquisition.build("chief@example.com", ["followthrough"], skill_configs, context)
+
+    [event] = SourceBundle.calendar_events(bundle)
+    assert event["summary"] == "Current customer webinar"
+    assert SourceBundle.gmail_messages(bundle) == []
+
+    assert get_in(SourceBundle.freshness(bundle), ["gmail", "status"]) == "unavailable"
+    assert get_in(SourceBundle.freshness(bundle), ["gmail", "reason"]) =~ "timed out"
+    assert get_in(telemetry, ["sources", "gmail", "status"]) == "timeout"
+    assert get_in(telemetry, ["sources", "calendar", "status"]) == "ready"
+  end
+
   test "marks Gmail bodies unavailable when body enrichment times out" do
     now = ~U[2026-04-02 13:00:00Z]
 
