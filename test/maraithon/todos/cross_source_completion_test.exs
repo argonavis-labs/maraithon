@@ -286,4 +286,35 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
                llm_complete: llm_complete
              )
   end
+
+  test "live source acquisition timeout is surfaced as source health evidence" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-25 12:00:00Z]
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Follow up after source acquisition timeout", source_at)
+      ])
+
+    source_bundle_fetcher = fn _user_id, _todos, _now, _opts ->
+      Process.sleep(:infinity)
+    end
+
+    llm_complete = fn prompt ->
+      assert prompt =~ "source_health"
+      assert prompt =~ "live source acquisition timed out"
+      assert prompt =~ "\\\"status\\\":\\\"unavailable\\\""
+
+      {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
+    end
+
+    assert %{checked: 1, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_timeout_ms: 5,
+               source_bundle_fetcher: source_bundle_fetcher,
+               llm_complete: llm_complete
+             )
+  end
 end

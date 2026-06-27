@@ -94,6 +94,8 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         :llm_complete,
         :live_sources,
         :source_bundle,
+        :source_bundle_fetcher,
+        :source_timeout_ms,
         :source_skill_config
       ])
       |> CrossSourceCompletion.run_for_all_users()

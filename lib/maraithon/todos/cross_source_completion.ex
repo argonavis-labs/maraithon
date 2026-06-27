@@ -37,6 +37,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   @max_excerpt 280
   @default_max_tokens 2_048
   @default_timeout_ms 60_000
+  @source_acquisition_timeout_ms 45_000
   @source_skill_id "commitment_tracker"
   @source_skill_config %{
     "email_scan_limit" => 200,
@@ -229,7 +230,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         reason: Exception.message(exception)
       )
 
-      []
+      live_source_unavailable_evidence(now, Exception.message(exception))
   catch
     kind, reason ->
       Logger.warning("Cross-source completion could not collect live source evidence",
@@ -237,10 +238,30 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         reason: "#{kind}: #{inspect(reason)}"
       )
 
-      []
+      live_source_unavailable_evidence(now, "#{kind}: #{inspect(reason)}")
   end
 
-  defp fetch_live_source_bundle(user_id, _todos, now, opts) do
+  defp fetch_live_source_bundle(user_id, todos, now, opts) do
+    timeout_ms =
+      positive_integer(Keyword.get(opts, :source_timeout_ms), @source_acquisition_timeout_ms)
+
+    fetcher = Keyword.get(opts, :source_bundle_fetcher) || (&build_live_source_bundle/4)
+
+    task = Task.async(fn -> fetcher.(user_id, todos, now, opts) end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, bundle} ->
+        bundle
+
+      {:exit, reason} ->
+        raise "live source acquisition failed: #{inspect(reason)}"
+
+      nil ->
+        raise "live source acquisition timed out after #{timeout_ms}ms"
+    end
+  end
+
+  defp build_live_source_bundle(user_id, _todos, now, opts) do
     skill_config =
       @source_skill_config
       |> Map.merge(Keyword.get(opts, :source_skill_config, %{}))
@@ -262,6 +283,24 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       )
 
     bundle
+  end
+
+  defp live_source_unavailable_evidence(now, reason) do
+    [
+      %{
+        "channel" => "source_health",
+        "kind" => "connected source coverage for this sweep",
+        "subject" => "all connected Chief-of-Staff sources",
+        "text" =>
+          Jason.encode!(%{
+            "live_sources" => %{
+              "status" => "unavailable",
+              "reason" => truncate(reason, @max_excerpt)
+            }
+          }),
+        "at" => DateTime.to_iso8601(now)
+      }
+    ]
   end
 
   defp source_bundle_evidence(bundle, now) when is_map(bundle) do
