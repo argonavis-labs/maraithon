@@ -2,12 +2,14 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
   use Maraithon.DataCase, async: false
 
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle}
+  alias Maraithon.OAuth
   alias Maraithon.TestSupport.{NewsStub, TravelCalendarStub, TravelGmailStub}
 
   setup do
     original_config = Application.get_env(:maraithon, Acquisition, [])
     original_gmail_stub = Application.get_env(:maraithon, TravelGmailStub, [])
     original_calendar_stub = Application.get_env(:maraithon, TravelCalendarStub, [])
+    original_slack_config = Application.get_env(:maraithon, :slack, [])
 
     Application.put_env(
       :maraithon,
@@ -23,9 +25,321 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       Application.put_env(:maraithon, Acquisition, original_config)
       Application.put_env(:maraithon, TravelGmailStub, original_gmail_stub)
       Application.put_env(:maraithon, TravelCalendarStub, original_calendar_stub)
+      Application.put_env(:maraithon, :slack, original_slack_config)
     end)
 
     :ok
+  end
+
+  test "expands Slack parent threads for thread broadcasts in the source bundle" do
+    now = ~U[2026-06-18 15:00:00Z]
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("chief-slack-thread@example.com", "slack:T123:user:UKENT", %{
+               access_token: "xoxp-user-token",
+               scopes: ["channels:read", "channels:history", "groups:history"]
+             })
+
+    Bypass.expect(bypass, "GET", "/api/conversations.list", fn conn ->
+      assert ["Bearer xoxp-user-token"] == Plug.Conn.get_req_header(conn, "authorization")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "channels" => [
+            %{"id" => "C111", "name" => "exec-hr", "is_private" => true, "is_member" => true}
+          ]
+        })
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/conversations.history", fn conn ->
+      assert ["Bearer xoxp-user-token"] == Plug.Conn.get_req_header(conn, "authorization")
+      assert conn.query_string =~ "channel=C111"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => [
+            %{
+              "ts" => "1781125242.926539",
+              "thread_ts" => "1780502644.660749",
+              "subtype" => "thread_broadcast",
+              "user" => "UJEFF",
+              "text" => "Do we have benefits? I'm about to get a bill for braces today."
+            }
+          ]
+        })
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/conversations.replies", fn conn ->
+      assert ["Bearer xoxp-user-token"] == Plug.Conn.get_req_header(conn, "authorization")
+      assert conn.query_string =~ "channel=C111"
+      assert conn.query_string =~ "ts=1780502644.660749"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => [
+            %{
+              "ts" => "1780502644.660749",
+              "thread_ts" => "1780502644.660749",
+              "user" => "ULAURA",
+              "text" => "Taking a look."
+            },
+            %{
+              "ts" => "1781125242.926539",
+              "thread_ts" => "1780502644.660749",
+              "subtype" => "thread_broadcast",
+              "user" => "UJEFF",
+              "text" => "Do we have benefits? I'm about to get a bill for braces today."
+            },
+            %{
+              "ts" => "1781551858.300399",
+              "thread_ts" => "1780502644.660749",
+              "user" => "ULAURA",
+              "text" => "Canada is unaffected; this is only impacting the US."
+            },
+            %{
+              "ts" => "1781722316.603969",
+              "thread_ts" => "1780502644.660749",
+              "user" => "UKENT",
+              "text" => "Looks resolved, thank you."
+            }
+          ]
+        })
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/search.messages", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"ok" => true, "messages" => %{"total" => 0, "matches" => []}})
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/users.info", fn conn ->
+      user =
+        conn.query_string
+        |> Plug.Conn.Query.decode()
+        |> Map.get("user")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "user" => %{"id" => user, "profile" => %{"display_name" => user}}
+        })
+      )
+    end)
+
+    source_scope = %{
+      "slack_workspaces" => [
+        %{"team_id" => "T123", "team_name" => "Agora", "services" => ["channels"]}
+      ]
+    }
+
+    skill_configs = %{
+      "followthrough" => %{
+        "source_scope" => source_scope,
+        "lookback_hours" => 24,
+        "slack_message_scan_limit" => 10
+      }
+    }
+
+    context = %{
+      agent_id: "chief-agent-slack-thread",
+      user_id: "chief-slack-thread@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry} =
+      Acquisition.build(
+        "chief-slack-thread@example.com",
+        ["followthrough"],
+        skill_configs,
+        context
+      )
+
+    messages = SourceBundle.slack_messages(bundle)
+    texts = Enum.map(messages, & &1["text"])
+
+    assert "Canada is unaffected; this is only impacting the US." in texts
+    assert "Looks resolved, thank you." in texts
+    assert Enum.any?(messages, &(&1["ts"] == "1781125242.926539"))
+    assert Enum.any?(messages, &(&1["thread_ts"] == "1780502644.660749"))
+
+    slack_fetches = Enum.filter(telemetry["fetches"], &(&1["source"] == "slack"))
+    assert Enum.any?(slack_fetches, &(&1["mode"] == "thread_replies" and &1["count"] == 4))
+    assert get_in(telemetry, ["sources", "slack", "message_count"]) == 4
+  end
+
+  test "adds self-authored Slack search matches when private channel history is not enumerable" do
+    now = ~U[2026-06-18 21:24:00Z]
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("chief-slack-search@example.com", "slack:T123:user:UKENT", %{
+               access_token: "xoxp-user-token",
+               scopes: [
+                 "channels:read",
+                 "channels:history",
+                 "groups:read",
+                 "groups:history",
+                 "search:read"
+               ]
+             })
+
+    Bypass.expect(bypass, "GET", "/api/conversations.list", fn conn ->
+      assert ["Bearer xoxp-user-token"] == Plug.Conn.get_req_header(conn, "authorization")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "channels" => [
+            %{"id" => "C111", "name" => "runner-general", "is_private" => false}
+          ]
+        })
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/conversations.history", fn conn ->
+      assert ["Bearer xoxp-user-token"] == Plug.Conn.get_req_header(conn, "authorization")
+      assert conn.query_string =~ "channel=C111"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "messages" => []}))
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/search.messages", fn conn ->
+      assert ["Bearer xoxp-user-token"] == Plug.Conn.get_req_header(conn, "authorization")
+
+      query =
+        conn.query_string
+        |> Plug.Conn.Query.decode()
+        |> Map.get("query")
+
+      matches =
+        if query == "\"I am going to\"" do
+          [
+            %{
+              "ts" => "1781817087.758159",
+              "thread_ts" => "1781817044.000000",
+              "user" => "UKENT",
+              "text" => "I am going to message Sheila tomorrow",
+              "channel" => %{"id" => "CPRIVATE", "name" => "runner-gtm"},
+              "permalink" => "https://example.slack.com/archives/CPRIVATE/p1781817087758159"
+            }
+          ]
+        else
+          []
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => %{"total" => length(matches), "matches" => matches}
+        })
+      )
+    end)
+
+    Bypass.expect(bypass, "GET", "/api/users.info", fn conn ->
+      user =
+        conn.query_string
+        |> Plug.Conn.Query.decode()
+        |> Map.get("user")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "user" => %{"id" => user, "profile" => %{"display_name" => "Kent"}}
+        })
+      )
+    end)
+
+    source_scope = %{
+      "slack_workspaces" => [
+        %{"team_id" => "T123", "team_name" => "Agora", "services" => ["channels", "dms"]}
+      ]
+    }
+
+    skill_configs = %{
+      "commitment_tracker" => %{
+        "source_scope" => source_scope,
+        "lookback_hours" => 336,
+        "slack_message_scan_limit" => 100
+      }
+    }
+
+    context = %{
+      agent_id: "chief-agent-slack-search",
+      user_id: "chief-slack-search@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry} =
+      Acquisition.build(
+        "chief-slack-search@example.com",
+        ["commitment_tracker"],
+        skill_configs,
+        context
+      )
+
+    messages = SourceBundle.slack_messages(bundle)
+
+    assert %{
+             "channel_name" => "runner-gtm",
+             "search_mode" => "self_authored",
+             "text" => "I am going to message Sheila tomorrow",
+             "user" => "UKENT"
+           } = Enum.find(messages, &(&1["text"] == "I am going to message Sheila tomorrow"))
+
+    slack_fetches = Enum.filter(telemetry["fetches"], &(&1["source"] == "slack"))
+
+    assert Enum.any?(
+             slack_fetches,
+             &(&1["mode"] == "self_authored_search" and &1["query"] == "\"I am going to\"" and
+                 &1["count"] == 1)
+           )
+
+    assert get_in(telemetry, ["sources", "slack", "message_count"]) == 1
   end
 
   test "builds one shared gmail and calendar bundle for overlapping skills" do

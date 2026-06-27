@@ -1062,7 +1062,13 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
     body = email_search_text(email, [subject, snippet, from, to, Enum.join(labels, " ")])
 
-    builtin = builtin_fyi_profile(body)
+    builtin =
+      if suppress_builtin_fyi_email?(email, body, from) do
+        empty_fyi_profile()
+      else
+        builtin_fyi_profile(body)
+      end
+
     watch_matches = matching_watch_rules(body, from, builtin.topics, watch_rules)
 
     if builtin.type == nil and watch_matches == [] do
@@ -1137,6 +1143,48 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   defp important_fyi_email_candidates(_email, _state, _watch_rules), do: []
 
+  defp suppress_builtin_fyi_email?(email, body, from)
+       when is_map(email) and is_binary(body) and is_binary(from) do
+    digest_text =
+      ([body] ++ email_content_parts(email))
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+
+    self_generated_digest_sender?(from) and digest_summary_body?(digest_text)
+  end
+
+  defp suppress_builtin_fyi_email?(_email, _body, _from), do: false
+
+  defp self_generated_digest_sender?(from) when is_binary(from) do
+    normalized = String.downcase(from)
+
+    (String.contains?(normalized, "notaui.com") and
+       (String.contains?(normalized, "no-reply") or String.contains?(normalized, "no_reply"))) or
+      (String.contains?(normalized, "maraithon.com") and
+         (String.contains?(normalized, "no-reply") or String.contains?(normalized, "no_reply")))
+  end
+
+  defp self_generated_digest_sender?(_from), do: false
+
+  defp digest_summary_body?(body) when is_binary(body) do
+    normalized = String.downcase(body)
+
+    String.contains?(normalized, "next actions") and
+      Enum.any?(
+        [
+          "needs your attention",
+          "today's schedule",
+          "today’s schedule",
+          "todays schedule",
+          "open commitments",
+          "manual decisions"
+        ],
+        &String.contains?(normalized, &1)
+      )
+  end
+
+  defp digest_summary_body?(_body), do: false
+
   defp builtin_fyi_profile(body) when is_binary(body) do
     account_risk_matches = matched_terms(body, @account_risk_terms)
     app_store_matches = matched_terms(body, @app_store_connect_terms)
@@ -1183,7 +1231,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     end
   end
 
-  defp builtin_fyi_profile(_body) do
+  defp builtin_fyi_profile(_body), do: empty_fyi_profile()
+
+  defp empty_fyi_profile do
     %{
       type: nil,
       topics: [],

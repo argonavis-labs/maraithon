@@ -519,7 +519,7 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
         ),
       "email_scan_limit" => 200,
       "event_scan_limit" => 120,
-      "slack_message_scan_limit" => 500,
+      "slack_message_scan_limit" => 180,
       "local_message_scan_limit" => 500,
       "local_chat_scan_limit" => 200,
       "local_voice_memo_scan_limit" => 200,

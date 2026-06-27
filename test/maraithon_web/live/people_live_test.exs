@@ -1,14 +1,17 @@
 defmodule MaraithonWeb.PeopleLiveTest do
   use MaraithonWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
   alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.Crm
   alias Maraithon.Crm.PersonMerge
+  alias Maraithon.Goals
   alias Maraithon.Memory
   alias Maraithon.Repo
+  alias Maraithon.Todos
 
   @user_email "people-live@example.com"
 
@@ -64,6 +67,93 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Family context will appear after you add a family member or proxy."
     refute html =~ "No people found yet."
     refute html =~ "No family context yet."
+  end
+
+  test "renders source-backed reconnect and duplicate review rows", %{conn: conn} do
+    {:ok, chatty} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Chatty Contact",
+        "email" => "chatty@example.com"
+      })
+
+    Repo.update_all(
+      from(person in Maraithon.Crm.Person, where: person.id == ^chatty.id),
+      set: [communication_score: 95]
+    )
+
+    {:ok, jane} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Jane Thuet",
+        "email" => "jane@example.com"
+      })
+
+    {:ok, [todo]} =
+      Todos.upsert_many(@user_email, [
+        %{
+          "source" => "gmail",
+          "title" => "Reply to Jane about Team plan pricing",
+          "summary" => "Jane is waiting on pricing.",
+          "next_action" => "Send Jane the Team plan pricing.",
+          "dedupe_key" => "people-live:jane-team-plan"
+        }
+      ])
+
+    {:ok, _link} =
+      Crm.attach_resource(@user_email, jane.id, %{
+        "resource_type" => "todo",
+        "resource_id" => todo.id,
+        "role" => "owed_to",
+        "title" => todo.title
+      })
+
+    {:ok, avery} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Avery Chen",
+        "relationship" => "Angel investor"
+      })
+
+    {:ok, goal} =
+      Goals.create_goal(@user_email, %{
+        "category" => "work",
+        "title" => "Close the seed round",
+        "desired_outcome" => "Investor follow-through is focused on the seed round.",
+        "priority" => 80
+      })
+
+    {:ok, _goal_link} =
+      Goals.link_resource(@user_email, goal.id, %{
+        "resource_type" => "person",
+        "resource_id" => avery.id,
+        "relationship" => "supports",
+        "source" => "agent",
+        "confidence" => 0.9
+      })
+
+    {:ok, _first_duplicate} =
+      Crm.create_person(@user_email, %{
+        "display_name" => "Jeff McLarty",
+        "email" => "jeff@voteagora.com"
+      })
+
+    {:ok, _second_duplicate} =
+      Crm.create_person(@user_email, %{
+        "display_name" => "Jeff McLarty",
+        "slack_id" => "Jeff McLarty"
+      })
+
+    {:ok, view, _html} = live(conn, "/operator/people")
+
+    assert has_element?(view, "#people-goal-opportunities", "Goal opportunities")
+    assert has_element?(view, "#people-goal-opportunities", "Avery Chen")
+    assert has_element?(view, "#people-goal-opportunities", "Close the seed round")
+
+    assert has_element?(view, "#people-reconnect-suggestions", "Relationship opportunities")
+    assert has_element?(view, "#people-reconnect-suggestions", "Jane Thuet")
+    assert has_element?(view, "#people-reconnect-suggestions", "Reply to Jane")
+    refute has_element?(view, "#people-reconnect-suggestions", "Chatty Contact")
+
+    assert has_element?(view, "#people-duplicate-suggestions", "Duplicate review")
+    assert has_element?(view, "#people-duplicate-suggestions", "Possible duplicate: Jeff McLarty")
   end
 
   test "renders relationship activity in the Chief of Staff timezone", %{conn: conn} do
@@ -351,14 +441,14 @@ defmodule MaraithonWeb.PeopleLiveTest do
 
   test "bulk merges duplicate people from the visible list", %{conn: conn} do
     {:ok, canonical} =
-      Crm.upsert_person(@user_email, %{
+      Crm.create_person(@user_email, %{
         "display_name" => "Christina Giannone",
         "email" => "christina.giannone@gmail.com",
         "relationship" => "Personal contact"
       })
 
     {:ok, duplicate} =
-      Crm.upsert_person(@user_email, %{
+      Crm.create_person(@user_email, %{
         "display_name" => "Christina Giannone",
         "email" => "cgiannone@framgroup.com",
         "communication_frequency" => "frequent"

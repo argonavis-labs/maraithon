@@ -17,6 +17,7 @@ defmodule Maraithon.Todos.SignalGate do
   @open_completion_statuses ~w(needs_action open pending still_open unresolved waiting_on_user)
   @completion_checked_skill_ids ~w(commitment_tracker followthrough)
   @weak_local_detectors ~w(cold_thread calendar_conflict)
+  @local_message_sources ~w(imessage messages local_messages)
   @drop_importance ~w(drop digest)
   @admission_directions ~w(i_owe asked_of_me pending_reply user_owes waiting_on_user waiting_on_me)
   @admission_obligations ~w(
@@ -109,6 +110,34 @@ defmodule Maraithon.Todos.SignalGate do
     "you need to",
     "you owe"
   ]
+  @local_source_action_phrases [
+    "are you able to",
+    "asked if you can",
+    "asked whether you can",
+    "asked you",
+    "can you",
+    "could you",
+    "for you to",
+    "if you can",
+    "i can",
+    "i will",
+    "i'll",
+    "i’ll",
+    "need you to",
+    "needs you to",
+    "please",
+    "waiting for you",
+    "waiting on you",
+    "will you",
+    "would you",
+    "you need to",
+    "you promised",
+    "you said you would"
+  ]
+  @local_source_action_terms ~w(
+    approve book deadline decide due pay register reply reschedule return rsvp schedule send sign
+    submit unblock
+  )
 
   def partition_candidates(candidates) when is_list(candidates) do
     Enum.reduce(candidates, {[], []}, fn candidate, {allowed, skipped} ->
@@ -153,6 +182,10 @@ defmodule Maraithon.Todos.SignalGate do
       requires_completion_check?(attrs) and not completion_verified_open?(attrs) ->
         {:skip,
          "Skipped by executive signal gate: no explicit source reconciliation proves this loop is still open."}
+
+      weak_local_message_chatter?(attrs) ->
+        {:skip,
+         "Skipped by executive signal gate: local-message source evidence does not contain an explicit operator ask, promise, deadline, or concrete logistics action."}
 
       weak_local_pattern?(attrs) ->
         {:skip,
@@ -253,6 +286,20 @@ defmodule Maraithon.Todos.SignalGate do
     read_string(attrs, "source", nil) == "local_patterns" and
       read_string(read_map(attrs, "metadata"), "detector", nil) in @weak_local_detectors and
       not promoted_by_explicit_evidence?(attrs)
+  end
+
+  defp weak_local_message_chatter?(attrs) do
+    read_string(attrs, "source", nil) in @local_message_sources and
+      present?(source_evidence_text(attrs)) and
+      not strong_local_source_action_evidence?(attrs)
+  end
+
+  defp strong_local_source_action_evidence?(attrs) do
+    metadata = read_map(attrs, "metadata")
+
+    truthy?(read_value(metadata, "force_todo")) or
+      read_string(metadata, "work_item_admission", nil) == "explicit_source_obligation" or
+      local_source_text_has_action?(source_evidence_text(attrs))
   end
 
   defp promoted_by_explicit_evidence?(attrs) do
@@ -399,6 +446,34 @@ defmodule Maraithon.Todos.SignalGate do
     |> Enum.map(&to_string/1)
     |> Enum.join(" ")
     |> String.downcase()
+  end
+
+  defp source_evidence_text(attrs) do
+    metadata = read_map(attrs, "metadata")
+    record = read_map(metadata, "record")
+
+    [
+      read_value(metadata, "quote"),
+      read_value(metadata, "source_quote"),
+      read_value(metadata, "source_excerpt"),
+      read_value(metadata, "body_excerpt"),
+      read_value(metadata, "source_evidence"),
+      read_value(metadata, "checked_evidence"),
+      read_value(metadata, "evidence"),
+      read_value(metadata, "matching_message_excerpt"),
+      read_value(record, "commitment"),
+      read_value(record, "evidence"),
+      read_value(record, "source")
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.map(&to_string/1)
+    |> Enum.join(" ")
+    |> String.downcase()
+  end
+
+  defp local_source_text_has_action?(text) when is_binary(text) do
+    Enum.any?(@local_source_action_phrases, &String.contains?(text, &1)) or
+      Enum.any?(@local_source_action_terms, &gate_term_present?(text, &1))
   end
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do

@@ -201,6 +201,83 @@ defmodule Maraithon.Todos.IntelligenceTest do
     refute persisted.dedupe_key =~ "fresh-key"
   end
 
+  test "ingest_many rejects weak local family chatter even when model tries to promote it" do
+    user_id = unique_user_email("todo-intelligence-local-chatter")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "imessage",
+        "title" => "Follow up on Emma's painting",
+        "summary" => "A family iMessage says, \"Also don't forget your painting.\"",
+        "next_action" => "Reply to Christina confirming whether you have the painting.",
+        "source_item_id" => "imessage-painting-1",
+        "dedupe_key" => "commitment:imessage:painting:weak",
+        "metadata" => %{
+          "origin_skill_id" => "commitment_tracker",
+          "quote" => "Also don't forget your painting",
+          "source_ref" => "imessage imessage-painting-1",
+          "source_tags" => ["family", "imessage"],
+          "life_domain" => "family",
+          "relationship_context" => "Family group chat context.",
+          "why_it_matters" =>
+            "Potential family logistics, but the source does not ask Kent to act.",
+          "completion_check" => %{
+            "status" => "open",
+            "reasoning" => "The source phrase is still present.",
+            "latest_source_checked_at" => "2026-06-18T17:00:00Z",
+            "later_evidence" => []
+          }
+        }
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created one local family follow-up.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "dedupe_key" => "commitment:imessage:painting:weak",
+                 "reasoning" => "The model misread a vague reminder as a direct ask.",
+                 "todo" => %{
+                   "source" => "imessage",
+                   "title" => "Follow up on Emma's painting",
+                   "summary" => "Christina reminded you about Emma's painting.",
+                   "next_action" =>
+                     "Reply to Christina confirming whether you have the painting.",
+                   "source_item_id" => "imessage-painting-1",
+                   "dedupe_key" => "commitment:imessage:painting:weak",
+                   "metadata" => %{
+                     "direct_ask" => true,
+                     "quote" => "Also don't forget your painting",
+                     "source_evidence" => "Also don't forget your painting",
+                     "why_it_matters" => "Potential family logistics."
+                   }
+                 }
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test"
+             )
+
+    assert result.todos == []
+    assert result.skipped_count == 1
+    assert [%{action: "skip", candidate_index: 0, reasoning: reasoning}] = result.skipped
+    assert reasoning =~ "local-message source evidence"
+    assert [] = Todos.list_for_user(user_id, limit: 10)
+  end
+
   test "ingest_many preserves source context metadata before quality scoring" do
     user_id = unique_user_email("todo-intelligence-source-context")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -290,6 +367,9 @@ defmodule Maraithon.Todos.IntelligenceTest do
       assert prompt =~ "informational or educational content"
       assert prompt =~ "podcasts, videos, market commentary, and learning material"
       assert prompt =~ "direct ask, operator promise, deadline/deliverable"
+      assert prompt =~ "kid/screen-time"
+      assert prompt =~ "notifications"
+      assert prompt =~ "don't forget your painting"
 
       refute prompt =~ "Maraithon's built-in todo intelligence layer"
       refute prompt =~ "Include CRM enrichment whenever source evidence identifies people"
@@ -569,6 +649,87 @@ defmodule Maraithon.Todos.IntelligenceTest do
 
     assert [%{title: "Plan Sunday one-on-one time with Jack Fenwick"}] =
              Todos.list_for_user(user_id, limit: 10)
+  end
+
+  test "ingest_many preserves commitment tracker snooze timing through model rewrite" do
+    user_id = unique_user_email("todo-intelligence-snoozed-commitment")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    snoozed_until_dt = ~U[2099-06-19 20:00:00Z]
+    snoozed_until = DateTime.to_iso8601(snoozed_until_dt)
+
+    candidates = [
+      %{
+        "source" => "slack",
+        "title" => "Message Sheila tomorrow",
+        "summary" => "You said you would message Sheila tomorrow.",
+        "next_action" => "Message Sheila tomorrow, then mark this done.",
+        "due_at" => snoozed_until,
+        "status" => "snoozed",
+        "snoozed_until" => snoozed_until,
+        "source_item_id" => "C-gtm:4085500260.000100",
+        "source_occurred_at" => "2099-06-18T21:11:00Z",
+        "dedupe_key" => "commitment:slack:C-gtm:4085500260.000100:message-sheila",
+        "metadata" => %{
+          "origin_skill_id" => "commitment_tracker",
+          "completion_check" => %{
+            "status" => "open",
+            "reasoning" => "No later Slack evidence shows the message was sent."
+          },
+          "explicit_user_commitment" => true,
+          "commitment_direction" => "i_owe",
+          "quote" => "I am going to message Sheila tomorrow",
+          "source_ref" => "slack C-gtm:4085500260.000100",
+          "why_it_matters" => "GTM coordination."
+        }
+      }
+    ]
+
+    llm_complete = fn prompt ->
+      assert prompt =~ "Do not use exact-string matching"
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created one Slack commitment.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "dedupe_key" => "commitment:slack:C-gtm:4085500260.000100:message-sheila",
+                 "reasoning" => "Source-backed commitment to message Sheila tomorrow.",
+                 "todo" => %{
+                   "source" => "slack",
+                   "title" => "Message Sheila tomorrow",
+                   "summary" => "You said you would message Sheila tomorrow.",
+                   "next_action" => "Message Sheila tomorrow, then mark this done.",
+                   "status" => "open",
+                   "dedupe_key" => "commitment:slack:C-gtm:4085500260.000100:message-sheila",
+                   "metadata" => %{
+                     "completion_check" => %{"status" => "open"}
+                   }
+                 }
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test"
+             )
+
+    assert [%{title: "Message Sheila tomorrow"} = todo] = result.todos
+    assert todo.status == "snoozed"
+    assert DateTime.compare(todo.snoozed_until, snoozed_until_dt) == :eq
+    assert DateTime.compare(todo.due_at, snoozed_until_dt) == :eq
+    assert todo.metadata["explicit_user_commitment"] == true
+    assert todo.metadata["commitment_direction"] == "i_owe"
+    assert todo.metadata["quote"] == "I am going to message Sheila tomorrow"
+    assert get_in(todo.metadata, ["completion_check", "status"]) == "open"
   end
 
   defp unique_user_email(prefix) do

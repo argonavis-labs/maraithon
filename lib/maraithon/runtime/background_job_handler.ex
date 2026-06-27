@@ -94,6 +94,8 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
         # ranking after each learned window.
         with {:ok, user_id} <- require_user_id(job) do
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_communication_score_refresh(user_id)
+          _ = Maraithon.Runtime.BackgroundJobs.enqueue_person_dedupe(user_id)
+          _ = Maraithon.Runtime.BackgroundJobs.enqueue_goal_people_discovery(user_id)
         end
 
         result
@@ -109,6 +111,26 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
         {:ok, summary} -> {:ok, Map.put(summary, :source, "communication_score_refresh")}
         {:error, reason} -> {:error, reason}
       end
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "goal_people_discovery"} = job) do
+    with {:ok, user_id} <- require_user_id(job) do
+      Maraithon.Crm.GoalPeopleDiscovery.run(user_id,
+        people_limit: payload_integer(job, "people_limit", 500),
+        goal_limit: payload_integer(job, "goal_limit", 20),
+        links_per_goal: payload_integer(job, "links_per_goal", 12)
+      )
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "person_dedupe"} = job) do
+    with {:ok, user_id} <- require_user_id(job) do
+      Maraithon.Crm.PersonDeduper.run(user_id,
+        people_limit: payload_integer(job, "people_limit", 5_000),
+        group_limit: payload_integer(job, "group_limit", 100),
+        max_merges: payload_integer(job, "max_merges", 50)
+      )
     end
   end
 

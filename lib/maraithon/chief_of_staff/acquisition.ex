@@ -24,7 +24,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_calendar_limit 250
   @default_slack_channel_limit 12
   @default_slack_message_limit 100
+  @slack_thread_fetch_limit 6
+  @slack_thread_reply_limit 40
+  @slack_user_directory_limit 80
+  @slack_user_directory_timeout_ms 1_500
   @slack_conversations_page_limit 1_000
+  @slack_self_authored_search_result_limit 50
+  @slack_self_authored_search_queries [
+    "\"I am going to\"",
+    "\"I'm going to\"",
+    "\"I will\"",
+    "\"I'll\"",
+    "\"I need to\"",
+    "\"I have to\"",
+    "\"follow up\""
+  ]
   @default_lookback_hours 24 * 14
   @default_timezone_offset_hours -5
   @commercial_gmail_lookback_days 7
@@ -537,6 +551,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 |> Map.get("messages", [])
                 |> normalize_list()
 
+              {raw_messages, thread_fetches} =
+                expand_slack_threads(token.access_token, channel_id, raw_messages, plan)
+
               user_directory =
                 slack_user_directory(token.access_token, raw_messages, channel, directory_acc)
 
@@ -562,9 +579,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     "conversation_kind" => slack_conversation_kind(channel),
                     "mode" => "connector",
                     "status" => "ok",
-                    "count" => length(messages)
+                    "count" => length(messages),
+                    "thread_fetch_count" => count_ok_slack_thread_fetches(thread_fetches),
+                    "thread_reply_count" => count_slack_thread_replies(thread_fetches)
                   }
-                  | fetch_acc
+                  | thread_fetches ++ fetch_acc
                 ],
                 user_directory
               }
@@ -592,6 +611,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       {mentions, mention_fetches} =
         fetch_slack_mentions(user_id, team_id, workspace, plan, oldest)
 
+      {self_authored_messages, self_authored_fetches} =
+        fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest)
+
+      channels =
+        maybe_prepend_slack_search_channel(channels, self_authored_messages)
+
       workspace_payload = %{
         "team_id" => team_id,
         "team_name" => Map.get(workspace, "team_name"),
@@ -605,7 +630,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         }
       }
 
-      {:ok, workspace_payload, mention_fetches ++ fetches}
+      {:ok, workspace_payload, self_authored_fetches ++ mention_fetches ++ fetches}
     else
       {:error, reason} -> {:error, reason, []}
     end
@@ -675,6 +700,296 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       end
     end)
   end
+
+  defp fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest) do
+    user_ids = slack_user_ids_for_team(user_id, team_id)
+    search_limit = slack_self_authored_search_limit(plan)
+
+    user_ids
+    |> Enum.take(3)
+    |> Enum.reduce({[], []}, fn slack_user_id, {message_acc, fetch_acc} ->
+      case SlackHelpers.resolve_access_token(user_id, team_id,
+             token_preference: "user",
+             slack_user_id: slack_user_id
+           ) do
+        {:ok, token} ->
+          {matches, query_fetches} =
+            fetch_slack_self_authored_queries(
+              token.access_token,
+              team_id,
+              workspace,
+              slack_user_id,
+              search_limit,
+              oldest
+            )
+
+          {dedupe_slack_messages(message_acc ++ matches), query_fetches ++ fetch_acc}
+
+        {:error, :no_user_token} ->
+          {message_acc, fetch_acc}
+
+        {:error, reason} ->
+          {message_acc,
+           [
+             %{
+               "source" => "slack",
+               "team_id" => team_id,
+               "mode" => "self_authored_search",
+               "status" => "error",
+               "slack_user_id" => slack_user_id,
+               "reason" => inspect(reason)
+             }
+             | fetch_acc
+           ]}
+      end
+    end)
+  end
+
+  defp fetch_slack_self_authored_queries(
+         access_token,
+         team_id,
+         workspace,
+         slack_user_id,
+         search_limit,
+         oldest
+       ) do
+    Enum.reduce(@slack_self_authored_search_queries, {[], []}, fn query,
+                                                                  {message_acc, fetch_acc} ->
+      case slack_module().search_messages(access_token, query,
+             count: search_limit,
+             sort: "timestamp",
+             sort_dir: "desc"
+           ) do
+        {:ok, response} ->
+          raw_matches =
+            response
+            |> get_in(["messages", "matches"])
+            |> normalize_list()
+            |> Enum.filter(&slack_search_match_for_user?(&1, slack_user_id))
+            |> Enum.filter(&slack_search_match_recent?(&1, oldest))
+
+          user_directory = slack_user_directory(access_token, raw_matches, nil)
+
+          matches =
+            raw_matches
+            |> Enum.map(fn match ->
+              match
+              |> serialize_slack_match(team_id, workspace, user_directory)
+              |> Map.put("search_mode", "self_authored")
+              |> Map.put("search_query", query)
+            end)
+
+          fetch = %{
+            "source" => "slack",
+            "team_id" => team_id,
+            "mode" => "self_authored_search",
+            "status" => "ok",
+            "slack_user_id" => slack_user_id,
+            "query" => query,
+            "count" => length(matches)
+          }
+
+          {dedupe_slack_messages(message_acc ++ matches), [fetch | fetch_acc]}
+
+        {:error, reason} ->
+          fetch = %{
+            "source" => "slack",
+            "team_id" => team_id,
+            "mode" => "self_authored_search",
+            "status" => "error",
+            "slack_user_id" => slack_user_id,
+            "query" => query,
+            "reason" => inspect(reason)
+          }
+
+          {message_acc, [fetch | fetch_acc]}
+      end
+    end)
+  end
+
+  defp maybe_prepend_slack_search_channel(channels, []), do: channels
+
+  defp maybe_prepend_slack_search_channel(channels, messages) when is_list(channels) do
+    [
+      %{
+        "id" => "slack_search:self_authored",
+        "name" => "self-authored Slack search",
+        "conversation_kind" => "search",
+        "messages" => dedupe_slack_messages(messages)
+      }
+      | channels
+    ]
+  end
+
+  defp slack_self_authored_search_limit(plan) when is_map(plan) do
+    limit =
+      plan
+      |> Map.get(:slack_message_limit, @default_slack_message_limit)
+      |> parse_integer()
+
+    (limit || @default_slack_message_limit)
+    |> min(@slack_self_authored_search_result_limit)
+  end
+
+  defp slack_self_authored_search_limit(_plan), do: @default_slack_message_limit
+
+  defp slack_search_match_for_user?(match, slack_user_id) when is_map(match) do
+    normalize_string(match["user"]) == slack_user_id
+  end
+
+  defp slack_search_match_for_user?(_match, _slack_user_id), do: false
+
+  defp slack_search_match_recent?(match, oldest) when is_map(match) and is_binary(oldest) do
+    with {oldest_seconds, _} <- Float.parse(oldest),
+         ts when ts > 0 <- slack_ts_sort_value(match) do
+      ts >= oldest_seconds
+    else
+      _ -> true
+    end
+  end
+
+  defp slack_search_match_recent?(_match, _oldest), do: true
+
+  defp expand_slack_threads(access_token, channel_id, raw_messages, plan)
+       when is_binary(access_token) and is_binary(channel_id) and is_list(raw_messages) do
+    raw_messages
+    |> slack_thread_ids_from_messages()
+    |> Enum.take(@slack_thread_fetch_limit)
+    |> Enum.reduce({raw_messages, []}, fn thread_ts, {message_acc, fetch_acc} ->
+      case slack_module().get_thread_replies(access_token, channel_id, thread_ts,
+             limit: slack_thread_reply_limit(plan)
+           ) do
+        {:ok, response} ->
+          replies =
+            response
+            |> Map.get("messages", [])
+            |> normalize_list()
+
+          fetch = %{
+            "source" => "slack",
+            "channel_id" => channel_id,
+            "thread_ts" => thread_ts,
+            "mode" => "thread_replies",
+            "status" => "ok",
+            "count" => length(replies),
+            "has_more" => response["has_more"] || false
+          }
+
+          {merge_slack_messages(message_acc, replies), [fetch | fetch_acc]}
+
+        {:error, reason} ->
+          fetch = %{
+            "source" => "slack",
+            "channel_id" => channel_id,
+            "thread_ts" => thread_ts,
+            "mode" => "thread_replies",
+            "status" => "error",
+            "reason" => inspect(reason)
+          }
+
+          {message_acc, [fetch | fetch_acc]}
+      end
+    end)
+  end
+
+  defp expand_slack_threads(_access_token, _channel_id, raw_messages, _plan),
+    do: {raw_messages, []}
+
+  defp slack_thread_ids_from_messages(messages) when is_list(messages) do
+    messages
+    |> Enum.flat_map(&slack_thread_ids_from_message/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp slack_thread_ids_from_messages(_messages), do: []
+
+  defp slack_thread_ids_from_message(message) when is_map(message) do
+    ts = normalize_string(message["ts"])
+    thread_ts = normalize_string(message["thread_ts"])
+
+    cond do
+      thread_ts ->
+        [thread_ts]
+
+      slack_threaded_root?(message) and ts ->
+        [ts]
+
+      true ->
+        []
+    end
+  end
+
+  defp slack_thread_ids_from_message(_message), do: []
+
+  defp slack_threaded_root?(message) when is_map(message) do
+    positive_integer?(message["reply_count"]) or present_string?(message["latest_reply"])
+  end
+
+  defp slack_threaded_root?(_message), do: false
+
+  defp positive_integer?(value) when is_integer(value), do: value > 0
+
+  defp positive_integer?(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {int, ""} -> int > 0
+      _ -> false
+    end
+  end
+
+  defp positive_integer?(_value), do: false
+
+  defp slack_thread_reply_limit(plan) when is_map(plan) do
+    plan
+    |> Map.get(:slack_message_limit, @default_slack_message_limit)
+    |> max(1)
+    |> min(@slack_thread_reply_limit)
+  end
+
+  defp slack_thread_reply_limit(_plan), do: @default_slack_message_limit
+
+  defp merge_slack_messages(messages, replies) do
+    (normalize_list(messages) ++ normalize_list(replies))
+    |> Enum.uniq_by(&normalize_string(&1["ts"]))
+    |> Enum.sort_by(&slack_ts_sort_value/1, :desc)
+  end
+
+  defp dedupe_slack_messages(messages) when is_list(messages) do
+    messages
+    |> normalize_list()
+    |> Enum.uniq_by(fn message ->
+      {
+        normalize_string(message["team_id"]),
+        normalize_string(message["channel_id"]),
+        normalize_string(message["ts"])
+      }
+    end)
+    |> Enum.sort_by(&slack_ts_sort_value/1, :desc)
+  end
+
+  defp slack_ts_sort_value(message) when is_map(message) do
+    case Float.parse(to_string(message["ts"] || "")) do
+      {value, _rest} -> value
+      :error -> 0.0
+    end
+  end
+
+  defp slack_ts_sort_value(_message), do: 0.0
+
+  defp count_ok_slack_thread_fetches(fetches) when is_list(fetches) do
+    Enum.count(fetches, &(&1["mode"] == "thread_replies" and &1["status"] == "ok"))
+  end
+
+  defp count_ok_slack_thread_fetches(_fetches), do: 0
+
+  defp count_slack_thread_replies(fetches) when is_list(fetches) do
+    fetches
+    |> Enum.filter(&(&1["mode"] == "thread_replies" and &1["status"] == "ok"))
+    |> Enum.map(&(&1["count"] || 0))
+    |> Enum.sum()
+  end
+
+  defp count_slack_thread_replies(_fetches), do: 0
 
   defp fetch_gmail_from_sources(telemetry, bundle, user_id, source_scope, plan, context) do
     providers = SourceScope.google_account_providers(source_scope, "gmail")
@@ -1729,8 +2044,25 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
     user_ids = message_user_ids ++ slack_user_ids_from_channel(channel)
     missing_user_ids = missing_slack_user_ids(user_ids, directory)
+    remaining_user_lookups = max(@slack_user_directory_limit - map_size(directory), 0)
+    lookup_user_ids = Enum.take(missing_user_ids, remaining_user_lookups)
 
-    Map.merge(directory, UserDirectory.resolve(access_token, missing_user_ids))
+    resolved =
+      if lookup_user_ids != [] do
+        UserDirectory.resolve(access_token, lookup_user_ids,
+          max_users: length(lookup_user_ids),
+          max_concurrency: 8,
+          timeout: @slack_user_directory_timeout_ms
+        )
+      else
+        %{}
+      end
+
+    attempted = Map.new(lookup_user_ids, &{&1, nil})
+
+    directory
+    |> Map.merge(attempted)
+    |> Map.merge(resolved)
   end
 
   defp missing_slack_user_ids(user_ids, directory) do

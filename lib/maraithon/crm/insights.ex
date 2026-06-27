@@ -13,7 +13,7 @@ defmodule Maraithon.Crm.Insights do
   alias Maraithon.Crm.{Observation, Person, PersonLink}
   alias Maraithon.Repo
 
-  @default_people_limit 100
+  @default_people_limit 500
   @default_observation_limit 250
   @default_link_limit 250
   @default_suggestion_limit 25
@@ -39,7 +39,7 @@ defmodule Maraithon.Crm.Insights do
 
   def list_for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
     people_limit =
-      opts |> Keyword.get(:people_limit, @default_people_limit) |> clamp_limit(1, 100)
+      opts |> Keyword.get(:people_limit, @default_people_limit) |> clamp_limit(1, 500)
 
     observation_limit =
       opts |> Keyword.get(:observation_limit, @default_observation_limit) |> clamp_limit(1, 500)

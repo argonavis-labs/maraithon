@@ -6,6 +6,7 @@ defmodule Maraithon.Crm do
   import Ecto.Query
 
   alias Maraithon.Crm.{Person, PersonLink, PersonMerge}
+  alias Maraithon.Goals.GoalLink
   alias Maraithon.Repo
   alias Maraithon.Todos
 
@@ -54,6 +55,21 @@ defmodule Maraithon.Crm do
   end
 
   def reconnect_suggestions(_user_id, _opts), do: []
+
+  @doc """
+  Goal-discovered people for the user, each with a goal-specific reason.
+
+  This is separate from the general reconnect list so the People surface can
+  show contacts who matter to goals even when they are not high-volume
+  contacts and do not have open work.
+  """
+  def goal_people_opportunities(user_id, opts \\ [])
+
+  def goal_people_opportunities(user_id, opts) when is_binary(user_id) do
+    Maraithon.Crm.ReconnectSuggestions.goal_opportunities(user_id, opts)
+  end
+
+  def goal_people_opportunities(_user_id, _opts), do: []
 
   def people_for_resource(user_id, resource_type, resource_id, opts \\ [])
 
@@ -234,8 +250,11 @@ defmodule Maraithon.Crm do
 
       nil ->
         case find_existing_person(user_id, attrs) do
-          %Person{} = person -> update_person(person, attrs)
-          nil -> create_person(user_id, attrs)
+          %Person{} = person ->
+            update_person(person, preserve_specific_display_name(person, attrs))
+
+          nil ->
+            create_person(user_id, attrs)
         end
     end
   end
@@ -357,6 +376,8 @@ defmodule Maraithon.Crm do
              {:ok, surviving} <- update_surviving_person(surviving, merged, now),
              %{repointed: repointed, collapsed: collapsed} <-
                move_person_links(user_id, surviving.id, merged.id),
+             %{repointed: repointed_goal_links, collapsed: collapsed_goal_links} <-
+               move_goal_links(user_id, surviving.id, merged.id, now),
              {:ok, merged} <- mark_person_merged(merged, surviving, attrs, now),
              {:ok, audit} <- insert_person_merge_audit(user_id, surviving, merged, attrs, now) do
           %{
@@ -364,7 +385,9 @@ defmodule Maraithon.Crm do
             merged_person: merged,
             audit: audit,
             repointed_link_count: repointed,
-            collapsed_link_count: collapsed
+            collapsed_link_count: collapsed,
+            repointed_goal_link_count: repointed_goal_links,
+            collapsed_goal_link_count: collapsed_goal_links
           }
         else
           nil -> Repo.rollback(:person_not_found)
@@ -639,6 +662,85 @@ defmodule Maraithon.Crm do
     end)
   end
 
+  defp move_goal_links(user_id, surviving_id, merged_id, %DateTime{} = now) do
+    GoalLink
+    |> where(
+      [link],
+      link.user_id == ^user_id and link.resource_type == "person" and
+        link.resource_id == ^merged_id
+    )
+    |> Repo.all()
+    |> Enum.reduce(%{repointed: 0, collapsed: 0}, fn link, counts ->
+      case existing_goal_link(user_id, surviving_id, link) do
+        %GoalLink{} = existing ->
+          {:ok, _existing} = merge_duplicate_goal_link(existing, link, merged_id, now)
+          {:ok, _deleted} = Repo.delete(link)
+          %{counts | collapsed: counts.collapsed + 1}
+
+        nil ->
+          {:ok, _link} =
+            link
+            |> Ecto.Changeset.change(
+              resource_id: surviving_id,
+              metadata: repointed_goal_link_metadata(link.metadata, merged_id, now)
+            )
+            |> Repo.update()
+
+          %{counts | repointed: counts.repointed + 1}
+      end
+    end)
+  end
+
+  defp existing_goal_link(user_id, surviving_id, %GoalLink{} = link) do
+    Repo.get_by(GoalLink,
+      user_id: user_id,
+      goal_id: link.goal_id,
+      resource_type: "person",
+      resource_id: surviving_id,
+      relationship: link.relationship
+    )
+  end
+
+  defp merge_duplicate_goal_link(
+         %GoalLink{} = existing,
+         %GoalLink{} = duplicate,
+         merged_id,
+         %DateTime{} = now
+       ) do
+    attrs = %{
+      confidence: max(existing.confidence || 0.0, duplicate.confidence || 0.0),
+      metadata:
+        existing.metadata
+        |> merge_maps(duplicate.metadata)
+        |> append_metadata_id("collapsed_goal_link_ids", duplicate.id)
+        |> append_metadata_id("merged_from_person_ids", merged_id)
+        |> Map.put("last_collapsed_goal_link_at", DateTime.to_iso8601(now))
+    }
+
+    existing
+    |> Ecto.Changeset.change(attrs)
+    |> Repo.update()
+  end
+
+  defp repointed_goal_link_metadata(metadata, merged_id, %DateTime{} = now) do
+    metadata
+    |> merge_maps(%{})
+    |> append_metadata_id("merged_from_person_ids", merged_id)
+    |> Map.put("repointed_goal_link_at", DateTime.to_iso8601(now))
+  end
+
+  defp append_metadata_id(metadata, key, value) when is_binary(value) do
+    existing =
+      metadata
+      |> Map.get(key, [])
+      |> List.wrap()
+      |> Enum.filter(&is_binary/1)
+
+    Map.put(metadata, key, Enum.uniq([value | existing]))
+  end
+
+  defp append_metadata_id(metadata, _key, _value), do: metadata
+
   defp merge_duplicate_link(%PersonLink{} = existing, %PersonLink{} = duplicate) do
     attrs = %{
       "resource_source" => first_present(existing.resource_source, duplicate.resource_source),
@@ -735,6 +837,26 @@ defmodule Maraithon.Crm do
   end
 
   defp apply_relationship_metric_growth(attrs, _person), do: attrs
+
+  defp preserve_specific_display_name(%Person{} = person, attrs) when is_map(attrs) do
+    incoming_display_name = normalize_display_name(attrs)
+
+    if specific_display_name?(person.display_name) and
+         single_token_display_name?(incoming_display_name) do
+      Map.drop(attrs, [
+        "display_name",
+        "displayName",
+        "first_name",
+        "firstName",
+        "last_name",
+        "lastName"
+      ])
+    else
+      attrs
+    end
+  end
+
+  defp preserve_specific_display_name(_person, attrs), do: attrs
 
   defp grow_count(existing, attrs, delta_keys) do
     explicit = read_integer_attr(attrs, "interaction_count")
@@ -881,44 +1003,78 @@ defmodule Maraithon.Crm do
     identifiers = contact_identifiers(attrs)
     display_name = normalize_display_name(attrs)
 
+    contact_match =
+      Enum.find_value(identifiers, fn value ->
+        find_person_by_contact(user_id, value)
+      end)
+
+    contact_match || find_existing_person_by_name(user_id, display_name, identifiers)
+  end
+
+  defp find_existing_person_by_name(_user_id, nil, _identifiers), do: nil
+
+  defp find_existing_person_by_name(user_id, display_name, identifiers) do
     cond do
-      identifiers != [] ->
-        contact_match =
-          Enum.reduce(identifiers, dynamic(false), fn value, dynamic ->
-            pattern = "%#{value}%"
-
-            dynamic(
-              [person],
-              ^dynamic or fragment("?::text ILIKE ?", person.contact_details, ^pattern)
-            )
-          end)
-
-        Person
-        |> where([person], person.user_id == ^user_id)
-        |> where([person], person.status == "active")
-        |> where(^contact_match)
-        |> order_by([person], desc: person.updated_at)
-        |> limit(1)
-        |> Repo.one()
-
-      is_binary(display_name) ->
-        exact =
-          Person
-          |> where([person], person.user_id == ^user_id)
-          |> where([person], person.status == "active")
-          |> where(
-            [person],
-            fragment("lower(?)", person.display_name) == ^String.downcase(display_name)
-          )
-          |> limit(1)
-          |> Repo.one()
-
-        exact ||
+      identifiers == [] ->
+        exact_name_match(user_id, display_name) ||
           fuzzy_find_person(user_id, display_name) ||
           semantic_find_person(user_id, display_name)
 
+      single_token_display_name?(display_name) ->
+        unique_specific_first_name_match(user_id, display_name)
+
+      specific_display_name?(display_name) ->
+        exact_name_match(user_id, display_name)
+
       true ->
         nil
+    end
+  end
+
+  defp exact_name_match(user_id, display_name) do
+    Person
+    |> where([person], person.user_id == ^user_id)
+    |> where([person], person.status == "active")
+    |> where(
+      [person],
+      fragment("lower(?)", person.display_name) == ^String.downcase(display_name)
+    )
+    |> order_by([person],
+      desc: person.communication_score,
+      desc: person.relationship_strength,
+      desc: person.affinity_score,
+      desc: person.updated_at
+    )
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp unique_specific_first_name_match(user_id, display_name) do
+    token = normalized_name_tokens(display_name) |> List.first()
+
+    if is_binary(token) do
+      matches =
+        Person
+        |> where([person], person.user_id == ^user_id and person.status == "active")
+        |> where(
+          [person],
+          fragment("lower(coalesce(?, ''))", person.first_name) == ^token or
+            fragment("lower(split_part(coalesce(?, ''), ' ', 1))", person.display_name) == ^token
+        )
+        |> order_by([person],
+          desc: person.communication_score,
+          desc: person.relationship_strength,
+          desc: person.affinity_score,
+          desc: person.updated_at
+        )
+        |> limit(3)
+        |> Repo.all()
+        |> Enum.filter(&specific_display_name?(&1.display_name))
+
+      case matches do
+        [person] -> person
+        _other -> nil
+      end
     end
   end
 
@@ -982,6 +1138,32 @@ defmodule Maraithon.Crm do
     |> Ecto.Changeset.get_change(:display_name)
     |> normalize_string()
   end
+
+  defp specific_display_name?(value) when is_binary(value) do
+    normalized_name_tokens(value)
+    |> length()
+    |> Kernel.>=(2)
+  end
+
+  defp specific_display_name?(_value), do: false
+
+  defp single_token_display_name?(value) when is_binary(value) do
+    normalized_name_tokens(value)
+    |> length()
+    |> Kernel.==(1)
+  end
+
+  defp single_token_display_name?(_value), do: false
+
+  defp normalized_name_tokens(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.replace(~r/[^\p{L}\p{N}@.]+/u, " ")
+    |> String.split(" ", trim: true)
+    |> Enum.reject(&String.contains?(&1, "@"))
+  end
+
+  defp normalized_name_tokens(_value), do: []
 
   defp linked_todos(user_id, links) do
     todo_ids =
@@ -1240,7 +1422,10 @@ defmodule Maraithon.Crm do
       (stored == value or String.contains?(stored, value) or String.contains?(value, stored))
   end
 
-  defp phone_digits(value) when is_binary(value), do: String.replace(value, ~r/\D+/, "")
+  defp phone_digits(value) when is_binary(value) do
+    for <<char <- value>>, char >= ?0 and char <= ?9, into: "", do: <<char>>
+  end
+
   defp phone_digits(_value), do: ""
 
   defp last_digits(value, count) when is_binary(value) and byte_size(value) > count do

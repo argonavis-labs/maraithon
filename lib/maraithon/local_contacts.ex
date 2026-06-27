@@ -129,6 +129,9 @@ defmodule Maraithon.LocalContacts do
         end
       end)
 
+    _ = BackgroundJobs.enqueue_person_dedupe(user_id)
+    _ = BackgroundJobs.enqueue_goal_people_discovery(user_id)
+
     {:ok,
      %{
        source: "local_contacts_crm_merge",
@@ -274,13 +277,13 @@ defmodule Maraithon.LocalContacts do
   end
 
   defp merge_row_into_crm(row, user_id, device_id, %DateTime{} = now, lookup) do
-    existing = existing_person_for_row(row, lookup)
+    existing = existing_person_for_row(row, lookup, user_id)
     attrs = crm_attrs(row, existing, device_id, now)
 
     result =
       case existing do
         %Person{} = person -> Crm.update_person(person, attrs)
-        nil -> Crm.create_person(user_id, attrs)
+        nil -> Crm.upsert_person(user_id, attrs)
       end
 
     case result do
@@ -299,10 +302,30 @@ defmodule Maraithon.LocalContacts do
     end
   end
 
-  defp existing_person_for_row(row, lookup) do
+  defp existing_person_for_row(row, lookup, user_id) do
     find_lookup_person(lookup, "apple_contact_ids", row.guid) ||
       Enum.find_value(row.emails || [], &find_lookup_person(lookup, "emails", &1)) ||
-      Enum.find_value(row.phones || [], &find_lookup_person(lookup, "phones", &1))
+      Enum.find_value(row.phones || [], &find_lookup_person(lookup, "phones", &1)) ||
+      find_lookup_person(lookup, "display_names", display_name_from_row(row)) ||
+      find_person_by_exact_display_name(user_id, display_name_from_row(row))
+  end
+
+  defp find_person_by_exact_display_name(user_id, display_name) do
+    if specific_display_name?(display_name) do
+      normalized = normalize_name(display_name)
+
+      Person
+      |> where([person], person.user_id == ^user_id and person.status == "active")
+      |> where([person], fragment("lower(?)", person.display_name) == ^normalized)
+      |> order_by([person],
+        desc: person.communication_score,
+        desc: person.relationship_strength,
+        desc: person.affinity_score,
+        desc: person.updated_at
+      )
+      |> limit(1)
+      |> Repo.one()
+    end
   end
 
   defp crm_contact_lookup(user_id) do
@@ -316,7 +339,8 @@ defmodule Maraithon.LocalContacts do
     %{
       "apple_contact_ids" => %{},
       "emails" => %{},
-      "phones" => %{}
+      "phones" => %{},
+      "display_names" => %{}
     }
   end
 
@@ -331,6 +355,7 @@ defmodule Maraithon.LocalContacts do
     )
     |> put_lookup_values("emails", Map.get(contact_details, "emails"), person)
     |> put_lookup_values("phones", Map.get(contact_details, "phones"), person)
+    |> put_lookup_values("display_names", [person.display_name], person)
   end
 
   defp put_lookup_values(lookup, kind, values, person) do
@@ -375,6 +400,16 @@ defmodule Maraithon.LocalContacts do
         [digits]
 
       true ->
+        []
+    end
+  end
+
+  defp lookup_keys("display_names", value) do
+    case text(value) do
+      value when is_binary(value) ->
+        if specific_display_name?(value), do: [normalize_name(value)], else: []
+
+      nil ->
         []
     end
   end
@@ -533,6 +568,7 @@ defmodule Maraithon.LocalContacts do
 
   defp display_name_from_attrs(attrs) do
     [
+      attrs[:display_name],
       [attrs.first_name, attrs.last_name]
       |> Enum.reject(&blank?/1)
       |> Enum.join(" "),
@@ -545,6 +581,7 @@ defmodule Maraithon.LocalContacts do
 
   defp display_name_from_row(row) do
     display_name_from_attrs(%{
+      display_name: row.display_name,
       first_name: row.first_name,
       last_name: row.last_name,
       organization_name: row.organization_name,
@@ -615,6 +652,24 @@ defmodule Maraithon.LocalContacts do
 
   defp phone_digits(value) when is_binary(value), do: String.replace(value, ~r/\D+/, "")
   defp phone_digits(_value), do: ""
+
+  defp specific_display_name?(value) when is_binary(value) do
+    value
+    |> normalize_name()
+    |> String.split(" ", trim: true)
+    |> Enum.reject(&String.contains?(&1, "@"))
+    |> length()
+    |> Kernel.>=(2)
+  end
+
+  defp specific_display_name?(_value), do: false
+
+  defp normalize_name(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.replace(~r/[^\p{L}\p{N}@.]+/u, " ")
+    |> String.trim()
+  end
 
   defp blank?(value), do: text(value) == nil
 end

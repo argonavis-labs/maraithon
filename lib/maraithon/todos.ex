@@ -517,10 +517,10 @@ defmodule Maraithon.Todos do
       |> UserFacingCopy.polish_attrs()
       |> ActionDrafts.ensure()
 
-    case Repo.get_by(Todo, user_id: user_id, dedupe_key: normalized_attrs["dedupe_key"]) do
-      %Todo{} = todo ->
+    case existing_todo_for_upsert(user_id, normalized_attrs) do
+      {%Todo{} = todo, attrs} ->
         todo
-        |> Todo.changeset(merge_upsert_attrs(todo, normalized_attrs))
+        |> Todo.changeset(merge_upsert_attrs(todo, attrs))
         |> Repo.update()
 
       nil ->
@@ -532,6 +532,49 @@ defmodule Maraithon.Todos do
             {:error, reason} -> Repo.rollback(reason)
           end
         end)
+    end
+  end
+
+  defp existing_todo_for_upsert(user_id, attrs) do
+    case Repo.get_by(Todo, user_id: user_id, dedupe_key: attrs["dedupe_key"]) do
+      %Todo{} = todo ->
+        {todo, attrs}
+
+      nil ->
+        case existing_source_item_todo(user_id, attrs) do
+          %Todo{} = todo ->
+            {todo, Map.put(attrs, "dedupe_key", todo.dedupe_key)}
+
+          nil ->
+            nil
+        end
+    end
+  end
+
+  defp existing_source_item_todo(user_id, attrs) do
+    source = normalize_optional_string(Map.get(attrs, "source"))
+    source_item_id = normalize_optional_string(Map.get(attrs, "source_item_id"))
+    kind = normalize_optional_string(Map.get(attrs, "kind"))
+    owner_user_id = normalize_optional_string(Map.get(attrs, "owner_user_id"))
+
+    if source && source_item_id && kind && owner_user_id do
+      Todo
+      |> where(
+        [todo],
+        todo.user_id == ^user_id and todo.source == ^source and
+          todo.source_item_id == ^source_item_id and todo.kind == ^kind and
+          todo.owner_user_id == ^owner_user_id
+      )
+      |> order_by([todo],
+        asc:
+          fragment(
+            "CASE ? WHEN 'open' THEN 0 WHEN 'snoozed' THEN 1 WHEN 'dismissed' THEN 2 WHEN 'done' THEN 3 ELSE 4 END",
+            todo.status
+          ),
+        desc: todo.updated_at
+      )
+      |> limit(1)
+      |> Repo.one()
     end
   end
 

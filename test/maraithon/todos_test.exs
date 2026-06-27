@@ -62,6 +62,51 @@ defmodule Maraithon.TodosTest do
     assert Todos.list_open_for_user(user_id, kind: "gmail_triage") == []
   end
 
+  test "upsert_many reuses a source item when the model emits a fresh dedupe key" do
+    user_id = unique_user_email("todos-source-item-dedupe")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "imessage",
+          "kind" => "general",
+          "title" => "Confirm Emma pickup and painting with Christina",
+          "summary" => "Christina asked if you can get Emma and reminded you about the painting.",
+          "next_action" => "Reply to Christina confirming you will pick up Emma.",
+          "priority" => 80,
+          "source_item_id" => "imessage-source-1",
+          "dedupe_key" => "commitment:imessage:imessage-source-1:original"
+        }
+      ])
+
+    assert {:ok, dismissed} = Todos.dismiss(user_id, todo.id, note: "Not needed anymore.")
+    assert dismissed.status == "dismissed"
+
+    {:ok, [reupserted]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "imessage",
+          "kind" => "general",
+          "title" => "Confirm you have the painting for Emma's pickup",
+          "summary" => "The same iMessage source still needs painting confirmation.",
+          "next_action" => "Reply to Christina confirming you have the painting.",
+          "priority" => 82,
+          "source_item_id" => "imessage-source-1",
+          "dedupe_key" => "commitment:imessage:imessage-source-1:model-fresh-key"
+        }
+      ])
+
+    assert reupserted.id == todo.id
+    assert reupserted.dedupe_key == todo.dedupe_key
+    assert reupserted.status == "dismissed"
+
+    assert [persisted] = Todos.list_recent_for_user(user_id, limit: 10)
+    assert persisted.id == todo.id
+    assert persisted.title == "Confirm you have the painting for Emma's pickup"
+    assert persisted.dedupe_key == todo.dedupe_key
+  end
+
   test "dismissing a todo records a low-signal not-important learning marker" do
     user_id = unique_user_email("todos-dismiss-signal")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -398,7 +443,9 @@ defmodule Maraithon.TodosTest do
       }
     }
 
-    Enum.into(overrides, defaults)
+    overrides
+    |> Enum.map(fn {key, value} -> {to_string(key), value} end)
+    |> Enum.into(defaults)
   end
 
   defp unique_user_email(prefix) do

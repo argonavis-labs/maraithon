@@ -2,7 +2,7 @@ defmodule MaraithonWeb.PeopleLive do
   use MaraithonWeb, :live_view
 
   alias Maraithon.{BriefingSchedules, Crm, Timezones}
-  alias Maraithon.Crm.Person
+  alias Maraithon.Crm.{Insights, Person}
   alias Maraithon.Crm.RelationshipPresentation
   alias Maraithon.Crm.RelationshipPresets
   alias Maraithon.Memory
@@ -57,6 +57,9 @@ defmodule MaraithonWeb.PeopleLive do
        filters: @default_filters,
        filter_form: to_form(@default_filters, as: :filters),
        people: [],
+       goal_opportunities: [],
+       reconnect_suggestions: [],
+       duplicate_suggestions: [],
        family_context_people: [],
        family_onboarding_mode: nil,
        family_member_form: to_form(@default_family_member_form, as: :family_member),
@@ -347,34 +350,115 @@ defmodule MaraithonWeb.PeopleLive do
           family_proxy_form={@family_proxy_form}
         />
 
-        <.panel :if={keep_in_touch_people(@people) != []} body_class="px-5 py-0">
+        <.panel
+          :if={@duplicate_suggestions != []}
+          id="people-duplicate-suggestions"
+          body_class="px-5 py-0"
+        >
           <:header>
             <div>
-              <h2 class="text-sm/6 font-semibold text-zinc-950">Keep in touch</h2>
+              <h2 class="text-sm/6 font-semibold text-zinc-950">Duplicate review</h2>
               <p class="text-sm/6 text-zinc-500">
-                Important relationships drifting past their usual rhythm.
+                Contacts that look like the same person and should be merged or reviewed.
               </p>
             </div>
           </:header>
           <ul role="list" class="divide-y divide-zinc-950/5">
             <li
-              :for={person <- keep_in_touch_people(@people)}
-              class="flex items-center justify-between gap-3 py-3"
+              :for={suggestion <- @duplicate_suggestions}
+              class="flex flex-wrap items-center justify-between gap-3 py-3"
+            >
+              <div class="min-w-0 flex-1">
+                <div class="text-sm/6 font-medium text-zinc-950"><%= suggestion.title %></div>
+                <div class="mt-1 text-sm/6 text-zinc-500"><%= suggestion.summary %></div>
+                <div class="mt-1 text-xs/5 text-zinc-500">
+                  <%= duplicate_evidence_line(suggestion) %>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <.badge color="amber"><%= duplicate_confidence_label(suggestion.confidence) %></.badge>
+                <.button navigate="/insights" variant="outline">Review</.button>
+              </div>
+            </li>
+          </ul>
+        </.panel>
+
+        <.panel
+          :if={@goal_opportunities != []}
+          id="people-goal-opportunities"
+          body_class="px-5 py-0"
+        >
+          <:header>
+            <div>
+              <h2 class="text-sm/6 font-semibold text-zinc-950">Goal opportunities</h2>
+              <p class="text-sm/6 text-zinc-500">
+                Contacts the background scan linked to active goals, including lower-volume people.
+              </p>
+            </div>
+          </:header>
+          <ul role="list" class="divide-y divide-zinc-950/5">
+            <li
+              :for={suggestion <- @goal_opportunities}
+              class="flex flex-wrap items-center justify-between gap-3 py-3"
             >
               <button
                 type="button"
                 phx-click="open_person_detail"
-                phx-value-id={person.id}
+                phx-value-id={suggestion.person.id}
                 class="min-w-0 flex-1 text-left"
               >
                 <span class="block truncate text-sm/6 font-medium text-zinc-950">
-                  <%= person.display_name %>
+                  <%= suggestion.person.display_name %>
                 </span>
-                <span class="block truncate text-xs/5 text-zinc-500">
-                  <%= keep_in_touch_note(person) %>
+                <span class="block text-sm/6 text-zinc-500">
+                  <%= suggestion.reason %>
+                </span>
+                <span :if={present?(suggestion.suggested_action)} class="block truncate text-xs/5 text-zinc-500">
+                  <%= suggestion.suggested_action %>
                 </span>
               </button>
-              <.badge color="amber">Overdue</.badge>
+              <.badge color="purple">Goal</.badge>
+            </li>
+          </ul>
+        </.panel>
+
+        <.panel
+          :if={@reconnect_suggestions != []}
+          id="people-reconnect-suggestions"
+          body_class="px-5 py-0"
+        >
+          <:header>
+            <div>
+              <h2 class="text-sm/6 font-semibold text-zinc-950">Relationship opportunities</h2>
+              <p class="text-sm/6 text-zinc-500">
+                Source-backed reasons from open work, goals, and relationships drifting past their rhythm.
+              </p>
+            </div>
+          </:header>
+          <ul role="list" class="divide-y divide-zinc-950/5">
+            <li
+              :for={suggestion <- @reconnect_suggestions}
+              class="flex flex-wrap items-center justify-between gap-3 py-3"
+            >
+              <button
+                type="button"
+                phx-click="open_person_detail"
+                phx-value-id={suggestion.person.id}
+                class="min-w-0 flex-1 text-left"
+              >
+                <span class="block truncate text-sm/6 font-medium text-zinc-950">
+                  <%= suggestion.person.display_name %>
+                </span>
+                <span class="block text-sm/6 text-zinc-500">
+                  <%= suggestion.reason %>
+                </span>
+                <span :if={present?(suggestion.suggested_action)} class="block truncate text-xs/5 text-zinc-500">
+                  <%= suggestion.suggested_action %>
+                </span>
+              </button>
+              <.badge color={reconnect_badge_color(suggestion.category)}>
+                <%= reconnect_category_label(suggestion.category) %>
+              </.badge>
             </li>
           </ul>
         </.panel>
@@ -530,6 +614,24 @@ defmodule MaraithonWeb.PeopleLive do
       |> Crm.list_people(query: query_text, limit: 100)
       |> rank_people(query_text)
 
+    {goal_opportunities, reconnect_suggestions, duplicate_suggestions} =
+      if query_text in [nil, ""] do
+        insights = Insights.list_for_user(user_id, people_limit: 500, suggestion_limit: 5)
+        goal_opportunities = Crm.goal_people_opportunities(user_id, limit: 5)
+        goal_person_ids = MapSet.new(goal_opportunities, & &1.person.id)
+
+        {
+          goal_opportunities,
+          user_id
+          |> Crm.reconnect_suggestions(limit: 10)
+          |> Enum.reject(&MapSet.member?(goal_person_ids, &1.person.id))
+          |> Enum.take(8),
+          Map.get(insights, :duplicate_suggestions, [])
+        }
+      else
+        {[], [], []}
+      end
+
     family_context_people = Crm.list_family_context(user_id, limit: 100)
     visible_ids = people |> Enum.map(& &1.id) |> MapSet.new()
     selected_person_ids = MapSet.intersection(socket.assigns.selected_person_ids, visible_ids)
@@ -537,6 +639,9 @@ defmodule MaraithonWeb.PeopleLive do
 
     assign(socket,
       people: people,
+      goal_opportunities: goal_opportunities,
+      reconnect_suggestions: reconnect_suggestions,
+      duplicate_suggestions: duplicate_suggestions,
       family_context_people: family_context_people,
       selected_person_ids: selected_person_ids,
       bulk_action_menu_open?: has_selection? && socket.assigns.bulk_action_menu_open?,
@@ -585,37 +690,41 @@ defmodule MaraithonWeb.PeopleLive do
     communication * 3 + strength * 2 + affinity + interactions / 4 + recency
   end
 
-  @doc false
-  def keep_in_touch_people(people) do
-    people
-    |> Enum.filter(fn person ->
-      get_in(person.metadata || %{}, ["communication_signals", "overdue"]) == true
-    end)
-    |> Enum.take(5)
-  end
+  defp duplicate_evidence_line(%{evidence: evidence}) when is_list(evidence) do
+    evidence
+    |> List.first()
+    |> case do
+      %{label: label, detail: detail} when is_binary(label) and is_binary(detail) ->
+        "#{label}: #{detail}"
 
-  defp keep_in_touch_note(person) do
-    signals = get_in(person.metadata || %{}, ["communication_signals"]) || %{}
-    days = signals["days_since_last"]
-    cadence = signals["cadence_days"]
+      %{detail: detail} when is_binary(detail) ->
+        detail
 
-    cond do
-      is_integer(days) and is_integer(cadence) ->
-        "#{days} days since last touch · usually every #{cadence_label(cadence)}"
-
-      is_integer(days) ->
-        "#{days} days since last touch"
-
-      true ->
-        "No recent contact"
+      _other ->
+        "Review the matching contact evidence before merging."
     end
   end
 
-  defp cadence_label(days) when days <= 1, do: "day"
-  defp cadence_label(days) when days <= 9, do: "#{days} days"
-  defp cadence_label(days) when days <= 13, do: "week or two"
-  defp cadence_label(days) when days <= 35, do: "month"
-  defp cadence_label(_days), do: "few months"
+  defp duplicate_evidence_line(_suggestion),
+    do: "Review the matching contact evidence before merging."
+
+  defp duplicate_confidence_label(confidence) when is_float(confidence) and confidence >= 0.85,
+    do: "Strong match"
+
+  defp duplicate_confidence_label(_confidence), do: "Review"
+
+  defp reconnect_category_label(:open_work), do: "Open work"
+  defp reconnect_category_label(:goal_aligned), do: "Goal"
+  defp reconnect_category_label(:overdue), do: "Overdue"
+  defp reconnect_category_label(:going_quiet), do: "Going quiet"
+  defp reconnect_category_label(category) when is_binary(category), do: category |> label()
+  defp reconnect_category_label(_category), do: "Review"
+
+  defp reconnect_badge_color(:open_work), do: "blue"
+  defp reconnect_badge_color(:goal_aligned), do: "purple"
+  defp reconnect_badge_color(:overdue), do: "amber"
+  defp reconnect_badge_color(:going_quiet), do: "zinc"
+  defp reconnect_badge_color(_category), do: "zinc"
 
   attr :family_context_people, :list, required: true
   attr :family_onboarding_mode, :string, default: nil

@@ -8,6 +8,7 @@ import SwiftUI
 /// human-readable signal line can be unit-tested directly.
 enum ReconnectCategory: String, Equatable {
     case openWork = "open_work"
+    case goalAligned = "goal_aligned"
     case overdue
     case goingQuiet = "going_quiet"
     case unknown
@@ -19,6 +20,7 @@ enum ReconnectCategory: String, Equatable {
     var label: String {
         switch self {
         case .openWork: "Open work"
+        case .goalAligned: "Goal"
         case .overdue: "Overdue"
         case .goingQuiet: "Going quiet"
         case .unknown: "Reconnect"
@@ -28,6 +30,7 @@ enum ReconnectCategory: String, Equatable {
     var systemImage: String {
         switch self {
         case .openWork: "checklist"
+        case .goalAligned: "target"
         case .overdue: "clock.badge.exclamationmark"
         case .goingQuiet: "person.crop.circle.badge.moon"
         case .unknown: "person.2"
@@ -37,6 +40,7 @@ enum ReconnectCategory: String, Equatable {
     var tint: Color {
         switch self {
         case .openWork: .blue
+        case .goalAligned: .purple
         case .overdue: .orange
         case .goingQuiet: .purple
         case .unknown: .accentColor

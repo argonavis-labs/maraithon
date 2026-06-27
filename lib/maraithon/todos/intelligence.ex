@@ -193,6 +193,13 @@ defmodule Maraithon.Todos.Intelligence do
        create standalone check-in/reach-out work items. Only an explicit
        `opt_in_rhythm` policy or user-requested reminder should create family
        relationship-rhythm work.
+       - Local iMessage/Messages family chatter is context, not open work, unless
+         the source text explicitly asks the operator to act or records a promise
+         the operator made. Skip kid/screen-time notifications, reactions,
+         photo/show chatter, and vague reminders like "don't forget your painting"
+         or "cool painting" unless the source clearly asks the operator to do a
+         concrete pickup, payment, RSVP, form, scheduling, reply, or other logistics
+         action.
        - Work item title, summary, next_action, notes, and action_plan are user-facing
        in Telegram and should read like the operator's human chief of staff wrote them.
          Address the operator as `you`, never as `the user` or by their own name.
@@ -255,6 +262,12 @@ defmodule Maraithon.Todos.Intelligence do
          create/update one of these candidates, preserve metadata.completion_check
          exactly enough to show the later evidence checked and why the loop still
          needs action.
+       - For chief_of_staff_commitment_tracker candidates, preserve candidate timing
+         decisions. If the candidate already has status "snoozed", copy status,
+         snoozed_until, and due_at into the returned todo unless you skip it because
+         evidence proves the work is completed or not real. Do not downgrade a
+         future-dated operator self-commitment to status "open"; the snooze is the
+         polite follow-up timing chosen by the source intelligence.
        - If a candidate partly matches negative feedback but may be worth keeping
          for later, create/update it as `attention_mode: "monitor"` with lower
          priority instead of putting it in act-now.
@@ -297,7 +310,8 @@ defmodule Maraithon.Todos.Intelligence do
                "source_account_id": null,
                "source_account_label": null,
                "priority": 50,
-               "status": "open",
+               "status": "open | snoozed",
+               "snoozed_until": "ISO-8601 datetime or omitted",
                "source_item_id": null,
                "source_occurred_at": null,
                "dedupe_key": "same stable semantic key",
@@ -785,6 +799,7 @@ defmodule Maraithon.Todos.Intelligence do
       |> preserve_candidate_completion_check(candidate)
       |> preserve_candidate_source_identifiers(candidate)
       |> preserve_candidate_source_context(candidate)
+      |> preserve_candidate_schedule_attrs(candidate)
       |> put_intelligence_metadata(
         action,
         candidate_index,
@@ -920,7 +935,7 @@ defmodule Maraithon.Todos.Intelligence do
     body_excerpt checked_evidence context context_brief conversation_context direct_ask
     evidence evidence_summary excerpt explicit_user_commitment false_positive_risk family_member
     family_role fyi_class importance importance_hint life_domain missing_followthrough_evidence
-    obligation_type organization people person project project_name quote record
+    commitment_direction obligation_type organization people person project project_name quote record
     relationship_context relationship_domain reply_obligation sensitivity source_body
     source_evidence source_excerpt source_ref source_refs source_subject subject thread_subject
     todo_policy user_requested why_it_matters why_now work_item_admission
@@ -976,6 +991,46 @@ defmodule Maraithon.Todos.Intelligence do
         )
 
       Map.put(todo_attrs, "metadata", preserved)
+    end
+  end
+
+  defp preserve_candidate_schedule_attrs(todo_attrs, candidate) do
+    candidate = stringify_top_level_keys(candidate || %{})
+    candidate_status = read_string(candidate, "status", nil)
+    todo_status = read_string(todo_attrs, "status", nil)
+
+    todo_attrs
+    |> maybe_preserve_candidate_status(candidate_status, todo_status)
+    |> maybe_preserve_candidate_datetime(candidate, "snoozed_until", candidate_status)
+    |> maybe_preserve_candidate_datetime(candidate, "due_at", candidate_status)
+  end
+
+  defp maybe_preserve_candidate_status(todo_attrs, "snoozed", _todo_status) do
+    Map.put(todo_attrs, "status", "snoozed")
+  end
+
+  defp maybe_preserve_candidate_status(todo_attrs, candidate_status, todo_status)
+       when candidate_status in ["open", "snoozed"] and todo_status in [nil, ""] do
+    Map.put(todo_attrs, "status", candidate_status)
+  end
+
+  defp maybe_preserve_candidate_status(todo_attrs, _candidate_status, _todo_status),
+    do: todo_attrs
+
+  defp maybe_preserve_candidate_datetime(todo_attrs, candidate, field, "snoozed")
+       when field in ["snoozed_until", "due_at"] do
+    case read_string(candidate, field, nil) do
+      value when is_binary(value) -> Map.put(todo_attrs, field, value)
+      _other -> todo_attrs
+    end
+  end
+
+  defp maybe_preserve_candidate_datetime(todo_attrs, candidate, field, _candidate_status)
+       when field in ["snoozed_until", "due_at"] do
+    case {read_string(todo_attrs, field, nil), read_string(candidate, field, nil)} do
+      {nil, value} when is_binary(value) -> Map.put(todo_attrs, field, value)
+      {"", value} when is_binary(value) -> Map.put(todo_attrs, field, value)
+      _other -> todo_attrs
     end
   end
 

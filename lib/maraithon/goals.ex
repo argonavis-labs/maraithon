@@ -11,6 +11,7 @@ defmodule Maraithon.Goals do
   alias Maraithon.Insights.Insight
   alias Maraithon.Memory.Item, as: MemoryItem
   alias Maraithon.Repo
+  alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.ScheduledTasks.Task, as: ScheduledTask
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
@@ -78,8 +79,12 @@ defmodule Maraithon.Goals do
     |> Goal.changeset(attrs)
     |> Repo.insert()
     |> tap(fn
-      {:ok, goal} -> emit_goal_event(:create, goal, %{})
-      _other -> :ok
+      {:ok, goal} ->
+        emit_goal_event(:create, goal, %{})
+        _ = BackgroundJobs.enqueue_goal_people_discovery(goal.user_id)
+
+      _other ->
+        :ok
     end)
   end
 
@@ -100,6 +105,7 @@ defmodule Maraithon.Goals do
         |> tap(fn
           {:ok, updated} ->
             emit_goal_event(:update, updated, %{previous_status: previous_status})
+            _ = BackgroundJobs.enqueue_goal_people_discovery(updated.user_id)
 
           _other ->
             :ok

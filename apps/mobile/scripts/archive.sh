@@ -19,8 +19,14 @@ SCHEME="${SCHEME:-MaraithonMobile}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-${ROOT_DIR}/build/archive/MaraithonMobile.xcarchive}"
 EXPORT_PATH="${EXPORT_PATH:-${ROOT_DIR}/build/export}"
 EXPORT_OPTIONS_PLIST="${EXPORT_OPTIONS_PLIST:-${ROOT_DIR}/Config/ExportOptions.plist}"
+ENV_FILE="${ENV_FILE:-${ROOT_DIR}/Config/appstore.env}"
 
 mkdir -p "$(dirname "${ARCHIVE_PATH}")" "${EXPORT_PATH}"
+
+if [[ -f "${ENV_FILE}" ]]; then
+  # shellcheck source=/dev/null
+  source "${ENV_FILE}"
+fi
 
 XCODEBUILD_AUTH_ARGS=()
 if [[ -n "${APP_STORE_CONNECT_API_KEY_ID:-}" && -n "${APP_STORE_CONNECT_API_ISSUER_ID:-}" ]]; then

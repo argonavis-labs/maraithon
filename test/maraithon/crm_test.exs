@@ -4,6 +4,8 @@ defmodule Maraithon.CrmTest do
   alias Maraithon.Accounts
   alias Maraithon.Crm
   alias Maraithon.Crm.{PersonMerge, Serializer}
+  alias Maraithon.Goals
+  alias Maraithon.Goals.GoalLink
   alias Maraithon.Repo
   alias Maraithon.Todos
 
@@ -41,6 +43,80 @@ defmodule Maraithon.CrmTest do
     assert updated.contact_details["slack_ids"] == ["U123"]
 
     assert [listed] = Crm.list_people(user_id, query: "charlie")
+    assert listed.id == person.id
+  end
+
+  test "upserts people by exact specific display name when identifiers differ" do
+    user_id = "crm-person-name-dedupe-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, person} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Jeff McLarty",
+        "slack_id" => "Jeff McLarty",
+        "relationship" => "GM at Agora"
+      })
+
+    assert {:ok, updated} =
+             Crm.upsert_person(user_id, %{
+               "display_name" => "Jeff McLarty",
+               "email" => "jeff@voteagora.com",
+               "relationship" => "Colleague or team member"
+             })
+
+    assert updated.id == person.id
+    assert updated.contact_details["slack_ids"] == ["Jeff McLarty"]
+    assert updated.contact_details["emails"] == ["jeff@voteagora.com"]
+
+    assert [listed] = Crm.list_people(user_id, query: "Jeff McLarty", limit: 5)
+    assert listed.id == person.id
+  end
+
+  test "does not collapse ambiguous first-name records when identifiers differ" do
+    user_id = "crm-person-ambiguous-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, first} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Jeff",
+        "email" => "first-jeff@example.com"
+      })
+
+    {:ok, second} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Jeff",
+        "phone" => "+1 905 555 1212"
+      })
+
+    refute second.id == first.id
+
+    assert user_id
+           |> Crm.list_people(query: "Jeff", limit: 5)
+           |> Enum.count(&(&1.display_name == "Jeff")) == 2
+  end
+
+  test "upserts first-name-only source rows into a unique specific existing person" do
+    user_id = "crm-person-first-name-specific-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, person} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Jeff McLarty",
+        "email" => "jeff@voteagora.com"
+      })
+
+    assert {:ok, updated} =
+             Crm.upsert_person(user_id, %{
+               "display_name" => "Jeff",
+               "slack_id" => "UJEFF"
+             })
+
+    assert updated.id == person.id
+    assert updated.display_name == "Jeff McLarty"
+    assert updated.contact_details["emails"] == ["jeff@voteagora.com"]
+    assert updated.contact_details["slack_ids"] == ["UJEFF"]
+
+    assert [listed] = Crm.list_people(user_id, query: "Jeff", limit: 5)
     assert listed.id == person.id
   end
 
@@ -253,6 +329,49 @@ defmodule Maraithon.CrmTest do
         "role" => "participant"
       })
 
+    {:ok, shared_goal} =
+      Goals.create_goal(user_id, %{
+        "category" => "work",
+        "title" => "Launch Runner",
+        "desired_outcome" => "Keep the launch team aligned.",
+        "priority" => 80
+      })
+
+    {:ok, unique_goal} =
+      Goals.create_goal(user_id, %{
+        "category" => "work",
+        "title" => "Close customer feedback",
+        "desired_outcome" => "Get Charlie's customer context into the plan.",
+        "priority" => 70
+      })
+
+    {:ok, _survivor_goal_link} =
+      Goals.link_resource(user_id, shared_goal.id, %{
+        "resource_type" => "person",
+        "resource_id" => survivor.id,
+        "relationship" => "supports",
+        "source" => "agent",
+        "confidence" => 0.4
+      })
+
+    {:ok, _duplicate_shared_goal_link} =
+      Goals.link_resource(user_id, shared_goal.id, %{
+        "resource_type" => "person",
+        "resource_id" => duplicate.id,
+        "relationship" => "supports",
+        "source" => "agent",
+        "confidence" => 0.8
+      })
+
+    {:ok, _duplicate_unique_goal_link} =
+      Goals.link_resource(user_id, unique_goal.id, %{
+        "resource_type" => "person",
+        "resource_id" => duplicate.id,
+        "relationship" => "supports",
+        "source" => "agent",
+        "confidence" => 0.7
+      })
+
     assert {:ok, result} =
              Crm.merge_people(user_id, survivor.id, duplicate.id, %{
                "evidence" => "Same person across Gmail and Slack.",
@@ -262,6 +381,8 @@ defmodule Maraithon.CrmTest do
 
     assert result.repointed_link_count == 1
     assert result.collapsed_link_count == 1
+    assert result.repointed_goal_link_count == 1
+    assert result.collapsed_goal_link_count == 1
     assert result.audit.evidence =~ "Same person"
 
     reloaded_survivor = Crm.get_person_for_user(user_id, survivor.id)
@@ -291,6 +412,30 @@ defmodule Maraithon.CrmTest do
     assert shared_link.relationship_note =~ "Duplicate evidence note"
     assert shared_link.evidence_quote =~ "asked for a reply"
     assert shared_link.confidence == 0.8
+
+    survivor_goal_links =
+      Repo.all(
+        from link in GoalLink,
+          where:
+            link.user_id == ^user_id and link.resource_type == "person" and
+              link.resource_id == ^survivor.id
+      )
+
+    assert length(survivor_goal_links) == 2
+
+    assert Enum.any?(
+             survivor_goal_links,
+             &(&1.goal_id == shared_goal.id and &1.confidence == 0.8)
+           )
+
+    assert Enum.any?(survivor_goal_links, &(&1.goal_id == unique_goal.id))
+
+    refute Repo.exists?(
+             from link in GoalLink,
+               where:
+                 link.user_id == ^user_id and link.resource_type == "person" and
+                   link.resource_id == ^duplicate.id
+           )
 
     assert %PersonMerge{} =
              Repo.get_by(PersonMerge,

@@ -23,7 +23,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   @default_review_hour 7
   @default_email_scan_limit 200
   @default_event_scan_limit 80
-  @default_slack_message_scan_limit 300
+  @default_slack_message_scan_limit 180
   @default_local_message_scan_limit 300
   @default_local_chat_scan_limit 120
   @default_local_voice_memo_scan_limit 100
@@ -35,6 +35,20 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   @default_calendar_forward_days 14
   @default_llm_max_tokens 12_000
   @default_llm_reasoning_effort "high"
+  @vague_self_commitment_followup_hour 16
+  @explicit_clock_time_pattern ~r/\b(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b(?:[01]?\d|2[0-3]):[0-5]\d\b/i
+  @explicit_time_words [
+    "this morning",
+    "tomorrow morning",
+    "morning",
+    "noon",
+    "lunch",
+    "tonight",
+    "this evening",
+    "tomorrow evening",
+    "end of day",
+    "eod"
+  ]
   @skill_path "priv/agents/skills/chief_of_staff/commitment_tracker.md"
 
   @impl true
@@ -489,6 +503,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       |> Enum.reject(&(read_string(&1, "text", nil) in [nil, ""]))
       |> Enum.sort_by(&slack_message_sort_key/1, :desc)
 
+    slack_self_authored_messages =
+      slack_messages
+      |> Enum.filter(&slack_self_authored_search_message?/1)
+      |> Enum.sort_by(&slack_message_sort_key/1, :desc)
+
     slack_mentions =
       source_bundle
       |> SourceBundle.slack_mentions()
@@ -573,6 +592,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         "counts" => %{"upcoming_events" => length(local_calendar_events)}
       },
       "slack" => %{
+        "self_authored_recent" =>
+          slack_self_authored_messages
+          |> Enum.map(&slack_message_for_prompt/1)
+          |> Enum.take(80),
         "recent_messages" =>
           slack_messages
           |> Enum.map(&slack_message_for_prompt/1)
@@ -582,6 +605,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
           |> Enum.map(&slack_message_for_prompt/1)
           |> Enum.take(state.slack_message_scan_limit),
         "counts" => %{
+          "self_authored_recent" => length(slack_self_authored_messages),
           "recent_messages" => length(slack_messages),
           "mentions" => length(slack_mentions)
         }
@@ -699,6 +723,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
              "summary": "actual todo",
              "next_action": "suggested next action",
              "due_at": "ISO-8601 datetime or omitted",
+             "status": "open | snoozed",
+             "snoozed_until": "ISO-8601 datetime or omitted",
              "notes": "source evidence and metadata",
              "action_plan": "draft or plan of next action",
              "action_draft": {
@@ -762,6 +788,30 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
          only create a work item when the ask is directed AT the operator
          and still open; if the operator already answered, committed, or
          someone else owns it, it is not the operator's open loop.
+       - The operator's own Slack thread or channel message can be the source
+         evidence. If they say they are going to message, send, follow up,
+         decide, schedule, or otherwise act for a named person/project on a
+         concrete future date, save that as work even when nobody explicitly
+         asked. Examples include "I am going to message Pat tomorrow" and
+         "I'll follow up with Sam on Friday."
+       - Review slack.self_authored_recent carefully before general Slack
+         chatter. Those rows come from Slack search because some private
+         channels may not appear in conversation history. Treat the row text,
+         timestamp, user, channel, and thread metadata as evidence; do not
+         create work from the search query or phrase match alone.
+       - For future-dated self-commitments, save the work item now but avoid an
+         immediate nag. You MUST set status to "snoozed", not "open", and set
+         snoozed_until to a polite follow-up time after the operator had time to act. For
+         "tomorrow" with no exact time, use late afternoon in the operator's
+         local timezone, around 4 PM local; if the source gives an explicit
+         due time, use that time or shortly after it.
+       - Local iMessage/Messages family chatter is context, not open work, unless
+         the source text explicitly asks the operator to act or records a promise
+         the operator made. Do not create work from kid/screen-time notifications,
+         reactions, photo/show chatter, or vague reminders like "don't forget your
+         painting" / "cool painting" unless a later adult message clearly asks
+         the operator to do a concrete pickup, payment, RSVP, form, scheduling,
+         reply, or other logistics action.
        - Before returning any work item, reconcile the original ask/promise against
          later evidence in every available supplied source: Gmail inbox and sent,
          Calendar, Slack, iMessage/Messages, voice notes, Notes, Reminders,
@@ -776,6 +826,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
          write "no later reply or delivery is recorded" unless you actually checked
          the later supplied source material for the same person/thread/topic and
          found no closure evidence.
+       - For operator self-commitments, set metadata.explicit_user_commitment to
+         true, metadata.commitment_direction to "i_owe", include the exact source
+         quote, and keep Slack channel/thread identifiers in metadata/source fields.
        - Every saved work item must include action_draft.text. If a reply or
          message makes sense, write concise suggested wording in the operator's
          style. If a full draft does not make sense, write a conversational next
@@ -1356,6 +1409,128 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     |> Map.put_new("source", "chief_of_staff_commitment_tracker")
     |> Map.put_new("kind", "general")
     |> Map.put_new("source_occurred_at", read_string(tracker_input, "generated_at", nil))
+    |> enforce_vague_self_commitment_snooze_floor(tracker_input)
+  end
+
+  defp enforce_vague_self_commitment_snooze_floor(attrs, tracker_input) when is_map(attrs) do
+    metadata = read_map(attrs, "metadata")
+
+    if read_string(attrs, "status", nil) == "snoozed" and
+         explicit_self_commitment?(metadata) and
+         vague_next_day_commitment?(attrs, metadata) do
+      offset_hours = tracker_input_timezone_offset_hours(tracker_input)
+
+      target =
+        read_datetime(attrs, "snoozed_until") ||
+          read_datetime(attrs, "due_at") ||
+          implied_next_day_floor(tracker_input, offset_hours)
+
+      case target do
+        %DateTime{} = target ->
+          floor = local_day_floor(target, offset_hours, @vague_self_commitment_followup_hour)
+
+          if DateTime.compare(target, floor) == :lt do
+            attrs
+            |> Map.put("snoozed_until", DateTime.to_iso8601(floor))
+            |> maybe_floor_due_at(floor)
+            |> Map.put(
+              "metadata",
+              metadata
+              |> Map.put_new("snooze_timing", "late_afternoon_local")
+              |> Map.put("snooze_timing_enforced", true)
+            )
+          else
+            attrs
+          end
+
+        _ ->
+          attrs
+      end
+    else
+      attrs
+    end
+  end
+
+  defp enforce_vague_self_commitment_snooze_floor(attrs, _tracker_input), do: attrs
+
+  defp explicit_self_commitment?(metadata) when is_map(metadata) do
+    truthy_value?(read_any(metadata, "explicit_user_commitment")) or
+      read_string(metadata, "commitment_direction", nil) == "i_owe"
+  end
+
+  defp explicit_self_commitment?(_metadata), do: false
+
+  defp truthy_value?(value) when value in [true, 1], do: true
+
+  defp truthy_value?(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.trim()
+    |> then(&(&1 in ["true", "yes", "1"]))
+  end
+
+  defp truthy_value?(_value), do: false
+
+  defp vague_next_day_commitment?(attrs, metadata) do
+    text =
+      [
+        read_string(metadata, "quote", nil),
+        read_string(metadata, "source_evidence", nil),
+        read_string(metadata, "source_excerpt", nil),
+        read_string(attrs, "title", nil),
+        read_string(attrs, "summary", nil),
+        read_string(attrs, "next_action", nil)
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    String.contains?(text, "tomorrow") and not explicit_time_text?(text)
+  end
+
+  defp explicit_time_text?(text) when is_binary(text) do
+    Regex.match?(@explicit_clock_time_pattern, text) or
+      Enum.any?(@explicit_time_words, &String.contains?(text, &1))
+  end
+
+  defp explicit_time_text?(_text), do: false
+
+  defp implied_next_day_floor(tracker_input, offset_hours) do
+    case read_datetime(tracker_input, "generated_at") do
+      %DateTime{} = generated_at ->
+        generated_at
+        |> DateTime.add(offset_hours, :hour)
+        |> DateTime.add(1, :day)
+        |> local_day_floor(0, @vague_self_commitment_followup_hour)
+        |> DateTime.add(-offset_hours, :hour)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp local_day_floor(%DateTime{} = datetime, offset_hours, hour) do
+    local_date =
+      datetime
+      |> DateTime.add(offset_hours, :hour)
+      |> DateTime.to_date()
+
+    local_floor = DateTime.new!(local_date, Time.new!(hour, 0, 0), "Etc/UTC")
+    DateTime.add(local_floor, -offset_hours, :hour)
+  end
+
+  defp maybe_floor_due_at(attrs, %DateTime{} = floor) do
+    case read_datetime(attrs, "due_at") do
+      %DateTime{} = due_at ->
+        if DateTime.compare(due_at, floor) == :lt do
+          Map.put(attrs, "due_at", DateTime.to_iso8601(floor))
+        else
+          attrs
+        end
+
+      _ ->
+        Map.put(attrs, "due_at", DateTime.to_iso8601(floor))
+    end
   end
 
   defp append_todo_write_summary(report, {:ok, :no_todos}), do: report
@@ -1807,6 +1982,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp recent_slack_message?(_message, _lookback_start), do: false
+
+  defp slack_self_authored_search_message?(message) when is_map(message) do
+    read_string(message, "search_mode", nil) == "self_authored"
+  end
+
+  defp slack_self_authored_search_message?(_message), do: false
 
   defp recent_local_message?(message, lookback_start) when is_map(message) do
     case local_message_datetime(message) do

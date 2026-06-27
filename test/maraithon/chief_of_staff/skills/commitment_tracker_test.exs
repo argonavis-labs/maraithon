@@ -192,7 +192,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     {:effect, {:llm_call, params}, state} = CommitmentTracker.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 8_000
+    assert params["max_tokens"] == 12_000
     assert params["reasoning_effort"] == "high"
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
@@ -228,6 +228,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
                 "To: Elena Saradidis\nDirection: i_owe\nSource: gmail\nRef: thread-elena\nQuote: I'll send the revised version tomorrow.",
               "action_plan" =>
                 "Find the latest agreement, verify the date, and email it to Elena.",
+              "action_draft" => %{
+                "text" =>
+                  "You should email Elena and say: \"Thanks, I have the revised Runner ambassador agreement ready. Sending it over for your review.\""
+              },
               "owner_label" => "Kent",
               "source_account_label" => "kent@runner.now",
               "source_item_id" => "thread-elena",
@@ -243,10 +247,20 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
               ],
               "metadata" => %{
                 "commitment_direction" => "i_owe",
+                "explicit_user_commitment" => true,
                 "source_ref" => "gmail thread-elena",
                 "quote" => "I'll send the revised version tomorrow.",
                 "omni_project" => "Runner",
-                "source_tags" => ["runner", "gmail"]
+                "why_it_matters" =>
+                  "Elena is waiting on a revised Runner ambassador agreement the operator promised to send.",
+                "source_tags" => ["runner", "gmail"],
+                "completion_check" => %{
+                  "status" => "open",
+                  "reasoning" =>
+                    "Checked later Gmail and calendar evidence in the supplied window; there is no later sent message delivering the agreement or canceling the commitment.",
+                  "latest_source_checked_at" => "2026-05-09T15:00:00Z",
+                  "later_evidence" => []
+                }
               }
             }
           ]
@@ -297,6 +311,179 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     assert relationship.open_todo_count == 1
     assert Enum.any?(relationship.todos, &(&1.id == todo.id))
+  end
+
+  test "captures future-dated Slack self-commitments as snoozed follow-up work", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2099-06-18 21:15:00Z]
+    message_ts = "4085500260.000100"
+    source_item_id = "C-gtm:#{message_ts}"
+    snoozed_until = ~U[2099-06-19 20:00:00Z]
+    early_model_snooze = ~U[2099-06-19 13:00:00Z]
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_slack(%{
+        "workspaces" => [
+          %{
+            "team_id" => "T-agora",
+            "team_name" => "Agora",
+            "channels" => [
+              %{
+                "id" => "C-gtm",
+                "name" => "runner-gtm",
+                "messages" => [
+                  %{
+                    "conversation_kind" => "private_channel",
+                    "ts" => message_ts,
+                    "thread_ts" => "4085498460.000000",
+                    "date" => "2099-06-18T21:11:00Z",
+                    "user" => "U-kent",
+                    "user_display_name" => "Kent",
+                    "text" => "I am going to message Sheila tomorrow.",
+                    "text_resolved" => "I am going to message Sheila tomorrow.",
+                    "search_mode" => "self_authored",
+                    "search_query" => "\"I am going to\"",
+                    "reply_count" => 0,
+                    "permalink" => "https://example.slack.com/archives/C-gtm/p4085500260000100"
+                  },
+                  %{
+                    "conversation_kind" => "private_channel",
+                    "ts" => "4085500140.000000",
+                    "thread_ts" => "4085498460.000000",
+                    "date" => "2099-06-18T21:09:00Z",
+                    "user" => "U-charlie",
+                    "user_display_name" => "Charlie",
+                    "text" => "Oh that's kinda interesting!",
+                    "text_resolved" => "Oh that's kinda interesting!",
+                    "reply_count" => 0
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    state =
+      CommitmentTracker.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Toronto",
+        "timezone_offset_hours" => -4,
+        "commitment_review_hour_local" => 7
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: source_bundle,
+      assistant_cycle_id: "cycle-slack-self-commitment"
+    }
+
+    {:effect, {:llm_call, params}, state} = CommitmentTracker.handle_wakeup(state, context)
+
+    prompt = get_in(params, ["messages", Access.at(0), "content"])
+    assert prompt =~ "I am going to message Sheila tomorrow."
+
+    assert prompt =~ "The operator's own Slack thread or channel message"
+    assert prompt =~ "\"self_authored_recent\""
+    assert prompt =~ "do not create work from the search query or phrase match alone"
+    assert prompt =~ "save that as work even when nobody explicitly"
+    assert prompt =~ "I am going to message Pat tomorrow"
+    assert prompt =~ "status to \"snoozed\""
+    assert prompt =~ "snoozed_until"
+    assert prompt =~ "around 4 PM local"
+
+    response = %{
+      content:
+        Jason.encode!(%{
+          "title" => "Open work review - 2099-06-18",
+          "summary" => "One Slack commitment was saved for tomorrow follow-up.",
+          "body" =>
+            "Open work review - 2099-06-18\n\nNew commitments:\n- Message Sheila tomorrow about the free-license idea.",
+          "pending_replies" => [],
+          "already_tracked" => [],
+          "missing_sources" => [],
+          "todos" => [
+            %{
+              "source" => "slack",
+              "title" => "Message Sheila about the EA license idea",
+              "summary" =>
+                "You said you would message Sheila tomorrow about giving a few EAs free licenses.",
+              "next_action" =>
+                "Message Sheila tomorrow about the free-license idea, then mark this done.",
+              "due_at" => DateTime.to_iso8601(early_model_snooze),
+              "status" => "snoozed",
+              "snoozed_until" => DateTime.to_iso8601(early_model_snooze),
+              "notes" =>
+                "Channel: runner-gtm\nDirection: i_owe\nSource: slack\nRef: #{source_item_id}\nQuote: I am going to message Sheila tomorrow.",
+              "action_plan" =>
+                "Send Sheila a short note about whether a few EAs should get free licenses.",
+              "action_draft" => %{
+                "text" =>
+                  "You should message Sheila and say: \"Thinking about giving a few Athena EAs free Runner licenses. Worth trying?\""
+              },
+              "owner_label" => "Kent",
+              "source_account_label" => "Agora / runner-gtm",
+              "source_item_id" => source_item_id,
+              "source_occurred_at" => "2099-06-18T21:11:00Z",
+              "dedupe_key" => "commitment:slack:#{source_item_id}:message-sheila",
+              "people" => [
+                %{
+                  "first_name" => "Sheila",
+                  "relationship" => "EA license idea counterparty",
+                  "preferred_communication_method" => "message"
+                }
+              ],
+              "metadata" => %{
+                "commitment_direction" => "i_owe",
+                "explicit_user_commitment" => true,
+                "source_ref" => "slack #{source_item_id}",
+                "slack_channel_id" => "C-gtm",
+                "slack_channel_name" => "runner-gtm",
+                "slack_thread_ts" => "4085498460.000000",
+                "quote" => "I am going to message Sheila tomorrow.",
+                "source_tags" => ["slack", "gtm", "sales"],
+                "why_it_matters" =>
+                  "This is a concrete GTM follow-up the operator committed to in-thread.",
+                "completion_check" => %{
+                  "status" => "open",
+                  "reasoning" =>
+                    "Checked later Slack thread context in the supplied window; there is no later message showing Sheila was contacted or that the idea was dropped.",
+                  "latest_source_checked_at" => "2099-06-18T21:15:00Z",
+                  "later_evidence" => []
+                }
+              }
+            }
+          ]
+        })
+    }
+
+    {:emit, {:briefs_recorded, payload}, _state} =
+      CommitmentTracker.handle_effect_result({:llm_call, response}, state, context)
+
+    assert payload.todo_count == 1
+    assert payload.todo_skipped_count == 0
+
+    [todo] = Todos.list_for_user(user_id, statuses: ["snoozed"], limit: 5)
+    assert todo.source == "slack"
+    assert todo.source_item_id == source_item_id
+    assert todo.status == "snoozed"
+    assert DateTime.compare(todo.snoozed_until, snoozed_until) == :eq
+    assert DateTime.compare(todo.due_at, snoozed_until) == :eq
+    assert todo.metadata["explicit_user_commitment"] == true
+    assert todo.metadata["commitment_direction"] == "i_owe"
+    assert todo.metadata["quote"] == "I am going to message Sheila tomorrow."
+    assert get_in(todo.metadata, ["completion_check", "status"]) == "open"
+
+    assert Todos.list_open_for_user(user_id, limit: 5) == []
   end
 
   test "accepts markdown-fenced model JSON as a real commitment report", %{

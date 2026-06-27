@@ -184,6 +184,10 @@ defmodule MaraithonWeb.MobileJSON do
       open_work:
         suggestion
         |> Map.get(:open_work, [])
+        |> Enum.map(fn item -> %{id: to_string(item.id), title: item.title} end),
+      goals:
+        suggestion
+        |> Map.get(:goals, [])
         |> Enum.map(fn item -> %{id: to_string(item.id), title: item.title} end)
     }
   end

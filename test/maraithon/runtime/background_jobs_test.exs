@@ -53,15 +53,38 @@ defmodule Maraithon.Runtime.BackgroundJobsTest do
     assert {:ok, open_loop_job} =
              BackgroundJobs.enqueue_open_loop_check(user_id, %{payload: %{"query" => "Charlie"}})
 
+    assert {:ok, goal_people_job} =
+             BackgroundJobs.enqueue_goal_people_discovery(user_id,
+               payload: %{"people_limit" => 250, "goal_limit" => 10}
+             )
+
+    assert {:ok, person_dedupe_job} =
+             BackgroundJobs.enqueue_person_dedupe(user_id,
+               payload: %{"people_limit" => 250, "max_merges" => 10}
+             )
+
     assert email_job.queue == "email"
     assert relationship_job.queue == "relationships"
     assert open_loop_job.queue == "open_loops"
+    assert goal_people_job.queue == "relationships"
+    assert person_dedupe_job.queue == "relationships"
+    assert goal_people_job.job_type == "goal_people_discovery"
+    assert person_dedupe_job.job_type == "person_dedupe"
     assert email_job.dedupe_key == "background:email_processing:#{user_id}:thread-1"
+    assert goal_people_job.dedupe_key == "#{user_id}:goal_people_discovery"
+    assert person_dedupe_job.dedupe_key == "#{user_id}:person_dedupe"
 
     assert DateTime.compare(email_job.scheduled_at, DateTime.truncate(scheduled_at, :microsecond)) ==
              :eq
 
     jobs = BackgroundJobs.list(user_id: user_id, limit: 10)
-    assert Enum.map(jobs, & &1.queue) |> Enum.sort() == ["email", "open_loops", "relationships"]
+
+    assert Enum.map(jobs, & &1.queue) |> Enum.sort() == [
+             "email",
+             "open_loops",
+             "relationships",
+             "relationships",
+             "relationships"
+           ]
   end
 end

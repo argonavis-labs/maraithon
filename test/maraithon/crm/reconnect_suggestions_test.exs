@@ -3,6 +3,7 @@ defmodule Maraithon.Crm.ReconnectSuggestionsTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Crm
+  alias Maraithon.Goals
   alias Maraithon.Todos
 
   defp user_id do
@@ -103,6 +104,189 @@ defmodule Maraithon.Crm.ReconnectSuggestionsTest do
       })
 
     assert Crm.reconnect_suggestions(uid) == []
+  end
+
+  test "surfaces people linked to active goals without requiring high communication volume" do
+    uid = user_id()
+
+    person =
+      person_with(uid, %{
+        "first_name" => "Avery",
+        "display_name" => "Avery Chen",
+        "relationship" => "Investor"
+      })
+
+    {:ok, goal} =
+      Goals.create_goal(uid, %{
+        "category" => "work",
+        "title" => "Close the seed round",
+        "desired_outcome" => "Investor follow-through is focused on the seed round.",
+        "priority" => 80
+      })
+
+    assert {:ok, _link} =
+             Goals.link_resource(uid, goal.id, %{
+               "resource_type" => "person",
+               "resource_id" => person.id,
+               "relationship" => "supports",
+               "source" => "agent",
+               "confidence" => 0.92
+             })
+
+    assert [suggestion] = Crm.reconnect_suggestions(uid)
+    assert suggestion.person.id == person.id
+    assert suggestion.category == :goal_aligned
+    assert suggestion.headline == "Goal aligned"
+    assert suggestion.reason =~ "Close the seed round"
+    assert [%{title: "Close the seed round"}] = suggestion.goals
+    assert suggestion.suggested_action =~ "Close the seed round"
+  end
+
+  test "keeps low-volume goal opportunities visible when open work fills the limit" do
+    uid = user_id()
+
+    goal_person =
+      person_with(uid, %{
+        "display_name" => "Avery Chen",
+        "relationship" => "Angel investor"
+      })
+
+    {:ok, goal} =
+      Goals.create_goal(uid, %{
+        "category" => "work",
+        "title" => "Close the seed round",
+        "desired_outcome" => "Investor follow-through is focused on the seed round.",
+        "priority" => 80
+      })
+
+    assert {:ok, _link} =
+             Goals.link_resource(uid, goal.id, %{
+               "resource_type" => "person",
+               "resource_id" => goal_person.id,
+               "relationship" => "supports",
+               "source" => "agent",
+               "confidence" => 0.9
+             })
+
+    for index <- 1..4 do
+      work_person =
+        person_with(uid, %{
+          "first_name" => "Work #{index}",
+          "display_name" => "Work Person #{index}"
+        })
+
+      Repo.update_all(
+        from(p in Maraithon.Crm.Person, where: p.id == ^work_person.id),
+        set: [communication_score: 95, relationship_strength: 95]
+      )
+
+      {:ok, [todo]} =
+        Todos.upsert_many(uid, [
+          %{
+            "source" => "gmail",
+            "kind" => "general",
+            "title" => "Ship contract #{index}",
+            "summary" => "Owed.",
+            "next_action" => "Send it.",
+            "dedupe_key" => "reconnect-balanced-work-#{index}"
+          }
+        ])
+
+      {:ok, _} =
+        Crm.attach_resource(uid, work_person.id, %{
+          "resource_type" => "todo",
+          "resource_id" => todo.id,
+          "role" => "owed_to",
+          "title" => todo.title
+        })
+    end
+
+    suggestions = Crm.reconnect_suggestions(uid, limit: 3)
+
+    assert Enum.any?(suggestions, &(&1.person.id == goal_person.id))
+    assert Enum.any?(suggestions, &(&1.category == :goal_aligned))
+  end
+
+  test "goal opportunities explain the goal even when the person also has open work" do
+    uid = user_id()
+
+    person =
+      person_with(uid, %{
+        "first_name" => "Avery",
+        "display_name" => "Avery Chen"
+      })
+
+    {:ok, [todo]} =
+      Todos.upsert_many(uid, [
+        %{
+          "source" => "gmail",
+          "kind" => "general",
+          "title" => "Send Avery the contract",
+          "summary" => "Avery is waiting.",
+          "next_action" => "Send it.",
+          "dedupe_key" => "reconnect-goal-opportunity-open-work"
+        }
+      ])
+
+    {:ok, _} =
+      Crm.attach_resource(uid, person.id, %{
+        "resource_type" => "todo",
+        "resource_id" => todo.id,
+        "role" => "owed_to",
+        "title" => todo.title
+      })
+
+    {:ok, goal} =
+      Goals.create_goal(uid, %{
+        "category" => "work",
+        "title" => "Close the seed round",
+        "desired_outcome" => "Investor follow-through is focused on the seed round.",
+        "priority" => 80
+      })
+
+    {:ok, _link} =
+      Goals.link_resource(uid, goal.id, %{
+        "resource_type" => "person",
+        "resource_id" => person.id,
+        "relationship" => "supports",
+        "source" => "agent",
+        "confidence" => 0.9
+      })
+
+    assert [suggestion] = Crm.goal_people_opportunities(uid, limit: 3)
+    assert suggestion.person.id == person.id
+    assert suggestion.category == :goal_aligned
+    assert suggestion.reason =~ "Close the seed round"
+    assert [%{title: "Send Avery the contract"}] = suggestion.open_work
+  end
+
+  test "goal opportunities collapse duplicate people with the same display name" do
+    uid = user_id()
+
+    {:ok, goal} =
+      Goals.create_goal(uid, %{
+        "category" => "life",
+        "title" => "Husband of the Year",
+        "desired_outcome" => "Plan thoughtful family moments.",
+        "priority" => 80
+      })
+
+    first = person_with(uid, %{"display_name" => "Christina Giannone"})
+    second = person_with(uid, %{"display_name" => "Christina Giannone"})
+
+    for person <- [first, second] do
+      {:ok, _link} =
+        Goals.link_resource(uid, goal.id, %{
+          "resource_type" => "person",
+          "resource_id" => person.id,
+          "relationship" => "supports",
+          "source" => "agent",
+          "confidence" => 0.9
+        })
+    end
+
+    assert [suggestion] = Crm.goal_people_opportunities(uid, limit: 5)
+    assert suggestion.person.display_name == "Christina Giannone"
   end
 
   test "ranks open work above a bare overdue cadence" do

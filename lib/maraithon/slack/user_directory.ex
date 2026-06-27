@@ -14,6 +14,7 @@ defmodule Maraithon.Slack.UserDirectory do
   def resolve(access_token, user_ids, opts) when is_binary(access_token) and is_list(user_ids) do
     max_users = Keyword.get(opts, :max_users, 120)
     max_concurrency = Keyword.get(opts, :max_concurrency, 6)
+    timeout = opts |> Keyword.get(:timeout, :timer.seconds(10)) |> positive_timeout()
 
     user_ids
     |> normalize_user_ids()
@@ -21,7 +22,7 @@ defmodule Maraithon.Slack.UserDirectory do
     |> Task.async_stream(
       fn user_id -> {user_id, fetch_display_name(access_token, user_id)} end,
       max_concurrency: max_concurrency,
-      timeout: :timer.seconds(10),
+      timeout: timeout,
       on_timeout: :kill_task
     )
     |> Enum.reduce(%{}, fn
@@ -143,4 +144,7 @@ defmodule Maraithon.Slack.UserDirectory do
   end
 
   defp clean_display_name(_value, _user_id), do: nil
+
+  defp positive_timeout(value) when is_integer(value) and value > 0, do: value
+  defp positive_timeout(_value), do: :timer.seconds(10)
 end

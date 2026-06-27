@@ -36,6 +36,12 @@ A saved work item must be an actionable personal, family/home, or business oblig
 - A pending work reply where someone is waiting on the operator and the message is old enough to matter.
 - A concrete personal/business consequence if the operator does not respond, decide, or do the next step.
 
+The operator's own Slack thread or channel message can be source evidence. If they say they are going to message, send, follow up, decide, schedule, or otherwise act for a named person/project on a concrete future date, save that as work even when nobody explicitly asked. Examples include "I am going to message Pat tomorrow" and "I'll follow up with Sam on Friday."
+
+Review `slack.self_authored_recent` carefully before general Slack chatter. Those rows come from Slack search because some private channels may not appear in conversation history. Treat the row text, timestamp, user, channel, and thread metadata as evidence; do not create work from the search query or phrase match alone.
+
+For future-dated self-commitments, save the work item now but avoid an immediate nag. You MUST set `status` to `snoozed`, not `open`, and set `snoozed_until` to a polite follow-up time after the operator had time to act. For "tomorrow" with no exact time, use late afternoon in the operator's local timezone, around 4 PM local; if the source gives an explicit due time, use that time or shortly after it.
+
 Executive bar: if a busy operator would feel their time was wasted by seeing the candidate as a separate work item, skip it. The right answer is often fewer, sharper decisions rather than a broad capture list.
 
 Skip content consumption and educational material unless the full body contains one of the admission signals above. Newsletters, articles, essays, podcasts, videos, reports, course/webinar announcements, market commentary, and informational digests are not work items just because they may be useful to read, watch, or listen to.
@@ -55,6 +61,7 @@ Use relationship context and memory:
 
 Routing metadata:
 - Always set `metadata.commitment_direction` to `i_owe`, `asked_of_me`, or `pending_reply`.
+- For operator self-commitments, set `metadata.explicit_user_commitment` to true, use `metadata.commitment_direction = "i_owe"`, include the exact source quote, and keep Slack channel/thread identifiers in metadata/source fields.
 - Always include useful source metadata: thread ID, message ID, event ID, memo ID, note ID, reminder ID, file ID, visit ID, account, chat/channel, quote, source ref, and source tags.
 - For Slack items, use `user_display_name`, `mentioned_users.display_name`, and resolved message text for human-facing names. Keep raw Slack user IDs such as `U...` in metadata only.
 - For human follow-ups, include memory-jogging relationship context in metadata: `company`, `organization`, `relationship_context`, `relationship_strength` when known, `why_it_matters`, and enough `source_tags` to identify the project/company.
@@ -93,6 +100,8 @@ JSON shape:
       "summary": "You owe a partner contact the revised agreement.",
       "next_action": "Open the latest agreement draft, confirm the terms, and send it to the partner contact.",
       "due_at": "2026-05-10T13:00:00Z",
+      "status": "open",
+      "snoozed_until": null,
       "notes": "To: partner contact\nDirection: i_owe\nSource: gmail\nRef: thread-123\nQuote: \"I'll send the revised version tomorrow.\"",
       "action_plan": "Find the latest PDF, verify the effective date, then send with a short note asking for approval.",
       "action_draft": {

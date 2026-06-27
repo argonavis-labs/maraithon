@@ -743,6 +743,57 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert stored.metadata["why_now"] =~ "release planning"
       assert stored.recommended_action =~ "monitor it"
     end
+
+    test "does not surface Notaui digest summaries as platform status", %{
+      user_id: user_id,
+      context: context
+    } do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-notaui-digest-1",
+              "thread_id" => "thread-notaui-digest-1",
+              "subject" =>
+                "Thursday, June 11 - SF travel day, benefits crisis escalation, and family handoffs before takeoff",
+              "snippet" =>
+                "Next Actions include App Store Connect and confirm Emma pickup and painting.",
+              "text_body" => """
+              Thursday, June 11 - SF travel day, benefits crisis escalation, and family handoffs before takeoff
+
+              Next Actions
+              - Confirm Emma pickup and painting with Christina: Text Christina to confirm she has Emma's pickup, the painting, and the evening cast party covered.
+              - Review App Store Connect status: Monitor the review state if it changes again.
+
+              Needs Your Attention
+              - Family Handoff & Emma's Events: Confirm Christina has Emma's pickup, the painting, and evening logistics covered.
+              - App Store Connect: The app is in review, but this is only a copied status note inside the digest.
+
+              Today's Schedule
+              - 6:30 AM - Flight to San Francisco.
+              """,
+              "from" => "Notaui <no-reply@notaui.com>",
+              "to" => user_id,
+              "labels" => ["INBOX", "CATEGORY_UPDATES"],
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      assert {:effect, {:llm_call, params}, new_state} =
+               InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert new_state.pending_direct_insights == []
+      assert new_state.pending_candidates == []
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+      assert prompt =~ "Notaui"
+      assert prompt =~ "Emma pickup and painting"
+      assert Insights.list_open_for_user(user_id) == []
+    end
   end
 
   describe "handle_effect_result/3" do
