@@ -31,6 +31,7 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   alias Maraithon.AssistantHarness
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OperatorEvents
+  alias Maraithon.TelegramConversations
   alias Maraithon.TelegramResponder
   alias Maraithon.TelegramRouter
 
@@ -95,24 +96,51 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   def handle_cast({:handle_message, data}, state) do
     message_id = message_id(data)
 
-    if message_id != nil and MapSet.member?(state.seen_set, message_id) do
-      # Duplicate webhook delivery — Telegram retried. Already handled.
-      {:noreply, state}
-    else
-      # `run_router/2` never lets an exception, exit, or throw escape — it
-      # always resolves to `:ok` (success, or a caught failure whose fallback
-      # reply was actually delivered) or `:unhandled` (a caught failure whose
-      # fallback reply also failed to send). Only `:ok` marks the message id
-      # as seen. If the worker dies outright before this point, or the
-      # fallback itself could not reach the user, the id is never
-      # remembered, so a Telegram webhook retry (or any other redelivery of
-      # the same message id) can still be processed — by this worker or a
-      # fresh one — instead of the message being silently, permanently lost.
-      case run_router(data, state.chat_id) do
-        :ok -> {:noreply, remember(state, message_id)}
-        :unhandled -> {:noreply, state}
-      end
+    cond do
+      message_id != nil and MapSet.member?(state.seen_set, message_id) ->
+        # Duplicate webhook delivery — Telegram retried, and this worker
+        # already handled it in this lifetime.
+        {:noreply, state}
+
+      message_id != nil and already_completed?(state.chat_id, message_id) ->
+        # Deferring mark-as-seen until after handling (R3) means a webhook
+        # retry re-runs `TelegramRouter.handle_message/1` from scratch — but
+        # `seen_set` alone can't catch a retry that arrives after a worker
+        # restart, since it's only in-memory. Check persisted state instead:
+        # if a completed assistant reply already exists for this inbound
+        # message, the prior attempt actually finished and answered the
+        # user. Re-running from scratch here would risk double-firing
+        # non-idempotent tool side effects (e.g. sending an email twice), so
+        # just remember the id and skip reprocessing.
+        {:noreply, remember(state, message_id)}
+
+      true ->
+        # `run_router/2` never lets an exception, exit, or throw escape — it
+        # always resolves to `:ok` (success, or a caught failure whose fallback
+        # reply was actually delivered) or `:unhandled` (a caught failure whose
+        # fallback reply also failed to send). Only `:ok` marks the message id
+        # as seen. If the worker dies outright before this point, or the
+        # fallback itself could not reach the user, the id is never
+        # remembered, so a Telegram webhook retry (or any other redelivery of
+        # the same message id) can still be processed — by this worker or a
+        # fresh one — instead of the message being silently, permanently lost.
+        case run_router(data, state.chat_id) do
+          :ok -> {:noreply, remember(state, message_id)}
+          :unhandled -> {:noreply, state}
+        end
     end
+  end
+
+  defp already_completed?(chat_id, message_id) do
+    TelegramConversations.assistant_reply_recorded?(chat_id, message_id)
+  rescue
+    error ->
+      Logger.warning("[telegram_fallback] retry-completion check failed",
+        chat_id: chat_id,
+        reason: Exception.message(error)
+      )
+
+      false
   end
 
   defp run_router(data, chat_id) do

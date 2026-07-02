@@ -57,7 +57,13 @@ defmodule Maraithon.TelegramRouter do
             # unrelated later message. Only a recognizable yes/no answer is
             # allowed to continue it; anything else starts a fresh
             # conversation instead of inheriting the stale thread's context.
-            "confirmation_reply" => affirmative?(text) or negative?(text)
+            "confirmation_reply" => affirmative?(text) or negative?(text),
+            # Same bleed risk for a pending clarifying question: within the
+            # freshness window, only a message that actually looks like an
+            # answer continues that thread. Anything that looks like a fresh,
+            # unrelated ask (slash command, long multi-sentence message)
+            # starts a new conversation instead.
+            "clarification_reply" => clarification_reply?(text)
           })
 
         {:ok, {_conversation, user_turn}} =
@@ -616,6 +622,39 @@ defmodule Maraithon.TelegramRouter do
       "don't save that",
       "do not save"
     ]
+  end
+
+  # A clarifying question doesn't have a fixed yes/no vocabulary — any short
+  # direct reply ("General rule, not just this thread") is a valid answer.
+  # So, unlike `affirmative?/1` / `negative?/1`, this deliberately does not
+  # try to match an allowlist of phrasings. Instead it only rejects text that
+  # looks like a fresh, unrelated ask in form: a slash command, or a long
+  # multi-sentence message (the shape of someone starting a new request, not
+  # answering a short question). Everything else is treated as an answer, so
+  # a genuine direct reply keeps continuing the clarification thread.
+  defp clarification_reply?(text) when is_binary(text) do
+    trimmed = String.trim(text)
+
+    cond do
+      trimmed == "" -> false
+      String.starts_with?(trimmed, "/") -> false
+      looks_like_fresh_ask?(trimmed) -> false
+      true -> true
+    end
+  end
+
+  defp looks_like_fresh_ask?(text) do
+    sentence_count =
+      text
+      |> String.split(~r/[.!?]+/, trim: true)
+      |> length()
+
+    word_count =
+      text
+      |> String.split(~r/\s+/, trim: true)
+      |> length()
+
+    sentence_count > 1 and word_count > 12
   end
 
   defp ensure_draft_then_send(delivery) do
