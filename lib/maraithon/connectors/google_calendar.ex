@@ -31,13 +31,16 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
   @behaviour Maraithon.Connectors.Connector
 
+  alias Maraithon.Connectors.SourceCursors
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
   alias Maraithon.Connectors.Connector
+  alias Maraithon.Runtime.BackgroundJobs
 
   require Logger
 
   @default_api_base "https://www.googleapis.com/calendar/v3"
+  @sync_token_cursor_kind "calendar_sync_token"
 
   # ===========================================================================
   # Watch Management
@@ -107,6 +110,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
     resource_id = get_header(conn, "x-goog-resource-id")
     resource_state = get_header(conn, "x-goog-resource-state")
     channel_token = get_header(conn, "x-goog-channel-token")
+    message_number = get_header(conn, "x-goog-message-number")
 
     # Channel token contains user_id
     user_id = channel_token
@@ -122,35 +126,34 @@ defmodule Maraithon.Connectors.GoogleCalendar do
           {:ignore, "sync confirmation"}
 
         "exists" ->
-          # Calendar changed - fetch updated events
-          case sync_calendar_events(user_id) do
-            {:ok, events} ->
+          # Calendar changed - enqueue a durable background job so the
+          # webhook request never makes an outbound Google API call. The
+          # actual event fetch happens in `Maraithon.Runtime.BackgroundJobHandler`.
+          dedupe_key = "calendar_webhook:#{channel_id}:#{resource_id}:#{message_number}"
+
+          case BackgroundJobs.enqueue("calendar_incremental_sync", %{
+                 "user_id" => user_id,
+                 "queue" => "connectors",
+                 "payload" => %{"channel_id" => channel_id, "resource_id" => resource_id},
+                 "dedupe_key" => dedupe_key
+               }) do
+            {:ok, _job} ->
               event =
-                Connector.build_event("calendar_sync", "google_calendar", %{
+                Connector.build_event("calendar_webhook_enqueued", "google_calendar", %{
                   user_id: user_id,
                   channel_id: channel_id,
-                  resource_id: resource_id,
-                  events: events
+                  resource_id: resource_id
                 })
 
               {:ok, topic, event}
 
             {:error, reason} ->
-              Logger.warning("Failed to sync calendar",
+              Logger.warning("Failed to enqueue Calendar incremental sync",
                 user_id: user_id,
                 reason: inspect(reason)
               )
 
-              # Still publish notification of change
-              event =
-                Connector.build_event("calendar_changed", "google_calendar", %{
-                  user_id: user_id,
-                  channel_id: channel_id,
-                  resource_id: resource_id,
-                  sync_failed: true
-                })
-
-              {:ok, topic, event}
+              {:error, reason}
           end
 
         "not_exists" ->
@@ -180,22 +183,76 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   Returns `{:ok, events}` or `{:error, reason}`.
   """
   def sync_calendar_events(user_id, opts \\ []) do
+    case sync_calendar_events_with_token(user_id, opts) do
+      {:ok, events, _next_sync_token} -> {:ok, events}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Same as `sync_calendar_events/2`, but also returns the response's
+  `nextSyncToken` so the caller can persist it as a cursor. Used by the
+  `calendar_incremental_sync` background job.
+
+  Returns `{:ok, events, next_sync_token}` or `{:error, reason}`. On a 410
+  (expired sync token), `fetch_events/2` already falls back to one full
+  window fetch internally, so the token returned here is always the fresh
+  one to store.
+  """
+  def sync_calendar_events_with_token(user_id, opts \\ []) do
     provider = Keyword.get(opts, :provider, "google")
 
     case OAuth.get_valid_access_token(user_id, provider) do
       {:ok, token} ->
         case fetch_events(token, opts) do
-          {:ok, events} = ok ->
+          {:ok, events, next_sync_token} ->
             ingest_events(user_id, events)
-            ok
+            {:ok, events, next_sync_token}
 
-          other ->
-            other
+          {:error, reason} ->
+            {:error, reason}
         end
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @doc """
+  Cursor-aware incremental sync used by the `calendar_incremental_sync`
+  background job. Reads the stored `calendar_sync_token` cursor for
+  `account`, fetches events (a full window fetch when no cursor exists yet),
+  ingests them, and persists the fresh `nextSyncToken`.
+  """
+  def sync_history(user_id, account, opts \\ []) do
+    provider = Keyword.get(opts, :provider, account.provider)
+    cursor = SourceCursors.get(account.id, @sync_token_cursor_kind)
+
+    fetch_opts =
+      case cursor do
+        %{value: value} when is_binary(value) and value != "" ->
+          Keyword.put(opts, :sync_token, value)
+
+        _ ->
+          opts
+      end
+
+    case sync_calendar_events_with_token(user_id, Keyword.put(fetch_opts, :provider, provider)) do
+      {:ok, events, next_sync_token} ->
+        persist_sync_token(account, next_sync_token)
+        {:ok, %{count: length(events), next_sync_token: next_sync_token}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp persist_sync_token(_account, next_sync_token)
+       when next_sync_token in [nil, ""],
+       do: :ok
+
+  defp persist_sync_token(account, next_sync_token) do
+    SourceCursors.put(account, @sync_token_cursor_kind, %{"value" => next_sync_token})
   end
 
   @doc """
@@ -310,10 +367,11 @@ defmodule Maraithon.Connectors.GoogleCalendar do
       {:ok, response} ->
         events = parse_events(response["items"] || [])
 
-        {:ok, events}
+        {:ok, events, response["nextSyncToken"]}
 
       {:error, {:http_status, 410, _}} ->
-        # Sync token expired - do full sync
+        # Sync token expired - clear it and do one full window fetch; the
+        # fresh nextSyncToken from that fetch is what gets persisted.
         fetch_events(access_token, Keyword.delete(opts, :sync_token))
 
       {:error, reason} ->
