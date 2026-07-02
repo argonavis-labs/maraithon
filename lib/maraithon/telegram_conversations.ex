@@ -30,7 +30,13 @@ defmodule Maraithon.TelegramConversations do
     reply_to_message_id = read_string(attrs, "reply_to_message_id")
     root_message_id = read_string(attrs, "root_message_id", reply_to_message_id)
     confirmation_reply? = read_bool(attrs, "confirmation_reply", false)
-    clarification_reply? = read_bool(attrs, "clarification_reply", true)
+    # Default false, matching the confirmation path: a caller that doesn't
+    # explicitly compute whether this message looks like an answer to a
+    # pending clarification (e.g. a push landing via `PushBroker`) must not
+    # silently attach to — and keep alive — a stale
+    # `pending_clarification` conversation. Only `TelegramRouter`, which
+    # inspects the inbound text, should opt in.
+    clarification_reply? = read_bool(attrs, "clarification_reply", false)
     now = DateTime.utc_now()
 
     conversation =
@@ -252,7 +258,12 @@ defmodule Maraithon.TelegramConversations do
   defp insert_or_reuse_turn(conversation, attrs, telegram_message_id) do
     %Turn{}
     |> Turn.changeset(Map.merge(attrs, %{"conversation_id" => conversation.id}))
-    |> Repo.insert()
+    # `append_turn/2` runs this inside a `Repo.transaction`. Without
+    # `mode: :savepoint`, a real unique-constraint violation here aborts the
+    # whole Postgres transaction, so the `Repo.get_by` lookup below (needed
+    # to fetch-and-reuse the existing turn) would itself raise
+    # `Postgrex.Error, 25P02 in_failed_sql_transaction` instead of running.
+    |> Repo.insert(mode: :savepoint)
     |> case do
       {:ok, turn} ->
         {:ok, turn, :inserted}
@@ -273,12 +284,23 @@ defmodule Maraithon.TelegramConversations do
     end
   end
 
-  defp unique_constraint_error?(changeset, field) do
+  # Must match the `name:` passed to `unique_constraint/3` for this field in
+  # `Turn.changeset/2` — see the comment there on why this is truncated to
+  # Postgres's 63-byte identifier limit rather than the full inferred name.
+  @telegram_message_id_constraint_name "telegram_conversation_turns_conversation_id_telegram_message_id"
+
+  defp unique_constraint_error?(changeset, :telegram_message_id) do
     Enum.any?(changeset.errors, fn
-      {^field, {_message, opts}} -> Keyword.get(opts, :constraint) == :unique
-      _ -> false
+      {:telegram_message_id, {_message, opts}} ->
+        Keyword.get(opts, :constraint) == :unique and
+          Keyword.get(opts, :constraint_name) == @telegram_message_id_constraint_name
+
+      _ ->
+        false
     end)
   end
+
+  defp unique_constraint_error?(_changeset, _field), do: false
 
   def update_turn_text(chat_id, telegram_message_id, text)
       when is_binary(chat_id) and is_binary(telegram_message_id) and is_binary(text) do
