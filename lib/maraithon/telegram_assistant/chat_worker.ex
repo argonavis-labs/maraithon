@@ -100,13 +100,18 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
       {:noreply, state}
     else
       # `run_router/2` never lets an exception, exit, or throw escape — it
-      # always resolves to a handled outcome (success, or a caught failure
-      # with a fallback reply attempted). Only once that's true do we mark
-      # the message id as seen: if the worker somehow still died before this
-      # point (e.g. the BEAM itself killed it), the id is never remembered,
-      # so a Telegram webhook retry can still be processed by a fresh worker.
-      run_router(data, state.chat_id)
-      {:noreply, remember(state, message_id)}
+      # always resolves to `:ok` (success, or a caught failure whose fallback
+      # reply was actually delivered) or `:unhandled` (a caught failure whose
+      # fallback reply also failed to send). Only `:ok` marks the message id
+      # as seen. If the worker dies outright before this point, or the
+      # fallback itself could not reach the user, the id is never
+      # remembered, so a Telegram webhook retry (or any other redelivery of
+      # the same message id) can still be processed — by this worker or a
+      # fresh one — instead of the message being silently, permanently lost.
+      case run_router(data, state.chat_id) do
+        :ok -> {:noreply, remember(state, message_id)}
+        :unhandled -> {:noreply, state}
+      end
     end
   end
 
@@ -127,8 +132,8 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   # Any crash anywhere inside `TelegramRouter.handle_message/1` — including a
   # `GenServer.call` timeout (`:exit`) surfacing from deep in the tool/agent
   # stack — lands here instead of killing the worker. The failure is only
-  # considered "handled" once a fallback reply has been attempted, so the
-  # user is never left with silence.
+  # considered "handled" (and the message id eligible to be marked seen)
+  # once the fallback reply has actually been delivered to the user.
   defp handle_router_failure(data, chat_id, kind, reason) do
     Logger.warning("[telegram_fallback] ChatWorker message handling failed",
       chat_id: chat_id,
@@ -139,7 +144,10 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
     send_result = send_fallback_reply(data, chat_id)
     _ = record_fallback_event(data, chat_id, kind, reason, send_result)
 
-    :ok
+    case send_result do
+      {:ok, _} -> :ok
+      _ -> :unhandled
+    end
   end
 
   defp send_fallback_reply(data, chat_id) do
