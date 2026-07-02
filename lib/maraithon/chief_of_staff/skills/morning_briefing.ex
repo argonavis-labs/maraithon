@@ -25,6 +25,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Memory
   alias Maraithon.Spend
   alias Maraithon.OpenLoops
+  alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Todos
   alias Maraithon.Tracing
 
@@ -788,7 +789,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "todos" =>
           user_id
           |> Todos.list_open_for_user(limit: 100)
-          |> Enum.map(&todo_for_prompt/1)
+          |> Enum.map(&todo_for_prompt/1),
+        "held_interruptions" => held_interruptions_for_prompt(user_id)
       },
       "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
       "relationships" =>
@@ -1332,6 +1334,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
        Local source rule:
        When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
+
+       Held interruptions rule:
+       open_work.held_interruptions lists proactive Telegram pushes that were held instead of
+       interrupting (quiet hours, the hourly interruption budget, or a model hold decision) and
+       are now due for review in this brief. Do not silently drop them: fold any that still need
+       a decision into Needs Your Attention, Open Commitments, or another appropriate section
+       using hold_reason and why_now for context, and skip any that are already fully covered by
+       another item in this brief.
 
        Source digest rule:
        The morning briefing payload is assembled from independently bounded source digests for
@@ -5339,6 +5349,29 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "source_item_id" => todo.source_item_id,
       "source_occurred_at" => prompt_time(todo.source_occurred_at)
     }
+  end
+
+  # SPEC 08 R2: interruptions held for quiet hours, the interruption
+  # budget, or the model's own hold disposition must still reach the
+  # operator instead of vanishing. Fold them into the brief once, then
+  # mark them delivered so they do not repeat on every future brief.
+  defp held_interruptions_for_prompt(user_id) do
+    held = ProactiveQueue.list_held_for_user(user_id, limit: 25)
+
+    Enum.map(held, fn candidate ->
+      Maraithon.TelegramAssistant.ProactiveQueue.mark_delivered(candidate)
+
+      %{
+        "id" => candidate.id,
+        "source" => candidate.source,
+        "title" => candidate.title,
+        "body" => candidate.body,
+        "why_now" => candidate.why_now,
+        "urgency" => candidate.urgency,
+        "hold_reason" => candidate.plan_reason,
+        "held_since" => prompt_time(candidate.updated_at)
+      }
+    end)
   end
 
   defp recent_unread_message?(message, lookback_start) when is_map(message) do

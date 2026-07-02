@@ -609,6 +609,7 @@ defmodule Maraithon.AssistantHarness do
     - If any candidate is assigned digest, write one compact digest_intro that can introduce the grouped candidate cards.
     - Keep reasons short, source-grounded, and safe for audit logs.
     - Do not invent facts outside the candidate snapshots, context, recent pushes, and user preferences.
+    - Use operator_feedback.good_interruption_examples and operator_feedback.bad_interruption_examples below to calibrate what this specific operator has previously marked helpful vs not helpful; steer dispositions toward the good pattern and away from the bad pattern for similar candidates.
     - The runtime policy below is authoritative for valid dispositions and request budgets.
 
     Pending candidates JSON:
@@ -623,9 +624,22 @@ defmodule Maraithon.AssistantHarness do
     Interruption budget JSON:
     #{PromptStability.encode!(Map.get(payload, :interruption_budget) || Map.get(payload, "interruption_budget") || %{})}
 
+    Good interruptions for this operator (thumbs-up feedback) JSON:
+    #{PromptStability.encode!(operator_feedback_field(payload, :good_interruption_examples))}
+
+    Bad interruptions for this operator (thumbs-down feedback) JSON:
+    #{PromptStability.encode!(operator_feedback_field(payload, :bad_interruption_examples))}
+
     Runtime policy JSON:
     #{PromptStability.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
     """
+  end
+
+  defp operator_feedback_field(payload, field) do
+    operator_feedback =
+      Map.get(payload, :operator_feedback) || Map.get(payload, "operator_feedback") || %{}
+
+    Map.get(operator_feedback, field) || Map.get(operator_feedback, Atom.to_string(field)) || []
   end
 
   defp policy_value(opts, key, default) do
