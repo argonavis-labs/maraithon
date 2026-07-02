@@ -5,6 +5,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   alias Maraithon.ChiefOfStaff.{Skills, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Crm
   alias Maraithon.LocalBrowserHistory
   alias Maraithon.LocalCalendar
@@ -356,17 +357,25 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       bundle = SourceBundle.mark_unavailable(bundle, "slack", "slack_workspace_not_connected")
       {put_source_summary(telemetry, "slack", %{"status" => "unavailable"}), bundle}
     else
+      now = context[:timestamp] || DateTime.utc_now()
+
       oldest =
-        (context[:timestamp] || DateTime.utc_now())
+        now
         |> DateTime.add(-plan.lookback_hours, :hour)
         |> DateTime.to_unix(:second)
         |> Integer.to_string()
 
+      now_watermark = now |> DateTime.to_unix(:second) |> Integer.to_string()
+
       {workspaces, fetches} =
         Enum.reduce(team_ids, {[], telemetry["fetches"]}, fn team_id,
                                                              {workspace_acc, fetch_acc} ->
-          case fetch_slack_workspace(user_id, source_scope, team_id, plan, oldest) do
+          slack_account = ConnectedAccounts.get(user_id, "slack:#{team_id}")
+          team_oldest = slack_poll_oldest(slack_account, oldest)
+
+          case fetch_slack_workspace(user_id, source_scope, team_id, plan, team_oldest) do
             {:ok, workspace, workspace_fetches} ->
+              advance_slack_watermark(slack_account, now_watermark)
               {[workspace | workspace_acc], workspace_fetches ++ fetch_acc}
 
             {:error, reason, workspace_fetches} ->
@@ -426,6 +435,36 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         })
 
       {telemetry, bundle}
+    end
+  end
+
+  # Slack recomputes `oldest = now - lookback_hours` every cycle. When a
+  # `slack_watermark` cursor exists for this workspace, fetch only messages
+  # after the last successful poll instead; the lookback window remains the
+  # fallback for workspaces with no cursor yet.
+  defp slack_poll_oldest(nil, fallback_oldest), do: fallback_oldest
+
+  defp slack_poll_oldest(account, fallback_oldest) do
+    case SourceCursors.get(account.id, "slack_watermark") do
+      %{value: value} when is_binary(value) and value != "" -> value
+      _ -> fallback_oldest
+    end
+  end
+
+  defp advance_slack_watermark(nil, _now_watermark), do: :ok
+
+  defp advance_slack_watermark(account, now_watermark) do
+    case SourceCursors.put(account, "slack_watermark", %{"value" => now_watermark}) do
+      {:ok, _cursor} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to advance Slack watermark",
+          provider: account.provider,
+          reason: inspect(reason)
+        )
+
+        :ok
     end
   end
 
@@ -1212,11 +1251,19 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       {put_source_summary(telemetry, "gmail", %{"status" => "unavailable"}), bundle}
     else
       lookback_days = max(div(plan.lookback_hours, 24), @commercial_gmail_lookback_days)
-      query = "newer_than:#{lookback_days}d"
+      fallback_query = "newer_than:#{lookback_days}d"
+
+      now_watermark =
+        (context[:timestamp] || DateTime.utc_now())
+        |> DateTime.to_unix(:second)
+        |> Integer.to_string()
 
       {messages_by_provider, fetches} =
         Enum.reduce(providers, {%{}, telemetry["fetches"]}, fn provider,
                                                                {message_acc, fetch_acc} ->
+          account = ConnectedAccounts.get(user_id, provider)
+          query = gmail_poll_query(account, fallback_query)
+
           case gmail_module().fetch_messages(user_id,
                  max_results: plan.gmail_message_limit,
                  label_ids: [],
@@ -1224,6 +1271,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                  provider: provider
                ) do
             {:ok, messages} ->
+              advance_gmail_watermark(account, now_watermark)
+
               commercial_messages =
                 fetch_commercial_gmail_messages(user_id, provider, plan.commercial_gmail_queries)
 
@@ -1291,7 +1340,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           "sent_messages" => filter_messages_by_label(messages, "SENT", plan.sent_limit),
           "messages_by_provider" => messages_by_provider,
           "providers" => providers,
-          "metadata" => %{"mode" => "connector", "query" => query},
+          "metadata" => %{"mode" => "connector", "query" => fallback_query},
           "status" => status,
           "fetched_at" => context[:timestamp] || DateTime.utc_now()
         })
@@ -1309,6 +1358,36 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         })
 
       {telemetry, bundle}
+    end
+  end
+
+  # Gmail's `newer_than:Nd` window fetch always re-scans the whole lookback
+  # window. When a `gmail_poll_watermark` cursor exists for this account,
+  # fetch only messages after the last successful poll instead; the window
+  # fetch remains the fallback for accounts with no cursor yet.
+  defp gmail_poll_query(nil, fallback_query), do: fallback_query
+
+  defp gmail_poll_query(account, fallback_query) do
+    case SourceCursors.get(account.id, "gmail_poll_watermark") do
+      %{value: value} when is_binary(value) and value != "" -> "after:#{value}"
+      _ -> fallback_query
+    end
+  end
+
+  defp advance_gmail_watermark(nil, _now_watermark), do: :ok
+
+  defp advance_gmail_watermark(account, now_watermark) do
+    case SourceCursors.put(account, "gmail_poll_watermark", %{"value" => now_watermark}) do
+      {:ok, _cursor} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to advance Gmail poll watermark",
+          provider: account.provider,
+          reason: inspect(reason)
+        )
+
+        :ok
     end
   end
 
