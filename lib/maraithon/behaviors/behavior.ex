@@ -60,11 +60,13 @@ defmodule Maraithon.Behaviors.Behavior do
   @callback handle_effect_result({:llm_call | :tool_call, result :: any()}, state(), context()) ::
               {:emit, {atom(), map()}, state()}
               | {:effect, effect(), state()}
+              | {:continue, state()}
               | {:idle, state()}
 
   @callback handle_effect_error(:llm_call | :tool_call, reason :: any(), state(), context()) ::
               {:emit, {atom(), map()}, state()}
               | {:effect, effect(), state()}
+              | {:continue, state()}
               | {:idle, state()}
 
   @doc """

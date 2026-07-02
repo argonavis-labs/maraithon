@@ -170,6 +170,55 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
     assert next_state.resume_index == 0
   end
 
+  test "routes continue from an effect result back to the originating skill", %{
+    context: context
+  } do
+    state =
+      AIChiefOfStaff.init(%{
+        "user_id" => context.user_id,
+        "skill_configs" => %{
+          "alpha" => %{
+            "wakeup_mode" => "effect",
+            "effect_kind" => "llm_call",
+            "effect_params" => %{"messages" => [%{"role" => "user", "content" => "hi"}]},
+            "effect_result_mode" => "continue",
+            "effect_continue_wakeup_mode" => "emit",
+            "wakeup_emit_type" => "briefs_recorded",
+            "wakeup_payload" => %{
+              "count" => 1,
+              "user_id" => context.user_id,
+              "cadences" => ["morning"]
+            }
+          },
+          "beta" => %{"wakeup_mode" => "idle"}
+        }
+      })
+
+    assert {:effect, {:llm_call, _params}, waiting_state} =
+             AIChiefOfStaff.handle_wakeup(state, context)
+
+    assert waiting_state.pending_effect_skill_id == "alpha"
+    assert waiting_state.resume_index == 1
+
+    assert {:continue, continued_state} =
+             AIChiefOfStaff.handle_effect_result(
+               {:llm_call, %{content: "ok"}},
+               waiting_state,
+               context
+             )
+
+    assert continued_state.pending_effect_skill_id == nil
+    assert continued_state.resume_index == 0
+    assert get_in(continued_state.skill_states, ["alpha", :wakeup_mode]) == "emit"
+
+    assert {:emit, {:briefs_recorded, payload}, next_state} =
+             AIChiefOfStaff.handle_wakeup(continued_state, context)
+
+    assert payload["cadences"] == ["morning"]
+    assert next_state.pending_effect_skill_id == nil
+    assert next_state.resume_index == 0
+  end
+
   test "runs only the skills interested in a pubsub trigger", %{context: context} do
     event_context = %{
       context

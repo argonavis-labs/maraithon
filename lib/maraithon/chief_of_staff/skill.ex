@@ -31,6 +31,7 @@ defmodule Maraithon.ChiefOfStaff.Skill do
             ) ::
               {:emit, {atom(), map()}, Behavior.state()}
               | {:effect, Behavior.effect(), Behavior.state()}
+              | {:continue, Behavior.state()}
               | {:idle, Behavior.state()}
 
   @callback handle_effect_error(
@@ -41,6 +42,7 @@ defmodule Maraithon.ChiefOfStaff.Skill do
             ) ::
               {:emit, {atom(), map()}, Behavior.state()}
               | {:effect, Behavior.effect(), Behavior.state()}
+              | {:continue, Behavior.state()}
               | {:idle, Behavior.state()}
 
   @callback next_wakeup(Behavior.state()) :: Behavior.wakeup_schedule()

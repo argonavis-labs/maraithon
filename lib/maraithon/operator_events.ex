@@ -8,6 +8,29 @@ defmodule Maraithon.OperatorEvents do
   alias Maraithon.OperatorEvents.OperatorEvent
   alias Maraithon.Repo
 
+  @doc """
+  Records an operator event only when the user/dedupe key has not already
+  been claimed.
+
+  Returns whether this call inserted the event or found an existing one. This
+  is for side effects that must be guarded before they execute, such as
+  notification sends from multiple runtime processes.
+  """
+  def record_once(attrs) when is_map(attrs) do
+    normalized = normalize_attrs(attrs)
+
+    case OperatorEvent.changeset(%OperatorEvent{}, normalized)
+         |> Ecto.Changeset.apply_action(:insert) do
+      {:ok, %OperatorEvent{} = event} ->
+        insert_once(event)
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  def record_once(_attrs), do: {:error, :invalid_operator_event}
+
   def record(attrs) when is_map(attrs) do
     normalized = normalize_attrs(attrs)
 
@@ -67,6 +90,44 @@ defmodule Maraithon.OperatorEvents do
   end
 
   defp handle_dedupe_conflict({:error, changeset}, _attrs), do: {:error, changeset}
+
+  defp insert_once(%OperatorEvent{} = event) do
+    now = DateTime.utc_now()
+
+    row = %{
+      id: Ecto.UUID.generate(),
+      user_id: event.user_id,
+      project_id: event.project_id,
+      source: event.source,
+      event_type: event.event_type,
+      scope: event.scope,
+      source_item_id: event.source_item_id,
+      dedupe_key: event.dedupe_key,
+      occurred_at: event.occurred_at,
+      payload: event.payload || %{},
+      metadata: event.metadata || %{},
+      inserted_at: now,
+      updated_at: now
+    }
+
+    case Repo.insert_all(OperatorEvent, [row],
+           on_conflict: :nothing,
+           conflict_target: [:user_id, :dedupe_key],
+           returning: true
+         ) do
+      {1, [%OperatorEvent{} = inserted]} ->
+        {:ok, :inserted, inserted}
+
+      {1, [inserted]} when is_map(inserted) ->
+        {:ok, :inserted, struct(OperatorEvent, inserted)}
+
+      {0, _} ->
+        case Repo.get_by(OperatorEvent, user_id: event.user_id, dedupe_key: event.dedupe_key) do
+          %OperatorEvent{} = existing -> {:ok, :existing, existing}
+          nil -> {:error, :dedupe_conflict_not_found}
+        end
+    end
+  end
 
   defp maybe_filter_user(query, nil), do: query
   defp maybe_filter_user(query, ""), do: query

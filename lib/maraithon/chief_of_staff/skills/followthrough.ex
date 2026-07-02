@@ -191,6 +191,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
     case module.handle_effect_result(effect_result, sub_state, context) do
       {:effect, effect, next_state} -> {{:effect, effect}, next_state}
       {:emit, emit, next_state} -> {{:emit, emit}, next_state}
+      {:continue, next_state} -> {:continue, next_state}
       {:idle, next_state} -> {:idle, next_state}
     end
   end

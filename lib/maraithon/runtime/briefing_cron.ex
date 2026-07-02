@@ -10,6 +10,8 @@ defmodule Maraithon.Runtime.BriefingCron do
   use GenServer
 
   alias Maraithon.BriefingSchedules
+  alias Maraithon.EmailDelivery
+  alias Maraithon.OperatorEvents
   alias Maraithon.Runtime.Config
   alias Maraithon.Runtime.Scheduler
 
@@ -59,15 +61,20 @@ defmodule Maraithon.Runtime.BriefingCron do
       {:noreply, state}
   end
 
-  defp alert_late_briefings(now, state) do
+  @doc false
+  def alert_late_briefings(%DateTime{} = now, state \\ %{alerted_keys: MapSet.new()}) do
+    state = Map.put_new(state, :alerted_keys, MapSet.new())
+
     BriefingSchedules.list_due_morning_agents(now)
     |> Enum.filter(&briefing_late?(&1, now))
     |> Enum.reduce(state, fn due, acc ->
-      if MapSet.member?(acc.alerted_keys, due.dedupe_key) do
+      alert_key = late_alert_key(due)
+
+      if MapSet.member?(acc.alerted_keys, alert_key) do
         acc
       else
-        deliver_late_alert(due)
-        %{acc | alerted_keys: MapSet.put(acc.alerted_keys, due.dedupe_key)}
+        maybe_deliver_late_alert(due, now)
+        %{acc | alerted_keys: MapSet.put(acc.alerted_keys, alert_key)}
       end
     end)
   end
@@ -81,6 +88,49 @@ defmodule Maraithon.Runtime.BriefingCron do
     now_minutes - scheduled_minutes >= @late_alert_after_minutes
   end
 
+  defp maybe_deliver_late_alert(due, now) do
+    case claim_late_alert(due, now) do
+      {:ok, :inserted} ->
+        deliver_late_alert(due)
+
+      {:ok, :existing} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Late-briefing alert dedupe failed",
+          user_id: due.user_id,
+          dedupe_key: due.dedupe_key,
+          reason: inspect(reason)
+        )
+
+        :ok
+    end
+  end
+
+  defp claim_late_alert(due, now) do
+    case OperatorEvents.record_once(%{
+           user_id: due.user_id,
+           source: "briefing_cron",
+           event_type: "morning_briefing.late_alert_attempted",
+           source_item_id: due.dedupe_key,
+           dedupe_key: operator_event_late_alert_key(due),
+           occurred_at: now,
+           payload: %{
+             "agent_id" => due.agent_id,
+             "briefing_dedupe_key" => due.dedupe_key,
+             "local_date" => Date.to_iso8601(due.local_date),
+             "timezone" => due.timezone_name,
+             "timezone_offset_hours" => due.timezone_offset_hours,
+             "morning_brief_hour_local" => due.morning_brief_hour_local,
+             "morning_brief_minute_local" => due.morning_brief_minute_local
+           },
+           metadata: %{"delivery_channel" => "email"}
+         }) do
+      {:ok, status, _event} -> {:ok, status}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp deliver_late_alert(due) do
     user_id = due.user_id
 
@@ -90,7 +140,7 @@ defmodule Maraithon.Runtime.BriefingCron do
         dedupe_key: due.dedupe_key
       )
 
-      Maraithon.EmailDelivery.send(user_id, %{
+      email_module().send(user_id, %{
         subject: "Your morning briefing is running late",
         text_body: """
         Your Maraithon morning briefing has not been generated yet today.
@@ -110,6 +160,17 @@ defmodule Maraithon.Runtime.BriefingCron do
   rescue
     exception ->
       Logger.warning("Late-briefing alert failed", reason: Exception.message(exception))
+  end
+
+  defp late_alert_key(due), do: "#{due.user_id}:#{operator_event_late_alert_key(due)}"
+
+  defp operator_event_late_alert_key(due) do
+    "briefing_cron:late_alert:#{due.dedupe_key}"
+  end
+
+  defp email_module do
+    Application.get_env(:maraithon, :briefing_cron, [])
+    |> Keyword.get(:email_module, EmailDelivery)
   end
 
   # Briefings deliver by email and Telegram; generation must never be

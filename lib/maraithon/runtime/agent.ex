@@ -427,6 +427,10 @@ defmodule Maraithon.Runtime.Agent do
               {:effect, effect, new_behavior_state} ->
                 data = %{data | behavior_state: new_behavior_state}
                 request_effect(data, effect)
+
+              {:continue, new_behavior_state} ->
+                data = %{data | behavior_state: new_behavior_state}
+                {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
             end
 
           {:error, reason} ->
@@ -465,6 +469,10 @@ defmodule Maraithon.Runtime.Agent do
                 {:effect, effect, new_behavior_state} ->
                   data = %{data | behavior_state: new_behavior_state}
                   request_effect(data, effect)
+
+                {:continue, new_behavior_state} ->
+                  data = %{data | behavior_state: new_behavior_state}
+                  {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
               end
             else
               data = fail_current_run(data, reason)

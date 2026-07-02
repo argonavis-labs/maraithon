@@ -82,6 +82,13 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
             run_from_index(state.resume_index || 0, state, context)
 
+          {:continue, next_skill_state} ->
+            {:continue,
+             state
+             |> put_skill_state(skill_id, next_skill_state)
+             |> Map.put(:pending_effect_skill_id, nil)
+             |> Map.put(:resume_index, index)}
+
           {:idle, next_skill_state} ->
             state =
               state
@@ -118,6 +125,13 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
                 |> stash_emit(emit, skill_id, index)
 
               run_from_index(state.resume_index || 0, state, context)
+
+            {:continue, next_skill_state} ->
+              {:continue,
+               state
+               |> put_skill_state(skill_id, next_skill_state)
+               |> Map.put(:pending_effect_skill_id, nil)
+               |> Map.put(:resume_index, index)}
 
             {:idle, next_skill_state} ->
               state =

@@ -33,6 +33,7 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
       effect_result_mode: read_string(config, "effect_result_mode", "idle"),
       effect_emit_type: read_string(config, "effect_emit_type", nil),
       effect_payload: read_map(config, "effect_payload"),
+      effect_continue_wakeup_mode: read_string(config, "effect_continue_wakeup_mode", "idle"),
       include_context_keys: read_list(config, "include_context_keys"),
       next_wakeup:
         case read_integer(config, "next_wakeup_ms") do
@@ -93,6 +94,9 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
 
       "effect" ->
         {:effect, {effect_kind(state.effect_kind), state.effect_params}, state}
+
+      "continue" ->
+        {:continue, %{state | wakeup_mode: state.effect_continue_wakeup_mode}}
 
       _ ->
         {:idle, state}

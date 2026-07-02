@@ -112,7 +112,9 @@ defmodule Maraithon.Runtime.AgentTest do
   alias Maraithon.Accounts
   alias Maraithon.Runtime.Agent, as: RuntimeAgent
   alias Maraithon.Agents
+  alias Maraithon.ChiefOfStaff.Skills
   alias Maraithon.OperatorEvents
+  alias Maraithon.TestSupport.ChiefOfStaffTestSkill
 
   # ----------------------------------------------------------------------------
   # Test Setup
@@ -840,6 +842,78 @@ defmodule Maraithon.Runtime.AgentTest do
       Process.sleep(100)
       # Agent may crash due to effect execution, that's ok for this test
       :ok
+    end
+
+    test "continues behavior after an effect result without orphaning the run", %{
+      scheduler_pid: _scheduler_pid
+    } do
+      previous_skills_config = Application.fetch_env(:maraithon, Skills)
+
+      Application.put_env(:maraithon, Skills,
+        skill_modules: %{"alpha" => ChiefOfStaffTestSkill},
+        default_enabled_ids: ["alpha"]
+      )
+
+      on_exit(fn ->
+        case previous_skills_config do
+          {:ok, config} -> Application.put_env(:maraithon, Skills, config)
+          :error -> Application.delete_env(:maraithon, Skills)
+        end
+      end)
+
+      user_id = "runtime-continue@example.com"
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          user_id: user_id,
+          behavior: "ai_chief_of_staff",
+          config: %{
+            "user_id" => user_id,
+            "enabled_skills" => ["alpha"],
+            "skill_configs" => %{
+              "alpha" => %{
+                "wakeup_mode" => "effect",
+                "effect_kind" => "llm_call",
+                "effect_params" => %{
+                  "messages" => [%{"role" => "user", "content" => "first pass"}]
+                },
+                "effect_result_mode" => "continue",
+                "effect_continue_wakeup_mode" => "emit",
+                "wakeup_emit_type" => "briefs_recorded",
+                "wakeup_payload" => %{
+                  "count" => 1,
+                  "user_id" => user_id,
+                  "cadences" => ["morning"]
+                }
+              }
+            }
+          },
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      pid = start_supervised!({RuntimeAgent, agent})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      {:idle, _data} = :sys.get_state(pid)
+
+      send(pid, {:wakeup, "wakeup", Ecto.UUID.generate(), %{}})
+
+      {:waiting_effect, waiting_data} = :sys.get_state(pid)
+      assert waiting_data.current_run_id != nil
+
+      [effect_id] = Map.keys(waiting_data.pending_effects)
+      send(pid, {:effect_result, effect_id, {:ok, %{content: "continue"}}})
+
+      {:idle, idle_data} = :sys.get_state(pid)
+      assert idle_data.current_run_id == nil
+
+      assert [run] = Agents.list_agent_runs(agent.id, limit: 1)
+      assert run.status == "completed"
+      assert run.metadata["terminal_event"] == "briefs_recorded"
+
+      assert [%{payload: %{"cadences" => ["morning"]}}] =
+               Maraithon.Events.list_events(agent.id, types: ["briefs_recorded"])
     end
   end
 end
