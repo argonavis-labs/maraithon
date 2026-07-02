@@ -34,15 +34,20 @@ defmodule Maraithon.Connectors.Gmail do
 
   @behaviour Maraithon.Connectors.Connector
 
+  alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Crm.Ingest
   alias Maraithon.Crm.Observation
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
   alias Maraithon.Connectors.Connector
+  alias Maraithon.Runtime.BackgroundJobs
 
   require Logger
 
   @default_api_base "https://gmail.googleapis.com/gmail/v1"
+  @history_cursor_kind "gmail_history_id"
+  @full_resync_window_query "newer_than:1d"
+  @full_resync_message_limit 50
 
   # ===========================================================================
   # Watch Management
@@ -113,41 +118,40 @@ defmodule Maraithon.Connectors.Gmail do
     #   },
     #   "subscription": "projects/.../subscriptions/..."
     # }
-
+    #
+    # We only decode enough to identify the mailbox and enqueue a durable
+    # background job; the actual history fetch (and any Google API calls)
+    # happen out-of-request in `Maraithon.Runtime.BackgroundJobHandler` so the
+    # webhook can ack quickly and Pub/Sub never times out waiting on us.
     case decode_pubsub_message(params) do
-      {:ok, user_id, history_id} ->
+      {:ok, user_id, history_id, message_id} ->
         topic = "email:#{user_id}"
 
-        # Fetch the actual email changes
-        case sync_mail_changes(user_id, history_id) do
-          {:ok, messages} ->
-            ingest_messages(user_id, messages)
+        dedupe_key = gmail_webhook_dedupe_key(message_id, user_id, history_id)
 
+        case BackgroundJobs.enqueue("gmail_incremental_sync", %{
+               "user_id" => user_id,
+               "queue" => "connectors",
+               "payload" => %{"notification_history_id" => history_id},
+               "dedupe_key" => dedupe_key
+             }) do
+          {:ok, _job} ->
             event =
-              Connector.build_event("email_sync", "gmail", %{
+              Connector.build_event("email_webhook_enqueued", "gmail", %{
                 user_id: user_id,
-                history_id: history_id,
-                messages: messages
+                history_id: history_id
               })
 
             {:ok, topic, event}
 
           {:error, reason} ->
-            Logger.warning("Failed to sync mail changes",
+            Logger.warning("Failed to enqueue Gmail incremental sync",
               user_id: user_id,
               history_id: history_id,
               reason: inspect(reason)
             )
 
-            # Still notify that mail changed
-            event =
-              Connector.build_event("email_changed", "gmail", %{
-                user_id: user_id,
-                history_id: history_id,
-                sync_failed: true
-              })
-
-            {:ok, topic, event}
+            {:error, reason}
         end
 
       {:error, reason} ->
@@ -167,7 +171,109 @@ defmodule Maraithon.Connectors.Gmail do
   def sync_mail_changes(user_id, history_id) do
     case OAuth.get_valid_access_token(user_id, "google") do
       {:ok, token} ->
-        fetch_history(token, history_id)
+        case fetch_history(token, history_id) do
+          {:ok, messages, _latest_history_id} -> {:ok, messages}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Cursor-aware incremental sync used by the `gmail_incremental_sync`
+  background job.
+
+  Reads the stored `gmail_history_id` cursor for `account` and uses it as
+  `startHistoryId` (the *last processed* id, not the notification's own id).
+  On success, ingests the messages and advances the cursor to the response's
+  max historyId. When the stored id has expired (Gmail 404s) or no cursor
+  exists yet, falls back to a bounded recent-window full fetch and resets the
+  cursor to the mailbox's current history head.
+
+  Returns `{:ok, %{count: n, history_id: id, mode: :incremental | :full_resync}}`
+  or `{:error, reason}`.
+  """
+  def sync_history(user_id, account, opts \\ []) do
+    provider = Keyword.get(opts, :provider, account.provider)
+
+    case OAuth.get_valid_access_token(user_id, provider) do
+      {:ok, token} ->
+        cursor = SourceCursors.get(account.id, @history_cursor_kind)
+
+        case cursor_history_id(cursor) do
+          nil -> full_resync(user_id, account, token)
+          history_id -> incremental_sync(user_id, account, token, history_id)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp cursor_history_id(nil), do: nil
+  defp cursor_history_id(%{value: value}) when is_binary(value) and value != "", do: value
+  defp cursor_history_id(_cursor), do: nil
+
+  defp incremental_sync(user_id, account, token, history_id) do
+    case fetch_history(token, history_id) do
+      {:ok, messages, latest_history_id} ->
+        ingest_messages(user_id, messages)
+        persist_history_cursor(account, latest_history_id || history_id)
+        {:ok, %{count: length(messages), history_id: latest_history_id, mode: :incremental}}
+
+      {:error, :history_expired} ->
+        full_resync(user_id, account, token)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp full_resync(user_id, account, token) do
+    case fetch_messages(token,
+           max_results: @full_resync_message_limit,
+           label_ids: [],
+           query: @full_resync_window_query,
+           access_token: true
+         ) do
+      {:ok, messages} ->
+        ingest_messages(user_id, messages)
+
+        case current_history_id(token) do
+          {:ok, history_id} ->
+            persist_history_cursor(account, history_id)
+            {:ok, %{count: length(messages), history_id: history_id, mode: :full_resync}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp persist_history_cursor(_account, nil), do: :ok
+
+  defp persist_history_cursor(account, history_id) do
+    SourceCursors.put(account, @history_cursor_kind, %{"value" => to_string(history_id)})
+  end
+
+  @doc """
+  Fetches the mailbox's current `historyId` (the head of the history log),
+  used to establish a fresh cursor baseline after a full resync.
+  """
+  def current_history_id(access_token) do
+    url = "#{api_base_url()}/users/me/profile"
+
+    case Google.api_request(:get, url, access_token) do
+      {:ok, %{"historyId" => history_id}} when not is_nil(history_id) ->
+        {:ok, history_id}
+
+      {:ok, _response} ->
+        {:error, :missing_history_id}
 
       {:error, reason} ->
         {:error, reason}
@@ -431,7 +537,7 @@ defmodule Maraithon.Connectors.Gmail do
     url = "#{api_base_url()}/users/me/history?#{params}"
 
     case Google.api_request(:get, url, access_token) do
-      {:ok, %{"history" => history}} ->
+      {:ok, %{"history" => history} = response} ->
         # Extract added message IDs
         message_ids =
           history
@@ -454,11 +560,12 @@ defmodule Maraithon.Connectors.Gmail do
             _ -> []
           end)
 
-        {:ok, messages}
+        {:ok, messages, response["historyId"]}
 
-      {:ok, _} ->
-        # No history changes
-        {:ok, []}
+      {:ok, response} ->
+        # No history changes, but the response still carries the mailbox's
+        # current historyId - use it to advance the cursor.
+        {:ok, [], response["historyId"]}
 
       {:error, {:http_status, 404, _}} ->
         # History ID too old - need full sync
@@ -664,16 +771,17 @@ defmodule Maraithon.Connectors.Gmail do
     DateTime.from_unix!(expiration, :millisecond)
   end
 
-  defp decode_pubsub_message(%{"message" => %{"data" => data}}) do
+  defp decode_pubsub_message(%{"message" => %{"data" => data} = message}) do
     with {:ok, json} <- Base.decode64(data),
          {:ok, payload} <- Jason.decode(json) do
       # Gmail sends: {"emailAddress": "user@example.com", "historyId": "12345"}
       user_email = payload["emailAddress"]
       history_id = payload["historyId"]
+      message_id = message["messageId"]
 
       # We use email address as user_id for Gmail
       # In production, you'd map this to your internal user_id
-      {:ok, user_email, history_id}
+      {:ok, user_email, history_id, message_id}
     else
       _ -> {:error, :invalid_pubsub_message}
     end
@@ -681,6 +789,17 @@ defmodule Maraithon.Connectors.Gmail do
 
   defp decode_pubsub_message(_) do
     {:error, :invalid_pubsub_format}
+  end
+
+  # Pub/Sub's `messageId` uniquely identifies a delivery attempt; fall back to
+  # the (user, historyId) pair if it is ever missing so we still dedupe.
+  defp gmail_webhook_dedupe_key(message_id, _user_id, _history_id)
+       when is_binary(message_id) and message_id != "" do
+    "gmail_webhook:#{message_id}"
+  end
+
+  defp gmail_webhook_dedupe_key(_message_id, user_id, history_id) do
+    "gmail_webhook:#{user_id}:#{history_id}"
   end
 
   defp get_pubsub_topic do

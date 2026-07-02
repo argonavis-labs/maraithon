@@ -67,7 +67,9 @@ defmodule Maraithon.Connectors.GmailTest do
   end
 
   describe "handle_webhook/2 - valid payload" do
-    test "parses valid pubsub message and returns event" do
+    test "enqueues a background job and acks without calling Google" do
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("user@test.com")
+
       # Gmail sends payload: {"emailAddress": "user@example.com", "historyId": "12345"}
       payload_json = ~s({"emailAddress":"user@test.com","historyId":"99999"})
       encoded_data = Base.encode64(payload_json)
@@ -83,13 +85,35 @@ defmodule Maraithon.Connectors.GmailTest do
 
       conn = conn(:post, "/webhooks/google/gmail", params)
 
-      # Will return email_changed event since sync will fail (no token)
       {:ok, topic, event} = Gmail.handle_webhook(conn, params)
 
       assert topic == "email:user@test.com"
       assert event.source == "gmail"
-      # Either email_sync or email_changed depending on sync result
-      assert event.type in ["email_sync", "email_changed"]
+      assert event.type == "email_webhook_enqueued"
+
+      [job] = Maraithon.Runtime.BackgroundJobs.list(user_id: "user@test.com")
+      assert job.job_type == "gmail_incremental_sync"
+      assert job.status == "pending"
+      assert job.dedupe_key == "gmail_webhook:msg123"
+    end
+
+    test "dedupes repeated deliveries of the same Pub/Sub messageId" do
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("dedupe@test.com")
+
+      payload_json = ~s({"emailAddress":"dedupe@test.com","historyId":"1"})
+      encoded_data = Base.encode64(payload_json)
+
+      params = %{
+        "message" => %{"data" => encoded_data, "messageId" => "dupe-msg"}
+      }
+
+      conn = conn(:post, "/webhooks/google/gmail", params)
+
+      {:ok, _topic, _event} = Gmail.handle_webhook(conn, params)
+      {:ok, _topic, _event} = Gmail.handle_webhook(conn, params)
+
+      jobs = Maraithon.Runtime.BackgroundJobs.list(user_id: "dedupe@test.com")
+      assert length(jobs) == 1
     end
   end
 
@@ -234,6 +258,8 @@ defmodule Maraithon.Connectors.GmailTest do
 
   describe "handle_webhook/2 - successful sync" do
     setup do
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("user@test.com")
+
       # Create token for user that will be used in webhook
       {:ok, _token} =
         Maraithon.OAuth.store_tokens("user@test.com", "google", %{
@@ -250,7 +276,7 @@ defmodule Maraithon.Connectors.GmailTest do
       :ok
     end
 
-    test "returns email_changed event when sync fails on API" do
+    test "enqueues the sync job instead of calling Google inline" do
       payload_json = ~s({"emailAddress":"user@test.com","historyId":"99999"})
       encoded_data = Base.encode64(payload_json)
 
@@ -267,8 +293,11 @@ defmodule Maraithon.Connectors.GmailTest do
 
       assert topic == "email:user@test.com"
       assert event.source == "gmail"
-      # Sync will fail because API call fails, but event is still generated
-      assert event.type in ["email_sync", "email_changed"]
+      assert event.type == "email_webhook_enqueued"
+
+      [job] = Maraithon.Runtime.BackgroundJobs.list(user_id: "user@test.com")
+      assert job.job_type == "gmail_incremental_sync"
+      assert job.status == "pending"
     end
   end
 
@@ -529,6 +558,94 @@ defmodule Maraithon.Connectors.GmailTest do
       result = Gmail.sync_mail_changes("sync_expired_user", "12345")
 
       assert {:error, :history_expired} = result
+    end
+  end
+
+  describe "sync_history/3 - cursor-aware incremental sync with Bypass" do
+    test "uses the stored historyId cursor and advances it to the response max" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("gmail_cursor_user@example.com")
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("gmail_cursor_user@example.com", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
+
+      account = Maraithon.ConnectedAccounts.get("gmail_cursor_user@example.com", "google")
+
+      Maraithon.Connectors.SourceCursors.put(account, "gmail_history_id", %{"value" => "1000"})
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/history", fn conn ->
+        assert conn.query_string =~ "startHistoryId=1000"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"historyId" => "1050"}))
+      end)
+
+      {:ok, result} = Gmail.sync_history("gmail_cursor_user@example.com", account)
+
+      assert result.mode == :incremental
+      assert result.history_id == "1050"
+
+      cursor = Maraithon.Connectors.SourceCursors.get(account.id, "gmail_history_id")
+      assert cursor.value == "1050"
+    end
+
+    test "falls back to a bounded full resync and resets the cursor on history_expired" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("gmail_expired_user@example.com")
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("gmail_expired_user@example.com", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
+
+      account = Maraithon.ConnectedAccounts.get("gmail_expired_user@example.com", "google")
+
+      Maraithon.Connectors.SourceCursors.put(account, "gmail_history_id", %{"value" => "1"})
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/history", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(404, Jason.encode!(%{"error" => %{"code" => 404}}))
+      end)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"resultSizeEstimate" => 0}))
+      end)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/profile", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"historyId" => "9999", "emailAddress" => "x"}))
+      end)
+
+      {:ok, result} = Gmail.sync_history("gmail_expired_user@example.com", account)
+
+      assert result.mode == :full_resync
+      assert result.history_id == "9999"
+
+      cursor = Maraithon.Connectors.SourceCursors.get(account.id, "gmail_history_id")
+      assert cursor.value == "9999"
     end
   end
 
