@@ -191,6 +191,10 @@ defmodule Maraithon.AssistantHarness do
     compact_tool_history(tool_history, runtime_policy(opts))
   end
 
+  def failure_message(:chat_worker_crash) do
+    "Something went wrong handling that message on my side. Please try sending it again."
+  end
+
   def failure_message(:deeper_analysis_requested) do
     "Maraithon flagged this for deeper analysis but could not finish it. Ask again in a moment."
   end

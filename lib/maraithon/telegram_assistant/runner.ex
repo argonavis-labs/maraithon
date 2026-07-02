@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.ActionCards
   alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ContextEngine
+  alias Maraithon.OperatorEvents
   alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
@@ -609,24 +610,20 @@ defmodule Maraithon.TelegramAssistant.Runner do
     {:ok, %{delivery: delivery, summary: liveness_summary}} =
       TelegramAssistant.prepare_final_delivery(run.id)
 
-    case delivery.mode do
-      :suppress_after_timeout ->
-        {:ok, "degraded",
-         build_result_summary(message_class, prepared_action_id, state, liveness_summary)}
+    delivery =
+      resolve_effective_delivery(delivery, liveness_summary, run, Map.get(attrs, :chat_id))
 
-      _ ->
-        deliver_response_by_class(
-          conversation,
-          run,
-          response,
-          state,
-          attrs,
-          message_class,
-          prepared_action_id,
-          delivery,
-          liveness_summary
-        )
-    end
+    deliver_response_by_class(
+      conversation,
+      run,
+      response,
+      state,
+      attrs,
+      message_class,
+      prepared_action_id,
+      delivery,
+      liveness_summary
+    )
   end
 
   defp deliver_final_response(_conversation, run, _response, state, _attrs) do
@@ -638,6 +635,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
     {:ok, %{delivery: delivery, summary: liveness_summary}} =
       TelegramAssistant.prepare_final_delivery(run.id)
+
+    delivery =
+      resolve_effective_delivery(delivery, liveness_summary, run, Map.get(attrs, :chat_id))
 
     _ = maybe_record_loop_failure(run, reason, state)
 
@@ -656,11 +656,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
         result_summary: summary
       })
 
-    case {state.tool_history, Map.get(attrs, :conversation), delivery.mode} do
-      {_history, %Conversation{} = _conversation, :suppress_after_timeout} ->
-        :ok
-
-      {_history, %Conversation{} = conversation, _mode} ->
+    case {state.tool_history, Map.get(attrs, :conversation)} do
+      {_history, %Conversation{} = conversation} ->
         _ =
           TelegramAssistant.send_turn(
             conversation,
@@ -683,6 +680,75 @@ defmodule Maraithon.TelegramAssistant.Runner do
       _ ->
         :ok
     end
+  end
+
+  # `LivenessSession` never actually hands back `:suppress_after_timeout`
+  # today (it always resolves to `:send` or `:edit`), but this guards against
+  # any delivery path that would otherwise end a timed-out run with no
+  # user-visible message. If the "still working" notice was never actually
+  # delivered, force a plain send of the final response/failure message. If
+  # it was delivered, prefer editing that message in place over staying
+  # silent.
+  defp resolve_effective_delivery(
+         %{mode: :suppress_after_timeout} = delivery,
+         liveness_summary,
+         run,
+         chat_id
+       ) do
+    notice_delivered? = Map.get(liveness_summary || %{}, "timeout_notice_sent", false)
+    message_id = Map.get(delivery, :message_id)
+
+    effective_delivery =
+      if notice_delivered? and is_binary(message_id) do
+        %{mode: :edit, message_id: message_id}
+      else
+        %{mode: :send}
+      end
+
+    Logger.warning(
+      "[telegram_fallback] Liveness timeout suppression overridden to guarantee delivery",
+      run_id: run.id,
+      chat_id: chat_id,
+      timeout_notice_delivered: notice_delivered?,
+      resolved_mode: effective_delivery.mode
+    )
+
+    _ =
+      record_timeout_suppression_fallback(
+        run,
+        chat_id,
+        notice_delivered?,
+        effective_delivery.mode
+      )
+
+    effective_delivery
+  end
+
+  defp resolve_effective_delivery(delivery, _liveness_summary, _run, _chat_id), do: delivery
+
+  defp record_timeout_suppression_fallback(run, chat_id, notice_delivered?, resolved_mode) do
+    OperatorEvents.record(%{
+      user_id: run.user_id,
+      source: "telegram",
+      event_type: "telegram_fallback.timeout_suppression_overridden",
+      source_item_id: run.id,
+      dedupe_key: "telegram_fallback:timeout_suppression_overridden:#{run.id}",
+      payload: %{
+        "run_id" => run.id,
+        "chat_id" => chat_id,
+        "timeout_notice_delivered" => notice_delivered?,
+        "resolved_delivery_mode" => to_string(resolved_mode)
+      }
+    })
+  rescue
+    error ->
+      Logger.warning(
+        "[telegram_fallback] failed to record timeout suppression operator event",
+        run_id: run.id,
+        reason: Exception.message(error)
+      )
+
+      :ok
   end
 
   defp maybe_record_loop_failure(

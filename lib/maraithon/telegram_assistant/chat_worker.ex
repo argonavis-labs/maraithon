@@ -28,6 +28,10 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
 
   require Logger
 
+  alias Maraithon.AssistantHarness
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.OperatorEvents
+  alias Maraithon.TelegramResponder
   alias Maraithon.TelegramRouter
 
   @registry Maraithon.TelegramAssistant.ChatRegistry
@@ -95,6 +99,12 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
       # Duplicate webhook delivery — Telegram retried. Already handled.
       {:noreply, state}
     else
+      # `run_router/2` never lets an exception, exit, or throw escape — it
+      # always resolves to a handled outcome (success, or a caught failure
+      # with a fallback reply attempted). Only once that's true do we mark
+      # the message id as seen: if the worker somehow still died before this
+      # point (e.g. the BEAM itself killed it), the id is never remembered,
+      # so a Telegram webhook retry can still be processed by a fresh worker.
       run_router(data, state.chat_id)
       {:noreply, remember(state, message_id)}
     end
@@ -102,14 +112,100 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
 
   defp run_router(data, chat_id) do
     TelegramRouter.handle_message(data)
+    :ok
   rescue
     error ->
-      Logger.warning("ChatWorker message handling crashed",
+      handle_router_failure(data, chat_id, :exception, Exception.message(error))
+  catch
+    :exit, reason ->
+      handle_router_failure(data, chat_id, :exit, inspect(reason))
+
+    :throw, value ->
+      handle_router_failure(data, chat_id, :throw, inspect(value))
+  end
+
+  # Any crash anywhere inside `TelegramRouter.handle_message/1` — including a
+  # `GenServer.call` timeout (`:exit`) surfacing from deep in the tool/agent
+  # stack — lands here instead of killing the worker. The failure is only
+  # considered "handled" once a fallback reply has been attempted, so the
+  # user is never left with silence.
+  defp handle_router_failure(data, chat_id, kind, reason) do
+    Logger.warning("[telegram_fallback] ChatWorker message handling failed",
+      chat_id: chat_id,
+      kind: kind,
+      reason: reason
+    )
+
+    send_result = send_fallback_reply(data, chat_id)
+    _ = record_fallback_event(data, chat_id, kind, reason, send_result)
+
+    :ok
+  end
+
+  defp send_fallback_reply(data, chat_id) do
+    text = AssistantHarness.failure_message(:chat_worker_crash)
+
+    case message_id(data) do
+      nil -> TelegramResponder.send(chat_id, text)
+      reply_to_message_id -> TelegramResponder.reply(chat_id, reply_to_message_id, text)
+    end
+  rescue
+    error ->
+      Logger.warning("[telegram_fallback] fallback reply send crashed",
+        chat_id: chat_id,
+        reason: Exception.message(error)
+      )
+
+      {:error, :fallback_send_crashed}
+  catch
+    kind, reason ->
+      Logger.warning("[telegram_fallback] fallback reply send crashed",
+        chat_id: chat_id,
+        reason: inspect({kind, reason})
+      )
+
+      {:error, :fallback_send_crashed}
+  end
+
+  defp record_fallback_event(data, chat_id, kind, reason, send_result) do
+    case resolve_user_id(chat_id) do
+      nil ->
+        :ok
+
+      user_id ->
+        OperatorEvents.record(%{
+          user_id: user_id,
+          source: "telegram",
+          event_type: "telegram_fallback.message_recovered",
+          source_item_id: message_id(data) || chat_id,
+          dedupe_key:
+            "telegram_fallback:message_recovered:#{chat_id}:#{message_id(data) || Ecto.UUID.generate()}",
+          payload: %{
+            "chat_id" => chat_id,
+            "message_id" => message_id(data),
+            "kind" => to_string(kind),
+            "reason" => reason,
+            "fallback_sent" => match?({:ok, _}, send_result)
+          }
+        })
+    end
+  rescue
+    error ->
+      Logger.warning("[telegram_fallback] failed to record operator event",
         chat_id: chat_id,
         reason: Exception.message(error)
       )
 
       :ok
+  end
+
+  defp resolve_user_id(chat_id) do
+    case ConnectedAccounts.get_connected_by_external_account("telegram", chat_id) do
+      %{user_id: user_id} -> user_id
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp remember(state, nil), do: state

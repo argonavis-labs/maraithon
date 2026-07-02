@@ -14,6 +14,12 @@ defmodule Maraithon.TelegramConversations do
   @general_idle_seconds 24 * 60 * 60
   @linked_idle_seconds 7 * 24 * 60 * 60
 
+  # A pending confirmation/clarification older than this is considered
+  # abandoned. An unrelated later message must not attach to it and bleed its
+  # stale context — see `open_pending_confirmation/2` and
+  # `open_pending_clarification/1`.
+  @awaiting_state_freshness_seconds 10 * 60
+
   def start_or_continue(user_id, chat_id, attrs \\ %{})
       when is_binary(user_id) and is_binary(chat_id) and is_map(attrs) do
     metadata = read_map(attrs, "metadata")
@@ -23,6 +29,7 @@ defmodule Maraithon.TelegramConversations do
     linked_insight_id = read_string(attrs, "linked_insight_id")
     reply_to_message_id = read_string(attrs, "reply_to_message_id")
     root_message_id = read_string(attrs, "root_message_id", reply_to_message_id)
+    confirmation_reply? = read_bool(attrs, "confirmation_reply", false)
     now = DateTime.utc_now()
 
     conversation =
@@ -37,7 +44,7 @@ defmodule Maraithon.TelegramConversations do
         # those, two unrelated asks ("what emails do I have?" then "who is
         # Charlie?") would pile into one conversation and bleed context.
         find_by_reply(chat_id, reply_to_message_id) ||
-          open_pending_confirmation(chat_id) ||
+          open_pending_confirmation(chat_id, confirmation_reply?) ||
           open_pending_clarification(chat_id) ||
           find_open_linked(chat_id, linked_delivery_id, linked_insight_id)
       end
@@ -79,6 +86,7 @@ defmodule Maraithon.TelegramConversations do
     chat_id = "mobile:#{user_id}:#{client_thread_id}"
     root_message_id = read_string(attrs, "root_message_id")
     now = DateTime.utc_now()
+
     metadata =
       attrs
       |> read_map("metadata")
@@ -298,17 +306,60 @@ defmodule Maraithon.TelegramConversations do
     |> Repo.one()
   end
 
-  def open_pending_confirmation(chat_id) when is_binary(chat_id) do
+  @doc """
+  Finds the chat's open `awaiting_confirmation` conversation, if any is fresh
+  enough and this message looks like it's actually answering it.
+
+  `confirmation_reply?` should be true when the inbound text is a
+  recognizable yes/no answer (see `TelegramRouter`'s `affirmative?/1` and
+  `negative?/1`). A stale conversation (older than
+  `@awaiting_state_freshness_seconds`) is expired back to `"open"` and never
+  attached to. A fresh-but-unrelated message (not a recognizable yes/no) is
+  left alone but also not attached to — the caller starts a new conversation
+  instead, so the stale thread doesn't bleed its context into an unrelated
+  ask.
+  """
+  def open_pending_confirmation(chat_id, confirmation_reply? \\ true) when is_binary(chat_id) do
     Conversation
     |> where([c], c.chat_id == ^chat_id and c.status == "awaiting_confirmation")
     |> order_by([c], desc: c.updated_at)
     |> preload([:linked_delivery, :linked_insight, :turns])
     |> limit(1)
     |> Repo.one()
+    |> resolve_pending_confirmation(confirmation_reply?)
+  end
+
+  defp resolve_pending_confirmation(nil, _confirmation_reply?), do: nil
+
+  defp resolve_pending_confirmation(%Conversation{} = conversation, confirmation_reply?) do
+    cond do
+      stale_awaiting_state?(conversation) ->
+        _ = expire_stale_awaiting_confirmation(conversation)
+        nil
+
+      confirmation_reply? ->
+        conversation
+
+      true ->
+        nil
+    end
+  end
+
+  defp expire_stale_awaiting_confirmation(%Conversation{} = conversation) do
+    conversation
+    |> Conversation.changeset(%{
+      status: "open",
+      metadata:
+        Map.merge(conversation.metadata || %{}, %{
+          "expired_awaiting_confirmation" => true,
+          "expired_at" => DateTime.to_iso8601(DateTime.utc_now())
+        })
+    })
+    |> Repo.update()
   end
 
   # The user is answering a clarifying question the bot asked — continue that
-  # thread instead of opening a new one.
+  # thread instead of opening a new one, unless it's gone stale.
   defp open_pending_clarification(chat_id) when is_binary(chat_id) do
     Conversation
     |> where([c], c.chat_id == ^chat_id and c.status == "open")
@@ -317,6 +368,36 @@ defmodule Maraithon.TelegramConversations do
     |> preload([:linked_delivery, :linked_insight, :turns])
     |> limit(1)
     |> Repo.one()
+    |> resolve_pending_clarification()
+  end
+
+  defp resolve_pending_clarification(nil), do: nil
+
+  defp resolve_pending_clarification(%Conversation{} = conversation) do
+    if stale_awaiting_state?(conversation) do
+      _ =
+        update_metadata(conversation, %{
+          "pending_clarification" => false,
+          "clarification_expired_at" => DateTime.to_iso8601(DateTime.utc_now())
+        })
+
+      nil
+    else
+      conversation
+    end
+  end
+
+  defp stale_awaiting_state?(%Conversation{} = conversation) do
+    reference_time =
+      conversation.last_turn_at || conversation.updated_at || conversation.inserted_at
+
+    case reference_time do
+      %DateTime{} = value ->
+        DateTime.diff(DateTime.utc_now(), value, :second) > @awaiting_state_freshness_seconds
+
+      _ ->
+        false
+    end
   end
 
   def mark_awaiting_confirmation(%Conversation{} = conversation, attrs \\ %{}) do
@@ -660,6 +741,16 @@ defmodule Maraithon.TelegramConversations do
 
       _ ->
         default
+    end
+  end
+
+  defp read_bool(map, key, default) when is_map(map) do
+    case fetch(map, key) do
+      true -> true
+      false -> false
+      "true" -> true
+      "false" -> false
+      _ -> default
     end
   end
 

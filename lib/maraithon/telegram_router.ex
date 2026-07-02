@@ -52,7 +52,12 @@ defmodule Maraithon.TelegramRouter do
             "reply_to_message_id" => reply_to_message_id,
             "root_message_id" => source_message_id || reply_to_message_id,
             "linked_delivery_id" => linked_delivery && linked_delivery.id,
-            "linked_insight_id" => linked_insight && linked_insight.id
+            "linked_insight_id" => linked_insight && linked_insight.id,
+            # A stale, abandoned confirmation prompt must not capture an
+            # unrelated later message. Only a recognizable yes/no answer is
+            # allowed to continue it; anything else starts a fresh
+            # conversation instead of inheriting the stale thread's context.
+            "confirmation_reply" => affirmative?(text) or negative?(text)
           })
 
         {:ok, {_conversation, user_turn}} =
