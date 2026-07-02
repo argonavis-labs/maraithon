@@ -426,7 +426,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             "origin_skill_id" => id(),
             "source_backed" => true,
             "brief_input" => compact_brief_input_for_metadata(brief_input),
-            "source_health" => read_map(brief_input, "source_health")
+            "source_health" => read_map(brief_input, "source_health"),
+            "held_interruption_ids" => held_interruption_ids(brief_input)
           }
         }
 
@@ -5353,14 +5354,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   # SPEC 08 R2: interruptions held for quiet hours, the interruption
   # budget, or the model's own hold disposition must still reach the
-  # operator instead of vanishing. Fold them into the brief once, then
-  # mark them delivered so they do not repeat on every future brief.
+  # operator instead of vanishing. Fold them into the brief input here, but
+  # do NOT mark them delivered yet — that flip is irreversible, and at this
+  # point the LLM hasn't generated the brief and the push hasn't been
+  # confirmed sent. Their ids are carried through brief.metadata and only
+  # marked "delivered" once PushBroker confirms the brief actually reached
+  # the operator (see mark_held_interruptions_delivered/1 in push_broker.ex).
+  # If generation errors or the brief stays held/failed, they remain
+  # "held" so the next brief re-fetches them via list_held_for_user/2.
   defp held_interruptions_for_prompt(user_id) do
-    held = ProactiveQueue.list_held_for_user(user_id, limit: 25)
-
-    Enum.map(held, fn candidate ->
-      Maraithon.TelegramAssistant.ProactiveQueue.mark_delivered(candidate)
-
+    user_id
+    |> ProactiveQueue.list_held_for_user(limit: 25)
+    |> Enum.map(fn candidate ->
       %{
         "id" => candidate.id,
         "source" => candidate.source,
@@ -5373,6 +5378,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       }
     end)
   end
+
+  defp held_interruption_ids(brief_input) when is_map(brief_input) do
+    brief_input
+    |> get_in(["open_work", "held_interruptions"])
+    |> Kernel.||([])
+    |> Enum.map(&Map.get(&1, "id"))
+    |> Enum.filter(&is_binary/1)
+  end
+
+  defp held_interruption_ids(_brief_input), do: []
 
   defp recent_unread_message?(message, lookback_start) when is_map(message) do
     labels = read_list(message, "labels") |> Enum.map(&to_string/1)

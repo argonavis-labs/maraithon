@@ -331,9 +331,58 @@ defmodule Maraithon.TelegramAssistant do
     %PushReceipt{}
     |> PushReceipt.changeset(attrs)
     |> Repo.insert(
-      on_conflict: {:replace, [:decision, :origin_type, :origin_id, :conversation_turn_id]},
+      on_conflict: push_receipt_on_conflict(),
       conflict_target: [:user_id, :dedupe_key],
       returning: true
+    )
+  end
+
+  # A non-blocking hold (`held_rate_limit`) must never overwrite a
+  # previously committed blocking decision (`sent_now`/`merged`/
+  # `queued_digest`) for the same dedupe_key — that would erase delivery
+  # proof and let a duplicate send through. Blocking decisions may still
+  # overwrite an existing hold, or another blocking decision (e.g. a
+  # retried send), so those keep replacing normally.
+  defp push_receipt_on_conflict do
+    blocking = @blocking_push_decisions
+
+    from(receipt in PushReceipt,
+      update: [
+        set: [
+          decision:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.decision END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.decision
+            ),
+          origin_type:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.origin_type END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.origin_type
+            ),
+          origin_id:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.origin_id END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.origin_id
+            ),
+          conversation_turn_id:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.conversation_turn_id END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.conversation_turn_id
+            )
+        ]
+      ]
     )
   end
 

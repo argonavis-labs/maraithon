@@ -135,7 +135,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         end),
       context: context,
       recent_pushes: recent_pushes,
-      interruption_budget: PushBroker.interruption_budget(user_id, now: now_from_context(context)),
+      interruption_budget:
+        PushBroker.interruption_budget(user_id, now: now_from_context(context, user_id)),
       operator_feedback: operator_feedback_examples(user_id)
     }
   end
@@ -503,12 +504,17 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       dedupe_key: digest_key,
       title: "Maraithon digest",
       body: digest_intro,
+      # Informational only (telemetry/structured_data) — `digest: true` below
+      # keeps PushBroker's urgency-exempt-from-quiet-hours check from ever
+      # reading this value, so a bundled urgency >= 0.9 item cannot un-gate
+      # the whole digest during quiet hours (see push_broker.ex).
       urgency: max_urgency(candidates),
       # The digest bundle is the batched, budget-conscious delivery path
       # itself (R2) — it is not an interrupt, and its own send is exempt
       # from the hourly cap (but still respects quiet hours).
       interrupt_now: false,
       bypass_budget_cap: true,
+      digest: true,
       why_now: Map.get(plan, "summary"),
       structured_data: %{
         "message_class" => "proactive_delivery_digest",
@@ -878,25 +884,29 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   # PushBroker.quiet_hours?/1 compares the datetime's `.hour` against local
   # quiet-hour thresholds, so it must be given the operator's local wall
   # clock (context.ex's `local_now`), not `now_utc` — passing the UTC value
-  # here previously compared a UTC hour against local thresholds.
-  defp now_from_context(context) when is_map(context) do
+  # here previously compared a UTC hour against local thresholds. When
+  # `local_now` is missing or malformed, fall back through
+  # `PushBroker.local_now_for_user/1` (the same source the send-time
+  # enforcement gate uses) instead of `DateTime.utc_now/0`, so this advisory
+  # budget shown to the model agrees with what actually gates the send.
+  defp now_from_context(context, user_id) when is_map(context) do
     context
     |> read_field("current_time")
     |> read_field("local_now")
-    |> parse_datetime()
+    |> parse_datetime(user_id)
   end
 
-  defp now_from_context(_context), do: DateTime.utc_now()
+  defp now_from_context(_context, user_id), do: PushBroker.local_now_for_user(user_id)
 
-  defp parse_datetime(value) when is_binary(value) do
+  defp parse_datetime(value, user_id) when is_binary(value) do
     case DateTime.from_iso8601(value) do
       {:ok, datetime, _offset} -> datetime
-      _other -> DateTime.utc_now()
+      _other -> PushBroker.local_now_for_user(user_id)
     end
   end
 
-  defp parse_datetime(%DateTime{} = datetime), do: datetime
-  defp parse_datetime(_value), do: DateTime.utc_now()
+  defp parse_datetime(%DateTime{} = datetime, _user_id), do: datetime
+  defp parse_datetime(_value, user_id), do: PushBroker.local_now_for_user(user_id)
 
   defp empty_due_summary do
     %{users: 0, planned: 0, interrupt_now: 0, digest: 0, held: 0, delivered: 0, failed: 0}
