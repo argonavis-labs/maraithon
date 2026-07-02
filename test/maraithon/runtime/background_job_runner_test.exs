@@ -1,3 +1,13 @@
+defmodule Maraithon.Runtime.RetryAfterTestHandler do
+  @moduledoc false
+  # Stands in for a real handler (e.g. the Gmail/Calendar incremental sync
+  # clauses) that hit a 429 and want a provider-specified backoff instead of
+  # burning a job attempt.
+  def execute(%Maraithon.Runtime.BackgroundJob{}) do
+    {:error, {:retry_after, 5, {:rate_limited, "slow down"}}}
+  end
+end
+
 defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
   use Maraithon.DataCase, async: false
 
@@ -90,6 +100,42 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     assert failed.status == "failed"
     assert failed.attempts == 2
     assert failed.failed_at
+
+    GenServer.stop(pid, :normal)
+  end
+
+  test "a {:retry_after, seconds, reason} error reschedules without burning an attempt", %{
+    user_id: user_id
+  } do
+    {:ok, job} =
+      BackgroundJobs.enqueue("retry_after_probe", %{
+        user_id: user_id,
+        queue: "test",
+        max_attempts: 3
+      })
+
+    job_id = job.id
+
+    {:ok, pid} =
+      BackgroundJobRunner.start_link(
+        name: :background_job_runner_retry_after_test,
+        handler: Maraithon.Runtime.RetryAfterTestHandler,
+        poll_interval_ms: 60_000,
+        batch_size: 5
+      )
+
+    before_call = DateTime.utc_now()
+
+    assert {:ok,
+            [{^job_id, {:error, {:retry_after, 5, {:rate_limited, "slow down"}}}}]} =
+             BackgroundJobRunner.drain_once(pid)
+
+    stored = Repo.get!(BackgroundJob, job.id)
+    assert stored.status == "pending"
+    assert stored.attempts == 0
+    assert stored.claimed_by == nil
+    assert stored.last_error =~ "rate_limited"
+    assert DateTime.diff(stored.scheduled_at, before_call, :second) in 3..7
 
     GenServer.stop(pid, :normal)
   end

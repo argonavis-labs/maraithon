@@ -222,6 +222,12 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       {:ok, data} ->
         mark_completed(job, data)
 
+      {:error, {:retry_after, seconds, reason}} when is_integer(seconds) and seconds >= 0 ->
+        # Provider-signaled backoff (e.g. HTTP 429 + Retry-After): reschedule
+        # at the requested delay without burning an attempt.
+        retry_at = DateTime.add(DateTime.utc_now(), seconds, :second)
+        mark_pending_retry(job, reason, job.attempts, retry_at)
+
       {:error, reason} ->
         attempts = job.attempts + 1
 
@@ -257,6 +263,10 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp mark_pending_retry(%BackgroundJob{} = job, reason, attempts) do
     backoff_ms = calculate_backoff(attempts)
     retry_at = DateTime.add(DateTime.utc_now(), backoff_ms, :millisecond)
+    mark_pending_retry(job, reason, attempts, retry_at)
+  end
+
+  defp mark_pending_retry(%BackgroundJob{} = job, reason, attempts, %DateTime{} = retry_at) do
     now = DateTime.utc_now()
 
     DbResilience.with_database("background job runner mark retry", fn ->
