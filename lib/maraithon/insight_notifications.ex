@@ -65,6 +65,14 @@ defmodule Maraithon.InsightNotifications do
       "message" ->
         handle_message_event(read_map(event, "data"))
 
+      # Voice/audio messages arrive as their own connector event types (no
+      # "text"), classified by `Connectors.Telegram.classify_message/1`.
+      # They still need the same chat-linking / enqueue handling as a plain
+      # text message — the transcription step happens later, inside
+      # `ChatWorker`, before the message reaches `TelegramRouter` (SPEC 02).
+      type when type in ["voice", "audio"] ->
+        handle_message_event(read_map(event, "data"))
+
       "edited_message" ->
         TelegramRouter.handle_edited_message(read_map(event, "data"))
 

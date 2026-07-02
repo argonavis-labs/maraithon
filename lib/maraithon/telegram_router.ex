@@ -71,7 +71,8 @@ defmodule Maraithon.TelegramRouter do
             "role" => "user",
             "telegram_message_id" => source_message_id,
             "reply_to_message_id" => reply_to_message_id,
-            "text" => text
+            "text" => text,
+            "structured_data" => turn_structured_data(data)
           })
 
         cond do
@@ -801,6 +802,17 @@ defmodule Maraithon.TelegramRouter do
   defp send_ephemeral_reply(chat_id, reply_to_message_id, text) do
     _ = TelegramResponder.reply(chat_id, reply_to_message_id, text)
     :ok
+  end
+
+  # R4: tag the turn as voice-originated without prepending any visible text
+  # to the user's message. `input_mode` is set by
+  # `Maraithon.TelegramAssistant.VoiceCapture` on the inbound data once a
+  # voice/audio message has been transcribed into `text`.
+  defp turn_structured_data(data) do
+    case read_string(data, "input_mode") do
+      nil -> %{}
+      mode -> %{"input_mode" => mode}
+    end
   end
 
   defp read_string(map, key, default \\ nil) when is_map(map) and is_binary(key) do

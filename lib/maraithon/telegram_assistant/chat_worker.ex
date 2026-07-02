@@ -31,6 +31,7 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   alias Maraithon.AssistantHarness
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OperatorEvents
+  alias Maraithon.TelegramAssistant.VoiceCapture
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramResponder
   alias Maraithon.TelegramRouter
@@ -124,7 +125,7 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
         # remembered, so a Telegram webhook retry (or any other redelivery of
         # the same message id) can still be processed — by this worker or a
         # fresh one — instead of the message being silently, permanently lost.
-        case run_router(data, state.chat_id) do
+        case prepare_and_run(data, state.chat_id) do
           :ok -> {:noreply, remember(state, message_id)}
           :unhandled -> {:noreply, state}
         end
@@ -143,6 +144,30 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
       false
   end
 
+  # SPEC 02: a voice/audio message has no `text` yet when it reaches here —
+  # the webhook already acked, so downloading + transcribing happens in this
+  # worker, before the message is handed to `TelegramRouter`. Any exception
+  # escaping either step (transcription included) still lands on the same
+  # "never silence" fallback path as a router crash.
+  defp prepare_and_run(data, chat_id) do
+    case VoiceCapture.maybe_transcribe(data) do
+      {:ok, prepared_data} ->
+        run_router(prepared_data, chat_id)
+
+      {:error, reason} ->
+        handle_voice_capture_failure(data, chat_id, reason)
+    end
+  rescue
+    error ->
+      handle_router_failure(data, chat_id, :exception, Exception.message(error))
+  catch
+    :exit, reason ->
+      handle_router_failure(data, chat_id, :exit, inspect(reason))
+
+    :throw, value ->
+      handle_router_failure(data, chat_id, :throw, inspect(value))
+  end
+
   defp run_router(data, chat_id) do
     TelegramRouter.handle_message(data)
     :ok
@@ -157,6 +182,27 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
       handle_router_failure(data, chat_id, :throw, inspect(value))
   end
 
+  # R5: download/transcription failure (including R6 cap violations) must
+  # still produce a short user-visible reply — never silence — using the
+  # same fallback delivery + operator-event recording as a router crash,
+  # just with copy specific to the voice failure reason
+  # (`AssistantHarness.failure_message/1`).
+  defp handle_voice_capture_failure(data, chat_id, reason) do
+    Logger.warning("[telegram_fallback] voice capture failed",
+      chat_id: chat_id,
+      reason: inspect(reason)
+    )
+
+    text = AssistantHarness.failure_message(reason)
+    send_result = send_fallback_reply(data, chat_id, text)
+    _ = record_fallback_event(data, chat_id, :voice_capture, inspect(reason), send_result)
+
+    case send_result do
+      {:ok, _} -> :ok
+      _ -> :unhandled
+    end
+  end
+
   # Any crash anywhere inside `TelegramRouter.handle_message/1` — including a
   # `GenServer.call` timeout (`:exit`) surfacing from deep in the tool/agent
   # stack — lands here instead of killing the worker. The failure is only
@@ -169,7 +215,8 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
       reason: reason
     )
 
-    send_result = send_fallback_reply(data, chat_id)
+    text = AssistantHarness.failure_message(:chat_worker_crash)
+    send_result = send_fallback_reply(data, chat_id, text)
     _ = record_fallback_event(data, chat_id, kind, reason, send_result)
 
     case send_result do
@@ -178,9 +225,7 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
     end
   end
 
-  defp send_fallback_reply(data, chat_id) do
-    text = AssistantHarness.failure_message(:chat_worker_crash)
-
+  defp send_fallback_reply(data, chat_id, text) do
     case message_id(data) do
       nil -> TelegramResponder.send(chat_id, text)
       reply_to_message_id -> TelegramResponder.reply(chat_id, reply_to_message_id, text)

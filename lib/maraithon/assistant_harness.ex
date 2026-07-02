@@ -195,6 +195,18 @@ defmodule Maraithon.AssistantHarness do
     "Something went wrong handling that message on my side. Please try sending it again."
   end
 
+  def failure_message(:voice_transcription_failed) do
+    "Couldn't process that voice note — mind typing it or trying again?"
+  end
+
+  def failure_message({:voice_too_large, max_mb}) do
+    "That voice note is over the #{max_mb} MB limit I can transcribe — mind typing it or sending a shorter one?"
+  end
+
+  def failure_message({:voice_too_long, max_minutes}) do
+    "That voice note is longer than the #{max_minutes}-minute limit I can transcribe — mind typing it or sending a shorter one?"
+  end
+
   def failure_message(:deeper_analysis_requested) do
     "Maraithon flagged this for deeper analysis but could not finish it. Ask again in a moment."
   end
