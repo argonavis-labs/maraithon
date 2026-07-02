@@ -676,13 +676,18 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   # folds held ProactiveCandidates into the brief prompt and stashes their
   # ids in brief.metadata["held_interruption_ids"], but deliberately does
   # NOT flip their status — that's irreversible. Only once the brief is
-  # confirmed delivered here (sent_now, or merged/queued_digest/suppressed
-  # duplicate, i.e. `mark_brief_sent/2` or `mark_brief_delivered_elsewhere/1`)
-  # do we flip them to "delivered". A generation error, a held/failed brief,
-  # or a Brief.record insert failure leaves them "held" for the next brief
-  # to re-fetch via ProactiveQueue.list_held_for_user/2 instead of losing
-  # them forever.
-  defp mark_held_interruptions_delivered(%Brief{metadata: metadata}) do
+  # confirmed delivered (sent_now, or merged/queued_digest/suppressed
+  # duplicate) do we flip them to "delivered". A generation error, a
+  # held/failed brief, or a Brief.record insert failure leaves them "held"
+  # for the next brief to re-fetch via ProactiveQueue.list_held_for_user/2
+  # instead of losing them forever.
+  #
+  # Public because both the legacy direct-send path in this module
+  # (`mark_brief_sent/2`, `mark_brief_delivered_elsewhere/1` above) and the
+  # DeliveryPlanner-confirmed-delivery path (`maybe_mark_brief_delivered/1`
+  # in DeliveryPlanner) need to share this one implementation rather than
+  # duplicating the fold-in-cleanup logic.
+  def mark_held_interruptions_delivered(%Brief{metadata: metadata}) do
     metadata
     |> Kernel.||(%{})
     |> Map.get("held_interruption_ids", [])

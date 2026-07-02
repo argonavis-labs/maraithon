@@ -605,13 +605,26 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
        when is_binary(brief_id) do
     with {:ok, _uuid} <- Ecto.UUID.cast(brief_id),
          %Brief{} = brief <- Repo.get(Brief, brief_id) do
-      brief
-      |> Ecto.Changeset.change(%{
-        status: "sent",
-        sent_at: brief.sent_at || DateTime.utc_now(),
-        error_message: nil
-      })
-      |> Repo.update()
+      result =
+        brief
+        |> Ecto.Changeset.change(%{
+          status: "sent",
+          sent_at: brief.sent_at || DateTime.utc_now(),
+          error_message: nil
+        })
+        |> Repo.update()
+
+      # SPEC 08 R2 finding 1 (planner-path gap): this call site is the
+      # DeliveryPlanner equivalent of PushBroker.mark_brief_sent/2 and
+      # mark_brief_delivered_elsewhere/1 — it only runs once the brief is
+      # confirmed delivered (sent_now, suppressed-duplicate, or merged into a
+      # digest; never on held/failed). Held items folded into the brief's
+      # prompt (brief.metadata["held_interruption_ids"]) must flip to
+      # "delivered" here too, or they never leave "held" status when the
+      # planner (not the legacy path) is the one confirming delivery.
+      PushBroker.mark_held_interruptions_delivered(brief)
+
+      result
     else
       _other -> :ok
     end
