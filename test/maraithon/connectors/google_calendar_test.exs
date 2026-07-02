@@ -612,6 +612,152 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
       {:ok, result} = GoogleCalendar.sync_history("cal_cursor_user_2@example.com", account)
       assert result.next_sync_token == "next-token"
     end
+
+    test "follows nextPageToken to the final page and persists its nextSyncToken" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google_calendar,
+        api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
+      )
+
+      {:ok, _user} =
+        Maraithon.Accounts.get_or_create_user_by_email("cal_paged_user@example.com")
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_paged_user@example.com", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
+
+      account = Maraithon.ConnectedAccounts.get("cal_paged_user@example.com", "google")
+
+      call_count = :counters.new(1, [:atomics])
+
+      Bypass.expect(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
+        :counters.add(call_count, 1, 1)
+        count = :counters.get(call_count, 1)
+
+        case count do
+          1 ->
+            refute conn.query_string =~ "pageToken"
+
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.resp(
+              200,
+              Jason.encode!(%{
+                "items" => [
+                  %{
+                    "id" => "event_p1",
+                    "summary" => "Page 1 Event",
+                    "start" => %{"dateTime" => "2024-01-15T09:00:00Z"},
+                    "end" => %{"dateTime" => "2024-01-15T09:15:00Z"},
+                    "organizer" => %{"email" => "team@test.com"}
+                  }
+                ],
+                "nextPageToken" => "page2"
+                # No nextSyncToken - Google only returns it on the FINAL page.
+              })
+            )
+
+          2 ->
+            assert conn.query_string =~ "pageToken=page2"
+
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.resp(
+              200,
+              Jason.encode!(%{
+                "items" => [
+                  %{
+                    "id" => "event_p2",
+                    "summary" => "Page 2 Event",
+                    "start" => %{"dateTime" => "2024-01-15T10:00:00Z"},
+                    "end" => %{"dateTime" => "2024-01-15T10:15:00Z"},
+                    "organizer" => %{"email" => "team@test.com"}
+                  }
+                ],
+                "nextSyncToken" => "final-page-token"
+              })
+            )
+        end
+      end)
+
+      {:ok, result} = GoogleCalendar.sync_history("cal_paged_user@example.com", account)
+
+      # Both pages' events were collected, and the FINAL page's nextSyncToken
+      # (only Google returns it there) was persisted - not nil, which is what
+      # a single-request implementation would see on a multi-page result.
+      assert result.count == 2
+      assert result.next_sync_token == "final-page-token"
+
+      cursor = Maraithon.Connectors.SourceCursors.get(account.id, "calendar_sync_token")
+      assert cursor.value == "final-page-token"
+    end
+
+    test "on 410, clears the stored sync token before the recovery fetch so an empty/partial recovery can't leave an expired token behind" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google_calendar,
+        api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
+      )
+
+      {:ok, _user} =
+        Maraithon.Accounts.get_or_create_user_by_email("cal_410_cursor_user@example.com")
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_410_cursor_user@example.com", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
+
+      account = Maraithon.ConnectedAccounts.get("cal_410_cursor_user@example.com", "google")
+
+      Maraithon.Connectors.SourceCursors.put(account, "calendar_sync_token", %{
+        "value" => "expired-token",
+        "watch_channel_id" => "chan-1",
+        "watch_resource_id" => "res-1"
+      })
+
+      call_count = :counters.new(1, [:atomics])
+
+      Bypass.expect(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
+        :counters.add(call_count, 1, 1)
+        count = :counters.get(call_count, 1)
+
+        if count == 1 do
+          assert conn.query_string == "syncToken=expired-token"
+
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(410, Jason.encode!(%{"error" => %{"code" => 410}}))
+        else
+          # Recovery full-window fetch returns an empty window with no
+          # nextSyncToken (e.g. nothing in range) - the expired token must
+          # not still be sitting in source_cursors after this.
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(200, Jason.encode!(%{"items" => []}))
+        end
+      end)
+
+      {:ok, result} = GoogleCalendar.sync_history("cal_410_cursor_user@example.com", account)
+
+      assert result.count == 0
+      assert result.next_sync_token == nil
+
+      cursor = Maraithon.Connectors.SourceCursors.get(account.id, "calendar_sync_token")
+      # The expired token is gone (no perpetual-410 loop on the next sync)...
+      assert cursor.value in [nil, ""]
+      # ...but the watch bookkeeping on the same row was preserved, since
+      # clearing it would silently drop the account from WatchRenewer.
+      assert cursor.watch_channel_id == "chan-1"
+      assert cursor.watch_resource_id == "res-1"
+    end
   end
 
   # Helper functions

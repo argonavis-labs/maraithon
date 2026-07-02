@@ -133,13 +133,13 @@ defmodule Maraithon.Runtime.WatchRenewer do
 
       %ConnectedAccount{} = account ->
         case OAuth.get_valid_access_token(user_id, provider) do
-          {:ok, token} -> renew_watch(cursor.kind, account, user_id, token)
+          {:ok, token} -> renew_watch(cursor.kind, cursor, account, user_id, token)
           {:error, reason} -> {:error, reason}
         end
     end
   end
 
-  defp renew_watch(@gmail_kind, account, user_id, token) do
+  defp renew_watch(@gmail_kind, _cursor, account, user_id, token) do
     case Gmail.setup_watch(user_id, token) do
       {:ok, watch} ->
         _ = SourceCursors.put(account, @gmail_kind, %{"watch_expires_at" => watch.expiration})
@@ -157,7 +157,7 @@ defmodule Maraithon.Runtime.WatchRenewer do
     end
   end
 
-  defp renew_watch(@calendar_kind, account, user_id, token) do
+  defp renew_watch(@calendar_kind, cursor, account, user_id, token) do
     case GoogleCalendar.setup_watch(user_id, token) do
       {:ok, watch} ->
         SourceCursors.put(account, @calendar_kind, %{
@@ -165,6 +165,14 @@ defmodule Maraithon.Runtime.WatchRenewer do
           "watch_resource_id" => watch.resource_id,
           "watch_expires_at" => watch.expiration
         })
+
+        # `setup_watch` mints a brand new channel; the previous one (still
+        # tracked on `cursor`, the row as it was before this renewal) keeps
+        # delivering push notifications until its own TTL unless we stop it
+        # explicitly - otherwise both channels fire, producing duplicate
+        # webhook jobs (different channel_id -> different dedupe key). Best
+        # effort: a failure here must not fail the renewal itself.
+        stop_previous_calendar_watch(user_id, cursor, watch)
 
         :ok
 
@@ -174,7 +182,39 @@ defmodule Maraithon.Runtime.WatchRenewer do
     end
   end
 
-  defp renew_watch(_kind, _account, _user_id, _token), do: {:error, :unsupported_cursor_kind}
+  defp renew_watch(_kind, _cursor, _account, _user_id, _token), do: {:error, :unsupported_cursor_kind}
+
+  defp stop_previous_calendar_watch(user_id, %SourceCursor{} = cursor, new_watch) do
+    channel_id = cursor.watch_channel_id
+    resource_id = cursor.watch_resource_id
+
+    if is_binary(channel_id) and channel_id != "" and is_binary(resource_id) and
+         resource_id != "" and channel_id != new_watch.id do
+      case GoogleCalendar.stop_watch(user_id, channel_id, resource_id) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Failed to stop previous Calendar watch channel after renewal",
+            user_id: user_id,
+            channel_id: channel_id,
+            reason: inspect(reason)
+          )
+
+          :ok
+      end
+    else
+      :ok
+    end
+  rescue
+    error ->
+      Logger.warning("Failed to stop previous Calendar watch channel after renewal",
+        user_id: user_id,
+        reason: Exception.message(error)
+      )
+
+      :ok
+  end
 
   defp report_watch_issue(user_id, provider, reason) do
     ConnectedAccounts.report_access_issue(user_id, provider, reason)

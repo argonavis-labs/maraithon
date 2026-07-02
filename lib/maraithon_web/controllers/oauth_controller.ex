@@ -804,7 +804,7 @@ defmodule MaraithonWeb.OAuthController do
           "calendar" ->
             case GoogleCalendar.setup_watch(user_id, access_token) do
               {:ok, watch} ->
-                persist_calendar_watch_cursor(account, watch)
+                persist_calendar_watch_cursor(account, watch, user_id)
                 %{status: "active", watch_id: watch.id}
 
               {:error, reason} ->
@@ -834,14 +834,60 @@ defmodule MaraithonWeb.OAuthController do
 
   # `account` is nil only if the token store above somehow failed to produce
   # a readable row; skip cursor bookkeeping rather than crash the OAuth flow.
-  defp persist_calendar_watch_cursor(nil, _watch), do: :ok
+  defp persist_calendar_watch_cursor(nil, _watch, _user_id), do: :ok
 
-  defp persist_calendar_watch_cursor(account, watch) do
+  defp persist_calendar_watch_cursor(account, watch, user_id) do
+    # Reconnecting an already-connected calendar account mints a brand new
+    # watch channel. Capture whatever channel was previously registered
+    # *before* overwriting the cursor row, so it can be stopped afterward -
+    # otherwise the old channel keeps delivering push notifications until
+    # its TTL, producing duplicate webhook jobs (different channel_id means
+    # a different dedupe key).
+    previous_watch = SourceCursors.get(account.id, "calendar_sync_token")
+
     SourceCursors.put(account, "calendar_sync_token", %{
       "watch_channel_id" => watch.id,
       "watch_resource_id" => watch.resource_id,
       "watch_expires_at" => watch.expiration
     })
+
+    stop_previous_calendar_watch(user_id, previous_watch, watch)
+  end
+
+  # Best-effort: stopping the old channel is cleanup, not correctness for
+  # this request, so failures are logged and swallowed rather than surfaced.
+  defp stop_previous_calendar_watch(_user_id, nil, _new_watch), do: :ok
+
+  defp stop_previous_calendar_watch(user_id, previous_watch, new_watch) do
+    channel_id = previous_watch.watch_channel_id
+    resource_id = previous_watch.watch_resource_id
+
+    if is_binary(channel_id) and channel_id != "" and is_binary(resource_id) and
+         resource_id != "" and channel_id != new_watch.id do
+      case GoogleCalendar.stop_watch(user_id, channel_id, resource_id) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Failed to stop previous Calendar watch channel after reconnect",
+            user_id: user_id,
+            channel_id: channel_id,
+            reason: inspect(reason)
+          )
+
+          :ok
+      end
+    else
+      :ok
+    end
+  rescue
+    error ->
+      Logger.warning("Failed to stop previous Calendar watch channel after reconnect",
+        user_id: user_id,
+        reason: Exception.message(error)
+      )
+
+      :ok
   end
 
   defp persist_gmail_watch_cursor(nil, _watch), do: :ok

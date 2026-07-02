@@ -48,6 +48,11 @@ defmodule Maraithon.Connectors.Gmail do
   @history_cursor_kind "gmail_history_id"
   @full_resync_window_query "newer_than:1d"
   @full_resync_message_limit 50
+  # Safety cap on how many `history.list` pages we'll follow for a single
+  # incremental sync before giving up and falling back to a full resync. A
+  # legitimate delta should never come close to this; it exists so a
+  # pathological/looping response can't wedge a background job forever.
+  @max_history_pages 25
 
   # ===========================================================================
   # Watch Management
@@ -527,40 +532,50 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
+  # Follows `nextPageToken` across `users/me/history` pages, accumulating
+  # history records BEFORE the cursor is advanced. Google returns
+  # `historyId` (the mailbox's current head, used for cursor advancement) on
+  # every page, but only the *final* page's records complete the delta - if
+  # we stopped at page 1 like the old single-request implementation did,
+  # pages 2+ would be silently dropped forever once the cursor moved past
+  # them.
   defp fetch_history(access_token, history_id) do
+    fetch_history_page(access_token, history_id, nil, [], 1)
+  end
+
+  defp fetch_history_page(access_token, history_id, page_token, acc_history, page) do
     params =
-      URI.encode_query(%{
-        startHistoryId: history_id,
-        historyTypes: "messageAdded"
-      })
+      %{startHistoryId: history_id, historyTypes: "messageAdded"}
+      |> maybe_put_page_token(page_token)
+      |> URI.encode_query()
 
     url = "#{api_base_url()}/users/me/history?#{params}"
 
     case Google.api_request(:get, url, access_token) do
       {:ok, %{"history" => history} = response} ->
-        # Extract added message IDs
-        message_ids =
-          history
-          |> Enum.flat_map(fn h -> h["messagesAdded"] || [] end)
-          |> Enum.map(fn ma -> ma["message"]["id"] end)
-          |> Enum.uniq()
+        acc_history = acc_history ++ history
+        next_page_token = response["nextPageToken"]
 
-        # Fetch full message details so downstream model triage can use body text.
-        messages =
-          message_ids
-          |> Enum.take(20)
-          |> Task.async_stream(
-            fn id -> fetch_message_content(access_token, id, access_token: true) end,
-            max_concurrency: 8,
-            ordered: true,
-            timeout: :infinity
-          )
-          |> Enum.flat_map(fn
-            {:ok, {:ok, message}} -> [message]
-            _ -> []
-          end)
+        cond do
+          present?(next_page_token) and page < max_history_pages() ->
+            fetch_history_page(access_token, history_id, next_page_token, acc_history, page + 1)
 
-        {:ok, messages, response["historyId"]}
+          present?(next_page_token) ->
+            # Safety cap hit - treat like a history overflow rather than risk
+            # advancing the cursor past unread pages. The caller's existing
+            # history_expired fallback does a bounded full resync and resets
+            # the cursor to the mailbox's current head.
+            Logger.warning(
+              "Gmail history pagination exceeded safety cap; falling back to full resync",
+              history_id: history_id,
+              pages: page
+            )
+
+            {:error, :history_expired}
+
+          true ->
+            build_history_result(access_token, acc_history, response["historyId"])
+        end
 
       {:ok, response} ->
         # No history changes, but the response still carries the mailbox's
@@ -574,6 +589,42 @@ defmodule Maraithon.Connectors.Gmail do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp build_history_result(access_token, history_records, latest_history_id) do
+    # Extract added message IDs across all accumulated pages
+    message_ids =
+      history_records
+      |> Enum.flat_map(fn h -> h["messagesAdded"] || [] end)
+      |> Enum.map(fn ma -> ma["message"]["id"] end)
+      |> Enum.uniq()
+
+    # Fetch full message details so downstream model triage can use body text.
+    messages =
+      message_ids
+      |> Enum.take(20)
+      |> Task.async_stream(
+        fn id -> fetch_message_content(access_token, id, access_token: true) end,
+        max_concurrency: 8,
+        ordered: true,
+        timeout: :infinity
+      )
+      |> Enum.flat_map(fn
+        {:ok, {:ok, message}} -> [message]
+        _ -> []
+      end)
+
+    {:ok, messages, latest_history_id}
+  end
+
+  defp maybe_put_page_token(params, page_token) when is_binary(page_token) and page_token != "",
+    do: Map.put(params, :pageToken, page_token)
+
+  defp maybe_put_page_token(params, _page_token), do: params
+
+  defp max_history_pages do
+    Application.get_env(:maraithon, :gmail, [])
+    |> Keyword.get(:max_history_pages, @max_history_pages)
   end
 
   defp parse_message(message) do
