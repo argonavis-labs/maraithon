@@ -321,15 +321,31 @@ defmodule Maraithon.TelegramAssistant do
 
   def latest_prepared_action(_conversation), do: nil
 
+  # Only these decisions represent a message that actually reached (or will
+  # reach via another channel) the operator. `held_rate_limit` is a
+  # deliberate exception: quiet hours and interruption-budget holds must not
+  # permanently block a later retry of the same dedupe_key.
+  @blocking_push_decisions ["sent_now", "merged", "queued_digest"]
+
   def record_push_receipt(attrs) when is_map(attrs) do
     %PushReceipt{}
     |> PushReceipt.changeset(attrs)
-    |> Repo.insert()
+    |> Repo.insert(
+      on_conflict: {:replace, [:decision, :origin_type, :origin_id, :conversation_turn_id]},
+      conflict_target: [:user_id, :dedupe_key],
+      returning: true
+    )
   end
 
   def push_receipt_for(user_id, dedupe_key)
       when is_binary(user_id) and is_binary(dedupe_key) do
-    Repo.get_by(PushReceipt, user_id: user_id, dedupe_key: dedupe_key)
+    case Repo.get_by(PushReceipt, user_id: user_id, dedupe_key: dedupe_key) do
+      %PushReceipt{decision: decision} = receipt when decision in @blocking_push_decisions ->
+        receipt
+
+      _non_blocking_or_missing ->
+        nil
+    end
   end
 
   def push_receipt_for(_user_id, _dedupe_key), do: nil
