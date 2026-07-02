@@ -42,10 +42,14 @@ defmodule Maraithon.HTTP do
 
   @doc """
   Makes a GET request.
+
+  Options:
+    * `:receive_timeout` - overrides the default 15s response timeout,
+      for large-body fetches like file downloads.
   """
-  @spec get(String.t(), headers()) :: response()
-  def get(url, headers \\ []) do
-    request(:get, url, headers, [])
+  @spec get(String.t(), headers(), keyword()) :: response()
+  def get(url, headers \\ [], opts \\ []) do
+    request(:get, url, headers, [], opts)
   end
 
   @doc """
@@ -84,14 +88,14 @@ defmodule Maraithon.HTTP do
   # Private
   # ===========================================================================
 
-  defp request(method, url, headers, req_opts) do
+  defp request(method, url, headers, req_opts, opts \\ []) do
     req =
       Req.new(
         method: method,
         url: url,
         headers: normalize_headers(headers),
         retry: false,
-        receive_timeout: 15_000
+        receive_timeout: Keyword.get(opts, :receive_timeout, 15_000)
       )
 
     case Req.request(req, req_opts) do

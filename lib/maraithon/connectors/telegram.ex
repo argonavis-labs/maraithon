@@ -54,6 +54,9 @@ defmodule Maraithon.Connectors.Telegram do
 
   @default_api_base "https://api.telegram.org/bot"
   @default_file_base "https://api.telegram.org/file/bot"
+  # Voice/audio downloads can approach VoiceCapture's 20 MB cap; the default
+  # 15s HTTP receive timeout is too tight for bodies that size.
+  @file_download_timeout_ms 60_000
 
   # ===========================================================================
   # Webhook Handling
@@ -441,7 +444,7 @@ defmodule Maraithon.Connectors.Telegram do
     bot_token = get_bot_token()
     url = "#{file_base_url()}#{bot_token}/#{file_path}"
 
-    case HTTP.get(url) do
+    case HTTP.get(url, [], receive_timeout: @file_download_timeout_ms) do
       {:ok, body} when is_binary(body) -> {:ok, body}
       {:ok, _other} -> {:error, :unexpected_response}
       {:error, reason} -> {:error, reason}
