@@ -71,8 +71,11 @@ defmodule Maraithon.ActionLedger do
   Periods resolve against the user's local day — the same
   `BriefingSchedules`-derived timezone the proactive planner and delivery
   planner already use for quiet hours/local time (see
-  `MaraithonWeb.LocalTime.timezone_info_for_user/1` and
-  `Maraithon.Timezones.offset_at/3`) — not the server's UTC day.
+  `MaraithonWeb.LocalTime.timezone_info_for_user/1`) — not the server's UTC
+  day. Each day boundary resolves its own DST offset via
+  `Maraithon.Timezones.offset_for_local/3` rather than reusing "now"'s
+  offset, so :yesterday and arbitrary dates/ranges are correct across DST
+  transitions.
 
   Returns todos created/updated/closed, memories written by kind (titles
   only — memory content/summary are encrypted and never read here), people
@@ -255,23 +258,23 @@ defmodule Maraithon.ActionLedger do
   # -- SPEC 09 R1: activity_summary/2 period resolution -----------------
 
   defp resolve_period(user_id, :today) do
-    {local_date, offset_hours} = local_day_context(user_id)
-    {since, until} = day_bounds(local_date, offset_hours)
+    {local_date, timezone_info} = local_day_context(user_id)
+    {since, until} = day_bounds(local_date, timezone_info)
     {since, until, "today"}
   end
 
   defp resolve_period(user_id, :yesterday) do
-    {local_date, offset_hours} = local_day_context(user_id)
-    {since, until} = day_bounds(Date.add(local_date, -1), offset_hours)
+    {local_date, timezone_info} = local_day_context(user_id)
+    {since, until} = day_bounds(Date.add(local_date, -1), timezone_info)
     {since, until, "yesterday"}
   end
 
   defp resolve_period(user_id, %Date{} = date), do: resolve_period(user_id, {date, date})
 
   defp resolve_period(user_id, {%Date{} = from_date, %Date{} = to_date}) do
-    {_local_date, offset_hours} = local_day_context(user_id)
-    {since, _until} = day_bounds(from_date, offset_hours)
-    {_since, until} = day_bounds(to_date, offset_hours)
+    {_local_date, timezone_info} = local_day_context(user_id)
+    {since, _until} = day_bounds(from_date, timezone_info)
+    {_since, until} = day_bounds(to_date, timezone_info)
     {since, until, range_label(from_date, to_date)}
   end
 
@@ -282,24 +285,33 @@ defmodule Maraithon.ActionLedger do
   defp range_label(%Date{} = from_date, %Date{} = to_date),
     do: "#{Date.to_iso8601(from_date)}..#{Date.to_iso8601(to_date)}"
 
+  # `now`'s offset is only used to decide which calendar date is "today" in
+  # the user's zone. Each individual day boundary is then resolved against
+  # its own local midnight below, so a DST transition between "now" and the
+  # requested date (e.g. :yesterday just after the fall-back, or an
+  # arbitrary past/future date or range) doesn't shift the window by an
+  # hour. Mirrors `MaraithonWeb.TodosLive.local_boundary_to_utc/3`.
   defp local_day_context(user_id) do
     info = LocalTime.timezone_info_for_user(user_id)
     now = DateTime.utc_now()
     offset_hours = Timezones.offset_at(info.name, now, info.offset_hours)
     local_date = now |> DateTime.add(offset_hours * 3600, :second) |> DateTime.to_date()
-    {local_date, offset_hours}
+    {local_date, info}
   end
 
-  defp day_bounds(%Date{} = date, offset_hours) do
-    since = local_midnight_to_utc(date, offset_hours)
-    until = local_midnight_to_utc(Date.add(date, 1), offset_hours)
+  defp day_bounds(%Date{} = date, timezone_info) do
+    since = local_midnight_to_utc(date, timezone_info)
+    until = local_midnight_to_utc(Date.add(date, 1), timezone_info)
     {since, until}
   end
 
-  defp local_midnight_to_utc(%Date{} = date, offset_hours) do
-    date
-    |> DateTime.new!(~T[00:00:00], "Etc/UTC")
-    |> DateTime.add(-offset_hours * 3600, :second)
+  defp local_midnight_to_utc(%Date{} = date, timezone_info) do
+    local_midnight = DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+
+    offset_hours =
+      Timezones.offset_for_local(timezone_info.name, local_midnight, timezone_info.offset_hours)
+
+    DateTime.add(local_midnight, -offset_hours, :hour)
   end
 
   # -- SPEC 09 R1: activity_summary/2 section builders -------------------

@@ -4,6 +4,7 @@ defmodule Maraithon.ActionLedgerTest do
   alias Maraithon.Accounts
   alias Maraithon.ActionLedger
   alias Maraithon.ActionLedger.Action
+  alias Maraithon.Agents
   alias Maraithon.Crm
   alias Maraithon.Crm.Person
   alias Maraithon.Memory
@@ -11,6 +12,7 @@ defmodule Maraithon.ActionLedgerTest do
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.PushReceipt
+  alias Maraithon.Timezones
   alias Maraithon.Todos
   alias Maraithon.Todos.ActivityEvent
 
@@ -228,6 +230,37 @@ defmodule Maraithon.ActionLedgerTest do
 
     test "returns an empty structure for an invalid user" do
       assert ActionLedger.activity_summary(nil, :today).todos.created.count == 0
+    end
+
+    test "resolves each day's own DST offset instead of reusing now's offset" do
+      user_id = unique_user_email("activity-summary-dst")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _agent} =
+        Agents.create_agent(%{
+          user_id: user_id,
+          behavior: "founder_followthrough_agent",
+          config: %{"timezone" => "America/New_York", "timezone_offset_hours" => -5}
+        })
+
+      # America/New_York DST in 2026: begins 2026-03-08, ends 2026-11-01.
+      # `from_date` sits before the transition (standard time, UTC-5) and
+      # `to_date` sits after it (daylight time, UTC-4). A single reused
+      # offset (the bug) would misplace one edge of this range by an hour;
+      # resolving each boundary against its own local midnight must not.
+      from_date = ~D[2026-03-01]
+      to_date = ~D[2026-03-15]
+
+      summary = ActionLedger.activity_summary(user_id, {from_date, to_date})
+
+      expected_since =
+        DateTime.new!(from_date, ~T[00:00:00], "Etc/UTC") |> DateTime.add(5, :hour)
+
+      expected_until =
+        DateTime.new!(Date.add(to_date, 1), ~T[00:00:00], "Etc/UTC") |> DateTime.add(4, :hour)
+
+      assert DateTime.compare(summary.period.since, expected_since) == :eq
+      assert DateTime.compare(summary.period.until, expected_until) == :eq
     end
   end
 
