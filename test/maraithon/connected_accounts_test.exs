@@ -114,6 +114,12 @@ defmodule Maraithon.ConnectedAccountsTest do
         metadata: %{"chat_id" => "6114124042"}
       })
 
+    # SPEC 10 R3: re-notify-after-N-days makes `sent_at` recency matter now,
+    # so this must be "recently sent" (within the renotify window) - the
+    # test's intent is the legacy-shape parsing (no per-channel "channels"
+    # map), not staleness, so anchor it to "now" instead of a fixed date.
+    recent_sent_at = DateTime.utc_now() |> DateTime.to_iso8601()
+
     {:ok, _token} =
       OAuth.store_tokens(user_id, "google:founder@example.com", %{
         access_token: "google-token",
@@ -122,7 +128,7 @@ defmodule Maraithon.ConnectedAccountsTest do
           "account_email" => "founder@example.com",
           "reconnect_notification" => %{
             "reason" => "oauth_reauth_required",
-            "sent_at" => "2026-05-01T12:00:00Z",
+            "sent_at" => recent_sent_at,
             "destination" => "6114124042"
           }
         }
@@ -308,6 +314,161 @@ defmodule Maraithon.ConnectedAccountsTest do
     account = ConnectedAccounts.get(user_id, "google:founder@example.com")
     assert account.status == "disconnected"
     assert get_in(account.metadata, ["reconnect_notification"]) == nil
+  end
+
+  test "report_access_issue/3 sends a soft 'gone quiet' notice for source_stale (R3)" do
+    user_id = "source-stale-alert-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram_account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "6114124042",
+        metadata: %{"chat_id" => "6114124042"}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:founder@example.com", %{
+        access_token: "google-token",
+        refresh_token: "google-refresh",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    :ok =
+      ConnectedAccounts.report_access_issue(user_id, "google:founder@example.com", "source_stale")
+
+    assert [%{chat_id: "6114124042", text: text}] =
+             Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+
+    assert text =~ "connector check"
+    assert text =~ "haven't seen"
+    assert text =~ "may need attention"
+    refute text =~ "action required"
+
+    account = ConnectedAccounts.get(user_id, "google:founder@example.com")
+    assert account.status == "error"
+    assert get_in(account.metadata, ["last_error", "reason"]) == "source_stale"
+    assert get_in(account.metadata, ["reconnect_notification", "reason"]) == "source_stale"
+  end
+
+  test "still-broken sources re-notify after the renotify window (R3)" do
+    user_id = "renotify-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram_account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "6114124042",
+        metadata: %{"chat_id" => "6114124042"}
+      })
+
+    old_sent_at = DateTime.utc_now() |> DateTime.add(-4, :day) |> DateTime.to_iso8601()
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:founder@example.com", %{
+        access_token: "google-token",
+        refresh_token: "google-refresh",
+        metadata: %{
+          "account_email" => "founder@example.com",
+          "reconnect_notification" => %{
+            "reason" => "oauth_reauth_required",
+            "sent_at" => old_sent_at,
+            "channels" => %{
+              "push" => %{"sent_at" => old_sent_at, "destination" => "6114124042"}
+            }
+          }
+        }
+      })
+
+    assert {:ok, _account} =
+             ConnectedAccounts.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required"
+             )
+
+    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+
+    account = ConnectedAccounts.get(user_id, "google:founder@example.com")
+
+    new_sent_at =
+      get_in(account.metadata, ["reconnect_notification", "channels", "push", "sent_at"])
+
+    refute new_sent_at == old_sent_at
+
+    # Immediately repeating the same still-broken error must not re-notify
+    # a second time inside the window.
+    assert {:ok, _account} =
+             ConnectedAccounts.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required"
+             )
+
+    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+  end
+
+  test "reconnecting via OAuth sends exactly one recovery confirmation and re-arms notifications (R4)" do
+    user_id = "recovery-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram_account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "6114124042",
+        metadata: %{"chat_id" => "6114124042"}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:founder@example.com", %{
+        access_token: "google-token",
+        refresh_token: "google-refresh",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    assert {:ok, _account} =
+             ConnectedAccounts.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required"
+             )
+
+    # Clear the notification recorder so only the recovery send is counted.
+    Agent.update(:capturing_telegram_recorder, fn _ -> [] end)
+
+    assert {:ok, recovered_account} =
+             ConnectedAccounts.upsert_from_oauth(user_id, "google:founder@example.com", %{
+               access_token: "new-google-token",
+               refresh_token: "new-google-refresh",
+               metadata: %{"account_email" => "founder@example.com"}
+             })
+
+    assert recovered_account.status == "connected"
+    refute get_in(recovered_account.metadata, ["reconnect_notification"])
+
+    assert [%{chat_id: "6114124042", text: text}] =
+             Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+
+    assert text =~ "connected again"
+
+    # A second successful refresh with nothing previously pending must not
+    # send another recovery confirmation.
+    assert {:ok, _account} =
+             ConnectedAccounts.upsert_from_oauth(user_id, "google:founder@example.com", %{
+               access_token: "newer-google-token",
+               refresh_token: "newer-google-refresh",
+               metadata: %{"account_email" => "founder@example.com"}
+             })
+
+    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+
+    # A fresh failure after recovery should be able to notify again (re-armed).
+    assert {:ok, _account} =
+             ConnectedAccounts.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required"
+             )
+
+    assert [_recovery, %{chat_id: "6114124042"}] =
+             Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
   end
 
   test "get_connected_by_external_account/2 falls back to Telegram metadata chat_id" do

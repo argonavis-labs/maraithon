@@ -21,6 +21,7 @@ defmodule Maraithon.Runtime.WatchRenewer do
   alias Maraithon.OAuth
   alias Maraithon.Repo
   alias Maraithon.Runtime.Config
+  alias Maraithon.SourceFreshness
 
   require Logger
 
@@ -149,6 +150,10 @@ defmodule Maraithon.Runtime.WatchRenewer do
             SourceCursors.ensure_value(account, @gmail_kind, to_string(watch.history_id))
           end
 
+        # R2/R4: a successful renewal is the recovery signal for a
+        # `watch_expired` flag from the freshness sweep.
+        report_watch_recovery(user_id, account.provider)
+
         :ok
 
       {:error, reason} ->
@@ -173,6 +178,8 @@ defmodule Maraithon.Runtime.WatchRenewer do
         # webhook jobs (different channel_id -> different dedupe key). Best
         # effort: a failure here must not fail the renewal itself.
         stop_previous_calendar_watch(user_id, cursor, watch)
+
+        report_watch_recovery(user_id, account.provider)
 
         :ok
 
@@ -218,6 +225,12 @@ defmodule Maraithon.Runtime.WatchRenewer do
 
   defp report_watch_issue(user_id, provider, reason) do
     ConnectedAccounts.report_access_issue(user_id, provider, reason)
+  rescue
+    _ -> :ok
+  end
+
+  defp report_watch_recovery(user_id, provider) do
+    SourceFreshness.mark_success(user_id, provider)
   rescue
     _ -> :ok
   end

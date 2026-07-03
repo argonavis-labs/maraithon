@@ -104,6 +104,76 @@ defmodule Maraithon.SourceFreshnessTest do
     refute snapshot.stale_reason =~ "sync"
   end
 
+  test "compact_for_prompt includes a reconnect_url for broken sources only (R5)" do
+    user_id = "source-freshness-reconnect-url-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    Application.put_env(:maraithon, :connected_accounts,
+      reconnect_base_url: "https://maraithon.test"
+    )
+
+    on_exit(fn -> Application.delete_env(:maraithon, :connected_accounts) end)
+
+    {:ok, _google} =
+      ConnectedAccounts.upsert_manual(user_id, "google:founder@example.com", %{
+        external_account_id: "founder@example.com",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    assert {:ok, _account} =
+             SourceFreshness.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required"
+             )
+
+    snapshots = SourceFreshness.compact_for_prompt(user_id)
+    google = Enum.find(snapshots, &(&1.provider == "google"))
+
+    assert google.status == "reauth_required"
+    assert google.reconnect_url == "https://maraithon.test/connectors/google"
+  end
+
+  test "mark_success sends a one-time recovery confirmation and re-arms notifications (R4)" do
+    user_id = "source-freshness-recovery-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "6114124042",
+        metadata: %{"chat_id" => "6114124042"}
+      })
+
+    {:ok, _google} =
+      ConnectedAccounts.upsert_manual(user_id, "google:founder@example.com", %{
+        external_account_id: "founder@example.com",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    assert {:ok, _account} =
+             SourceFreshness.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required"
+             )
+
+    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    Agent.update(:capturing_telegram_recorder, fn _ -> [] end)
+
+    assert {:ok, recovered} = SourceFreshness.mark_success(user_id, "google:founder@example.com")
+    assert recovered.status == "connected"
+    refute get_in(recovered.metadata, ["reconnect_notification"])
+
+    assert [%{chat_id: "6114124042", text: text}] =
+             Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+
+    assert text =~ "connected again"
+
+    # A second success with nothing pending must not re-confirm.
+    assert {:ok, _recovered} = SourceFreshness.mark_success(user_id, "google:founder@example.com")
+    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+  end
+
   test "injects compact freshness into Telegram assistant context" do
     user_id = "context-freshness-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

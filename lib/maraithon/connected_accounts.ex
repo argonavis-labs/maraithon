@@ -66,6 +66,7 @@ defmodule Maraithon.ConnectedAccounts do
   def upsert_from_oauth(user_id, provider, token_data)
       when is_binary(user_id) and is_binary(provider) do
     now = DateTime.utc_now()
+    previous_account = get(user_id, provider)
 
     attrs = %{
       user_id: user_id,
@@ -83,16 +84,26 @@ defmodule Maraithon.ConnectedAccounts do
           metadata_external_account_id(token_data[:metadata] || token_data["metadata"])
     }
 
-    case get(user_id, provider) do
-      nil ->
-        %ConnectedAccount{}
-        |> ConnectedAccount.changeset(attrs)
-        |> Repo.insert()
+    result =
+      case previous_account do
+        nil ->
+          %ConnectedAccount{}
+          |> ConnectedAccount.changeset(attrs)
+          |> Repo.insert()
 
-      account ->
-        account
-        |> ConnectedAccount.changeset(attrs)
-        |> Repo.update()
+        account ->
+          account
+          |> ConnectedAccount.changeset(attrs)
+          |> Repo.update()
+      end
+
+    case result do
+      {:ok, updated_account} = ok ->
+        maybe_report_recovery(previous_account, updated_account)
+        ok
+
+      error ->
+        error
     end
   end
 
@@ -238,6 +249,81 @@ defmodule Maraithon.ConnectedAccounts do
 
   def notify_reconnect_required(_user_id, _provider, _reason, _opts), do: :ok
 
+  @doc """
+  R4: sends a one-time recovery confirmation when `previous_account` was
+  broken (`error`/`disconnected`) and had a reconnect notification pending,
+  and `updated_account` is now healthy (`connected`). No-ops otherwise.
+
+  Called after any write that represents "this source is working again":
+  a successful OAuth token refresh/reconnect (`upsert_from_oauth/3`) or a
+  successful sync (`Maraithon.SourceFreshness.mark_success/3`). Both of
+  those already clear `reconnect_notification`/`reauth_notification` from
+  metadata as part of the same write, so the pending-notification flag is
+  read from `previous_account` (the pre-write snapshot) — this also
+  re-arms notifications, since the next failure will find no pending
+  notification and be free to send again.
+  """
+  def maybe_report_recovery(previous_account, updated_account)
+
+  def maybe_report_recovery(
+        %ConnectedAccount{} = previous_account,
+        %ConnectedAccount{
+          status: "connected"
+        } = updated_account
+      ) do
+    if recoverable_transition?(previous_account) do
+      send_recovery_notification(updated_account)
+    end
+
+    :ok
+  end
+
+  def maybe_report_recovery(_previous_account, _updated_account), do: :ok
+
+  defp recoverable_transition?(%ConnectedAccount{status: status, metadata: metadata})
+       when status in ["error", "disconnected"] do
+    metadata = normalize_metadata(metadata)
+
+    is_map(fetch_map_value(metadata, "reconnect_notification")) or
+      is_map(fetch_map_value(metadata, "reauth_notification"))
+  end
+
+  defp recoverable_transition?(_previous_account), do: false
+
+  defp send_recovery_notification(%ConnectedAccount{} = account) do
+    message = recovery_message(account)
+    email_content = recovery_email(account)
+
+    [
+      reconnect_push_channel(account, message),
+      reconnect_email_channel(account, email_content)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.each(&send_reconnect_notification_channel(account, &1))
+
+    :ok
+  end
+
+  defp recovery_message(%ConnectedAccount{} = account) do
+    provider_label = provider_label(account.provider)
+
+    """
+    <b>Maraithon connector check</b>
+    #{html_escape(provider_label)} is connected again — I'm caught up.
+    """
+    |> String.trim()
+  end
+
+  defp recovery_email(%ConnectedAccount{} = account) do
+    provider_label = provider_label(account.provider)
+
+    %{
+      subject: "#{provider_label} is connected again",
+      text_body: "#{provider_label} is connected again - I'm caught up.",
+      html_body: "<p>#{html_escape(provider_label)} is connected again — I'm caught up.</p>"
+    }
+  end
+
   def sync_from_oauth_tokens(user_id) when is_binary(user_id) do
     OAuth.list_user_tokens(user_id)
     |> Enum.map(&sync_token/1)
@@ -270,6 +356,13 @@ defmodule Maraithon.ConnectedAccounts do
   defp normalize_access_issue_reason(:reauth_required), do: "oauth_reauth_required"
   defp normalize_access_issue_reason(:no_refresh_token), do: "oauth_missing_refresh_token"
   defp normalize_access_issue_reason(:no_token), do: "oauth_reauth_required"
+
+  # R2: the freshness sweep and watch renewal already did the classifying
+  # (a provider-appropriate staleness threshold, or an expired push watch);
+  # pass those reasons through unchanged instead of running them back
+  # through the generic error-text matcher below.
+  defp normalize_access_issue_reason("source_stale"), do: "source_stale"
+  defp normalize_access_issue_reason("watch_expired"), do: "watch_expired"
 
   defp normalize_access_issue_reason({:http_status, status, _body}) when status in [401, 403],
     do: "oauth_reauth_required"
@@ -475,31 +568,56 @@ defmodule Maraithon.ConnectedAccounts do
     sent_reason = is_map(notification) && fetch_map_value(notification, "reason")
 
     if sent_reason == reason do
-      Enum.reject(channels, &reconnect_channel_sent?(notification, &1["channel"]))
+      now = DateTime.utc_now()
+      Enum.reject(channels, &reconnect_channel_sent_recently?(notification, &1["channel"], now))
     else
       channels
     end
   end
 
-  defp reconnect_channel_sent?(notification, channel) when is_map(notification) do
+  # R3: a still-broken source should not be silenced forever after the
+  # first notification - re-notify once `renotify_after_days` has passed
+  # since the last send for this same reason, using the existing `sent_at`
+  # tracking (no new column needed).
+  defp reconnect_channel_sent_recently?(notification, channel, now) when is_map(notification) do
     channels = fetch_map_value(notification, "channels")
 
     cond do
       is_map(channels) ->
         channel_entry = fetch_map_value(channels, channel)
         sent_at = is_map(channel_entry) && fetch_map_value(channel_entry, "sent_at")
-        is_binary(sent_at) and sent_at != ""
+        is_binary(sent_at) and sent_at != "" and sent_recently?(sent_at, now)
 
       # Legacy rows only prove the old Telegram push path already ran.
       is_binary(fetch_map_value(notification, "sent_at")) ->
-        channel == "push"
+        channel == "push" and sent_recently?(fetch_map_value(notification, "sent_at"), now)
 
       true ->
         false
     end
   end
 
-  defp reconnect_channel_sent?(_notification, _channel), do: false
+  defp reconnect_channel_sent_recently?(_notification, _channel, _now), do: false
+
+  defp sent_recently?(sent_at, now) when is_binary(sent_at) do
+    case DateTime.from_iso8601(sent_at) do
+      {:ok, sent_at_dt, _offset} -> DateTime.diff(now, sent_at_dt, :day) < renotify_after_days()
+      _ -> false
+    end
+  end
+
+  defp sent_recently?(_sent_at, _now), do: false
+
+  @default_renotify_after_days 3
+
+  defp renotify_after_days do
+    Application.get_env(:maraithon, :connected_accounts, [])
+    |> Keyword.get(:renotify_after_days, @default_renotify_after_days)
+    |> case do
+      value when is_integer(value) and value > 0 -> value
+      _ -> @default_renotify_after_days
+    end
+  end
 
   defp send_reconnect_notifications(%ConnectedAccount{} = account, channels, reason)
        when is_list(channels) do
@@ -584,7 +702,15 @@ defmodule Maraithon.ConnectedAccounts do
   defp reconnect_notification_reason?("oauth_reauth_required"), do: true
   defp reconnect_notification_reason?("oauth_missing_refresh_token"), do: true
   defp reconnect_notification_reason?("disconnected"), do: true
+  # R3: broaden beyond hard OAuth failures — a source that's gone quiet
+  # (no successful sync/watch for a while) is worth a soft notice too.
+  defp reconnect_notification_reason?("source_stale"), do: true
+  defp reconnect_notification_reason?("watch_expired"), do: true
   defp reconnect_notification_reason?(_reason), do: false
+
+  @soft_reconnect_reasons ~w(source_stale watch_expired)
+
+  defp soft_reconnect_reason?(reason), do: reason in @soft_reconnect_reasons
 
   def telegram_destination(user_id) when is_binary(user_id) do
     case get(user_id, "telegram") do
@@ -624,7 +750,14 @@ defmodule Maraithon.ConnectedAccounts do
     _ -> false
   end
 
-  defp reconnect_url(provider) when is_binary(provider) do
+  @doc """
+  Public reconnect-management URL for a provider (e.g. `/connectors/google`).
+
+  Exposed for `Maraithon.SourceFreshness.compact_for_prompt/2` (R5) so the
+  assistant can hand the user a reconnect link for a broken source without
+  duplicating the base-URL/provider-root logic.
+  """
+  def reconnect_url(provider) when is_binary(provider) do
     base =
       Application.get_env(:maraithon, :connected_accounts, [])
       |> Keyword.get_lazy(:reconnect_base_url, fn -> Maraithon.AppUrl.base_url() end)
@@ -636,7 +769,7 @@ defmodule Maraithon.ConnectedAccounts do
     if base == "", do: path, else: base <> path
   end
 
-  defp reconnect_url(_provider), do: "/connectors"
+  def reconnect_url(_provider), do: "/connectors"
 
   defp provider_root(provider) when is_binary(provider) do
     provider
@@ -658,6 +791,14 @@ defmodule Maraithon.ConnectedAccounts do
   defp reconnect_notification_enabled?(_opts), do: true
 
   defp reconnect_notification_message(%ConnectedAccount{} = account, reconnect_url, reason) do
+    if soft_reconnect_reason?(reason) do
+      soft_notification_message(account, reconnect_url, reason)
+    else
+      hard_notification_message(account, reconnect_url, reason)
+    end
+  end
+
+  defp hard_notification_message(%ConnectedAccount{} = account, reconnect_url, reason) do
     provider_label = provider_label(account.provider)
     account_label = account_label(account)
     action_text = reconnect_action_text(reason)
@@ -670,7 +811,31 @@ defmodule Maraithon.ConnectedAccounts do
     |> String.trim()
   end
 
+  # R3: softer copy for source_stale/watch_expired — the account is not
+  # necessarily broken (no OAuth error), it has just gone quiet, so this
+  # should read like a gentle heads-up rather than an alarm.
+  defp soft_notification_message(%ConnectedAccount{} = account, reconnect_url, reason) do
+    provider_label = provider_label(account.provider)
+    since_phrase = since_phrase(account)
+    quiet_text = quiet_action_text(reason)
+
+    """
+    <b>Maraithon connector check</b>
+    I haven't seen #{quiet_text} #{html_escape(provider_label)} #{since_phrase} — the connection may need attention.
+    <a href="#{html_escape(reconnect_url)}">Check #{html_escape(provider_label)} in Maraithon</a>
+    """
+    |> String.trim()
+  end
+
   defp reconnect_notification_email(%ConnectedAccount{} = account, reconnect_url, reason) do
+    if soft_reconnect_reason?(reason) do
+      soft_notification_email(account, reconnect_url, reason)
+    else
+      hard_notification_email(account, reconnect_url, reason)
+    end
+  end
+
+  defp hard_notification_email(%ConnectedAccount{} = account, reconnect_url, reason) do
     provider_label = provider_label(account.provider)
     account_label = account_label(account)
     action_text = reconnect_action_text(reason)
@@ -697,8 +862,55 @@ defmodule Maraithon.ConnectedAccounts do
     }
   end
 
+  defp soft_notification_email(%ConnectedAccount{} = account, reconnect_url, reason) do
+    provider_label = provider_label(account.provider)
+    since_phrase = since_phrase(account)
+    quiet_text = quiet_action_text(reason)
+
+    subject = "Check #{provider_label} in Maraithon"
+
+    text_body = """
+    Maraithon connector check
+
+    I haven't seen #{quiet_text} #{provider_label} #{since_phrase} - the connection may need attention.
+    Check #{provider_label} in Maraithon: #{reconnect_url}
+    """
+
+    html_body = """
+    <p><strong>Maraithon connector check</strong></p>
+    <p>I haven't seen #{quiet_text} #{html_escape(provider_label)} #{since_phrase} — the connection may need attention.</p>
+    <p><a href="#{html_escape(reconnect_url)}">Check #{html_escape(provider_label)} in Maraithon</a></p>
+    """
+
+    %{
+      subject: subject,
+      text_body: String.trim(text_body),
+      html_body: String.trim(html_body)
+    }
+  end
+
   defp reconnect_action_text("disconnected"), do: "was disconnected"
   defp reconnect_action_text(_reason), do: "needs re-authentication"
+
+  defp quiet_action_text("watch_expired"), do: "live updates from"
+  defp quiet_action_text(_reason), do: "new activity from"
+
+  # "I haven't seen new Gmail since Tuesday" - falls back to a vaguer
+  # phrase when we don't have a last-successful-sync timestamp to anchor to.
+  defp since_phrase(%ConnectedAccount{metadata: metadata}) do
+    metadata = normalize_metadata(metadata)
+
+    case fetch_map_value(metadata, "last_successful_sync_at") do
+      value when is_binary(value) ->
+        case DateTime.from_iso8601(value) do
+          {:ok, datetime, _offset} -> "since #{Calendar.strftime(datetime, "%A")}"
+          _ -> "in a while"
+        end
+
+      _ ->
+        "in a while"
+    end
+  end
 
   defp provider_label(provider) when is_binary(provider),
     do: SourceLabels.label(provider, fallback: "Connector")

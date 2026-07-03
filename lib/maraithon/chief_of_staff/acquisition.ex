@@ -18,6 +18,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   alias Maraithon.News
   alias Maraithon.OAuth
   alias Maraithon.Slack.UserDirectory
+  alias Maraithon.SourceFreshness
   alias Maraithon.Tools.SlackHelpers
 
   require Logger
@@ -400,6 +401,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
           case fetch_slack_workspace(user_id, source_scope, team_id, plan, team_oldest) do
             {:ok, workspace, workspace_fetches} ->
+              # R4: mirrors the gmail/calendar branches - confirms recovery
+              # for a Slack workspace previously flagged stale/reauth.
+              SourceFreshness.mark_success(user_id, "slack:#{team_id}")
+
               watermark_acc =
                 accumulate_watermark(
                   watermark_acc,
@@ -1332,6 +1337,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                  provider: provider
                ) do
             {:ok, messages} ->
+              # R4: a successful poll is the recovery signal for gmail
+              # sources flagged stale/watch_expired by the freshness sweep
+              # (or reauth-recovered since the last cycle) - confirms once
+              # and re-arms future notifications.
+              SourceFreshness.mark_success(user_id, provider)
+
               watermark_acc =
                 accumulate_watermark(
                   watermark_acc,
@@ -1474,6 +1485,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                  provider: provider
                ) do
             {:ok, events} ->
+              # R4: mirrors the gmail branch above - a successful calendar
+              # fetch confirms recovery for calendar sources previously
+              # flagged stale/watch_expired/reauth.
+              SourceFreshness.mark_success(user_id, provider)
+
               annotated = annotate_google_items(events, source_scope, provider)
 
               {
