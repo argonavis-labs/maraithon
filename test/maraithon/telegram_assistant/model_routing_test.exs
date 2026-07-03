@@ -68,6 +68,21 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
     assert Keyword.fetch!(profile.llm_opts, :max_wall_clock_ms) == 15_000
   end
 
+  test "routes 'what can you see' with a source/connector anchor to connector_status" do
+    profile = ModelRouting.profile_for(%{text: "what sources can you see right now?"})
+
+    assert profile.request_focus == :connector_status
+    assert profile.task_class == :connector_status
+    assert profile.route_reason == "connector_status_focus"
+  end
+
+  test "does not misroute an unrelated 'what can you see' ask into connector_status" do
+    profile = ModelRouting.profile_for(%{text: "what can you see for tomorrow's meetings?"})
+
+    refute profile.request_focus == :connector_status
+    refute profile.task_class == :connector_status
+  end
+
   test "routes broad planning and todo-review asks to the reasoning tier" do
     for text <- [
           "What should I do next?",

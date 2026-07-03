@@ -10,7 +10,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.ChiefOfStaff.Acquisition
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.ChiefOfStaff.MeetingEnrichment
-  alias Maraithon.Commitments
   alias Maraithon.Companion
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm
@@ -25,6 +24,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Memory
   alias Maraithon.Spend
   alias Maraithon.OpenLoops
+  alias Maraithon.SourceFreshness
+  alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Todos
   alias Maraithon.Tracing
 
@@ -425,7 +426,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             "origin_skill_id" => id(),
             "source_backed" => true,
             "brief_input" => compact_brief_input_for_metadata(brief_input),
-            "source_health" => read_map(brief_input, "source_health")
+            "source_health" => read_map(brief_input, "source_health"),
+            "held_interruption_ids" => held_interruption_ids(brief_input)
           }
         }
 
@@ -660,6 +662,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     schedule_coverage = schedule_coverage_contract(meeting_prep)
 
+    # SPEC 07 R1: briefing-shaped query — today's date plus the concrete
+    # calendar/commercial-thread subjects in this brief, instead of a static
+    # "morning briefing chief of staff relevance" string with no signal.
+    briefing_memory_query =
+      briefing_memory_query(local_date, today_events, commercial_threads)
+
     %{
       "date" => Date.to_iso8601(local_date),
       "generated_at" => DateTime.to_iso8601(now),
@@ -773,8 +781,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         }
       },
       "weather" => SourceBundle.weather(source_bundle),
+      # SPEC 05 R6: sourced from the direction-aware todo queries
+      # (Todos.list_owed_by_me/2) instead of the retired Commitment schema,
+      # which nothing ever wrote to.
       "commitments" =>
-        Commitments.bucket_for_brief(user_id,
+        Todos.bucket_for_brief(user_id,
           now: now,
           timezone_offset_hours: offset_hours,
           timezone_label: timezone_label(state, now),
@@ -788,7 +799,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "todos" =>
           user_id
           |> Todos.list_open_for_user(limit: 100)
-          |> Enum.map(&todo_for_prompt/1)
+          |> Enum.map(&todo_for_prompt/1),
+        "held_interruptions" => held_interruptions_for_prompt(user_id)
       },
       "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
       "relationships" =>
@@ -796,7 +808,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         |> Crm.summarize_for_prompt(100),
       "deep_memory" =>
         user_id
-        |> Memory.prompt_context(query: "morning briefing chief of staff relevance", limit: 100),
+        |> Memory.prompt_context(query: briefing_memory_query, limit: 100),
       "source_health" =>
         source_bundle
         |> SourceBundle.freshness()
@@ -813,8 +825,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             browser_history: visits
           ],
           local_source_errors
-        )
+        ),
+      # R6: `source_health` above is this cycle's per-fetch status (ready/
+      # partial/unavailable) and can read "partial" for an ordinary quiet
+      # day. `connector_health` is the durable account-level signal
+      # (`Maraithon.SourceFreshness`) so the brief can say plainly when a
+      # source used in this run has an active reconnect issue, not just a
+      # quiet one.
+      "connector_health" => broken_connector_health(user_id, now)
     }
+  end
+
+  defp broken_connector_health(user_id, now) do
+    user_id
+    |> SourceFreshness.compact_for_prompt(now: now)
+    |> Enum.reject(&(Map.get(&1, :status) == "fresh"))
   end
 
   @doc """
@@ -1067,7 +1092,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         context
 
       _ ->
-        {source_bundle, telemetry} =
+        {source_bundle, telemetry, _proposed_watermarks} =
           Acquisition.build(
             user_id,
             [id()],
@@ -1333,6 +1358,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        Local source rule:
        When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
 
+       Held interruptions rule:
+       open_work.held_interruptions lists proactive Telegram pushes that were held instead of
+       interrupting (quiet hours, the hourly interruption budget, or a model hold decision) and
+       are now due for review in this brief. Do not silently drop them: fold any that still need
+       a decision into Needs Your Attention, Open Commitments, or another appropriate section
+       using hold_reason and why_now for context, and skip any that are already fully covered by
+       another item in this brief.
+
        Source digest rule:
        The morning briefing payload is assembled from independently bounded source digests for
        Gmail, Slack, calendar, People records, open work, memory, and local sources. Treat
@@ -1340,6 +1373,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        included rows before deciding what belongs in the executive brief, and use
        source_health/counts to call out connector gaps or truncation risk when it affects
        confidence.
+
+       Connector health rule:
+       connector_health lists connected sources with an active reconnect issue (stale, never
+       synced, an error, or needing reauth) - fresh sources are omitted, so any entry there is a
+       real coverage gap. If a source in that list is one this brief draws on (Gmail, Calendar,
+       Slack), add one short line near the top noting the gap, e.g. "This run only covers Gmail;
+       Calendar needs reconnect." Do not invent detail beyond account_label/status/stale_reason,
+       and do not repeat the note for every section - state it once.
 
        Inbox and Slack triage contract:
        If gmail.recent_inbox, gmail.recent_unread, slack.key_threads, or slack.mentions contain
@@ -4917,6 +4958,23 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
+  # SPEC 07 R1: builds the deep_memory recall query for the morning briefing
+  # from the concrete content of this brief (date, today's calendar events,
+  # commercial thread subjects) instead of a static relevance string.
+  defp briefing_memory_query(local_date, today_events, commercial_threads) do
+    [
+      "morning briefing #{Date.to_iso8601(local_date)}",
+      today_events |> Enum.map(&Map.get(&1, "summary")) |> Enum.reject(&blank?/1) |> Enum.take(6) |> Enum.join(" "),
+      commercial_threads
+      |> Enum.map(&Map.get(&1, "subject"))
+      |> Enum.reject(&blank?/1)
+      |> Enum.take(6)
+      |> Enum.join(" ")
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" | ")
+  end
+
   defp json_metadata(value), do: Maraithon.Normalization.normalize_json_value(value)
 
   defp timed(fun) when is_function(fun, 0) do
@@ -5341,6 +5399,43 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     }
   end
 
+  # SPEC 08 R2: interruptions held for quiet hours, the interruption
+  # budget, or the model's own hold disposition must still reach the
+  # operator instead of vanishing. Fold them into the brief input here, but
+  # do NOT mark them delivered yet — that flip is irreversible, and at this
+  # point the LLM hasn't generated the brief and the push hasn't been
+  # confirmed sent. Their ids are carried through brief.metadata and only
+  # marked "delivered" once PushBroker confirms the brief actually reached
+  # the operator (see mark_held_interruptions_delivered/1 in push_broker.ex).
+  # If generation errors or the brief stays held/failed, they remain
+  # "held" so the next brief re-fetches them via list_held_for_user/2.
+  defp held_interruptions_for_prompt(user_id) do
+    user_id
+    |> ProactiveQueue.list_held_for_user(limit: 25)
+    |> Enum.map(fn candidate ->
+      %{
+        "id" => candidate.id,
+        "source" => candidate.source,
+        "title" => candidate.title,
+        "body" => candidate.body,
+        "why_now" => candidate.why_now,
+        "urgency" => candidate.urgency,
+        "hold_reason" => candidate.plan_reason,
+        "held_since" => prompt_time(candidate.updated_at)
+      }
+    end)
+  end
+
+  defp held_interruption_ids(brief_input) when is_map(brief_input) do
+    brief_input
+    |> get_in(["open_work", "held_interruptions"])
+    |> Kernel.||([])
+    |> Enum.map(&Map.get(&1, "id"))
+    |> Enum.filter(&is_binary/1)
+  end
+
+  defp held_interruption_ids(_brief_input), do: []
+
   defp recent_unread_message?(message, lookback_start) when is_map(message) do
     labels = read_list(message, "labels") |> Enum.map(&to_string/1)
     internal_date = read_datetime(message, "internal_date")
@@ -5686,7 +5781,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       {"reminders", %{}, &compact_prompt_value/1},
       {"files", %{}, &compact_prompt_value/1},
       {"browser_history", %{}, &compact_prompt_value/1},
-      {"source_health", %{}, &compact_prompt_value/1}
+      {"source_health", %{}, &compact_prompt_value/1},
+      {"connector_health", [], &compact_prompt_value/1}
     ]
   end
 

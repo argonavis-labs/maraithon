@@ -126,6 +126,14 @@ defmodule Maraithon.RelationshipIntelligenceTest do
     assert person.affinity_score == 64
     assert person.interaction_count == 1
 
+    # Post-review fix: `persist_person/3` used `Map.update("metadata", %{},
+    # fun)`, whose default branch inserts the bare default and skips `fun`
+    # entirely when "metadata" is absent (the common case) — silently
+    # dropping the RI provenance stamp. Same bug class as the person_id
+    # stamp above, fixed the same way.
+    assert person.metadata["relationship_intelligence"]["source"] == "test"
+    assert person.metadata["relationship_intelligence"]["confidence"] == 0.88
+
     assert [memory] = Memory.list_items(user_id, query: "4M newsletters", limit: 5)
     assert memory.kind == "relationship"
 
@@ -133,5 +141,84 @@ defmodule Maraithon.RelationshipIntelligenceTest do
     assert [link] = relationship.links
     assert link.resource_type == "gmail_thread"
     assert link.resource_id == "thread-school-4m"
+  end
+
+  # SPEC 07 review finding 2: relationship memories must stamp
+  # metadata.person_id when the model returns a person_ref, so the memory
+  # can be recalled scoped to that person (Recall.score's subject_match_score
+  # reads metadata["person_id"] against the person_id filter).
+  test "stamps metadata.person_id on relationship memories that reference a person_ref" do
+    user_id = "relationship-intel-person-ref-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    observation = %{
+      "source" => "gmail",
+      "resource_type" => "gmail_thread",
+      "resource_id" => "thread-marla-checkin",
+      "title" => "Check-in from Marla",
+      "from" => "Marla Maharaj <teacher@example.com>",
+      "to" => user_id,
+      "body_excerpt" => "Just checking in about Emma's progress this term."
+    }
+
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Learned a person-scoped memory.",
+             "people" => [
+               %{
+                 "person_ref" => "marla",
+                 "display_name" => "Marla Maharaj",
+                 "email" => "teacher@example.com",
+                 "relationship" => "School contact for Emma",
+                 "importance" => 82,
+                 "confidence" => 0.88
+               }
+             ],
+             "memories" => [
+               %{
+                 "kind" => "relationship",
+                 "title" => "Marla prefers concise updates",
+                 "content" => "Marla prefers short, concise email replies about Emma.",
+                 "tags" => ["emma", "school"],
+                 "importance" => 80,
+                 "confidence" => 0.9,
+                 "dedupe_key" => "relationship-intel:marla-prefers-concise",
+                 "person_ref" => "marla"
+               },
+               %{
+                 "kind" => "relationship",
+                 "title" => "General school logistics note",
+                 "content" => "School logistics emails are not urgent unless flagged.",
+                 "tags" => ["school"],
+                 "importance" => 60,
+                 "confidence" => 0.9,
+                 "dedupe_key" => "relationship-intel:general-school-logistics"
+               }
+             ],
+             "links" => []
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             RelationshipIntelligence.learn_from_observations(user_id, [observation],
+               source: "test",
+               llm_complete: llm_complete
+             )
+
+    assert result.memory_count == 2
+    assert [person] = Crm.list_people(user_id, query: "Marla")
+
+    scoped_memory =
+      Enum.find(Memory.list_items(user_id, limit: 10), &(&1.title =~ "concise updates"))
+
+    unscoped_memory =
+      Enum.find(Memory.list_items(user_id, limit: 10), &(&1.title =~ "General school logistics"))
+
+    assert scoped_memory.metadata["person_id"] == person.id
+    assert is_nil(unscoped_memory.metadata["person_id"])
   end
 end

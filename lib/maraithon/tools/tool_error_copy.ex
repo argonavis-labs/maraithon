@@ -71,6 +71,9 @@ defmodule Maraithon.Tools.ToolErrorCopy do
       {:rate_limited, _body} ->
         unavailable
 
+      {:rate_limited, _retry_after_seconds, _body} ->
+        unavailable
+
       {:http_error, _reason} ->
         unavailable
 

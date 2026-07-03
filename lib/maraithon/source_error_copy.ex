@@ -24,6 +24,7 @@ defmodule Maraithon.SourceErrorCopy do
 
   def reason({:http_status, _status, _body}), do: @source_check_failed
   def reason({:rate_limited, _body}), do: "rate limited"
+  def reason({:rate_limited, _retry_after_seconds, _body}), do: "rate limited"
   def reason({:http_error, _reason}), do: @service_problem
   def reason({:exit, _reason}), do: "interrupted"
 

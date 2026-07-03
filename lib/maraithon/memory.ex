@@ -10,7 +10,7 @@ defmodule Maraithon.Memory do
 
   import Ecto.Query
 
-  alias Maraithon.Memory.{Event, Intelligence, Item, Recall}
+  alias Maraithon.Memory.{Embedding, EmbeddingBackfill, Event, Intelligence, Item, Recall}
   alias Maraithon.Repo
 
   @default_limit 12
@@ -116,6 +116,7 @@ defmodule Maraithon.Memory do
 
         item
       end)
+      |> tap_embedding(user_id)
     end
   end
 
@@ -171,9 +172,21 @@ defmodule Maraithon.Memory do
           Repo.rollback(:memory_not_found)
       end
     end)
+    |> tap_embedding(user_id)
   end
 
   def supersede(_user_id, _attrs, _supersedes_id, _opts), do: {:error, :invalid_memory_attrs}
+
+  # SPEC 07 R2: fire-and-forget embedding refresh for the newly written item,
+  # plus a lazy backfill sweep for any older items still missing an
+  # embedding. Both are best-effort — a failure here never fails the write.
+  defp tap_embedding({:ok, %Item{} = item} = result, user_id) do
+    _ = Embedding.refresh_async(item)
+    _ = EmbeddingBackfill.enqueue_for_user(user_id)
+    result
+  end
+
+  defp tap_embedding(result, _user_id), do: result
 
   def update_confidence(user_id, memory_id, confidence, opts \\ [])
 
@@ -273,6 +286,114 @@ defmodule Maraithon.Memory do
   end
 
   def record_relevance_feedback(_user_id, _attrs, _opts), do: {:error, :invalid_feedback_attrs}
+
+  @doc """
+  Deterministically records a `kind: "correction"` memory (SPEC 07 R6).
+
+  The assistant step contract carries a model-classified `correction` field
+  (see `Maraithon.AssistantHarness`'s JSON contract); the runner calls this
+  function whenever the model marks a turn as a correction, so a correction
+  memory is written regardless of whether the model also calls the
+  `write_memory` tool. Shaping mirrors `record_relevance_feedback/3`.
+  """
+  def record_correction(user_id, attrs, opts \\ [])
+
+  def record_correction(user_id, attrs, opts) when is_binary(user_id) and is_map(attrs) do
+    corrected_value = read_string(attrs, "corrected_value", nil)
+
+    if is_nil(corrected_value) do
+      {:error, :missing_corrected_value}
+    else
+      kind_label = read_string(attrs, "kind", "other")
+      explicit_subject = read_string(attrs, "subject", nil)
+      subject = explicit_subject || "the previous response"
+      original_value = read_string(attrs, "original_value", nil)
+      resource_type = read_string(attrs, "resource_type", nil)
+      resource_id = read_string(attrs, "resource_id", nil)
+      source = read_string(attrs, "source", Keyword.get(opts, :source, "assistant_correction"))
+
+      content =
+        [
+          "Correction (#{correction_label(kind_label)}) on #{subject}.",
+          if(original_value, do: "Was: #{original_value}.", else: nil),
+          "Correct: #{corrected_value}."
+        ]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join(" ")
+
+      dedupe_key =
+        correction_dedupe_key(kind_label, resource_type, resource_id, explicit_subject, opts)
+
+      memory_attrs =
+        attrs
+        |> Map.merge(%{
+          "kind" => "correction",
+          "title" => "Correction: #{String.slice(subject, 0, 120)}",
+          "content" => content,
+          "summary" => content,
+          "source" => source,
+          "source_ref_type" => resource_type,
+          "source_ref_id" => resource_id,
+          "author_type" => read_string(attrs, "author_type", "user"),
+          "polarity" => "negative",
+          "importance" => read_integer(attrs, "importance", 80),
+          "confidence" => read_float(attrs, "confidence", 0.9),
+          "tags" => normalize_tags(Map.get(attrs, "tags")) ++ ["correction", kind_label],
+          "metadata" =>
+            attrs
+            |> read_map("metadata", %{})
+            |> Map.merge(%{
+              "correction_kind" => kind_label,
+              "subject" => subject,
+              "original_value" => original_value,
+              "corrected_value" => corrected_value
+            })
+        })
+        |> maybe_put_dedupe_key(dedupe_key)
+
+      case write(user_id, memory_attrs, source: source) do
+        {:ok, %Item{} = item} ->
+          log_event(user_id, item.id, "correction_recorded", source, %{
+            "kind" => kind_label,
+            "subject" => subject,
+            "resource_type" => resource_type,
+            "resource_id" => resource_id
+          })
+
+          {:ok, item}
+
+        other ->
+          other
+      end
+    end
+  end
+
+  def record_correction(_user_id, _attrs, _opts), do: {:error, :invalid_correction_attrs}
+
+  # `subject` defaults to the generic "the previous response" whenever the
+  # caller didn't pass one, so two distinct corrections with no
+  # resource_type/resource_id and no explicit subject would otherwise land
+  # on the exact same dedupe key — and `write/3` updates a matching key in
+  # place, so the second correction would silently overwrite the first
+  # instead of persisting as its own row. When all three identifying
+  # components are absent/generic, fold in a run/turn-scoped component (the
+  # runner's `run_id`, threaded through `opts`, when available; otherwise a
+  # microsecond-precision timestamp) so distinct corrections in the same
+  # conversation still get distinct keys. When any real identifier exists
+  # (resource_type/resource_id or an explicit subject), keep the original
+  # key unchanged so a genuinely repeated correction on the same thing still
+  # dedupes in place.
+  defp correction_dedupe_key(kind_label, nil, nil, nil, opts) do
+    scope =
+      Keyword.get(opts, :run_id) || Keyword.get(opts, :correction_scope) ||
+        DateTime.to_iso8601(DateTime.utc_now())
+
+    "correction:#{kind_label}:#{scope}:the previous response"
+  end
+
+  defp correction_dedupe_key(kind_label, resource_type, resource_id, subject, _opts) do
+    "correction:#{kind_label}:#{resource_type}:#{resource_id}:#{subject || "the previous response"}"
+  end
 
   def recall(user_id, query, opts \\ [])
 
@@ -875,6 +996,12 @@ defmodule Maraithon.Memory do
 
   defp feedback_label("not_relevant"), do: "not relevant"
   defp feedback_label(_feedback), do: "relevant"
+
+  defp correction_label("wrong_person"), do: "wrong person"
+  defp correction_label("already_done"), do: "already done"
+  defp correction_label("misunderstood"), do: "misunderstood request"
+  defp correction_label("value_correction"), do: "value correction"
+  defp correction_label(_kind), do: "correction"
 
   defp maybe_put_dedupe_key(attrs, fallback) do
     if read_string(attrs, "dedupe_key", nil) do

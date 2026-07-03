@@ -5,7 +5,9 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
     Application.put_env(:maraithon, __MODULE__, opts)
   end
 
-  def fetch_messages(_user_id, _opts \\ []) do
+  def fetch_messages(_user_id, opts \\ []) do
+    Application.put_env(:maraithon, {__MODULE__, :last_fetch_opts}, opts)
+
     if config(:fetch_messages_hang, false) do
       receive do
         :never -> :ok
@@ -13,6 +15,10 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
     end
 
     {:ok, config(:messages, [])}
+  end
+
+  def last_fetch_opts do
+    Application.get_env(:maraithon, {__MODULE__, :last_fetch_opts}, [])
   end
 
   def fetch_message_content(_user_id, message_id) when is_binary(message_id) do

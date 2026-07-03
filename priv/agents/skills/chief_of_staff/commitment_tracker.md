@@ -61,7 +61,12 @@ Use relationship context and memory:
 
 Routing metadata:
 - Always set `metadata.commitment_direction` to `i_owe`, `asked_of_me`, or `pending_reply`.
-- For operator self-commitments, set `metadata.explicit_user_commitment` to true, use `metadata.commitment_direction = "i_owe"`, include the exact source quote, and keep Slack channel/thread identifiers in metadata/source fields.
+- Always also set the top-level `direction` field on the todo candidate:
+  `owed_by_me` for `i_owe`/`asked_of_me` (the operator owes the counterparty),
+  `owed_to_me` for `pending_reply`/`user_owes`/`waiting_on_*` (the operator is
+  waiting on someone else), or `fyi` when nobody is waiting on anything. Name
+  the counterparty in the top-level `counterparty_label` whenever known.
+- For operator self-commitments, set `metadata.explicit_user_commitment` to true, use `metadata.commitment_direction = "i_owe"` (top-level `direction: "owed_by_me"`), include the exact source quote, and keep Slack channel/thread identifiers in metadata/source fields.
 - Always include useful source metadata: thread ID, message ID, event ID, memo ID, note ID, reminder ID, file ID, visit ID, account, chat/channel, quote, source ref, and source tags.
 - For Slack items, use `user_display_name`, `mentioned_users.display_name`, and resolved message text for human-facing names. Keep raw Slack user IDs such as `U...` in metadata only.
 - For human follow-ups, include memory-jogging relationship context in metadata: `company`, `organization`, `relationship_context`, `relationship_strength` when known, `why_it_matters`, and enough `source_tags` to identify the project/company.

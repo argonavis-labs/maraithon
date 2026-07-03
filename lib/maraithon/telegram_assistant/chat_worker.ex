@@ -28,6 +28,12 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
 
   require Logger
 
+  alias Maraithon.AssistantHarness
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.OperatorEvents
+  alias Maraithon.TelegramAssistant.VoiceCapture
+  alias Maraithon.TelegramConversations
+  alias Maraithon.TelegramResponder
   alias Maraithon.TelegramRouter
 
   @registry Maraithon.TelegramAssistant.ChatRegistry
@@ -91,25 +97,196 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   def handle_cast({:handle_message, data}, state) do
     message_id = message_id(data)
 
-    if message_id != nil and MapSet.member?(state.seen_set, message_id) do
-      # Duplicate webhook delivery — Telegram retried. Already handled.
-      {:noreply, state}
-    else
-      run_router(data, state.chat_id)
-      {:noreply, remember(state, message_id)}
+    cond do
+      message_id != nil and MapSet.member?(state.seen_set, message_id) ->
+        # Duplicate webhook delivery — Telegram retried, and this worker
+        # already handled it in this lifetime.
+        {:noreply, state}
+
+      message_id != nil and already_completed?(state.chat_id, message_id) ->
+        # Deferring mark-as-seen until after handling (R3) means a webhook
+        # retry re-runs `TelegramRouter.handle_message/1` from scratch — but
+        # `seen_set` alone can't catch a retry that arrives after a worker
+        # restart, since it's only in-memory. Check persisted state instead:
+        # if a completed assistant reply already exists for this inbound
+        # message, the prior attempt actually finished and answered the
+        # user. Re-running from scratch here would risk double-firing
+        # non-idempotent tool side effects (e.g. sending an email twice), so
+        # just remember the id and skip reprocessing.
+        {:noreply, remember(state, message_id)}
+
+      true ->
+        # `run_router/2` never lets an exception, exit, or throw escape — it
+        # always resolves to `:ok` (success, or a caught failure whose fallback
+        # reply was actually delivered) or `:unhandled` (a caught failure whose
+        # fallback reply also failed to send). Only `:ok` marks the message id
+        # as seen. If the worker dies outright before this point, or the
+        # fallback itself could not reach the user, the id is never
+        # remembered, so a Telegram webhook retry (or any other redelivery of
+        # the same message id) can still be processed — by this worker or a
+        # fresh one — instead of the message being silently, permanently lost.
+        case prepare_and_run(data, state.chat_id) do
+          :ok -> {:noreply, remember(state, message_id)}
+          :unhandled -> {:noreply, state}
+        end
     end
+  end
+
+  defp already_completed?(chat_id, message_id) do
+    TelegramConversations.assistant_reply_recorded?(chat_id, message_id)
+  rescue
+    error ->
+      Logger.warning("[telegram_fallback] retry-completion check failed",
+        chat_id: chat_id,
+        reason: Exception.message(error)
+      )
+
+      false
+  end
+
+  # SPEC 02: a voice/audio message has no `text` yet when it reaches here —
+  # the webhook already acked, so downloading + transcribing happens in this
+  # worker, before the message is handed to `TelegramRouter`. Any exception
+  # escaping either step (transcription included) still lands on the same
+  # "never silence" fallback path as a router crash.
+  defp prepare_and_run(data, chat_id) do
+    case VoiceCapture.maybe_transcribe(data) do
+      {:ok, prepared_data} ->
+        run_router(prepared_data, chat_id)
+
+      {:error, reason} ->
+        handle_voice_capture_failure(data, chat_id, reason)
+    end
+  rescue
+    error ->
+      handle_router_failure(data, chat_id, :exception, Exception.message(error))
+  catch
+    :exit, reason ->
+      handle_router_failure(data, chat_id, :exit, inspect(reason))
+
+    :throw, value ->
+      handle_router_failure(data, chat_id, :throw, inspect(value))
   end
 
   defp run_router(data, chat_id) do
     TelegramRouter.handle_message(data)
+    :ok
   rescue
     error ->
-      Logger.warning("ChatWorker message handling crashed",
+      handle_router_failure(data, chat_id, :exception, Exception.message(error))
+  catch
+    :exit, reason ->
+      handle_router_failure(data, chat_id, :exit, inspect(reason))
+
+    :throw, value ->
+      handle_router_failure(data, chat_id, :throw, inspect(value))
+  end
+
+  # R5: download/transcription failure (including R6 cap violations) must
+  # still produce a short user-visible reply — never silence — using the
+  # same fallback delivery + operator-event recording as a router crash,
+  # just with copy specific to the voice failure reason
+  # (`AssistantHarness.failure_message/1`).
+  defp handle_voice_capture_failure(data, chat_id, reason) do
+    Logger.warning("[telegram_fallback] voice capture failed",
+      chat_id: chat_id,
+      reason: inspect(reason)
+    )
+
+    text = AssistantHarness.failure_message(reason)
+    send_result = send_fallback_reply(data, chat_id, text)
+    _ = record_fallback_event(data, chat_id, :voice_capture, inspect(reason), send_result)
+
+    case send_result do
+      {:ok, _} -> :ok
+      _ -> :unhandled
+    end
+  end
+
+  # Any crash anywhere inside `TelegramRouter.handle_message/1` — including a
+  # `GenServer.call` timeout (`:exit`) surfacing from deep in the tool/agent
+  # stack — lands here instead of killing the worker. The failure is only
+  # considered "handled" (and the message id eligible to be marked seen)
+  # once the fallback reply has actually been delivered to the user.
+  defp handle_router_failure(data, chat_id, kind, reason) do
+    Logger.warning("[telegram_fallback] ChatWorker message handling failed",
+      chat_id: chat_id,
+      kind: kind,
+      reason: reason
+    )
+
+    text = AssistantHarness.failure_message(:chat_worker_crash)
+    send_result = send_fallback_reply(data, chat_id, text)
+    _ = record_fallback_event(data, chat_id, kind, reason, send_result)
+
+    case send_result do
+      {:ok, _} -> :ok
+      _ -> :unhandled
+    end
+  end
+
+  defp send_fallback_reply(data, chat_id, text) do
+    case message_id(data) do
+      nil -> TelegramResponder.send(chat_id, text)
+      reply_to_message_id -> TelegramResponder.reply(chat_id, reply_to_message_id, text)
+    end
+  rescue
+    error ->
+      Logger.warning("[telegram_fallback] fallback reply send crashed",
+        chat_id: chat_id,
+        reason: Exception.message(error)
+      )
+
+      {:error, :fallback_send_crashed}
+  catch
+    kind, reason ->
+      Logger.warning("[telegram_fallback] fallback reply send crashed",
+        chat_id: chat_id,
+        reason: inspect({kind, reason})
+      )
+
+      {:error, :fallback_send_crashed}
+  end
+
+  defp record_fallback_event(data, chat_id, kind, reason, send_result) do
+    case resolve_user_id(chat_id) do
+      nil ->
+        :ok
+
+      user_id ->
+        OperatorEvents.record(%{
+          user_id: user_id,
+          source: "telegram",
+          event_type: "telegram_fallback.message_recovered",
+          source_item_id: message_id(data) || chat_id,
+          dedupe_key:
+            "telegram_fallback:message_recovered:#{chat_id}:#{message_id(data) || Ecto.UUID.generate()}",
+          payload: %{
+            "chat_id" => chat_id,
+            "message_id" => message_id(data),
+            "kind" => to_string(kind),
+            "reason" => reason,
+            "fallback_sent" => match?({:ok, _}, send_result)
+          }
+        })
+    end
+  rescue
+    error ->
+      Logger.warning("[telegram_fallback] failed to record operator event",
         chat_id: chat_id,
         reason: Exception.message(error)
       )
 
       :ok
+  end
+
+  defp resolve_user_id(chat_id) do
+    case ConnectedAccounts.get_connected_by_external_account("telegram", chat_id) do
+      %{user_id: user_id} -> user_id
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp remember(state, nil), do: state

@@ -39,7 +39,10 @@ defmodule Maraithon.Proactive.LocalPatternsTest do
 
   defp emit_and_fetch(detector, user_id, agent_id, now) do
     LocalPatterns.run_detector(detector, user_id, agent_id, now)
-    Insights.list_open_for_user(user_id, limit: 50)
+    # SPEC 04 R5: detector output is recorded as a "candidate" (inert until a
+    # model relevance decision promotes it), not directly as an open/
+    # Telegram-eligible "new" insight.
+    Insights.list_candidates_for_user(user_id, limit: 50)
   end
 
   describe "cold_thread detector" do
@@ -746,14 +749,45 @@ defmodule Maraithon.Proactive.LocalPatternsTest do
         ])
 
       {:ok, _} = LocalPatterns.run_for_user(user_id, now: now)
-      first_open = Insights.list_open_for_user(user_id, limit: 50)
+      first_open = Insights.list_candidates_for_user(user_id, limit: 50)
       assert length(first_open) == 1
       first_id = hd(first_open).id
 
       {:ok, _} = LocalPatterns.run_for_user(user_id, now: now)
-      second_open = Insights.list_open_for_user(user_id, limit: 50)
+      second_open = Insights.list_candidates_for_user(user_id, limit: 50)
       assert length(second_open) == 1
       assert hd(second_open).id == first_id
+    end
+  end
+
+  describe "candidate status (SPEC 04 R5)" do
+    test "run_detector records a candidate, not a directly-deliverable insight" do
+      user_id = unique_user!()
+      agent = system_agent!(user_id)
+      now = DateTime.utc_now()
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "candidate-status-memo",
+            "title" => "Candidate status check",
+            "created_at" => iso(seconds_ago(now, 3_600)),
+            "transcript" => nil
+          }
+        ])
+
+      count = LocalPatterns.run_detector(:untranscribed_memo, user_id, agent.id, now)
+      assert count == 1
+
+      assert Insights.list_open_for_user(user_id, limit: 50) == []
+      assert [candidate] = Insights.list_candidates_for_user(user_id, limit: 50)
+      assert candidate.status == "candidate"
+
+      {:ok, _updated} = Insights.approve_candidate(user_id, candidate.id)
+      assert [approved] = Insights.list_open_for_user(user_id, limit: 50)
+      assert approved.id == candidate.id
+      assert approved.status == "new"
     end
   end
 end

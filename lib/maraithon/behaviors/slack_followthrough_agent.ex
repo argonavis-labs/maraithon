@@ -17,7 +17,8 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
   require Logger
 
-  @default_wakeup_interval_ms :timer.hours(1)
+  # R1 (SPEC 04): sub-agent default cadence is 15 minutes, not hourly.
+  @default_wakeup_interval_ms :timer.minutes(15)
   @default_channel_scan_limit 80
   @default_dm_scan_limit 50
   @default_lookback_hours 48

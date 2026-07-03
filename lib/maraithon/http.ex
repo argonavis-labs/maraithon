@@ -42,10 +42,14 @@ defmodule Maraithon.HTTP do
 
   @doc """
   Makes a GET request.
+
+  Options:
+    * `:receive_timeout` - overrides the default 15s response timeout,
+      for large-body fetches like file downloads.
   """
-  @spec get(String.t(), headers()) :: response()
-  def get(url, headers \\ []) do
-    request(:get, url, headers, [])
+  @spec get(String.t(), headers(), keyword()) :: response()
+  def get(url, headers \\ [], opts \\ []) do
+    request(:get, url, headers, [], opts)
   end
 
   @doc """
@@ -84,19 +88,19 @@ defmodule Maraithon.HTTP do
   # Private
   # ===========================================================================
 
-  defp request(method, url, headers, req_opts) do
+  defp request(method, url, headers, req_opts, opts \\ []) do
     req =
       Req.new(
         method: method,
         url: url,
         headers: normalize_headers(headers),
         retry: false,
-        receive_timeout: 15_000
+        receive_timeout: Keyword.get(opts, :receive_timeout, 15_000)
       )
 
     case Req.request(req, req_opts) do
-      {:ok, %Response{status: status, body: body}} ->
-        handle_response(status, body, url)
+      {:ok, %Response{} = response} ->
+        handle_response(response, url)
 
       {:error, reason} ->
         Logger.warning("HTTP request failed", url: url, reason: inspect(reason))
@@ -104,21 +108,46 @@ defmodule Maraithon.HTTP do
     end
   end
 
-  defp handle_response(status, body, _url) when status in 200..299, do: {:ok, body}
+  defp handle_response(%Response{status: status, body: body}, _url) when status in 200..299,
+    do: {:ok, body}
 
-  defp handle_response(401, _body, _url) do
+  defp handle_response(%Response{status: 401}, _url) do
     {:error, :unauthorized}
   end
 
-  defp handle_response(429, body, _url) do
-    {:error, {:rate_limited, response_body_to_string(body)}}
+  defp handle_response(%Response{status: 429} = response, _url) do
+    body_string = response_body_to_string(response.body)
+
+    case retry_after_seconds(response) do
+      nil -> {:error, {:rate_limited, body_string}}
+      seconds -> {:error, {:rate_limited, seconds, body_string}}
+    end
   end
 
-  defp handle_response(status, body, url) do
+  defp handle_response(%Response{status: status, body: body}, url) do
     body_string = response_body_to_string(body)
     Logger.warning("HTTP request failed", url: url, status: status, body: body_string)
     {:error, {:http_status, status, body_string}}
   end
+
+  # `Retry-After` is either delta-seconds (what Google/Slack send in practice)
+  # or an HTTP-date; we only parse the numeric form and fall back to letting
+  # the caller apply its own default backoff.
+  defp retry_after_seconds(%Response{} = response) do
+    case Response.get_header(response, "retry-after") do
+      [value | _] -> parse_retry_after(value)
+      _ -> nil
+    end
+  end
+
+  defp parse_retry_after(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {seconds, ""} when seconds >= 0 -> seconds
+      _ -> nil
+    end
+  end
+
+  defp parse_retry_after(_value), do: nil
 
   defp normalize_headers(headers) do
     Enum.map(headers, fn

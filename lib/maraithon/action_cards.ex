@@ -160,7 +160,7 @@ defmodule Maraithon.ActionCards do
         "why_now" => why_now(todo, metadata, profile, attention_mode, opts, context_pack),
         "context_pack" => context_pack,
         "next_best_action" => next_best_action(todo, attention_mode),
-        "prepared_actions" => prepared_actions(todo),
+        "prepared_actions" => prepared_actions(todo, profile),
         "draft_preview" => draft_preview(todo),
         "available_buttons" => available_buttons(todo, attention_mode),
         "estimated_effort" => estimated_effort(todo),
@@ -646,8 +646,54 @@ defmodule Maraithon.ActionCards do
       manual_capture_why_now(todo, metadata),
       profile_why_now(profile, todo, context),
       contextual_why_now(todo, context),
+      nudge_why_now(todo, profile),
       fallback_why_now()
     ])
+  end
+
+  # SPEC 05 R4: surfaces nudge state ("waiting 9 days, never nudged" vs
+  # "nudged Tuesday") as a low-priority why_now candidate — it only fires
+  # once every richer, more specific signal above has nothing to say, and
+  # only for commitment-shaped todos (never for the neutral "fyi" default).
+  @nudge_min_age_days 3
+
+  defp nudge_why_now(%Todo{direction: direction} = todo, profile)
+       when direction in ["owed_by_me", "owed_to_me"] do
+    age_days = read_field(profile, "age_days")
+
+    cond do
+      is_integer(todo.nudge_count) and todo.nudge_count > 0 and
+          match?(%DateTime{}, todo.last_nudged_at) ->
+        nudge_subject_phrase(direction, age_days) <>
+          " nudged #{relative_nudge_label(todo.last_nudged_at)}."
+
+      is_integer(age_days) and age_days >= @nudge_min_age_days ->
+        nudge_subject_phrase(direction, age_days) <> ", never nudged."
+
+      true ->
+        nil
+    end
+  end
+
+  defp nudge_why_now(_todo, _profile), do: nil
+
+  defp nudge_subject_phrase("owed_to_me", age_days) when is_integer(age_days),
+    do: "You've been waiting #{age_days} days"
+
+  defp nudge_subject_phrase("owed_to_me", _age_days), do: "You've been waiting on this"
+
+  defp nudge_subject_phrase(_direction, age_days) when is_integer(age_days),
+    do: "This has been open #{age_days} days"
+
+  defp nudge_subject_phrase(_direction, _age_days), do: "This has been open"
+
+  defp relative_nudge_label(%DateTime{} = nudged_at) do
+    case Date.diff(Date.utc_today(), DateTime.to_date(nudged_at)) do
+      0 -> "today"
+      1 -> "yesterday"
+      days when days > 1 -> "#{days} days ago"
+      _ -> "recently"
+    end
   end
 
   defp manual_capture_why_now(todo, metadata) do
@@ -722,22 +768,48 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp prepared_actions(todo) do
+  defp prepared_actions(todo, profile) do
     next_action = String.downcase(todo.next_action || "")
     source = todo.source
 
+    base =
+      cond do
+        action_draft_present?(todo.action_draft) ->
+          [%{"type" => "review_draft", "label" => "Draft material is ready for approval."}]
+
+        source == "gmail" and String.contains?(next_action, ["reply", "email"]) ->
+          [%{"type" => "draft_email", "label" => "Draft the reply for approval."}]
+
+        source == "slack" and String.contains?(next_action, ["reply", "respond", "message"]) ->
+          [
+            %{
+              "type" => "draft_slack",
+              "label" => "Draft the Slack response for approval."
+            }
+          ]
+
+        true ->
+          []
+      end
+
+    base ++ nudge_prepared_actions(todo, profile)
+  end
+
+  # SPEC 05 R4: suggests sending a follow-up nudge for old, never-nudged
+  # "owed_to_me" work. Silent once a nudge has already gone out or the item
+  # is too fresh to chase.
+  defp nudge_prepared_actions(%Todo{direction: "owed_to_me", status: status} = todo, profile)
+       when status in @open_statuses do
     cond do
-      action_draft_present?(todo.action_draft) ->
-        [%{"type" => "review_draft", "label" => "Draft material is ready for approval."}]
+      is_integer(todo.nudge_count) and todo.nudge_count > 0 ->
+        []
 
-      source == "gmail" and String.contains?(next_action, ["reply", "email"]) ->
-        [%{"type" => "draft_email", "label" => "Draft the reply for approval."}]
-
-      source == "slack" and String.contains?(next_action, ["reply", "respond", "message"]) ->
+      is_integer(read_field(profile, "age_days")) and
+          read_field(profile, "age_days") >= @nudge_min_age_days ->
         [
           %{
-            "type" => "draft_slack",
-            "label" => "Draft the Slack response for approval."
+            "type" => "send_nudge",
+            "label" => "Send a follow-up nudge; none has gone out yet."
           }
         ]
 
@@ -745,6 +817,8 @@ defmodule Maraithon.ActionCards do
         []
     end
   end
+
+  defp nudge_prepared_actions(_todo, _profile), do: []
 
   defp available_buttons(%Todo{status: status}, _attention_mode)
        when status not in @open_statuses,

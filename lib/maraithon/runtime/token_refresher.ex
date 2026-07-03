@@ -5,6 +5,7 @@ defmodule Maraithon.Runtime.TokenRefresher do
 
   use GenServer
 
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.Runtime.Config
 
@@ -94,12 +95,27 @@ defmodule Maraithon.Runtime.TokenRefresher do
               reason: inspect(reason)
             )
 
+            # R1: report immediately so a terminal failure (invalid_grant,
+            # revoked, missing refresh token) reaches the user at this
+            # cycle instead of waiting for the next active scan failure.
+            # `report_access_issue` already classifies the error shape
+            # (`ConnectedAccounts.normalize_access_issue_reason/1`) and is a
+            # no-op for transient/network errors, so this never notifies on
+            # a retryable failure.
+            report_refresh_issue(token.user_id, token.provider, reason)
+
             %{acc | attempted: acc.attempted + 1, failed: acc.failed + 1}
         end
       else
         acc
       end
     end)
+  end
+
+  defp report_refresh_issue(user_id, provider, reason) do
+    ConnectedAccounts.report_access_issue(user_id, provider, reason)
+  rescue
+    _ -> :ok
   end
 
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do

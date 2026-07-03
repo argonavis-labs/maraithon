@@ -52,6 +52,30 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
 
   def list_pending_for_user(_user_id, _opts), do: []
 
+  @default_held_limit 25
+
+  @doc """
+  Held candidates (model-chosen hold, or downgraded by quiet hours/the
+  interruption budget at send time) that still need to reach the operator.
+  Callers that surface these (for example the morning briefing) are
+  expected to mark them delivered once included so they do not repeat
+  forever — see `mark_delivered/1`.
+  """
+  def list_held_for_user(user_id, opts \\ [])
+
+  def list_held_for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    limit = opts |> Keyword.get(:limit, @default_held_limit) |> positive_integer()
+
+    ProactiveCandidate
+    |> where([candidate], candidate.user_id == ^user_id)
+    |> where([candidate], candidate.status == "held")
+    |> order_by([candidate], desc: candidate.urgency, asc: candidate.inserted_at)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  def list_held_for_user(_user_id, _opts), do: []
+
   def pending_user_ids(opts \\ [])
 
   def pending_user_ids(limit) when is_integer(limit), do: pending_user_ids(limit: limit)

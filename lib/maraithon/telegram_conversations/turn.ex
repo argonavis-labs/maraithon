@@ -61,8 +61,26 @@ defmodule Maraithon.TelegramConversations.Turn do
     |> validate_inclusion(:delivery_state, @delivery_states)
     |> validate_number(:confidence, greater_than_or_equal_to: 0.0, less_than_or_equal_to: 1.0)
     |> foreign_key_constraint(:conversation_id)
-    |> unique_constraint([:conversation_id, :telegram_message_id])
-    |> unique_constraint([:conversation_id, :client_message_id])
+    # Postgres truncates identifiers to 63 bytes (NAMEDATALEN), so the
+    # actual index names in the DB are NOT the full
+    # "..._telegram_message_id_index" / "..._client_message_id_index"
+    # strings Ecto's default naming would infer — they get cut to exactly
+    # 63 chars, dropping the "_index" suffix (and, for the longer name,
+    # part of "id" too). Passing the untruncated inferred name as `:name`
+    # here would silently fail to match on conflict (Ecto would raise
+    # Ecto.ConstraintError instead of routing the error into the
+    # changeset), so both names below are the verified, truncated,
+    # as-created-in-the-DB constraint names — see
+    # `@telegram_message_id_constraint_name` in `TelegramConversations`,
+    # which must stay in sync with the first one.
+    |> unique_constraint([:conversation_id, :telegram_message_id],
+      name: "telegram_conversation_turns_conversation_id_telegram_message_id",
+      error_key: :telegram_message_id
+    )
+    |> unique_constraint([:conversation_id, :client_message_id],
+      name: "telegram_conversation_turns_conversation_id_client_message_id_i",
+      error_key: :client_message_id
+    )
   end
 
   defp put_default_turn_kind(changeset) do

@@ -783,6 +783,156 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Repo.get!(PreparedAction, prepared_action.id).status == "failed"
   end
 
+  test "a duplicate Confirm tap on an already-executed prepared action does not execute twice", %{
+    user_id: user_id
+  } do
+    {:ok, conversation} =
+      Maraithon.TelegramConversations.start_or_continue(user_id, "12345", %{
+        "root_message_id" => "9401"
+      })
+
+    {:ok, run} =
+      Maraithon.TelegramAssistant.start_run(%{
+        user_id: user_id,
+        chat_id: conversation.chat_id,
+        conversation_id: conversation.id,
+        surface: "telegram",
+        trigger_type: "inbound_message",
+        status: "completed",
+        model_provider: "test",
+        model_name: "test",
+        prompt_snapshot: %{},
+        result_summary: %{"message_class" => "approval_prompt"},
+        started_at: DateTime.utc_now(),
+        finished_at: DateTime.utc_now()
+      })
+
+    {:ok, prepared_action} =
+      Maraithon.TelegramAssistant.create_prepared_action(%{
+        user_id: user_id,
+        chat_id: conversation.chat_id,
+        conversation_id: conversation.id,
+        run_id: run.id,
+        surface: "telegram",
+        action_type: "project_create",
+        target_type: "project",
+        target_id: "duplicate-confirm-project",
+        payload: %{
+          "user_id" => user_id,
+          "attrs" => %{"name" => "Duplicate Confirm Project"}
+        },
+        preview_text: "Create project",
+        status: "awaiting_confirmation",
+        expires_at: DateTime.add(DateTime.utc_now(), 600, :second)
+      })
+
+    confirm_tap = fn message_id, callback_id ->
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          "chat_id" => 12345,
+          "message_id" => message_id,
+          "callback_id" => callback_id,
+          "data" => "tgact:#{prepared_action.id}:confirm"
+        }
+      })
+    end
+
+    :ok = confirm_tap.("9401-confirm-1", "duplicate-confirm-callback-1")
+
+    assert Repo.get!(PreparedAction, prepared_action.id).status == "executed"
+    assert last_telegram_message(:send).text == "Created the project."
+
+    matching_projects =
+      Repo.all(
+        from(project in Maraithon.Projects.Project,
+          where: project.user_id == ^user_id and project.name == "Duplicate Confirm Project"
+        )
+      )
+
+    assert length(matching_projects) == 1
+
+    :ok = confirm_tap.("9401-confirm-2", "duplicate-confirm-callback-2")
+
+    # Status is unchanged and no second project was created: the second
+    # Confirm tap loses the atomic claim (status is no longer
+    # "awaiting_confirmation") and gets a neutral "already handled" reply
+    # instead of re-executing the action.
+    assert Repo.get!(PreparedAction, prepared_action.id).status == "executed"
+
+    assert Repo.aggregate(
+             from(project in Maraithon.Projects.Project,
+               where: project.user_id == ^user_id and project.name == "Duplicate Confirm Project"
+             ),
+             :count
+           ) == 1
+
+    assert last_telegram_message(:send).text == "This was already handled."
+  end
+
+  test "a Confirm callback from a different chat than the prepared action is rejected", %{
+    user_id: user_id
+  } do
+    {:ok, conversation} =
+      Maraithon.TelegramConversations.start_or_continue(user_id, "12345", %{
+        "root_message_id" => "9402"
+      })
+
+    {:ok, run} =
+      Maraithon.TelegramAssistant.start_run(%{
+        user_id: user_id,
+        chat_id: conversation.chat_id,
+        conversation_id: conversation.id,
+        surface: "telegram",
+        trigger_type: "inbound_message",
+        status: "completed",
+        model_provider: "test",
+        model_name: "test",
+        prompt_snapshot: %{},
+        result_summary: %{"message_class" => "approval_prompt"},
+        started_at: DateTime.utc_now(),
+        finished_at: DateTime.utc_now()
+      })
+
+    {:ok, prepared_action} =
+      Maraithon.TelegramAssistant.create_prepared_action(%{
+        user_id: user_id,
+        chat_id: conversation.chat_id,
+        conversation_id: conversation.id,
+        run_id: run.id,
+        surface: "telegram",
+        action_type: "project_create",
+        target_type: "project",
+        target_id: "chat-mismatch-project",
+        payload: %{
+          "user_id" => user_id,
+          "attrs" => %{"name" => "Chat Mismatch Project"}
+        },
+        preview_text: "Create project",
+        status: "awaiting_confirmation",
+        expires_at: DateTime.add(DateTime.utc_now(), 600, :second)
+      })
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          "chat_id" => 99999,
+          "message_id" => "9999-confirm",
+          "callback_id" => "chat-mismatch-callback",
+          "data" => "tgact:#{prepared_action.id}:confirm"
+        }
+      })
+
+    assert Repo.get!(PreparedAction, prepared_action.id).status == "awaiting_confirmation"
+
+    refute Repo.exists?(
+             from(project in Maraithon.Projects.Project,
+               where: project.user_id == ^user_id and project.name == "Chat Mismatch Project"
+             )
+           )
+  end
+
   test "assistant can inspect a project by name and return project-manager recommendations", %{
     user_id: user_id
   } do

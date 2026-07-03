@@ -9,8 +9,16 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   @behaviour Maraithon.Behaviors.Behavior
 
   alias Maraithon.ChiefOfStaff.{Acquisition, AttentionArbiter, Skills}
+  alias Maraithon.Connectors.SourceCursors
 
-  @default_wakeup_interval_ms :timer.hours(1)
+  require Logger
+
+  # GOALS.md: the Chief of Staff wakes every 10 minutes, with lean modes
+  # allowed to stretch to 15. R1 (SPEC 04): default cadence is 10 minutes;
+  # the floor (not a slow-down clamp) is 5 minutes so config can only make
+  # cadence *faster*, never forced back up to the old hourly loop.
+  @default_wakeup_interval_ms :timer.minutes(10)
+  @min_wakeup_interval_ms :timer.minutes(5)
 
   @impl true
   def init(config) do
@@ -37,11 +45,16 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       pending_emits: [],
       pending_effect_skill_id: nil,
       resume_index: 0,
+      pending_watermarks: [],
+      last_watermarks: %{},
+      last_cycle_stats: %{},
+      cycle_memory: %{"memo" => nil, "updated_at" => nil, "cycle_id" => nil},
+      cycle_memo_generated: false,
       wakeup_interval_ms:
         config
         |> Map.get("wakeup_interval_ms")
         |> positive_integer(@default_wakeup_interval_ms)
-        |> max(@default_wakeup_interval_ms)
+        |> max(@min_wakeup_interval_ms)
     }
   end
 
@@ -62,6 +75,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     case state.pending_effect_skill_id do
       nil ->
         {:idle, state}
+
+      :cycle_memo ->
+        handle_cycle_memo_effect_result(effect_result, state, context)
 
       skill_id ->
         module = Skills.get!(skill_id)
@@ -105,6 +121,14 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     case state.pending_effect_skill_id do
       nil ->
         {:idle, state}
+
+      :cycle_memo ->
+        Logger.warning("ChiefOfStaff cycle memo generation failed",
+          effect_type: inspect(effect_type),
+          reason: inspect(reason)
+        )
+
+        finalize_cycle(mark_cycle_memo_done(state))
 
       skill_id ->
         module = Skills.get!(skill_id)
@@ -168,7 +192,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     skill_ids = cycle_skill_ids(state)
 
     if index >= length(skill_ids) do
-      finalize_cycle(%{state | resume_index: 0})
+      request_cycle_memo(%{state | resume_index: 0}, context)
     else
       skill_id = Enum.at(skill_ids, index)
       module = Skills.get!(skill_id)
@@ -207,7 +231,60 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     end
   end
 
+  # R3/R4 (SPEC 04): before finalizing, ask the model for a short cycle memo
+  # ("state of the world + what I decided/held this cycle") so the next
+  # wakeup reasons over deltas instead of starting from scratch. This is a
+  # cheap effect (skipped entirely on a quiet cycle with no deltas/emits —
+  # near-zero spend) routed through the same effect/continue machinery
+  # skills use, keyed off the `:cycle_memo` sentinel instead of a skill id.
+  defp request_cycle_memo(%{cycle_memo_generated: true} = state, _context) do
+    finalize_cycle(state)
+  end
+
+  defp request_cycle_memo(state, _context) do
+    case memo_llm_params(state) do
+      {:ok, params} ->
+        {:effect, {:llm_call, params}, %{state | pending_effect_skill_id: :cycle_memo}}
+
+      :skip ->
+        finalize_cycle(mark_cycle_memo_done(state))
+    end
+  end
+
+  defp handle_cycle_memo_effect_result({:llm_call, response}, state, context) do
+    state =
+      state
+      |> put_cycle_memo(extract_memo_text(response), context)
+      |> mark_cycle_memo_done()
+
+    finalize_cycle(state)
+  end
+
+  defp handle_cycle_memo_effect_result(_effect_result, state, _context) do
+    finalize_cycle(mark_cycle_memo_done(state))
+  end
+
+  defp mark_cycle_memo_done(state) do
+    %{state | pending_effect_skill_id: nil, cycle_memo_generated: true}
+  end
+
+  defp put_cycle_memo(state, nil, _context), do: state
+
+  defp put_cycle_memo(state, memo_text, context) when is_binary(memo_text) do
+    %{
+      state
+      | cycle_memory: %{
+          "memo" => memo_text,
+          "updated_at" => DateTime.to_iso8601(context[:timestamp] || DateTime.utc_now()),
+          "cycle_id" => state.assistant_cycle_id
+        }
+    }
+  end
+
   defp finalize_cycle(state) do
+    advanced_watermarks = advance_pending_watermarks(state)
+    log_cycle_delta_summary(state)
+
     emit =
       AttentionArbiter.finalize_emit(
         state.pending_emit,
@@ -221,9 +298,18 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       | cycle_skill_ids: nil,
         assistant_cycle_id: nil,
         source_bundle: nil,
+        # R3 (SPEC 04): keep a compact per-source watermark/stats snapshot in
+        # behavior_state (already snapshotted/restored) even though the
+        # canonical watermark lives in `source_cursors` — this is what
+        # carries "what I last saw per source" forward for the agent's own
+        # reasoning, independent of the DB round-trip.
+        last_watermarks: Map.merge(state.last_watermarks || %{}, advanced_watermarks),
+        last_cycle_stats: (state.assistant_fetch_telemetry || %{}) |> Map.get("sources", %{}),
         assistant_fetch_telemetry: nil,
         pending_effect_skill_id: nil,
         pending_emits: [],
+        pending_watermarks: [],
+        cycle_memo_generated: false,
         resume_index: 0
     }
 
@@ -236,15 +322,171 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     end
   end
 
+  # R4 (SPEC 04): watermarks are only ever advanced here, after every skill's
+  # effects for this cycle have completed (durable writes committed) and the
+  # cycle memo attempt has resolved. Acquisition defers advancement for the
+  # scheduled cycle (`defer_watermark_advance: true`) and instead proposes
+  # `%{account:, kind:, value:}` entries; a crash before this point leaves the
+  # watermark untouched, so the next wakeup reprocesses the same items rather
+  # than silently skipping them. Returns a `%{"provider:kind" => value}`
+  # summary for the behavior_state snapshot (R3).
+  defp advance_pending_watermarks(%{pending_watermarks: watermarks}) when is_list(watermarks) do
+    Enum.reduce(watermarks, %{}, fn entry, acc ->
+      advance_pending_watermark(entry)
+
+      case entry do
+        %{account: %Maraithon.Accounts.ConnectedAccount{provider: provider}, kind: kind, value: value}
+        when is_binary(provider) and is_binary(kind) ->
+          Map.put(acc, "#{provider}:#{kind}", value)
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp advance_pending_watermarks(_state), do: %{}
+
+  defp advance_pending_watermark(%{
+         account: %Maraithon.Accounts.ConnectedAccount{} = account,
+         kind: kind,
+         value: value
+       })
+       when is_binary(kind) and is_binary(value) do
+    case SourceCursors.put(account, kind, %{"value" => value}) do
+      {:ok, _cursor} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("ChiefOfStaff failed to advance source watermark",
+          provider: account.provider,
+          kind: kind,
+          reason: inspect(reason)
+        )
+    end
+  end
+
+  defp advance_pending_watermark(_other), do: :ok
+
+  defp log_cycle_delta_summary(state) do
+    sources = (state.assistant_fetch_telemetry || %{}) |> Map.get("sources", %{})
+
+    Logger.info(
+      "ChiefOfStaff cycle source deltas: " <> safe_json(sources),
+      assistant_cycle_id: state.assistant_cycle_id,
+      user_id: state.user_id
+    )
+  end
+
+  @memo_max_chars 1500
+
+  defp memo_llm_params(state) do
+    if cycle_worth_memo?(state) do
+      {:ok,
+       %{
+         "messages" => [%{"role" => "user", "content" => memo_prompt(state)}],
+         "max_tokens" => 400,
+         "temperature" => 0.2,
+         "reasoning_effort" => "low"
+       }}
+    else
+      :skip
+    end
+  end
+
+  defp cycle_worth_memo?(state) do
+    blank?(Map.get(state.cycle_memory || %{}, "memo")) or cycle_has_activity?(state)
+  end
+
+  defp cycle_has_activity?(state) do
+    has_emits = state.pending_emits != [] or not is_nil(state.pending_emit)
+    has_emits or telemetry_delta_count(state.assistant_fetch_telemetry) > 0
+  end
+
+  @delta_count_keys ~w(
+    message_count event_count count item_count memo_count note_count
+    open_due_soon recent_count visit_count chat_count feed_count
+  )
+
+  defp telemetry_delta_count(telemetry) when is_map(telemetry) do
+    telemetry
+    |> Map.get("sources", %{})
+    |> Map.values()
+    |> Enum.map(&source_item_count/1)
+    |> Enum.sum()
+  end
+
+  defp telemetry_delta_count(_telemetry), do: 0
+
+  defp source_item_count(summary) when is_map(summary) do
+    @delta_count_keys
+    |> Enum.map(&Map.get(summary, &1, 0))
+    |> Enum.filter(&is_integer/1)
+    |> Enum.sum()
+  end
+
+  defp source_item_count(_summary), do: 0
+
+  defp memo_prompt(state) do
+    previous_memo = Map.get(state.cycle_memory || %{}, "memo")
+    skills_ran = state.pending_emits |> Enum.map(& &1.skill_id) |> Enum.uniq()
+    deltas = (state.assistant_fetch_telemetry || %{}) |> Map.get("sources", %{})
+
+    """
+    You are the Chief of Staff's cross-cycle memory. Write a short memo \
+    (max #{@memo_max_chars} characters, plain text, no markdown) capturing \
+    the state of the world and what you decided or held this cycle, so \
+    your next wakeup can reason over the delta instead of starting from \
+    scratch.
+
+    Previous cycle memo:
+    #{if blank?(previous_memo), do: "(none yet - this is the first cycle)", else: previous_memo}
+
+    This cycle:
+    - Skills that produced output: #{if skills_ran == [], do: "none", else: Enum.join(skills_ran, ", ")}
+    - Per-source new-item counts since the last watermark: #{safe_json(deltas)}
+
+    Write the memo now. Be concrete and terse: note open threads, anything \
+    you decided to hold or suppress, and anything worth watching next \
+    cycle. Do not repeat these instructions.
+    """
+  end
+
+  defp extract_memo_text(response) do
+    content =
+      case response do
+        %{content: content} when is_binary(content) -> content
+        %{"content" => content} when is_binary(content) -> content
+        content when is_binary(content) -> content
+        _ -> nil
+      end
+
+    case content && String.trim(content) do
+      text when is_binary(text) and text != "" -> String.slice(text, 0, @memo_max_chars)
+      _ -> nil
+    end
+  end
+
+  defp safe_json(value) do
+    case Jason.encode(value) do
+      {:ok, json} -> json
+      {:error, _reason} -> inspect(value)
+    end
+  end
+
+  # R2 (SPEC 04): the scheduled wakeup path defers watermark advancement to
+  # `finalize_cycle/1` (R4) and gets a capped no-cursor fallback lookback
+  # (see Acquisition's `deep_lookback?`/`defer_watermark_advance`).
   defp ensure_cycle(%{cycle_skill_ids: nil} = state, context) do
     cycle_skill_ids = selected_skill_ids(state, context)
+    acquisition_context = Map.put(context, :defer_watermark_advance, true)
 
-    {source_bundle, assistant_fetch_telemetry} =
+    {source_bundle, assistant_fetch_telemetry, proposed_watermarks} =
       acquisition_module().build(
         state.user_id || normalize_string(context[:user_id]),
         cycle_skill_ids,
         state.skill_configs,
-        context
+        acquisition_context
       )
 
     %{
@@ -252,7 +494,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       | cycle_skill_ids: cycle_skill_ids,
         assistant_cycle_id: Ecto.UUID.generate(),
         source_bundle: source_bundle,
-        assistant_fetch_telemetry: assistant_fetch_telemetry
+        assistant_fetch_telemetry: assistant_fetch_telemetry,
+        pending_watermarks: proposed_watermarks,
+        cycle_memo_generated: false
     }
   end
 
@@ -304,6 +548,12 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     |> Map.put(:assistant_fetch_telemetry, state.assistant_fetch_telemetry)
     |> Map.put(:assistant_origin_skill_id, skill_id)
     |> Map.put(:assistant_origin_skill_rank, index + 1)
+    |> Map.put(:previous_cycle_memo, Map.get(state.cycle_memory || %{}, "memo"))
+    |> Map.put(
+      :previous_cycle_memo_updated_at,
+      Map.get(state.cycle_memory || %{}, "updated_at")
+    )
+    |> Map.put(:previous_cycle_memo_cycle_id, Map.get(state.cycle_memory || %{}, "cycle_id"))
   end
 
   defp build_skill_configs(config, user_id, enabled_skill_ids) do
@@ -488,7 +738,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   defp merge_wakeup(_left, right), do: right
 
   defp clamp_relative_scan_floor({:relative, ms}) when is_integer(ms) do
-    {:relative, max(ms, @default_wakeup_interval_ms)}
+    {:relative, max(ms, @min_wakeup_interval_ms)}
   end
 
   defp clamp_relative_scan_floor(other), do: other

@@ -151,11 +151,27 @@ defmodule Maraithon.SourceFreshness do
         status: snapshot.status,
         last_successful_sync: snapshot.last_successful_sync,
         stale_reason: prompt_stale_reason(snapshot),
-        last_error: prompt_last_error(snapshot.last_error)
+        last_error: prompt_last_error(snapshot.last_error),
+        reconnect_url: prompt_reconnect_url(snapshot)
       }
       |> compact_map()
     end)
   end
+
+  # R5: give the assistant a reconnect link for any source that isn't
+  # fresh, so a "what can you see right now?" answer can point the user
+  # straight at the fix instead of just naming the problem. The desktop
+  # companion has no OAuth/connectors page, so it's excluded.
+  @broken_statuses ["stale", "never_synced", "error", "reauth_required"]
+
+  defp prompt_reconnect_url(%{provider: "desktop"}), do: nil
+
+  defp prompt_reconnect_url(%{status: status, provider: provider})
+       when status in @broken_statuses do
+    ConnectedAccounts.reconnect_url(provider)
+  end
+
+  defp prompt_reconnect_url(_snapshot), do: nil
 
   def mark_success(user_id, provider, attrs \\ %{})
 
@@ -174,13 +190,29 @@ defmodule Maraithon.SourceFreshness do
           |> maybe_put_iso("last_webhook_at", read_datetime(attrs, :last_webhook_at))
           |> maybe_put_iso("last_full_scan_at", read_datetime(attrs, :last_full_scan_at))
 
-        account
-        |> ConnectedAccount.changeset(%{
-          status: "connected",
-          metadata: metadata,
-          last_refreshed_at: now
-        })
-        |> Repo.update()
+        result =
+          account
+          |> ConnectedAccount.changeset(%{
+            status: "connected",
+            metadata: metadata,
+            last_refreshed_at: now
+          })
+          |> Repo.update()
+
+        case result do
+          {:ok, updated_account} = ok ->
+            # R4: `account` (pre-write) still carries the prior status and
+            # any pending reconnect notification; `updated_account` is the
+            # fresh "connected" state. This is the general success hook for
+            # real syncs (Gmail/Calendar/Slack poll, watch renewal), unlike
+            # `ConnectedAccounts.upsert_from_oauth/3` which only fires on
+            # token refresh.
+            ConnectedAccounts.maybe_report_recovery(account, updated_account)
+            ok
+
+          error ->
+            error
+        end
 
       nil ->
         {:error, :connected_account_not_found}

@@ -9,6 +9,9 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
   import Ecto.Query
 
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Connectors.Gmail
+  alias Maraithon.Connectors.GoogleCalendar
   alias Maraithon.Crm.Ingest
   alias Maraithon.Crm.Ingest.Window
   alias Maraithon.Crm.Observation
@@ -21,6 +24,44 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   alias Maraithon.Runtime.BackgroundJob
 
   require Logger
+
+  # Default backoff applied when a provider returns 429 without a parseable
+  # `Retry-After` header.
+  @default_rate_limit_retry_seconds 30
+
+  def execute(%BackgroundJob{job_type: "gmail_incremental_sync"} = job) do
+    with {:ok, user_id} <- require_user_id(job) do
+      provider = payload_string(job, "provider", "google")
+
+      case ConnectedAccounts.get(user_id, provider) do
+        nil ->
+          {:error, {:connected_account_not_found, provider}}
+
+        account ->
+          case Gmail.sync_history(user_id, account, provider: provider) do
+            {:ok, result} -> {:ok, Map.put(result, :source, "gmail_incremental_sync")}
+            {:error, reason} -> handle_google_rate_limit(reason)
+          end
+      end
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "calendar_incremental_sync"} = job) do
+    with {:ok, user_id} <- require_user_id(job) do
+      provider = payload_string(job, "provider", "google")
+
+      case ConnectedAccounts.get(user_id, provider) do
+        nil ->
+          {:error, {:connected_account_not_found, provider}}
+
+        account ->
+          case GoogleCalendar.sync_history(user_id, account, provider: provider) do
+            {:ok, result} -> {:ok, Map.put(result, :source, "calendar_incremental_sync")}
+            {:error, reason} -> handle_google_rate_limit(reason)
+          end
+      end
+    end
+  end
 
   def execute(%BackgroundJob{job_type: "email_processing"} = job) do
     with {:ok, user_id} <- require_user_id(job) do
@@ -168,6 +209,14 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
   def execute(%BackgroundJob{job_type: "local_files_embed"} = job) do
     dispatch_local_embed_job(job, Maraithon.LocalFiles.EmbedJob)
+  end
+
+  def execute(%BackgroundJob{job_type: "memory_items_embedding_backfill"} = job) do
+    with {:ok, user_id} <- require_user_id(job) do
+      Maraithon.Memory.EmbeddingBackfill.run_for_user(user_id,
+        limit: payload_integer(job, "limit", 25)
+      )
+    end
   end
 
   def execute(%BackgroundJob{job_type: "local_contacts_crm_merge"} = job) do
@@ -388,6 +437,22 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
        }}
     end
   end
+
+  # Google APIs (Gmail, Calendar) surface 429s as `Maraithon.HTTP`'s
+  # `:rate_limited` error. Rather than burning a job attempt on a transient
+  # rate limit, translate it into `{:retry_after, seconds, reason}` so
+  # `BackgroundJobRunner` reschedules at `Retry-After` (or a default backoff)
+  # without incrementing `attempts`.
+  defp handle_google_rate_limit({:rate_limited, retry_after_seconds, _body} = reason)
+       when is_integer(retry_after_seconds) do
+    {:error, {:retry_after, retry_after_seconds, reason}}
+  end
+
+  defp handle_google_rate_limit({:rate_limited, _body} = reason) do
+    {:error, {:retry_after, @default_rate_limit_retry_seconds, reason}}
+  end
+
+  defp handle_google_rate_limit(reason), do: {:error, reason}
 
   defp require_user_id(%BackgroundJob{user_id: user_id})
        when is_binary(user_id) and user_id != "",

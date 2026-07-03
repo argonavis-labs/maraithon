@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightNotifications
   alias Maraithon.Memory
+  alias Maraithon.TelegramAssistant.PreparedAction
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.Todos
@@ -471,6 +472,382 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     refute edit.text =~ "Feedback noted:"
     refute edit.text =~ "I'll show fewer"
     refute edit.text =~ "Maraithon will show fewer"
+  end
+
+  test "cards with an existing draft show Send instead of Draft", %{user_id: user_id} do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Reply to Priya about the contract",
+          "summary" => "Priya is waiting on the signed contract update.",
+          "next_action" => "Reply to Priya with the contract status.",
+          "dedupe_key" => "todo-actions:send-button-present",
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "gmail",
+            "subject" => "Re: Contract",
+            "text" => "Hi Priya, the contract is signed and on file."
+          }
+        }
+      ])
+
+    payload = TodoActions.telegram_payload(todo)
+    buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
+
+    assert Enum.any?(buttons, &(&1["text"] == "Send"))
+    refute Enum.any?(buttons, &(&1["text"] == "Draft Email"))
+  end
+
+  test "cards with an existing draft also offer a Redraft option (review finding: no redraft affordance once a real draft exists)",
+       %{user_id: user_id} do
+    {:ok, [gmail_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Reply to Priya about the contract",
+          "summary" => "Priya is waiting on the signed contract update.",
+          "next_action" => "Reply to Priya with the contract status.",
+          "dedupe_key" => "todo-actions:redraft-button-gmail",
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "gmail",
+            "subject" => "Re: Contract",
+            "text" => "Hi Priya, the contract is signed and on file."
+          }
+        }
+      ])
+
+    gmail_buttons =
+      TodoActions.telegram_payload(gmail_todo).reply_markup["inline_keyboard"] |> List.flatten()
+
+    assert Enum.any?(gmail_buttons, &(&1["text"] == "Send"))
+    assert Enum.any?(gmail_buttons, &(&1["text"] == "Redraft Email"))
+    assert Enum.any?(gmail_buttons, &(&1["callback_data"] == "tgtodo:#{gmail_todo.id}:draft_email"))
+
+    {:ok, [slack_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "slack",
+          "title" => "Reply to the launch channel",
+          "summary" => "The team is waiting on a status update in Slack.",
+          "next_action" => "Reply in Slack with the launch status.",
+          "dedupe_key" => "todo-actions:redraft-button-slack",
+          "metadata" => %{"team_id" => "T123", "channel_id" => "C123"},
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "slack",
+            "text" => "Quick update: the launch is on track for Friday."
+          }
+        }
+      ])
+
+    slack_buttons =
+      TodoActions.telegram_payload(slack_todo).reply_markup["inline_keyboard"] |> List.flatten()
+
+    assert Enum.any?(slack_buttons, &(&1["text"] == "Send"))
+    assert Enum.any?(slack_buttons, &(&1["text"] == "Redraft Slack"))
+    assert Enum.any?(slack_buttons, &(&1["callback_data"] == "tgtodo:#{slack_todo.id}:draft_slack"))
+  end
+
+  test "draft callback persists the generated draft onto the todo and refreshes the card with a Send button",
+       %{user_id: user_id} do
+    original_assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(original_assistant_config, :draft_opts,
+        llm_complete: fn _params ->
+          {:ok,
+           %{
+             content:
+               Jason.encode!(%{
+                 "subject" => "Re: Renewal timing",
+                 "body" => "Hi there, I can confirm the renewal timing by Friday."
+               })
+           }}
+        end
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant_config)
+    end)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Reply about renewal timing",
+          "summary" => "The renewal needs a confirmed date.",
+          "next_action" => "Reply with the renewal timing.",
+          "dedupe_key" => "todo-actions:draft-persist"
+        }
+      ])
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "todo-draft-persist",
+          callback_id: "cb-draft-persist",
+          data: "tgtodo:#{todo.id}:draft_email"
+        }
+      })
+
+    updated = Todos.get_for_user(user_id, todo.id)
+    assert updated.action_draft["channel"] == "gmail"
+    assert updated.action_draft["subject"] == "Re: Renewal timing"
+    assert updated.action_draft["text"] =~ "confirm the renewal timing"
+
+    edit = last_telegram_message(:edit)
+    refreshed_buttons = edit.opts[:reply_markup]["inline_keyboard"] |> List.flatten()
+    assert Enum.any?(refreshed_buttons, &(&1["text"] == "Send"))
+    refute Enum.any?(refreshed_buttons, &(&1["text"] == "Draft Email"))
+
+    assert last_telegram_message(:send).text =~ "Email draft ready"
+  end
+
+  test "send callback prepares a confirmable action for a slack-sourced todo and requires explicit confirmation",
+       %{user_id: user_id} do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "slack",
+          "title" => "Reply to the launch channel",
+          "summary" => "The team is waiting on a status update in Slack.",
+          "next_action" => "Reply in Slack with the launch status.",
+          "dedupe_key" => "todo-actions:send-slack",
+          "metadata" => %{"team_id" => "T123", "channel_id" => "C123"},
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "slack",
+            "text" => "Quick update: the launch is on track for Friday."
+          }
+        }
+      ])
+
+    payload = TodoActions.telegram_payload(todo)
+    buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
+    assert Enum.any?(buttons, &(&1["text"] == "Send"))
+    refute Enum.any?(buttons, &(&1["text"] == "Draft Slack"))
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "todo-send-slack",
+          callback_id: "cb-send-slack",
+          data: "tgtodo:#{todo.id}:send"
+        }
+      })
+
+    assert last_telegram_message(:callback).opts[:text] == "Review before sending"
+
+    prepared_action =
+      Repo.one!(
+        from(prepared_action in PreparedAction,
+          where: prepared_action.user_id == ^user_id,
+          order_by: [desc: prepared_action.inserted_at],
+          limit: 1
+        )
+      )
+
+    assert prepared_action.status == "awaiting_confirmation"
+    assert prepared_action.action_type == "slack_post"
+    assert prepared_action.surface == "telegram"
+    assert prepared_action.payload["todo_id"] == todo.id
+
+    confirmation = last_telegram_message(:send)
+    assert confirmation.text =~ "Ready to send"
+    assert confirmation.text =~ "the launch is on track for Friday"
+
+    confirm_buttons = confirmation.opts[:reply_markup]["inline_keyboard"] |> List.flatten()
+    assert Enum.any?(confirm_buttons, &(&1["text"] == "Confirm"))
+    assert Enum.any?(confirm_buttons, &(&1["text"] == "Cancel"))
+
+    # Never claim a send that did not happen: nothing is sent and the todo is
+    # untouched until the Confirm button (or a typed "yes") is used.
+    untouched = Todos.get_for_user(user_id, todo.id)
+    assert untouched.status == "open"
+  end
+
+  test "cancelling a prepared send leaves the todo and draft untouched", %{user_id: user_id} do
+    # The Confirm/Cancel buttons are handled by
+    # `Maraithon.TelegramAssistant.handle_callback_query/1`, which is gated by
+    # `TelegramAssistant.enabled?/0`; enable it for this test the same way
+    # `telegram_assistant_test.exs` does for the confirm/reject flow.
+    original_assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(original_assistant_config, :telegram_full_chat_enabled, true)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant_config)
+    end)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "slack",
+          "title" => "Reply to the launch channel",
+          "summary" => "The team is waiting on a status update in Slack.",
+          "next_action" => "Reply in Slack with the launch status.",
+          "dedupe_key" => "todo-actions:send-slack-cancel",
+          "metadata" => %{"team_id" => "T123", "channel_id" => "C123"},
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "slack",
+            "text" => "Quick update: the launch is on track for Friday."
+          }
+        }
+      ])
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "todo-send-slack-cancel",
+          callback_id: "cb-send-slack-cancel",
+          data: "tgtodo:#{todo.id}:send"
+        }
+      })
+
+    prepared_action =
+      Repo.one!(
+        from(prepared_action in PreparedAction,
+          where: prepared_action.user_id == ^user_id,
+          order_by: [desc: prepared_action.inserted_at],
+          limit: 1
+        )
+      )
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          "chat_id" => 12345,
+          "message_id" => "todo-send-slack-cancel-confirm",
+          "callback_id" => "cb-send-slack-reject",
+          "data" => "tgact:#{prepared_action.id}:reject"
+        }
+      })
+
+    assert Repo.get!(PreparedAction, prepared_action.id).status == "rejected"
+
+    untouched = Todos.get_for_user(user_id, todo.id)
+    assert untouched.status == "open"
+    assert untouched.action_draft["text"] =~ "the launch is on track for Friday"
+  end
+
+  test "repeated Send taps on the same todo reuse the pending prepared action instead of creating a duplicate",
+       %{user_id: user_id} do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "slack",
+          "title" => "Reply to the launch channel",
+          "summary" => "The team is waiting on a status update in Slack.",
+          "next_action" => "Reply in Slack with the launch status.",
+          "dedupe_key" => "todo-actions:send-slack-dedupe",
+          "metadata" => %{"team_id" => "T123", "channel_id" => "C123"},
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "slack",
+            "text" => "Quick update: the launch is on track for Friday."
+          }
+        }
+      ])
+
+    send_tap = fn message_id, callback_id ->
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: message_id,
+          callback_id: callback_id,
+          data: "tgtodo:#{todo.id}:send"
+        }
+      })
+    end
+
+    :ok = send_tap.("todo-send-dedupe-1", "cb-send-dedupe-1")
+    :ok = send_tap.("todo-send-dedupe-2", "cb-send-dedupe-2")
+
+    prepared_actions =
+      Repo.all(
+        from(prepared_action in PreparedAction,
+          where: prepared_action.user_id == ^user_id,
+          order_by: [asc: prepared_action.inserted_at]
+        )
+      )
+
+    # Two taps must not create two independent prepared actions (which would
+    # otherwise produce two Confirm prompts and, if both confirmed, a double
+    # send plus a double nudge_count increment).
+    assert length(prepared_actions) == 1
+    assert hd(prepared_actions).status == "awaiting_confirmation"
+
+    # The second tap still re-presents a confirmation prompt (rather than
+    # silently doing nothing) so the user always sees where their tap went.
+    sends =
+      :capturing_telegram_recorder
+      |> Agent.get(&Enum.reverse/1)
+      |> Enum.filter(&(&1.type == :send))
+
+    assert length(sends) == 2
+
+    # The card refresh after the second tap reflects the pending confirmation
+    # instead of still inviting a fresh "Send" tap.
+    edit = last_telegram_message(:edit)
+    refreshed_buttons = edit.opts[:reply_markup]["inline_keyboard"] |> List.flatten()
+    assert Enum.any?(refreshed_buttons, &(&1["text"] == "Awaiting confirmation"))
+    refute Enum.any?(refreshed_buttons, &(&1["text"] == "Send"))
+  end
+
+  test "send callback without a resolvable destination fails honestly and leaves the todo untouched",
+       %{user_id: user_id} do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Follow up on the renewal",
+          "summary" => "Handle the renewal task before it lapses.",
+          "next_action" => "Send an update on the renewal status.",
+          "dedupe_key" => "todo-actions:send-no-destination",
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "gmail",
+            "text" => "I will confirm the renewal timing soon."
+          }
+        }
+      ])
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "todo-send-no-dest",
+          callback_id: "cb-send-no-dest",
+          data: "tgtodo:#{todo.id}:send"
+        }
+      })
+
+    assert last_telegram_message(:callback).opts[:text] =~ "Could not find where to send this"
+
+    refute Repo.exists?(from(prepared_action in PreparedAction, where: prepared_action.user_id == ^user_id))
+
+    untouched = Todos.get_for_user(user_id, todo.id)
+    assert untouched.status == "open"
   end
 
   defp last_telegram_message(type) do

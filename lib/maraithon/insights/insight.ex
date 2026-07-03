@@ -9,7 +9,12 @@ defmodule Maraithon.Insights.Insight do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses ["new", "acknowledged", "dismissed", "snoozed"]
+  # "candidate" (SPEC 04 R5): a keyword-heuristic detector's output — inert
+  # until `Maraithon.ChiefOfStaff.Skills.LocalPatternReview` (a model
+  # relevance decision) promotes it to "new" or dismisses it. Excluded from
+  # `@open_statuses` in `Maraithon.Insights`, so it never reaches the open-
+  # insight/Telegram delivery pipeline on its own.
+  @statuses ["new", "acknowledged", "dismissed", "snoozed", "candidate"]
   @attention_modes ["act_now", "monitor"]
   @categories [
     "reply_urgent",

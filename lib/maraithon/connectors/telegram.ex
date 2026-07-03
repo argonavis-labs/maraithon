@@ -53,6 +53,10 @@ defmodule Maraithon.Connectors.Telegram do
   require Logger
 
   @default_api_base "https://api.telegram.org/bot"
+  @default_file_base "https://api.telegram.org/file/bot"
+  # Voice/audio downloads can approach VoiceCapture's 20 MB cap; the default
+  # 15s HTTP receive timeout is too tight for bodies that size.
+  @file_download_timeout_ms 60_000
 
   # ===========================================================================
   # Webhook Handling
@@ -422,6 +426,31 @@ defmodule Maraithon.Connectors.Telegram do
     api_request("getMe", %{})
   end
 
+  @doc """
+  Resolves a `file_id` (e.g. a voice/audio message's `voice_id`/`audio_id`)
+  to Telegram's `file_path` (and, when Telegram reports one, `file_size`) via
+  the `getFile` Bot API method. Pass the returned `file_path` to
+  `download_file/1` to fetch the actual bytes.
+  """
+  def get_file(file_id) do
+    api_request("getFile", %{file_id: file_id})
+  end
+
+  @doc """
+  Downloads a file's raw bytes given the `file_path` returned by
+  `get_file/1`, via `https://api.telegram.org/file/bot<token>/<file_path>`.
+  """
+  def download_file(file_path) when is_binary(file_path) do
+    bot_token = get_bot_token()
+    url = "#{file_base_url()}#{bot_token}/#{file_path}"
+
+    case HTTP.get(url, [], receive_timeout: @file_download_timeout_ms) do
+      {:ok, body} when is_binary(body) -> {:ok, body}
+      {:ok, _other} -> {:error, :unexpected_response}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # ===========================================================================
   # Private Helpers
   # ===========================================================================
@@ -611,6 +640,11 @@ defmodule Maraithon.Connectors.Telegram do
   defp api_base_url do
     Application.get_env(:maraithon, :telegram, [])
     |> Keyword.get(:api_base_url, @default_api_base)
+  end
+
+  defp file_base_url do
+    Application.get_env(:maraithon, :telegram, [])
+    |> Keyword.get(:file_base_url, @default_file_base)
   end
 
   defp get_bot_id do

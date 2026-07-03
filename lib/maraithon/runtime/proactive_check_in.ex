@@ -4,11 +4,18 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
 
   The worker only supplies cadence and batching. The proactive assistant harness
   decides whether to send or hold each candidate check-in.
+
+  SPEC 04 R6: this worker is delivery-side plumbing only (dispatching
+  already-decided check-ins and running the budget-enforced delivery
+  planner) — it does not run any candidate-generation/intelligence pipeline
+  of its own. `Maraithon.Proactive.LocalPatterns` detection now happens
+  inside `Maraithon.ChiefOfStaff.Skills.LocalPatternReview`, a normal skill
+  in the supervised Chief of Staff wakeup cycle, so the 10-15 minute model
+  wakeup is the single always-on intelligence loop.
   """
 
   use GenServer
 
-  alias Maraithon.Proactive.LocalPatterns
   alias Maraithon.Runtime.Config
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.DeliveryPlanner
@@ -69,7 +76,6 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
       )
     end
 
-    run_local_pattern_detectors()
     expired = maybe_expire_stale_candidates()
     planner_result = run_delivery_planner(batch_size: state.batch_size)
     log_delivery_planner_cycle(planner_result, expired)
@@ -81,44 +87,6 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
       Logger.warning("Proactive Telegram check-in cycle failed", reason: Exception.message(error))
       schedule_tick(state.interval_ms)
       {:noreply, state}
-  end
-
-  defp run_local_pattern_detectors do
-    summary = LocalPatterns.run_for_all_users()
-    detector_total = Enum.sum(Enum.map(detector_keys(), &Map.get(summary, &1, 0)))
-
-    if detector_total > 0 do
-      Logger.info("Local-pattern detectors emitted insights",
-        users: Map.get(summary, :user_count, 0),
-        total: detector_total,
-        cold_thread: Map.get(summary, :cold_thread, 0),
-        dropped_commitment: Map.get(summary, :dropped_commitment, 0),
-        untranscribed_memo: Map.get(summary, :untranscribed_memo, 0),
-        note_follow_up: Map.get(summary, :note_follow_up, 0),
-        calendar_conflict: Map.get(summary, :calendar_conflict, 0),
-        file_mention: Map.get(summary, :file_mention, 0)
-      )
-    end
-
-    :ok
-  rescue
-    error ->
-      Logger.warning("Local-pattern detector cycle failed",
-        reason: Exception.message(error)
-      )
-
-      :ok
-  end
-
-  defp detector_keys do
-    [
-      :cold_thread,
-      :dropped_commitment,
-      :untranscribed_memo,
-      :note_follow_up,
-      :calendar_conflict,
-      :file_mention
-    ]
   end
 
   defp maybe_expire_stale_candidates do

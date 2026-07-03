@@ -54,6 +54,22 @@ defmodule Maraithon.HTTPTest do
       assert body == "Too many requests"
     end
 
+    test "returns the Retry-After seconds for 429 responses that include the header" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/rate-limited-with-header", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "17")
+        |> Plug.Conn.resp(429, "slow down")
+      end)
+
+      {:error, {:rate_limited, seconds, body}} =
+        HTTP.get("http://localhost:#{bypass.port}/rate-limited-with-header")
+
+      assert seconds == 17
+      assert body == "slow down"
+    end
+
     test "returns error for other status codes" do
       bypass = Bypass.open()
 

@@ -12,6 +12,7 @@ defmodule Maraithon.Todos.Todo do
   @statuses ~w(open done dismissed snoozed)
   @attention_modes ~w(act_now monitor)
   @kinds ~w(general gmail_triage)
+  @directions ~w(owed_by_me owed_to_me fyi)
 
   schema "todos" do
     field :user_id, :string
@@ -37,6 +38,20 @@ defmodule Maraithon.Todos.Todo do
     field :source_occurred_at, :utc_datetime_usec
     field :dedupe_key, :string
     field :metadata, :map, default: %{}
+
+    # SPEC 05: two-sided waiting-on tracker. `direction` names who owes
+    # whom (self-owned action items default to owed_by_me), and the
+    # counterparty fields identify the other side of the loop.
+    field :direction, :string, default: "owed_by_me"
+    field :counterparty_person_id, :binary_id
+    field :counterparty_label, :string
+
+    # SPEC 05: nudge/follow-up state, set when a follow-up referencing this
+    # todo is actually delivered (see Maraithon.Todos.record_nudge_sent/3).
+    field :last_nudged_at, :utc_datetime
+    field :nudge_count, :integer, default: 0
+    field :next_nudge_at, :utc_datetime
+    field :follow_up_channel, :string
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -67,7 +82,14 @@ defmodule Maraithon.Todos.Todo do
     :closed_at,
     :source_item_id,
     :source_occurred_at,
-    :metadata
+    :metadata,
+    :direction,
+    :counterparty_person_id,
+    :counterparty_label,
+    :last_nudged_at,
+    :nudge_count,
+    :next_nudge_at,
+    :follow_up_channel
   ]
 
   def changeset(todo, attrs) do
@@ -78,7 +100,11 @@ defmodule Maraithon.Todos.Todo do
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:attention_mode, @attention_modes)
     |> validate_inclusion(:status, @statuses)
+    |> validate_inclusion(:direction, @directions)
     |> validate_number(:priority, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
+    |> validate_number(:nudge_count, greater_than_or_equal_to: 0)
+    |> validate_length(:counterparty_label, max: 255)
+    |> validate_length(:follow_up_channel, max: 50)
     |> validate_length(:source, min: 2, max: 100)
     |> validate_length(:title, min: 4, max: 240)
     |> validate_length(:summary, min: 4, max: 2_000)
@@ -98,6 +124,7 @@ defmodule Maraithon.Todos.Todo do
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:owner_user_id)
     |> foreign_key_constraint(:source_account_id)
+    |> foreign_key_constraint(:counterparty_person_id)
   end
 
   defp default_owner_to_user(changeset) do

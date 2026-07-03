@@ -14,6 +14,12 @@ defmodule Maraithon.TelegramConversations do
   @general_idle_seconds 24 * 60 * 60
   @linked_idle_seconds 7 * 24 * 60 * 60
 
+  # A pending confirmation/clarification older than this is considered
+  # abandoned. An unrelated later message must not attach to it and bleed its
+  # stale context — see `open_pending_confirmation/2` and
+  # `open_pending_clarification/1`.
+  @awaiting_state_freshness_seconds 10 * 60
+
   def start_or_continue(user_id, chat_id, attrs \\ %{})
       when is_binary(user_id) and is_binary(chat_id) and is_map(attrs) do
     metadata = read_map(attrs, "metadata")
@@ -23,6 +29,14 @@ defmodule Maraithon.TelegramConversations do
     linked_insight_id = read_string(attrs, "linked_insight_id")
     reply_to_message_id = read_string(attrs, "reply_to_message_id")
     root_message_id = read_string(attrs, "root_message_id", reply_to_message_id)
+    confirmation_reply? = read_bool(attrs, "confirmation_reply", false)
+    # Default false, matching the confirmation path: a caller that doesn't
+    # explicitly compute whether this message looks like an answer to a
+    # pending clarification (e.g. a push landing via `PushBroker`) must not
+    # silently attach to — and keep alive — a stale
+    # `pending_clarification` conversation. Only `TelegramRouter`, which
+    # inspects the inbound text, should opt in.
+    clarification_reply? = read_bool(attrs, "clarification_reply", false)
     now = DateTime.utc_now()
 
     conversation =
@@ -37,8 +51,8 @@ defmodule Maraithon.TelegramConversations do
         # those, two unrelated asks ("what emails do I have?" then "who is
         # Charlie?") would pile into one conversation and bleed context.
         find_by_reply(chat_id, reply_to_message_id) ||
-          open_pending_confirmation(chat_id) ||
-          open_pending_clarification(chat_id) ||
+          open_pending_confirmation(chat_id, confirmation_reply?) ||
+          open_pending_clarification(chat_id, clarification_reply?) ||
           find_open_linked(chat_id, linked_delivery_id, linked_insight_id)
       end
 
@@ -79,6 +93,7 @@ defmodule Maraithon.TelegramConversations do
     chat_id = "mobile:#{user_id}:#{client_thread_id}"
     root_message_id = read_string(attrs, "root_message_id")
     now = DateTime.utc_now()
+
     metadata =
       attrs
       |> read_map("metadata")
@@ -160,34 +175,49 @@ defmodule Maraithon.TelegramConversations do
     |> Repo.one()
   end
 
+  @doc """
+  Appends a turn to a conversation.
+
+  Idempotent for redelivered Telegram messages: a webhook retry re-runs
+  `TelegramRouter.handle_message/1` from scratch (see R3 — mark-as-seen is
+  deferred until after handling completes), so a second `append_turn/2` for
+  the same `(conversation_id, telegram_message_id)` pair is expected, not a
+  bug. Rather than raising on the DB's unique-constraint conflict (which
+  would look like a real failure and mask whatever actually happened on the
+  retry), we fetch and reuse the existing turn.
+  """
   def append_turn(%Conversation{} = conversation, attrs) when is_map(attrs) do
     now = DateTime.utc_now()
+    telegram_message_id = read_string(attrs, "telegram_message_id")
 
     Repo.transaction(fn ->
-      turn =
-        %Turn{}
-        |> Turn.changeset(
-          Map.merge(attrs, %{
-            "conversation_id" => conversation.id
-          })
-        )
-        |> Repo.insert!()
+      case insert_or_reuse_turn(conversation, attrs, telegram_message_id) do
+        {:ok, turn, :inserted} ->
+          updated_conversation =
+            conversation
+            |> Conversation.changeset(%{
+              last_turn_at: now,
+              last_intent: read_string(attrs, "intent", conversation.last_intent),
+              summary: summarize_recent_turns(conversation.id)
+            })
+            |> Repo.update!()
 
-      updated_conversation =
-        conversation
-        |> Conversation.changeset(%{
-          last_turn_at: now,
-          last_intent: read_string(attrs, "intent", conversation.last_intent),
-          summary: summarize_recent_turns(conversation.id)
-        })
-        |> Repo.update!()
+          {:ok, operator_event} =
+            OperatorEvents.record(turn_operator_event_attrs(updated_conversation, turn, now))
 
-      {:ok, operator_event} =
-        OperatorEvents.record(turn_operator_event_attrs(updated_conversation, turn, now))
+          {updated_conversation, turn, operator_event}
 
-      {updated_conversation, turn, operator_event}
+        {:ok, turn, :reused} ->
+          {conversation, turn, nil}
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
     end)
     |> case do
+      {:ok, {conversation, turn, nil}} ->
+        {:ok, {conversation, turn}}
+
       {:ok, {conversation, turn, operator_event}} ->
         :ok = OperatorBus.broadcast(operator_event)
         {:ok, {conversation, turn}}
@@ -196,6 +226,81 @@ defmodule Maraithon.TelegramConversations do
         {:error, reason}
     end
   end
+
+  @doc """
+  True when a completed assistant reply turn already exists for the given
+  inbound Telegram message id in this chat.
+
+  Every reply flow (`TelegramRouter.send_assistant_turn/5`,
+  `TelegramAssistant.handle_inbound/1`, the runner, etc.) stamps the
+  assistant turn's `reply_to_message_id` with the inbound message id it
+  answered. A caught failure's fallback apology is sent directly via
+  `TelegramResponder` and is *not* recorded as a turn, so this only reports
+  true when the run actually produced its user-visible answer — used by
+  `ChatWorker` to skip reprocessing a Telegram webhook retry whose first
+  attempt already completed (so non-idempotent tool side effects don't
+  double-fire), without building a general idempotency framework.
+  """
+  def assistant_reply_recorded?(chat_id, telegram_message_id)
+      when is_binary(chat_id) and is_binary(telegram_message_id) do
+    Turn
+    |> join(:inner, [t], c in assoc(t, :conversation))
+    |> where(
+      [t, c],
+      c.chat_id == ^chat_id and t.role == "assistant" and
+        t.reply_to_message_id == ^telegram_message_id
+    )
+    |> Repo.exists?()
+  end
+
+  def assistant_reply_recorded?(_chat_id, _telegram_message_id), do: false
+
+  defp insert_or_reuse_turn(conversation, attrs, telegram_message_id) do
+    %Turn{}
+    |> Turn.changeset(Map.merge(attrs, %{"conversation_id" => conversation.id}))
+    # `append_turn/2` runs this inside a `Repo.transaction`. Without
+    # `mode: :savepoint`, a real unique-constraint violation here aborts the
+    # whole Postgres transaction, so the `Repo.get_by` lookup below (needed
+    # to fetch-and-reuse the existing turn) would itself raise
+    # `Postgrex.Error, 25P02 in_failed_sql_transaction` instead of running.
+    |> Repo.insert(mode: :savepoint)
+    |> case do
+      {:ok, turn} ->
+        {:ok, turn, :inserted}
+
+      {:error, changeset} ->
+        if is_binary(telegram_message_id) and
+             unique_constraint_error?(changeset, :telegram_message_id) do
+          case Repo.get_by(Turn,
+                 conversation_id: conversation.id,
+                 telegram_message_id: telegram_message_id
+               ) do
+            %Turn{} = existing -> {:ok, existing, :reused}
+            nil -> {:error, changeset}
+          end
+        else
+          {:error, changeset}
+        end
+    end
+  end
+
+  # Must match the `name:` passed to `unique_constraint/3` for this field in
+  # `Turn.changeset/2` — see the comment there on why this is truncated to
+  # Postgres's 63-byte identifier limit rather than the full inferred name.
+  @telegram_message_id_constraint_name "telegram_conversation_turns_conversation_id_telegram_message_id"
+
+  defp unique_constraint_error?(changeset, :telegram_message_id) do
+    Enum.any?(changeset.errors, fn
+      {:telegram_message_id, {_message, opts}} ->
+        Keyword.get(opts, :constraint) == :unique and
+          Keyword.get(opts, :constraint_name) == @telegram_message_id_constraint_name
+
+      _ ->
+        false
+    end)
+  end
+
+  defp unique_constraint_error?(_changeset, _field), do: false
 
   def update_turn_text(chat_id, telegram_message_id, text)
       when is_binary(chat_id) and is_binary(telegram_message_id) and is_binary(text) do
@@ -298,18 +403,80 @@ defmodule Maraithon.TelegramConversations do
     |> Repo.one()
   end
 
-  def open_pending_confirmation(chat_id) when is_binary(chat_id) do
+  @doc """
+  Finds the chat's open `awaiting_confirmation` conversation, if any is fresh
+  enough and this message looks like it's actually answering it.
+
+  `confirmation_reply?` should be true when the inbound text is a
+  recognizable yes/no answer (see `TelegramRouter`'s `affirmative?/1` and
+  `negative?/1`). A stale conversation (older than
+  `@awaiting_state_freshness_seconds`) is expired back to `"open"` and never
+  attached to. A fresh-but-unrelated message (not a recognizable yes/no) is
+  left alone but also not attached to — the caller starts a new conversation
+  instead, so the stale thread doesn't bleed its context into an unrelated
+  ask.
+  """
+  # Shared note for `open_pending_confirmation/2` and
+  # `open_pending_clarification/2`: within the freshness window, ANY inbound
+  # message used to attach to a pending awaiting-state conversation and
+  # inherit its turns, even when the text had nothing to do with the pending
+  # question. Both now take a `*_reply?` gate so an unrelated new ask starts
+  # a fresh conversation instead of bleeding into the stale one.
+  def open_pending_confirmation(chat_id, confirmation_reply? \\ true) when is_binary(chat_id) do
     Conversation
     |> where([c], c.chat_id == ^chat_id and c.status == "awaiting_confirmation")
     |> order_by([c], desc: c.updated_at)
     |> preload([:linked_delivery, :linked_insight, :turns])
     |> limit(1)
     |> Repo.one()
+    |> resolve_pending_confirmation(confirmation_reply?)
+  end
+
+  defp resolve_pending_confirmation(nil, _confirmation_reply?), do: nil
+
+  defp resolve_pending_confirmation(%Conversation{} = conversation, confirmation_reply?) do
+    cond do
+      stale_awaiting_state?(conversation) ->
+        _ = expire_stale_awaiting_confirmation(conversation)
+        nil
+
+      confirmation_reply? ->
+        conversation
+
+      true ->
+        nil
+    end
+  end
+
+  defp expire_stale_awaiting_confirmation(%Conversation{} = conversation) do
+    conversation
+    |> Conversation.changeset(%{
+      status: "open",
+      metadata:
+        Map.merge(conversation.metadata || %{}, %{
+          "expired_awaiting_confirmation" => true,
+          "expired_at" => DateTime.to_iso8601(DateTime.utc_now())
+        })
+    })
+    |> Repo.update()
   end
 
   # The user is answering a clarifying question the bot asked — continue that
-  # thread instead of opening a new one.
-  defp open_pending_clarification(chat_id) when is_binary(chat_id) do
+  # thread instead of opening a new one, unless it's gone stale or this
+  # message doesn't actually look like an answer.
+  #
+  # `clarification_reply?` should be true when the inbound text is a
+  # recognizable answer to the pending clarifying question (see
+  # `TelegramRouter`'s `clarification_reply?/1`). Unlike a confirmation, a
+  # clarification answer isn't a fixed yes/no vocabulary — it can be any
+  # short direct reply — so the gate only rejects text that looks like a
+  # fresh, unrelated ask (a slash command, or a long multi-sentence message)
+  # rather than requiring an exact match. A fresh-but-unrelated message is
+  # left alone but not attached to — the caller starts a new conversation
+  # instead, so the stale thread doesn't bleed its context into an unrelated
+  # ask.
+  defp open_pending_clarification(chat_id, clarification_reply?)
+       when is_binary(chat_id) do
     Conversation
     |> where([c], c.chat_id == ^chat_id and c.status == "open")
     |> where([c], fragment("? @> ?", c.metadata, ^%{"pending_clarification" => true}))
@@ -317,6 +484,41 @@ defmodule Maraithon.TelegramConversations do
     |> preload([:linked_delivery, :linked_insight, :turns])
     |> limit(1)
     |> Repo.one()
+    |> resolve_pending_clarification(clarification_reply?)
+  end
+
+  defp resolve_pending_clarification(nil, _clarification_reply?), do: nil
+
+  defp resolve_pending_clarification(%Conversation{} = conversation, clarification_reply?) do
+    cond do
+      stale_awaiting_state?(conversation) ->
+        _ =
+          update_metadata(conversation, %{
+            "pending_clarification" => false,
+            "clarification_expired_at" => DateTime.to_iso8601(DateTime.utc_now())
+          })
+
+        nil
+
+      clarification_reply? ->
+        conversation
+
+      true ->
+        nil
+    end
+  end
+
+  defp stale_awaiting_state?(%Conversation{} = conversation) do
+    reference_time =
+      conversation.last_turn_at || conversation.updated_at || conversation.inserted_at
+
+    case reference_time do
+      %DateTime{} = value ->
+        DateTime.diff(DateTime.utc_now(), value, :second) > @awaiting_state_freshness_seconds
+
+      _ ->
+        false
+    end
   end
 
   def mark_awaiting_confirmation(%Conversation{} = conversation, attrs \\ %{}) do
@@ -660,6 +862,16 @@ defmodule Maraithon.TelegramConversations do
 
       _ ->
         default
+    end
+  end
+
+  defp read_bool(map, key, default) when is_map(map) do
+    case fetch(map, key) do
+      true -> true
+      false -> false
+      "true" -> true
+      "false" -> false
+      _ -> default
     end
   end
 

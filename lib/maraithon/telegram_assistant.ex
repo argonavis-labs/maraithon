@@ -27,7 +27,14 @@ defmodule Maraithon.TelegramAssistant do
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
-  alias Maraithon.Todos.{PublicPayload, UserFacingCopy}
+  alias Maraithon.Todos
+  alias Maraithon.Todos.{PublicPayload, Todo, UserFacingCopy}
+
+  # SPEC 05 R4: prepared-action types that represent an actual follow-up
+  # message being sent on behalf of a todo (see
+  # Maraithon.AssistantChat.TodoThreadPrimer, which stamps payload["todo_id"]
+  # when a gmail/slack draft is prepared from a todo chat thread).
+  @nudge_action_types ~w(gmail_send gmail_draft_send slack_post)
 
   require Logger
 
@@ -288,6 +295,39 @@ defmodule Maraithon.TelegramAssistant do
   def get_prepared_action(id) when is_binary(id), do: Repo.get(PreparedAction, id)
   def get_prepared_action(_id), do: nil
 
+  @doc """
+  Finds an existing non-expired, still-`awaiting_confirmation` PreparedAction
+  linked to the given todo (via `payload["todo_id"]`), if any.
+
+  SPEC 06 review finding #2: without this dedupe check, every "Send" tap on a
+  todo card creates a brand-new Conversation + PreparedAction, so two taps
+  produce two independent confirmation prompts and, if both are confirmed,
+  two sends plus two independent nudge_count increments
+  (`maybe_record_todo_nudge/1` below). `Maraithon.TelegramAssistant.TodoActions`
+  calls this before preparing a new send so a repeat tap re-presents the
+  existing confirmation instead of creating a duplicate, and uses it again at
+  render time to keep the card's "Send" button from implying a fresh tap will
+  do something when one is already pending.
+  """
+  def find_awaiting_prepared_action_for_todo(user_id, todo_id)
+      when is_binary(user_id) and is_binary(todo_id) do
+    now = DateTime.utc_now()
+
+    PreparedAction
+    |> where(
+      [prepared_action],
+      prepared_action.user_id == ^user_id and
+        prepared_action.status == "awaiting_confirmation" and
+        prepared_action.expires_at > ^now and
+        fragment("?->>'todo_id' = ?", prepared_action.payload, ^todo_id)
+    )
+    |> order_by([prepared_action], desc: prepared_action.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def find_awaiting_prepared_action_for_todo(_user_id, _todo_id), do: nil
+
   def latest_prepared_action(%Conversation{} = conversation) do
     prepared_action_id = get_in(conversation.metadata || %{}, ["latest_prepared_action_id"])
 
@@ -321,15 +361,80 @@ defmodule Maraithon.TelegramAssistant do
 
   def latest_prepared_action(_conversation), do: nil
 
+  # Only these decisions represent a message that actually reached (or will
+  # reach via another channel) the operator. `held_rate_limit` is a
+  # deliberate exception: quiet hours and interruption-budget holds must not
+  # permanently block a later retry of the same dedupe_key.
+  @blocking_push_decisions ["sent_now", "merged", "queued_digest"]
+
   def record_push_receipt(attrs) when is_map(attrs) do
     %PushReceipt{}
     |> PushReceipt.changeset(attrs)
-    |> Repo.insert()
+    |> Repo.insert(
+      on_conflict: push_receipt_on_conflict(),
+      conflict_target: [:user_id, :dedupe_key],
+      returning: true
+    )
+  end
+
+  # A non-blocking hold (`held_rate_limit`) must never overwrite a
+  # previously committed blocking decision (`sent_now`/`merged`/
+  # `queued_digest`) for the same dedupe_key — that would erase delivery
+  # proof and let a duplicate send through. Blocking decisions may still
+  # overwrite an existing hold, or another blocking decision (e.g. a
+  # retried send), so those keep replacing normally.
+  defp push_receipt_on_conflict do
+    blocking = @blocking_push_decisions
+
+    from(receipt in PushReceipt,
+      update: [
+        set: [
+          decision:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.decision END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.decision
+            ),
+          origin_type:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.origin_type END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.origin_type
+            ),
+          origin_id:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.origin_id END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.origin_id
+            ),
+          conversation_turn_id:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.conversation_turn_id END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.conversation_turn_id
+            )
+        ]
+      ]
+    )
   end
 
   def push_receipt_for(user_id, dedupe_key)
       when is_binary(user_id) and is_binary(dedupe_key) do
-    Repo.get_by(PushReceipt, user_id: user_id, dedupe_key: dedupe_key)
+    case Repo.get_by(PushReceipt, user_id: user_id, dedupe_key: dedupe_key) do
+      %PushReceipt{decision: decision} = receipt when decision in @blocking_push_decisions ->
+        receipt
+
+      _non_blocking_or_missing ->
+        nil
+    end
   end
 
   def push_receipt_for(_user_id, _dedupe_key), do: nil
@@ -518,32 +623,55 @@ defmodule Maraithon.TelegramAssistant do
        ) do
     case Repo.get(PreparedAction, prepared_action_id) do
       %PreparedAction{} = prepared_action ->
-        conversation =
-          prepared_action.conversation_id &&
-            Repo.get(Conversation, prepared_action.conversation_id)
+        if prepared_action_chat_authorized?(prepared_action, chat_id) do
+          conversation =
+            prepared_action.conversation_id &&
+              Repo.get(Conversation, prepared_action.conversation_id)
 
-        if callback_id do
-          _ =
-            TelegramResponder.answer_callback(
-              callback_id,
-              if(decision == "confirm", do: "Confirmed", else: "Cancelled")
-            )
+          if callback_id do
+            _ =
+              TelegramResponder.answer_callback(
+                callback_id,
+                if(decision == "confirm", do: "Confirmed", else: "Cancelled")
+              )
+          end
+
+          respond_to_prepared_action(
+            prepared_action,
+            normalize_decision(decision),
+            conversation,
+            nil,
+            chat_id,
+            reply_to_message_id
+          )
+        else
+          if callback_id,
+            do: TelegramResponder.answer_callback(callback_id, "This action isn't available here.")
+
+          :ok
         end
-
-        respond_to_prepared_action(
-          prepared_action,
-          normalize_decision(decision),
-          conversation,
-          nil,
-          chat_id,
-          reply_to_message_id
-        )
 
       nil ->
         if callback_id, do: TelegramResponder.answer_callback(callback_id, "Action not found")
         :ok
     end
   end
+
+  # SPEC 06 review finding #3: `handle_prepared_action_decision/5` fetches the
+  # PreparedAction by UUID alone, so a confirm/cancel callback carrying a
+  # different chat's prepared_action_id (forged, replayed, or from a stale
+  # inline keyboard after the chat was reused for another chief-of-staff
+  # thread) would otherwise still execute. Requiring the inbound callback's
+  # chat to match the chat the action was actually prepared for keeps this
+  # scoped to the chat it belongs to, mirroring
+  # `Maraithon.TelegramAssistant.TodoActions`'s own `:chat_mismatch` guard for
+  # todo callbacks.
+  defp prepared_action_chat_authorized?(%PreparedAction{chat_id: expected_chat_id}, chat_id)
+       when is_binary(expected_chat_id) and is_binary(chat_id) do
+    expected_chat_id == chat_id
+  end
+
+  defp prepared_action_chat_authorized?(_prepared_action, _chat_id), do: false
 
   defp respond_to_prepared_action(
          %PreparedAction{} = prepared_action,
@@ -573,6 +701,28 @@ defmodule Maraithon.TelegramAssistant do
                   "prepared_action_id" => updated_action.id,
                   "decision" => "confirm",
                   "result" => serialize_result(result),
+                  "source_turn_id" => user_turn && user_turn.id
+                }
+              )
+
+            :ok
+
+          {:error, updated_action, :already_handled} ->
+            _ = maybe_close_confirmation(conversation)
+
+            {:ok, _conversation, _turn, _telegram_result} =
+              send_turn(
+                conversation,
+                chat_id,
+                "This was already handled.",
+                reply_to_message_id: reply_to_message_id,
+                turn_kind: "system_notice",
+                origin_type: "prepared_action",
+                origin_id: updated_action.id,
+                structured_data: %{
+                  "prepared_action_id" => updated_action.id,
+                  "decision" => "confirm",
+                  "already_handled" => true,
                   "source_turn_id" => user_turn && user_turn.id
                 }
               )
@@ -651,33 +801,60 @@ defmodule Maraithon.TelegramAssistant do
 
       {:error, expired_action, :confirmation_expired}
     else
-      {:ok, confirmed_action} =
-        update_prepared_action(prepared_action, %{
-          status: "confirmed",
-          confirmed_at: DateTime.utc_now(),
-          error: nil
-        })
+      case claim_prepared_action_for_confirmation(prepared_action) do
+        {:ok, confirmed_action} ->
+          case Runner.execute_prepared_action(confirmed_action) do
+            {:ok, result} ->
+              {:ok, executed_action} =
+                update_prepared_action(confirmed_action, %{
+                  status: "executed",
+                  executed_at: DateTime.utc_now(),
+                  error: nil
+                })
 
-      case Runner.execute_prepared_action(confirmed_action) do
-        {:ok, result} ->
-          {:ok, executed_action} =
-            update_prepared_action(confirmed_action, %{
-              status: "executed",
-              executed_at: DateTime.utc_now(),
-              error: nil
-            })
+              _ = maybe_record_todo_nudge(executed_action)
 
-          {:ok, executed_action, result}
+              {:ok, executed_action, result}
 
-        {:error, reason} ->
-          {:ok, failed_action} =
-            update_prepared_action(confirmed_action, %{
-              status: "failed",
-              error: normalize_error(reason)
-            })
+            {:error, reason} ->
+              {:ok, failed_action} =
+                update_prepared_action(confirmed_action, %{
+                  status: "failed",
+                  error: normalize_error(reason)
+                })
 
-          {:error, failed_action, reason}
+              {:error, failed_action, reason}
+          end
+
+        :already_handled ->
+          {:error, prepared_action, :already_handled}
       end
+    end
+  end
+
+  # SPEC 06 review finding #3: an atomic `UPDATE ... WHERE status =
+  # 'awaiting_confirmation'` so exactly one confirm wins a race between a
+  # duplicate tap (two Confirm callbacks for the same prepared action) or a
+  # tap that lands after the text-confirmation path already executed it.
+  # `Repo.update_all/3` bypasses the read-then-write window that
+  # `update_prepared_action/2` (changeset + `Repo.update`) has, where two
+  # concurrent callers could each read `status: "awaiting_confirmation"`
+  # before either write landed.
+  defp claim_prepared_action_for_confirmation(%PreparedAction{id: id}) do
+    now = DateTime.utc_now()
+
+    {count, _} =
+      Repo.update_all(
+        from(prepared_action in PreparedAction,
+          where: prepared_action.id == ^id,
+          where: prepared_action.status == "awaiting_confirmation"
+        ),
+        set: [status: "confirmed", confirmed_at: now, error: nil, updated_at: now]
+      )
+
+    case count do
+      1 -> {:ok, Repo.get!(PreparedAction, id)}
+      _ -> :already_handled
     end
   end
 
@@ -887,6 +1064,66 @@ defmodule Maraithon.TelegramAssistant do
 
   defp normalize_error(error) when is_binary(error), do: error
   defp normalize_error(error), do: inspect(error)
+
+  # SPEC 05/06 R4: when a confirmed send referencing a todo actually
+  # completes, either stamp the todo's nudge state (when the todo is
+  # `owed_to_me`, a nudge keeps the loop open) or close the todo out with a
+  # resolution note referencing what was sent (every other direction: the
+  # send itself was the requested action, e.g. an `owed_by_me` reply).
+  defp maybe_record_todo_nudge(
+         %PreparedAction{action_type: action_type, user_id: user_id, payload: payload} =
+           prepared_action
+       )
+       when action_type in @nudge_action_types do
+    case read_string(payload, "todo_id") do
+      todo_id when is_binary(todo_id) ->
+        close_or_nudge_todo(user_id, todo_id, prepared_action)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_record_todo_nudge(_prepared_action), do: :ok
+
+  defp close_or_nudge_todo(user_id, todo_id, %PreparedAction{
+         action_type: action_type,
+         preview_text: preview_text
+       }) do
+    case Todos.get_for_user(user_id, todo_id) do
+      %Todo{direction: "owed_to_me"} ->
+        _ = Todos.record_nudge_sent(user_id, todo_id, channel: action_type)
+        :ok
+
+      %Todo{} ->
+        _ =
+          Todos.mark_done(user_id, todo_id,
+            note: send_resolution_note(action_type, preview_text),
+            actor_type: "assistant",
+            actor_label: "Maraithon"
+          )
+
+        :ok
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp send_resolution_note(action_type, preview_text) do
+    base = "Sent via #{send_channel_label(action_type)}."
+
+    if is_binary(preview_text) and String.trim(preview_text) != "" do
+      "#{base} #{preview_text}"
+    else
+      base
+    end
+  end
+
+  defp send_channel_label("gmail_send"), do: "Gmail"
+  defp send_channel_label("gmail_draft_send"), do: "Gmail"
+  defp send_channel_label("slack_post"), do: "Slack"
+  defp send_channel_label(_action_type), do: "the connected channel"
 
   defp normalize_id(nil), do: nil
   defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)

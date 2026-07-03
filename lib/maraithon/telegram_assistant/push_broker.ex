@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   import Ecto.Query
 
+  alias Maraithon.BriefingSchedules
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
@@ -13,10 +14,16 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramResponder
 
   @default_push_limit_per_hour 3
+
+  # Model-declared interrupt_now can still be forced through the hard
+  # send-time budget gate below when it reflects genuine urgency; anything
+  # under this threshold is subject to the hourly cap and quiet hours.
+  @urgency_exempt_threshold 0.9
 
   def deliver_insight(%Delivery{} = delivery) do
     cond do
@@ -62,7 +69,18 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
         :ok
 
-      {:ok, %{decision: decision}} when decision in ["suppressed", "merged", "queued_digest"] ->
+      {:ok, %{decision: decision}} when decision in ["merged", "queued_digest"] ->
+        mark_delivery_delivered_elsewhere(delivery)
+        :ok
+
+      {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
+        mark_delivery_delivered_elsewhere(delivery)
+        :ok
+
+      {:ok, %{decision: "held_rate_limit"}} ->
+        # Interruption budget or quiet hours held this insight. The delivery
+        # stays "pending" so the periodic Telegram batch retries it once the
+        # hold clears instead of it vanishing silently.
         :ok
 
       {:error, reason} ->
@@ -75,6 +93,12 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
         {:error, reason}
     end
+  end
+
+  defp mark_delivery_delivered_elsewhere(%Delivery{} = delivery) do
+    delivery
+    |> Ecto.Changeset.change(%{status: "sent", sent_at: delivery.sent_at || DateTime.utc_now()})
+    |> Repo.update()
   end
 
   def deliver_brief(%Brief{} = brief) do
@@ -111,17 +135,17 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
         TelegramAssistant.push_receipt_for(candidate.user_id, candidate.dedupe_key) ->
           {:ok, %{decision: "suppressed", reason: "duplicate"}}
 
-        suppress_for_rate_limit?(candidate) ->
+        hold_reason = interruption_hold_reason(candidate) ->
           {:ok, _receipt} =
             TelegramAssistant.record_push_receipt(%{
               user_id: candidate.user_id,
               dedupe_key: candidate.dedupe_key,
               origin_type: candidate.origin_type,
               origin_id: candidate.origin_id,
-              decision: "suppressed"
+              decision: "held_rate_limit"
             })
 
-          {:ok, %{decision: "suppressed", reason: "rate_limit"}}
+          {:ok, %{decision: "held_rate_limit", reason: hold_reason}}
 
         true ->
           send_candidate(candidate)
@@ -140,7 +164,12 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       |> positive_integer(push_limit_per_hour())
 
     sent_last_hour = recent_sent_push_count(user_id)
-    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    now =
+      case Keyword.fetch(opts, :now) do
+        {:ok, %DateTime{} = value} -> value
+        _other -> local_now_for_user(user_id)
+      end
 
     %{
       "max_immediate_per_hour" => limit,
@@ -237,6 +266,9 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       body: Map.get(candidate, :body) || candidate["body"] || "",
       urgency: normalize_urgency(Map.get(candidate, :urgency) || candidate["urgency"]),
       interrupt_now: truthy?(Map.get(candidate, :interrupt_now) || candidate["interrupt_now"]),
+      bypass_budget_cap:
+        truthy?(Map.get(candidate, :bypass_budget_cap) || candidate["bypass_budget_cap"]),
+      digest: truthy?(Map.get(candidate, :digest) || candidate["digest"]),
       why_now: Map.get(candidate, :why_now) || candidate["why_now"],
       structured_data:
         Map.get(candidate, :structured_data) || candidate["structured_data"] || %{},
@@ -249,10 +281,51 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     }
   end
 
-  defp suppress_for_rate_limit?(candidate) do
-    candidate.interrupt_now != true and candidate.urgency < 0.9 and
-      recent_sent_push_count(candidate.user_id) >= push_limit_per_hour()
+  # Hard budget gate at send time. The model's own `interrupt_now` decision
+  # is respected upstream, but it no longer bypasses enforcement here: only
+  # genuinely high-urgency *interrupt* items (>= @urgency_exempt_threshold)
+  # skip the hourly cap and quiet hours. Digest bundles never take this
+  # exemption, even though their urgency is set to the max of the bundled
+  # candidates for display/telemetry purposes: an urgency >= 0.9 item the
+  # model chose to DIGEST was judged not interrupt-worthy, so it must ride
+  # the digest through quiet hours rather than un-gate the whole batch.
+  # Digest bundles opt out of the hourly cap via `bypass_budget_cap` (that is
+  # precisely the overflow valve for the cap) but still respect quiet hours.
+  defp interruption_hold_reason(candidate) do
+    cond do
+      not candidate.digest and candidate.urgency >= @urgency_exempt_threshold ->
+        nil
+
+      quiet_hours?(local_now_for_user(candidate.user_id)) ->
+        "quiet_hours"
+
+      candidate.bypass_budget_cap ->
+        nil
+
+      recent_sent_push_count(candidate.user_id) >= push_limit_per_hour() ->
+        "budget_exhausted"
+
+      true ->
+        nil
+    end
   end
+
+  @doc """
+  The operator's local wall-clock time, used both to enforce the quiet-hours
+  send-time gate here and (via `DeliveryPlanner.now_from_context/2`) as the
+  fallback source for the advisory budget shown to the planning model, so
+  the two never disagree about "now".
+  """
+  def local_now_for_user(user_id) when is_binary(user_id) do
+    offset_hours =
+      user_id
+      |> BriefingSchedules.summarize_for_prompt()
+      |> Map.get(:timezone_offset_hours, -5)
+
+    DateTime.add(DateTime.utc_now(), offset_hours, :hour)
+  end
+
+  def local_now_for_user(_user_id), do: DateTime.utc_now()
 
   defp quiet_hours?(%DateTime{} = now) do
     local_hour = now.hour
@@ -496,7 +569,18 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
         mark_brief_sent(brief, message_id)
         :ok
 
-      {:ok, %{decision: decision}} when decision in ["suppressed", "merged", "queued_digest"] ->
+      {:ok, %{decision: decision}} when decision in ["merged", "queued_digest"] ->
+        mark_brief_delivered_elsewhere(brief)
+        :ok
+
+      {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
+        mark_brief_delivered_elsewhere(brief)
+        :ok
+
+      {:ok, %{decision: "held_rate_limit"}} ->
+        # Quiet hours or the interruption budget held this brief. Leave it
+        # "pending" so Briefs.dispatch_telegram_batch retries it instead of
+        # it silently vanishing.
         :ok
 
       {:error, reason} ->
@@ -536,7 +620,15 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
           mark_brief_sent(brief, message_id)
           :ok
 
-        {:ok, %{decision: decision}} when decision in ["suppressed", "merged", "queued_digest"] ->
+        {:ok, %{decision: decision}} when decision in ["merged", "queued_digest"] ->
+          mark_brief_delivered_elsewhere(brief)
+          :ok
+
+        {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
+          mark_brief_delivered_elsewhere(brief)
+          :ok
+
+        {:ok, %{decision: "held_rate_limit"}} ->
           :ok
 
         {:error, reason} ->
@@ -546,15 +638,29 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     end
   end
 
+  defp mark_brief_delivered_elsewhere(%Brief{} = brief) do
+    result =
+      brief
+      |> Ecto.Changeset.change(%{status: "sent", sent_at: brief.sent_at || DateTime.utc_now()})
+      |> Repo.update()
+
+    mark_held_interruptions_delivered(brief)
+    result
+  end
+
   defp mark_brief_sent(%Brief{} = brief, message_id) do
-    brief
-    |> Ecto.Changeset.change(%{
-      status: "sent",
-      sent_at: DateTime.utc_now(),
-      provider_message_id: normalize_id(message_id),
-      error_message: nil
-    })
-    |> Repo.update()
+    result =
+      brief
+      |> Ecto.Changeset.change(%{
+        status: "sent",
+        sent_at: DateTime.utc_now(),
+        provider_message_id: normalize_id(message_id),
+        error_message: nil
+      })
+      |> Repo.update()
+
+    mark_held_interruptions_delivered(brief)
+    result
   end
 
   defp mark_brief_failed(%Brief{} = brief, reason) do
@@ -564,5 +670,31 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       error_message: DeliveryErrorCopy.storage_message(reason)
     })
     |> Repo.update()
+  end
+
+  # SPEC 08 R2 finding 1: MorningBriefing.held_interruptions_for_prompt/1
+  # folds held ProactiveCandidates into the brief prompt and stashes their
+  # ids in brief.metadata["held_interruption_ids"], but deliberately does
+  # NOT flip their status — that's irreversible. Only once the brief is
+  # confirmed delivered (sent_now, or merged/queued_digest/suppressed
+  # duplicate) do we flip them to "delivered". A generation error, a
+  # held/failed brief, or a Brief.record insert failure leaves them "held"
+  # for the next brief to re-fetch via ProactiveQueue.list_held_for_user/2
+  # instead of losing them forever.
+  #
+  # Public because both the legacy direct-send path in this module
+  # (`mark_brief_sent/2`, `mark_brief_delivered_elsewhere/1` above) and the
+  # DeliveryPlanner-confirmed-delivery path (`maybe_mark_brief_delivered/1`
+  # in DeliveryPlanner) need to share this one implementation rather than
+  # duplicating the fold-in-cleanup logic.
+  def mark_held_interruptions_delivered(%Brief{metadata: metadata}) do
+    metadata
+    |> Kernel.||(%{})
+    |> Map.get("held_interruption_ids", [])
+    |> List.wrap()
+    |> Enum.each(fn
+      id when is_binary(id) -> ProactiveQueue.mark_delivered(id)
+      _other -> :ok
+    end)
   end
 end

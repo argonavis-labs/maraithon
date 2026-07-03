@@ -553,16 +553,29 @@ defmodule MaraithonWeb.WebhookControllerTest do
     Published to topic "calendar:{user_id}".
     """
     test "handles calendar exists notification", %{conn: conn} do
+      # Enqueuing the sync job requires a real user row (background_jobs has
+      # a user_id FK); the actual sync now happens out-of-request via the
+      # gmail/calendar_incremental_sync background job, not inline here.
+      {:ok, _user} =
+        Maraithon.Accounts.get_or_create_user_by_email("webhook-calendar-exists@example.com")
+
       conn =
         conn
         |> put_req_header("content-type", "application/json")
         |> put_req_header("x-goog-channel-id", "channel123")
         |> put_req_header("x-goog-resource-id", "resource123")
         |> put_req_header("x-goog-resource-state", "exists")
-        |> put_req_header("x-goog-channel-token", "user_123")
+        |> put_req_header("x-goog-channel-token", "webhook-calendar-exists@example.com")
         |> post("/webhooks/google/calendar", %{})
 
       assert json_response(conn, 200)["status"] == "published"
+
+      [job] =
+        Maraithon.Runtime.BackgroundJobs.list(
+          user_id: "webhook-calendar-exists@example.com"
+        )
+
+      assert job.job_type == "calendar_incremental_sync"
     end
   end
 

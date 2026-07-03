@@ -820,14 +820,20 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["name"] == "chief-of-staff"
       assert agent.config["user_id"] == @user_email
 
+      # SPEC 04 R5/R6: `local_pattern_review` is now part of the default
+      # skill pack (LocalPatterns candidates are model-gated inside the CoS
+      # cycle rather than on ProactiveCheckIn's own timer). `goal_alignment`
+      # was already part of the default pack independent of this change.
       assert agent.config["enabled_skills"] == [
                "followthrough",
                "travel_logistics",
                "morning_briefing",
                "commitment_tracker",
                "calendar_check_in",
+               "goal_alignment",
                "project_scope_alignment",
-               "holiday_radar"
+               "holiday_radar",
+               "local_pattern_review"
              ]
 
       assert agent.config["source_policy"] == "all_connected"
@@ -836,7 +842,9 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["timezone"] == "America/Los_Angeles"
       assert agent.config["timezone_name"] == "America/Los_Angeles"
       assert agent.config["timezone_offset_hours"] == -8
-      assert agent.config["wakeup_interval_ms"] == 3_600_000
+      # R1 (SPEC 04): the Chief of Staff marketplace default cadence is now
+      # 10 minutes, not hourly.
+      assert agent.config["wakeup_interval_ms"] == 600_000
       assert agent.config["brief_max_items"] == 12
 
       assert agent.config["subscribe"] == [

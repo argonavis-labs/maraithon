@@ -115,6 +115,7 @@ defmodule MaraithonWeb.Router do
       live "/agents", AgentsLive, :index
       live "/goals", GoalsLive, :index
       live "/briefing", BriefingLive, :index
+      live "/activity", ActivityLive, :index
       live "/stream", StreamLive, :index
       live "/dashboard", DashboardLive, :index
       live "/insights", InsightsLive, :index

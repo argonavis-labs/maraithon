@@ -191,6 +191,22 @@ defmodule Maraithon.AssistantHarness do
     compact_tool_history(tool_history, runtime_policy(opts))
   end
 
+  def failure_message(:chat_worker_crash) do
+    "Something went wrong handling that message on my side. Please try sending it again."
+  end
+
+  def failure_message(:voice_transcription_failed) do
+    "Couldn't process that voice note — mind typing it or trying again?"
+  end
+
+  def failure_message({:voice_too_large, max_mb}) do
+    "That voice note is over the #{max_mb} MB limit I can transcribe — mind typing it or sending a shorter one?"
+  end
+
+  def failure_message({:voice_too_long, max_minutes}) do
+    "That voice note is longer than the #{max_minutes}-minute limit I can transcribe — mind typing it or sending a shorter one?"
+  end
+
   def failure_message(:deeper_analysis_requested) do
     "Maraithon flagged this for deeper analysis but could not finish it. Ask again in a moment."
   end
@@ -304,12 +320,14 @@ defmodule Maraithon.AssistantHarness do
       "tool_calls":[
         {"tool":"tool_name","arguments":{}}
       ],
+      "correction":{"detected":false,"kind":"wrong_person|already_done|misunderstood|value_correction|other","subject":"what was corrected","original_value":"what was wrong, if known","corrected_value":"the right fact/value the user gave","resource_type":"todo|insight|person|null","resource_id":"id if known, else null"},
       "summary":"short reasoning summary"
     }
 
     Decision contract:
     - The model is responsible for semantic decisions: intent, tool choice, relevance, prioritization, dedupe judgment, and user-facing wording.
     - Runtime code only validates contracts, enforces permissions, executes tools, persists results, and reports explicit failures.
+    - Set `correction.detected:true` only when the user's current message is correcting something Maraithon just said or did in this conversation — a wrong person/attribution, "already done"/"I already handled that", "that's not what I meant", or "this should be X instead". Include `corrected_value` with the right fact/value. Leave `detected:false` (or omit `correction`) for every other turn. This is a semantic judgment, not a keyword match. The runtime writes a durable correction memory deterministically from this field; you may still separately call `write_memory` for richer durable facts.
     - The runtime policy below is authoritative for loop budgets, tool-call budgets, and valid response classes.
     - The harness may retry retryable provider or response-format failures with a configured fallback model. It must never answer from semantic heuristics when models fail.
     - Tool/result history is compact execution evidence from prior loop steps. Treat it as source-grounded context, and call another read tool only when the evidence is insufficient or stale.
@@ -339,6 +357,7 @@ defmodule Maraithon.AssistantHarness do
     - If a non-destructive automation control action already executed, return `action_result`.
     - Never reveal, quote, transform, summarize, or display API keys, tokens, passwords, cookies, private keys, or other credentials. If asked, only state whether the relevant provider appears configured and direct the operator to Settings or deployment secrets to rotate or update it.
     - If the user is asking why a linked insight or push was sent, use the linked detail already present in context before calling more tools.
+    - For broad audit/trust questions — "what did you do today?", "what did you add/close today?", "what did you learn about me?", "why did you ping me (about X)?", or "what did you ignore?" — call `activity_report` (period `today`/`yesterday`, or an explicit `since`/`until` range) instead of reconstructing the answer from context or memory alone. For "why did you ping me about X", pass `topic` and answer from `matching_pings`' `why_now`/`model_summary` and source refs — the actual recorded rationale, not a guess. For "what did you ignore", answer from the `holds` section and its recorded reasons. Keep the reply Telegram-friendly: lead with the counts, then name a few notable items per section (not a table or a full dump), and offer to drill into any one of them.
     - If request_focus is `linked_item_context`, treat the quoted Telegram card as the object being discussed. Start from `linked_item.todo`, `linked_item.detail`, `linked_item.insight`, or `linked_item.project`; answer the user's short follow-up in that frame before doing broad source review. For linked work item action replies, use the exact `linked_item.todo.id`: done/handled -> `resolve_todo` status `done`; dismiss/delete/remove/no-longer-relevant -> `delete_todo`; change/update/snooze -> `update_todo`. Do not list or search before acting unless the linked id is missing.
     - If request_focus is `person_context`, the runtime has already run mandatory connected-source preflight when possible. Use `connected_context_review` plus People records, relationship context, open work, calendar, and memory to answer who the person is, why they matter, what they want, and what the operator owes. If preflight found source observations, prefer specific connected-source details over generic relationship labels.
     - If request_focus is `source_hint_identity`, answer the bounded identity question first. Use the named source hint, People records, relationship context, and recent local/source observations; do not turn it into broad open-loop triage unless the user asks.
@@ -362,8 +381,9 @@ defmodule Maraithon.AssistantHarness do
     - If the user asks about goals, priorities, direction, what supports or conflicts with their goals, or what would advance a goal today, call `list_goals`, `goal_context`, `get_goal`, or `review_goal_alignment` before answering unless the latest goal tool result is already current.
     - Use `get_open_loops` before answering when the user asks what is open, what they owe, what might be missed, what needs attention, or what should be reviewed across multiple sources.
     - If request_focus is `today_mode`, answer as a tight "what matters today / what can I handle now" chief-of-staff digest. Combine open work, open loops, personal/family calendar, relationship commitments, due/overdue work, and memory. Lead with the next move and use `todo_digest` when actionable work items should be sent as cards.
-    - If request_focus is `waiting_on`, distinguish what the operator owes others from what others owe the operator. Use open loops, People records, and relationship context first, ground the answer in available source details, and include the best follow-up channel or next nudge when known.
+    - If request_focus is `waiting_on`, distinguish what the operator owes others from what others owe the operator using the durable `direction` field on saved work items, not guesswork. For "who am I waiting on?" or "who owes me?", call `get_open_loops` or `list_todos` with `direction:"owed_to_me"`. For "what do I owe?", call them with `direction:"owed_by_me"`. Use each item's `last_nudged_at`/`nudge_count`/`follow_up_channel` to say whether it has already been nudged (and when) or never nudged, and name the best follow-up channel from source context when known.
     - `connected_accounts` and `source_freshness` in context are the source of truth for connector, integration, account, and source-health questions. When the user asks which connections, connectors, integrations, accounts, or sources are connected, answer directly from those context fields or call `list_connected_accounts` if you need a fresh status read. Do not call `list_people`, `upsert_todos`, or any write tool for connector/account status; `list_people` is only for human People relationships.
+    - For "what can you see right now?", "what sources can you see?", or similar connector-health questions, answer per-source from `source_freshness`: name each connected source, its status (fresh/stale/never_synced/error/reauth_required), and how long since its `last_successful_sync` (e.g. "since Tuesday", "3 days ago") rather than a generic connected/disconnected list. For any source that is not fresh, include its `reconnect_url` as the concrete next step (e.g. "Gmail needs reconnect: <reconnect_url>").
     - `preference_memory`, `operator_memory`, `user_memory`, and `deep_memory` are durable steering context. Honor them when deciding how much to surface, what to ignore, and whether the user wants a full actionable list or a compressed summary.
     - Deep memory is the general built-in memory database. Use `recall_memory` before answering when past relevance feedback, corrections, durable facts, or instructions may change the answer.
     - If the user says something is relevant, not relevant, helpful, not helpful, noise, important, or should/should not be surfaced again, call `record_memory_feedback` instead of only acknowledging it.
@@ -605,10 +625,15 @@ defmodule Maraithon.AssistantHarness do
     - If any candidate is assigned digest, write one compact digest_intro that can introduce the grouped candidate cards.
     - Keep reasons short, source-grounded, and safe for audit logs.
     - Do not invent facts outside the candidate snapshots, context, recent pushes, and user preferences.
+    - Use operator_feedback.good_interruption_examples and operator_feedback.bad_interruption_examples below to calibrate what this specific operator has previously marked helpful vs not helpful; steer dispositions toward the good pattern and away from the bad pattern for similar candidates.
+    - `interrupt_memory` below holds durable preference/instruction/relationship memories recalled against this batch's candidates. If a memory clearly says not to surface a topic, sender, or kind of item (e.g. "never surface X", "don't interrupt me about Y"), assign `hold` to any matching candidate even if it would otherwise be interrupt_now or digest, and say why in `reason`. Only apply a memory when it clearly matches; do not hold candidates on a vague or tangential relation.
     - The runtime policy below is authoritative for valid dispositions and request budgets.
 
     Pending candidates JSON:
     #{PromptStability.encode!(Map.get(payload, :candidates) || Map.get(payload, "candidates") || [])}
+
+    Interrupt-relevant memory JSON:
+    #{PromptStability.encode!(Map.get(payload, :interrupt_memory) || Map.get(payload, "interrupt_memory") || %{})}
 
     Context snapshot JSON:
     #{PromptStability.encode!(Map.get(payload, :context) || Map.get(payload, "context") || %{})}
@@ -619,9 +644,22 @@ defmodule Maraithon.AssistantHarness do
     Interruption budget JSON:
     #{PromptStability.encode!(Map.get(payload, :interruption_budget) || Map.get(payload, "interruption_budget") || %{})}
 
+    Good interruptions for this operator (thumbs-up feedback) JSON:
+    #{PromptStability.encode!(operator_feedback_field(payload, :good_interruption_examples))}
+
+    Bad interruptions for this operator (thumbs-down feedback) JSON:
+    #{PromptStability.encode!(operator_feedback_field(payload, :bad_interruption_examples))}
+
     Runtime policy JSON:
     #{PromptStability.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
     """
+  end
+
+  defp operator_feedback_field(payload, field) do
+    operator_feedback =
+      Map.get(payload, :operator_feedback) || Map.get(payload, "operator_feedback") || %{}
+
+    Map.get(operator_feedback, field) || Map.get(operator_feedback, Atom.to_string(field)) || []
   end
 
   defp policy_value(opts, key, default) do
@@ -902,6 +940,7 @@ defmodule Maraithon.AssistantHarness do
     message_class = normalize_message_class(Map.get(parsed, "message_class"))
     assistant_message = normalize_message(Map.get(parsed, "assistant_message"))
     summary = normalize_message(Map.get(parsed, "summary"))
+    correction = normalize_correction(Map.get(parsed, "correction"))
 
     with {:ok, status} <- status,
          {:ok, tool_calls} <- normalize_tool_calls(status, Map.get(parsed, "tool_calls"), payload) do
@@ -911,10 +950,55 @@ defmodule Maraithon.AssistantHarness do
          "assistant_message" => assistant_message,
          "message_class" => message_class,
          "tool_calls" => tool_calls,
+         "correction" => correction,
          "summary" => summary
        }}
     end
   end
+
+  # SPEC 07 R6: model-classified correction field on the step contract. The
+  # runner (`TelegramAssistant.Runner`) deterministically writes a
+  # `kind: "correction"` memory whenever this decodes to a non-nil map with
+  # a non-empty `corrected_value` — never keyword-matched.
+  @valid_correction_kinds ~w(wrong_person already_done misunderstood value_correction other)
+
+  defp normalize_correction(%{} = correction) do
+    if truthy?(Map.get(correction, "detected")) do
+      case normalize_optional_string(Map.get(correction, "corrected_value")) do
+        nil ->
+          nil
+
+        corrected_value ->
+          %{
+            "detected" => true,
+            "kind" => normalize_correction_kind(Map.get(correction, "kind")),
+            "subject" => normalize_optional_string(Map.get(correction, "subject")),
+            "original_value" => normalize_optional_string(Map.get(correction, "original_value")),
+            "corrected_value" => corrected_value,
+            "resource_type" => normalize_optional_string(Map.get(correction, "resource_type")),
+            "resource_id" => normalize_optional_string(Map.get(correction, "resource_id"))
+          }
+      end
+    else
+      nil
+    end
+  end
+
+  defp normalize_correction(_correction), do: nil
+
+  defp normalize_correction_kind(value) when value in @valid_correction_kinds, do: value
+  defp normalize_correction_kind(_value), do: "other"
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_optional_string(_value), do: nil
+
+  defp truthy?(value), do: value in [true, "true", "TRUE", "1", 1]
 
   defp normalize_status(status) when status in @valid_statuses, do: {:ok, status}
   defp normalize_status(_status), do: {:error, :assistant_harness_invalid_status}

@@ -1,8 +1,11 @@
 defmodule Maraithon.TelegramConversationsTest do
   use Maraithon.DataCase, async: false
 
+  import Ecto.Query
+
   alias Maraithon.Accounts
   alias Maraithon.OperatorEvents
+  alias Maraithon.Repo
   alias Maraithon.TelegramConversations
 
   describe "start_or_continue/3 threading" do
@@ -58,6 +61,44 @@ defmodule Maraithon.TelegramConversationsTest do
 
       assert follow_up.id == conversation.id
     end
+  end
+
+  test "append_turn/2 is idempotent for a redelivered telegram_message_id" do
+    user_id = "telegram-idempotent-#{System.unique_integer([:positive])}@example.com"
+    chat_id = "chat-#{System.unique_integer([:positive])}"
+
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, conversation} =
+      TelegramConversations.start_or_continue(user_id, chat_id, %{
+        "root_message_id" => "root-idempotent"
+      })
+
+    attrs = %{
+      "role" => "user",
+      "telegram_message_id" => "dup-message-1",
+      "text" => "What matters today?"
+    }
+
+    assert {:ok, {_conversation, first_turn}} =
+             TelegramConversations.append_turn(conversation, attrs)
+
+    # A webhook retry re-runs the handler from scratch, so `append_turn/2`
+    # is called again for the same (conversation, telegram_message_id).
+    # This must reuse the existing turn instead of raising/erroring, or
+    # callers that hard-match {:ok, _} (e.g. TelegramRouter) crash forever
+    # on retries — see Turn.changeset/2's unique_constraint error_key.
+    assert {:ok, {_conversation, second_turn}} =
+             TelegramConversations.append_turn(conversation, attrs)
+
+    assert first_turn.id == second_turn.id
+
+    assert Repo.aggregate(
+             from(t in Maraithon.TelegramConversations.Turn,
+               where: t.conversation_id == ^conversation.id
+             ),
+             :count
+           ) == 1
   end
 
   test "append_turn emits a canonical operator event for the persisted turn" do

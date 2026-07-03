@@ -105,7 +105,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     slack_search_messages slack_get_thread_context linear_list_or_lookup notaui_list_tasks
     list_projects inspect_project list_implementation_runs list_agents inspect_agent
     list_scheduled_tasks list_goals get_goal goal_context
-    explain_action_ledger
+    explain_action_ledger activity_report
     notes_search notes_get notes_list_recent
     voice_memos_search voice_memos_get voice_memos_list_recent
     files_search files_get files_list_recent
@@ -154,11 +154,12 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "get_open_loops",
-        "Fetch the linked user's durable open-loop snapshot across goals, open work, relationships, and memory.",
+        "Fetch the linked user's durable open-loop snapshot across goals, open work, relationships, and memory. Pass direction:\"owed_to_me\" for \"who am I waiting on?\" (others owe the operator) or direction:\"owed_by_me\" for \"what do I owe?\" (the operator owes someone else).",
         %{
           "type" => "object",
           "properties" => %{
             "query" => %{"type" => "string"},
+            "direction" => %{"type" => "string", "enum" => ["owed_to_me", "owed_by_me"]},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
         }
@@ -306,6 +307,35 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "object_type" => %{"type" => "string"},
             "object_id" => %{"type" => "string"},
             "event_type" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "activity_report",
+        "Audit-trail summary of what Maraithon did: todos added/updated/closed, memories learned (by kind), People created/enriched, proactive pings sent (with why_now and source), and held/ignored items with reasons. Use for 'what did you do today', 'what did you learn about me', 'why did you ping me (about X)', and 'what did you ignore'.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "period" => %{
+              "type" => "string",
+              "enum" => ["today", "yesterday"],
+              "description" => "Defaults to today, the operator's local day."
+            },
+            "since" => %{
+              "type" => "string",
+              "description" =>
+                "Optional explicit range start date (YYYY-MM-DD), for a custom range instead of period."
+            },
+            "until" => %{
+              "type" => "string",
+              "description" =>
+                "Optional explicit range end date (YYYY-MM-DD, inclusive). Defaults to since when omitted."
+            },
+            "topic" => %{
+              "type" => "string",
+              "description" =>
+                "Optional topic/keyword for 'why did you ping me about X?'. Matches recent pushes by why_now/origin across the last 30 days, independent of period."
+            }
           }
         }
       ),
@@ -556,7 +586,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "list_todos",
-        "List the linked user's persisted open work items and their statuses.",
+        "List the linked user's persisted open work items and their statuses. Pass direction:\"owed_to_me\" for \"who am I waiting on?\" or direction:\"owed_by_me\" for \"what do I owe?\".",
         %{
           "type" => "object",
           "properties" => %{
@@ -567,6 +597,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "kind" => %{"type" => "string"},
             "attention_mode" => %{"type" => "string"},
             "owner_user_id" => %{"type" => "string"},
+            "direction" => %{"type" => "string", "enum" => ["owed_to_me", "owed_by_me", "fyi"]},
             "due_before" => %{"type" => "string"},
             "due_after" => %{"type" => "string"},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
@@ -1544,6 +1575,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "explain_action_ledger" ->
         explain_action_ledger(runtime_context, args)
 
+      "activity_report" ->
+        activity_report(runtime_context, args)
+
       "update_briefing_schedule" ->
         update_briefing_schedule(runtime_context, args)
 
@@ -1999,6 +2033,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     {:ok,
      OpenLoops.snapshot(runtime_context.user_id,
        query: Map.get(args, "query"),
+       direction: Map.get(args, "direction"),
        limit: limit
      )}
   end
@@ -2153,6 +2188,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           kind: Map.get(args, "kind"),
           attention_mode: Map.get(args, "attention_mode"),
           owner_user_id: Map.get(args, "owner_user_id"),
+          direction: Map.get(args, "direction"),
           due_before: Map.get(args, "due_before"),
           due_after: Map.get(args, "due_after"),
           query: Map.get(args, "query")
@@ -2165,6 +2201,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           kind: Map.get(args, "kind"),
           attention_mode: Map.get(args, "attention_mode"),
           owner_user_id: Map.get(args, "owner_user_id"),
+          direction: Map.get(args, "direction"),
           due_before: Map.get(args, "due_before"),
           due_after: Map.get(args, "due_after"),
           query: Map.get(args, "query")
@@ -2244,7 +2281,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp list_preferences(runtime_context) do
-    {:ok, preference_snapshot(runtime_context.user_id)}
+    {:ok,
+     preference_snapshot(runtime_context.user_id, "user preferences and standing instructions")}
   end
 
   defp remember_preferences(runtime_context, args) do
@@ -2258,10 +2296,12 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         {:error, "missing_rules"}
 
       true ->
+        filtered_rules = Enum.filter(rules, &is_map/1)
+
         with {:ok, saved} <-
                PreferenceMemory.save_interpreted_rules(
                  runtime_context.user_id,
-                 Enum.filter(rules, &is_map/1),
+                 filtered_rules,
                  "explicit_telegram",
                  conversation_id: Map.get(runtime_context, :conversation_id),
                  source_delivery_id: linked_delivery_id(runtime_context)
@@ -2272,7 +2312,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           _ = maybe_mark_pending_preference_confirmation(runtime_context, pending)
 
           {:ok,
-           preference_snapshot(runtime_context.user_id)
+           preference_snapshot(runtime_context.user_id, rules_memory_query(filtered_rules))
            |> Map.merge(%{
              status: remember_preferences_status(active, pending, saved),
              saved_count: length(saved),
@@ -2289,9 +2329,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp forget_preference(runtime_context, args) do
     with {:ok, rule_id} <- required_string(args, "rule_id"),
+         query <- forget_preference_query(runtime_context.user_id, rule_id),
          {:ok, message} <- PreferenceMemory.forget_rule(runtime_context.user_id, rule_id) do
       {:ok,
-       preference_snapshot(runtime_context.user_id)
+       preference_snapshot(runtime_context.user_id, query)
        |> Map.merge(%{
          status: "forgotten",
          forgotten_rule_id: rule_id,
@@ -2300,6 +2341,27 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     else
       {:error, :rule_not_found} -> {:error, "preference_not_found"}
       {:error, reason} -> {:error, normalize_error(reason)}
+    end
+  end
+
+  defp rules_memory_query(rules) when is_list(rules) do
+    rules
+    |> Enum.flat_map(fn rule -> [Map.get(rule, "label"), Map.get(rule, "instruction")] end)
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join(" ")
+    |> case do
+      "" -> "user preferences and standing instructions"
+      text -> text
+    end
+  end
+
+  defp forget_preference_query(user_id, rule_id) do
+    user_id
+    |> PreferenceMemory.active_rules()
+    |> Enum.find(&(Map.get(&1, "id") == rule_id))
+    |> case do
+      %{} = rule -> rules_memory_query([rule])
+      _other -> "user preferences and standing instructions"
     end
   end
 
@@ -2722,6 +2784,80 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp explain_first_action([action | _actions]), do: {:ok, ActionLedger.explain_action(action)}
   defp explain_first_action([]), do: {:error, "action_not_found"}
 
+  # SPEC 09 R2: "what did you do today / what did you learn about me / why
+  # did you ping me (about X) / what did you ignore" audit surface.
+  defp activity_report(runtime_context, args) do
+    user_id = runtime_context.user_id
+    period = activity_report_period(args)
+    summary = ActionLedger.activity_summary(user_id, period)
+    topic = optional_string(args, "topic")
+
+    matching_pings =
+      if topic do
+        ActionLedger.recent_pings(user_id, topic: topic, limit: 5)
+      else
+        []
+      end
+
+    {:ok,
+     %{
+       summary: summary,
+       topic: topic,
+       matching_pings: matching_pings,
+       message: activity_report_message(summary, topic, matching_pings)
+     }}
+  end
+
+  defp activity_report_period(args) do
+    case optional_string(args, "period") do
+      "yesterday" ->
+        :yesterday
+
+      _other ->
+        activity_report_custom_range(args) || :today
+    end
+  end
+
+  defp activity_report_custom_range(args) do
+    with since_str when is_binary(since_str) <- optional_string(args, "since"),
+         {:ok, from_date} <- Date.from_iso8601(since_str) do
+      to_date =
+        case optional_string(args, "until") do
+          until_str when is_binary(until_str) ->
+            case Date.from_iso8601(until_str) do
+              {:ok, date} -> date
+              _error -> from_date
+            end
+
+          _other ->
+            from_date
+        end
+
+      {from_date, to_date}
+    else
+      _other -> nil
+    end
+  end
+
+  defp activity_report_message(summary, topic, matching_pings) do
+    headline =
+      "#{summary.period.label}: #{summary.todos.created.count} added, " <>
+        "#{summary.todos.closed.count} closed, #{summary.memories.count} learned, " <>
+        "#{summary.people.created.count + summary.people.enriched.count} people touched, " <>
+        "#{summary.pings.count} pings sent, #{summary.holds.count} held."
+
+    topic_note = activity_report_topic_note(topic, matching_pings)
+
+    [headline, topic_note] |> Enum.reject(&blank_string?/1) |> Enum.join(" ")
+  end
+
+  defp activity_report_topic_note(nil, _matching_pings), do: nil
+  defp activity_report_topic_note(_topic, []), do: "No recent pings matched that topic."
+
+  defp activity_report_topic_note(_topic, matching_pings) do
+    "#{length(matching_pings)} recent ping(s) matched that topic."
+  end
+
   defp action_explanation_message(explanation, freshness) do
     summary =
       explanation.model_summary ||
@@ -2978,6 +3114,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
          {:ok, action_type} <- required_string(args, "action_type"),
          %{} = spec <- Map.get(@external_action_tools, action_type),
          payload when is_map(payload) <- Map.get(args, "payload", %{}) do
+      payload = maybe_stamp_linked_todo_id(payload, runtime_context)
       executable_payload = Map.put(payload, "user_id", runtime_context.user_id)
       preview_text = external_action_preview(action_type, executable_payload)
 
@@ -4552,6 +4689,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       priority: todo.priority,
       source_item_id: todo.source_item_id,
       source_occurred_at: todo.source_occurred_at,
+      direction: todo.direction,
+      counterparty_person_id: todo.counterparty_person_id,
+      counterparty_label: todo.counterparty_label,
+      last_nudged_at: todo.last_nudged_at,
+      nudge_count: todo.nudge_count,
+      next_nudge_at: todo.next_nudge_at,
+      follow_up_channel: todo.follow_up_channel,
       metadata: todo.metadata || %{},
       updated_at: todo.updated_at
     }
@@ -4571,7 +4715,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp maybe_put_default(args, _key, _value), do: args
 
-  defp preference_snapshot(user_id) when is_binary(user_id) do
+  defp preference_snapshot(user_id, query) when is_binary(user_id) do
     active_rules = PreferenceMemory.active_rules(user_id)
     pending_rules = PreferenceMemory.pending_rules(user_id)
 
@@ -4583,11 +4727,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       preference_summary: PreferenceMemory.prompt_context(user_id),
       operator_memory: OperatorMemory.summaries_for_prompt(user_id),
       user_memory: UserMemory.prompt_context(user_id),
-      deep_memory: Memory.prompt_context(user_id)
+      deep_memory: Memory.prompt_context(user_id, query: query, limit: 8)
     }
   end
 
-  defp preference_snapshot(_user_id) do
+  defp preference_snapshot(_user_id, _query) do
     %{
       active_count: 0,
       active_rules: [],
@@ -4664,6 +4808,32 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp linked_delivery_id(runtime_context) when is_map(runtime_context) do
     get_in(runtime_context, [:context, :linked_item, :delivery, :id]) ||
       get_in(runtime_context, [:context, "linked_item", "delivery", "id"])
+  end
+
+  defp linked_todo_id(runtime_context) when is_map(runtime_context) do
+    get_in(runtime_context, [:context, :linked_item, :todo, :id]) ||
+      get_in(runtime_context, [:context, "linked_item", "todo", "id"])
+  end
+
+  # Runtime bookkeeping only — never add `todo_id` to the model-facing tool
+  # schema for `prepare_external_action`. The todo-card flow
+  # (`TodoThreadPrimer`) already stamps `payload["todo_id"]` when a send is
+  # prepared from a todo action card, but a send prepared conversationally
+  # (no card, just chat) skips that stamp even when the conversation itself
+  # is linked to a todo — so `maybe_record_todo_nudge/1` in
+  # `TelegramAssistant` never closes/nudges the todo afterward. Stamp it here
+  # from the resolved conversation context whenever the model didn't already
+  # supply one.
+  defp maybe_stamp_linked_todo_id(%{"todo_id" => todo_id} = payload, _runtime_context)
+       when is_binary(todo_id) and todo_id != "" do
+    payload
+  end
+
+  defp maybe_stamp_linked_todo_id(payload, runtime_context) when is_map(payload) do
+    case linked_todo_id(runtime_context) do
+      todo_id when is_binary(todo_id) and todo_id != "" -> Map.put(payload, "todo_id", todo_id)
+      _ -> payload
+    end
   end
 
   defp stringify_map(map) when is_map(map) do

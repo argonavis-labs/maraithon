@@ -8,7 +8,10 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   alias Maraithon.ActionLedger
   alias Maraithon.AssistantHarness
   alias Maraithon.Briefs
+  alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.InsightFeedback
+  alias Maraithon.InsightNotifications.MemoryGate
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
 
@@ -77,7 +80,6 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
             planned = persist_plan(candidates, plan, payload)
             counts = disposition_counts(planned)
-            record_planning_decision(user_id, candidates, plan, counts, payload)
 
             dispatch? = Keyword.get(opts, :dispatch, true)
 
@@ -85,8 +87,12 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
               if dispatch? do
                 dispatch(user_id, chat_id, planned, plan)
               else
-                %{delivered: 0, failed: 0, held: 0}
+                %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}
               end
+
+            # Recorded after dispatch so this reflects the enforced outcome
+            # (post budget/quiet-hours gate), not just the model's plan.
+            record_planning_decision(user_id, candidates, plan, counts, payload, dispatch_counts)
 
             {:ok,
              %{
@@ -130,7 +136,58 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         end),
       context: context,
       recent_pushes: recent_pushes,
-      interruption_budget: PushBroker.interruption_budget(user_id, now: now_from_context(context))
+      interruption_budget:
+        PushBroker.interruption_budget(user_id, now: now_from_context(context, user_id)),
+      operator_feedback: operator_feedback_examples(user_id),
+      # SPEC 07 R4: preference/instruction/relationship memories recalled
+      # with this batch's candidate titles as the query, so a "never surface
+      # X" memory can inform the model's hold/interrupt_now/digest call for
+      # a matching candidate — same recall path `insight_notifications.ex`
+      # uses for the legacy gate, just folded into this batch decision
+      # instead of a second gatekeeping model call.
+      interrupt_memory: interrupt_memory_context(user_id, candidates)
+    }
+  end
+
+  # Good/bad interruption examples for this specific operator, so the model
+  # calibrates against real thumbs feedback instead of only a scalar
+  # threshold it never otherwise reads.
+  defp operator_feedback_examples(user_id) do
+    feedback = InsightFeedback.prompt_context(user_id)
+    recent_feedback = feedback.recent_feedback || []
+
+    %{
+      threshold_profile: feedback.threshold_profile,
+      good_interruption_examples: Enum.filter(recent_feedback, &(&1.feedback == "helpful")),
+      bad_interruption_examples: Enum.filter(recent_feedback, &(&1.feedback == "not_helpful")),
+      preference_profile: feedback.preference_profile,
+      user_memory_profile: feedback.user_memory_profile
+    }
+  end
+
+  defp interrupt_memory_context(user_id, candidates) do
+    query =
+      candidates
+      |> Enum.map(&candidate_title/1)
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.take(12)
+      |> Enum.join(" | ")
+
+    case query do
+      "" -> %{summary: "No pending candidates to recall memory for.", memories: [], count: 0}
+      query -> MemoryGate.recall_memories(user_id, query) |> memory_summary_context(query)
+    end
+  end
+
+  defp memory_summary_context(memories, query) do
+    %{
+      summary:
+        if(memories == [],
+          do: "No relevant preference/instruction/relationship memories matched.",
+          else: "Interrupt-relevant memories for: #{query}"
+        ),
+      memories: memories,
+      count: length(memories)
     }
   end
 
@@ -317,8 +374,23 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     %{
       delivered: interrupt_counts.delivered + digest_counts.delivered,
       failed: interrupt_counts.failed + digest_counts.failed,
-      held: held_count
+      held: held_count + interrupt_counts.held + digest_counts.held,
+      hold_reasons:
+        merge_hold_reasons([
+          interrupt_counts.hold_reasons,
+          digest_counts.hold_reasons,
+          model_hold_reasons(hold)
+        ])
     }
+  end
+
+  defp model_hold_reasons([]), do: %{}
+  defp model_hold_reasons(hold), do: %{"model_hold" => length(hold)}
+
+  defp merge_hold_reasons(reason_maps) do
+    Enum.reduce(reason_maps, %{}, fn reasons, acc ->
+      Map.merge(acc, reasons, fn _reason, a, b -> a + b end)
+    end)
   end
 
   defp apply_interruption_budget_to_plan(plan, payload) when is_map(plan) do
@@ -387,20 +459,55 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   end
 
   defp dispatch_interrupts(candidates, chat_id) do
-    Enum.reduce(candidates, %{delivered: 0, failed: 0}, fn candidate, acc ->
+    Enum.reduce(candidates, %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}, fn candidate,
+                                                                                       acc ->
+      # Model chose interrupt_now at planning time, but PushBroker.deliver/1
+      # still re-checks the hard budget gate at send time (R2): only a
+      # genuinely high-urgency candidate skips the hourly cap/quiet hours.
       case PushBroker.deliver(push_candidate(candidate, chat_id, interrupt_now: true)) do
         {:ok, %{decision: "sent_now", conversation_id: conversation_id}} ->
           {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+          maybe_mark_brief_delivered(candidate)
           maybe_send_candidate_todo_cards(conversation_id, candidate)
+          record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "sent_now"})
           %{acc | delivered: acc.delivered + 1}
 
         {:ok, %{decision: "sent_now"}} ->
           {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+          maybe_mark_brief_delivered(candidate)
+          record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "sent_now"})
           %{acc | delivered: acc.delivered + 1}
+
+        {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
+          # Already delivered under this dedupe_key through another path.
+          {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+          maybe_mark_brief_delivered(candidate)
+
+          record_dispatch_decision(candidate, "proactive.sent", "sent", %{
+            "decision" => "suppressed",
+            "reason" => "duplicate"
+          })
+
+          %{acc | delivered: acc.delivered + 1}
+
+        {:ok, %{decision: "held_rate_limit", reason: reason}} ->
+          {:ok, _candidate} = ProactiveQueue.mark_held(candidate)
+
+          record_dispatch_decision(candidate, "proactive.held", "held", %{
+            "decision" => "held_rate_limit",
+            "hold_reason" => reason
+          })
+
+          %{acc | held: acc.held + 1, hold_reasons: bump_reason(acc.hold_reasons, reason)}
 
         {:ok, _result} ->
           {:ok, _candidate} = ProactiveQueue.mark_held(candidate)
-          acc
+
+          record_dispatch_decision(candidate, "proactive.held", "held", %{
+            "decision" => "unknown"
+          })
+
+          %{acc | held: acc.held + 1, hold_reasons: bump_reason(acc.hold_reasons, "unknown")}
 
         {:error, _reason} ->
           %{acc | failed: acc.failed + 1}
@@ -411,7 +518,13 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     end)
   end
 
-  defp dispatch_digest(_user_id, _chat_id, [], _plan), do: %{delivered: 0, failed: 0}
+  defp bump_reason(reasons, reason) when is_map(reasons) and is_binary(reason) do
+    Map.update(reasons, reason, 1, &(&1 + 1))
+  end
+
+  defp bump_reason(reasons, _reason), do: reasons
+
+  defp dispatch_digest(_user_id, _chat_id, [], _plan), do: %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}
 
   defp dispatch_digest(user_id, chat_id, candidates, plan) do
     digest_intro = digest_intro(plan)
@@ -425,8 +538,17 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       dedupe_key: digest_key,
       title: "Maraithon digest",
       body: digest_intro,
+      # Informational only (telemetry/structured_data) — `digest: true` below
+      # keeps PushBroker's urgency-exempt-from-quiet-hours check from ever
+      # reading this value, so a bundled urgency >= 0.9 item cannot un-gate
+      # the whole digest during quiet hours (see push_broker.ex).
       urgency: max_urgency(candidates),
-      interrupt_now: true,
+      # The digest bundle is the batched, budget-conscious delivery path
+      # itself (R2) — it is not an interrupt, and its own send is exempt
+      # from the hourly cap (but still respects quiet hours).
+      interrupt_now: false,
+      bypass_budget_cap: true,
+      digest: true,
       why_now: Map.get(plan, "summary"),
       structured_data: %{
         "message_class" => "proactive_delivery_digest",
@@ -440,20 +562,41 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         case load_conversation(conversation_id) do
           %Conversation{} = conversation ->
             send_digest_cards(conversation, candidates)
+            |> Map.merge(%{held: 0, hold_reasons: %{}})
 
           nil ->
-            %{delivered: 0, failed: length(candidates)}
+            %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
         end
 
+      {:ok, %{decision: "held_rate_limit", reason: reason}} ->
+        hold_digest_candidates(candidates, reason)
+        %{delivered: 0, failed: 0, held: length(candidates), hold_reasons: %{reason => length(candidates)}}
+
       {:ok, _result} ->
-        %{delivered: 0, failed: length(candidates)}
+        hold_digest_candidates(candidates, "unknown")
+        %{delivered: 0, failed: 0, held: length(candidates), hold_reasons: %{"unknown" => length(candidates)}}
 
       {:error, _reason} ->
-        %{delivered: 0, failed: length(candidates)}
+        %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
 
       {:fallback, _reason} ->
-        %{delivered: 0, failed: length(candidates)}
+        %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
     end
+  end
+
+  # The digest bundle itself was held (quiet hours; the hourly cap is
+  # bypassed for digests). The bundled candidates go through the same "held"
+  # fate as a model-chosen hold: they surface in the next morning brief
+  # instead of being silently dropped.
+  defp hold_digest_candidates(candidates, reason) do
+    Enum.each(candidates, fn candidate ->
+      {:ok, _candidate} = ProactiveQueue.mark_held(candidate)
+
+      record_dispatch_decision(candidate, "proactive.held", "held", %{
+        "decision" => "held_rate_limit",
+        "hold_reason" => reason
+      })
+    end)
   end
 
   defp send_digest_cards(%Conversation{} = conversation, candidates) do
@@ -475,7 +618,9 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
            ) do
         {:ok, _conversation, turn, _telegram_result} ->
           {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+          maybe_mark_brief_delivered(candidate)
           record_merged_receipt(candidate, turn.id)
+          record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "merged"})
           todo_counts = send_candidate_todo_cards(conversation, candidate)
           %{acc | delivered: acc.delivered + 1, failed: acc.failed + todo_counts.failed}
 
@@ -485,8 +630,52 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     end)
   end
 
+  # The proactive-candidate queue tracks its own delivery status, but the
+  # underlying Brief record (surfaced on the Briefing page and retried by
+  # Briefs.dispatch_telegram_batch while "pending") must also reflect a
+  # successful send — otherwise it stays "pending" forever even though the
+  # content already reached the operator.
+  defp maybe_mark_brief_delivered(%ProactiveCandidate{source: "brief", source_id: brief_id})
+       when is_binary(brief_id) do
+    with {:ok, _uuid} <- Ecto.UUID.cast(brief_id),
+         %Brief{} = brief <- Repo.get(Brief, brief_id) do
+      result =
+        brief
+        |> Ecto.Changeset.change(%{
+          status: "sent",
+          sent_at: brief.sent_at || DateTime.utc_now(),
+          error_message: nil
+        })
+        |> Repo.update()
+
+      # SPEC 08 R2 finding 1 (planner-path gap): this call site is the
+      # DeliveryPlanner equivalent of PushBroker.mark_brief_sent/2 and
+      # mark_brief_delivered_elsewhere/1 — it only runs once the brief is
+      # confirmed delivered (sent_now, suppressed-duplicate, or merged into a
+      # digest; never on held/failed). Held items folded into the brief's
+      # prompt (brief.metadata["held_interruption_ids"]) must flip to
+      # "delivered" here too, or they never leave "held" status when the
+      # planner (not the legacy path) is the one confirming delivery.
+      PushBroker.mark_held_interruptions_delivered(brief)
+
+      result
+    else
+      _other -> :ok
+    end
+  rescue
+    _error -> :ok
+  end
+
+  defp maybe_mark_brief_delivered(_candidate), do: :ok
+
   defp mark_held(candidates) do
     Enum.reduce(candidates, 0, fn candidate, count ->
+      record_dispatch_decision(candidate, "proactive.held", "held", %{
+        "decision" => "model_hold",
+        "hold_reason" => "model_hold",
+        "model_reason" => candidate.plan_reason
+      })
+
       case ProactiveQueue.mark_held(candidate) do
         {:ok, _candidate} -> count + 1
         {:error, _reason} -> count
@@ -629,7 +818,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     _error -> :ok
   end
 
-  defp record_planning_decision(user_id, candidates, plan, counts, payload) do
+  defp record_planning_decision(user_id, candidates, plan, counts, payload, dispatch_counts) do
     ActionLedger.record(%{
       user_id: user_id,
       surface: "telegram",
@@ -648,8 +837,39 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         "digest_count" => counts.digest,
         "hold_count" => counts.hold,
         "interruption_budget" =>
-          Map.get(payload, :interruption_budget) || payload["interruption_budget"]
+          Map.get(payload, :interruption_budget) || payload["interruption_budget"],
+        # Enforced outcome (post send-time gate), distinct from the
+        # model's plan-time counts above.
+        "enforced_delivered_count" => Map.get(dispatch_counts, :delivered, 0),
+        "enforced_held_count" => Map.get(dispatch_counts, :held, 0),
+        "enforced_failed_count" => Map.get(dispatch_counts, :failed, 0),
+        "enforced_hold_reasons" => Map.get(dispatch_counts, :hold_reasons, %{})
       }
+    })
+
+    :ok
+  rescue
+    _error -> :ok
+  end
+
+  defp record_dispatch_decision(%ProactiveCandidate{} = candidate, event_type, status, metadata) do
+    ActionLedger.record(%{
+      user_id: candidate.user_id,
+      surface: "telegram",
+      event_type: event_type,
+      status: status,
+      source_evidence: %{
+        "candidate_id" => candidate.id,
+        "dedupe_key" => candidate.dedupe_key,
+        "source" => candidate.source,
+        "source_id" => candidate.source_id
+      },
+      model_summary: candidate_why_now(candidate),
+      result_object_refs: %{
+        "candidate_id" => candidate.id,
+        "dedupe_key" => candidate.dedupe_key
+      },
+      metadata: Map.merge(metadata, %{"urgency" => candidate.urgency})
     })
 
     :ok
@@ -708,24 +928,32 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     |> Enum.max(fn -> 0.0 end)
   end
 
-  defp now_from_context(context) when is_map(context) do
+  # PushBroker.quiet_hours?/1 compares the datetime's `.hour` against local
+  # quiet-hour thresholds, so it must be given the operator's local wall
+  # clock (context.ex's `local_now`), not `now_utc` — passing the UTC value
+  # here previously compared a UTC hour against local thresholds. When
+  # `local_now` is missing or malformed, fall back through
+  # `PushBroker.local_now_for_user/1` (the same source the send-time
+  # enforcement gate uses) instead of `DateTime.utc_now/0`, so this advisory
+  # budget shown to the model agrees with what actually gates the send.
+  defp now_from_context(context, user_id) when is_map(context) do
     context
     |> read_field("current_time")
-    |> read_field("now_utc")
-    |> parse_datetime()
+    |> read_field("local_now")
+    |> parse_datetime(user_id)
   end
 
-  defp now_from_context(_context), do: DateTime.utc_now()
+  defp now_from_context(_context, user_id), do: PushBroker.local_now_for_user(user_id)
 
-  defp parse_datetime(value) when is_binary(value) do
+  defp parse_datetime(value, user_id) when is_binary(value) do
     case DateTime.from_iso8601(value) do
       {:ok, datetime, _offset} -> datetime
-      _other -> DateTime.utc_now()
+      _other -> PushBroker.local_now_for_user(user_id)
     end
   end
 
-  defp parse_datetime(%DateTime{} = datetime), do: datetime
-  defp parse_datetime(_value), do: DateTime.utc_now()
+  defp parse_datetime(%DateTime{} = datetime, _user_id), do: datetime
+  defp parse_datetime(_value, user_id), do: PushBroker.local_now_for_user(user_id)
 
   defp empty_due_summary do
     %{users: 0, planned: 0, interrupt_now: 0, digest: 0, held: 0, delivered: 0, failed: 0}

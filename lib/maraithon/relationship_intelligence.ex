@@ -150,6 +150,10 @@ defmodule Maraithon.RelationshipIntelligence do
       available.
     - Write memories only for durable facts or durable relationship guidance that
       will improve future decisions.
+    - When a memory is specifically about one person (not a general fact),
+      set that memory's `person_ref` to the same person_ref/display_name/contact
+      value used for `people` and `links` so it can be recalled scoped to that
+      person. Omit `person_ref` for memories that are not about one person.
     - Link learned people to relevant source observations or todos when a
       resource id is available.
     - Return ONLY valid JSON. No markdown.
@@ -195,6 +199,7 @@ defmodule Maraithon.RelationshipIntelligence do
           "importance": 0,
           "confidence": 0.0,
           "dedupe_key": "stable key",
+          "person_ref": "person_ref, display_name, or contact value this memory is about, if any",
           "metadata": {}
         }
       ],
@@ -311,7 +316,7 @@ defmodule Maraithon.RelationshipIntelligence do
 
     {memories, memory_errors} =
       Enum.reduce(memory_decisions, {[], []}, fn attrs, {memories, errors} ->
-        case persist_memory(user_id, attrs, opts) do
+        case persist_memory(user_id, attrs, opts, person_index) do
           {:ok, %Item{} = item} -> {[item | memories], errors}
           {:error, reason} -> {memories, [error("memory", attrs, reason) | errors]}
         end
@@ -355,8 +360,10 @@ defmodule Maraithon.RelationshipIntelligence do
           "last_interaction_at",
           Keyword.get(opts, :now, DateTime.utc_now()) |> normalize_json_value()
         )
-        |> Map.update("metadata", %{}, fn metadata ->
-          metadata
+        |> Map.put(
+          "metadata",
+          attrs
+          |> Map.get("metadata", %{})
           |> normalize_map()
           |> Map.merge(%{
             "relationship_intelligence" =>
@@ -369,19 +376,35 @@ defmodule Maraithon.RelationshipIntelligence do
                   |> normalize_json_value()
               })
           })
-        end)
+        )
 
       Crm.upsert_person(user_id, person_attrs)
     end
   end
 
-  defp persist_memory(user_id, attrs, opts) do
+  defp persist_memory(user_id, attrs, opts, person_index) do
     attrs = stringify_top_level_keys(attrs)
     confidence = read_float(attrs, "confidence", 0.75)
 
     if confidence < Keyword.get(opts, :min_memory_confidence, 0.6) do
       {:error, :low_confidence_memory}
     else
+      # Model may omit person_ref (or reference a person that failed to
+      # persist) — degrade to an unstamped memory rather than erroring.
+      person = resolve_link_person(attrs, person_index)
+
+      # NB: `Map.update/4`'s default branch inserts the default verbatim
+      # without calling the update function when "metadata" is absent — and
+      # the model commonly omits it — so building the map with `Map.get/3`
+      # + `Map.put/3` here (rather than `Map.update/4`) ensures
+      # `maybe_put_person_id/2` always runs.
+      metadata =
+        attrs
+        |> Map.get("metadata", %{})
+        |> normalize_map()
+        |> Map.put("relationship_intelligence", true)
+        |> maybe_put_person_id(person)
+
       memory_attrs =
         attrs
         |> Map.put_new("kind", "relationship")
@@ -390,17 +413,16 @@ defmodule Maraithon.RelationshipIntelligence do
         |> Map.put_new("source", Keyword.get(opts, :source, "relationship_intelligence"))
         |> Map.put_new("importance", 70)
         |> Map.put_new("confidence", confidence)
-        |> Map.update("metadata", %{}, fn metadata ->
-          metadata
-          |> normalize_map()
-          |> Map.put("relationship_intelligence", true)
-        end)
+        |> Map.put("metadata", metadata)
 
       Memory.write(user_id, memory_attrs,
         source: Keyword.get(opts, :source, "relationship_intelligence")
       )
     end
   end
+
+  defp maybe_put_person_id(metadata, %Person{id: id}), do: Map.put(metadata, "person_id", id)
+  defp maybe_put_person_id(metadata, _person), do: metadata
 
   defp persist_link(user_id, attrs, person_index) do
     attrs = stringify_top_level_keys(attrs)

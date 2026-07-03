@@ -471,7 +471,8 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
     config = tracker_config(user_id, source_scope, opts)
     skill_configs = %{@skill_id => config}
     context = tracker_context(user_id, agent.id, now, job_id)
-    {source_bundle, telemetry} = Acquisition.build(user_id, [@skill_id], skill_configs, context)
+    {source_bundle, telemetry, _proposed_watermarks} =
+      Acquisition.build(user_id, [@skill_id], skill_configs, context)
 
     context =
       context
@@ -538,6 +539,9 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
       user_id: user_id,
       timestamp: now,
       assistant_cycle_id: job_id,
+      # An explicit admin rebuild, not a scheduled scan — keep the deep
+      # lookback window (SPEC 04 R2 caps scheduled scans to 48h).
+      acquisition_deep_lookback: true,
       trigger: %{
         type: :wakeup,
         source: "admin_open_work_rebuild",

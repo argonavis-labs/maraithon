@@ -366,6 +366,26 @@ config :maraithon, :openrouter,
   http_referer: openrouter_http_referer,
   app_title: openrouter_app_title
 
+# Voice transcription (Telegram voice/audio message capture — SPEC 02).
+# Reuses the OpenAI API key already configured for the LLM providers above
+# unless a dedicated TRANSCRIPTION_API_KEY is set — Whisper transcription is
+# a separate OpenAI product from chat completions, so it stays usable even
+# when LLM_PROVIDER is anthropic/openrouter, as long as either key is set.
+transcription_api_key =
+  case System.get_env("TRANSCRIPTION_API_KEY", "") |> String.trim() do
+    "" -> openai_api_key
+    value -> value
+  end
+
+config :maraithon, Maraithon.Transcription, provider: Maraithon.Transcription.OpenAIWhisper
+
+config :maraithon, Maraithon.Transcription.OpenAIWhisper,
+  api_key: transcription_api_key,
+  model: System.get_env("TRANSCRIPTION_MODEL", "whisper-1"),
+  base_url:
+    System.get_env("TRANSCRIPTION_BASE_URL", "https://api.openai.com/v1/audio/transcriptions"),
+  receive_timeout_ms: String.to_integer(System.get_env("TRANSCRIPTION_TIMEOUT_MS", "60000"))
+
 # Timing configuration (can be overridden via env vars)
 heartbeat_interval_ms =
   System.get_env("HEARTBEAT_INTERVAL_MS", "900000") |> String.to_integer()

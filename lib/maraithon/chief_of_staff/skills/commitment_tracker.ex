@@ -280,7 +280,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
             pending_dedupe_key: dedupe_key
         }
 
-        case llm_params(tracker_input, state) do
+        case llm_params(tracker_input, state, context) do
           {:ok, params} ->
             {:effect, {:llm_call, params}, pending_state}
 
@@ -677,8 +677,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     }
   end
 
-  defp llm_params(tracker_input, state) do
-    with {:ok, prompt} <- commitment_prompt(tracker_input) do
+  defp llm_params(tracker_input, state, context) do
+    with {:ok, prompt} <- commitment_prompt(tracker_input, context) do
       params =
         %{
           "messages" => [
@@ -697,7 +697,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     end
   end
 
-  defp commitment_prompt(tracker_input) do
+  defp commitment_prompt(tracker_input, context) do
     with {:ok, skill} <- MarkdownSkill.load_file(@skill_path),
          {:ok, input_json} <- Jason.encode(tracker_input) do
       {:ok,
@@ -736,6 +736,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
              "source_item_id": "message/thread/event id when known",
              "source_occurred_at": "ISO-8601 datetime when known",
              "dedupe_key": "stable semantic key",
+             "direction": "owed_by_me | owed_to_me | fyi",
+             "counterparty_label": "the person or team this is owed to/from, or omitted",
              "people": [],
              "memories": [],
              "metadata": {
@@ -829,6 +831,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        - For operator self-commitments, set metadata.explicit_user_commitment to
          true, metadata.commitment_direction to "i_owe", include the exact source
          quote, and keep Slack channel/thread identifiers in metadata/source fields.
+       - Set the top-level `direction` field on every saved work item, not just
+         metadata.commitment_direction: `owed_by_me` when the operator owes the
+         counterparty (this covers self-commitments, "i_owe", "asked_of_me"),
+         `owed_to_me` when the operator is waiting on someone else ("pending_reply",
+         "user_owes", "waiting_on_*"), or `fyi` when nobody is waiting on anything.
+         Name the counterparty in `counterparty_label` whenever the source
+         identifies them.
        - Every saved work item must include action_draft.text. If a reply or
          message makes sense, write concise suggested wording in the operator's
          style. If a full draft does not make sense, write a conversational next
@@ -842,9 +851,42 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        Skill instructions:
        #{skill.instructions}
 
-       Commitment tracker input JSON:
+       #{previous_cycle_memo_section(context)}Commitment tracker input JSON:
        #{input_json}
        """}
+    end
+  end
+
+  # R3 (SPEC 04): render the model's own cross-cycle memo (persisted in
+  # behavior_state, injected via skill_context/4) as a clearly-labeled prompt
+  # section so the model reasons over deltas against its own prior notes
+  # instead of the memo only existing to seed the next memo.
+  defp previous_cycle_memo_section(context) do
+    memo = context[:previous_cycle_memo]
+
+    if is_binary(memo) and String.trim(memo) != "" do
+      """
+      PREVIOUS CYCLE MEMO#{memo_meta_suffix(context)}:
+      #{String.trim(memo)}
+
+      """
+    else
+      ""
+    end
+  end
+
+  defp memo_meta_suffix(context) do
+    cycle_id = context[:previous_cycle_memo_cycle_id]
+    updated_at = context[:previous_cycle_memo_updated_at]
+
+    parts =
+      [{"cycle", cycle_id}, {"at", updated_at}]
+      |> Enum.reject(fn {_label, value} -> blank?(value) end)
+      |> Enum.map(fn {label, value} -> "#{label} #{value}" end)
+
+    case parts do
+      [] -> ""
+      parts -> " (" <> Enum.join(parts, ", ") <> ")"
     end
   end
 

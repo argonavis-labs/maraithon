@@ -69,15 +69,43 @@ defmodule Maraithon.Insights do
     |> Repo.all()
   end
 
-  def record_many(user_id, agent_id, insights) when is_binary(user_id) and is_list(insights) do
+  # SPEC 04 R5: keyword-heuristic detectors (`Maraithon.Proactive.LocalPatterns`)
+  # record with `status: "candidate"` instead of the default "new" so their
+  # output never reaches the open-insight/Telegram delivery pipeline
+  # (`@open_statuses` excludes "candidate") until a model relevance decision
+  # promotes or dismisses each one — see `list_candidates_for_user/2` and
+  # `approve_candidate/2`.
+  def list_candidates_for_user(user_id, opts \\ []) when is_binary(user_id) do
+    limit = Keyword.get(opts, :limit, 20)
+
+    Insight
+    |> where([i], i.user_id == ^user_id and i.status == "candidate")
+    |> order_by([i], desc: i.priority, desc: i.inserted_at)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  @doc """
+  Promotes a `"candidate"` insight (a keyword-heuristic detector's output) to
+  `"new"` once a model has decided it is worth surfacing to the operator —
+  from that point it flows through the same open-insight/Telegram pipeline
+  as any other insight.
+  """
+  def approve_candidate(user_id, insight_id) when is_binary(user_id) and is_binary(insight_id) do
+    update_status(user_id, insight_id, "new")
+  end
+
+  def record_many(user_id, agent_id, insights, opts \\ [])
+      when is_binary(user_id) and is_list(insights) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
+    status = Keyword.get(opts, :status, "new")
 
     inserted =
       Enum.reduce(insights, [], fn insight_attrs, acc ->
         attrs =
           insight_attrs
           |> normalize_attrs(user_id, agent_id)
-          |> Map.put_new("status", "new")
+          |> Map.put("status", status)
 
         case record_one(attrs, now) do
           {:ok, insight} -> [insight | acc]
@@ -213,9 +241,16 @@ defmodule Maraithon.Insights do
               i.inserted_at,
               i.metadata
             ),
+          # SPEC 04 R5: this used to hardcode the literal 'new' here, which
+          # was equivalent to EXCLUDED.status back when every insert used
+          # status "new". Now that LocalPatterns records "candidate"
+          # insights, a same-day re-detection (same dedupe_key -> this
+          # conflict path, which the faster 10-15 min cadence hits far more
+          # often) must not silently flip a still-unreviewed candidate to
+          # "new" and skip the model relevance gate.
           status:
             fragment(
-              "CASE WHEN ? IN ('acknowledged','dismissed') AND NOT (EXCLUDED.source_occurred_at IS NOT NULL AND EXCLUDED.source_occurred_at > COALESCE(?, ?, ?)) THEN ? ELSE 'new' END",
+              "CASE WHEN ? IN ('acknowledged','dismissed') AND NOT (EXCLUDED.source_occurred_at IS NOT NULL AND EXCLUDED.source_occurred_at > COALESCE(?, ?, ?)) THEN ? ELSE EXCLUDED.status END",
               i.status,
               i.source_occurred_at,
               i.updated_at,

@@ -221,14 +221,25 @@ defmodule Maraithon.Tools.ReviewConnectedContext do
      )}
   end
 
-  defp review_source("memory", user_id, query, limit, _args) do
-    {:ok, Memory.prompt_context(user_id, query: query, limit: limit)}
+  defp review_source("memory", user_id, query, limit, args) do
+    # SPEC 07 R5: when a person has already been resolved for this review
+    # (see `ConnectedContextPreflight`), scope recall to that person so
+    # relationship memories for them rank first instead of only ranking by
+    # generic query/importance.
+    memory_opts =
+      [query: query, limit: limit]
+      |> maybe_put_person_id(optional_string(args, "person_id"))
+
+    {:ok, Memory.prompt_context(user_id, memory_opts)}
   rescue
     _error -> {:error, :temporary_failure}
   end
 
   defp review_source(source, _user_id, _query, _limit, _args),
     do: {:error, "unknown_source: #{source}"}
+
+  defp maybe_put_person_id(opts, nil), do: opts
+  defp maybe_put_person_id(opts, person_id), do: Keyword.put(opts, :person_id, person_id)
 
   defp search_local_source(module, source, collection_key, user_id, query, limit)
        when is_binary(query) do

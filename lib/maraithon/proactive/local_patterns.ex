@@ -1,9 +1,17 @@
 defmodule Maraithon.Proactive.LocalPatterns do
   @moduledoc """
-  Server-side pattern detectors that surface proactive nudges across the
-  v6 local sources (iMessage, Reminders, Voice Memos, Notes, Calendar,
-  Files). Each detector runs through `Maraithon.Insights.record_many/3`
-  so the standard dedupe / ranking / telegram-delivery pipeline applies.
+  Server-side pattern detectors that gather proactive nudge *candidates*
+  across the v6 local sources (iMessage, Reminders, Voice Memos, Notes,
+  Calendar, Files). Each detector runs through `Maraithon.Insights.record_many/4`
+  with `status: "candidate"`, so the standard dedupe/ranking machinery
+  applies but nothing becomes a user-facing (Telegram-eligible) insight
+  directly.
+
+  These are keyword/token-overlap heuristics, not a model relevance
+  decision (GOALS Principle 3). `Maraithon.ChiefOfStaff.Skills.LocalPatternReview`
+  — a normal skill inside the supervised Chief of Staff wakeup cycle —
+  reviews pending candidates and is the only path that promotes one to
+  `"new"` (or dismisses it).
 
   Six detectors:
 
@@ -36,7 +44,6 @@ defmodule Maraithon.Proactive.LocalPatterns do
 
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm.Person
   alias Maraithon.Insights
   alias Maraithon.LocalCalendar
@@ -87,28 +94,6 @@ defmodule Maraithon.Proactive.LocalPatterns do
   # ---------------------------------------------------------------------
 
   @doc """
-  Runs every detector for every user that has any local data or a
-  connected telegram account. Returns a summary of how many insights
-  were emitted per detector (rolled up across users).
-
-  Used by `Maraithon.Runtime.ProactiveCheckIn` on its cron tick.
-  """
-  def run_for_all_users(opts \\ []) do
-    now = Keyword.get(opts, :now) || DateTime.utc_now()
-    user_ids = candidate_user_ids()
-
-    summary =
-      Enum.reduce(user_ids, empty_summary(), fn user_id, acc ->
-        case run_for_user(user_id, now: now) do
-          {:ok, per_detector} -> merge_summaries(acc, per_detector)
-          {:error, _reason} -> acc
-        end
-      end)
-
-    Map.put(summary, :user_count, length(user_ids))
-  end
-
-  @doc """
   Runs every detector for a single user. Returns
   `{:ok, %{cold_thread: n, ...}}`.
   """
@@ -138,12 +123,19 @@ defmodule Maraithon.Proactive.LocalPatterns do
   Detector entry point used by tests so each detector can be exercised
   in isolation against a fixture. Public to keep the test surface stable
   if the internal loop changes.
+
+  SPEC 04 R5: these are keyword/token-overlap heuristics, not a model
+  relevance decision, so their output is recorded as a `"candidate"` insight
+  — inert until `Maraithon.ChiefOfStaff.Skills.LocalPatternReview` (a normal
+  CoS skill, part of the supervised model wakeup) reviews it and either
+  promotes it to `"new"` (eligible for Telegram delivery) or dismisses it.
+  Nothing here writes a directly user-facing insight.
   """
   def run_detector(detector, user_id, agent_id, now \\ DateTime.utc_now())
       when detector in @detectors and is_binary(user_id) and is_binary(agent_id) do
     insights = build_insights(detector, user_id, now)
 
-    case Insights.record_many(user_id, agent_id, insights) do
+    case Insights.record_many(user_id, agent_id, insights, status: "candidate") do
       {:ok, recorded} -> length(recorded)
       _ -> 0
     end
@@ -730,40 +722,9 @@ defmodule Maraithon.Proactive.LocalPatterns do
     end
   end
 
-  defp candidate_user_ids do
-    telegram_users =
-      "telegram"
-      |> ConnectedAccounts.list_connected_provider()
-      |> Enum.map(& &1.user_id)
-
-    local_users = local_source_user_ids()
-
-    MapSet.new(telegram_users)
-    |> MapSet.union(MapSet.new(local_users))
-    |> MapSet.delete(nil)
-    |> MapSet.to_list()
-  end
-
-  defp local_source_user_ids do
-    [LocalMessage, LocalReminder, LocalVoiceMemo, LocalNote, LocalEvent, LocalFile]
-    |> Enum.flat_map(fn schema ->
-      Repo.all(from row in schema, distinct: row.user_id, select: row.user_id)
-    end)
-  end
-
   # ---------------------------------------------------------------------
   # Small helpers
   # ---------------------------------------------------------------------
-
-  defp empty_summary do
-    Enum.reduce(@detectors, %{user_count: 0}, fn detector, acc -> Map.put(acc, detector, 0) end)
-  end
-
-  defp merge_summaries(acc, per_detector) do
-    Enum.reduce(per_detector, acc, fn {detector, count}, inner ->
-      Map.update(inner, detector, count, &(&1 + count))
-    end)
-  end
 
   defp days_since(%DateTime{} = now, %DateTime{} = then) do
     div(max(DateTime.diff(now, then, :second), 0), 86_400)
