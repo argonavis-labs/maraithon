@@ -236,6 +236,7 @@ defmodule Maraithon.Runtime.Agent do
 
         "wakeup" ->
           data = emit_event(data, "wakeup_received", %{job_id: job_id})
+          data = maybe_refill_budget(data)
 
           if has_budget?(data) do
             data = put_wakeup_trigger(data, job_type, job_id, payload)
@@ -263,6 +264,8 @@ defmodule Maraithon.Runtime.Agent do
         message_id: message_id
       })
 
+    data = maybe_refill_budget(data)
+
     if has_budget?(data) do
       data = put_message_trigger(data, message, metadata, message_id)
       {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
@@ -282,6 +285,8 @@ defmodule Maraithon.Runtime.Agent do
           topic: topic,
           payload: payload
         })
+
+      data = maybe_refill_budget(data)
 
       if has_budget?(data) do
         data = put_pubsub_trigger(data, topic, payload)
@@ -1130,6 +1135,52 @@ defmodule Maraithon.Runtime.Agent do
       tool_calls: budget["tool_calls"] || 1000
     }
   end
+
+  # The budget is a runaway-work guardrail, but it is snapshotted and
+  # restored across restarts/deploys and was never refilled — so it was
+  # a LIFETIME allowance: at the 10-minute always-on cadence an agent
+  # burned through it in days and then every wakeup/message/pubsub gate
+  # became a silent "No budget, staying idle" no-op forever. Refill to
+  # the configured allowance once per UTC day, so it acts as the daily
+  # spend cap it was meant to be. `refilled_at` rides inside the budget
+  # map (snapshot-compatible: old snapshots lack the key and refill on
+  # their first post-deploy trigger; has_budget?/decrement_budget only
+  # read llm_calls/tool_calls).
+  @budget_refill_interval_hours 24
+
+  defp maybe_refill_budget(data) do
+    refilled_at = parse_refilled_at(Map.get(data.budget || %{}, :refilled_at))
+    now = DateTime.utc_now()
+
+    stale? =
+      is_nil(refilled_at) or
+        DateTime.diff(now, refilled_at, :hour) >= @budget_refill_interval_hours
+
+    if stale? do
+      fresh = init_budget(data.config["budget"])
+
+      Logger.info("Agent budget refilled",
+        agent_id: data.agent_id,
+        previous_llm_calls: Map.get(data.budget || %{}, :llm_calls),
+        previous_tool_calls: Map.get(data.budget || %{}, :tool_calls)
+      )
+
+      %{data | budget: Map.put(fresh, :refilled_at, DateTime.to_iso8601(now))}
+    else
+      data
+    end
+  end
+
+  defp parse_refilled_at(%DateTime{} = at), do: at
+
+  defp parse_refilled_at(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, at, _offset} -> at
+      _ -> nil
+    end
+  end
+
+  defp parse_refilled_at(_other), do: nil
 
   defp has_budget?(data) do
     data.budget.llm_calls > 0 || data.budget.tool_calls > 0
