@@ -323,15 +323,18 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             },
             "since" => %{
               "type" => "string",
-              "description" => "Optional explicit range start date (YYYY-MM-DD), for a custom range instead of period."
+              "description" =>
+                "Optional explicit range start date (YYYY-MM-DD), for a custom range instead of period."
             },
             "until" => %{
               "type" => "string",
-              "description" => "Optional explicit range end date (YYYY-MM-DD, inclusive). Defaults to since when omitted."
+              "description" =>
+                "Optional explicit range end date (YYYY-MM-DD, inclusive). Defaults to since when omitted."
             },
             "topic" => %{
               "type" => "string",
-              "description" => "Optional topic/keyword for 'why did you ping me about X?'. Matches recent pushes by why_now/origin across the last 30 days, independent of period."
+              "description" =>
+                "Optional topic/keyword for 'why did you ping me about X?'. Matches recent pushes by why_now/origin across the last 30 days, independent of period."
             }
           }
         }
@@ -3111,6 +3114,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
          {:ok, action_type} <- required_string(args, "action_type"),
          %{} = spec <- Map.get(@external_action_tools, action_type),
          payload when is_map(payload) <- Map.get(args, "payload", %{}) do
+      payload = maybe_stamp_linked_todo_id(payload, runtime_context)
       executable_payload = Map.put(payload, "user_id", runtime_context.user_id)
       preview_text = external_action_preview(action_type, executable_payload)
 
@@ -4804,6 +4808,32 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp linked_delivery_id(runtime_context) when is_map(runtime_context) do
     get_in(runtime_context, [:context, :linked_item, :delivery, :id]) ||
       get_in(runtime_context, [:context, "linked_item", "delivery", "id"])
+  end
+
+  defp linked_todo_id(runtime_context) when is_map(runtime_context) do
+    get_in(runtime_context, [:context, :linked_item, :todo, :id]) ||
+      get_in(runtime_context, [:context, "linked_item", "todo", "id"])
+  end
+
+  # Runtime bookkeeping only — never add `todo_id` to the model-facing tool
+  # schema for `prepare_external_action`. The todo-card flow
+  # (`TodoThreadPrimer`) already stamps `payload["todo_id"]` when a send is
+  # prepared from a todo action card, but a send prepared conversationally
+  # (no card, just chat) skips that stamp even when the conversation itself
+  # is linked to a todo — so `maybe_record_todo_nudge/1` in
+  # `TelegramAssistant` never closes/nudges the todo afterward. Stamp it here
+  # from the resolved conversation context whenever the model didn't already
+  # supply one.
+  defp maybe_stamp_linked_todo_id(%{"todo_id" => todo_id} = payload, _runtime_context)
+       when is_binary(todo_id) and todo_id != "" do
+    payload
+  end
+
+  defp maybe_stamp_linked_todo_id(payload, runtime_context) when is_map(payload) do
+    case linked_todo_id(runtime_context) do
+      todo_id when is_binary(todo_id) and todo_id != "" -> Map.put(payload, "todo_id", todo_id)
+      _ -> payload
+    end
   end
 
   defp stringify_map(map) when is_map(map) do

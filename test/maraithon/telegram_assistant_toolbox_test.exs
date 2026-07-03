@@ -908,6 +908,120 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     refute_prepared_preview_leaks(linear, ["lin-internal-state-id"])
   end
 
+  # Post-review fix: a send prepared conversationally (no todo action card,
+  # just chat) never carried `payload["todo_id"]` even when the conversation
+  # was linked to a todo, so `maybe_record_todo_nudge/1` never closed/nudged
+  # the todo once the send executed. `prepare_external_action` now stamps it
+  # from the resolved conversation context (`context.linked_item.todo.id`)
+  # whenever the model didn't already supply one.
+  test "prepare_external_action stamps a linked todo id onto the payload when the model omits it" do
+    user_id = "toolbox-prepared-todo-link-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(config,
+        telegram_full_chat_enabled: true,
+        telegram_assistant_write_tools_enabled: true
+      )
+    )
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Reply to vendor about invoice",
+          "summary" => "Vendor needs a reply confirming the payment date.",
+          "next_action" => "Send a reply confirming the payment date.",
+          "dedupe_key" => "toolbox-prepared-todo-link:vendor-invoice"
+        }
+      ])
+
+    runtime_context =
+      user_id
+      |> toolbox_run_context()
+      |> Map.put(:context, %{linked_item: %{todo: %{id: todo.id}}})
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "slack_post",
+                 "payload" => %{
+                   "channel" => "C012ABCD9",
+                   "team_id" => "T012SECRET",
+                   "text" => "Confirming the payment date now."
+                 }
+               },
+               runtime_context
+             )
+
+    prepared_action = Repo.get!(PreparedAction, result.prepared_action_id)
+    assert prepared_action.payload["todo_id"] == todo.id
+  end
+
+  test "prepare_external_action does not override a todo_id the model already supplied" do
+    user_id =
+      "toolbox-prepared-todo-link-explicit-#{System.unique_integer([:positive])}@example.com"
+
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(config,
+        telegram_full_chat_enabled: true,
+        telegram_assistant_write_tools_enabled: true
+      )
+    )
+
+    {:ok, [linked_todo, explicit_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Linked-context todo",
+          "summary" => "Should not be used once the model supplies its own todo_id.",
+          "next_action" => "No action needed here.",
+          "dedupe_key" => "toolbox-prepared-todo-link-explicit:linked"
+        },
+        %{
+          "source" => "gmail",
+          "title" => "Explicit todo",
+          "summary" => "This is the todo the model referenced explicitly.",
+          "next_action" => "This is the one the model referenced explicitly.",
+          "dedupe_key" => "toolbox-prepared-todo-link-explicit:explicit"
+        }
+      ])
+
+    runtime_context =
+      user_id
+      |> toolbox_run_context()
+      |> Map.put(:context, %{linked_item: %{todo: %{id: linked_todo.id}}})
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "slack_post",
+                 "payload" => %{
+                   "channel" => "C012ABCD9",
+                   "team_id" => "T012SECRET",
+                   "text" => "Confirming now.",
+                   "todo_id" => explicit_todo.id
+                 }
+               },
+               runtime_context
+             )
+
+    prepared_action = Repo.get!(PreparedAction, result.prepared_action_id)
+    assert prepared_action.payload["todo_id"] == explicit_todo.id
+  end
+
   test "tool failures return product-safe copy instead of raw error codes" do
     user_id = "toolbox-safe-errors-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
