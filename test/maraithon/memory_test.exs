@@ -234,6 +234,75 @@ defmodule Maraithon.MemoryTest do
     assert hd(context.memories).title =~ "Generic VC newsletter"
   end
 
+  # SPEC 07 review finding 4: two distinct corrections in the same
+  # conversation with no resource_type/resource_id/subject would previously
+  # collapse onto the same dedupe key (both defaulting subject to "the
+  # previous response"), so the second correction silently overwrote the
+  # first instead of persisting as its own row.
+  test "two generic corrections with no resource identifiers persist as separate rows" do
+    user_id = "memory-correction-dedupe-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, first} =
+             Memory.record_correction(
+               user_id,
+               %{
+                 "kind" => "tone",
+                 "corrected_value" => "Be more concise."
+               },
+               run_id: "run-1"
+             )
+
+    assert {:ok, second} =
+             Memory.record_correction(
+               user_id,
+               %{
+                 "kind" => "tone",
+                 "corrected_value" => "Don't use emoji."
+               },
+               run_id: "run-2"
+             )
+
+    assert first.id != second.id
+    assert first.dedupe_key != second.dedupe_key
+
+    corrections = Memory.list_items(user_id, kind: "correction", limit: 10)
+    assert length(corrections) == 2
+
+    contents = Enum.map(corrections, & &1.content)
+    assert Enum.any?(contents, &(&1 =~ "Be more concise"))
+    assert Enum.any?(contents, &(&1 =~ "Don't use emoji"))
+  end
+
+  test "a repeated correction on the same resource still dedupes in place" do
+    user_id = "memory-correction-samekey-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, first} =
+             Memory.record_correction(user_id, %{
+               "kind" => "fact",
+               "resource_type" => "todo",
+               "resource_id" => "todo-42",
+               "subject" => "todo-42 owner",
+               "corrected_value" => "Alice owns this."
+             })
+
+    assert {:ok, second} =
+             Memory.record_correction(user_id, %{
+               "kind" => "fact",
+               "resource_type" => "todo",
+               "resource_id" => "todo-42",
+               "subject" => "todo-42 owner",
+               "corrected_value" => "Bob owns this."
+             })
+
+    assert first.id == second.id
+    assert second.content =~ "Bob owns this"
+
+    corrections = Memory.list_items(user_id, kind: "correction", limit: 10)
+    assert length(corrections) == 1
+  end
+
   test "injects relevant memories into model params before a turn" do
     user_id = "memory-inject-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

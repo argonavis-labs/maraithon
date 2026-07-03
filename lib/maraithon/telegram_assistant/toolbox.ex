@@ -2249,7 +2249,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp list_preferences(runtime_context) do
-    {:ok, preference_snapshot(runtime_context.user_id)}
+    {:ok,
+     preference_snapshot(runtime_context.user_id, "user preferences and standing instructions")}
   end
 
   defp remember_preferences(runtime_context, args) do
@@ -2263,10 +2264,12 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         {:error, "missing_rules"}
 
       true ->
+        filtered_rules = Enum.filter(rules, &is_map/1)
+
         with {:ok, saved} <-
                PreferenceMemory.save_interpreted_rules(
                  runtime_context.user_id,
-                 Enum.filter(rules, &is_map/1),
+                 filtered_rules,
                  "explicit_telegram",
                  conversation_id: Map.get(runtime_context, :conversation_id),
                  source_delivery_id: linked_delivery_id(runtime_context)
@@ -2277,7 +2280,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           _ = maybe_mark_pending_preference_confirmation(runtime_context, pending)
 
           {:ok,
-           preference_snapshot(runtime_context.user_id)
+           preference_snapshot(runtime_context.user_id, rules_memory_query(filtered_rules))
            |> Map.merge(%{
              status: remember_preferences_status(active, pending, saved),
              saved_count: length(saved),
@@ -2294,9 +2297,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp forget_preference(runtime_context, args) do
     with {:ok, rule_id} <- required_string(args, "rule_id"),
+         query <- forget_preference_query(runtime_context.user_id, rule_id),
          {:ok, message} <- PreferenceMemory.forget_rule(runtime_context.user_id, rule_id) do
       {:ok,
-       preference_snapshot(runtime_context.user_id)
+       preference_snapshot(runtime_context.user_id, query)
        |> Map.merge(%{
          status: "forgotten",
          forgotten_rule_id: rule_id,
@@ -2305,6 +2309,27 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     else
       {:error, :rule_not_found} -> {:error, "preference_not_found"}
       {:error, reason} -> {:error, normalize_error(reason)}
+    end
+  end
+
+  defp rules_memory_query(rules) when is_list(rules) do
+    rules
+    |> Enum.flat_map(fn rule -> [Map.get(rule, "label"), Map.get(rule, "instruction")] end)
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join(" ")
+    |> case do
+      "" -> "user preferences and standing instructions"
+      text -> text
+    end
+  end
+
+  defp forget_preference_query(user_id, rule_id) do
+    user_id
+    |> PreferenceMemory.active_rules()
+    |> Enum.find(&(Map.get(&1, "id") == rule_id))
+    |> case do
+      %{} = rule -> rules_memory_query([rule])
+      _other -> "user preferences and standing instructions"
     end
   end
 
@@ -4583,7 +4608,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp maybe_put_default(args, _key, _value), do: args
 
-  defp preference_snapshot(user_id) when is_binary(user_id) do
+  defp preference_snapshot(user_id, query) when is_binary(user_id) do
     active_rules = PreferenceMemory.active_rules(user_id)
     pending_rules = PreferenceMemory.pending_rules(user_id)
 
@@ -4595,11 +4620,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       preference_summary: PreferenceMemory.prompt_context(user_id),
       operator_memory: OperatorMemory.summaries_for_prompt(user_id),
       user_memory: UserMemory.prompt_context(user_id),
-      deep_memory: Memory.prompt_context(user_id)
+      deep_memory: Memory.prompt_context(user_id, query: query, limit: 8)
     }
   end
 
-  defp preference_snapshot(_user_id) do
+  defp preference_snapshot(_user_id, _query) do
     %{
       active_count: 0,
       active_rules: [],

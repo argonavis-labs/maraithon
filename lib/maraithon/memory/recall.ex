@@ -97,8 +97,11 @@ defmodule Maraithon.Memory.Recall do
     )
   end
 
-  # Weights intentionally sum around a 100-point scale. Query, subject, and
-  # embedding boosts are boosts, not gates, so the model can still see
+  # Weights intentionally sum to roughly a 155-point scale (importance 45 +
+  # confidence 30 + recency 10 + subject 20 + query_match 15 + embedding 35).
+  # Embedding (35) intentionally outweighs lexical query_match (15): semantic
+  # similarity is the stronger relevance signal, but query, subject, and
+  # embedding are still boosts, not gates, so the model can still see
   # high-value adjacent facts. `embedding_score/2` is 0 whenever the item (or
   # the query) has no embedding, so lexical `query_match_score/2` remains a
   # full fallback signal rather than being displaced (SPEC 07 R2).

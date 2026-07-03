@@ -305,7 +305,8 @@ defmodule Maraithon.Memory do
       {:error, :missing_corrected_value}
     else
       kind_label = read_string(attrs, "kind", "other")
-      subject = read_string(attrs, "subject", nil) || "the previous response"
+      explicit_subject = read_string(attrs, "subject", nil)
+      subject = explicit_subject || "the previous response"
       original_value = read_string(attrs, "original_value", nil)
       resource_type = read_string(attrs, "resource_type", nil)
       resource_id = read_string(attrs, "resource_id", nil)
@@ -319,6 +320,9 @@ defmodule Maraithon.Memory do
         ]
         |> Enum.reject(&is_nil/1)
         |> Enum.join(" ")
+
+      dedupe_key =
+        correction_dedupe_key(kind_label, resource_type, resource_id, explicit_subject, opts)
 
       memory_attrs =
         attrs
@@ -345,9 +349,7 @@ defmodule Maraithon.Memory do
               "corrected_value" => corrected_value
             })
         })
-        |> maybe_put_dedupe_key(
-          "correction:#{kind_label}:#{resource_type}:#{resource_id}:#{subject}"
-        )
+        |> maybe_put_dedupe_key(dedupe_key)
 
       case write(user_id, memory_attrs, source: source) do
         {:ok, %Item{} = item} ->
@@ -367,6 +369,31 @@ defmodule Maraithon.Memory do
   end
 
   def record_correction(_user_id, _attrs, _opts), do: {:error, :invalid_correction_attrs}
+
+  # `subject` defaults to the generic "the previous response" whenever the
+  # caller didn't pass one, so two distinct corrections with no
+  # resource_type/resource_id and no explicit subject would otherwise land
+  # on the exact same dedupe key — and `write/3` updates a matching key in
+  # place, so the second correction would silently overwrite the first
+  # instead of persisting as its own row. When all three identifying
+  # components are absent/generic, fold in a run/turn-scoped component (the
+  # runner's `run_id`, threaded through `opts`, when available; otherwise a
+  # microsecond-precision timestamp) so distinct corrections in the same
+  # conversation still get distinct keys. When any real identifier exists
+  # (resource_type/resource_id or an explicit subject), keep the original
+  # key unchanged so a genuinely repeated correction on the same thing still
+  # dedupes in place.
+  defp correction_dedupe_key(kind_label, nil, nil, nil, opts) do
+    scope =
+      Keyword.get(opts, :run_id) || Keyword.get(opts, :correction_scope) ||
+        DateTime.to_iso8601(DateTime.utc_now())
+
+    "correction:#{kind_label}:#{scope}:the previous response"
+  end
+
+  defp correction_dedupe_key(kind_label, resource_type, resource_id, subject, _opts) do
+    "correction:#{kind_label}:#{resource_type}:#{resource_id}:#{subject || "the previous response"}"
+  end
 
   def recall(user_id, query, opts \\ [])
 

@@ -402,7 +402,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
       %{"detected" => true} = correction ->
         user_id = Map.get(runtime_context, :user_id)
 
-        case Memory.record_correction(user_id, correction, source: "assistant_correction") do
+        case Memory.record_correction(user_id, correction,
+               source: "assistant_correction",
+               run_id: run.id
+             ) do
           {:ok, item} ->
             Logger.info("Recorded deterministic correction memory",
               run_id: run.id,

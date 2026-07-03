@@ -16,9 +16,13 @@ defmodule Maraithon.InsightNotifications.MemoryGate do
   hiccup never silently suppresses a legitimate interrupt.
   """
 
+  import Ecto.Query
+
   alias Maraithon.Insights.Insight
   alias Maraithon.LLM
   alias Maraithon.Memory
+  alias Maraithon.Memory.Item
+  alias Maraithon.Repo
 
   require Logger
 
@@ -39,23 +43,92 @@ defmodule Maraithon.InsightNotifications.MemoryGate do
         true
 
       memories ->
-        case model_decision(insight, memories, opts) do
-          {:ok, "hold", reason} ->
-            Logger.info("Memory-aware interrupt gate held an insight",
-              user_id: user_id,
-              insight_id: insight.id,
-              reason: reason
-            )
-
-            false
-
-          _other ->
-            true
-        end
+        decide(user_id, insight, memories, opts)
     end
   end
 
   def allow_interrupt?(_user_id, _insight, _opts), do: true
+
+  @doc """
+  Cheap pre-check (one indexed `user_id`+`kind` count query) for callers
+  staging many insights per account/tick (SPEC 07 review finding 3): when a
+  user has zero active preference/instruction/relationship memories, every
+  `allow_interrupt?/allow_interrupt_batch?` call for them would recall
+  nothing and always allow, so batch callers can skip the gate (and its
+  recall) entirely instead of paying one query per insight.
+  """
+  def any_gate_memories?(user_id) when is_binary(user_id) do
+    now = DateTime.utc_now()
+
+    Item
+    |> where([item], item.user_id == ^user_id and item.status == "active")
+    |> where([item], item.kind in ^@kinds)
+    |> where([item], is_nil(item.expires_at) or item.expires_at > ^now)
+    |> Repo.exists?()
+  rescue
+    _error -> true
+  catch
+    _kind, _reason -> true
+  end
+
+  def any_gate_memories?(_user_id), do: true
+
+  @doc """
+  Batched form of `allow_interrupt?/3` for the legacy Telegram staging tick
+  (`InsightNotifications.stage_for_account/1`), which previously called
+  `allow_interrupt?/2` once per insight (up to `@eligible_insight_limit`
+  times), each paying its own embedding recall round-trip serially inside
+  the global tick. This recalls preference/instruction/relationship
+  memories ONCE for the whole batch (query built from every insight's
+  title/summary/category) and reuses that single recall for each insight's
+  own hold/allow decision, instead of a separate recall per insight.
+
+  Returns a `%{insight_id => boolean}` map. Fails open (every insight
+  allowed) on any recall error, matching `allow_interrupt?/3`'s fail-open
+  semantics.
+  """
+  def allow_interrupt_batch?(user_id, insights, opts \\ [])
+
+  def allow_interrupt_batch?(user_id, insights, opts)
+      when is_binary(user_id) and is_list(insights) do
+    case recall_memories(user_id, batch_query(insights), opts) do
+      [] ->
+        Map.new(insights, &{&1.id, true})
+
+      memories ->
+        Map.new(insights, fn %Insight{} = insight ->
+          {insight.id, decide(user_id, insight, memories, opts)}
+        end)
+    end
+  end
+
+  def allow_interrupt_batch?(_user_id, _insights, _opts), do: %{}
+
+  defp batch_query(insights) do
+    insights
+    |> Enum.flat_map(fn %Insight{} = insight ->
+      [insight.title, insight.summary, insight.category]
+    end)
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.take(24)
+    |> Enum.join(" | ")
+  end
+
+  defp decide(user_id, %Insight{} = insight, memories, opts) do
+    case model_decision(insight, memories, opts) do
+      {:ok, "hold", reason} ->
+        Logger.info("Memory-aware interrupt gate held an insight",
+          user_id: user_id,
+          insight_id: insight.id,
+          reason: reason
+        )
+
+        false
+
+      _other ->
+        true
+    end
+  end
 
   @doc """
   Same recall step as `allow_interrupt?/3`, exposed separately so callers

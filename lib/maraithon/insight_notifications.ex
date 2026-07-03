@@ -142,14 +142,30 @@ defmodule Maraithon.InsightNotifications do
     if is_binary(destination) and String.trim(destination) != "" do
       {:ok, profile} = get_or_create_profile(account.user_id)
 
-      Insights.list_open_for_user(account.user_id, limit: @eligible_insight_limit)
-      |> Enum.reduce(0, fn insight, count ->
-        score = insight_score(insight)
+      # Cheap filters (score threshold, delivery eligibility, standing
+      # preference rules) run first so the memory gate — the only step that
+      # pays for a recall — only runs against the survivors.
+      scored_candidates =
+        account.user_id
+        |> Insights.list_open_for_user(limit: @eligible_insight_limit)
+        |> Enum.map(fn insight -> {insight, insight_score(insight)} end)
+        |> Enum.filter(fn {insight, score} ->
+          score >= profile.score_threshold and
+            telegram_delivery_eligible?(insight) and
+            PreferenceMemory.allow_telegram_interrupt?(account.user_id, insight, now)
+        end)
 
-        if score >= profile.score_threshold and
-             telegram_delivery_eligible?(insight) and
-             PreferenceMemory.allow_telegram_interrupt?(account.user_id, insight, now) and
-             MemoryGate.allow_interrupt?(account.user_id, insight) and
+      # SPEC 07 review finding 3: this used to call MemoryGate.allow_interrupt?/2
+      # once per insight (up to @eligible_insight_limit times), each paying its
+      # own embedding recall round-trip serially inside this global tick. Now
+      # it recalls once for the whole batch (or skips the gate entirely when
+      # the user has no gate-relevant memories at all) and reuses that single
+      # recall for each insight's decision.
+      memory_allowed =
+        memory_gate_allowed(account.user_id, Enum.map(scored_candidates, &elem(&1, 0)))
+
+      Enum.reduce(scored_candidates, 0, fn {insight, score}, count ->
+        if Map.get(memory_allowed, insight.id, true) and
              not delivery_exists?(insight.id, destination) do
           attrs = %{
             insight_id: insight.id,
@@ -177,6 +193,16 @@ defmodule Maraithon.InsightNotifications do
       end)
     else
       0
+    end
+  end
+
+  defp memory_gate_allowed(_user_id, []), do: %{}
+
+  defp memory_gate_allowed(user_id, insights) do
+    if MemoryGate.any_gate_memories?(user_id) do
+      MemoryGate.allow_interrupt_batch?(user_id, insights)
+    else
+      Map.new(insights, &{&1.id, true})
     end
   end
 
