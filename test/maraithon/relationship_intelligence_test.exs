@@ -126,6 +126,14 @@ defmodule Maraithon.RelationshipIntelligenceTest do
     assert person.affinity_score == 64
     assert person.interaction_count == 1
 
+    # Post-review fix: `persist_person/3` used `Map.update("metadata", %{},
+    # fun)`, whose default branch inserts the bare default and skips `fun`
+    # entirely when "metadata" is absent (the common case) — silently
+    # dropping the RI provenance stamp. Same bug class as the person_id
+    # stamp above, fixed the same way.
+    assert person.metadata["relationship_intelligence"]["source"] == "test"
+    assert person.metadata["relationship_intelligence"]["confidence"] == 0.88
+
     assert [memory] = Memory.list_items(user_id, query: "4M newsletters", limit: 5)
     assert memory.kind == "relationship"
 

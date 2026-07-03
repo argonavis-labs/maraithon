@@ -360,8 +360,10 @@ defmodule Maraithon.RelationshipIntelligence do
           "last_interaction_at",
           Keyword.get(opts, :now, DateTime.utc_now()) |> normalize_json_value()
         )
-        |> Map.update("metadata", %{}, fn metadata ->
-          metadata
+        |> Map.put(
+          "metadata",
+          attrs
+          |> Map.get("metadata", %{})
           |> normalize_map()
           |> Map.merge(%{
             "relationship_intelligence" =>
@@ -374,7 +376,7 @@ defmodule Maraithon.RelationshipIntelligence do
                   |> normalize_json_value()
               })
           })
-        end)
+        )
 
       Crm.upsert_person(user_id, person_attrs)
     end

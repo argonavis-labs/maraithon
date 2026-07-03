@@ -23,6 +23,12 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   @default_claim_timeout_ms 300_000
   @default_batch_size 10
   @default_max_concurrency 5
+  # A `{:retry_after, seconds, reason}` error (e.g. HTTP 429 + Retry-After)
+  # reschedules without burning an attempt, so it needs its own ceiling and
+  # cap independent of `attempts`/`max_attempts` — otherwise a persistent
+  # 429 (or an absurd Retry-After header) reschedules a job forever.
+  @max_retry_after_delay_seconds 3_600
+  @max_retry_after_reschedules 20
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -225,8 +231,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       {:error, {:retry_after, seconds, reason}} when is_integer(seconds) and seconds >= 0 ->
         # Provider-signaled backoff (e.g. HTTP 429 + Retry-After): reschedule
         # at the requested delay without burning an attempt.
-        retry_at = DateTime.add(DateTime.utc_now(), seconds, :second)
-        mark_pending_retry(job, reason, job.attempts, retry_at)
+        handle_retry_after(job, seconds, reason)
 
       {:error, reason} ->
         attempts = job.attempts + 1
@@ -254,6 +259,62 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
           claimed_by: nil,
           claimed_at: nil,
           last_error: nil,
+          updated_at: now
+        ]
+      )
+    end)
+  end
+
+  # Clamps the provider-requested delay to `@max_retry_after_delay_seconds`
+  # and counts the reschedule against `@max_retry_after_reschedules`
+  # (tracked in `job.result["retry_after_count"]`, since `attempts` is
+  # deliberately not burned for this path). Once a job has rescheduled on
+  # `:retry_after` this many times without making progress, fall through to
+  # the ordinary attempt/backoff machinery so it eventually fails out rather
+  # than rescheduling forever.
+  defp handle_retry_after(%BackgroundJob{} = job, seconds, reason) do
+    retry_after_count = retry_after_count(job) + 1
+
+    if retry_after_count > @max_retry_after_reschedules do
+      attempts = job.attempts + 1
+
+      if attempts < job.max_attempts do
+        mark_pending_retry(job, reason, attempts)
+      else
+        mark_failed(job, reason, attempts)
+      end
+    else
+      clamped_seconds = min(seconds, @max_retry_after_delay_seconds)
+      retry_at = DateTime.add(DateTime.utc_now(), clamped_seconds, :second)
+      mark_pending_rate_limited_retry(job, reason, retry_at, retry_after_count)
+    end
+  end
+
+  defp retry_after_count(%BackgroundJob{result: %{"retry_after_count" => count}})
+       when is_integer(count) do
+    count
+  end
+
+  defp retry_after_count(_job), do: 0
+
+  defp mark_pending_rate_limited_retry(
+         %BackgroundJob{} = job,
+         reason,
+         %DateTime{} = retry_at,
+         retry_after_count
+       ) do
+    now = DateTime.utc_now()
+
+    DbResilience.with_database("background job runner mark rate-limited retry", fn ->
+      Repo.update_all(
+        from(candidate in BackgroundJob, where: candidate.id == ^job.id),
+        set: [
+          status: "pending",
+          scheduled_at: retry_at,
+          claimed_by: nil,
+          claimed_at: nil,
+          last_error: error_text(reason),
+          result: Map.put(job.result || %{}, "retry_after_count", retry_after_count),
           updated_at: now
         ]
       )
