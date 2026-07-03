@@ -59,6 +59,12 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
         {:send_prepared, prepared_action} ->
           :ok = send_confirmation_prompt(chat_id, message_id, prepared_action)
+          # SPEC 06 review finding #2: without this, the card's Send button
+          # stays rendered exactly as before the tap, inviting a second tap
+          # (and, pre-dedupe-fix, a second independent prepared action/send).
+          # Re-rendering here picks up `awaiting_send_confirmation?/1` below so
+          # the button reflects the confirmation now pending.
+          :ok = refresh_message(chat_id, message_id, todo)
           maybe_answer_callback(callback_id, callback_notice(action))
           :ok
       end
@@ -219,7 +225,23 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   # `Maraithon.TelegramAssistant.handle_callback_query/1`) and a typed
   # "yes"/"no" reply (`Maraithon.TelegramAssistant.handle_text_confirmation/5`)
   # can complete it; nothing sends until one of those fires.
+  #
+  # SPEC 06 review finding #2: repeated Send taps used to create an
+  # independent Conversation + PreparedAction each time, so two taps produced
+  # two Confirm prompts and, if both were confirmed, two sends plus two
+  # independent nudge_count increments. Reuse the existing awaiting
+  # confirmation (if any) instead of creating a duplicate.
   defp prepare_todo_send(user_id, chat_id, %Todo{} = todo) do
+    case TelegramAssistant.find_awaiting_prepared_action_for_todo(user_id, todo.id) do
+      %{} = existing_prepared_action ->
+        {:ok, {:send_prepared, existing_prepared_action}}
+
+      nil ->
+        create_prepared_send(user_id, chat_id, todo)
+    end
+  end
+
+  defp create_prepared_send(user_id, chat_id, %Todo{} = todo) do
     with {:ok, conversation} <-
            TelegramConversations.start_or_continue(user_id, chat_id, %{
              "surface" => "telegram",
@@ -357,17 +379,19 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   # todo's own action_draft fields to tell an actual reply draft (kind
   # "reply", written by `generate_todo_draft/3` below or supplied directly by
   # a model-generated todo) apart from that placeholder.
+  #
+  # SPEC 06 review finding #1: a real draft used to leave exactly one button
+  # ("Send") with no way to regenerate a bad draft. Once a real draft is
+  # ready, show both Send and a compact "Redraft" button that reuses the
+  # existing draft_email/draft_slack callback actions (`generate_todo_draft/3`
+  # already persists the regenerated draft and re-renders the card).
   defp maybe_add_draft_row(rows, todo, _card) when is_map(todo) do
-    action =
-      if real_draft_ready?(todo) do
-        send_row_action(todo)
-      else
-        draft_callback_action(todo)
-      end
-
-    case {todo_id(todo), action} do
-      {todo_id, {action, label}} when is_binary(todo_id) ->
-        rows ++ [[%{"text" => label, "callback_data" => callback_data(todo_id, action)}]]
+    case todo_id(todo) do
+      todo_id when is_binary(todo_id) ->
+        case draft_row_buttons(todo, todo_id) do
+          [] -> rows
+          buttons -> rows ++ [buttons]
+        end
 
       _ ->
         rows
@@ -375,6 +399,64 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp maybe_add_draft_row(rows, _todo, _card), do: rows
+
+  defp draft_row_buttons(todo, todo_id) do
+    if real_draft_ready?(todo) do
+      [send_row_button(todo, todo_id), redraft_row_button(todo, todo_id)]
+      |> Enum.reject(&is_nil/1)
+    else
+      case draft_callback_action(todo) do
+        {action, label} -> [%{"text" => label, "callback_data" => callback_data(todo_id, action)}]
+        nil -> []
+      end
+    end
+  end
+
+  defp send_row_button(todo, todo_id) do
+    case send_row_action(todo) do
+      nil ->
+        nil
+
+      {action, label} ->
+        # SPEC 06 review finding #2: once a send is already awaiting
+        # confirmation for this todo, relabel instead of implying a fresh tap
+        # starts a new send (repeat taps are deduped by
+        # `prepare_todo_send/3`/`find_awaiting_prepared_action_for_todo/2`, so
+        # this is a UX signal on top of that, not the only guard).
+        label = if awaiting_send_confirmation?(todo), do: "Awaiting confirmation", else: label
+        %{"text" => label, "callback_data" => callback_data(todo_id, action)}
+    end
+  end
+
+  defp redraft_row_button(todo, todo_id) do
+    case redraft_row_action(todo) do
+      {action, label} -> %{"text" => label, "callback_data" => callback_data(todo_id, action)}
+      nil -> nil
+    end
+  end
+
+  defp redraft_row_action(todo) do
+    case draft_channel(todo) do
+      "gmail" -> {"draft_email", "Redraft Email"}
+      "slack" -> {"draft_slack", "Redraft Slack"}
+      _ -> nil
+    end
+  end
+
+  defp draft_channel(todo) do
+    draft = todo_action_draft(todo)
+    first_present([read_string(draft, "channel"), todo_source(todo)])
+  end
+
+  defp awaiting_send_confirmation?(todo) do
+    with user_id when is_binary(user_id) <- todo_user_id(todo),
+         todo_id when is_binary(todo_id) <- todo_id(todo),
+         %{} <- TelegramAssistant.find_awaiting_prepared_action_for_todo(user_id, todo_id) do
+      true
+    else
+      _ -> false
+    end
+  end
 
   defp real_draft_ready?(todo) do
     draft = todo_action_draft(todo)
@@ -974,6 +1056,10 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp todo_id(%Todo{id: id}), do: id
   defp todo_id(todo) when is_map(todo), do: map_string(todo, "id")
   defp todo_id(_todo), do: nil
+
+  defp todo_user_id(%Todo{user_id: user_id}), do: user_id
+  defp todo_user_id(todo) when is_map(todo), do: map_string(todo, "user_id")
+  defp todo_user_id(_todo), do: nil
 
   defp todo_status(%Todo{status: status}), do: status || "open"
   defp todo_status(todo) when is_map(todo), do: map_string(todo, "status") || "open"

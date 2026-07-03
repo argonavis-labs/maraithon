@@ -295,6 +295,39 @@ defmodule Maraithon.TelegramAssistant do
   def get_prepared_action(id) when is_binary(id), do: Repo.get(PreparedAction, id)
   def get_prepared_action(_id), do: nil
 
+  @doc """
+  Finds an existing non-expired, still-`awaiting_confirmation` PreparedAction
+  linked to the given todo (via `payload["todo_id"]`), if any.
+
+  SPEC 06 review finding #2: without this dedupe check, every "Send" tap on a
+  todo card creates a brand-new Conversation + PreparedAction, so two taps
+  produce two independent confirmation prompts and, if both are confirmed,
+  two sends plus two independent nudge_count increments
+  (`maybe_record_todo_nudge/1` below). `Maraithon.TelegramAssistant.TodoActions`
+  calls this before preparing a new send so a repeat tap re-presents the
+  existing confirmation instead of creating a duplicate, and uses it again at
+  render time to keep the card's "Send" button from implying a fresh tap will
+  do something when one is already pending.
+  """
+  def find_awaiting_prepared_action_for_todo(user_id, todo_id)
+      when is_binary(user_id) and is_binary(todo_id) do
+    now = DateTime.utc_now()
+
+    PreparedAction
+    |> where(
+      [prepared_action],
+      prepared_action.user_id == ^user_id and
+        prepared_action.status == "awaiting_confirmation" and
+        prepared_action.expires_at > ^now and
+        fragment("?->>'todo_id' = ?", prepared_action.payload, ^todo_id)
+    )
+    |> order_by([prepared_action], desc: prepared_action.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def find_awaiting_prepared_action_for_todo(_user_id, _todo_id), do: nil
+
   def latest_prepared_action(%Conversation{} = conversation) do
     prepared_action_id = get_in(conversation.metadata || %{}, ["latest_prepared_action_id"])
 
@@ -590,32 +623,55 @@ defmodule Maraithon.TelegramAssistant do
        ) do
     case Repo.get(PreparedAction, prepared_action_id) do
       %PreparedAction{} = prepared_action ->
-        conversation =
-          prepared_action.conversation_id &&
-            Repo.get(Conversation, prepared_action.conversation_id)
+        if prepared_action_chat_authorized?(prepared_action, chat_id) do
+          conversation =
+            prepared_action.conversation_id &&
+              Repo.get(Conversation, prepared_action.conversation_id)
 
-        if callback_id do
-          _ =
-            TelegramResponder.answer_callback(
-              callback_id,
-              if(decision == "confirm", do: "Confirmed", else: "Cancelled")
-            )
+          if callback_id do
+            _ =
+              TelegramResponder.answer_callback(
+                callback_id,
+                if(decision == "confirm", do: "Confirmed", else: "Cancelled")
+              )
+          end
+
+          respond_to_prepared_action(
+            prepared_action,
+            normalize_decision(decision),
+            conversation,
+            nil,
+            chat_id,
+            reply_to_message_id
+          )
+        else
+          if callback_id,
+            do: TelegramResponder.answer_callback(callback_id, "This action isn't available here.")
+
+          :ok
         end
-
-        respond_to_prepared_action(
-          prepared_action,
-          normalize_decision(decision),
-          conversation,
-          nil,
-          chat_id,
-          reply_to_message_id
-        )
 
       nil ->
         if callback_id, do: TelegramResponder.answer_callback(callback_id, "Action not found")
         :ok
     end
   end
+
+  # SPEC 06 review finding #3: `handle_prepared_action_decision/5` fetches the
+  # PreparedAction by UUID alone, so a confirm/cancel callback carrying a
+  # different chat's prepared_action_id (forged, replayed, or from a stale
+  # inline keyboard after the chat was reused for another chief-of-staff
+  # thread) would otherwise still execute. Requiring the inbound callback's
+  # chat to match the chat the action was actually prepared for keeps this
+  # scoped to the chat it belongs to, mirroring
+  # `Maraithon.TelegramAssistant.TodoActions`'s own `:chat_mismatch` guard for
+  # todo callbacks.
+  defp prepared_action_chat_authorized?(%PreparedAction{chat_id: expected_chat_id}, chat_id)
+       when is_binary(expected_chat_id) and is_binary(chat_id) do
+    expected_chat_id == chat_id
+  end
+
+  defp prepared_action_chat_authorized?(_prepared_action, _chat_id), do: false
 
   defp respond_to_prepared_action(
          %PreparedAction{} = prepared_action,
@@ -645,6 +701,28 @@ defmodule Maraithon.TelegramAssistant do
                   "prepared_action_id" => updated_action.id,
                   "decision" => "confirm",
                   "result" => serialize_result(result),
+                  "source_turn_id" => user_turn && user_turn.id
+                }
+              )
+
+            :ok
+
+          {:error, updated_action, :already_handled} ->
+            _ = maybe_close_confirmation(conversation)
+
+            {:ok, _conversation, _turn, _telegram_result} =
+              send_turn(
+                conversation,
+                chat_id,
+                "This was already handled.",
+                reply_to_message_id: reply_to_message_id,
+                turn_kind: "system_notice",
+                origin_type: "prepared_action",
+                origin_id: updated_action.id,
+                structured_data: %{
+                  "prepared_action_id" => updated_action.id,
+                  "decision" => "confirm",
+                  "already_handled" => true,
                   "source_turn_id" => user_turn && user_turn.id
                 }
               )
@@ -723,35 +801,60 @@ defmodule Maraithon.TelegramAssistant do
 
       {:error, expired_action, :confirmation_expired}
     else
-      {:ok, confirmed_action} =
-        update_prepared_action(prepared_action, %{
-          status: "confirmed",
-          confirmed_at: DateTime.utc_now(),
-          error: nil
-        })
+      case claim_prepared_action_for_confirmation(prepared_action) do
+        {:ok, confirmed_action} ->
+          case Runner.execute_prepared_action(confirmed_action) do
+            {:ok, result} ->
+              {:ok, executed_action} =
+                update_prepared_action(confirmed_action, %{
+                  status: "executed",
+                  executed_at: DateTime.utc_now(),
+                  error: nil
+                })
 
-      case Runner.execute_prepared_action(confirmed_action) do
-        {:ok, result} ->
-          {:ok, executed_action} =
-            update_prepared_action(confirmed_action, %{
-              status: "executed",
-              executed_at: DateTime.utc_now(),
-              error: nil
-            })
+              _ = maybe_record_todo_nudge(executed_action)
 
-          _ = maybe_record_todo_nudge(executed_action)
+              {:ok, executed_action, result}
 
-          {:ok, executed_action, result}
+            {:error, reason} ->
+              {:ok, failed_action} =
+                update_prepared_action(confirmed_action, %{
+                  status: "failed",
+                  error: normalize_error(reason)
+                })
 
-        {:error, reason} ->
-          {:ok, failed_action} =
-            update_prepared_action(confirmed_action, %{
-              status: "failed",
-              error: normalize_error(reason)
-            })
+              {:error, failed_action, reason}
+          end
 
-          {:error, failed_action, reason}
+        :already_handled ->
+          {:error, prepared_action, :already_handled}
       end
+    end
+  end
+
+  # SPEC 06 review finding #3: an atomic `UPDATE ... WHERE status =
+  # 'awaiting_confirmation'` so exactly one confirm wins a race between a
+  # duplicate tap (two Confirm callbacks for the same prepared action) or a
+  # tap that lands after the text-confirmation path already executed it.
+  # `Repo.update_all/3` bypasses the read-then-write window that
+  # `update_prepared_action/2` (changeset + `Repo.update`) has, where two
+  # concurrent callers could each read `status: "awaiting_confirmation"`
+  # before either write landed.
+  defp claim_prepared_action_for_confirmation(%PreparedAction{id: id}) do
+    now = DateTime.utc_now()
+
+    {count, _} =
+      Repo.update_all(
+        from(prepared_action in PreparedAction,
+          where: prepared_action.id == ^id,
+          where: prepared_action.status == "awaiting_confirmation"
+        ),
+        set: [status: "confirmed", confirmed_at: now, error: nil, updated_at: now]
+      )
+
+    case count do
+      1 -> {:ok, Repo.get!(PreparedAction, id)}
+      _ -> :already_handled
     end
   end
 
