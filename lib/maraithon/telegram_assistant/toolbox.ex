@@ -154,11 +154,12 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "get_open_loops",
-        "Fetch the linked user's durable open-loop snapshot across goals, open work, relationships, and memory.",
+        "Fetch the linked user's durable open-loop snapshot across goals, open work, relationships, and memory. Pass direction:\"owed_to_me\" for \"who am I waiting on?\" (others owe the operator) or direction:\"owed_by_me\" for \"what do I owe?\" (the operator owes someone else).",
         %{
           "type" => "object",
           "properties" => %{
             "query" => %{"type" => "string"},
+            "direction" => %{"type" => "string", "enum" => ["owed_to_me", "owed_by_me"]},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
         }
@@ -556,7 +557,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "list_todos",
-        "List the linked user's persisted open work items and their statuses.",
+        "List the linked user's persisted open work items and their statuses. Pass direction:\"owed_to_me\" for \"who am I waiting on?\" or direction:\"owed_by_me\" for \"what do I owe?\".",
         %{
           "type" => "object",
           "properties" => %{
@@ -567,6 +568,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "kind" => %{"type" => "string"},
             "attention_mode" => %{"type" => "string"},
             "owner_user_id" => %{"type" => "string"},
+            "direction" => %{"type" => "string", "enum" => ["owed_to_me", "owed_by_me", "fyi"]},
             "due_before" => %{"type" => "string"},
             "due_after" => %{"type" => "string"},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
@@ -1999,6 +2001,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     {:ok,
      OpenLoops.snapshot(runtime_context.user_id,
        query: Map.get(args, "query"),
+       direction: Map.get(args, "direction"),
        limit: limit
      )}
   end
@@ -2153,6 +2156,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           kind: Map.get(args, "kind"),
           attention_mode: Map.get(args, "attention_mode"),
           owner_user_id: Map.get(args, "owner_user_id"),
+          direction: Map.get(args, "direction"),
           due_before: Map.get(args, "due_before"),
           due_after: Map.get(args, "due_after"),
           query: Map.get(args, "query")
@@ -2165,6 +2169,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           kind: Map.get(args, "kind"),
           attention_mode: Map.get(args, "attention_mode"),
           owner_user_id: Map.get(args, "owner_user_id"),
+          direction: Map.get(args, "direction"),
           due_before: Map.get(args, "due_before"),
           due_after: Map.get(args, "due_after"),
           query: Map.get(args, "query")
@@ -4552,6 +4557,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       priority: todo.priority,
       source_item_id: todo.source_item_id,
       source_occurred_at: todo.source_occurred_at,
+      direction: todo.direction,
+      counterparty_person_id: todo.counterparty_person_id,
+      counterparty_label: todo.counterparty_label,
+      last_nudged_at: todo.last_nudged_at,
+      nudge_count: todo.nudge_count,
+      next_nudge_at: todo.next_nudge_at,
+      follow_up_channel: todo.follow_up_channel,
       metadata: todo.metadata || %{},
       updated_at: todo.updated_at
     }

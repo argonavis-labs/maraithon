@@ -72,13 +72,9 @@ defmodule Maraithon.OpenLoops do
     limit = opts |> Keyword.get(:limit, @default_limit) |> clamp_limit(1, @max_limit)
     now = normalize_now(Keyword.get(opts, :now))
     query = opts |> Keyword.get(:query) |> normalize_text()
+    direction = opts |> Keyword.get(:direction) |> normalize_direction_filter()
 
-    todos =
-      Todos.list_for_user(user_id,
-        statuses: @open_statuses,
-        open_due_only: false,
-        limit: limit * 4
-      )
+    todos = todos_for_snapshot(user_id, direction, limit)
 
     bucketed = bucket_todos(todos, now)
     people = relationship_snapshots(user_id, query, limit)
@@ -95,6 +91,7 @@ defmodule Maraithon.OpenLoops do
       source: "maraithon_open_loops",
       generated_at: DateTime.to_iso8601(now),
       query: query,
+      direction: direction,
       totals: totals(bucketed, people, memory, goals),
       buckets: trim_buckets(bucketed, limit),
       people: people,
@@ -104,6 +101,29 @@ defmodule Maraithon.OpenLoops do
   end
 
   def snapshot(_user_id, _opts), do: empty_snapshot()
+
+  # SPEC 05 R3: "who am I waiting on?" / "what do I owe?" resolve to the
+  # direction-aware todo queries when the assistant passes a direction hint
+  # (see telegram_assistant/toolbox.ex's get_open_loops tool). No hint keeps
+  # the prior undifferentiated open-todo snapshot.
+  defp todos_for_snapshot(user_id, "owed_to_me", limit) do
+    Todos.list_owed_to_me(user_id, limit: limit * 4)
+  end
+
+  defp todos_for_snapshot(user_id, "owed_by_me", limit) do
+    Todos.list_owed_by_me(user_id, limit: limit * 4)
+  end
+
+  defp todos_for_snapshot(user_id, _direction, limit) do
+    Todos.list_for_user(user_id,
+      statuses: @open_statuses,
+      open_due_only: false,
+      limit: limit * 4
+    )
+  end
+
+  defp normalize_direction_filter(value) when value in ["owed_to_me", "owed_by_me"], do: value
+  defp normalize_direction_filter(_value), do: nil
 
   def ingest_todos(user_id, candidates, opts \\ [])
 
@@ -1289,6 +1309,13 @@ defmodule Maraithon.OpenLoops do
       source_item_id: todo.source_item_id,
       source_occurred_at: todo.source_occurred_at,
       inserted_at: todo.inserted_at,
+      direction: todo.direction,
+      counterparty_person_id: todo.counterparty_person_id,
+      counterparty_label: todo.counterparty_label,
+      last_nudged_at: todo.last_nudged_at,
+      nudge_count: todo.nudge_count,
+      next_nudge_at: todo.next_nudge_at,
+      follow_up_channel: todo.follow_up_channel,
       metadata: todo.metadata || %{},
       attention_profile: AttentionRanker.profile(todo),
       updated_at: todo.updated_at

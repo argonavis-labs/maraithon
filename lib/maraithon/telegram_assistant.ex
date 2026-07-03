@@ -27,7 +27,14 @@ defmodule Maraithon.TelegramAssistant do
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
+  alias Maraithon.Todos
   alias Maraithon.Todos.{PublicPayload, UserFacingCopy}
+
+  # SPEC 05 R4: prepared-action types that represent an actual follow-up
+  # message being sent on behalf of a todo (see
+  # Maraithon.AssistantChat.TodoThreadPrimer, which stamps payload["todo_id"]
+  # when a gmail/slack draft is prepared from a todo chat thread).
+  @nudge_action_types ~w(gmail_send gmail_draft_send slack_post)
 
   require Logger
 
@@ -732,6 +739,8 @@ defmodule Maraithon.TelegramAssistant do
               error: nil
             })
 
+          _ = maybe_record_todo_nudge(executed_action)
+
           {:ok, executed_action, result}
 
         {:error, reason} ->
@@ -952,6 +961,26 @@ defmodule Maraithon.TelegramAssistant do
 
   defp normalize_error(error) when is_binary(error), do: error
   defp normalize_error(error), do: inspect(error)
+
+  # SPEC 05 R4: when a confirmed send referencing a todo actually completes,
+  # stamp the todo's nudge state so "who am I waiting on?" reflects it.
+  defp maybe_record_todo_nudge(%PreparedAction{
+         action_type: action_type,
+         user_id: user_id,
+         payload: payload
+       })
+       when action_type in @nudge_action_types do
+    case read_string(payload, "todo_id") do
+      todo_id when is_binary(todo_id) ->
+        _ = Todos.record_nudge_sent(user_id, todo_id, channel: action_type)
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_record_todo_nudge(_prepared_action), do: :ok
 
   defp normalize_id(nil), do: nil
   defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)
