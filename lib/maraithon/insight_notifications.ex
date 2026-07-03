@@ -10,7 +10,7 @@ defmodule Maraithon.InsightNotifications do
   alias Maraithon.Connectors.Telegram
   alias Maraithon.DeliveryErrorCopy
   alias Maraithon.InsightNotifications.Actions
-  alias Maraithon.InsightNotifications.{Delivery, ThresholdProfile}
+  alias Maraithon.InsightNotifications.{Delivery, MemoryGate, ThresholdProfile}
   alias Maraithon.Insights
   alias Maraithon.Insights.Insight
   alias Maraithon.PreferenceMemory
@@ -149,6 +149,7 @@ defmodule Maraithon.InsightNotifications do
         if score >= profile.score_threshold and
              telegram_delivery_eligible?(insight) and
              PreferenceMemory.allow_telegram_interrupt?(account.user_id, insight, now) and
+             MemoryGate.allow_interrupt?(account.user_id, insight) and
              not delivery_exists?(insight.id, destination) do
           attrs = %{
             insight_id: insight.id,

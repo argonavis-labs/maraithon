@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.ActionCards
   alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ContextEngine
+  alias Maraithon.Memory
   alias Maraithon.OperatorEvents
   alias Maraithon.Projects
   alias Maraithon.Runtime
@@ -382,12 +383,49 @@ defmodule Maraithon.TelegramAssistant.Runner do
            }),
          {:ok, _llm_response_step} <-
            record_llm_response(run, state.sequence + 2, response) do
+      _ = maybe_record_correction(run, runtime_context, response)
       next_state = %{state | llm_turns: state.llm_turns + 1, sequence: state.sequence + 2}
       handle_llm_response(run, runtime_context, response, next_state, started_monotonic_ms)
     else
       {:error, reason} ->
         {:error, run, reason, state}
     end
+  end
+
+  # SPEC 07 R6: deterministically writes a `kind: "correction"` memory
+  # whenever the model's step contract marks this turn as a correction
+  # (`AssistantHarness.normalize/2`'s `"correction"` field), regardless of
+  # whether the model also calls the `write_memory` tool. Best-effort — a
+  # failure here never fails the turn.
+  defp maybe_record_correction(run, runtime_context, response) do
+    case Map.get(response, "correction") do
+      %{"detected" => true} = correction ->
+        user_id = Map.get(runtime_context, :user_id)
+
+        case Memory.record_correction(user_id, correction, source: "assistant_correction") do
+          {:ok, item} ->
+            Logger.info("Recorded deterministic correction memory",
+              run_id: run.id,
+              memory_id: item.id,
+              kind: Map.get(correction, "kind")
+            )
+
+          {:error, reason} ->
+            Logger.warning("Failed to record correction memory",
+              run_id: run.id,
+              reason: inspect(reason)
+            )
+        end
+
+      _other ->
+        :ok
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("Correction memory recording crashed", reason: Exception.message(error))
+      :ok
   end
 
   defp handle_llm_response(run, runtime_context, response, state, started_monotonic_ms) do

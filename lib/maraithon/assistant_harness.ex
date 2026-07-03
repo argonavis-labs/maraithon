@@ -320,12 +320,14 @@ defmodule Maraithon.AssistantHarness do
       "tool_calls":[
         {"tool":"tool_name","arguments":{}}
       ],
+      "correction":{"detected":false,"kind":"wrong_person|already_done|misunderstood|value_correction|other","subject":"what was corrected","original_value":"what was wrong, if known","corrected_value":"the right fact/value the user gave","resource_type":"todo|insight|person|null","resource_id":"id if known, else null"},
       "summary":"short reasoning summary"
     }
 
     Decision contract:
     - The model is responsible for semantic decisions: intent, tool choice, relevance, prioritization, dedupe judgment, and user-facing wording.
     - Runtime code only validates contracts, enforces permissions, executes tools, persists results, and reports explicit failures.
+    - Set `correction.detected:true` only when the user's current message is correcting something Maraithon just said or did in this conversation — a wrong person/attribution, "already done"/"I already handled that", "that's not what I meant", or "this should be X instead". Include `corrected_value` with the right fact/value. Leave `detected:false` (or omit `correction`) for every other turn. This is a semantic judgment, not a keyword match. The runtime writes a durable correction memory deterministically from this field; you may still separately call `write_memory` for richer durable facts.
     - The runtime policy below is authoritative for loop budgets, tool-call budgets, and valid response classes.
     - The harness may retry retryable provider or response-format failures with a configured fallback model. It must never answer from semantic heuristics when models fail.
     - Tool/result history is compact execution evidence from prior loop steps. Treat it as source-grounded context, and call another read tool only when the evidence is insufficient or stale.
@@ -622,10 +624,14 @@ defmodule Maraithon.AssistantHarness do
     - Keep reasons short, source-grounded, and safe for audit logs.
     - Do not invent facts outside the candidate snapshots, context, recent pushes, and user preferences.
     - Use operator_feedback.good_interruption_examples and operator_feedback.bad_interruption_examples below to calibrate what this specific operator has previously marked helpful vs not helpful; steer dispositions toward the good pattern and away from the bad pattern for similar candidates.
+    - `interrupt_memory` below holds durable preference/instruction/relationship memories recalled against this batch's candidates. If a memory clearly says not to surface a topic, sender, or kind of item (e.g. "never surface X", "don't interrupt me about Y"), assign `hold` to any matching candidate even if it would otherwise be interrupt_now or digest, and say why in `reason`. Only apply a memory when it clearly matches; do not hold candidates on a vague or tangential relation.
     - The runtime policy below is authoritative for valid dispositions and request budgets.
 
     Pending candidates JSON:
     #{PromptStability.encode!(Map.get(payload, :candidates) || Map.get(payload, "candidates") || [])}
+
+    Interrupt-relevant memory JSON:
+    #{PromptStability.encode!(Map.get(payload, :interrupt_memory) || Map.get(payload, "interrupt_memory") || %{})}
 
     Context snapshot JSON:
     #{PromptStability.encode!(Map.get(payload, :context) || Map.get(payload, "context") || %{})}
@@ -932,6 +938,7 @@ defmodule Maraithon.AssistantHarness do
     message_class = normalize_message_class(Map.get(parsed, "message_class"))
     assistant_message = normalize_message(Map.get(parsed, "assistant_message"))
     summary = normalize_message(Map.get(parsed, "summary"))
+    correction = normalize_correction(Map.get(parsed, "correction"))
 
     with {:ok, status} <- status,
          {:ok, tool_calls} <- normalize_tool_calls(status, Map.get(parsed, "tool_calls"), payload) do
@@ -941,10 +948,55 @@ defmodule Maraithon.AssistantHarness do
          "assistant_message" => assistant_message,
          "message_class" => message_class,
          "tool_calls" => tool_calls,
+         "correction" => correction,
          "summary" => summary
        }}
     end
   end
+
+  # SPEC 07 R6: model-classified correction field on the step contract. The
+  # runner (`TelegramAssistant.Runner`) deterministically writes a
+  # `kind: "correction"` memory whenever this decodes to a non-nil map with
+  # a non-empty `corrected_value` — never keyword-matched.
+  @valid_correction_kinds ~w(wrong_person already_done misunderstood value_correction other)
+
+  defp normalize_correction(%{} = correction) do
+    if truthy?(Map.get(correction, "detected")) do
+      case normalize_optional_string(Map.get(correction, "corrected_value")) do
+        nil ->
+          nil
+
+        corrected_value ->
+          %{
+            "detected" => true,
+            "kind" => normalize_correction_kind(Map.get(correction, "kind")),
+            "subject" => normalize_optional_string(Map.get(correction, "subject")),
+            "original_value" => normalize_optional_string(Map.get(correction, "original_value")),
+            "corrected_value" => corrected_value,
+            "resource_type" => normalize_optional_string(Map.get(correction, "resource_type")),
+            "resource_id" => normalize_optional_string(Map.get(correction, "resource_id"))
+          }
+      end
+    else
+      nil
+    end
+  end
+
+  defp normalize_correction(_correction), do: nil
+
+  defp normalize_correction_kind(value) when value in @valid_correction_kinds, do: value
+  defp normalize_correction_kind(_value), do: "other"
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_optional_string(_value), do: nil
+
+  defp truthy?(value), do: value in [true, "true", "TRUE", "1", 1]
 
   defp normalize_status(status) when status in @valid_statuses, do: {:ok, status}
   defp normalize_status(_status), do: {:error, :assistant_harness_invalid_status}

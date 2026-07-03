@@ -11,6 +11,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightFeedback
+  alias Maraithon.InsightNotifications.MemoryGate
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
 
@@ -137,7 +138,14 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       recent_pushes: recent_pushes,
       interruption_budget:
         PushBroker.interruption_budget(user_id, now: now_from_context(context, user_id)),
-      operator_feedback: operator_feedback_examples(user_id)
+      operator_feedback: operator_feedback_examples(user_id),
+      # SPEC 07 R4: preference/instruction/relationship memories recalled
+      # with this batch's candidate titles as the query, so a "never surface
+      # X" memory can inform the model's hold/interrupt_now/digest call for
+      # a matching candidate — same recall path `insight_notifications.ex`
+      # uses for the legacy gate, just folded into this batch decision
+      # instead of a second gatekeeping model call.
+      interrupt_memory: interrupt_memory_context(user_id, candidates)
     }
   end
 
@@ -154,6 +162,32 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       bad_interruption_examples: Enum.filter(recent_feedback, &(&1.feedback == "not_helpful")),
       preference_profile: feedback.preference_profile,
       user_memory_profile: feedback.user_memory_profile
+    }
+  end
+
+  defp interrupt_memory_context(user_id, candidates) do
+    query =
+      candidates
+      |> Enum.map(&candidate_title/1)
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.take(12)
+      |> Enum.join(" | ")
+
+    case query do
+      "" -> %{summary: "No pending candidates to recall memory for.", memories: [], count: 0}
+      query -> MemoryGate.recall_memories(user_id, query) |> memory_summary_context(query)
+    end
+  end
+
+  defp memory_summary_context(memories, query) do
+    %{
+      summary:
+        if(memories == [],
+          do: "No relevant preference/instruction/relationship memories matched.",
+          else: "Interrupt-relevant memories for: #{query}"
+        ),
+      memories: memories,
+      count: length(memories)
     }
   end
 
