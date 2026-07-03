@@ -708,6 +708,66 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     refute result.message =~ "stale"
   end
 
+  test "activity_report summarizes today's audit trail with counts up front" do
+    user_id = "toolbox-activity-report-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "manual",
+          "kind" => "general",
+          "title" => "Send the Acme proposal",
+          "dedupe_key" => "toolbox-activity-report-todo"
+        }
+      ])
+
+    dedupe_key = "toolbox-activity-report-ping"
+
+    {:ok, _action} =
+      ActionLedger.record(%{
+        user_id: user_id,
+        surface: "telegram",
+        event_type: "proactive.sent",
+        status: "sent",
+        source_evidence: %{"dedupe_key" => dedupe_key},
+        model_summary: "Acme's renewal is due Friday and nobody has replied.",
+        result_object_refs: %{"dedupe_key" => dedupe_key}
+      })
+
+    {:ok, _receipt} =
+      TelegramAssistant.record_push_receipt(%{
+        user_id: user_id,
+        dedupe_key: dedupe_key,
+        origin_type: "insight",
+        decision: "sent_now"
+      })
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "activity_report",
+               %{"period" => "today"},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert result.summary.period.label == "today"
+    assert result.summary.todos.created.count == 1
+    assert result.summary.pings.count == 1
+    assert result.message =~ "1 added"
+    assert result.message =~ "1 pings sent"
+
+    assert {:ok, topic_result} =
+             Toolbox.execute(
+               "activity_report",
+               %{"topic" => "acme"},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert [%{why_now: why_now}] = topic_result.matching_pings
+    assert why_now =~ "Acme"
+    assert topic_result.message =~ "1 recent ping(s) matched"
+  end
+
   test "prepare_external_action confirmation previews hide provider ids" do
     user_id = "toolbox-prepared-copy-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

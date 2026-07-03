@@ -105,7 +105,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     slack_search_messages slack_get_thread_context linear_list_or_lookup notaui_list_tasks
     list_projects inspect_project list_implementation_runs list_agents inspect_agent
     list_scheduled_tasks list_goals get_goal goal_context
-    explain_action_ledger
+    explain_action_ledger activity_report
     notes_search notes_get notes_list_recent
     voice_memos_search voice_memos_get voice_memos_list_recent
     files_search files_get files_list_recent
@@ -307,6 +307,32 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "object_type" => %{"type" => "string"},
             "object_id" => %{"type" => "string"},
             "event_type" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "activity_report",
+        "Audit-trail summary of what Maraithon did: todos added/updated/closed, memories learned (by kind), People created/enriched, proactive pings sent (with why_now and source), and held/ignored items with reasons. Use for 'what did you do today', 'what did you learn about me', 'why did you ping me (about X)', and 'what did you ignore'.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "period" => %{
+              "type" => "string",
+              "enum" => ["today", "yesterday"],
+              "description" => "Defaults to today, the operator's local day."
+            },
+            "since" => %{
+              "type" => "string",
+              "description" => "Optional explicit range start date (YYYY-MM-DD), for a custom range instead of period."
+            },
+            "until" => %{
+              "type" => "string",
+              "description" => "Optional explicit range end date (YYYY-MM-DD, inclusive). Defaults to since when omitted."
+            },
+            "topic" => %{
+              "type" => "string",
+              "description" => "Optional topic/keyword for 'why did you ping me about X?'. Matches recent pushes by why_now/origin across the last 30 days, independent of period."
+            }
           }
         }
       ),
@@ -1546,6 +1572,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "explain_action_ledger" ->
         explain_action_ledger(runtime_context, args)
 
+      "activity_report" ->
+        activity_report(runtime_context, args)
+
       "update_briefing_schedule" ->
         update_briefing_schedule(runtime_context, args)
 
@@ -2751,6 +2780,80 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp explain_first_action([action | _actions]), do: {:ok, ActionLedger.explain_action(action)}
   defp explain_first_action([]), do: {:error, "action_not_found"}
+
+  # SPEC 09 R2: "what did you do today / what did you learn about me / why
+  # did you ping me (about X) / what did you ignore" audit surface.
+  defp activity_report(runtime_context, args) do
+    user_id = runtime_context.user_id
+    period = activity_report_period(args)
+    summary = ActionLedger.activity_summary(user_id, period)
+    topic = optional_string(args, "topic")
+
+    matching_pings =
+      if topic do
+        ActionLedger.recent_pings(user_id, topic: topic, limit: 5)
+      else
+        []
+      end
+
+    {:ok,
+     %{
+       summary: summary,
+       topic: topic,
+       matching_pings: matching_pings,
+       message: activity_report_message(summary, topic, matching_pings)
+     }}
+  end
+
+  defp activity_report_period(args) do
+    case optional_string(args, "period") do
+      "yesterday" ->
+        :yesterday
+
+      _other ->
+        activity_report_custom_range(args) || :today
+    end
+  end
+
+  defp activity_report_custom_range(args) do
+    with since_str when is_binary(since_str) <- optional_string(args, "since"),
+         {:ok, from_date} <- Date.from_iso8601(since_str) do
+      to_date =
+        case optional_string(args, "until") do
+          until_str when is_binary(until_str) ->
+            case Date.from_iso8601(until_str) do
+              {:ok, date} -> date
+              _error -> from_date
+            end
+
+          _other ->
+            from_date
+        end
+
+      {from_date, to_date}
+    else
+      _other -> nil
+    end
+  end
+
+  defp activity_report_message(summary, topic, matching_pings) do
+    headline =
+      "#{summary.period.label}: #{summary.todos.created.count} added, " <>
+        "#{summary.todos.closed.count} closed, #{summary.memories.count} learned, " <>
+        "#{summary.people.created.count + summary.people.enriched.count} people touched, " <>
+        "#{summary.pings.count} pings sent, #{summary.holds.count} held."
+
+    topic_note = activity_report_topic_note(topic, matching_pings)
+
+    [headline, topic_note] |> Enum.reject(&blank_string?/1) |> Enum.join(" ")
+  end
+
+  defp activity_report_topic_note(nil, _matching_pings), do: nil
+  defp activity_report_topic_note(_topic, []), do: "No recent pings matched that topic."
+
+  defp activity_report_topic_note(_topic, matching_pings) do
+    "#{length(matching_pings)} recent ping(s) matched that topic."
+  end
 
   defp action_explanation_message(explanation, freshness) do
     summary =
