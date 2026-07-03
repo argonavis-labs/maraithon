@@ -14,7 +14,8 @@ defmodule Maraithon.ChiefOfStaff.Skills do
     "briefing" => Maraithon.ChiefOfStaff.Skills.Briefing,
     "goal_alignment" => Maraithon.ChiefOfStaff.Skills.GoalAlignment,
     "project_scope_alignment" => Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment,
-    "holiday_radar" => Maraithon.ChiefOfStaff.Skills.HolidayRadar
+    "holiday_radar" => Maraithon.ChiefOfStaff.Skills.HolidayRadar,
+    "local_pattern_review" => Maraithon.ChiefOfStaff.Skills.LocalPatternReview
   }
 
   @default_enabled_ids [
@@ -25,7 +26,8 @@ defmodule Maraithon.ChiefOfStaff.Skills do
     "calendar_check_in",
     "goal_alignment",
     "project_scope_alignment",
-    "holiday_radar"
+    "holiday_radar",
+    "local_pattern_review"
   ]
 
   @doc false

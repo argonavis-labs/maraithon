@@ -1,9 +1,17 @@
 defmodule Maraithon.Proactive.LocalPatterns do
   @moduledoc """
-  Server-side pattern detectors that surface proactive nudges across the
-  v6 local sources (iMessage, Reminders, Voice Memos, Notes, Calendar,
-  Files). Each detector runs through `Maraithon.Insights.record_many/3`
-  so the standard dedupe / ranking / telegram-delivery pipeline applies.
+  Server-side pattern detectors that gather proactive nudge *candidates*
+  across the v6 local sources (iMessage, Reminders, Voice Memos, Notes,
+  Calendar, Files). Each detector runs through `Maraithon.Insights.record_many/4`
+  with `status: "candidate"`, so the standard dedupe/ranking machinery
+  applies but nothing becomes a user-facing (Telegram-eligible) insight
+  directly.
+
+  These are keyword/token-overlap heuristics, not a model relevance
+  decision (GOALS Principle 3). `Maraithon.ChiefOfStaff.Skills.LocalPatternReview`
+  — a normal skill inside the supervised Chief of Staff wakeup cycle —
+  reviews pending candidates and is the only path that promotes one to
+  `"new"` (or dismisses it).
 
   Six detectors:
 
@@ -138,12 +146,19 @@ defmodule Maraithon.Proactive.LocalPatterns do
   Detector entry point used by tests so each detector can be exercised
   in isolation against a fixture. Public to keep the test surface stable
   if the internal loop changes.
+
+  SPEC 04 R5: these are keyword/token-overlap heuristics, not a model
+  relevance decision, so their output is recorded as a `"candidate"` insight
+  — inert until `Maraithon.ChiefOfStaff.Skills.LocalPatternReview` (a normal
+  CoS skill, part of the supervised model wakeup) reviews it and either
+  promotes it to `"new"` (eligible for Telegram delivery) or dismisses it.
+  Nothing here writes a directly user-facing insight.
   """
   def run_detector(detector, user_id, agent_id, now \\ DateTime.utc_now())
       when detector in @detectors and is_binary(user_id) and is_binary(agent_id) do
     insights = build_insights(detector, user_id, now)
 
-    case Insights.record_many(user_id, agent_id, insights) do
+    case Insights.record_many(user_id, agent_id, insights, status: "candidate") do
       {:ok, recorded} -> length(recorded)
       _ -> 0
     end
