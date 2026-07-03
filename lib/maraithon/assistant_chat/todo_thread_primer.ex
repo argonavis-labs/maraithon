@@ -55,6 +55,28 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
 
   def ensure(_conversation, _todo), do: {:error, :invalid_todo_thread}
 
+  @doc """
+  Resolves a todo's current `action_draft` into `prepare_external_action`-shaped
+  attrs (`gmail_draft_send` or `slack_post`), reusing the same recipient,
+  thread, and subject resolution (CRM/local contact lookup, calendar-aware
+  body enrichment, saved Gmail draft) as the mobile chat primer, including the
+  process/timeout isolation those lookups need.
+
+  Returns `{:ok, attrs}` (a plain map suitable for
+  `Maraithon.TelegramAssistant.create_prepared_action/1` once the caller adds
+  `:run_id` and, for non-mobile surfaces, overrides `:surface`) or `:skip`
+  when the todo has no resolvable gmail/slack destination. Used by
+  `Maraithon.TelegramAssistant.TodoActions` for the Telegram todo "Send"
+  button so both surfaces share one resolution path.
+  """
+  def resolve_send_action_attrs(%Conversation{} = conversation, %Todo{} = todo) do
+    card = ActionCards.for_todo(todo, include_disconnected: true)
+    draft = draft_for(todo, card)
+    prepared_action_attrs_with_timeout(conversation, todo, draft)
+  end
+
+  def resolve_send_action_attrs(_conversation, _todo), do: :skip
+
   defp primer_turn_attrs(%Conversation{} = conversation, %Todo{} = todo, card, draft, text, turn) do
     prepared_action_id = prepared_action_id_for(conversation, todo, draft, turn)
 

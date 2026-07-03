@@ -5,14 +5,18 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   alias Maraithon.AppUrl
   alias Maraithon.ActionCards
+  alias Maraithon.AssistantChat.TodoThreadPrimer
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Drafts
   alias Maraithon.SourceLabels
+  alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ActionFailureCopy
   alias Maraithon.TelegramAssistant.BriefTodoReview
+  alias Maraithon.TelegramConversations
+  alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
-  alias Maraithon.Todos.{PublicMetadata, Todo, UserFacingCopy}
+  alias Maraithon.Todos.{ActionDrafts, PublicMetadata, Todo, UserFacingCopy}
 
   @callback_prefix "tgtodo"
   @feedback_values ~w(important helpful not_helpful see_less)
@@ -39,7 +43,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          %{user_id: user_id} <-
            ConnectedAccounts.get_connected_by_external_account("telegram", chat_id),
          {:ok, todo} <- Todos.get_for_user(user_id, todo_id) |> fetch_todo(),
-         {:ok, result} <- dispatch_action(user_id, todo, action) do
+         {:ok, result} <- dispatch_action(user_id, chat_id, todo, action) do
       case result do
         {:todo_updated, updated_todo} ->
           :ok = refresh_message(chat_id, message_id, updated_todo)
@@ -47,8 +51,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
           _ = BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action)
           :ok
 
-        {:draft_ready, draft_text} ->
+        {:draft_ready, draft_text, updated_todo} ->
           :ok = send_draft(chat_id, message_id, draft_text)
+          :ok = refresh_message(chat_id, message_id, updated_todo)
+          maybe_answer_callback(callback_id, callback_notice(action))
+          :ok
+
+        {:send_prepared, prepared_action} ->
+          :ok = send_confirmation_prompt(chat_id, message_id, prepared_action)
           maybe_answer_callback(callback_id, callback_notice(action))
           :ok
       end
@@ -76,7 +86,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   def parse_callback(value) when is_binary(value) do
     case Regex.run(
-           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|snooze|important|helpful|not_helpful|see_less|draft_email|draft_slack)$/i,
+           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|snooze|important|helpful|not_helpful|see_less|draft_email|draft_slack|send)$/i,
            value,
            capture: :all_but_first
          ) do
@@ -90,7 +100,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp fetch_todo(%Todo{} = todo), do: {:ok, todo}
   defp fetch_todo(_todo), do: {:error, :not_found}
 
-  defp dispatch_action(user_id, %Todo{id: todo_id}, "done") do
+  defp dispatch_action(user_id, _chat_id, %Todo{id: todo_id}, "done") do
     with {:ok, todo} <-
            Todos.mark_done(
              user_id,
@@ -101,7 +111,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp dispatch_action(user_id, %Todo{id: todo_id}, "dismiss") do
+  defp dispatch_action(user_id, _chat_id, %Todo{id: todo_id}, "dismiss") do
     with {:ok, todo} <-
            Todos.dismiss(
              user_id,
@@ -112,7 +122,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp dispatch_action(user_id, %Todo{id: todo_id}, "snooze") do
+  defp dispatch_action(user_id, _chat_id, %Todo{id: todo_id}, "snooze") do
     snoozed_until =
       DateTime.utc_now()
       |> DateTime.add(24 * 60 * 60, :second)
@@ -126,13 +136,13 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp dispatch_action(user_id, %Todo{id: todo_id}, "important") do
+  defp dispatch_action(user_id, _chat_id, %Todo{id: todo_id}, "important") do
     with {:ok, todo} <- Todos.mark_important(user_id, todo_id, source: "telegram") do
       {:ok, {:todo_updated, todo}}
     end
   end
 
-  defp dispatch_action(user_id, %Todo{id: todo_id}, "see_less") do
+  defp dispatch_action(user_id, _chat_id, %Todo{id: todo_id}, "see_less") do
     case Todos.see_less_like(
            user_id,
            todo_id,
@@ -143,19 +153,29 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp dispatch_action(user_id, %Todo{id: todo_id}, feedback)
+  defp dispatch_action(user_id, _chat_id, %Todo{id: todo_id}, feedback)
        when feedback in @record_feedback_values do
     with {:ok, todo} <- Todos.record_feedback(user_id, todo_id, feedback, source: "telegram") do
       {:ok, {:todo_updated, todo}}
     end
   end
 
-  defp dispatch_action(user_id, %Todo{} = todo, "draft_email") do
+  defp dispatch_action(user_id, _chat_id, %Todo{} = todo, "draft_email") do
     generate_todo_draft(user_id, todo, "gmail")
   end
 
-  defp dispatch_action(user_id, %Todo{} = todo, "draft_slack") do
+  defp dispatch_action(user_id, _chat_id, %Todo{} = todo, "draft_slack") do
     generate_todo_draft(user_id, todo, "slack")
+  end
+
+  # SPEC 06 R3/R4: resolve the todo's action_draft (+ source_actions
+  # destination context) into a prepare_external_action-style prepared
+  # action, then hand it to the existing confirm/execute pipeline. Never
+  # sends without the explicit Confirm tap handled by
+  # `Maraithon.TelegramAssistant.handle_callback_query/1` /
+  # `handle_text_confirmation/5`.
+  defp dispatch_action(user_id, chat_id, %Todo{} = todo, "send") do
+    prepare_todo_send(user_id, chat_id, todo)
   end
 
   defp todo_action_opts(user_id, note), do: Keyword.put(todo_actor_opts(user_id), :note, note)
@@ -193,12 +213,101 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
+  # Resolves the todo's action_draft + source destination into a prepared
+  # action awaiting confirmation. Attached to a real conversation so both the
+  # Confirm/Cancel buttons (`TelegramResponder.action_markup/1`,
+  # `Maraithon.TelegramAssistant.handle_callback_query/1`) and a typed
+  # "yes"/"no" reply (`Maraithon.TelegramAssistant.handle_text_confirmation/5`)
+  # can complete it; nothing sends until one of those fires.
+  defp prepare_todo_send(user_id, chat_id, %Todo{} = todo) do
+    with {:ok, conversation} <-
+           TelegramConversations.start_or_continue(user_id, chat_id, %{
+             "surface" => "telegram",
+             "metadata" => %{"mode" => "assistant"}
+           }),
+         {:ok, attrs} <- TodoThreadPrimer.resolve_send_action_attrs(conversation, todo),
+         {:ok, run} <- create_send_run(conversation, todo),
+         {:ok, prepared_action} <-
+           attrs
+           |> Map.put(:surface, "telegram")
+           |> Map.put(:run_id, run.id)
+           |> TelegramAssistant.create_prepared_action() do
+      _ = TelegramAssistant.mark_conversation_awaiting_action(conversation, prepared_action)
+      {:ok, {:send_prepared, prepared_action}}
+    else
+      :skip -> {:error, :no_send_destination}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp create_send_run(%Conversation{} = conversation, %Todo{} = todo) do
+    now = DateTime.utc_now()
+
+    TelegramAssistant.start_run(%{
+      user_id: conversation.user_id,
+      chat_id: conversation.chat_id,
+      conversation_id: conversation.id,
+      surface: "telegram",
+      trigger_type: "follow_up",
+      status: "completed",
+      model_provider: "deterministic",
+      model_name: "todo_send_action",
+      prompt_snapshot: %{},
+      result_summary: %{
+        surface: "telegram",
+        message_class: "todo_send_action",
+        linked_todo_id: todo.id
+      },
+      started_at: now,
+      finished_at: now
+    })
+  end
+
+  defp send_confirmation_prompt(chat_id, message_id, %{} = prepared_action)
+       when is_binary(chat_id) do
+    text = send_confirmation_text(prepared_action)
+    reply_markup = TelegramResponder.action_markup(prepared_action.id)
+
+    result =
+      if is_binary(message_id) do
+        TelegramResponder.reply(chat_id, message_id, text,
+          parse_mode: "HTML",
+          reply_markup: reply_markup
+        )
+      else
+        TelegramResponder.send(chat_id, text, parse_mode: "HTML", reply_markup: reply_markup)
+      end
+
+    case result do
+      {:ok, _result} -> :ok
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp send_confirmation_prompt(_chat_id, _message_id, _prepared_action), do: :ok
+
+  defp send_confirmation_text(%{payload: payload, preview_text: preview_text}) do
+    payload = payload || %{}
+    subject = read_string(payload, "subject")
+    body = first_present([read_string(payload, "body"), read_string(payload, "text")])
+
+    [
+      "<b>Ready to send</b>",
+      if(present?(preview_text), do: preview_text),
+      if(subject, do: "<b>Subject:</b> #{safe(subject)}"),
+      if(body, do: "<pre>#{safe(truncate(body, 1_500))}</pre>"),
+      "Confirm to send, or Cancel to leave it untouched."
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n")
+  end
+
   defp build_reply_markup(todo, opts) when is_map(todo) and is_list(opts) do
     card = ActionCards.for_todo(todo, action_card_opts(opts))
 
     rows =
       []
-      |> maybe_add_draft_row(todo)
+      |> maybe_add_draft_row(todo, card)
       |> maybe_add_action_row(todo, card)
       |> maybe_add_feedback_row(todo, card)
       |> maybe_add_link_row(todo)
@@ -238,8 +347,25 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp maybe_add_action_row(rows, _todo, _card), do: rows
 
-  defp maybe_add_draft_row(rows, todo) when is_map(todo) do
-    case {todo_id(todo), draft_callback_action(todo)} do
+  # SPEC 06 R2: once a *real* draft already exists on the todo, offer "Send"
+  # instead of "Draft" (there is nothing left to draft, only to approve and
+  # send). Deliberately does not key off `action_cards.ex`'s "review_draft"
+  # prepared_actions hint: every todo gets a generic "next step" placeholder
+  # draft from `Maraithon.Todos.ActionDrafts.ensure/2` (a write-boundary
+  # fallback so mobile always has *something* to show), which would make that
+  # signal true for nearly every todo. `real_draft_ready?/1` checks the
+  # todo's own action_draft fields to tell an actual reply draft (kind
+  # "reply", written by `generate_todo_draft/3` below or supplied directly by
+  # a model-generated todo) apart from that placeholder.
+  defp maybe_add_draft_row(rows, todo, _card) when is_map(todo) do
+    action =
+      if real_draft_ready?(todo) do
+        send_row_action(todo)
+      else
+        draft_callback_action(todo)
+      end
+
+    case {todo_id(todo), action} do
       {todo_id, {action, label}} when is_binary(todo_id) ->
         rows ++ [[%{"text" => label, "callback_data" => callback_data(todo_id, action)}]]
 
@@ -248,7 +374,38 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp maybe_add_draft_row(rows, _todo), do: rows
+  defp maybe_add_draft_row(rows, _todo, _card), do: rows
+
+  defp real_draft_ready?(todo) do
+    draft = todo_action_draft(todo)
+    text = ActionDrafts.preview(draft)
+
+    present?(text) and not generic_next_step_draft?(draft)
+  end
+
+  defp generic_next_step_draft?(draft) do
+    read_string(draft, "kind") == "next_step" or
+      read_string(draft, "source") == "todo_write_boundary"
+  end
+
+  defp todo_action_draft(%Todo{action_draft: draft}) when is_map(draft), do: draft
+
+  defp todo_action_draft(todo) when is_map(todo) do
+    case Map.get(todo, "action_draft") || Map.get(todo, :action_draft) do
+      draft when is_map(draft) -> draft
+      _ -> %{}
+    end
+  end
+
+  defp todo_action_draft(_todo), do: %{}
+
+  defp send_row_action(todo) do
+    if sendable_channel?(todo), do: {"send", "Send"}
+  end
+
+  defp sendable_channel?(todo) do
+    todo_source(todo) in ["gmail", "slack"]
+  end
 
   defp maybe_add_feedback_row(rows, todo, card) when is_map(todo) do
     case {todo_id(todo), feedback_value(todo), read_string(card, "attention_mode")} do
@@ -585,16 +742,34 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp learning_line(_card), do: nil
 
+  # Mirrors `Maraithon.ActionCards.prepared_actions/2`'s own draft_email /
+  # draft_slack detection (source + next_action wording) rather than reading
+  # its "prepared_actions" list: that list's first cond branch fires whenever
+  # *any* action_draft is present, including the universal write-boundary
+  # "next step" placeholder every todo gets from `ActionDrafts.ensure/2`, so
+  # it never actually reaches the draft_email/draft_slack branches in
+  # practice. `real_draft_ready?/1` already handles the "a real draft already
+  # exists, offer Send" side of this; this is the "no real draft yet, offer
+  # Draft" side.
   defp draft_callback_action(todo) do
-    todo
-    |> ActionCards.for_todo(include_disconnected: false)
-    |> Map.get("prepared_actions", [])
-    |> Enum.find_value(fn
-      %{"type" => "draft_email"} -> {"draft_email", "Draft Email"}
-      %{"type" => "draft_slack"} -> {"draft_slack", "Draft Slack"}
-      _ -> nil
-    end)
+    next_action = todo |> raw_next_action() |> to_string() |> String.downcase()
+    source = todo_source(todo)
+
+    cond do
+      source == "gmail" and String.contains?(next_action, ["reply", "email"]) ->
+        {"draft_email", "Draft Email"}
+
+      source == "slack" and String.contains?(next_action, ["reply", "respond", "message"]) ->
+        {"draft_slack", "Draft Slack"}
+
+      true ->
+        nil
+    end
   end
+
+  defp raw_next_action(%Todo{next_action: next_action}), do: next_action
+  defp raw_next_action(todo) when is_map(todo), do: map_string(todo, "next_action")
+  defp raw_next_action(_todo), do: nil
 
   defp generate_todo_draft(user_id, %Todo{} = todo, channel) do
     card = ActionCards.for_todo(todo, include_disconnected: false)
@@ -606,10 +781,59 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
       |> Map.put("save_to_provider", false)
 
     case Drafts.create(user_id, attrs, draft_opts()) do
-      {:ok, result} -> {:ok, {:draft_ready, render_draft_result(channel, result)}}
-      {:error, reason} -> {:error, reason}
+      {:ok, result} ->
+        # SPEC 06 R5: persist the regenerated draft onto the todo's
+        # `action_draft` (previously this only rendered a one-off preview
+        # reply) and re-render the card so the buttons offer "Send" instead
+        # of "Draft" going forward.
+        updated_todo = persist_generated_draft(user_id, todo, channel, result)
+        {:ok, {:draft_ready, render_draft_result(channel, result), updated_todo}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  defp persist_generated_draft(user_id, %Todo{} = todo, channel, result) do
+    draft_map = generated_action_draft(channel, result)
+
+    case compact_map(draft_map) do
+      empty when map_size(empty) == 0 ->
+        todo
+
+      draft_map ->
+        case Todos.update_for_user(user_id, todo.id, %{"action_draft" => draft_map}) do
+          {:ok, updated_todo} -> updated_todo
+          {:error, _reason} -> todo
+        end
+    end
+  end
+
+  defp generated_action_draft("gmail", %{draft: %{"subject" => subject, "body" => body}}) do
+    %{
+      "kind" => "reply",
+      "label" => "Email draft ready",
+      "channel" => "gmail",
+      "subject" => subject,
+      "text" => body,
+      "body" => body,
+      "source" => "todo_draft_action",
+      "style" => "assistant_prepared_draft"
+    }
+  end
+
+  defp generated_action_draft("slack", %{draft: %{"text" => text}}) do
+    %{
+      "kind" => "reply",
+      "label" => "Slack draft ready",
+      "channel" => "slack",
+      "text" => text,
+      "source" => "todo_draft_action",
+      "style" => "assistant_prepared_draft"
+    }
+  end
+
+  defp generated_action_draft(_channel, _result), do: %{}
 
   defp draft_attrs(%Todo{} = todo, channel, card) do
     metadata = todo.metadata || %{}
@@ -1028,6 +1252,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp callback_notice("see_less"), do: "Similar work will show up less often"
   defp callback_notice("draft_email"), do: "Draft ready"
   defp callback_notice("draft_slack"), do: "Draft ready"
+  defp callback_notice("send"), do: "Review before sending"
 
   defp callback_data(todo_id, action), do: "#{@callback_prefix}:#{todo_id}:#{action}"
 
