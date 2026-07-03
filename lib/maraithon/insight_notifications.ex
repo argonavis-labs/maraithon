@@ -15,6 +15,7 @@ defmodule Maraithon.InsightNotifications do
   alias Maraithon.Insights.Insight
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.SourceFreshness
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TelegramRouter
@@ -89,6 +90,8 @@ defmodule Maraithon.InsightNotifications do
   defp handle_message_event(data) when is_map(data) do
     chat_id = read_id_string(data, "chat_id")
     text = read_string(data, "text")
+
+    if is_binary(chat_id), do: touch_telegram_freshness(chat_id)
 
     cond do
       is_nil(chat_id) ->
@@ -426,6 +429,44 @@ defmodule Maraithon.InsightNotifications do
     /forget RULE_ID
     """
     |> String.trim()
+  end
+
+  # Telegram is webhook-push: nothing polls it, so without this touch its
+  # SourceFreshness never records a success and the freshness sweep will
+  # eventually flag a perfectly healthy bot as source_stale, erroring the
+  # account (which every status-filtered lookup then ignores — bricking
+  # linking and preference commands too). Inbound traffic IS the liveness
+  # signal; the lookup deliberately ignores account status so a
+  # wrongly-flagged account heals on the next message.
+  @telegram_freshness_touch_interval_hours 6
+
+  defp touch_telegram_freshness(chat_id) do
+    account = ConnectedAccounts.get_by_external_account_any_status("telegram", chat_id)
+
+    with %{user_id: user_id, metadata: metadata} <- account,
+         true <- telegram_freshness_touch_due?(metadata) do
+      SourceFreshness.mark_success(user_id, "telegram", %{last_webhook_at: DateTime.utc_now()})
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("Telegram freshness touch failed",
+        chat_id: chat_id,
+        reason: Exception.message(error)
+      )
+
+      :ok
+  end
+
+  defp telegram_freshness_touch_due?(metadata) do
+    with value when is_binary(value) <- get_in(metadata || %{}, ["last_successful_sync_at"]),
+         {:ok, last_success, _offset} <- DateTime.from_iso8601(value) do
+      DateTime.diff(DateTime.utc_now(), last_success, :hour) >=
+        @telegram_freshness_touch_interval_hours
+    else
+      _missing_or_unparseable -> true
+    end
   end
 
   defp link_telegram_chat(chat_id, command_text, from_user) do

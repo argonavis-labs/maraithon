@@ -11,7 +11,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
   # the cycle's real emit. Tests exercising the end of a cycle need to drive
   # that extra round-trip; this helper does so transparently and is a no-op
   # when the cycle had nothing worth memo-ing (memo generation skipped).
-  defp resolve_cycle_result({:effect, {:llm_call, _params}, %{pending_effect_skill_id: :cycle_memo} = state}, context) do
+  defp resolve_cycle_result(
+         {:effect, {:llm_call, _params}, %{pending_effect_skill_id: :cycle_memo} = state},
+         context
+       ) do
     AIChiefOfStaff.handle_effect_result({:llm_call, %{"content" => "noted."}}, state, context)
   end
 
@@ -111,6 +114,35 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
     assert Skills.enabled_ids(%{}) == ["alpha", "gamma"]
     assert Skills.label("gamma") == "Gamma"
     assert Skills.description("gamma") == "Runs as part of the Chief of Staff cycle."
+  end
+
+  test "handle_wakeup tolerates a restored snapshot missing newer state keys", %{
+    context: context
+  } do
+    state =
+      AIChiefOfStaff.init(%{
+        "user_id" => "chief@example.com",
+        "skill_configs" => %{}
+      })
+
+    # A behavior_state snapshot written by an older release has none of the
+    # keys added since (pending_watermarks, cycle_memory, ...). Restore hands
+    # that map to handle_wakeup verbatim; it must not KeyError (prod outage
+    # 2026-07-03).
+    legacy_state =
+      Map.drop(state, [
+        :pending_watermarks,
+        :last_watermarks,
+        :last_cycle_stats,
+        :cycle_memory,
+        :cycle_memo_generated
+      ])
+
+    assert {_directive, _state_or_effect, _next} =
+             (case AIChiefOfStaff.handle_wakeup(legacy_state, context) do
+                {a, b} -> {a, b, nil}
+                {a, b, c} -> {a, b, c}
+              end)
   end
 
   test "merges emitted outputs from multiple skills in one wakeup", %{context: context} do
@@ -242,7 +274,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
     assert get_in(continued_state.skill_states, ["alpha", :wakeup_mode]) == "emit"
 
     assert {:emit, {:briefs_recorded, payload}, next_state} =
-             AIChiefOfStaff.handle_wakeup(continued_state, context) |> resolve_cycle_result(context)
+             AIChiefOfStaff.handle_wakeup(continued_state, context)
+             |> resolve_cycle_result(context)
 
     assert payload["cadences"] == ["morning"]
     assert next_state.pending_effect_skill_id == nil
@@ -284,7 +317,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
       })
 
     assert {:emit, {:insights_recorded, payload}, next_state} =
-             AIChiefOfStaff.handle_wakeup(state, event_context) |> resolve_cycle_result(event_context)
+             AIChiefOfStaff.handle_wakeup(state, event_context)
+             |> resolve_cycle_result(event_context)
 
     assert payload["categories"] == ["reply_urgent"]
     refute Map.has_key?(payload, "briefs")

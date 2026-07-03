@@ -44,6 +44,29 @@ defmodule Maraithon.ConnectedAccounts do
     |> latest_account()
   end
 
+  @doc """
+  Like `get_connected_by_external_account/2` but ignores account status.
+
+  Inbound provider traffic (e.g. a Telegram webhook message) is proof the
+  source is alive even when the account row is currently marked `error` —
+  callers use this so a wrongly-flagged account can be found and healed by
+  `SourceFreshness.mark_success/3` instead of staying invisible to every
+  status-filtered lookup.
+  """
+  def get_by_external_account_any_status(provider, external_account_id)
+      when is_binary(provider) and is_binary(external_account_id) do
+    case normalize_destination(external_account_id) do
+      nil ->
+        nil
+
+      value ->
+        find_by_metadata_identifier_any_status(provider, value) ||
+          find_by_external_id_any_status(provider, value)
+    end
+  end
+
+  def get_by_external_account_any_status(_provider, _external_account_id), do: nil
+
   def get_connected_by_external_account(provider, external_account_id)
       when is_binary(provider) and is_binary(external_account_id) do
     normalized_external_account_id = normalize_destination(external_account_id)
@@ -475,6 +498,27 @@ defmodule Maraithon.ConnectedAccounts do
   end
 
   defp metadata_external_account_id(_), do: nil
+
+  defp find_by_metadata_identifier_any_status(provider, external_account_id) do
+    ConnectedAccount
+    |> where([account], account.provider == ^provider)
+    |> order_by([account], desc: account.updated_at, desc: account.inserted_at, desc: account.id)
+    |> Repo.all()
+    |> Enum.find(fn account ->
+      metadata_identifiers(account.metadata)
+      |> Enum.member?(external_account_id)
+    end)
+  end
+
+  defp find_by_external_id_any_status(provider, external_account_id) do
+    ConnectedAccount
+    |> where(
+      [account],
+      account.provider == ^provider and
+        account.external_account_id == ^external_account_id
+    )
+    |> latest_account()
+  end
 
   defp find_connected_by_metadata_identifier(provider, external_account_id)
        when is_binary(provider) and is_binary(external_account_id) do

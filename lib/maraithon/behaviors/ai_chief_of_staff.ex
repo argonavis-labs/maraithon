@@ -58,6 +58,23 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     }
   end
 
+  # Restored behavior_state snapshots can predate keys added by newer
+  # releases; `%{state | key: ...}` update syntax and `state.key` dot access
+  # both raise KeyError on such maps, killing every wakeup after a deploy
+  # (observed in prod 2026-07-03 with :pending_watermarks). Seed any missing
+  # keys with their init/1 defaults before the cycle logic touches them.
+  @state_key_defaults %{
+    pending_watermarks: [],
+    last_watermarks: %{},
+    last_cycle_stats: %{},
+    cycle_memory: %{"memo" => nil, "updated_at" => nil, "cycle_id" => nil},
+    cycle_memo_generated: false
+  }
+
+  defp ensure_state_keys(state) when is_map(state) do
+    Map.merge(@state_key_defaults, state)
+  end
+
   @impl true
   def handle_wakeup(state, context) do
     state =
@@ -65,6 +82,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         nil -> %{state | user_id: normalize_string(context[:user_id])}
         _ -> state
       end
+      |> ensure_state_keys()
       |> ensure_cycle(context)
 
     run_from_index(state.resume_index || 0, state, context)
@@ -72,6 +90,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   @impl true
   def handle_effect_result(effect_result, state, context) do
+    state = ensure_state_keys(state)
+
     case state.pending_effect_skill_id do
       nil ->
         {:idle, state}
@@ -118,6 +138,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   @impl true
   def handle_effect_error(effect_type, reason, state, context) do
+    state = ensure_state_keys(state)
+
     case state.pending_effect_skill_id do
       nil ->
         {:idle, state}
@@ -335,7 +357,11 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       advance_pending_watermark(entry)
 
       case entry do
-        %{account: %Maraithon.Accounts.ConnectedAccount{provider: provider}, kind: kind, value: value}
+        %{
+          account: %Maraithon.Accounts.ConnectedAccount{provider: provider},
+          kind: kind,
+          value: value
+        }
         when is_binary(provider) and is_binary(kind) ->
           Map.put(acc, "#{provider}:#{kind}", value)
 
