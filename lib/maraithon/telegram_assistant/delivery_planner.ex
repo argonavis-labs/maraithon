@@ -7,6 +7,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   alias Maraithon.ActionLedger
   alias Maraithon.AssistantHarness
+  alias Maraithon.BriefingSchedules
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
@@ -205,8 +206,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       urgency: candidate.urgency,
       why_now: candidate_why_now(candidate),
       structured_data: candidate_structured_data(candidate),
-      inserted_at: candidate.inserted_at,
-      expires_at: candidate.expires_at,
+      inserted_at: local_display(candidate.inserted_at, candidate.user_id),
+      expires_at: local_display(candidate.expires_at, candidate.user_id),
       planning_rank: rank,
       attention_profile: profile,
       related_todos: Enum.map(related_todos, &compact_related_todo/1)
@@ -336,14 +337,47 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     |> Enum.sort_by(&Map.get(candidate_order, &1.id, 999_999))
     |> Enum.flat_map(fn candidate ->
       disposition = Map.get(disposition_by_id, candidate.id)
-      value = (disposition && disposition["disposition"]) || "hold"
-      reason = (disposition && disposition["reason"]) || "No model disposition returned."
+      {value, reason} = resolve_disposition(candidate, disposition)
 
       case ProactiveQueue.mark_planned(candidate, value, reason) do
         {:ok, planned} -> [planned]
         {:error, _reason} -> []
       end
     end)
+  end
+
+  # Bug fix: a cadence brief is an explicit user subscription, not an
+  # opportunistic push — the planner model must not be able to fatigue/
+  # relevance-hold it indefinitely. In production the model held the
+  # morning brief every cycle with a "notification fatigue" rationale, and
+  # the brief sat "pending" forever (compounding Briefs.list_pending/1's
+  # backlog problem). Prompt-level guidance alone is not sufficient (GOALS
+  # Principle 3: runtime validates model decisions) — a brief-sourced
+  # candidate the model tried to `hold` is forced to `interrupt_now` here,
+  # post-plan. `digest` is left as the model chose it: it still delivers
+  # this cycle (just bundled), so it is not the "held forever" failure mode
+  # this guards against, and downstream dispatch/push_candidate/2 exempts
+  # brief-sourced sends from the hourly interruption budget (still fully
+  # subject to the quiet-hours gate and true duplicate-receipt suppression
+  # at PushBroker send time).
+  defp resolve_disposition(%ProactiveCandidate{source: "brief"}, disposition) do
+    case disposition && disposition["disposition"] do
+      "hold" ->
+        {"interrupt_now",
+         "Cadence brief: forced to send instead of a model hold (not model-holdable for fatigue/relevance)."}
+
+      value when value in ["interrupt_now", "digest"] ->
+        {value, disposition["reason"] || "No model disposition returned."}
+
+      _other ->
+        {"interrupt_now", "Cadence brief: forced to send (no valid model disposition returned)."}
+    end
+  end
+
+  defp resolve_disposition(_candidate, disposition) do
+    value = (disposition && disposition["disposition"]) || "hold"
+    reason = (disposition && disposition["reason"]) || "No model disposition returned."
+    {value, reason}
   end
 
   defp candidate_order(payload) do
@@ -696,6 +730,13 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       body: delivery_text(candidate.body),
       urgency: candidate.urgency,
       interrupt_now: Keyword.get(opts, :interrupt_now, false),
+      # Cadence briefs are an explicit subscription (see resolve_disposition/2
+      # above) — they should not be silently dropped by the shared hourly
+      # interruption budget the way an opportunistic insight push can be.
+      # They still fully respect quiet hours and true duplicate-receipt
+      # suppression at PushBroker send time (see interruption_hold_reason/1
+      # in push_broker.ex).
+      bypass_budget_cap: candidate.source == "brief",
       why_now: candidate_why_now(candidate),
       structured_data:
         candidate_structured_data(candidate)
@@ -890,10 +931,36 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         origin_type: receipt.origin_type,
         origin_id: receipt.origin_id,
         decision: receipt.decision,
-        inserted_at: receipt.inserted_at
+        inserted_at: local_display(receipt.inserted_at, user_id)
       }
     end)
   end
+
+  # Bug fix: recent push receipts and candidate timestamps were shown to the
+  # planning model as bare UTC ISO-8601 (e.g. "2026-07-03T09:21:00Z"). In
+  # production the model read a 09:21 UTC receipt as 09:21 *local* (it was
+  # actually 5:21 AM local) and used that misreading to justify holding the
+  # morning brief as a fatigue duplicate. Render an explicit local-time
+  # label instead, from the same offset source PushBroker.local_now_for_user/1
+  # and the context current_time block use, so the model cannot misread the
+  # timezone.
+  defp local_display(%DateTime{} = datetime, user_id) do
+    offset_hours =
+      user_id
+      |> BriefingSchedules.summarize_for_prompt()
+      |> Map.get(:timezone_offset_hours, -5)
+      |> case do
+        value when is_integer(value) -> value
+        _other -> -5
+      end
+
+    local = DateTime.add(datetime, offset_hours, :hour)
+    label = if offset_hours >= 0, do: "UTC+#{offset_hours}", else: "UTC#{offset_hours}"
+
+    "#{Calendar.strftime(local, "%Y-%m-%d %H:%M")} local (#{label})"
+  end
+
+  defp local_display(_datetime, _user_id), do: nil
 
   defp load_conversation(conversation_id) when is_binary(conversation_id),
     do: Repo.get(Conversation, conversation_id)

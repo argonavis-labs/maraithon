@@ -214,12 +214,25 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
        }}
     end
 
+    # Cadence briefs are an explicit user subscription: even though the model
+    # tried to `hold` this one, a brief-sourced candidate is never
+    # model-holdable for relevance/fatigue (see resolve_disposition/2 in
+    # DeliveryPlanner) — it is forced to send instead, using the same
+    # redacted, product-safe body verified above.
     assert {:ok, result} =
              DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
 
     assert result.planned == 1
-    assert result.held == 1
-    assert telegram_messages() == []
+    assert result.held == 0
+    assert result.interrupt_now == 1
+    assert result.delivered == 1
+
+    [message] = telegram_messages()
+    assert message.text =~ "Maraithon kept only review-ready next steps."
+
+    delivered_candidate = Repo.get!(ProactiveCandidate, candidate.id)
+    assert delivered_candidate.status == "delivered"
+    assert delivered_candidate.disposition == "interrupt_now"
   end
 
   test "hold candidates are marked held without sending", %{user_id: user_id} do
@@ -241,6 +254,97 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     assert held.status == "held"
     assert held.disposition == "hold"
     assert held.plan_reason == "Not useful enough to interrupt."
+  end
+
+  test "a cadence brief candidate cannot be fatigue-held by the model, unlike other sources", %{
+    user_id: user_id
+  } do
+    {:ok, brief_candidate} =
+      ProactiveQueue.enqueue(
+        candidate_attrs(user_id, %{
+          source: "brief",
+          title: "Morning brief",
+          body: "Two open loops need a decision this morning.",
+          dedupe_key: "brief:fatigue-hold-regression"
+        })
+      )
+
+    llm_complete =
+      plan_llm(%{
+        brief_candidate.id =>
+          {"hold", "A check-in already went out this morning; holding to prevent fatigue."}
+      })
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    # The model's fatigue-hold rationale is overridden: a cadence brief is an
+    # explicit subscription, not an opportunistic push, so it is forced to
+    # send instead of sitting "pending" forever (the production incident this
+    # regression test guards against).
+    assert result.held == 0
+    assert result.interrupt_now == 1
+    assert result.delivered == 1
+    assert telegram_messages() != []
+
+    planned = Repo.get!(ProactiveCandidate, brief_candidate.id)
+    assert planned.status == "delivered"
+    assert planned.disposition == "interrupt_now"
+    assert planned.plan_reason =~ "forced to send"
+  end
+
+  test "a fatigue-held brief still respects quiet hours instead of bypassing them", %{
+    user_id: user_id
+  } do
+    {:ok, brief_candidate} =
+      ProactiveQueue.enqueue(
+        candidate_attrs(user_id, %{
+          source: "brief",
+          title: "Morning brief",
+          body: "Two open loops need a decision this morning.",
+          dedupe_key: "brief:fatigue-hold-quiet-hours"
+        })
+      )
+
+    llm_complete =
+      plan_llm(%{
+        brief_candidate.id => {"hold", "Holding to prevent notification fatigue."}
+      })
+
+    # Force quiet hours to cover "now" (whatever hour the suite happens to
+    # run at) so this assertion isn't time-of-day-dependent. The real
+    # send-time gate (PushBroker.interruption_hold_reason/1) reads wall-clock
+    # time directly, not the `context:` opt, so quiet hours can only be
+    # exercised deterministically through config, not through a synthetic
+    # context payload.
+    assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+    now_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user(user_id).hour
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(assistant_config,
+        quiet_hours_start_local: now_hour,
+        quiet_hours_end_local: rem(now_hour + 1, 24)
+      )
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :telegram_assistant, assistant_config) end)
+
+    # Forcing the brief to `interrupt_now` must not also grant it the
+    # urgency-exempt bypass of quiet hours; it should be held by the runtime
+    # send-time gate instead.
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    assert result.interrupt_now == 1
+    assert result.delivered == 0
+    assert result.held == 1
+    assert telegram_messages() == []
+
+    planned = Repo.get!(ProactiveCandidate, brief_candidate.id)
+    assert planned.status == "held"
+    assert planned.disposition == "interrupt_now"
   end
 
   test "feedback verification holds stale backlog dumps even when model asks to interrupt", %{
