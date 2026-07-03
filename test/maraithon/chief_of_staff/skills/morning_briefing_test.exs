@@ -18,6 +18,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
   alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
   alias Maraithon.Memory
+  alias Maraithon.SourceFreshness
   alias Maraithon.Todos
 
   setup do
@@ -70,6 +71,63 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert input["timezone"] == "ET"
     assert input["timezone_offset_hours"] == -4
+  end
+
+  test "brief input surfaces a broken source in connector_health (R6)", %{user_id: user_id} do
+    start_supervised!(%{
+      id: :capturing_telegram_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
+    })
+
+    start_supervised!(%{
+      id: :capturing_email_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_email_recorder]]}
+    })
+
+    Application.put_env(:maraithon, :connected_accounts,
+      telegram_module: Maraithon.TestSupport.CapturingTelegram,
+      email_module: Maraithon.TestSupport.CapturingEmail
+    )
+
+    on_exit(fn -> Application.delete_env(:maraithon, :connected_accounts) end)
+
+    now = ~U[2026-05-15 14:00:00Z]
+
+    {:ok, _google} =
+      ConnectedAccounts.upsert_manual(user_id, "google:founder@example.com", %{
+        external_account_id: "founder@example.com",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    assert {:ok, _account} =
+             SourceFreshness.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required",
+               at: now
+             )
+
+    state = MorningBriefing.init(%{"user_id" => user_id})
+
+    input =
+      MorningBriefing.build_brief_input(user_id, now, state, %{
+        source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now})
+      })
+
+    connector_health = input["connector_health"]
+    assert is_list(connector_health)
+
+    google_entry =
+      Enum.find(connector_health, fn entry ->
+        (entry[:provider] || entry["provider"]) == "google"
+      end)
+
+    refute is_nil(google_entry)
+    assert (google_entry[:status] || google_entry["status"]) == "reauth_required"
+
+    refute Enum.any?(connector_health, fn entry ->
+             (entry[:provider] || entry["provider"]) == "telegram"
+           end)
   end
 
   test "builds a checked input and records an LLM synthesized brief", %{

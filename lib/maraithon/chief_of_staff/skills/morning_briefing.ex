@@ -24,6 +24,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Memory
   alias Maraithon.Spend
   alias Maraithon.OpenLoops
+  alias Maraithon.SourceFreshness
   alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Todos
   alias Maraithon.Tracing
@@ -824,8 +825,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             browser_history: visits
           ],
           local_source_errors
-        )
+        ),
+      # R6: `source_health` above is this cycle's per-fetch status (ready/
+      # partial/unavailable) and can read "partial" for an ordinary quiet
+      # day. `connector_health` is the durable account-level signal
+      # (`Maraithon.SourceFreshness`) so the brief can say plainly when a
+      # source used in this run has an active reconnect issue, not just a
+      # quiet one.
+      "connector_health" => broken_connector_health(user_id, now)
     }
+  end
+
+  defp broken_connector_health(user_id, now) do
+    user_id
+    |> SourceFreshness.compact_for_prompt(now: now)
+    |> Enum.reject(&(Map.get(&1, :status) == "fresh"))
   end
 
   @doc """
@@ -1359,6 +1373,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        included rows before deciding what belongs in the executive brief, and use
        source_health/counts to call out connector gaps or truncation risk when it affects
        confidence.
+
+       Connector health rule:
+       connector_health lists connected sources with an active reconnect issue (stale, never
+       synced, an error, or needing reauth) - fresh sources are omitted, so any entry there is a
+       real coverage gap. If a source in that list is one this brief draws on (Gmail, Calendar,
+       Slack), add one short line near the top noting the gap, e.g. "This run only covers Gmail;
+       Calendar needs reconnect." Do not invent detail beyond account_label/status/stale_reason,
+       and do not repeat the note for every section - state it once.
 
        Inbox and Slack triage contract:
        If gmail.recent_inbox, gmail.recent_unread, slack.key_threads, or slack.mentions contain
@@ -5759,7 +5781,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       {"reminders", %{}, &compact_prompt_value/1},
       {"files", %{}, &compact_prompt_value/1},
       {"browser_history", %{}, &compact_prompt_value/1},
-      {"source_health", %{}, &compact_prompt_value/1}
+      {"source_health", %{}, &compact_prompt_value/1},
+      {"connector_health", [], &compact_prompt_value/1}
     ]
   end
 

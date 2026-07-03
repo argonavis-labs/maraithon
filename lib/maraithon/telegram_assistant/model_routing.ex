@@ -105,7 +105,9 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\b(connected|active|enabled|working)\b.*\b(connections?|connectors?|integrations?|accounts?|sources?)\b/u,
     ~r/\bwhat\s+(is|do\s+i\s+have)\s+connected\b/u,
     ~r/\bconnection\s+status\b/u,
-    ~r/\bconnector\s+status\b/u
+    ~r/\bconnector\s+status\b/u,
+    ~r/\bwhat\s+(can|do)\s+you\s+see\b/u,
+    ~r/\bwhat\s+sources?\s+can\s+you\s+see\b/u
   ]
 
   @linked_item_context_patterns [
