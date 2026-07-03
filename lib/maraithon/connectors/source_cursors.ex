@@ -13,6 +13,18 @@ defmodule Maraithon.Connectors.SourceCursors do
   alias Maraithon.Connectors.SourceCursor
   alias Maraithon.Repo
 
+  # Poll-watermark kinds are epoch-second strings that a *delta* fetch reads
+  # to know "since when" to ask a provider for new items. Post-review
+  # belt-and-suspenders guard: a caller racing/misordering writes (or a bug
+  # like the non-agent `Acquisition.build` callers advancing these
+  # immediately) must never be able to move one of these backwards, since
+  # that would make the next delta fetch re-request a window it already
+  # covered rather than silently losing coverage — moving forward
+  # incorrectly is the dangerous direction, so only guard against rewinding.
+  # `gmail_history_id`/sync-token kinds are opaque provider cursors, not
+  # comparable integers, and are left untouched.
+  @monotonic_watermark_kinds ["gmail_poll_watermark", "slack_watermark"]
+
   @doc """
   Fetches the cursor for a `(connected_account_id, kind)` pair, or `nil`.
   """
@@ -36,7 +48,10 @@ defmodule Maraithon.Connectors.SourceCursors do
   def put(account, kind, attrs \\ %{})
 
   def put(%ConnectedAccount{} = account, kind, attrs) when is_binary(kind) do
-    attrs = normalize_attrs(attrs)
+    attrs =
+      attrs
+      |> normalize_attrs()
+      |> guard_monotonic_value(account, kind)
 
     base = %{
       "user_id" => account.user_id,
@@ -134,4 +149,28 @@ defmodule Maraithon.Connectors.SourceCursors do
 
   defp normalize_attrs(attrs) when is_list(attrs), do: attrs |> Map.new() |> normalize_attrs()
   defp normalize_attrs(_attrs), do: %{}
+
+  # Drops a rewinding "value" from `attrs` for the monotonic poll-watermark
+  # kinds, leaving the existing column untouched (per `put/3`'s "only fields
+  # present in attrs are written" contract). Only guards when both the
+  # existing and incoming values parse cleanly as integers; anything else
+  # (no existing cursor yet, non-numeric value) falls through to today's
+  # unconditional replace.
+  defp guard_monotonic_value(%{"value" => new_value} = attrs, %ConnectedAccount{} = account, kind)
+       when kind in @monotonic_watermark_kinds and is_binary(new_value) do
+    with {new_int, ""} <- Integer.parse(new_value),
+         %SourceCursor{value: existing_value} when is_binary(existing_value) <-
+           get(account.id, kind),
+         {existing_int, ""} <- Integer.parse(existing_value) do
+      if new_int < existing_int do
+        Map.delete(attrs, "value")
+      else
+        attrs
+      end
+    else
+      _ -> attrs
+    end
+  end
+
+  defp guard_monotonic_value(attrs, _account, _kind), do: attrs
 end
