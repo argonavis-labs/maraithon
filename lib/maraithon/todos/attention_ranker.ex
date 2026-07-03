@@ -61,7 +61,7 @@ defmodule Maraithon.Todos.AttentionRanker do
     relationship_strength = relationship_strength(todo, metadata)
 
     personal_family? = personal_family?(text, metadata)
-    waiting? = waiting?(text, metadata)
+    waiting? = waiting?(todo, text, metadata)
     intro? = contains_any?(text, @intro_terms)
     meeting? = contains_any?(text, @meeting_terms)
     business? = business_project?(text, metadata)
@@ -194,10 +194,23 @@ defmodule Maraithon.Todos.AttentionRanker do
       Enum.count(@family_terms_weak, &term_present?(text, &1)) >= 2
   end
 
-  defp waiting?(text, metadata) do
-    direction = read_metadata(metadata, "commitment_direction")
+  # SPEC 05 review (Finding 1): the `direction` column is the writer
+  # contract now, so it's read before the legacy metadata vocabulary.
+  # `owed_to_me` means the counterparty owes the operator a reply/action,
+  # i.e. the operator is waiting on them. Only falls back to the legacy
+  # `commitment_direction` metadata check when `direction` is nil/absent
+  # (pre-backfill rows or edge imports).
+  defp waiting?(todo, text, metadata) do
+    case read_field(todo, "direction") do
+      direction when direction in ["owed_by_me", "owed_to_me", "fyi"] ->
+        direction == "owed_to_me" or contains_any?(text, @waiting_terms)
 
-    direction in ["i_owe", "asked_of_me", "pending_reply"] or contains_any?(text, @waiting_terms)
+      _ ->
+        legacy_direction = read_metadata(metadata, "commitment_direction")
+
+        legacy_direction in ["i_owe", "asked_of_me", "pending_reply"] or
+          contains_any?(text, @waiting_terms)
+    end
   end
 
   defp business_project?(text, metadata) do

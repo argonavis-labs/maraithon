@@ -64,6 +64,129 @@ defmodule Maraithon.LLM.Embeddings do
 
   def embed(_input, _opts), do: {:error, :invalid_input}
 
+  @doc """
+  Batch variant of `embed/2`. Computes embeddings for multiple non-blank
+  strings with as few provider round-trips as possible: the OpenAI
+  embeddings endpoint accepts a list `input` and returns one embedding per
+  entry in a single HTTP call, so this issues exactly one request instead
+  of one per string. Returns `{:ok, [vector]}` in the same order as
+  `inputs`, or `{:error, reason}`.
+
+  Non-OpenAI/mock providers (custom `{module, fun, extra}` or `fun/1`
+  overrides) don't have a batch API to call into, so they fall back to one
+  call per input; that's still correct, just not fewer round-trips.
+  """
+  def embed_many(inputs, opts \\ [])
+
+  def embed_many([], _opts), do: {:ok, []}
+
+  def embed_many(inputs, opts) when is_list(inputs) do
+    texts = Enum.map(inputs, &(is_binary(&1) && String.trim(&1)))
+
+    if Enum.any?(texts, &(&1 in [false, ""])) do
+      {:error, :empty_input}
+    else
+      provider = Keyword.get(opts, :provider, configured_provider())
+
+      case provider do
+        :openai ->
+          embed_many_via_openai(texts, opts)
+
+        :mock ->
+          {:ok, Enum.map(texts, &deterministic_mock(&1, dimension()))}
+
+        {module, fun, extra} when is_atom(module) and is_atom(fun) and is_list(extra) ->
+          embed_many_fallback(texts, &apply(module, fun, [&1 | extra]))
+
+        fun when is_function(fun, 1) ->
+          embed_many_fallback(texts, fun)
+
+        other ->
+          {:error, {:unknown_embedding_provider, other}}
+      end
+    end
+  end
+
+  def embed_many(_inputs, _opts), do: {:error, :invalid_input}
+
+  defp embed_many_via_openai(texts, opts) do
+    case Maraithon.LLM.openai_api_key() do
+      nil ->
+        Logger.warning("OPENAI_API_KEY missing; falling back to mock embedding")
+        {:ok, Enum.map(texts, &deterministic_mock(&1, dimension()))}
+
+      "" ->
+        Logger.warning("OPENAI_API_KEY empty; falling back to mock embedding")
+        {:ok, Enum.map(texts, &deterministic_mock(&1, dimension()))}
+
+      api_key ->
+        do_openai_batch_request(texts, api_key, opts)
+    end
+  end
+
+  defp do_openai_batch_request(texts, api_key, opts) do
+    model = Keyword.get(opts, :model, model())
+    timeout = Keyword.get(opts, :timeout_ms, 30_000)
+
+    body = %{model: model, input: texts}
+
+    case Req.post(openai_url(),
+           json: body,
+           headers: [
+             {"authorization", "Bearer #{api_key}"},
+             {"content-type", "application/json"}
+           ],
+           receive_timeout: timeout
+         ) do
+      {:ok, %{status: 200, body: response}} ->
+        extract_embeddings(response, length(texts))
+
+      {:ok, %{status: 429, body: body}} ->
+        Logger.warning("Embedding rate limited", body: inspect(body))
+        {:error, :rate_limited}
+
+      {:ok, %{status: status, body: body}} ->
+        Logger.error("Embedding API error", status: status, body: inspect(body))
+        {:error, {:api_error, status, body}}
+
+      {:error, %{reason: :timeout}} ->
+        {:error, :timeout}
+
+      {:error, reason} ->
+        {:error, {:network_error, reason}}
+    end
+  end
+
+  defp embed_many_fallback(texts, fun) do
+    texts
+    |> Enum.reduce_while({:ok, []}, fn text, {:ok, acc} ->
+      case fun.(text) do
+        {:ok, vector} -> {:cont, {:ok, [vector | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      other -> other
+    end
+  end
+
+  defp extract_embeddings(%{"data" => data}, expected_count)
+       when is_list(data) and length(data) == expected_count do
+    vectors =
+      data
+      |> Enum.sort_by(&Map.get(&1, "index", 0))
+      |> Enum.map(fn %{"embedding" => embedding} when is_list(embedding) ->
+        Enum.map(embedding, &normalize_float/1)
+      end)
+
+    {:ok, vectors}
+  rescue
+    _error -> {:error, :missing_embedding}
+  end
+
+  defp extract_embeddings(_response, _expected_count), do: {:error, :missing_embedding}
+
   defp embed_via_openai(text, opts) do
     case Maraithon.LLM.openai_api_key() do
       nil ->

@@ -63,6 +63,15 @@ defmodule Maraithon.Todos.Intelligence do
     "set a reminder"
   ]
 
+  # SPEC 05 review (Finding 3): augment_with_semantic_candidates/4 runs
+  # synchronously inside the chat-turn `upsert_todos` tool path. Cap how
+  # many candidates get an embedding-dedupe lookup per call, and bound the
+  # whole thing with a hard wall-clock budget so a slow/unavailable
+  # embedding provider degrades to "no injection" instead of stalling a
+  # live reply.
+  @semantic_dedupe_max_candidates 8
+  @semantic_dedupe_timeout_ms 4_000
+
   def sentinel, do: @sentinel
 
   def ingest_many(user_id, candidates, opts \\ [])
@@ -101,43 +110,39 @@ defmodule Maraithon.Todos.Intelligence do
   # SPEC 05 R5: embedding-similarity dedupe fallback. `existing` (recent
   # todos, capped by :existing_limit) may not contain a true semantic
   # duplicate that fell outside the recency window. This runs an embedding
-  # search per candidate over the user's open todos and folds the top
-  # near-matches into `existing` so the model reliably sees them in
-  # EXISTING_TODOS_JSON and can choose action "update" with the matched
-  # existing_todo_id instead of creating a duplicate with different wording.
-  # The model still makes the create-vs-update call; this only widens what
-  # it can see. Never raises — degrades to the unmodified `existing` list
-  # when semantic search is unavailable or fails.
+  # search over the user's open todos and folds the top near-matches into
+  # `existing` so the model reliably sees them in EXISTING_TODOS_JSON and
+  # can choose action "update" with the matched existing_todo_id instead of
+  # creating a duplicate with different wording. The model still makes the
+  # create-vs-update call; this only widens what it can see.
+  #
+  # SPEC 05 review (Finding 3): this runs synchronously on the chat-turn
+  # `upsert_todos` tool path, so it's bounded three ways: (a) all candidate
+  # texts are embedded in a single batched provider call
+  # (`Todos.semantic_duplicate_candidates_many/3` /
+  # `Embeddings.embed_many/2`) instead of one call per candidate, (b) only
+  # the first `@semantic_dedupe_max_candidates` candidates get a lookup,
+  # and (c) the whole augmentation runs under a
+  # `@semantic_dedupe_timeout_ms` wall-clock budget and degrades to
+  # no-injection (the unmodified `existing` list) on expiry — this fallback
+  # is best-effort by design, so a slow/unavailable embedding provider
+  # should never stall a live reply. Never raises.
   defp augment_with_semantic_candidates(existing, user_id, candidates, opts) do
     if Keyword.get(opts, :semantic_dedupe, true) do
-      existing_ids = MapSet.new(existing, & &1.id)
-      limit = Keyword.get(opts, :semantic_dedupe_limit, 5)
-      embed_opts = Keyword.get(opts, :embed_opts, [])
-      # Default tuned for real embedding providers (e.g. OpenAI
-      # text-embedding-3-small), where near-duplicate wording about the same
-      # commitment reliably scores much higher than this. Lower it (e.g. in
-      # a demo/offline run against the deterministic mock provider — see
-      # Maraithon.LLM.Embeddings.deterministic_mock/2) if the embedding
-      # provider's similarity scale is coarser.
-      min_similarity = Keyword.get(opts, :semantic_dedupe_min_similarity, 0.75)
+      timeout_ms = Keyword.get(opts, :semantic_dedupe_timeout_ms, @semantic_dedupe_timeout_ms)
+      parent = self()
 
-      extra =
-        candidates
-        |> Enum.flat_map(fn candidate ->
-          candidate
-          |> semantic_dedupe_text()
-          |> then(
-            &Todos.semantic_duplicate_candidates(user_id, &1,
-              limit: limit,
-              min_similarity: min_similarity,
-              embed_opts: embed_opts
-            )
-          )
+      task =
+        Task.async(fn ->
+          allow_sandbox_access(parent)
+          semantic_dedupe_extra(existing, user_id, candidates, opts)
         end)
-        |> Enum.uniq_by(& &1.id)
-        |> Enum.reject(&MapSet.member?(existing_ids, &1.id))
 
-      existing ++ extra
+      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, extra} -> existing ++ extra
+        {:exit, _reason} -> existing
+        nil -> existing
+      end
     else
       existing
     end
@@ -145,6 +150,55 @@ defmodule Maraithon.Todos.Intelligence do
     _error -> existing
   catch
     _kind, _reason -> existing
+  end
+
+  # Lets the spawned Task borrow the calling process's Ecto sandbox
+  # connection under `mix test` (ExUnit tests run each case on its own
+  # process/connection); a no-op in dev/prod where the repo isn't running
+  # the Sandbox pool.
+  defp allow_sandbox_access(parent) do
+    if Maraithon.Repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox do
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, parent, self())
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp semantic_dedupe_extra(existing, user_id, candidates, opts) do
+    existing_ids = MapSet.new(existing, & &1.id)
+    limit = Keyword.get(opts, :semantic_dedupe_limit, 5)
+    embed_opts = Keyword.get(opts, :embed_opts, [])
+    max_candidates =
+      Keyword.get(opts, :semantic_dedupe_max_candidates, @semantic_dedupe_max_candidates)
+
+    # Default tuned for real embedding providers (e.g. OpenAI
+    # text-embedding-3-small), where near-duplicate wording about the same
+    # commitment reliably scores much higher than this. Lower it (e.g. in
+    # a demo/offline run against the deterministic mock provider — see
+    # Maraithon.LLM.Embeddings.deterministic_mock/2) if the embedding
+    # provider's similarity scale is coarser.
+    min_similarity = Keyword.get(opts, :semantic_dedupe_min_similarity, 0.75)
+
+    texts =
+      candidates
+      |> Enum.take(max_candidates)
+      |> Enum.map(&semantic_dedupe_text/1)
+
+    user_id
+    |> Todos.semantic_duplicate_candidates_many(texts,
+      limit: limit,
+      min_similarity: min_similarity,
+      embed_opts: embed_opts
+    )
+    |> List.flatten()
+    |> Enum.uniq_by(& &1.id)
+    |> Enum.reject(&MapSet.member?(existing_ids, &1.id))
+  rescue
+    _error -> []
+  catch
+    _kind, _reason -> []
   end
 
   defp semantic_dedupe_text(candidate) when is_map(candidate) do

@@ -92,4 +92,51 @@ defmodule Maraithon.Todos.AttentionRankerTest do
 
     refute profile["business_project"]
   end
+
+  # SPEC 05 review (Finding 1): the direction column, not just the legacy
+  # metadata.commitment_direction vocabulary, must be read for
+  # "actively_waiting" so todos written via the general assistant path
+  # (which only sets `direction`, not the legacy metadata fields) are still
+  # recognized as waiting on a counterparty.
+  test "direction column alone marks a todo as actively waiting" do
+    waiting_on_counterparty = %{
+      "title" => "Vendor contract",
+      "summary" => "No wording hints here at all.",
+      "next_action" => "Check back later.",
+      "priority" => 60,
+      "direction" => "owed_to_me"
+    }
+
+    profile = AttentionRanker.profile(waiting_on_counterparty, now: @now)
+
+    assert profile["actively_waiting"] == true
+  end
+
+  test "owed_by_me direction alone does not force actively waiting" do
+    self_owned = %{
+      "title" => "Vendor contract",
+      "summary" => "No wording hints here at all.",
+      "next_action" => "Check back later.",
+      "priority" => 60,
+      "direction" => "owed_by_me"
+    }
+
+    profile = AttentionRanker.profile(self_owned, now: @now)
+
+    refute profile["actively_waiting"]
+  end
+
+  test "falls back to legacy commitment_direction metadata when direction is absent" do
+    legacy_waiting = %{
+      "title" => "Vendor contract",
+      "summary" => "No wording hints here at all.",
+      "next_action" => "Check back later.",
+      "priority" => 60,
+      "metadata" => %{"commitment_direction" => "pending_reply"}
+    }
+
+    profile = AttentionRanker.profile(legacy_waiting, now: @now)
+
+    assert profile["actively_waiting"] == true
+  end
 end

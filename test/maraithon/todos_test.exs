@@ -107,6 +107,84 @@ defmodule Maraithon.TodosTest do
     assert persisted.dedupe_key == todo.dedupe_key
   end
 
+  test "upserting an update without a direction preserves the existing owed_to_me direction" do
+    user_id = unique_user_email("todos-direction-preserve")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_attrs("thread-direction", "Waiting on vendor reply",
+          direction: "owed_to_me",
+          counterparty_label: "Acme Vendor"
+        )
+      ])
+
+    assert todo.direction == "owed_to_me"
+    assert todo.counterparty_label == "Acme Vendor"
+
+    {:ok, [reupserted]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_attrs("thread-direction", "Waiting on vendor reply",
+          summary: "Still waiting on the vendor to reply."
+        )
+      ])
+
+    assert reupserted.id == todo.id
+    assert reupserted.direction == "owed_to_me"
+    assert reupserted.counterparty_label == "Acme Vendor"
+  end
+
+  test "upserting an update with an explicit direction still overrides it" do
+    user_id = unique_user_email("todos-direction-override")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_attrs("thread-direction-override", "Waiting on vendor reply",
+          direction: "owed_to_me"
+        )
+      ])
+
+    assert todo.direction == "owed_to_me"
+
+    {:ok, [reupserted]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_attrs("thread-direction-override", "Waiting on vendor reply",
+          summary: "You now owe the vendor a reply.",
+          direction: "owed_by_me"
+        )
+      ])
+
+    assert reupserted.id == todo.id
+    assert reupserted.direction == "owed_by_me"
+  end
+
+  test "record_nudge_sent atomically increments nudge_count and stamps nudge state" do
+    user_id = unique_user_email("todos-nudge")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_attrs("thread-nudge", "Follow up with vendor", direction: "owed_to_me")
+      ])
+
+    assert todo.nudge_count == 0
+
+    assert {:ok, nudged_once} =
+             Todos.record_nudge_sent(user_id, todo.id, channel: "gmail")
+
+    assert nudged_once.nudge_count == 1
+    assert nudged_once.follow_up_channel == "gmail"
+    assert %DateTime{} = nudged_once.last_nudged_at
+
+    assert {:ok, nudged_twice} = Todos.record_nudge_sent(user_id, todo.id, channel: "slack")
+    assert nudged_twice.nudge_count == 2
+    assert nudged_twice.follow_up_channel == "slack"
+
+    assert {:error, :not_found} =
+             Todos.record_nudge_sent(user_id, Ecto.UUID.generate(), channel: "gmail")
+  end
+
   test "dismissing a todo records a low-signal not-important learning marker" do
     user_id = unique_user_email("todos-dismiss-signal")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

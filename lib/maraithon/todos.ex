@@ -589,29 +589,28 @@ defmodule Maraithon.Todos do
     channel = normalize_optional_string(Keyword.get(opts, :channel))
     next_nudge_at = Keyword.get(opts, :next_nudge_at)
 
-    Repo.transaction(fn ->
-      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
-           {:ok, updated} <-
-             todo
-             |> Todo.changeset(
-               %{
-                 last_nudged_at: now,
-                 nudge_count: (todo.nudge_count || 0) + 1,
-                 next_nudge_at: next_nudge_at
-               }
-               |> maybe_put(:follow_up_channel, channel)
-             )
-             |> Repo.update() do
-        updated
-      else
-        nil -> Repo.rollback(:not_found)
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    # DB-side atomic increment (review fix, minor): the prior read-then-write
+    # `(todo.nudge_count || 0) + 1` could lose increments under concurrent
+    # nudges for the same todo. `update_all` with `inc:` pushes the +1 to
+    # Postgres so it's race-free; `updated_at` is set explicitly here since
+    # `update_all` bypasses the changeset/Repo.update autogeneration that
+    # normally stamps it.
+    set_fields =
+      [last_nudged_at: now, next_nudge_at: next_nudge_at, updated_at: now]
+      |> maybe_put_keyword(:follow_up_channel, channel)
+
+    Todo
+    |> where([todo], todo.id == ^todo_id and todo.user_id == ^user_id)
+    |> Repo.update_all(inc: [nudge_count: 1], set: set_fields)
     |> case do
-      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
-      {:error, :not_found} -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
+      {1, _} ->
+        case Repo.get_by(Todo, id: todo_id, user_id: user_id) do
+          %Todo{} = todo -> {:ok, polish_todo_copy(todo)}
+          nil -> {:error, :not_found}
+        end
+
+      {0, _} ->
+        {:error, :not_found}
     end
   end
 
@@ -705,8 +704,78 @@ defmodule Maraithon.Todos do
 
   def semantic_duplicate_candidates(_user_id, _text, _opts), do: []
 
+  @doc """
+  Batch variant of `semantic_duplicate_candidates/3` (SPEC 05 review,
+  Finding 3). Takes multiple texts and returns a parallel list of duplicate
+  candidate lists, computing all embeddings in a single provider round-trip
+  (`Embeddings.embed_many/2`) instead of one call per text. The local
+  pgvector similarity search still runs once per text (that's an in-process
+  DB query, not a network call), so this only collapses the expensive part.
+  Never raises; degrades to `[]` per position on any failure.
+  """
+  def semantic_duplicate_candidates_many(user_id, texts, opts \\ [])
+
+  def semantic_duplicate_candidates_many(user_id, texts, opts)
+      when is_binary(user_id) and is_list(texts) and is_list(opts) do
+    limit = Keyword.get(opts, :limit, 5)
+    min_similarity = Keyword.get(opts, :min_similarity, 0.75)
+    embed_opts = Keyword.get(opts, :embed_opts, [])
+
+    normalized = Enum.map(texts, &normalize_optional_string/1)
+
+    if not LocalEmbeddings.embedding_storage_available?(@embedding_table) or
+         Enum.all?(normalized, &is_nil/1) do
+      Enum.map(normalized, fn _ -> [] end)
+    else
+      indexed = normalized |> Enum.with_index() |> Enum.filter(fn {text, _i} -> text != nil end)
+
+      case safe_embed_many(Enum.map(indexed, &elem(&1, 0)), embed_opts) do
+        {:ok, vectors} ->
+          vectors_by_index = indexed |> Enum.map(&elem(&1, 1)) |> Enum.zip(vectors) |> Map.new()
+
+          Enum.with_index(normalized)
+          |> Enum.map(fn {_text, index} ->
+            case Map.get(vectors_by_index, index) do
+              nil ->
+                []
+
+              vector ->
+                @embedding_table
+                |> LocalEmbeddings.semantic_search(user_id, vector,
+                  limit: max(limit * 4, limit),
+                  min_similarity: min_similarity
+                )
+                |> load_open_todos_ranked(user_id, limit)
+            end
+          end)
+
+        {:error, _reason} ->
+          Enum.map(normalized, fn _ -> [] end)
+      end
+    end
+  rescue
+    error ->
+      Logger.warning("todo semantic dedupe batch search failed", reason: Exception.message(error))
+      Enum.map(texts, fn _ -> [] end)
+  catch
+    _kind, _reason -> Enum.map(texts, fn _ -> [] end)
+  end
+
+  def semantic_duplicate_candidates_many(_user_id, texts, _opts) when is_list(texts),
+    do: Enum.map(texts, fn _ -> [] end)
+
+  def semantic_duplicate_candidates_many(_user_id, _texts, _opts), do: []
+
   defp safe_embed(text, opts) do
     Embeddings.embed(text, opts)
+  rescue
+    error -> {:error, Exception.message(error)}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp safe_embed_many(texts, opts) do
+    Embeddings.embed_many(texts, opts)
   rescue
     error -> {:error, Exception.message(error)}
   catch
@@ -885,9 +954,9 @@ defmodule Maraithon.Todos do
       |> ActionDrafts.ensure()
 
     case existing_todo_for_upsert(user_id, normalized_attrs) do
-      {%Todo{} = todo, attrs} ->
+      {%Todo{} = todo, matched_attrs} ->
         todo
-        |> Todo.changeset(merge_upsert_attrs(todo, attrs))
+        |> Todo.changeset(merge_upsert_attrs(todo, matched_attrs, attrs))
         |> Repo.update()
         |> tap_refresh_embedding()
 
@@ -1147,7 +1216,7 @@ defmodule Maraithon.Todos do
     end
   end
 
-  defp merge_upsert_attrs(%Todo{} = existing, attrs) do
+  defp merge_upsert_attrs(%Todo{} = existing, attrs, raw_attrs) do
     incoming_status = Map.get(attrs, "status", "open")
 
     status = merge_status(existing.status, incoming_status)
@@ -1170,6 +1239,47 @@ defmodule Maraithon.Todos do
     |> Map.put("status", status)
     |> Map.put("closed_at", closed_at)
     |> Map.put("snoozed_until", snoozed_until)
+    |> Map.put("direction", preserved_update_direction(existing, raw_attrs))
+    |> Map.put(
+      "counterparty_person_id",
+      preserved_update_counterparty_person_id(existing, raw_attrs)
+    )
+    |> Map.put("counterparty_label", preserved_update_counterparty_label(existing, raw_attrs))
+  end
+
+  # SPEC 05 review (Finding 2): normalize_attrs/2 always resolves a
+  # "direction" (defaulting to "owed_by_me") so the create path always has
+  # a sensible value, but by the time that default is baked in we can no
+  # longer tell "explicitly set to owed_by_me" apart from "not provided at
+  # all". On the update path that ambiguity meant every upsert whose
+  # incoming attrs omitted (or sent an invalid) direction/counterparty
+  # silently reset an existing owed_to_me todo back to owed_by_me. Re-derive
+  # from the *raw*, pre-normalization attrs here so we can preserve the
+  # existing value when nothing valid was explicitly provided — mirroring
+  # update_direction_attr/2 on the explicit-tool-update path. The create
+  # path is unaffected; it never goes through this function.
+  defp preserved_update_direction(%Todo{} = existing, raw_attrs) do
+    if attr_present?(raw_attrs, "direction") do
+      normalize_direction(read_string(raw_attrs, "direction", nil)) || existing.direction
+    else
+      existing.direction
+    end
+  end
+
+  defp preserved_update_counterparty_person_id(%Todo{} = existing, raw_attrs) do
+    if attr_present?(raw_attrs, "counterparty_person_id") do
+      read_uuid(raw_attrs, "counterparty_person_id", nil) || existing.counterparty_person_id
+    else
+      existing.counterparty_person_id
+    end
+  end
+
+  defp preserved_update_counterparty_label(%Todo{} = existing, raw_attrs) do
+    if attr_present?(raw_attrs, "counterparty_label") do
+      read_string(raw_attrs, "counterparty_label", nil) || existing.counterparty_label
+    else
+      existing.counterparty_label
+    end
   end
 
   defp merge_status(_existing_status, incoming_status)
@@ -2343,6 +2453,13 @@ defmodule Maraithon.Todos do
 
   defp maybe_put(map, key, value) do
     Map.put(map, key, value)
+  end
+
+  defp maybe_put_keyword(keyword, _key, nil), do: keyword
+  defp maybe_put_keyword(keyword, _key, ""), do: keyword
+
+  defp maybe_put_keyword(keyword, key, value) do
+    Keyword.put(keyword, key, value)
   end
 
   defp stringify_top_level_keys(map) when is_map(map) do

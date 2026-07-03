@@ -30,15 +30,14 @@ defmodule Maraithon.Todos.DecisionSignals do
 
   def needs_decision?(%Todo{} = todo) do
     todo.status in ["open", "snoozed"] and
-      (stale_keep_or_close?(todo) or explicit_direction?(todo.metadata || %{}) or
-         decision_text?(text_blob(todo)))
+      (stale_keep_or_close?(todo) or explicit_direction?(todo) or decision_text?(text_blob(todo)))
   end
 
   def needs_decision?(%{} = todo) do
     status = read_value(todo, :status) || read_value(todo, "status")
 
     status in ["open", "snoozed", nil] and
-      (explicit_direction?(read_metadata(todo)) or decision_text?(text_blob(todo)))
+      (explicit_direction?(todo) or decision_text?(text_blob(todo)))
   end
 
   def needs_decision?(_todo), do: false
@@ -55,7 +54,31 @@ defmodule Maraithon.Todos.DecisionSignals do
     |> read_value("stale_confirmation_candidate") == true
   end
 
-  defp explicit_direction?(metadata) when is_map(metadata) do
+  # SPEC 05 review (Finding 1): reads the `direction` column first, since
+  # todos created via the general assistant path only carry `direction`,
+  # not the legacy metadata vocabulary. `owed_by_me`/`owed_to_me` are
+  # decision-direction; `fyi` explicitly is not. Only falls back to the
+  # legacy metadata vocabulary when `direction` is nil/absent/invalid
+  # (pre-backfill rows or edge imports) so we don't regress older data.
+  defp explicit_direction?(%Todo{} = todo) do
+    case todo.direction do
+      direction when direction in ["owed_by_me", "owed_to_me"] -> true
+      "fyi" -> false
+      _ -> explicit_direction_from_metadata?(todo.metadata || %{})
+    end
+  end
+
+  defp explicit_direction?(%{} = todo) do
+    case read_value(todo, "direction") || read_value(todo, :direction) do
+      direction when direction in ["owed_by_me", "owed_to_me"] -> true
+      "fyi" -> false
+      _ -> explicit_direction_from_metadata?(read_metadata(todo))
+    end
+  end
+
+  defp explicit_direction?(_todo), do: false
+
+  defp explicit_direction_from_metadata?(metadata) when is_map(metadata) do
     [
       read_value(metadata, "commitment_direction"),
       read_value(metadata, "thread_state"),
@@ -65,7 +88,7 @@ defmodule Maraithon.Todos.DecisionSignals do
     |> Enum.any?(&(&1 in @decision_directions))
   end
 
-  defp explicit_direction?(_metadata), do: false
+  defp explicit_direction_from_metadata?(_metadata), do: false
 
   defp decision_text?(value) when is_binary(value) do
     normalized = normalize_text(value)
