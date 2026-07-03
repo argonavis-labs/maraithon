@@ -9,6 +9,9 @@ defmodule Maraithon.Memory.Recall do
 
   import Ecto.Query
 
+  alias Maraithon.LLM.Embeddings
+  alias Maraithon.LocalEmbeddings
+  alias Maraithon.Memory.Embedding
   alias Maraithon.Memory.Item
   alias Maraithon.Repo
 
@@ -16,6 +19,11 @@ defmodule Maraithon.Memory.Recall do
   @default_max_tokens 1_500
   @default_candidate_limit 120
   @max_candidate_limit 500
+  # SPEC 07 R2: bounds the query-embedding HTTP round trip so a slow/down
+  # embedding provider degrades to lexical-only scoring instead of stalling
+  # every `Memory.prompt_context/recall` caller (most of which have no outer
+  # timeout of their own).
+  @embedding_query_timeout_ms 2_000
 
   def recall(user_id, opts \\ [])
 
@@ -35,13 +43,14 @@ defmodule Maraithon.Memory.Recall do
 
     query = opts |> Keyword.get(:query) |> normalize_text()
     filters = normalized_filters(opts)
+    embedding_similarities = embedding_similarity_map(user_id, query, candidate_limit, opts)
 
     scored =
       user_id
       |> candidates_query(filters, now, Keyword.get(opts, :include_superseded, false))
       |> limit(^candidate_limit)
       |> Repo.all()
-      |> Enum.map(&{&1, score(&1, query, filters, now)})
+      |> Enum.map(&{&1, score(&1, query, filters, now, embedding_similarities)})
       |> Enum.sort_by(fn {_item, score} -> score end, :desc)
 
     {items, used_tokens, dropped} = apply_budget(scored, limit, max_tokens)
@@ -88,17 +97,94 @@ defmodule Maraithon.Memory.Recall do
     )
   end
 
-  # Weights intentionally sum around a 100-point scale. Query and subject boosts
-  # are boosts, not gates, so the model can still see high-value adjacent facts.
-  defp score(%Item{} = item, query, filters, now) do
+  # Weights intentionally sum around a 100-point scale. Query, subject, and
+  # embedding boosts are boosts, not gates, so the model can still see
+  # high-value adjacent facts. `embedding_score/2` is 0 whenever the item (or
+  # the query) has no embedding, so lexical `query_match_score/2` remains a
+  # full fallback signal rather than being displaced (SPEC 07 R2).
+  defp score(%Item{} = item, query, filters, now, embedding_similarities) do
     importance = (item.importance || 50) * 0.45
     confidence = (item.confidence || 0.75) * 100 * 0.30
     recency = recency_score(item, now) * 0.10
     subject = subject_match_score(item, filters) * 0.20
     query_match = query_match_score(item, query) * 0.15
+    embedding = embedding_score(item, embedding_similarities) * 0.35
     decay = decay_penalty(item, now)
 
-    importance + confidence + recency + subject + query_match + decay
+    importance + confidence + recency + subject + query_match + embedding + decay
+  end
+
+  defp embedding_score(_item, similarities) when map_size(similarities) == 0, do: 0
+
+  defp embedding_score(%Item{id: id}, similarities) do
+    case Map.get(similarities, id) do
+      similarity when is_number(similarity) -> max(similarity, 0) * 100
+      _other -> 0
+    end
+  end
+
+  # Computes the query embedding (bounded by @embedding_query_timeout_ms) and
+  # runs a cosine-similarity search over the user's memory_items, returning a
+  # `%{item_id => similarity}` lookup. Returns `%{}` (pure lexical fallback)
+  # when there's no query, the embedding column isn't present, the embed call
+  # errors, or it doesn't finish inside the timeout — this must never block
+  # or crash a recall call.
+  defp embedding_similarity_map(_user_id, nil, _candidate_limit, _opts), do: %{}
+
+  defp embedding_similarity_map(user_id, query, candidate_limit, opts) do
+    table = Embedding.table()
+
+    if LocalEmbeddings.embedding_storage_available?(table) do
+      case bounded_embed(query, opts) do
+        {:ok, vector} ->
+          table
+          |> LocalEmbeddings.semantic_search(user_id, vector, limit: candidate_limit)
+          |> Map.new()
+
+        {:error, _reason} ->
+          %{}
+      end
+    else
+      %{}
+    end
+  rescue
+    _error -> %{}
+  catch
+    _kind, _reason -> %{}
+  end
+
+  defp bounded_embed(query, opts) do
+    timeout_ms = Keyword.get(opts, :embedding_query_timeout_ms, @embedding_query_timeout_ms)
+    embed_opts = Keyword.get(opts, :embed_opts, [])
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        allow_sandbox_access(parent)
+        Embeddings.embed(query, embed_opts)
+      end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      nil -> {:error, :timeout}
+    end
+  rescue
+    error -> {:error, Exception.message(error)}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  # Lets the spawned Task borrow the calling process's Ecto sandbox
+  # connection under `mix test`; a no-op in dev/prod. Mirrors
+  # `Maraithon.Todos.Intelligence.allow_sandbox_access/1`.
+  defp allow_sandbox_access(parent) do
+    if Maraithon.Repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox do
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, parent, self())
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   defp recency_score(item, now) do
