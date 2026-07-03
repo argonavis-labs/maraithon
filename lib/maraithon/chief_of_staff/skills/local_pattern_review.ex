@@ -104,7 +104,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
         else
           pending_state = %{state | pending_candidates: candidates}
 
-          case llm_params(candidates, state) do
+          case llm_params(candidates, state, context) do
             {:ok, params} ->
               {:effect, {:llm_call, params}, pending_state}
 
@@ -150,11 +150,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
   # Model call + review
   # ==========================================================================
 
-  defp llm_params(candidates, state) do
+  defp llm_params(candidates, state, context) do
     with {:ok, input_json} <- Jason.encode(candidates_for_prompt(candidates)) do
       params =
         %{
-          "messages" => [%{"role" => "user", "content" => review_prompt(input_json)}],
+          "messages" => [%{"role" => "user", "content" => review_prompt(input_json, context)}],
           "max_tokens" => state.llm_max_tokens,
           "temperature" => 0.1,
           "reasoning_effort" => state.llm_reasoning_effort
@@ -179,7 +179,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
     end)
   end
 
-  defp review_prompt(input_json) do
+  defp review_prompt(input_json, context) do
     """
     You are the operator's chief of staff. A keyword/pattern detector flagged
     the candidate signals below (cold threads, dropped commitments,
@@ -188,7 +188,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
     are actually worth interrupting the operator about right now, and which
     are noise, stale, or not worth a Telegram nudge.
 
-    Return ONLY valid JSON with this exact shape:
+    #{previous_cycle_memo_section(context)}Return ONLY valid JSON with this exact shape:
     {
       "decisions": [
         {"id": "<candidate id>", "decision": "keep" | "discard", "reason": "short reason"}
@@ -314,6 +314,37 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
   end
 
   defp normalize_string(_value), do: nil
+
+  # R3 (SPEC 04): render the model's own cross-cycle memo (persisted in
+  # behavior_state, injected via skill_context/4) as a clearly-labeled prompt
+  # section so keep/discard decisions reason over what the last cycle already
+  # decided instead of the memo only existing to seed the next memo.
+  defp previous_cycle_memo_section(context) do
+    memo = context[:previous_cycle_memo]
+
+    if is_binary(memo) and String.trim(memo) != "" do
+      """
+      PREVIOUS CYCLE MEMO#{memo_meta_suffix(context)}:
+      #{String.trim(memo)}
+
+      """
+    else
+      ""
+    end
+  end
+
+  defp memo_meta_suffix(context) do
+    parts =
+      [{"cycle", context[:previous_cycle_memo_cycle_id]},
+       {"at", context[:previous_cycle_memo_updated_at]}]
+      |> Enum.reject(fn {_label, value} -> normalize_string(value) == nil end)
+      |> Enum.map(fn {label, value} -> "#{label} #{value}" end)
+
+    case parts do
+      [] -> ""
+      parts -> " (" <> Enum.join(parts, ", ") <> ")"
+    end
+  end
 
   defp normalize_reasoning_effort(value, default) when is_binary(value) do
     normalized = value |> String.trim() |> String.downcase()

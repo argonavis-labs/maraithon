@@ -268,7 +268,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
               last_reviewed_at: now
           }
 
-          {:effect, {:llm_call, llm_params(payload, state)}, next_state}
+          {:effect, {:llm_call, llm_params(payload, state, context)}, next_state}
 
         {:error, _reason} ->
           {:idle, %{state | user_id: user_id, last_reviewed_at: now}}
@@ -303,12 +303,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
     }
   end
 
-  defp llm_params(payload, state) do
+  defp llm_params(payload, state, context) do
     %{
       "messages" => [
         %{
           "role" => "user",
-          "content" => goal_alignment_prompt(payload)
+          "content" => goal_alignment_prompt(payload, context)
         }
       ],
       "max_tokens" => state.llm_max_tokens,
@@ -317,11 +317,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
     }
   end
 
-  defp goal_alignment_prompt(payload) do
+  defp goal_alignment_prompt(payload, context) do
     """
     You are Maraithon's proactive Chief of Staff goal-alignment loop.
 
-    Review the user's due goals against all connected context in the payload: open work, People, Gmail, Google Calendar, Slack, local calendar, iMessage, Notes, Reminders, files, browser history, and voice memos. Missing or stale sources are source-health facts, not failures.
+    #{previous_cycle_memo_section(context)}Review the user's due goals against all connected context in the payload: open work, People, Gmail, Google Calendar, Slack, local calendar, iMessage, Notes, Reminders, files, browser history, and voice memos. Missing or stale sources are source-health facts, not failures.
 
     Create outputs only when they are high quality:
     - Advice must be specific, grounded in connected context, and useful for the goal.
@@ -355,6 +355,37 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
     Payload JSON:
     #{Jason.encode!(payload)}
     """
+  end
+
+  # R3 (SPEC 04): render the model's own cross-cycle memo (persisted in
+  # behavior_state, injected via skill_context/4) as a clearly-labeled prompt
+  # section so the review reasons over deltas against its own prior notes
+  # instead of the memo only existing to seed the next memo.
+  defp previous_cycle_memo_section(context) do
+    memo = context[:previous_cycle_memo]
+
+    if is_binary(memo) and String.trim(memo) != "" do
+      """
+      PREVIOUS CYCLE MEMO#{memo_meta_suffix(context)}:
+      #{String.trim(memo)}
+
+      """
+    else
+      ""
+    end
+  end
+
+  defp memo_meta_suffix(context) do
+    parts =
+      [{"cycle", context[:previous_cycle_memo_cycle_id]},
+       {"at", context[:previous_cycle_memo_updated_at]}]
+      |> Enum.reject(fn {_label, value} -> normalize_string(value) == nil end)
+      |> Enum.map(fn {label, value} -> "#{label} #{value}" end)
+
+    case parts do
+      [] -> ""
+      parts -> " (" <> Enum.join(parts, ", ") <> ")"
+    end
   end
 
   defp source_summary(source_bundle, telemetry) do

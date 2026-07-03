@@ -549,6 +549,11 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     |> Map.put(:assistant_origin_skill_id, skill_id)
     |> Map.put(:assistant_origin_skill_rank, index + 1)
     |> Map.put(:previous_cycle_memo, Map.get(state.cycle_memory || %{}, "memo"))
+    |> Map.put(
+      :previous_cycle_memo_updated_at,
+      Map.get(state.cycle_memory || %{}, "updated_at")
+    )
+    |> Map.put(:previous_cycle_memo_cycle_id, Map.get(state.cycle_memory || %{}, "cycle_id"))
   end
 
   defp build_skill_configs(config, user_id, enabled_skill_ids) do

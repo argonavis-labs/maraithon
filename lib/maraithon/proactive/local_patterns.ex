@@ -44,7 +44,6 @@ defmodule Maraithon.Proactive.LocalPatterns do
 
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm.Person
   alias Maraithon.Insights
   alias Maraithon.LocalCalendar
@@ -93,28 +92,6 @@ defmodule Maraithon.Proactive.LocalPatterns do
   # ---------------------------------------------------------------------
   # Public API
   # ---------------------------------------------------------------------
-
-  @doc """
-  Runs every detector for every user that has any local data or a
-  connected telegram account. Returns a summary of how many insights
-  were emitted per detector (rolled up across users).
-
-  Used by `Maraithon.Runtime.ProactiveCheckIn` on its cron tick.
-  """
-  def run_for_all_users(opts \\ []) do
-    now = Keyword.get(opts, :now) || DateTime.utc_now()
-    user_ids = candidate_user_ids()
-
-    summary =
-      Enum.reduce(user_ids, empty_summary(), fn user_id, acc ->
-        case run_for_user(user_id, now: now) do
-          {:ok, per_detector} -> merge_summaries(acc, per_detector)
-          {:error, _reason} -> acc
-        end
-      end)
-
-    Map.put(summary, :user_count, length(user_ids))
-  end
 
   @doc """
   Runs every detector for a single user. Returns
@@ -745,40 +722,9 @@ defmodule Maraithon.Proactive.LocalPatterns do
     end
   end
 
-  defp candidate_user_ids do
-    telegram_users =
-      "telegram"
-      |> ConnectedAccounts.list_connected_provider()
-      |> Enum.map(& &1.user_id)
-
-    local_users = local_source_user_ids()
-
-    MapSet.new(telegram_users)
-    |> MapSet.union(MapSet.new(local_users))
-    |> MapSet.delete(nil)
-    |> MapSet.to_list()
-  end
-
-  defp local_source_user_ids do
-    [LocalMessage, LocalReminder, LocalVoiceMemo, LocalNote, LocalEvent, LocalFile]
-    |> Enum.flat_map(fn schema ->
-      Repo.all(from row in schema, distinct: row.user_id, select: row.user_id)
-    end)
-  end
-
   # ---------------------------------------------------------------------
   # Small helpers
   # ---------------------------------------------------------------------
-
-  defp empty_summary do
-    Enum.reduce(@detectors, %{user_count: 0}, fn detector, acc -> Map.put(acc, detector, 0) end)
-  end
-
-  defp merge_summaries(acc, per_detector) do
-    Enum.reduce(per_detector, acc, fn {detector, count}, inner ->
-      Map.update(inner, detector, count, &(&1 + count))
-    end)
-  end
 
   defp days_since(%DateTime{} = now, %DateTime{} = then) do
     div(max(DateTime.diff(now, then, :second), 0), 86_400)
