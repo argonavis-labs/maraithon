@@ -32,7 +32,9 @@ primary_region = 'yyz'
   DB_QUEUE_INTERVAL_MS = '2000'
 
 [[vm]]
-  memory = '1gb'
+  # 1GB OOM-killed the BEAM under the 10-min CoS cadence (2026-07-03:
+  # briefing generation died mid-run every morning attempt).
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 1024
+  memory_mb = 2048
