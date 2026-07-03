@@ -1,9 +1,18 @@
 defmodule Maraithon.ActionLedgerTest do
   use Maraithon.DataCase, async: true
 
+  alias Maraithon.Accounts
   alias Maraithon.ActionLedger
   alias Maraithon.ActionLedger.Action
+  alias Maraithon.Crm
+  alias Maraithon.Crm.Person
+  alias Maraithon.Memory
+  alias Maraithon.Memory.Item, as: MemoryItem
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.PushReceipt
+  alias Maraithon.Todos
+  alias Maraithon.Todos.ActivityEvent
 
   test "records, lists, and explains safe action summaries" do
     user_id = "ledger-#{System.unique_integer([:positive])}@example.com"
@@ -102,4 +111,159 @@ defmodule Maraithon.ActionLedgerTest do
     refute Repo.get(Action, old_action.id)
     assert Repo.get(Action, fresh_action.id)
   end
+
+  describe "activity_summary/2 (SPEC 09 R1)" do
+    test "aggregates today's todos, memories, people, pings, and holds, and respects the period" do
+      user_id = unique_user_email("activity-summary")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, [_todo]} =
+        Todos.upsert_many(user_id, [
+          %{
+            "source" => "manual",
+            "kind" => "general",
+            "title" => "Follow up with Dana",
+            "dedupe_key" => "activity-summary-todo"
+          }
+        ])
+
+      {:ok, _memory} =
+        Memory.write(user_id, %{
+          "content" => "Prefers async updates over calls.",
+          "kind" => "preference"
+        })
+
+      {:ok, _person} = Crm.create_person(user_id, %{"display_name" => "Dana Lee"})
+
+      dedupe_key = "activity-summary-ping"
+
+      {:ok, _sent_action} =
+        ActionLedger.record(%{
+          user_id: user_id,
+          surface: "telegram",
+          event_type: "proactive.sent",
+          status: "sent",
+          source_evidence: %{"dedupe_key" => dedupe_key},
+          model_summary: "Dana asked about pricing and nothing has moved since.",
+          result_object_refs: %{"dedupe_key" => dedupe_key}
+        })
+
+      {:ok, _receipt} =
+        TelegramAssistant.record_push_receipt(%{
+          user_id: user_id,
+          dedupe_key: dedupe_key,
+          origin_type: "insight",
+          decision: "sent_now"
+        })
+
+      {:ok, _held_action} =
+        ActionLedger.record(%{
+          user_id: user_id,
+          surface: "telegram",
+          event_type: "proactive.held",
+          status: "held",
+          model_summary: "Held a low-urgency nudge during quiet hours.",
+          metadata: %{"hold_reason" => "quiet_hours"}
+        })
+
+      summary = ActionLedger.activity_summary(user_id, :today)
+
+      assert summary.todos.created.count == 1
+      assert [%{title: "Follow up with Dana"}] = summary.todos.created.items
+
+      assert summary.memories.count == 1
+      assert summary.memories.by_kind["preference"] == 1
+
+      assert summary.people.created.count == 1
+      assert [%{display_name: "Dana Lee"}] = summary.people.created.items
+
+      assert summary.pings.count == 1
+      assert [%{why_now: why_now, decision: "sent_now"}] = summary.pings.items
+      assert why_now =~ "Dana asked about pricing"
+
+      assert summary.holds.count == 1
+      assert [%{reason: "quiet_hours"}] = summary.holds.items
+
+      # Backdate everything well outside today/yesterday for any timezone
+      # offset and confirm the period filter actually excludes them, while a
+      # wide explicit date range still finds them.
+      far_past = DateTime.utc_now() |> DateTime.add(-5 * 24 * 60 * 60, :second)
+
+      Repo.update_all(from(e in ActivityEvent, where: e.user_id == ^user_id),
+        set: [occurred_at: far_past]
+      )
+
+      Repo.update_all(from(m in MemoryItem, where: m.user_id == ^user_id),
+        set: [inserted_at: far_past]
+      )
+
+      Repo.update_all(from(p in Person, where: p.user_id == ^user_id),
+        set: [inserted_at: far_past]
+      )
+
+      Repo.update_all(from(a in Action, where: a.user_id == ^user_id),
+        set: [inserted_at: far_past]
+      )
+
+      Repo.update_all(from(r in PushReceipt, where: r.user_id == ^user_id),
+        set: [inserted_at: far_past]
+      )
+
+      empty_summary = ActionLedger.activity_summary(user_id, :today)
+      assert empty_summary.todos.created.count == 0
+      assert empty_summary.memories.count == 0
+      assert empty_summary.people.created.count == 0
+      assert empty_summary.pings.count == 0
+      assert empty_summary.holds.count == 0
+
+      range_summary =
+        ActionLedger.activity_summary(user_id, {Date.add(Date.utc_today(), -6), Date.utc_today()})
+
+      assert range_summary.todos.created.count == 1
+      assert range_summary.memories.count == 1
+      assert range_summary.people.created.count == 1
+      assert range_summary.pings.count == 1
+      assert range_summary.holds.count == 1
+    end
+
+    test "returns an empty structure for an invalid user" do
+      assert ActionLedger.activity_summary(nil, :today).todos.created.count == 0
+    end
+  end
+
+  describe "recent_pings/2 (SPEC 09 R2)" do
+    test "resolves the most recent sent_now/merged pushes with why_now, optionally by topic" do
+      user_id = unique_user_email("recent-pings")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      dedupe_key = "recent-pings-dedupe"
+
+      {:ok, _action} =
+        ActionLedger.record(%{
+          user_id: user_id,
+          surface: "telegram",
+          event_type: "proactive.sent",
+          status: "sent",
+          source_evidence: %{"dedupe_key" => dedupe_key},
+          model_summary: "Renewal deadline for Acme is Friday and nobody has replied.",
+          result_object_refs: %{"dedupe_key" => dedupe_key}
+        })
+
+      {:ok, _receipt} =
+        TelegramAssistant.record_push_receipt(%{
+          user_id: user_id,
+          dedupe_key: dedupe_key,
+          origin_type: "insight",
+          decision: "sent_now"
+        })
+
+      assert [ping] = ActionLedger.recent_pings(user_id, limit: 5)
+      assert ping.why_now =~ "Acme"
+
+      assert [_matched] = ActionLedger.recent_pings(user_id, topic: "acme")
+      assert ActionLedger.recent_pings(user_id, topic: "some unrelated topic") == []
+    end
+  end
+
+  defp unique_user_email(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}@example.com"
 end
