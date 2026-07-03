@@ -751,6 +751,126 @@ defmodule Maraithon.Connectors.GmailTest do
       assert cursor.value == "1050"
     end
 
+    test "treats a middle page with no \"history\" key as empty and keeps paginating" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      {:ok, _user} =
+        Maraithon.Accounts.get_or_create_user_by_email("gmail_empty_page_user@example.com")
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("gmail_empty_page_user@example.com", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
+
+      account = Maraithon.ConnectedAccounts.get("gmail_empty_page_user@example.com", "google")
+
+      Maraithon.Connectors.SourceCursors.put(account, "gmail_history_id", %{"value" => "1000"})
+
+      call_count = :counters.new(1, [:atomics])
+
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/history", fn conn ->
+        :counters.add(call_count, 1, 1)
+        count = :counters.get(call_count, 1)
+
+        case count do
+          1 ->
+            refute conn.query_string =~ "pageToken"
+
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.resp(
+              200,
+              Jason.encode!(%{
+                "history" => [
+                  %{"messagesAdded" => [%{"message" => %{"id" => "page1_msg"}}]}
+                ],
+                "nextPageToken" => "page2",
+                "historyId" => "1040"
+              })
+            )
+
+          2 ->
+            assert conn.query_string =~ "pageToken=page2"
+
+            # Gmail omits "history" entirely when this page's filtered
+            # result set is empty. This must NOT discard page 1's
+            # accumulated results or stop short of following
+            # nextPageToken - that's the bug this test guards against.
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.resp(
+              200,
+              Jason.encode!(%{
+                "nextPageToken" => "page3",
+                "historyId" => "1045"
+              })
+            )
+
+          3 ->
+            assert conn.query_string =~ "pageToken=page3"
+
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.resp(
+              200,
+              Jason.encode!(%{
+                "history" => [
+                  %{"messagesAdded" => [%{"message" => %{"id" => "page3_msg"}}]}
+                ],
+                "historyId" => "1050"
+              })
+            )
+        end
+      end)
+
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/page1_msg", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => "page1_msg",
+            "threadId" => "t1",
+            "labelIds" => ["INBOX"],
+            "payload" => %{"headers" => []}
+          })
+        )
+      end)
+
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/page3_msg", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => "page3_msg",
+            "threadId" => "t3",
+            "labelIds" => ["INBOX"],
+            "payload" => %{"headers" => []}
+          })
+        )
+      end)
+
+      {:ok, result} = Gmail.sync_history("gmail_empty_page_user@example.com", account)
+
+      # Page 1 and page 3 messages both ingested despite page 2 having no
+      # "history" key, and the cursor advanced to the FINAL page's
+      # historyId.
+      assert result.mode == :incremental
+      assert result.count == 2
+      assert result.history_id == "1050"
+
+      cursor = Maraithon.Connectors.SourceCursors.get(account.id, "gmail_history_id")
+      assert cursor.value == "1050"
+    end
+
     test "falls back to full resync when history pagination exceeds the safety cap" do
       bypass = Bypass.open()
 

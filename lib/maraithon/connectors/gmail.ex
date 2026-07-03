@@ -552,7 +552,14 @@ defmodule Maraithon.Connectors.Gmail do
     url = "#{api_base_url()}/users/me/history?#{params}"
 
     case Google.api_request(:get, url, access_token) do
-      {:ok, %{"history" => history} = response} ->
+      {:ok, response} ->
+        # Gmail omits the "history" key entirely when a page's filtered
+        # result set is empty (e.g. a page with only non-messageAdded
+        # events). That can happen on ANY page of the pagination loop, not
+        # just a single-page response - treat it as an empty page and keep
+        # following nextPageToken rather than discarding acc_history and
+        # stopping short.
+        history = response["history"] || []
         acc_history = acc_history ++ history
         next_page_token = response["nextPageToken"]
 
@@ -576,11 +583,6 @@ defmodule Maraithon.Connectors.Gmail do
           true ->
             build_history_result(access_token, acc_history, response["historyId"])
         end
-
-      {:ok, response} ->
-        # No history changes, but the response still carries the mailbox's
-        # current historyId - use it to advance the cursor.
-        {:ok, [], response["historyId"]}
 
       {:error, {:http_status, 404, _}} ->
         # History ID too old - need full sync
