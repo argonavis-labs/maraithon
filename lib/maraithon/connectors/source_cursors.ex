@@ -109,6 +109,22 @@ defmodule Maraithon.Connectors.SourceCursors do
     |> Repo.all()
   end
 
+  @doc """
+  Cursors whose watch has already expired (`watch_expires_at` in the past).
+
+  Used by `Maraithon.Runtime.FreshnessSweep` (SPEC 10 R2) to flag watches
+  that `Maraithon.Runtime.WatchRenewer` failed to renew before expiry —
+  the sweep flags, `WatchRenewer` renews. Ordered oldest-expired first.
+  """
+  def expired(now \\ DateTime.utc_now(), limit) when is_integer(limit) do
+    SourceCursor
+    |> where([cursor], not is_nil(cursor.watch_expires_at))
+    |> where([cursor], cursor.watch_expires_at < ^now)
+    |> order_by([cursor], asc: cursor.watch_expires_at)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
   defp normalize_attrs(attrs) when is_map(attrs) do
     Map.new(attrs, fn
       {key, value} when is_atom(key) -> {Atom.to_string(key), value}

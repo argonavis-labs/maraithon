@@ -51,6 +51,7 @@ defmodule Maraithon.Runtime.Supervisor do
           Maraithon.Runtime.TodoCompletionSweep,
           Maraithon.Runtime.TokenRefresher,
           Maraithon.Runtime.WatchRenewer,
+          Maraithon.Runtime.FreshnessSweep,
           Maraithon.TelegramAssistant.RunReaper
         ]
       else
