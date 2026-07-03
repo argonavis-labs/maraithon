@@ -31,6 +31,7 @@ defmodule MaraithonWeb.AdminNavigation do
     %{label: "Agents", path: "/agents", icon: :agents},
     %{label: "Insights", path: "/insights", icon: :insights},
     %{label: "Saved Context", path: "/operator/memories", icon: :memory},
+    %{label: "Activity", path: "/activity", icon: :book},
     %{label: "Dashboard", path: "/dashboard", icon: :home}
   ]
 
