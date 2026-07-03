@@ -539,6 +539,166 @@ defmodule Maraithon.BriefsTest do
     refute brief in Briefs.list_pending(10)
   end
 
+  test "stale check_in/commitment_tracker briefs expire after 36 hours and stop qualifying for retry",
+       %{user_id: user_id, agent: agent} do
+    stale_scheduled_for = DateTime.add(DateTime.utc_now(), -37 * 60 * 60, :second)
+    fresh_scheduled_for = DateTime.add(DateTime.utc_now(), -35 * 60 * 60, :second)
+
+    assert {:ok, %Brief{} = stale_brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "check_in",
+               "title" => "Stale check-in",
+               "summary" => "This is 37 hours old.",
+               "body" => "Should expire before ever being retried again.",
+               "scheduled_for" => stale_scheduled_for,
+               "dedupe_key" => "brief:check-in:expiry-stale"
+             })
+
+    assert {:ok, %Brief{} = fresh_brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "commitment_tracker",
+               "title" => "Fresh open work review",
+               "summary" => "This is 35 hours old, still inside the fast-cadence window.",
+               "body" => "Should not expire yet.",
+               "scheduled_for" => fresh_scheduled_for,
+               "dedupe_key" => "brief:commitment-tracker:expiry-fresh"
+             })
+
+    assert Briefs.expire_stale_pending() == 1
+
+    expired = Repo.get!(Brief, stale_brief.id)
+    assert expired.status == "failed"
+    assert expired.error_message == "brief_expired_unsent"
+    assert DeliveryErrorCopy.terminal?(expired.error_message)
+    refute Enum.any?(Briefs.list_pending(50), &(&1.id == stale_brief.id))
+
+    still_pending = Repo.get!(Brief, fresh_brief.id)
+    assert still_pending.status == "pending"
+    assert Enum.any?(Briefs.list_pending(50), &(&1.id == fresh_brief.id))
+
+    # Idempotent: running the sweep again is a no-op once terminal.
+    assert Briefs.expire_stale_pending() == 0
+  end
+
+  test "stale morning briefs expire after 3 days but survive inside that window", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    stale_scheduled_for = DateTime.add(DateTime.utc_now(), -(3 * 24 * 60 * 60 + 60), :second)
+    fresh_scheduled_for = DateTime.add(DateTime.utc_now(), -(2 * 24 * 60 * 60), :second)
+
+    assert {:ok, %Brief{} = stale_brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Stale morning brief",
+               "summary" => "This is just over 3 days old.",
+               "body" => "The user already got a late alert; this is stale news now.",
+               "scheduled_for" => stale_scheduled_for,
+               "dedupe_key" => "brief:morning:expiry-stale"
+             })
+
+    assert {:ok, %Brief{} = fresh_brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Recent morning brief",
+               "summary" => "This is 2 days old, still inside the window.",
+               "body" => "Should not expire yet.",
+               "scheduled_for" => fresh_scheduled_for,
+               "dedupe_key" => "brief:morning:expiry-fresh"
+             })
+
+    assert Briefs.expire_stale_pending() == 1
+
+    expired = Repo.get!(Brief, stale_brief.id)
+    assert expired.status == "failed"
+    assert expired.error_message == "brief_expired_unsent"
+    refute Enum.any?(Briefs.list_pending(50), &(&1.id == stale_brief.id))
+
+    still_pending = Repo.get!(Brief, fresh_brief.id)
+    assert still_pending.status == "pending"
+  end
+
+  test "dispatch_telegram_batch sweeps stale backlog first so it cannot starve a fresh brief", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    stale_scheduled_for = DateTime.add(DateTime.utc_now(), -(4 * 24 * 60 * 60), :second)
+
+    stale_briefs =
+      for n <- 1..3 do
+        {:ok, brief} =
+          Briefs.record(user_id, agent.id, %{
+            "cadence" => "morning",
+            "title" => "Backlogged morning brief #{n}",
+            "summary" => "Old backlog.",
+            "body" => "Old backlog body.",
+            "scheduled_for" => stale_scheduled_for,
+            "dedupe_key" => "brief:morning:backlog-starve-#{n}"
+          })
+
+        brief
+      end
+
+    assert {:ok, %Brief{} = fresh_brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Fresh morning brief",
+               "summary" => "This should not be starved by old backlog.",
+               "body" => "Fresh brief body.",
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:backlog-starve-fresh"
+             })
+
+    # A small batch size that would previously have been entirely consumed
+    # by the stale backlog (Bug 1's failure mode).
+    result = Briefs.dispatch_telegram_batch(batch_size: 2)
+    assert result.sent == 1
+
+    [message] = sent_messages()
+    assert message.text =~ "Fresh morning brief"
+
+    assert Repo.get!(Brief, fresh_brief.id).status == "sent"
+
+    for stale_brief <- stale_briefs do
+      updated = Repo.get!(Brief, stale_brief.id)
+      assert updated.status == "failed"
+      assert updated.error_message == "brief_expired_unsent"
+    end
+  end
+
+  test "telegram payload caps oversized brief text under Telegram's message limit", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    long_paragraph = String.duplicate("Reply to the finance thread with the signed update. ", 120)
+
+    long_body =
+      [long_paragraph, long_paragraph, long_paragraph, long_paragraph]
+      |> Enum.join("\n\n")
+
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief: oversized body",
+               "summary" => "This body is long enough to exceed Telegram's message cap.",
+               "body" => long_body,
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:oversized-body"
+             })
+
+    payload = Briefs.telegram_payload(brief)
+
+    assert String.length(payload.text) <= 3900
+    assert payload.text =~ "… Full briefing in your email inbox."
+
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    [message] = sent_messages()
+    assert String.length(message.text) <= 3900
+    assert message.text =~ "… Full briefing in your email inbox."
+  end
+
   test "check-in todo digests group new and older items for delivery", %{
     user_id: user_id,
     agent: agent

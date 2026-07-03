@@ -27,6 +27,14 @@ defmodule Maraithon.Briefs do
   @brief_summary_fallback "Maraithon kept only review-ready next steps."
   @brief_body_fallback "No verified recommendation was safe to send yet."
   @todo_digest_empty_decision_text "No saved open work is ready for a decision right now."
+  # Bug 3 fix: Telegram rejects messages over 4096 chars with HTTP 400
+  # "message is too long". Cap well under that so HTML entities introduced
+  # by escaping (e.g. `&amp;`, `&lt;`) can't push the final payload over the
+  # wire limit. The full brief still reaches the user via email
+  # (Briefs.Email.maybe_deliver/1), so a cap-with-trailer — not general
+  # multi-message chunking — is the right scope here.
+  @telegram_text_cap 3900
+  @telegram_truncation_trailer "… Full briefing in your email inbox."
   @internal_brief_markers [
     "<redacted",
     "=>",
@@ -146,6 +154,47 @@ defmodule Maraithon.Briefs do
   # indefinitely.
   @failed_retry_after_seconds 15 * 60
 
+  # Bug 1 fix: cadences that repeat multiple times a day (check_in,
+  # commitment_tracker) go stale fast — a 26-brief backlog stretching back
+  # to Jun 27 permanently filled the dispatch batch and starved same-day
+  # briefs (including the morning brief) from ever being attempted. These
+  # cadences expire after 36 hours; everything else (morning and other daily
+  # cadences) gets a 3-day window — a morning brief that old is stale news
+  # the user already got a late alert for.
+  @fast_cadence_expiry_cadences ["check_in", "commitment_tracker"]
+  @fast_cadence_expiry_seconds 36 * 60 * 60
+  @default_cadence_expiry_seconds 3 * 24 * 60 * 60
+
+  # Cheap, idempotent single UPDATE run at the top of every notifier tick
+  # (before list_pending/1) so a stale backlog can never again permanently
+  # starve the batch. Once stamped "brief_expired_unsent" (a terminal
+  # DeliveryErrorCopy message) a brief stops qualifying for list_pending/1
+  # forever, so re-running this is a no-op for already-expired rows.
+  def expire_stale_pending(now \\ DateTime.utc_now()) do
+    terminal_delivery_errors = DeliveryErrorCopy.terminal_storage_messages()
+    fast_cutoff = DateTime.add(now, -@fast_cadence_expiry_seconds, :second)
+    default_cutoff = DateTime.add(now, -@default_cadence_expiry_seconds, :second)
+
+    {count, _} =
+      Brief
+      |> where(
+        [b],
+        b.status == "pending" or
+          (b.status == "failed" and
+             (is_nil(b.error_message) or b.error_message not in ^terminal_delivery_errors))
+      )
+      |> where(
+        [b],
+        (b.cadence in ^@fast_cadence_expiry_cadences and b.scheduled_for < ^fast_cutoff) or
+          (b.cadence not in ^@fast_cadence_expiry_cadences and b.scheduled_for < ^default_cutoff)
+      )
+      |> Repo.update_all(
+        set: [status: "failed", error_message: "brief_expired_unsent", updated_at: now]
+      )
+
+    count
+  end
+
   def list_pending(limit \\ 20) when is_integer(limit) and limit > 0 do
     terminal_delivery_errors = DeliveryErrorCopy.terminal_storage_messages()
     retry_cutoff = DateTime.add(DateTime.utc_now(), -@failed_retry_after_seconds, :second)
@@ -210,6 +259,8 @@ defmodule Maraithon.Briefs do
   end
 
   def dispatch_telegram_batch(opts \\ []) do
+    expire_stale_pending()
+
     batch_size = Keyword.get(opts, :batch_size, 10)
     pending = list_pending(batch_size)
 
@@ -281,7 +332,7 @@ defmodule Maraithon.Briefs do
 
   def telegram_payload(%Brief{} = brief) do
     %{
-      text: render_telegram_text(brief),
+      text: brief |> render_telegram_text() |> cap_telegram_text(),
       reply_markup: brief_reply_markup(brief)
     }
   end
@@ -296,7 +347,7 @@ defmodule Maraithon.Briefs do
     todos = todos || todo_digest_todos(brief)
 
     %{
-      text: render_todo_digest_telegram_text(brief, todos),
+      text: brief |> render_todo_digest_telegram_text(todos) |> cap_telegram_text(),
       reply_markup: brief_reply_markup(brief)
     }
   end
@@ -405,6 +456,43 @@ defmodule Maraithon.Briefs do
   defp telegram_destination(user_id) do
     ConnectedAccounts.telegram_destination(user_id)
   end
+
+  # Applies to both the legacy direct-send path (deliver_standard_brief /
+  # deliver_todo_digest_brief) and the DeliveryPlanner candidate path
+  # (standard_brief_candidate / todo_digest_candidate) — both build their
+  # Telegram body from telegram_payload/1 and todo_digest_telegram_payload/2,
+  # so capping here covers both send paths from one place.
+  defp cap_telegram_text(text) when is_binary(text) do
+    if String.length(text) <= @telegram_text_cap do
+      text
+    else
+      trailer_budget = String.length(@telegram_truncation_trailer) + 2
+      body_budget = max(@telegram_text_cap - trailer_budget, 0)
+
+      text
+      |> truncate_at_paragraph_boundary(body_budget)
+      |> String.trim_trailing()
+      |> Kernel.<>("\n\n" <> @telegram_truncation_trailer)
+    end
+  end
+
+  defp cap_telegram_text(text), do: text
+
+  defp truncate_at_paragraph_boundary(text, max_length) when max_length > 0 do
+    candidate = String.slice(text, 0, max_length)
+
+    case String.split(candidate, "\n\n") do
+      [_only] ->
+        candidate
+
+      parts ->
+        parts
+        |> Enum.slice(0, length(parts) - 1)
+        |> Enum.join("\n\n")
+    end
+  end
+
+  defp truncate_at_paragraph_boundary(_text, _max_length), do: ""
 
   defp render_telegram_text(%Brief{} = brief) do
     if travel_brief?(brief) do

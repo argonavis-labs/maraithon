@@ -13,6 +13,11 @@ defmodule Maraithon.DeliveryErrorCopy do
   @timed_out "Delivery timed out. Check Telegram status before sending another delivery."
   @generic "Delivery could not be sent. Check the connected channel before sending another delivery."
 
+  # Stamped directly (via Repo.update_all) by Briefs' stale-brief expiry
+  # sweep — never routed through classify_reason/1 — so it must be a literal
+  # terminal storage message here, the same way the legacy atoms below are.
+  @brief_expired_unsent "brief_expired_unsent"
+
   @legacy_terminal_messages [
     ":missing_chat_id",
     "missing_chat_id",
@@ -20,7 +25,7 @@ defmodule Maraithon.DeliveryErrorCopy do
     "telegram_not_connected"
   ]
 
-  @terminal_messages [@missing_chat, @needs_reconnect]
+  @terminal_messages [@missing_chat, @needs_reconnect, @brief_expired_unsent]
 
   def storage_message(reason) do
     reason
