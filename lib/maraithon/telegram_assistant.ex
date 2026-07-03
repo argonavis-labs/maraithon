@@ -28,7 +28,7 @@ defmodule Maraithon.TelegramAssistant do
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
-  alias Maraithon.Todos.{PublicPayload, UserFacingCopy}
+  alias Maraithon.Todos.{PublicPayload, Todo, UserFacingCopy}
 
   # SPEC 05 R4: prepared-action types that represent an actual follow-up
   # message being sent on behalf of a todo (see
@@ -962,18 +962,19 @@ defmodule Maraithon.TelegramAssistant do
   defp normalize_error(error) when is_binary(error), do: error
   defp normalize_error(error), do: inspect(error)
 
-  # SPEC 05 R4: when a confirmed send referencing a todo actually completes,
-  # stamp the todo's nudge state so "who am I waiting on?" reflects it.
-  defp maybe_record_todo_nudge(%PreparedAction{
-         action_type: action_type,
-         user_id: user_id,
-         payload: payload
-       })
+  # SPEC 05/06 R4: when a confirmed send referencing a todo actually
+  # completes, either stamp the todo's nudge state (when the todo is
+  # `owed_to_me`, a nudge keeps the loop open) or close the todo out with a
+  # resolution note referencing what was sent (every other direction: the
+  # send itself was the requested action, e.g. an `owed_by_me` reply).
+  defp maybe_record_todo_nudge(
+         %PreparedAction{action_type: action_type, user_id: user_id, payload: payload} =
+           prepared_action
+       )
        when action_type in @nudge_action_types do
     case read_string(payload, "todo_id") do
       todo_id when is_binary(todo_id) ->
-        _ = Todos.record_nudge_sent(user_id, todo_id, channel: action_type)
-        :ok
+        close_or_nudge_todo(user_id, todo_id, prepared_action)
 
       _ ->
         :ok
@@ -981,6 +982,45 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp maybe_record_todo_nudge(_prepared_action), do: :ok
+
+  defp close_or_nudge_todo(user_id, todo_id, %PreparedAction{
+         action_type: action_type,
+         preview_text: preview_text
+       }) do
+    case Todos.get_for_user(user_id, todo_id) do
+      %Todo{direction: "owed_to_me"} ->
+        _ = Todos.record_nudge_sent(user_id, todo_id, channel: action_type)
+        :ok
+
+      %Todo{} ->
+        _ =
+          Todos.mark_done(user_id, todo_id,
+            note: send_resolution_note(action_type, preview_text),
+            actor_type: "assistant",
+            actor_label: "Maraithon"
+          )
+
+        :ok
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp send_resolution_note(action_type, preview_text) do
+    base = "Sent via #{send_channel_label(action_type)}."
+
+    if is_binary(preview_text) and String.trim(preview_text) != "" do
+      "#{base} #{preview_text}"
+    else
+      base
+    end
+  end
+
+  defp send_channel_label("gmail_send"), do: "Gmail"
+  defp send_channel_label("gmail_draft_send"), do: "Gmail"
+  defp send_channel_label("slack_post"), do: "Slack"
+  defp send_channel_label(_action_type), do: "the connected channel"
 
   defp normalize_id(nil), do: nil
   defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)

@@ -130,6 +130,11 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
 
   def todo_callback("google_account_not_connected"), do: "Connect Google first."
   def todo_callback("slack_workspace_not_connected"), do: "Connect Slack first."
+
+  def todo_callback(reason) when reason in [:no_send_destination, "no_send_destination"] do
+    "Could not find where to send this: no connected Gmail or Slack destination was found for this item."
+  end
+
   def todo_callback(_reason), do: @generic_todo_failure
 
   def tool_error({:error, reason}), do: tool_error(reason)
