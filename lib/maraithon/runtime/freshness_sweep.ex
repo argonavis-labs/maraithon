@@ -49,7 +49,10 @@ defmodule Maraithon.Runtime.FreshnessSweep do
   @default_interval_ms :timer.hours(1)
   @default_batch_size 500
   @default_initial_delay_ms :timer.seconds(15)
-  @default_never_synced_after_hours 24
+  # Roomier than the per-provider stale thresholds (SourceFreshness) so a
+  # still-onboarding backfill on a slower provider isn't flagged as broken
+  # while its first sync is legitimately still running.
+  @default_never_synced_after_hours 72
 
   def start_link(opts \\ []) do
     case Keyword.get(opts, :name, @name) do
@@ -126,10 +129,17 @@ defmodule Maraithon.Runtime.FreshnessSweep do
     }
   end
 
+  # Order by staleness (oldest-touched first, nulls — never refreshed — first
+  # of all) instead of `desc: account.id`. With a fixed batch size and a
+  # newest-first order, the same newest accounts get swept every cycle and
+  # older ones never get checked at all. Real sync activity
+  # (`mark_success`/`upsert_from_oauth`/etc.) bumps `last_refreshed_at`
+  # forward, so a healthy account naturally rotates toward the back of the
+  # queue and the worst offenders keep surfacing first.
   defp sweep_accounts(state, now) do
     ConnectedAccount
     |> where([account], account.status == "connected")
-    |> order_by([account], desc: account.id)
+    |> order_by([account], asc_nulls_first: account.last_refreshed_at)
     |> limit(^state.batch_size)
     |> Repo.all()
     |> Enum.reduce(%{checked: 0, flagged: 0}, fn account, acc ->
@@ -206,8 +216,12 @@ defmodule Maraithon.Runtime.FreshnessSweep do
   end
 
   defp flag_expired_watch(%SourceCursor{user_id: user_id, provider: provider} = cursor) do
-    report_issue(user_id, provider, "watch_expired")
-    :flagged
+    if still_expired?(cursor) do
+      report_issue(user_id, provider, "watch_expired")
+      :flagged
+    else
+      :ok
+    end
   rescue
     error ->
       Logger.warning("Freshness sweep failed to flag expired watch",
@@ -217,6 +231,21 @@ defmodule Maraithon.Runtime.FreshnessSweep do
       )
 
       :ok
+  end
+
+  # Guards against a race with `Maraithon.Runtime.WatchRenewer`: the cursor
+  # loaded by `sweep_expired_watches/2` may be stale by the time this runs
+  # (renewal is batched, isolated, and can happen concurrently). Re-read the
+  # row immediately before flagging and skip if the renewer already won the
+  # race and pushed `watch_expires_at` back into the future.
+  defp still_expired?(%SourceCursor{id: id}) do
+    case Repo.get(SourceCursor, id) do
+      %SourceCursor{watch_expires_at: %DateTime{} = watch_expires_at} ->
+        DateTime.compare(watch_expires_at, DateTime.utc_now()) == :lt
+
+      _ ->
+        false
+    end
   end
 
   defp report_issue(user_id, provider, reason) do

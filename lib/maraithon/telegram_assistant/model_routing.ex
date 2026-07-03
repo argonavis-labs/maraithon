@@ -106,7 +106,11 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bwhat\s+(is|do\s+i\s+have)\s+connected\b/u,
     ~r/\bconnection\s+status\b/u,
     ~r/\bconnector\s+status\b/u,
-    ~r/\bwhat\s+(can|do)\s+you\s+see\b/u,
+    # Unlike the plain "what sources can you see" pattern below, this one
+    # lacks a built-in source/connector noun, so require one nearby (or
+    # "right now" phrasing) — otherwise unrelated asks like "what can you
+    # see for tomorrow's meetings?" would misroute into this narrow focus.
+    ~r/\bwhat\s+(can|do)\s+you\s+see\b.*\b(connect(?:ed|ors?|ions?)?|integrations?|accounts?|sources?|inbox(?:es)?|calendars?|right\s+now)\b/u,
     ~r/\bwhat\s+sources?\s+can\s+you\s+see\b/u
   ]
 

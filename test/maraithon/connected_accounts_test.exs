@@ -459,7 +459,29 @@ defmodule Maraithon.ConnectedAccountsTest do
 
     assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
 
-    # A fresh failure after recovery should be able to notify again (re-armed).
+    # A fresh failure after recovery should be able to notify again
+    # (re-armed) once the flap-damping window has passed. Flap damping
+    # (added alongside this fix) holds a *new* failure notification for
+    # `@flap_damping_window_minutes` after a recovery confirmation, so a
+    # failure milliseconds later (as this test would otherwise exercise)
+    # is intentionally suppressed — see the rapid-flap test below. Backdate
+    # `recovery_confirmed_at` here (instead of sleeping in the test) to
+    # simulate the window having elapsed and exercise genuine re-arm.
+    recovered_again_account =
+      ConnectedAccounts.get(user_id, "google:founder@example.com")
+
+    backdated_metadata =
+      Map.put(
+        recovered_again_account.metadata,
+        "recovery_confirmed_at",
+        DateTime.utc_now() |> DateTime.add(-90, :minute) |> DateTime.to_iso8601()
+      )
+
+    assert {:ok, _account} =
+             recovered_again_account
+             |> Maraithon.Accounts.ConnectedAccount.changeset(%{metadata: backdated_metadata})
+             |> Maraithon.Repo.update()
+
     assert {:ok, _account} =
              ConnectedAccounts.mark_error(
                user_id,
@@ -469,6 +491,100 @@ defmodule Maraithon.ConnectedAccountsTest do
 
     assert [_recovery, %{chat_id: "6114124042"}] =
              Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+  end
+
+  test "rapid fail/recover/fail/recover flapping is damped to one notify and one confirm, and re-arms after the window (R4 flap damping)" do
+    user_id = "flap-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram_account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "6114124042",
+        metadata: %{"chat_id" => "6114124042"}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:founder@example.com", %{
+        access_token: "google-token",
+        refresh_token: "google-refresh",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    # fail1 -> notify1
+    assert {:ok, _account} =
+             ConnectedAccounts.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required"
+             )
+
+    assert [%{text: notify1}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert notify1 =~ "re-authentication"
+
+    Agent.update(:capturing_telegram_recorder, fn _ -> [] end)
+
+    # recover1 -> confirm1
+    assert {:ok, _account} =
+             ConnectedAccounts.upsert_from_oauth(user_id, "google:founder@example.com", %{
+               access_token: "new-google-token",
+               refresh_token: "new-google-refresh",
+               metadata: %{"account_email" => "founder@example.com"}
+             })
+
+    assert [%{text: confirm1}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert confirm1 =~ "connected again"
+
+    Agent.update(:capturing_telegram_recorder, fn _ -> [] end)
+
+    # fail2, immediately after recover1 (still inside the damping window) ->
+    # error state is still recorded, but the notification is held.
+    assert {:ok, failed_again_account} =
+             ConnectedAccounts.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required"
+             )
+
+    assert failed_again_account.status == "error"
+    assert Agent.get(:capturing_telegram_recorder, &Enum.reverse/1) == []
+
+    # recover2, also immediately -> no pending notification to confirm, so no
+    # second "connected again" either. The flap stays silent both directions.
+    assert {:ok, _account} =
+             ConnectedAccounts.upsert_from_oauth(user_id, "google:founder@example.com", %{
+               access_token: "newer-google-token",
+               refresh_token: "newer-google-refresh",
+               metadata: %{"account_email" => "founder@example.com"}
+             })
+
+    assert Agent.get(:capturing_telegram_recorder, &Enum.reverse/1) == []
+
+    # A genuine failure after the damping window has elapsed still notifies
+    # immediately (re-arm intact). Backdate recovery_confirmed_at instead of
+    # sleeping in the test.
+    account = ConnectedAccounts.get(user_id, "google:founder@example.com")
+
+    backdated_metadata =
+      Map.put(
+        account.metadata,
+        "recovery_confirmed_at",
+        DateTime.utc_now() |> DateTime.add(-90, :minute) |> DateTime.to_iso8601()
+      )
+
+    assert {:ok, _account} =
+             account
+             |> Maraithon.Accounts.ConnectedAccount.changeset(%{metadata: backdated_metadata})
+             |> Maraithon.Repo.update()
+
+    assert {:ok, _account} =
+             ConnectedAccounts.mark_error(
+               user_id,
+               "google:founder@example.com",
+               "oauth_reauth_required"
+             )
+
+    assert [%{text: notify2}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert notify2 =~ "re-authentication"
   end
 
   test "get_connected_by_external_account/2 falls back to Telegram metadata chat_id" do

@@ -249,6 +249,22 @@ defmodule Maraithon.ConnectedAccounts do
 
   def notify_reconnect_required(_user_id, _provider, _reason, _opts), do: :ok
 
+  # Flapping-source damping: a source that fails, recovers, fails, recovers
+  # in quick succession (a bad DNS blip, a token that refreshes then dies
+  # again) previously sent a full notify+confirm pair on *every* flip,
+  # because `mark_success`/`mark_error` clear/re-set the same metadata keys
+  # each time and neither side remembered the other happened recently.
+  #
+  # `recovery_confirmed_at` (stored in the same metadata region as
+  # `reconnect_notification`/`reauth_notification`) is the shared damping
+  # signal: it is stamped whenever a recovery confirmation is actually sent,
+  # and checked before sending either a new failure notification or another
+  # recovery confirmation. It is intentionally *not* cleared by
+  # `mark_success`'s metadata drop, so it survives across the flap. Once the
+  # window elapses without the source actually recovering, everything is
+  # re-armed exactly as before.
+  @flap_damping_window_minutes 60
+
   @doc """
   R4: sends a one-time recovery confirmation when `previous_account` was
   broken (`error`/`disconnected`) and had a reconnect notification pending,
@@ -262,6 +278,10 @@ defmodule Maraithon.ConnectedAccounts do
   read from `previous_account` (the pre-write snapshot) — this also
   re-arms notifications, since the next failure will find no pending
   notification and be free to send again.
+
+  Flap damping: if a recovery confirmation was already sent very recently
+  (within `@flap_damping_window_minutes`), this no-ops instead of sending
+  another one — see the module note above `@flap_damping_window_minutes`.
   """
   def maybe_report_recovery(previous_account, updated_account)
 
@@ -272,13 +292,55 @@ defmodule Maraithon.ConnectedAccounts do
         } = updated_account
       ) do
     if recoverable_transition?(previous_account) do
-      send_recovery_notification(updated_account)
+      maybe_send_recovery_confirmation(updated_account)
     end
 
     :ok
   end
 
   def maybe_report_recovery(_previous_account, _updated_account), do: :ok
+
+  defp maybe_send_recovery_confirmation(%ConnectedAccount{} = account) do
+    if flap_damped?(account) do
+      :ok
+    else
+      send_recovery_notification(account)
+      mark_recovery_confirmed(account)
+    end
+  end
+
+  defp flap_damped?(%ConnectedAccount{metadata: metadata}) do
+    metadata
+    |> normalize_metadata()
+    |> fetch_map_value("recovery_confirmed_at")
+    |> recent_within_minutes?(@flap_damping_window_minutes)
+  end
+
+  defp recent_within_minutes?(value, minutes) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, confirmed_at, _offset} ->
+        DateTime.diff(DateTime.utc_now(), confirmed_at, :minute) < minutes
+
+      _ ->
+        false
+    end
+  end
+
+  defp recent_within_minutes?(_value, _minutes), do: false
+
+  defp mark_recovery_confirmed(%ConnectedAccount{} = account) do
+    metadata =
+      account.metadata
+      |> normalize_metadata()
+      |> Map.put("recovery_confirmed_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+    _ =
+      account
+      |> ConnectedAccount.changeset(%{metadata: metadata})
+      |> Repo.update()
+
+    :ok
+  end
 
   defp recoverable_transition?(%ConnectedAccount{status: status, metadata: metadata})
        when status in ["error", "disconnected"] do
@@ -497,15 +559,24 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp maybe_send_reconnect_notification(%ConnectedAccount{} = account, reason, opts)
        when is_binary(reason) do
-    if reconnect_notification_enabled?(opts) and reconnect_notification_reason?(reason) do
-      channels =
-        account
-        |> reconnect_notification_channels(reason)
-        |> pending_reconnect_notification_channels(account.metadata, reason)
+    cond do
+      not (reconnect_notification_enabled?(opts) and reconnect_notification_reason?(reason)) ->
+        :ok
 
-      send_reconnect_notifications(account, channels, reason)
-    else
-      :ok
+      # Flap damping: the source recovered very recently — hold the
+      # notification rather than firing immediately. `mark_error` still ran
+      # (error state/metadata are already written by the caller); if it's
+      # still broken after the window, the next failure notifies normally.
+      flap_damped?(account) ->
+        :ok
+
+      true ->
+        channels =
+          account
+          |> reconnect_notification_channels(reason)
+          |> pending_reconnect_notification_channels(account.metadata, reason)
+
+        send_reconnect_notifications(account, channels, reason)
     end
   end
 
