@@ -63,6 +63,12 @@ defmodule Maraithon.Drafts do
 
   def sanitize_text(text), do: text
 
+  defp draft_memory_query(purpose, attrs) do
+    [purpose, read_string(attrs, "subject"), read_string(attrs, "recipient")]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join(" ")
+  end
+
   defp maybe_refresh_voice(user_id, channel, attrs, opts) do
     if truthy?(Map.get(attrs, "refresh_voice")) do
       refresh_opts =
@@ -92,7 +98,10 @@ defmodule Maraithon.Drafts do
       operator_summaries: OperatorMemory.summaries_for_prompt(user_id),
       user_memory_profile: UserMemory.prompt_context(user_id),
       channel_voice: voice_context,
-      deep_memory: Memory.prompt_context(user_id, query: purpose, limit: 8)
+      # SPEC 07 R1: thread the draft's subject/recipient alongside purpose so
+      # the recall query reflects who/what the draft is actually about, not
+      # just the free-text purpose.
+      deep_memory: Memory.prompt_context(user_id, query: draft_memory_query(purpose, attrs), limit: 8)
     }
 
     response_shape =

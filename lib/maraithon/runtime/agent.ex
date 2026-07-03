@@ -868,7 +868,7 @@ defmodule Maraithon.Runtime.Agent do
       user_memory: UserMemory.prompt_context(data.user_id),
       deep_memory:
         Memory.prompt_context(data.user_id,
-          query: data.current_message,
+          query: effect_query(data),
           limit: 8
         ),
       memory_tools:
@@ -937,16 +937,51 @@ defmodule Maraithon.Runtime.Agent do
 
   defp maybe_inject_memory_into_effect(data, effect_type, params)
        when effect_type in [:llm_call, "llm_call"] and is_map(params) do
+    query = effect_query(data)
+
     params
-    |> Memory.inject_llm_params(data.user_id, query: data.current_message, limit: 8)
+    |> Memory.inject_llm_params(data.user_id, query: query, limit: 8)
     |> OpenLoops.inject_llm_params(data.user_id,
-      query: data.current_message,
+      query: query,
       limit: 8,
       include_memory?: false
     )
   end
 
   defp maybe_inject_memory_into_effect(_data, _effect_type, params), do: params
+
+  # SPEC 07 R1: `current_message` is nil for effect/skill-triggered runs
+  # (wakeup jobs, pubsub events) that never went through
+  # `put_message_trigger/4`. Fall back to the trigger's own intent (job type
+  # + reason, or the pubsub topic) so those runs still thread a real query
+  # into memory recall instead of silently degrading to "no query".
+  defp effect_query(%{current_message: message}) when is_binary(message) do
+    case String.trim(message) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp effect_query(%{current_trigger: %{type: :wakeup, job_type: job_type}} = data)
+       when is_binary(job_type) do
+    reason =
+      get_in(data.current_trigger, [:payload, "reason"]) ||
+        get_in(data.current_trigger, [:payload, :reason])
+
+    [job_type, reason]
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.join(" ")
+    |> case do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp effect_query(%{current_trigger: %{type: :pubsub_event, topic: topic}})
+       when is_binary(topic),
+       do: topic
+
+  defp effect_query(_data), do: nil
 
   defp put_wakeup_trigger(data, job_type, job_id, payload) do
     %{

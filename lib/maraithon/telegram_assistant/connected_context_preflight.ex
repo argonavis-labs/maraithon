@@ -7,7 +7,7 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
   worse than waiting briefly for connected evidence.
   """
 
-  alias Maraithon.{SourceErrorCopy, Tools}
+  alias Maraithon.{Crm, SourceErrorCopy, Tools}
 
   @sources ~w(crm gmail google_contacts calendar slack open_loops memory)
   @preflight_timeout_ms 8_000
@@ -26,14 +26,16 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
   def apply(context, _attrs), do: context
 
   defp run_review(context, user_id, query) do
-    args = %{
-      "user_id" => user_id,
-      "query" => query,
-      "sources" => @sources,
-      "max_results" => 5,
-      "since_days" => 180,
-      "timeout_ms" => @preflight_timeout_ms
-    }
+    args =
+      %{
+        "user_id" => user_id,
+        "query" => query,
+        "sources" => @sources,
+        "max_results" => 5,
+        "since_days" => 180,
+        "timeout_ms" => @preflight_timeout_ms
+      }
+      |> maybe_put_person_id(resolve_person_id(user_id, query))
 
     case Tools.execute("review_connected_context", args, %{
            surface: "internal",
@@ -69,6 +71,24 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
         "error" => normalize_error(error)
       })
   end
+
+  # SPEC 07 R5: a cheap lexical People lookup (no embedding/HTTP round trip)
+  # so the "memory" review source can scope recall to this person via
+  # `person_id` and rank their relationship memories first. Best-effort —
+  # falls back to no person_id (generic query-only recall) on any miss.
+  defp resolve_person_id(user_id, query) do
+    case Crm.list_people(user_id, query: query, limit: 1) do
+      [%{id: id} | _rest] -> id
+      _other -> nil
+    end
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  defp maybe_put_person_id(args, nil), do: args
+  defp maybe_put_person_id(args, person_id), do: Map.put(args, "person_id", person_id)
 
   defp maybe_learn_async(user_id, result) do
     observations = source_observations(result)

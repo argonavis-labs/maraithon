@@ -41,10 +41,18 @@ defmodule Maraithon.TelegramAssistant.Context do
   @calendar_context_forward_hours 72
   @calendar_context_limit 40
   @default_context_fetch_timeout_ms 4_000
+  # SPEC 07 R1/R3: raised from 8 now that deep_memory is filtered by model
+  # selection (`Memory.recall/3`) instead of being a raw importance dump.
+  @deep_memory_limit 12
+  # Inner budget for the model-selection call so it fits comfortably inside
+  # the outer @default_context_fetch_timeout_ms fetch budget with room to
+  # fall back to unselected `prompt_context` candidates on expiry.
+  @deep_memory_recall_timeout_ms 2_500
   @personal_calendar_terms ~w(
     appointment birthday camp child children dad dentist doctor daughter emma family home jack
     kid kids medical mom parent personal practice rsvp school soccer son spouse wife husband
   )
+  @person_focus_modes [:person_context, :linked_item_context]
 
   def build(attrs) when is_map(attrs) do
     user_id = fetch_string!(attrs, :user_id)
@@ -116,19 +124,26 @@ defmodule Maraithon.TelegramAssistant.Context do
   end
 
   defp fetchers_for_focus(user_id, user_text, request_focus) do
+    normalized_focus = normalize_focus(request_focus)
+
     user_id
-    |> all_fetchers(user_text)
-    |> select_fetchers_for_focus(normalize_focus(request_focus))
+    |> all_fetchers(user_text, normalized_focus)
+    |> select_fetchers_for_focus(normalized_focus)
   end
 
-  defp all_fetchers(user_id, user_text) do
+  defp all_fetchers(user_id, user_text, focus) do
     [
       {:preference_memory, fn -> PreferenceMemory.prompt_context(user_id) end},
       {:operator_memory, fn -> OperatorMemory.summaries_for_prompt(user_id) end},
       {:user_memory, fn -> UserMemory.prompt_context(user_id) end},
-      # Skip the LLM-filter on the hot path (it added 2-6s per turn). The
-      # model can call recall_memory when it needs query-filtered memories.
-      {:deep_memory, fn -> Memory.prompt_context(user_id, limit: 8) end},
+      # SPEC 07 R1/R3: thread the inbound text as the recall query and route
+      # through `Memory.recall/3` (model-selected) instead of the raw
+      # `prompt_context` dump. The earlier "skip the LLM filter" note (it
+      # added 2-6s per turn) is handled by bounding the model-selection call
+      # with its own inner timeout and degrading to unselected
+      # `prompt_context` candidates rather than blocking or dropping to
+      # nothing — see `deep_memory_context/3`.
+      {:deep_memory, fn -> deep_memory_context(user_id, user_text, focus) end},
       {:open_loops,
        fn ->
          OpenLoops.snapshot(user_id, query: user_text, limit: 8, include_memory?: false)
@@ -370,6 +385,102 @@ defmodule Maraithon.TelegramAssistant.Context do
       source_status: %{local: "unavailable", google: "unavailable"}
     }
   end
+
+  # SPEC 07 R1/R3/R5: build the deep_memory fetcher's real query from the
+  # inbound text, optionally resolve a person_id when the request is
+  # person-focused (R5), then try model-selected recall
+  # (`Memory.recall/3`) before falling back to unselected `prompt_context`
+  # candidates on timeout/error so a slow selection call degrades gracefully
+  # rather than blocking or dropping to an empty context.
+  defp deep_memory_context(user_id, user_text, focus) do
+    query = normalize_optional_text(user_text)
+    person_id = maybe_resolve_person_id(user_id, query, focus)
+
+    recall_opts =
+      [limit: @deep_memory_limit]
+      |> maybe_put_opt(:query, query)
+      |> maybe_put_opt(:person_id, person_id)
+
+    case bounded_task(
+           fn -> Memory.recall(user_id, query || "", recall_opts) end,
+           @deep_memory_recall_timeout_ms
+         ) do
+      {:ok, {:ok, result}} ->
+        result
+        |> Map.take([:summary, :memories, :count])
+        |> Map.put(:error, nil)
+        |> Map.put(:selection_source, "memory_intelligence")
+
+      _other ->
+        Logger.info("Telegram deep memory recall degraded to unselected candidates",
+          user_id: user_id,
+          focus: inspect(focus)
+        )
+
+        user_id
+        |> Memory.prompt_context(recall_opts)
+        |> Map.put(:selection_source, "unselected_fallback")
+    end
+  end
+
+  defp maybe_resolve_person_id(_user_id, nil, _focus), do: nil
+
+  defp maybe_resolve_person_id(_user_id, _query, focus) when focus not in @person_focus_modes,
+    do: nil
+
+  defp maybe_resolve_person_id(user_id, query, _focus) do
+    case Crm.list_people(user_id, query: query, limit: 1) do
+      [%{id: id} | _rest] -> id
+      _other -> nil
+    end
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp bounded_task(fun, timeout_ms) when is_function(fun, 0) do
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        allow_sandbox_access(parent)
+        fun.()
+      end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> {:ok, result}
+      _other -> :bounded_timeout
+    end
+  rescue
+    _error -> :bounded_timeout
+  catch
+    _kind, _reason -> :bounded_timeout
+  end
+
+  # Lets the spawned Task borrow the calling process's Ecto sandbox
+  # connection under `mix test`; a no-op in dev/prod.
+  defp allow_sandbox_access(parent) do
+    if Maraithon.Repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox do
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, parent, self())
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp normalize_optional_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_optional_text(_value), do: nil
 
   defp run_context_fetcher(key, fun) when is_function(fun, 0) do
     started = System.monotonic_time(:millisecond)

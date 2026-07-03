@@ -661,6 +661,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     schedule_coverage = schedule_coverage_contract(meeting_prep)
 
+    # SPEC 07 R1: briefing-shaped query — today's date plus the concrete
+    # calendar/commercial-thread subjects in this brief, instead of a static
+    # "morning briefing chief of staff relevance" string with no signal.
+    briefing_memory_query =
+      briefing_memory_query(local_date, today_events, commercial_threads)
+
     %{
       "date" => Date.to_iso8601(local_date),
       "generated_at" => DateTime.to_iso8601(now),
@@ -801,7 +807,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         |> Crm.summarize_for_prompt(100),
       "deep_memory" =>
         user_id
-        |> Memory.prompt_context(query: "morning briefing chief of staff relevance", limit: 100),
+        |> Memory.prompt_context(query: briefing_memory_query, limit: 100),
       "source_health" =>
         source_bundle
         |> SourceBundle.freshness()
@@ -4928,6 +4934,23 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         tokens_out = read_integer(response, "tokens_out", 0)
         Spend.calculate_cost(model, tokens_in, tokens_out)
     end
+  end
+
+  # SPEC 07 R1: builds the deep_memory recall query for the morning briefing
+  # from the concrete content of this brief (date, today's calendar events,
+  # commercial thread subjects) instead of a static relevance string.
+  defp briefing_memory_query(local_date, today_events, commercial_threads) do
+    [
+      "morning briefing #{Date.to_iso8601(local_date)}",
+      today_events |> Enum.map(&Map.get(&1, "summary")) |> Enum.reject(&blank?/1) |> Enum.take(6) |> Enum.join(" "),
+      commercial_threads
+      |> Enum.map(&Map.get(&1, "subject"))
+      |> Enum.reject(&blank?/1)
+      |> Enum.take(6)
+      |> Enum.join(" ")
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" | ")
   end
 
   defp json_metadata(value), do: Maraithon.Normalization.normalize_json_value(value)
