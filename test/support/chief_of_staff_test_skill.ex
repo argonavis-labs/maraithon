@@ -182,5 +182,7 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
     if is_map(context[:source_bundle]), do: true, else: false
   end
 
+  defp context_value("previous_cycle_memo", context), do: context[:previous_cycle_memo]
+
   defp context_value(_key, _context), do: nil
 end

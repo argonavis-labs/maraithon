@@ -281,10 +281,13 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       timestamp: now,
       trigger: %{type: :wakeup, job_type: "todo_completion_sweep"},
       recent_events: [],
-      event: nil
+      event: nil,
+      # An explicit evidence sweep, not a scheduled scan — keep the deep
+      # lookback window (SPEC 04 R2 caps scheduled scans to 48h).
+      acquisition_deep_lookback: true
     }
 
-    {bundle, _telemetry} =
+    {bundle, _telemetry, _proposed_watermarks} =
       Acquisition.build(
         user_id,
         [@source_skill_id],

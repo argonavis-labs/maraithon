@@ -3,6 +3,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   Assistant-owned source acquisition for one Chief of Staff cycle.
   """
 
+  alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ChiefOfStaff.{Skills, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.SourceCursors
@@ -48,7 +49,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     "\"follow up\""
   ]
   @default_slack_self_authored_query_limit length(@slack_self_authored_search_queries)
-  @default_lookback_hours 24 * 14
+  # R2 (SPEC 04): the no-cursor fallback window for a *scheduled* wakeup scan
+  # is 48h, not 14 days — cursor-based delta fetch (Gmail/Slack) already wins
+  # whenever a watermark exists, so this only matters pre-cursor and for the
+  # sources that have no cursor mechanism (calendar, companion locals).
+  # Briefings/backfills that need a deeper window opt in explicitly via
+  # `context[:acquisition_deep_lookback]` (see `deep_lookback?/2`).
+  @default_lookback_hours 48
+  @scheduled_scan_lookback_cap_hours 48
   @default_timezone_offset_hours -5
   @commercial_gmail_lookback_days 7
   @commercial_gmail_query_limit 5
@@ -82,6 +90,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     "weather" => "weather"
   }
 
+  # Returns `{bundle, telemetry, proposed_watermarks}`. `proposed_watermarks`
+  # is a list of `%{account:, kind:, value:}` entries — populated whenever
+  # `context[:defer_watermark_advance]` is true (the scheduled AIChiefOfStaff
+  # cycle sets this so R4's crash-safe advancement can happen in
+  # `finalize_cycle/1` instead of here). When the flag is absent/false
+  # (direct backfill/rebuild/smoke-test callers), watermarks advance
+  # immediately as before and this list is empty.
   def build(user_id, skill_ids, skill_configs, context)
       when is_binary(user_id) and is_list(skill_ids) and is_map(skill_configs) and is_map(context) do
     source_scope = resolve_source_scope(user_id, skill_ids, skill_configs)
@@ -89,10 +104,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     plan = build_plan(skill_ids, skill_configs, context)
 
     {telemetry, bundle} =
-      {%{"fetches" => [], "sources" => %{}, "plan" => plan}, bundle}
+      {%{"fetches" => [], "sources" => %{}, "plan" => plan, "proposed_watermarks" => []}, bundle}
       |> run_source_fetches(source_fetchers(user_id, source_scope, plan, context))
 
-    {bundle, telemetry}
+    {proposed_watermarks, telemetry} = Map.pop(telemetry, "proposed_watermarks", [])
+
+    {bundle, telemetry, proposed_watermarks}
   end
 
   def build(_user_id, _skill_ids, _skill_configs, context) when is_map(context) do
@@ -103,7 +120,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
        "fetches" => [],
        "sources" => %{},
        "plan" => %{}
-     }}
+     }, []}
   end
 
   defp source_fetchers(user_id, source_scope, plan, context) do
@@ -177,9 +194,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp merge_source_result({telemetry, bundle}, source_telemetry, source_bundle) do
     fetches = Map.get(telemetry, "fetches", []) ++ Map.get(source_telemetry, "fetches", [])
 
+    proposed_watermarks =
+      Map.get(telemetry, "proposed_watermarks", []) ++
+        Map.get(source_telemetry, "proposed_watermarks", [])
+
     telemetry =
       telemetry
       |> Map.put("fetches", fetches)
+      |> Map.put("proposed_watermarks", proposed_watermarks)
       |> Map.update("sources", Map.get(source_telemetry, "sources", %{}), fn sources ->
         Map.merge(sources, Map.get(source_telemetry, "sources", %{}))
       end)
@@ -367,16 +389,27 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       now_watermark = now |> DateTime.to_unix(:second) |> Integer.to_string()
 
-      {workspaces, fetches} =
-        Enum.reduce(team_ids, {[], telemetry["fetches"]}, fn team_id,
-                                                             {workspace_acc, fetch_acc} ->
+      defer_watermarks? = defer_watermark_advance?(context)
+
+      {workspaces, fetches, proposed_watermarks} =
+        Enum.reduce(team_ids, {[], telemetry["fetches"], []}, fn team_id,
+                                                                  {workspace_acc, fetch_acc,
+                                                                   watermark_acc} ->
           slack_account = ConnectedAccounts.get(user_id, "slack:#{team_id}")
           team_oldest = slack_poll_oldest(slack_account, oldest)
 
           case fetch_slack_workspace(user_id, source_scope, team_id, plan, team_oldest) do
             {:ok, workspace, workspace_fetches} ->
-              advance_slack_watermark(slack_account, now_watermark)
-              {[workspace | workspace_acc], workspace_fetches ++ fetch_acc}
+              watermark_acc =
+                accumulate_watermark(
+                  watermark_acc,
+                  slack_account,
+                  "slack_watermark",
+                  now_watermark,
+                  defer_watermarks?
+                )
+
+              {[workspace | workspace_acc], workspace_fetches ++ fetch_acc, watermark_acc}
 
             {:error, reason, workspace_fetches} ->
               ConnectedAccounts.report_access_issue(user_id, "slack:#{team_id}", reason)
@@ -397,7 +430,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                    "reason" => inspect(reason)
                  }
                  | workspace_fetches ++ fetch_acc
-               ]}
+               ], watermark_acc}
           end
         end)
 
@@ -425,6 +458,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       telemetry =
         telemetry
         |> Map.put("fetches", fetches)
+        |> Map.update("proposed_watermarks", proposed_watermarks, &(proposed_watermarks ++ &1))
         |> put_source_summary("slack", %{
           "mode" => "connector",
           "status" => status,
@@ -451,21 +485,45 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
-  defp advance_slack_watermark(nil, _now_watermark), do: :ok
+  # R4 (SPEC 04): when the caller deferred watermark advancement (the
+  # scheduled AIChiefOfStaff cycle), stash a proposed watermark entry instead
+  # of writing it — `finalize_cycle/1` advances it only after this cycle's
+  # durable writes have committed, so a mid-cycle crash reprocesses rather
+  # than skips. Direct backfill/rebuild callers (no deferral) keep the prior
+  # immediate-advance behavior.
+  defp defer_watermark_advance?(context) when is_map(context) do
+    Map.get(context, :defer_watermark_advance) == true
+  end
 
-  defp advance_slack_watermark(account, now_watermark) do
-    case SourceCursors.put(account, "slack_watermark", %{"value" => now_watermark}) do
+  defp defer_watermark_advance?(_context), do: false
+
+  defp accumulate_watermark(acc, nil, _kind, _value, _defer?), do: acc
+
+  defp accumulate_watermark(acc, %ConnectedAccount{} = account, kind, value, true) do
+    [
+      %{
+        account: %ConnectedAccount{id: account.id, user_id: account.user_id, provider: account.provider},
+        kind: kind,
+        value: value
+      }
+      | acc
+    ]
+  end
+
+  defp accumulate_watermark(acc, %ConnectedAccount{} = account, kind, value, false) do
+    case SourceCursors.put(account, kind, %{"value" => value}) do
       {:ok, _cursor} ->
         :ok
 
       {:error, reason} ->
-        Logger.warning("Failed to advance Slack watermark",
+        Logger.warning("Failed to advance source watermark",
           provider: account.provider,
+          kind: kind,
           reason: inspect(reason)
         )
-
-        :ok
     end
+
+    acc
   end
 
   defp companion_source_fetchers(user_id, plan, context) when is_binary(user_id) do
@@ -1258,9 +1316,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> DateTime.to_unix(:second)
         |> Integer.to_string()
 
-      {messages_by_provider, fetches} =
-        Enum.reduce(providers, {%{}, telemetry["fetches"]}, fn provider,
-                                                               {message_acc, fetch_acc} ->
+      defer_watermarks? = defer_watermark_advance?(context)
+
+      {messages_by_provider, fetches, proposed_watermarks} =
+        Enum.reduce(providers, {%{}, telemetry["fetches"], []}, fn provider,
+                                                                    {message_acc, fetch_acc,
+                                                                     watermark_acc} ->
           account = ConnectedAccounts.get(user_id, provider)
           query = gmail_poll_query(account, fallback_query)
 
@@ -1271,7 +1332,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                  provider: provider
                ) do
             {:ok, messages} ->
-              advance_gmail_watermark(account, now_watermark)
+              watermark_acc =
+                accumulate_watermark(
+                  watermark_acc,
+                  account,
+                  "gmail_poll_watermark",
+                  now_watermark,
+                  defer_watermarks?
+                )
 
               commercial_messages =
                 fetch_commercial_gmail_messages(user_id, provider, plan.commercial_gmail_queries)
@@ -1296,7 +1364,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     "body_missing_count" => count_body_missing_messages(annotated)
                   }
                   | fetch_acc
-                ]
+                ],
+                watermark_acc
               }
 
             {:error, reason} ->
@@ -1319,7 +1388,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     "reason" => inspect(reason)
                   }
                   | fetch_acc
-                ]
+                ],
+                watermark_acc
               }
           end
         end)
@@ -1348,6 +1418,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       telemetry =
         telemetry
         |> Map.put("fetches", fetches)
+        |> Map.update("proposed_watermarks", proposed_watermarks, &(proposed_watermarks ++ &1))
         |> put_source_summary("gmail", %{
           "mode" => "connector",
           "status" => status,
@@ -1371,23 +1442,6 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     case SourceCursors.get(account.id, "gmail_poll_watermark") do
       %{value: value} when is_binary(value) and value != "" -> "after:#{value}"
       _ -> fallback_query
-    end
-  end
-
-  defp advance_gmail_watermark(nil, _now_watermark), do: :ok
-
-  defp advance_gmail_watermark(account, now_watermark) do
-    case SourceCursors.put(account, "gmail_poll_watermark", %{"value" => now_watermark}) do
-      {:ok, _cursor} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("Failed to advance Gmail poll watermark",
-          provider: account.provider,
-          reason: inspect(reason)
-        )
-
-        :ok
     end
   end
 
@@ -1529,6 +1583,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     news_config = news_config(skill_ids, skill_configs)
     weather_config = weather_config(skill_ids, skill_configs)
     morning_brief? = morning_brief_trigger?(skill_ids, context)
+
+    # R2 (SPEC 04): scheduled scans cap the no-cursor fallback window to 48h
+    # regardless of what any individual skill's own `lookback_hours` config
+    # requests (commitment_tracker/goal_alignment/travel_logistics default to
+    # 14-30 days for their own post-fetch analysis window, independent of the
+    # acquisition fetch window). Morning briefings and explicit
+    # backfill/rebuild callers (`context[:acquisition_deep_lookback]`) opt
+    # back into the deeper window.
+    deep_lookback? = morning_brief? or truthy?(Map.get(context, :acquisition_deep_lookback))
+    raw_lookback_hours = max(max_lookback_hours, 24)
+
+    scheduled_scan_lookback_hours =
+      if deep_lookback?,
+        do: raw_lookback_hours,
+        else: min(raw_lookback_hours, @scheduled_scan_lookback_cap_hours)
 
     %{
       gmail:
@@ -1688,7 +1757,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           "weather_fetch_timeout_ms",
           @default_weather_fetch_timeout_ms
         ),
-      lookback_hours: max(max_lookback_hours, 24),
+      lookback_hours: scheduled_scan_lookback_hours,
       forward_days: @default_forward_days
     }
   end
@@ -1869,6 +1938,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       get_in(context, [:trigger, :type]) == :wakeup and
       is_nil(get_in(context, [:event, :payload]))
   end
+
+  defp truthy?(true), do: true
+  defp truthy?(_other), do: false
 
   defp slack_key_channels(skill_ids, skill_configs) do
     configured =

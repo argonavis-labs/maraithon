@@ -29,7 +29,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   require Logger
 
-  @default_wakeup_interval_ms :timer.hours(1)
+  # R1 (SPEC 04): sub-agent default cadence is 15 minutes, not hourly.
+  @default_wakeup_interval_ms :timer.minutes(15)
   @default_email_scan_limit 14
   @default_event_scan_limit 12
   @default_follow_up_window_hours 36
@@ -232,6 +233,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   def init(config) do
     %{
       user_id: normalize_string(config["user_id"]),
+      wakeup_interval_ms:
+        to_positive_integer(config["wakeup_interval_ms"], @default_wakeup_interval_ms),
       email_scan_limit:
         to_positive_integer(config["email_scan_limit"], @default_email_scan_limit),
       event_scan_limit:
@@ -442,7 +445,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     do: {:idle, reset_pending_state(state)}
 
   @impl true
-  def next_wakeup(_state), do: {:relative, @default_wakeup_interval_ms}
+  def next_wakeup(state),
+    do: {:relative, Map.get(state, :wakeup_interval_ms, @default_wakeup_interval_ms)}
 
   defp ensure_user_id(state, context) do
     case state.user_id do

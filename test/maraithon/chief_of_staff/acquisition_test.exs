@@ -174,7 +174,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       event: nil
     }
 
-    {bundle, telemetry} =
+    {bundle, telemetry, _watermarks} =
       Acquisition.build(
         "chief-slack-thread@example.com",
         ["followthrough"],
@@ -292,7 +292,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       event: nil
     }
 
-    {bundle, telemetry} =
+    {bundle, telemetry, _watermarks} =
       Acquisition.build(
         "chief-slack-limit@example.com",
         ["commitment_tracker"],
@@ -424,7 +424,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       event: nil
     }
 
-    {bundle, telemetry} =
+    {bundle, telemetry, _watermarks} =
       Acquisition.build(
         "chief-slack-search@example.com",
         ["commitment_tracker"],
@@ -538,7 +538,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       event: nil
     }
 
-    {bundle, telemetry} =
+    {bundle, telemetry, _watermarks} =
       Acquisition.build(
         "chief@example.com",
         ["followthrough", "travel_logistics"],
@@ -606,7 +606,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       event: nil
     }
 
-    {bundle, telemetry} =
+    {bundle, telemetry, _watermarks} =
       Acquisition.build("chief@example.com", ["followthrough"], skill_configs, context)
 
     [event] = SourceBundle.calendar_events(bundle)
@@ -684,7 +684,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       event: nil
     }
 
-    {bundle, telemetry} =
+    {bundle, telemetry, _watermarks} =
       Acquisition.build("chief@example.com", ["followthrough"], skill_configs, context)
 
     messages = SourceBundle.gmail_messages(bundle)
@@ -754,7 +754,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       }
     }
 
-    {bundle, telemetry} =
+    {bundle, telemetry, _watermarks} =
       Acquisition.build("chief@example.com", ["followthrough"], skill_configs, context)
 
     [message] = SourceBundle.gmail_messages(bundle)
@@ -787,12 +787,135 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       event: nil
     }
 
-    {bundle, telemetry} =
+    {bundle, telemetry, _watermarks} =
       Acquisition.build("chief@example.com", ["morning_briefing"], skill_configs, context)
 
     [item] = SourceBundle.news_items(bundle)
     assert item["title"] =~ "Slack launches"
     assert get_in(telemetry, ["sources", "news", "status"]) == "ready"
     assert get_in(telemetry, ["sources", "news", "item_count"]) == 1
+  end
+
+  describe "watermark advancement (SPEC 04 R4)" do
+    setup do
+      user_id = "chief-watermark@example.com"
+      provider = "google:watermark@example.com"
+
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, account} =
+        Maraithon.ConnectedAccounts.upsert_from_oauth(user_id, provider, %{
+          access_token: "token",
+          scopes: ["gmail"]
+        })
+
+      %{user_id: user_id, provider: provider, account: account}
+    end
+
+    defp watermark_build_context(user_id, defer?) do
+      base = %{
+        agent_id: "chief-agent-watermark",
+        user_id: user_id,
+        timestamp: ~U[2026-06-01 12:00:00Z],
+        budget: %{llm_calls: 10, tool_calls: 10},
+        recent_events: [],
+        trigger: %{type: :wakeup, job_type: "wakeup"},
+        event: nil
+      }
+
+      if defer?, do: Map.put(base, :defer_watermark_advance, true), else: base
+    end
+
+    test "defers the watermark advance and proposes it instead when the caller asks", %{
+      user_id: user_id,
+      provider: provider,
+      account: account
+    } do
+      TravelGmailStub.configure(
+        messages: [
+          %{
+            message_id: "wm-msg-1",
+            thread_id: "wm-thread-1",
+            subject: "Hello",
+            labels: ["INBOX"],
+            internal_date: ~U[2026-06-01 11:00:00Z]
+          }
+        ],
+        contents: %{}
+      )
+
+      skill_configs = %{
+        "followthrough" => %{
+          "source_scope" => %{
+            "google_accounts" => [
+              %{"provider" => provider, "account_email" => "watermark@example.com", "services" => ["gmail"]}
+            ]
+          },
+          "email_scan_limit" => 10,
+          "lookback_hours" => 48
+        }
+      }
+
+      {_bundle, _telemetry, proposed_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          skill_configs,
+          watermark_build_context(user_id, true)
+        )
+
+      # Not advanced immediately — R4 requires this to happen only after the
+      # cycle's durable writes commit (in AIChiefOfStaff.finalize_cycle/1).
+      refute Maraithon.Connectors.SourceCursors.get(account.id, "gmail_poll_watermark")
+
+      assert [%{account: proposed_account, kind: "gmail_poll_watermark", value: value}] =
+               proposed_watermarks
+
+      assert proposed_account.id == account.id
+      assert is_binary(value)
+    end
+
+    test "advances the watermark immediately when the caller does not defer", %{
+      user_id: user_id,
+      provider: provider,
+      account: account
+    } do
+      TravelGmailStub.configure(
+        messages: [
+          %{
+            message_id: "wm-msg-2",
+            thread_id: "wm-thread-2",
+            subject: "Hello again",
+            labels: ["INBOX"],
+            internal_date: ~U[2026-06-01 11:00:00Z]
+          }
+        ],
+        contents: %{}
+      )
+
+      skill_configs = %{
+        "followthrough" => %{
+          "source_scope" => %{
+            "google_accounts" => [
+              %{"provider" => provider, "account_email" => "watermark@example.com", "services" => ["gmail"]}
+            ]
+          },
+          "email_scan_limit" => 10,
+          "lookback_hours" => 48
+        }
+      }
+
+      {_bundle, _telemetry, proposed_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          skill_configs,
+          watermark_build_context(user_id, false)
+        )
+
+      assert proposed_watermarks == []
+      assert %{value: value} = Maraithon.Connectors.SourceCursors.get(account.id, "gmail_poll_watermark")
+      assert is_binary(value)
+    end
   end
 end

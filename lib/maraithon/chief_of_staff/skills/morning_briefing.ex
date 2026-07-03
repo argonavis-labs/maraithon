@@ -1070,7 +1070,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         context
 
       _ ->
-        {source_bundle, telemetry} =
+        {source_bundle, telemetry, _proposed_watermarks} =
           Acquisition.build(
             user_id,
             [id()],

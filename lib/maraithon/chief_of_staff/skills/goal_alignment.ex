@@ -282,7 +282,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
         {bundle, Map.get(context, :assistant_fetch_telemetry, %{})}
 
       _other ->
-        Acquisition.build(user_id, [id()], %{id() => state.config}, context)
+        {bundle, telemetry, _proposed_watermarks} =
+          Acquisition.build(user_id, [id()], %{id() => state.config}, context)
+
+        {bundle, telemetry}
     end
   end
 
