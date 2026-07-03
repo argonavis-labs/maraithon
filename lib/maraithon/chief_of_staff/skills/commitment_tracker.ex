@@ -736,6 +736,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
              "source_item_id": "message/thread/event id when known",
              "source_occurred_at": "ISO-8601 datetime when known",
              "dedupe_key": "stable semantic key",
+             "direction": "owed_by_me | owed_to_me | fyi",
+             "counterparty_label": "the person or team this is owed to/from, or omitted",
              "people": [],
              "memories": [],
              "metadata": {
@@ -829,6 +831,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        - For operator self-commitments, set metadata.explicit_user_commitment to
          true, metadata.commitment_direction to "i_owe", include the exact source
          quote, and keep Slack channel/thread identifiers in metadata/source fields.
+       - Set the top-level `direction` field on every saved work item, not just
+         metadata.commitment_direction: `owed_by_me` when the operator owes the
+         counterparty (this covers self-commitments, "i_owe", "asked_of_me"),
+         `owed_to_me` when the operator is waiting on someone else ("pending_reply",
+         "user_owes", "waiting_on_*"), or `fyi` when nobody is waiting on anything.
+         Name the counterparty in `counterparty_label` whenever the source
+         identifies them.
        - Every saved work item must include action_draft.text. If a reply or
          message makes sense, write concise suggested wording in the operator's
          style. If a full draft does not make sense, write a conversational next

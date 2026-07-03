@@ -10,7 +10,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.ChiefOfStaff.Acquisition
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.ChiefOfStaff.MeetingEnrichment
-  alias Maraithon.Commitments
   alias Maraithon.Companion
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm
@@ -775,8 +774,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         }
       },
       "weather" => SourceBundle.weather(source_bundle),
+      # SPEC 05 R6: sourced from the direction-aware todo queries
+      # (Todos.list_owed_by_me/2) instead of the retired Commitment schema,
+      # which nothing ever wrote to.
       "commitments" =>
-        Commitments.bucket_for_brief(user_id,
+        Todos.bucket_for_brief(user_id,
           now: now,
           timezone_offset_hours: offset_hours,
           timezone_label: timezone_label(state, now),

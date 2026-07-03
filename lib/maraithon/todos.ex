@@ -6,6 +6,8 @@ defmodule Maraithon.Todos do
   import Ecto.Query
 
   alias Maraithon.Insights.Insight
+  alias Maraithon.LLM.Embeddings
+  alias Maraithon.LocalEmbeddings
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
 
@@ -23,12 +25,23 @@ defmodule Maraithon.Todos do
   alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Todos.Todo
 
+  require Logger
+
   @open_statuses ~w(open snoozed)
   @feedback_values ~w(helpful not_helpful)
-  @decision_text_pattern "\\m(approve|approval|approved|ask|asked|blocked|blocking|call|choose|commitment|committed|decide|decision|owe|owes|owed|reply|replied|respond|response|wait|waiting)\\M"
   @fallback_title "Review open work"
   @fallback_summary "This saved open work needs a keep, delegate, or dismiss decision."
   @fallback_action "Open the source context, confirm the request, then keep, delegate, or dismiss it."
+
+  # SPEC 05: direction enum + legacy metadata vocabulary mapping. The writer
+  # prompt (intelligence.ex, commitment_tracker.ex) and any legacy synced
+  # records may still emit the old commitment_direction/thread_state values;
+  # this is the single place that normalizes them onto the `direction` column.
+  @directions ~w(owed_by_me owed_to_me fyi)
+  @owed_by_me_legacy ~w(i_owe asked_of_me)
+  @owed_to_me_legacy ~w(pending_reply user_owes waiting_on_user waiting_on_me waiting_on_kent)
+
+  @embedding_table "todos"
 
   def get_for_user(user_id, todo_id)
       when is_binary(user_id) and is_binary(todo_id) do
@@ -58,12 +71,24 @@ defmodule Maraithon.Todos do
   def count_for_user(user_id, opts \\ []) when is_binary(user_id) do
     decision_only? = decision_only_option?(opts)
 
-    user_id
-    |> filtered_todo_query(opts)
-    |> maybe_filter_decision_only(decision_only?)
-    |> exclude(:order_by)
-    |> select([todo], count(todo.id))
-    |> Repo.one()
+    query =
+      user_id
+      |> filtered_todo_query(opts)
+      |> maybe_filter_decision_only(decision_only?)
+      |> exclude(:order_by)
+
+    if decision_only? do
+      # `maybe_filter_decision_only/2` is intentionally a broad SQL-level
+      # superset (see its docstring); the precise "does this actually need a
+      # decision" call happens here via DecisionSignals, same as list_for_user.
+      query
+      |> Repo.all()
+      |> Enum.count(&DecisionSignals.needs_decision?/1)
+    else
+      query
+      |> select([todo], count(todo.id))
+      |> Repo.one()
+    end
   end
 
   def list_open_for_user(user_id, opts \\ []) when is_binary(user_id) do
@@ -74,6 +99,36 @@ defmodule Maraithon.Todos do
 
     list_for_user(user_id, opts)
   end
+
+  @doc """
+  Open todos where someone else owes the operator (`direction: "owed_to_me"`),
+  ordered by due date then priority. Answers "who am I waiting on?".
+  """
+  def list_owed_to_me(user_id, opts \\ [])
+
+  def list_owed_to_me(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    opts
+    |> Keyword.put(:direction, "owed_to_me")
+    |> Keyword.put_new(:sort_by, "due")
+    |> then(&list_open_for_user(user_id, &1))
+  end
+
+  def list_owed_to_me(_user_id, _opts), do: []
+
+  @doc """
+  Open todos the operator owes someone else (`direction: "owed_by_me"`),
+  ordered by due date then priority. Answers "what do I owe?".
+  """
+  def list_owed_by_me(user_id, opts \\ [])
+
+  def list_owed_by_me(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    opts
+    |> Keyword.put(:direction, "owed_by_me")
+    |> Keyword.put_new(:sort_by, "due")
+    |> then(&list_open_for_user(user_id, &1))
+  end
+
+  def list_owed_by_me(_user_id, _opts), do: []
 
   def list_recent_for_user(user_id, opts \\ []) when is_binary(user_id) do
     limit = Keyword.get(opts, :limit, 40)
@@ -401,7 +456,10 @@ defmodule Maraithon.Todos do
       end
     end)
     |> case do
-      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
+      {:ok, %Todo{} = todo} ->
+        _ = safe_refresh_embedding(todo)
+        {:ok, polish_todo_copy(todo)}
+
       {:error, :not_found} -> {:error, :not_found}
       {:error, :empty_update} -> {:error, :empty_update}
       {:error, reason} -> {:error, reason}
@@ -504,11 +562,320 @@ defmodule Maraithon.Todos do
       source_occurred_at: todo.source_occurred_at,
       inserted_at: todo.inserted_at,
       updated_at: todo.updated_at,
+      direction: todo.direction,
+      counterparty_person_id: todo.counterparty_person_id,
+      counterparty_label: todo.counterparty_label,
+      last_nudged_at: todo.last_nudged_at,
+      nudge_count: todo.nudge_count,
+      next_nudge_at: todo.next_nudge_at,
+      follow_up_channel: todo.follow_up_channel,
       attention_profile: AttentionRanker.profile(todo),
       surface_quality: SurfaceQuality.assess(todo),
       metadata: summarize_metadata(todo.metadata || %{})
     }
   end
+
+  @doc """
+  Records that a follow-up/nudge referencing this todo was actually
+  delivered (e.g. a prepared Gmail/Slack send tied to the todo executed).
+  Increments `nudge_count`, stamps `last_nudged_at`, and optionally sets
+  `follow_up_channel` / `next_nudge_at`.
+  """
+  def record_nudge_sent(user_id, todo_id, opts \\ [])
+
+  def record_nudge_sent(user_id, todo_id, opts)
+      when is_binary(user_id) and is_binary(todo_id) and is_list(opts) do
+    now = Keyword.get(opts, :now, DateTime.utc_now()) |> DateTime.truncate(:second)
+    channel = normalize_optional_string(Keyword.get(opts, :channel))
+    next_nudge_at = Keyword.get(opts, :next_nudge_at)
+
+    Repo.transaction(fn ->
+      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
+           {:ok, updated} <-
+             todo
+             |> Todo.changeset(
+               %{
+                 last_nudged_at: now,
+                 nudge_count: (todo.nudge_count || 0) + 1,
+                 next_nudge_at: next_nudge_at
+               }
+               |> maybe_put(:follow_up_channel, channel)
+             )
+             |> Repo.update() do
+        updated
+      else
+        nil -> Repo.rollback(:not_found)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def record_nudge_sent(_user_id, _todo_id, _opts), do: {:error, :not_found}
+
+  @doc """
+  Bucket of open `owed_by_me` todos shaped like `Commitments.bucket_for_brief/2`,
+  used by the morning briefing prompt (SPEC 05 R6). This replaces the retired
+  `Commitment` schema as the brief's "what do I owe" source of truth.
+  """
+  def bucket_for_brief(user_id, opts \\ [])
+
+  def bucket_for_brief(user_id, opts) when is_binary(user_id) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    offset_hours = Keyword.get(opts, :timezone_offset_hours, -5)
+    timezone_label = Keyword.get(opts, :timezone_label, brief_timezone_offset_label(offset_hours))
+    limit = Keyword.get(opts, :limit, 50)
+
+    items =
+      user_id
+      |> list_owed_by_me(limit: limit)
+      |> Enum.map(&brief_item_for_todo/1)
+      |> Enum.map(&brief_put_display_due(&1, offset_hours, timezone_label))
+
+    %{
+      "source" => "todos_owed_by_me",
+      "active_count" => length(items),
+      "overdue" => Enum.filter(items, &brief_overdue?(&1, now, offset_hours)),
+      "due_today" => Enum.filter(items, &brief_due_today?(&1, now, offset_hours)),
+      "coming_up" => Enum.filter(items, &brief_coming_up?(&1, now, offset_hours)),
+      "no_deadline" => Enum.filter(items, &is_nil(&1["due_at"]))
+    }
+  end
+
+  def bucket_for_brief(_user_id, _opts) do
+    %{
+      "source" => "todos_owed_by_me",
+      "active_count" => 0,
+      "overdue" => [],
+      "due_today" => [],
+      "coming_up" => [],
+      "no_deadline" => []
+    }
+  end
+
+  @doc """
+  Embedding-similarity dedupe fallback (SPEC 05 R5). Returns up to `limit`
+  of the user's open todos whose title/summary embedding is closest to
+  `text`, for injection into the intelligence prompt's `existing_todos` so
+  the model can choose `update` instead of creating a near-duplicate with
+  different wording. Returns `[]` (never raises) when pgvector isn't
+  installed, the embed call fails, or `text` is blank.
+  """
+  def semantic_duplicate_candidates(user_id, text, opts \\ [])
+
+  def semantic_duplicate_candidates(user_id, text, opts)
+      when is_binary(user_id) and is_binary(text) and is_list(opts) do
+    limit = Keyword.get(opts, :limit, 5)
+    min_similarity = Keyword.get(opts, :min_similarity, 0.75)
+    embed_opts = Keyword.get(opts, :embed_opts, [])
+
+    case normalize_optional_string(text) do
+      nil ->
+        []
+
+      normalized ->
+        if LocalEmbeddings.embedding_storage_available?(@embedding_table) do
+          case safe_embed(normalized, embed_opts) do
+            {:ok, vector} ->
+              @embedding_table
+              |> LocalEmbeddings.semantic_search(user_id, vector,
+                limit: max(limit * 4, limit),
+                min_similarity: min_similarity
+              )
+              |> load_open_todos_ranked(user_id, limit)
+
+            {:error, _reason} ->
+              []
+          end
+        else
+          []
+        end
+    end
+  rescue
+    error ->
+      Logger.warning("todo semantic dedupe search failed", reason: Exception.message(error))
+      []
+  catch
+    _kind, _reason -> []
+  end
+
+  def semantic_duplicate_candidates(_user_id, _text, _opts), do: []
+
+  defp safe_embed(text, opts) do
+    Embeddings.embed(text, opts)
+  rescue
+    error -> {:error, Exception.message(error)}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp load_open_todos_ranked([], _user_id, _limit), do: []
+
+  defp load_open_todos_ranked(id_similarity_pairs, user_id, limit) do
+    ids = Enum.map(id_similarity_pairs, &elem(&1, 0))
+    similarity_by_id = Map.new(id_similarity_pairs)
+
+    Todo
+    |> where(
+      [todo],
+      todo.user_id == ^user_id and todo.id in ^ids and todo.status in ^@open_statuses
+    )
+    |> Repo.all()
+    |> Enum.sort_by(&Map.get(similarity_by_id, &1.id, 0.0), :desc)
+    |> Enum.take(limit)
+  end
+
+  @doc """
+  Recomputes and persists the title+summary embedding for a todo
+  (best-effort; never raises). Called at insert/update so future ingestion
+  cycles can find this todo as a semantic dedupe candidate.
+  """
+  def refresh_embedding(%Todo{} = todo) do
+    LocalEmbeddings.refresh(@embedding_table, todo.id, embedding_source_text(todo))
+  end
+
+  def refresh_embedding(_other), do: {:error, :invalid_todo}
+
+  defp embedding_source_text(%Todo{} = todo) do
+    [todo.title, todo.summary]
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.join("\n")
+  end
+
+  defp safe_refresh_embedding(%Todo{} = todo) do
+    refresh_embedding(todo)
+  rescue
+    error ->
+      Logger.warning("todo embedding refresh failed",
+        todo_id: todo.id,
+        reason: Exception.message(error)
+      )
+
+      :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp safe_refresh_embedding(_other), do: :ok
+
+  defp tap_refresh_embedding({:ok, %Todo{} = todo}) do
+    _ = safe_refresh_embedding(todo)
+    {:ok, todo}
+  end
+
+  defp tap_refresh_embedding(other), do: other
+
+  defp brief_item_for_todo(%Todo{} = todo) do
+    %{
+      "id" => todo.id,
+      "source" => "todo",
+      "source_id" => todo.id,
+      "title" => todo.title,
+      "owed_to" => todo.counterparty_label,
+      "project" => read_string(todo.metadata || %{}, "project", nil),
+      "due_at" => brief_datetime_to_iso(todo.due_at),
+      "status" => todo.status,
+      "priority" => todo.priority,
+      "evidence" => [],
+      "metadata" => Map.take(todo.metadata || %{}, ["source_insight_id", "record"])
+    }
+  end
+
+  defp brief_put_display_due(item, offset_hours, timezone_label) when is_map(item) do
+    case brief_display_due_label(item["due_at"], offset_hours, timezone_label) do
+      nil -> item
+      label -> Map.put(item, "display_due", label)
+    end
+  end
+
+  defp brief_overdue?(%{"due_at" => nil}, _now, _offset_hours), do: false
+
+  defp brief_overdue?(item, now, offset_hours) do
+    case brief_parse_datetime(item["due_at"]) do
+      nil ->
+        false
+
+      due_at ->
+        Date.compare(brief_local_date(due_at, offset_hours), brief_local_date(now, offset_hours)) ==
+          :lt
+    end
+  end
+
+  defp brief_due_today?(%{"due_at" => nil}, _now, _offset_hours), do: false
+
+  defp brief_due_today?(item, now, offset_hours) do
+    case brief_parse_datetime(item["due_at"]) do
+      nil ->
+        false
+
+      due_at ->
+        Date.compare(brief_local_date(due_at, offset_hours), brief_local_date(now, offset_hours)) ==
+          :eq
+    end
+  end
+
+  defp brief_coming_up?(%{"due_at" => nil}, _now, _offset_hours), do: false
+
+  defp brief_coming_up?(item, now, offset_hours) do
+    case brief_parse_datetime(item["due_at"]) do
+      nil ->
+        false
+
+      due_at ->
+        today = brief_local_date(now, offset_hours)
+        due_date = brief_local_date(due_at, offset_hours)
+        days = Date.diff(due_date, today)
+        days > 0 and days <= 7
+    end
+  end
+
+  defp brief_local_date(%DateTime{} = datetime, offset_hours) do
+    datetime
+    |> DateTime.add(offset_hours, :hour)
+    |> DateTime.to_date()
+  end
+
+  defp brief_display_due_label(nil, _offset_hours, _timezone_label), do: nil
+
+  defp brief_display_due_label(value, offset_hours, timezone_label) do
+    case brief_parse_datetime(value) do
+      nil ->
+        nil
+
+      due_at ->
+        due_at
+        |> DateTime.add(offset_hours, :hour)
+        |> Calendar.strftime("%b %-d, %Y at %-I:%M %p #{timezone_label}")
+    end
+  end
+
+  defp brief_timezone_offset_label(offset) when is_integer(offset) do
+    sign = if offset < 0, do: "-", else: "+"
+    hours = offset |> abs() |> Integer.to_string() |> String.pad_leading(2, "0")
+    "UTC#{sign}#{hours}:00"
+  end
+
+  defp brief_timezone_offset_label(_offset), do: "UTC"
+
+  defp brief_parse_datetime(nil), do: nil
+  defp brief_parse_datetime(%DateTime{} = value), do: value
+
+  defp brief_parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  defp brief_parse_datetime(_value), do: nil
+
+  defp brief_datetime_to_iso(nil), do: nil
+  defp brief_datetime_to_iso(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp brief_datetime_to_iso(value), do: to_string(value)
 
   defp upsert_one(user_id, attrs, opts) when is_binary(user_id) and is_map(attrs) do
     normalized_attrs =
@@ -522,6 +889,7 @@ defmodule Maraithon.Todos do
         todo
         |> Todo.changeset(merge_upsert_attrs(todo, attrs))
         |> Repo.update()
+        |> tap_refresh_embedding()
 
       nil ->
         Repo.transaction(fn ->
@@ -532,6 +900,7 @@ defmodule Maraithon.Todos do
             {:error, reason} -> Repo.rollback(reason)
           end
         end)
+        |> tap_refresh_embedding()
     end
   end
 
@@ -589,6 +958,7 @@ defmodule Maraithon.Todos do
           todo
           |> Todo.changeset(attrs)
           |> Repo.update()
+          |> tap_refresh_embedding()
         end
 
       nil ->
@@ -600,6 +970,7 @@ defmodule Maraithon.Todos do
             {:error, reason} -> Repo.rollback(reason)
           end
         end)
+        |> tap_refresh_embedding()
     end
   end
 
@@ -836,6 +1207,9 @@ defmodule Maraithon.Todos do
     |> update_text_attr(attrs, "source_item_id", "source_item_id")
     |> update_datetime_attr(attrs, "source_occurred_at", "source_occurred_at")
     |> update_text_attr(attrs, "dedupe_key", "dedupe_key")
+    |> update_direction_attr(attrs)
+    |> update_text_attr(attrs, "counterparty_person_id", "counterparty_person_id")
+    |> update_text_attr(attrs, "counterparty_label", "counterparty_label")
     |> update_metadata_attr(todo, attrs)
     |> UserFacingCopy.polish_attrs()
   end
@@ -888,6 +1262,17 @@ defmodule Maraithon.Todos do
         "attention_mode",
         normalize_attention_mode(read_string(attrs, "attention_mode", "act_now"))
       )
+    else
+      changes
+    end
+  end
+
+  defp update_direction_attr(changes, attrs) do
+    if attr_present?(attrs, "direction") do
+      case normalize_direction(read_string(attrs, "direction", nil)) do
+        nil -> changes
+        direction -> Map.put(changes, "direction", direction)
+      end
     else
       changes
     end
@@ -991,8 +1376,16 @@ defmodule Maraithon.Todos do
         read_string(attrs, "draft_plan", read_string(attrs, "plan", nil))
       )
 
+    direction =
+      normalize_direction(read_string(attrs, "direction", nil)) ||
+        direction_from_legacy_metadata(metadata) || "owed_by_me"
+
     %{
       "user_id" => user_id,
+      "direction" => direction,
+      "counterparty_person_id" => read_uuid(attrs, "counterparty_person_id", nil),
+      "counterparty_label" =>
+        read_string(attrs, "counterparty_label", counterparty_label_from_metadata(metadata)),
       "owner_user_id" => owner_user_id,
       "owner_label" => normalize_owner_label(owner_label, owner_user_id, user_id),
       "source" => source,
@@ -1129,6 +1522,7 @@ defmodule Maraithon.Todos do
     query_text = normalize_query_text(Keyword.get(opts, :query))
     open_due_only? = Keyword.get(opts, :open_due_only, false)
     exclude_unsurfaceable? = Keyword.get(opts, :exclude_unsurfaceable?, true)
+    direction = Keyword.get(opts, :direction)
 
     Todo
     |> where([todo], todo.user_id == ^user_id)
@@ -1140,11 +1534,22 @@ defmodule Maraithon.Todos do
     |> maybe_filter_kind(kind)
     |> maybe_filter_attention_mode(attention_mode)
     |> maybe_filter_owner_user_id(owner_user_id)
+    |> maybe_filter_direction(direction)
     |> maybe_filter_due_after(due_after)
     |> maybe_filter_due_before(due_before)
     |> maybe_filter_due_nil(due_nil?)
     |> maybe_filter_query(query_text)
   end
+
+  defp maybe_filter_direction(query, nil), do: query
+  defp maybe_filter_direction(query, ""), do: query
+  defp maybe_filter_direction(query, "all"), do: query
+
+  defp maybe_filter_direction(query, direction) when is_binary(direction) do
+    where(query, [todo], todo.direction == ^direction)
+  end
+
+  defp maybe_filter_direction(query, _direction), do: query
 
   defp maybe_filter_source(query, nil), do: query
   defp maybe_filter_source(query, ""), do: query
@@ -1213,47 +1618,17 @@ defmodule Maraithon.Todos do
 
   defp maybe_filter_decision_only(query, false), do: query
 
+  # SPEC 05 R3: replaces the old three-path metadata fragment disjunction
+  # (commitment_direction / thread_state / conversation_context.momentum_state)
+  # with the durable `direction` column those fragments have been backfilled
+  # into. This is intentionally a broad SQL-level prefilter; the precise
+  # per-row "does this actually need a decision" call still happens in
+  # `DecisionSignals.needs_decision?/1` after the query runs.
   defp maybe_filter_decision_only(query, true) do
     where(
       query,
       [todo],
-      todo.status in ^@open_statuses and
-        (fragment(
-           """
-           coalesce(?->>'commitment_direction', '') in ('i_owe', 'asked_of_me', 'pending_reply', 'user_owes', 'waiting_on_user', 'waiting_on_me')
-           """,
-           todo.metadata
-         ) or
-           fragment(
-             """
-             coalesce(?->>'thread_state', '') in ('i_owe', 'asked_of_me', 'pending_reply', 'user_owes', 'waiting_on_user', 'waiting_on_me', 'waiting_on_kent')
-             """,
-             todo.metadata
-           ) or
-           fragment(
-             """
-             coalesce(? #>> '{conversation_context,momentum_state}', '') in ('i_owe', 'asked_of_me', 'pending_reply', 'user_owes', 'waiting_on_user', 'waiting_on_me', 'waiting_on_kent')
-             """,
-             todo.metadata
-           ) or
-           fragment(
-             """
-             lower(concat_ws(' ', ?, ?, ?, ?, ?, coalesce(?->>'why_now', ''), coalesce(?->>'why_it_matters', ''), coalesce(?->>'context_brief', ''), coalesce(?->>'thread_state', ''), coalesce(?->>'source_quote', ''), coalesce(?->>'source_excerpt', ''), coalesce(?->>'quote', ''))) ~ ?
-             """,
-             todo.title,
-             todo.summary,
-             todo.next_action,
-             todo.notes,
-             todo.action_plan,
-             todo.metadata,
-             todo.metadata,
-             todo.metadata,
-             todo.metadata,
-             todo.metadata,
-             todo.metadata,
-             todo.metadata,
-             ^@decision_text_pattern
-           ))
+      todo.status in ^@open_statuses and todo.direction in ["owed_by_me", "owed_to_me"]
     )
   end
 
@@ -1647,6 +2022,28 @@ defmodule Maraithon.Todos do
   defp normalize_status(value) when value in ~w(open done dismissed snoozed), do: value
   defp normalize_status(_value), do: "open"
 
+  defp normalize_direction(value) when value in @directions, do: value
+  defp normalize_direction(_value), do: nil
+
+  # SPEC 05 R2: maps the writer's legacy commitment_direction/thread_state
+  # vocabulary onto the new direction enum. Falls back to nil (caller
+  # decides the default) when no legacy signal is present.
+  defp direction_from_legacy_metadata(metadata) when is_map(metadata) do
+    [
+      read_string(metadata, "commitment_direction", nil),
+      read_string(metadata, "thread_state", nil),
+      metadata |> read_map("conversation_context") |> read_string("momentum_state", nil)
+    ]
+    |> Enum.map(&normalize_legacy_direction/1)
+    |> Enum.find(& &1)
+  end
+
+  defp direction_from_legacy_metadata(_metadata), do: nil
+
+  defp normalize_legacy_direction(value) when value in @owed_by_me_legacy, do: "owed_by_me"
+  defp normalize_legacy_direction(value) when value in @owed_to_me_legacy, do: "owed_to_me"
+  defp normalize_legacy_direction(_value), do: nil
+
   defp normalize_status_filters(nil), do: nil
 
   defp normalize_status_filters(statuses) when is_list(statuses) do
@@ -1775,6 +2172,33 @@ defmodule Maraithon.Todos do
   end
 
   defp owner_label_from_metadata(_metadata), do: nil
+
+  defp counterparty_label_from_metadata(metadata) when is_map(metadata) do
+    read_string(
+      metadata,
+      "person",
+      read_string(
+        metadata,
+        "contact",
+        read_string(metadata, "requested_by", read_string(metadata, "sender_name", nil))
+      )
+    )
+  end
+
+  defp counterparty_label_from_metadata(_metadata), do: nil
+
+  defp read_uuid(attrs, key, default) do
+    case fetch_attr(attrs, key) do
+      value when is_binary(value) ->
+        case Ecto.UUID.cast(value) do
+          {:ok, uuid} -> uuid
+          :error -> default
+        end
+
+      _ ->
+        default
+    end
+  end
 
   defp notes_from_metadata(metadata) when is_map(metadata) do
     read_string(metadata, "notes", read_string(metadata, "note", nil))
