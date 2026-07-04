@@ -1700,6 +1700,7 @@ defmodule Maraithon.AssistantHarness do
     allowed =
       MapSet.new(~w(
         get_open_loops
+        get_today_focus
         list_todos
         resolve_todo
         update_todo

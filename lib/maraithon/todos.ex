@@ -462,9 +462,14 @@ defmodule Maraithon.Todos do
         _ = safe_refresh_embedding(todo)
         {:ok, polish_todo_copy(todo)}
 
-      {:error, :not_found} -> {:error, :not_found}
-      {:error, :empty_update} -> {:error, :empty_update}
-      {:error, reason} -> {:error, reason}
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, :empty_update} ->
+        {:error, :empty_update}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -729,9 +734,17 @@ defmodule Maraithon.Todos do
   defp normalize_timezone_offset_hours(_value), do: 0
 
   @doc """
-  Bucket of open `owed_by_me` todos shaped like `Commitments.bucket_for_brief/2`,
-  used by the morning briefing prompt (SPEC 05 R6). This replaces the retired
+  Bucket of open todos shaped like `Commitments.bucket_for_brief/2`, used by
+  the morning briefing prompt (SPEC 05 R6). This replaces the retired
   `Commitment` schema as the brief's "what do I owe" source of truth.
+
+  SPEC 06 R3: accepts a `:direction` option. The default remains
+  `"owed_by_me"` (behavior- and label-preserving for the morning brief's
+  existing call). `direction: "owed_to_me"` buckets what others owe the
+  operator (`"source" => "todos_owed_to_me"`); `direction: :all` buckets all
+  open todos with no direction filter (`"source" => "todos_open_all"`). The
+  private bucketing helpers are direction-agnostic and take the explicit
+  `:timezone_offset_hours`, so every direction shares the same due math.
   """
   def bucket_for_brief(user_id, opts \\ [])
 
@@ -741,14 +754,25 @@ defmodule Maraithon.Todos do
     timezone_label = Keyword.get(opts, :timezone_label, brief_timezone_offset_label(offset_hours))
     limit = Keyword.get(opts, :limit, 50)
 
+    {source, todos} =
+      case Keyword.get(opts, :direction, "owed_by_me") do
+        all when all in [:all, "all"] ->
+          {"todos_open_all", list_open_for_user(user_id, limit: limit)}
+
+        "owed_to_me" ->
+          {"todos_owed_to_me", list_owed_to_me(user_id, limit: limit)}
+
+        _owed_by_me ->
+          {"todos_owed_by_me", list_owed_by_me(user_id, limit: limit)}
+      end
+
     items =
-      user_id
-      |> list_owed_by_me(limit: limit)
+      todos
       |> Enum.map(&brief_item_for_todo/1)
       |> Enum.map(&brief_put_display_due(&1, offset_hours, timezone_label))
 
     %{
-      "source" => "todos_owed_by_me",
+      "source" => source,
       "active_count" => length(items),
       "overdue" => Enum.filter(items, &brief_overdue?(&1, now, offset_hours)),
       "due_today" => Enum.filter(items, &brief_due_today?(&1, now, offset_hours)),

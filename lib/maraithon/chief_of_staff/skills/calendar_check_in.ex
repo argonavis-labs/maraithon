@@ -16,6 +16,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   @behaviour Maraithon.ChiefOfStaff.Skill
 
   alias Maraithon.Briefs
+  alias Maraithon.Calendar.FreeBlocks
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Timezones
@@ -202,6 +203,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   # Check-in input
   # ==========================================================================
 
+  # SPEC 06 R2 / prompt-size invariant: every enrichment list stays bounded so
+  # the low-effort, 2000-max-output-token check-in call never has to skim a
+  # huge JSON blob. Trim server-side; never raise llm_max_tokens instead.
+  @enrichment_list_cap 15
+  @due_bucket_fetch_limit 40
+
   @doc false
   def build_check_in_input(user_id, now, state, context) do
     offset = timezone_offset_hours_at(now, state)
@@ -209,14 +216,31 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     local_now = DateTime.add(now, offset, :hour)
     local_date = DateTime.to_date(local_now)
 
-    events =
+    bundle =
       context
       |> Map.get(:source_bundle, %{})
       |> Kernel.||(%{})
+
+    # SPEC 06 R1: an absent/never-fetched calendar must not read as a fully
+    # free day. Without freshness evidence we skip gap math entirely, so the
+    # existing empty-openings guard in handle_wakeup idles honestly instead
+    # of firing a false "you have 9 hours open" check-in. A fetched calendar
+    # with zero events is a genuinely open day and behaves as before.
+    calendar_fetched? = SourceBundle.fetched?(bundle, "calendar")
+
+    events =
+      bundle
       |> SourceBundle.calendar_events()
       |> List.wrap()
 
-    openings = compute_openings(events, now, state)
+    openings =
+      if calendar_fetched? do
+        events
+        |> compute_openings(now, state)
+        |> FreeBlocks.attach_next_events(events, offset, timezone)
+      else
+        []
+      end
 
     %{
       "date" => Date.to_iso8601(local_date),
@@ -230,12 +254,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
         "start_hour" => state.work_day_start_hour,
         "end_hour" => state.work_day_end_hour
       },
+      "calendar_status" => if(calendar_fetched?, do: "ok", else: "unavailable"),
       "openings" => openings,
       "todays_events" =>
         events
-        |> Enum.map(&calendar_event_for_prompt(&1, offset, timezone))
+        |> Enum.map(&FreeBlocks.event_for_prompt(&1, offset, timezone))
         |> Enum.reject(&is_nil/1)
         |> Enum.take(20),
+      # SPEC 06 R2: two-sided waiting-on so the model can honestly separate
+      # "who owes the operator" from "what the operator owes". Same offset/
+      # timezone as everything else in this wakeup — never recomputed.
+      "waiting_on_me" =>
+        user_id
+        |> Todos.list_owed_to_me(limit: @enrichment_list_cap)
+        |> Enum.map(&Todos.serialize_for_prompt/1),
+      "i_owe" =>
+        user_id
+        |> Todos.list_owed_by_me(limit: @enrichment_list_cap)
+        |> Enum.map(&Todos.serialize_for_prompt/1),
+      "due" => due_buckets_for_check_in(user_id, now, offset, timezone),
       "open_work" => %{
         "todos" =>
           user_id
@@ -251,135 +288,41 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     }
   end
 
+  # SPEC 06 R2/R3: cross-direction due buckets via the generalized
+  # Todos.bucket_for_brief/2, reusing this wakeup's single offset/timezone.
+  # Each bucket list is capped so the prompt input stays bounded.
+  defp due_buckets_for_check_in(user_id, now, offset, timezone) do
+    user_id
+    |> Todos.bucket_for_brief(
+      direction: :all,
+      timezone_offset_hours: offset,
+      timezone_label: timezone,
+      now: now,
+      limit: @due_bucket_fetch_limit
+    )
+    |> Map.new(fn
+      {key, items} when is_list(items) -> {key, Enum.take(items, @enrichment_list_cap)}
+      {key, value} -> {key, value}
+    end)
+  end
+
   # Deterministic interval math: free stretches >= min_opening_minutes between
   # now (or the work-day start) and the work-day end, ignoring all-day events.
+  # SPEC 06 R7: thin wrapper over the shared, calendar-source-agnostic
+  # Maraithon.Calendar.FreeBlocks — behavior and return shape unchanged.
   defp compute_openings(events, now, state) do
     offset = timezone_offset_hours_at(now, state)
     timezone = timezone_label(state, now)
-    local_now = DateTime.add(now, offset, :hour)
-    local_date = DateTime.to_date(local_now)
+    local_date = now |> DateTime.add(offset, :hour) |> DateTime.to_date()
 
-    work_start_utc =
-      local_date
-      |> DateTime.new!(Time.new!(state.work_day_start_hour, 0, 0), "Etc/UTC")
-      |> DateTime.add(-offset, :hour)
-
-    work_end_utc =
-      local_date
-      |> work_day_end_datetime(state.work_day_end_hour)
-      |> DateTime.add(-offset, :hour)
-
-    window_start = latest(now, work_start_utc)
-    window_end = work_end_utc
-
-    if DateTime.compare(window_start, window_end) != :lt do
-      []
-    else
-      busy =
-        events
-        |> Enum.map(&event_interval/1)
-        |> Enum.reject(&is_nil/1)
-        |> Enum.filter(fn {s, e} ->
-          DateTime.compare(e, window_start) == :gt and DateTime.compare(s, window_end) == :lt
-        end)
-        |> Enum.sort_by(fn {s, _e} -> DateTime.to_unix(s, :microsecond) end)
-
-      {openings, cursor} =
-        Enum.reduce(busy, {[], window_start}, fn {s, e}, {acc, cursor} ->
-          gap_end = earliest(s, window_end)
-
-          acc =
-            maybe_add_opening(acc, cursor, gap_end, offset, timezone, state.min_opening_minutes)
-
-          {acc, latest(e, cursor)}
-        end)
-
-      openings
-      |> maybe_add_opening(cursor, window_end, offset, timezone, state.min_opening_minutes)
-      |> Enum.reverse()
-    end
+    FreeBlocks.openings(events, now,
+      work_start_utc: FreeBlocks.work_day_start_utc(local_date, state.work_day_start_hour, offset),
+      work_end_utc: FreeBlocks.work_day_end_utc(local_date, state.work_day_end_hour, offset),
+      min_opening_minutes: state.min_opening_minutes,
+      offset: offset,
+      timezone: timezone
+    )
   end
-
-  defp work_day_end_datetime(date, 24), do: DateTime.new!(date, ~T[23:59:59], "Etc/UTC")
-
-  defp work_day_end_datetime(date, hour),
-    do: DateTime.new!(date, Time.new!(hour, 0, 0), "Etc/UTC")
-
-  defp maybe_add_opening(acc, gap_start, gap_end, offset, timezone, min_minutes) do
-    minutes = gap_end |> DateTime.diff(gap_start, :second) |> div(60)
-
-    if minutes >= min_minutes do
-      [
-        %{
-          "start" => DateTime.to_iso8601(gap_start),
-          "end" => DateTime.to_iso8601(gap_end),
-          "local_start" => local_clock(gap_start, offset),
-          "local_end" => local_clock(gap_end, offset),
-          "display_range" => display_clock_range(gap_start, gap_end, offset, timezone),
-          "timezone" => timezone,
-          "minutes" => minutes
-        }
-        | acc
-      ]
-    else
-      acc
-    end
-  end
-
-  defp event_interval(event) when is_map(event) do
-    with %DateTime{} = start_at <- coerce_datetime(read_any(event, "start")),
-         %DateTime{} = end_at <- coerce_datetime(read_any(event, "end")),
-         :lt <- DateTime.compare(start_at, end_at) do
-      {start_at, end_at}
-    else
-      _ -> nil
-    end
-  end
-
-  defp event_interval(_event), do: nil
-
-  # All-day events arrive as %{"date" => "..."} and do not block timed work.
-  defp coerce_datetime(%DateTime{} = value), do: value
-
-  defp coerce_datetime(value) when is_binary(value) do
-    case DateTime.from_iso8601(value) do
-      {:ok, datetime, _offset} -> datetime
-      _ -> nil
-    end
-  end
-
-  defp coerce_datetime(_value), do: nil
-
-  defp latest(a, b), do: if(DateTime.compare(a, b) == :gt, do: a, else: b)
-  defp earliest(a, b), do: if(DateTime.compare(a, b) == :lt, do: a, else: b)
-
-  defp local_clock(%DateTime{} = datetime, offset) do
-    datetime
-    |> DateTime.add(offset, :hour)
-    |> DateTime.to_time()
-    |> Time.truncate(:second)
-    |> Time.to_iso8601()
-  end
-
-  defp calendar_event_for_prompt(event, offset, timezone) when is_map(event) do
-    case event_interval(event) do
-      {start_at, end_at} ->
-        %{
-          "summary" => read_string(event, "summary", "Untitled event"),
-          "local_start" => local_clock(start_at, offset),
-          "local_end" => local_clock(end_at, offset),
-          "display_time" => display_clock_range(start_at, end_at, offset, timezone),
-          "timezone" => timezone,
-          "location" => read_string(event, "location", nil),
-          "organizer" => read_string(event, "organizer", nil)
-        }
-
-      nil ->
-        nil
-    end
-  end
-
-  defp calendar_event_for_prompt(_event, _offset, _timezone), do: nil
 
   # ==========================================================================
   # Model call + delivery
@@ -416,6 +359,26 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     Voice: warm, specific, and brief, like a trusted operator — not a system
     notification. Use the local clock times from the input. Plain Telegram text,
     no markdown tables, no internal labels.
+
+    Curated inputs: waiting_on_me lists items where someone else owes the
+    operator; i_owe lists items the operator owes someone else; due.overdue and
+    due.due_today are cross-direction due buckets. Each opening may carry a
+    next_event — the meeting immediately after that opening — which makes a good
+    concrete anchor ("before your 2pm with Elena").
+
+    Effort fit: each opening includes its exact "minutes". Judge which 1-2 items
+    from open_work.todos, waiting_on_me, i_owe, due.overdue, or due.due_today
+    plausibly fit that exact duration — a short reply fits 15 minutes, a messy
+    thread or real prep does not — and suggest only what genuinely fits. When
+    nothing fits the time available, hold: "nothing fits" is a valid, complete
+    answer, not a failure to fill the slot.
+
+    Why it matters: items carry attention_profile (context.person, context.why,
+    age_days, counterparty_label). When you name an item, include a short
+    plain-language reason grounded in that context — e.g. "waiting 6 days on
+    Elena" — never raw internal bucket or field names (things like
+    "business_project_waiting" or "stale_confirmation_candidate"), and never
+    scores or confidence numbers.
 
     Held interruptions: open_work.held_interruptions lists proactive pushes that
     were held instead of interrupting (quiet hours, the interruption budget, or a
@@ -731,12 +694,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   defp opening_range_label_for(opening) when is_map(opening) do
     case read_string(opening, "display_range", nil) do
       nil ->
-        start_at = opening |> read_string("local_start", nil) |> display_clock_label()
-        end_at = opening |> read_string("local_end", nil) |> display_clock_label()
+        start_at = opening |> read_string("local_start", nil) |> FreeBlocks.display_clock_label()
+        end_at = opening |> read_string("local_end", nil) |> FreeBlocks.display_clock_label()
         timezone = read_string(opening, "timezone", nil)
 
         if start_at && end_at do
-          compact_clock_range(start_at, end_at, timezone)
+          FreeBlocks.compact_clock_range(start_at, end_at, timezone)
         end
 
       display_range ->
@@ -823,63 +786,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
 
   defp sentence(_value), do: ""
 
-  defp display_clock_range(start_at, end_at, offset, timezone)
-       when is_integer(offset) do
-    start_label =
-      start_at
-      |> local_clock(offset)
-      |> display_clock_label()
-
-    end_label =
-      end_at
-      |> local_clock(offset)
-      |> display_clock_label()
-
-    compact_clock_range(start_label, end_label, timezone)
-  end
-
-  defp compact_clock_range(start_label, end_label, timezone)
-       when is_binary(start_label) and is_binary(end_label) do
-    range =
-      case {String.split(start_label, " "), String.split(end_label, " ")} do
-        {[start_time, meridiem], [end_time, end_meridiem]} when meridiem == end_meridiem ->
-          "#{start_time}-#{end_time} #{meridiem}"
-
-        _ ->
-          "#{start_label}-#{end_label}"
-      end
-
-    case normalize_string(timezone) do
-      nil -> range
-      timezone -> "#{range} #{timezone}"
-    end
-  end
-
-  defp compact_clock_range(_start_label, _end_label, _timezone), do: nil
-
-  defp display_clock_label(nil), do: nil
-
-  defp display_clock_label(value) when is_binary(value) do
-    value
-    |> clock_parts()
-    |> case do
-      nil ->
-        nil
-
-      {hour, minute} ->
-        display_hour =
-          case rem(hour, 12) do
-            0 -> 12
-            hour -> hour
-          end
-
-        meridiem = if hour < 12, do: "AM", else: "PM"
-        "#{display_hour}:#{String.pad_leading(Integer.to_string(minute), 2, "0")} #{meridiem}"
-    end
-  end
-
-  defp display_clock_label(_value), do: nil
-
   defp clock_label(nil), do: nil
 
   defp clock_label(value) when is_binary(value) do
@@ -893,28 +799,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp clock_label(_value), do: nil
-
-  defp clock_parts(value) when is_binary(value) do
-    value
-    |> String.trim()
-    |> String.split(":")
-    |> case do
-      [hour, minute | _] ->
-        with {hour, ""} <- Integer.parse(hour),
-             {minute, ""} <- Integer.parse(minute),
-             true <- hour in 0..23,
-             true <- minute in 0..59 do
-          {hour, minute}
-        else
-          _ -> nil
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp clock_parts(_value), do: nil
 
   defp short_clock_label(nil), do: nil
 
