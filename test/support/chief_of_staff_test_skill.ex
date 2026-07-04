@@ -184,5 +184,8 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
 
   defp context_value("previous_cycle_memo", context), do: context[:previous_cycle_memo]
 
+  defp context_value("previous_decision_ledger", context),
+    do: context[:previous_decision_ledger]
+
   defp context_value(_key, _context), do: nil
 end

@@ -132,8 +132,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
      }, []}
   end
 
+  # R10/R11 (SPEC 07): a :pubsub_event trigger on one of the three subscribed
+  # topic families (email:/calendar:/slack: — the only topics
+  # SourceScope.subscriptions/2 ever returns) fetches gmail + calendar +
+  # slack together, but skips news/weather and every companion source: no
+  # skill that runs on a :pubsub_event trigger ever consults them.
+  # Never narrow further within {gmail, calendar, slack} — Followthrough
+  # always runs both its Gmail/Calendar and Slack sub-behaviors in one
+  # wakeup, and starving one of data would produce a confidently wrong
+  # "nothing to follow up on". Any other trigger (:message, :wakeup, nil, or
+  # an unrecognized pubsub topic) fails open to the full unscoped fetch.
   defp source_fetchers(user_id, source_scope, plan, context) do
-    [
+    connector_fetchers = [
       source_fetcher("gmail", gmail_fetch_timeout_ms(plan), fn state ->
         maybe_fetch_gmail(state, user_id, source_scope, plan, context)
       end),
@@ -142,15 +152,38 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       end),
       source_fetcher("slack", slack_fetch_timeout_ms(plan), fn state ->
         maybe_fetch_slack(state, user_id, source_scope, plan, context)
-      end),
-      source_fetcher("news", news_fetch_timeout_ms(plan), fn state ->
-        maybe_fetch_news(state, user_id, source_scope, plan, context)
-      end),
-      source_fetcher("weather", weather_fetch_timeout_ms(plan), fn state ->
-        maybe_fetch_weather(state, user_id, source_scope, plan, context)
       end)
-    ] ++ companion_source_fetchers(user_id, plan, context)
+    ]
+
+    if pubsub_scoped_trigger?(context) do
+      connector_fetchers
+    else
+      connector_fetchers ++
+        [
+          source_fetcher("news", news_fetch_timeout_ms(plan), fn state ->
+            maybe_fetch_news(state, user_id, source_scope, plan, context)
+          end),
+          source_fetcher("weather", weather_fetch_timeout_ms(plan), fn state ->
+            maybe_fetch_weather(state, user_id, source_scope, plan, context)
+          end)
+        ] ++ companion_source_fetchers(user_id, plan, context)
+    end
   end
+
+  @pubsub_scoped_topic_prefixes ["email:", "calendar:", "slack:"]
+
+  defp pubsub_scoped_trigger?(context) when is_map(context) do
+    get_in(context, [:trigger, :type]) == :pubsub_event and
+      scoped_pubsub_topic?(get_in(context, [:event, :topic]))
+  end
+
+  defp pubsub_scoped_trigger?(_context), do: false
+
+  defp scoped_pubsub_topic?(topic) when is_binary(topic) do
+    Enum.any?(@pubsub_scoped_topic_prefixes, &String.starts_with?(topic, &1))
+  end
+
+  defp scoped_pubsub_topic?(_topic), do: false
 
   defp source_fetcher(source, timeout_ms, fun)
        when is_binary(source) and is_integer(timeout_ms) and is_function(fun, 1) do

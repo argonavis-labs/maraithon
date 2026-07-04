@@ -143,6 +143,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
     finalize_outcome(inbox_outcome, state)
   end
 
+  # R2 (SPEC 07): mirror handle_effect_result/3's unconditional delegation —
+  # only InboxCalendarAdvisor ever originates an effect within this skill
+  # (SlackFollowthroughAgent never returns {:effect, ...}), so its
+  # emit-preserving handle_effect_error/4 is the right recovery for any
+  # failed effect: the cycle continues instead of falling through to
+  # AIChiefOfStaff's generic skip.
+  @impl true
+  def handle_effect_error(effect_type, reason, state, context) do
+    {inbox_outcome, inbox_state} =
+      run_effect_error(InboxCalendarAdvisor, effect_type, reason, state.inbox_state, context)
+
+    state = %{state | inbox_state: inbox_state}
+    finalize_outcome(inbox_outcome, state)
+  end
+
   @impl true
   def next_wakeup(state) do
     merge_wakeup(
@@ -189,6 +204,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
 
   defp run_effect_result(module, effect_result, sub_state, context) do
     case module.handle_effect_result(effect_result, sub_state, context) do
+      {:effect, effect, next_state} -> {{:effect, effect}, next_state}
+      {:emit, emit, next_state} -> {{:emit, emit}, next_state}
+      {:continue, next_state} -> {:continue, next_state}
+      {:idle, next_state} -> {:idle, next_state}
+    end
+  end
+
+  defp run_effect_error(module, effect_type, reason, sub_state, context) do
+    case module.handle_effect_error(effect_type, reason, sub_state, context) do
       {:effect, effect, next_state} -> {{:effect, effect}, next_state}
       {:emit, emit, next_state} -> {{:emit, emit}, next_state}
       {:continue, next_state} -> {:continue, next_state}

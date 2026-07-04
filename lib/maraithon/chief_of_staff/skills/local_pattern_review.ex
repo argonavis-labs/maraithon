@@ -188,7 +188,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
     are actually worth interrupting the operator about right now, and which
     are noise, stale, or not worth a Telegram nudge.
 
-    #{previous_cycle_memo_section(context)}Return ONLY valid JSON with this exact shape:
+    #{previous_cycle_memo_section(context)}#{previous_decision_ledger_section(context)}Return ONLY valid JSON with this exact shape:
     {
       "decisions": [
         {"id": "<candidate id>", "decision": "keep" | "discard", "reason": "short reason"}
@@ -206,13 +206,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
 
     case parse_decisions(response) do
       {:ok, decisions} ->
-        {approved_count, categories} = apply_decisions(state.user_id, candidates, decisions)
+        {approved_count, categories, ledger_entries} =
+          apply_decisions(state.user_id, candidates, decisions)
 
-        if approved_count > 0 do
-          {:emit,
-           {:insights_recorded,
-            %{count: approved_count, user_id: state.user_id, categories: categories}},
-           cleared_state}
+        # R7 (SPEC 07): discard decisions are the reference producer for the
+        # cross-cycle decision ledger — the model's own reason string would
+        # otherwise be thrown away the moment Insights.dismiss/2 returns.
+        # "keep" decisions need no entry: promotion to a durable Insight row
+        # is stronger state than the ledger. Emit whenever there is anything
+        # to carry (an approval or a ledger entry).
+        if approved_count > 0 or ledger_entries != [] do
+          payload =
+            %{count: approved_count, user_id: state.user_id, categories: categories}
+            |> maybe_put_ledger_entries(ledger_entries)
+
+          {:emit, {:insights_recorded, payload}, cleared_state}
         else
           {:idle, cleared_state}
         end
@@ -226,20 +234,31 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
   end
 
   defp apply_decisions(user_id, candidates, decisions) do
-    Enum.reduce(candidates, {0, []}, fn %Insight{} = insight, {count, categories} ->
+    Enum.reduce(candidates, {0, [], []}, fn %Insight{} = insight,
+                                            {count, categories, ledger_entries} ->
       case decision_for(decisions, insight.id) do
         "keep" ->
           case Insights.approve_candidate(user_id, insight.id) do
-            {:ok, _updated} -> {count + 1, [insight.category | categories]}
-            {:error, _reason} -> {count, categories}
+            {:ok, _updated} -> {count + 1, [insight.category | categories], ledger_entries}
+            {:error, _reason} -> {count, categories, ledger_entries}
           end
 
         _discard_or_missing ->
           _ = Insights.dismiss(user_id, insight.id)
-          {count, categories}
+
+          entry = %{
+            "item_id" => to_string(insight.id),
+            "item_type" => "insight",
+            "decision" => "suppressed",
+            "reason" => discard_reason(decisions, insight.id)
+          }
+
+          {count, categories, [entry | ledger_entries]}
       end
     end)
-    |> then(fn {count, categories} -> {count, Enum.uniq(categories)} end)
+    |> then(fn {count, categories, ledger_entries} ->
+      {count, Enum.uniq(categories), Enum.reverse(ledger_entries)}
+    end)
   end
 
   defp decision_for(decisions, insight_id) do
@@ -249,6 +268,31 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
       end
     end)
   end
+
+  defp discard_reason(decisions, insight_id) do
+    reason =
+      Enum.find_value(decisions, fn decision ->
+        if to_string(Map.get(decision, "id")) == to_string(insight_id) do
+          Map.get(decision, "reason")
+        end
+      end)
+
+    case reason do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> "discarded"
+          trimmed -> trimmed
+        end
+
+      _ ->
+        "discarded"
+    end
+  end
+
+  defp maybe_put_ledger_entries(payload, []), do: payload
+
+  defp maybe_put_ledger_entries(payload, ledger_entries),
+    do: Map.put(payload, "ledger_entries", ledger_entries)
 
   defp parse_decisions(response) do
     error =
@@ -330,6 +374,43 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
       """
     else
       ""
+    end
+  end
+
+  # R8 (SPEC 07): render prior cross-cycle ledger decisions on insights so
+  # the model sees "discarded 2 cycles ago as noise" before re-deciding a
+  # recurring detector hit. Mirrors previous_cycle_memo_section/1.
+  defp previous_decision_ledger_section(context) do
+    entries =
+      context[:previous_decision_ledger]
+      |> List.wrap()
+      |> Enum.filter(fn entry ->
+        is_map(entry) and Map.get(entry, "item_type") == "insight"
+      end)
+
+    if entries == [] do
+      ""
+    else
+      lines =
+        Enum.map(entries, fn entry ->
+          decision = Map.get(entry, "decision") || "held"
+          reason = Map.get(entry, "reason") || ""
+          suffix = ledger_entry_suffix(entry)
+          "- #{decision}#{suffix}: #{reason}"
+        end)
+
+      """
+      PREVIOUS DECISIONS ON PATTERN CANDIDATES (cross-cycle decision ledger):
+      #{Enum.join(lines, "\n")}
+
+      """
+    end
+  end
+
+  defp ledger_entry_suffix(entry) do
+    case normalize_string(Map.get(entry, "updated_at")) do
+      nil -> ""
+      updated_at -> " (as of #{updated_at})"
     end
   end
 
