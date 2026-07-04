@@ -221,4 +221,139 @@ defmodule Maraithon.RelationshipIntelligenceTest do
     assert scoped_memory.metadata["person_id"] == person.id
     assert is_nil(unscoped_memory.metadata["person_id"])
   end
+
+  # SPEC 04 R12-R14: person<->person proxy edges.
+
+  test "a person-type link resolves resource_id through the person_index" do
+    user_id = "relationship-intel-proxy-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, result} =
+             RelationshipIntelligence.persist_from_response(
+               user_id,
+               Jason.encode!(%{
+                 "summary" => "Marla is Emma's mom and handles her logistics.",
+                 "people" => [
+                   %{
+                     "person_ref" => "marla",
+                     "display_name" => "Marla Maharaj",
+                     "relationship" => "Emma's mom",
+                     "confidence" => 0.9
+                   },
+                   %{
+                     "person_ref" => "emma",
+                     "display_name" => "Emma Fenwick",
+                     "relationship" => "Kent's daughter",
+                     "confidence" => 0.9
+                   }
+                 ],
+                 "memories" => [],
+                 "links" => [
+                   %{
+                     "person_ref" => "marla",
+                     "resource_type" => "person",
+                     "resource_id" => "emma",
+                     "role" => "parent_of",
+                     "summary" => "Marla repeatedly emails about Emma's school logistics.",
+                     "relationship_note" => "Proxy for Emma's school items."
+                   }
+                 ]
+               })
+             )
+
+    assert result.link_count == 1
+
+    people = Crm.list_people(user_id)
+    marla = Enum.find(people, &(&1.display_name == "Marla Maharaj"))
+    emma = Enum.find(people, &(&1.display_name == "Emma Fenwick"))
+    assert marla && emma
+
+    assert [link] = Crm.list_links_for_person(user_id, marla.id, resource_type: "person")
+    # Resolved through the person_index to the persisted person's id — not
+    # stored as the raw "emma" ref string.
+    assert link.resource_id == emma.id
+    assert link.role == "parent_of"
+  end
+
+  test "a person-type link to a never-persisted person skips with person_resource_not_found" do
+    user_id = "relationship-intel-dangling-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, result} =
+             RelationshipIntelligence.persist_from_response(
+               user_id,
+               Jason.encode!(%{
+                 "summary" => "Proxy edge to an unknown person.",
+                 "people" => [
+                   %{
+                     "person_ref" => "marla",
+                     "display_name" => "Marla Maharaj",
+                     "confidence" => 0.9
+                   }
+                 ],
+                 "memories" => [],
+                 "links" => [
+                   %{
+                     "person_ref" => "marla",
+                     "resource_type" => "person",
+                     "resource_id" => "some unknown coach",
+                     "role" => "proxy_for"
+                   }
+                 ]
+               })
+             )
+
+    assert result.link_count == 0
+    assert Enum.any?(result.errors, &(&1.reason =~ "person_resource_not_found"))
+
+    assert [marla] = Crm.list_people(user_id, query: "Marla")
+    assert Crm.list_links_for_person(user_id, marla.id, resource_type: "person") == []
+  end
+
+  test "a person-type link is rejected when either endpoint matches a self handle" do
+    user_id = "relationship-intel-self-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    # The user's account email is always one of their own handles; the model
+    # ignoring the prompt rule and emitting a person for it must be blocked
+    # at the edge-persistence layer, not just in the prompt.
+    assert {:ok, result} =
+             RelationshipIntelligence.persist_from_response(
+               user_id,
+               Jason.encode!(%{
+                 "summary" => "Self edge that must be rejected.",
+                 "people" => [
+                   %{
+                     "person_ref" => "self",
+                     "display_name" => "Kent Fenwick",
+                     "contact_details" => %{"emails" => [user_id]},
+                     "confidence" => 0.9
+                   },
+                   %{
+                     "person_ref" => "marla",
+                     "display_name" => "Marla Maharaj",
+                     "confidence" => 0.9
+                   }
+                 ],
+                 "memories" => [],
+                 "links" => [
+                   %{
+                     "person_ref" => "self",
+                     "resource_type" => "person",
+                     "resource_id" => "marla",
+                     "role" => "spouse_of"
+                   },
+                   %{
+                     "person_ref" => "marla",
+                     "resource_type" => "person",
+                     "resource_id" => "self",
+                     "role" => "spouse_of"
+                   }
+                 ]
+               })
+             )
+
+    assert result.link_count == 0
+    assert Enum.count(result.errors, &(&1.reason =~ "self_person_link_rejected")) == 2
+  end
 end

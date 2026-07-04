@@ -74,10 +74,11 @@ defmodule Maraithon.OpenLoops do
     now = normalize_now(Keyword.get(opts, :now))
     query = opts |> Keyword.get(:query) |> normalize_text()
     direction = opts |> Keyword.get(:direction) |> normalize_direction_filter()
+    person_id = opts |> Keyword.get(:person_id) |> normalize_text()
 
     offset_hours = snapshot_offset_hours(user_id, Keyword.get(opts, :timezone_offset_hours))
 
-    todos = todos_for_snapshot(user_id, direction, limit)
+    todos = todos_for_snapshot(user_id, direction, limit, person_id)
 
     bucketed = bucket_todos(todos, now, offset_hours)
     people = relationship_snapshots(user_id, query, limit)
@@ -109,19 +110,25 @@ defmodule Maraithon.OpenLoops do
   # direction-aware todo queries when the assistant passes a direction hint
   # (see telegram_assistant/toolbox.ex's get_open_loops tool). No hint keeps
   # the prior undifferentiated open-todo snapshot.
-  defp todos_for_snapshot(user_id, "owed_to_me", limit) do
-    Todos.list_owed_to_me(user_id, limit: limit * 4)
+  #
+  # SPEC 04 R5: a person_id hint threads through to the counterparty SQL
+  # filter, so "what do I owe Charlie?" is direction + person id in the
+  # query, not the model reading free-text labels. nil passes through
+  # unchanged.
+  defp todos_for_snapshot(user_id, "owed_to_me", limit, person_id) do
+    Todos.list_owed_to_me(user_id, limit: limit * 4, person_id: person_id)
   end
 
-  defp todos_for_snapshot(user_id, "owed_by_me", limit) do
-    Todos.list_owed_by_me(user_id, limit: limit * 4)
+  defp todos_for_snapshot(user_id, "owed_by_me", limit, person_id) do
+    Todos.list_owed_by_me(user_id, limit: limit * 4, person_id: person_id)
   end
 
-  defp todos_for_snapshot(user_id, _direction, limit) do
+  defp todos_for_snapshot(user_id, _direction, limit, person_id) do
     Todos.list_for_user(user_id,
       statuses: @open_statuses,
       open_due_only: false,
-      limit: limit * 4
+      limit: limit * 4,
+      person_id: person_id
     )
   end
 

@@ -191,10 +191,30 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
   def execute(%BackgroundJob{job_type: "person_dedupe"} = job) do
     with {:ok, user_id} <- require_user_id(job) do
-      Maraithon.Crm.PersonDeduper.run(user_id,
-        people_limit: payload_integer(job, "people_limit", 5_000),
-        group_limit: payload_integer(job, "group_limit", 100),
-        max_merges: payload_integer(job, "max_merges", 50)
+      case Maraithon.Crm.PersonDeduper.run(user_id,
+             people_limit: payload_integer(job, "people_limit", 5_000),
+             group_limit: payload_integer(job, "group_limit", 100),
+             max_merges: payload_integer(job, "max_merges", 50)
+           ) do
+        {:ok, summary} ->
+          # SPEC 04 R8: soft-match merge suggestions run on the same cadence
+          # as the deterministic deduper, sequenced strictly after it so a
+          # pair the deduper just auto-merged this cycle is naturally gone
+          # rather than separately flagged. The summary is always attached —
+          # including "0 candidates" cycles — so a silently-regressed scan
+          # never looks identical to "no duplicates exist".
+          {:ok, Map.put(summary, :merge_suggestions, merge_suggestion_summary(user_id))}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "counterparty_backfill"} = job) do
+    with {:ok, user_id} <- require_user_id(job) do
+      Maraithon.Todos.CounterpartyBackfill.run(user_id,
+        limit: payload_integer(job, "limit", 500)
       )
     end
   end
@@ -477,6 +497,18 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   end
 
   defp handle_google_rate_limit(reason), do: {:error, reason}
+
+  # SPEC 04 R8-R10: the suggestion pass proposes only (PreparedAction +
+  # Telegram confirm card); it never merges. A failure here must not fail
+  # the dedupe job, but it must stay visible in the job result.
+  defp merge_suggestion_summary(user_id) do
+    case Maraithon.Crm.PersonMergeSuggestions.run(user_id) do
+      {:ok, summary} -> summary
+      {:error, reason} -> %{source: "person_merge_suggestions", error: inspect(reason)}
+    end
+  rescue
+    error -> %{source: "person_merge_suggestions", error: Exception.message(error)}
+  end
 
   defp require_user_id(%BackgroundJob{user_id: user_id})
        when is_binary(user_id) and user_id != "",

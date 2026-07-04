@@ -17,6 +17,7 @@ defmodule Maraithon.Todos do
     ActionDrafts,
     ActivityEvent,
     AttentionRanker,
+    CounterpartyResolver,
     DecisionSignals,
     FeedbackTrainer,
     Intelligence,
@@ -105,6 +106,9 @@ defmodule Maraithon.Todos do
   @doc """
   Open todos where someone else owes the operator (`direction: "owed_to_me"`),
   ordered by due date then priority. Answers "who am I waiting on?".
+
+  Pass `person_id: crm_person_id` (alias `:counterparty_person_id`) to scope
+  to one counterparty — "what is Charlie waiting on from me?" as a SQL filter.
   """
   def list_owed_to_me(user_id, opts \\ [])
 
@@ -120,6 +124,9 @@ defmodule Maraithon.Todos do
   @doc """
   Open todos the operator owes someone else (`direction: "owed_by_me"`),
   ordered by due date then priority. Answers "what do I owe?".
+
+  Pass `person_id: crm_person_id` (alias `:counterparty_person_id`) to scope
+  to one counterparty — "what do I owe Charlie?" as a SQL filter.
   """
   def list_owed_by_me(user_id, opts \\ [])
 
@@ -1366,7 +1373,7 @@ defmodule Maraithon.Todos do
     |> Map.put("direction", direction)
     |> Map.put(
       "counterparty_person_id",
-      preserved_update_counterparty_person_id(existing, raw_attrs)
+      preserved_update_counterparty_person_id(existing, attrs, raw_attrs)
     )
     |> Map.put("counterparty_label", preserved_update_counterparty_label(existing, raw_attrs))
     |> Map.put("next_nudge_at", preserved_update_next_nudge_at(existing, attrs, direction))
@@ -1403,11 +1410,18 @@ defmodule Maraithon.Todos do
     end
   end
 
-  defp preserved_update_counterparty_person_id(%Todo{} = existing, raw_attrs) do
+  # SPEC 04 R2/R3 (update path): an explicit incoming counterparty_person_id
+  # attr still wins (explicit nil keeps the existing value — unchanged
+  # semantic). When the attr is absent, an existing FK is never overwritten,
+  # but a nil FK may now be filled by the value the R2 resolver stamped into
+  # the normalized attrs — this is what lets a re-upsert flip an earlier
+  # :not_found/:ambiguous outcome to a resolution once the CRM candidate set
+  # changes, without ever clobbering a human- or tool-set value.
+  defp preserved_update_counterparty_person_id(%Todo{} = existing, attrs, raw_attrs) do
     if attr_present?(raw_attrs, "counterparty_person_id") do
       read_uuid(raw_attrs, "counterparty_person_id", nil) || existing.counterparty_person_id
     else
-      existing.counterparty_person_id
+      existing.counterparty_person_id || Map.get(attrs, "counterparty_person_id")
     end
   end
 
@@ -1650,13 +1664,23 @@ defmodule Maraithon.Todos do
         nil
       end
 
+    counterparty_label =
+      read_string(attrs, "counterparty_label", counterparty_label_from_metadata(metadata))
+
+    # Computed once here (instead of inline in the map below) because
+    # `dedupe_key_for/4` generates a fresh UUID when no stable source key is
+    # available — the R2a counterparty guard below must see the same key the
+    # persisted map carries.
+    dedupe_key =
+      read_string(attrs, "dedupe_key", dedupe_key_for(source, kind, source_item_id, metadata))
+
     %{
       "user_id" => user_id,
       "direction" => direction,
       "next_nudge_at" => next_nudge_at,
-      "counterparty_person_id" => read_uuid(attrs, "counterparty_person_id", nil),
-      "counterparty_label" =>
-        read_string(attrs, "counterparty_label", counterparty_label_from_metadata(metadata)),
+      "counterparty_person_id" =>
+        resolve_counterparty_person_id(user_id, attrs, direction, counterparty_label, dedupe_key),
+      "counterparty_label" => counterparty_label,
       "owner_user_id" => owner_user_id,
       "owner_label" => normalize_owner_label(owner_label, owner_user_id, user_id),
       "source" => source,
@@ -1679,12 +1703,63 @@ defmodule Maraithon.Todos do
       "closed_at" => read_datetime(attrs, "closed_at"),
       "source_item_id" => source_item_id,
       "source_occurred_at" => read_datetime(attrs, "source_occurred_at"),
-      "dedupe_key" =>
-        read_string(attrs, "dedupe_key", dedupe_key_for(source, kind, source_item_id, metadata)),
+      "dedupe_key" => dedupe_key,
       "metadata" => metadata
     }
     |> ActionDrafts.ensure()
   end
+
+  # SPEC 04 R2/R2a/R3: resolve counterparty_label -> counterparty_person_id at
+  # the single choke point both automated writers (Todos.Intelligence and the
+  # CommitmentTracker skill) share. Deterministic resolver only — no LLM call
+  # on this path.
+  #
+  # - R3: an explicitly present "counterparty_person_id" attr always wins
+  #   (including explicit nil, which the update path's
+  #   preserved_update_counterparty_person_id/3 treats as "keep existing" —
+  #   unchanged). The resolver never runs when the key is present.
+  # - R2: only owed_by_me/owed_to_me todos with a label get resolved;
+  #   ambiguity and no-match leave the FK nil — a wrong-person FK is worse
+  #   than none.
+  # - R2a: before hitting the CRM search, a narrow indexed read of the same
+  #   (user_id, dedupe_key) row existing_todo_for_upsert/2 fetches moments
+  #   later short-circuits re-upserts of an already-resolved todo (webhook
+  #   redelivery, re-sync storms) so the per-upsert cost is one cheap todo
+  #   lookup, not one CRM search per upsert forever. The resolver still runs
+  #   when the label changed or the persisted FK is nil, so a later upsert may
+  #   flip :not_found/:ambiguous to a resolution once the CRM candidate set
+  #   changes (no memoization, per the idempotency invariant).
+  defp resolve_counterparty_person_id(user_id, attrs, direction, counterparty_label, dedupe_key) do
+    cond do
+      attr_present?(attrs, "counterparty_person_id") ->
+        read_uuid(attrs, "counterparty_person_id", nil)
+
+      not is_binary(counterparty_label) or direction not in ["owed_by_me", "owed_to_me"] ->
+        nil
+
+      true ->
+        case existing_counterparty_for_upsert(user_id, dedupe_key) do
+          {existing_label, existing_person_id}
+          when existing_label == counterparty_label and is_binary(existing_person_id) ->
+            existing_person_id
+
+          _new_row_or_changed_label_or_unresolved ->
+            case CounterpartyResolver.resolve_person(user_id, counterparty_label) do
+              {:ok, person} -> person.id
+              _ambiguous_or_not_found -> nil
+            end
+        end
+    end
+  end
+
+  defp existing_counterparty_for_upsert(user_id, dedupe_key) when is_binary(dedupe_key) do
+    Todo
+    |> where([todo], todo.user_id == ^user_id and todo.dedupe_key == ^dedupe_key)
+    |> select([todo], {todo.counterparty_label, todo.counterparty_person_id})
+    |> Repo.one()
+  end
+
+  defp existing_counterparty_for_upsert(_user_id, _dedupe_key), do: nil
 
   defp dedupe_key_for(source, kind, source_item_id, metadata) do
     thread_id =
@@ -1795,6 +1870,9 @@ defmodule Maraithon.Todos do
     exclude_unsurfaceable? = Keyword.get(opts, :exclude_unsurfaceable?, true)
     direction = Keyword.get(opts, :direction)
 
+    counterparty_person_id =
+      Keyword.get(opts, :person_id) || Keyword.get(opts, :counterparty_person_id)
+
     Todo
     |> where([todo], todo.user_id == ^user_id)
     |> maybe_filter_statuses(statuses)
@@ -1806,6 +1884,7 @@ defmodule Maraithon.Todos do
     |> maybe_filter_attention_mode(attention_mode)
     |> maybe_filter_owner_user_id(owner_user_id)
     |> maybe_filter_direction(direction)
+    |> maybe_filter_counterparty_person_id(counterparty_person_id)
     |> maybe_filter_due_after(due_after)
     |> maybe_filter_due_before(due_before)
     |> maybe_filter_due_nil(due_nil?)
@@ -1821,6 +1900,26 @@ defmodule Maraithon.Todos do
   end
 
   defp maybe_filter_direction(query, _direction), do: query
+
+  # SPEC 04 R4: person filter mirroring maybe_filter_direction/2 — this is
+  # what lets "what do I owe Charlie?" resolve to a SQL filter
+  # (direction + counterparty_person_id) instead of the model reading labels.
+  # Accepted via the :person_id opt (alias :counterparty_person_id) on
+  # list_owed_to_me/2, list_owed_by_me/2, and every filtered_todo_query/2
+  # caller. A non-UUID value filters to zero rows rather than being silently
+  # ignored (an invalid filter must not confidently return everything).
+  defp maybe_filter_counterparty_person_id(query, nil), do: query
+  defp maybe_filter_counterparty_person_id(query, ""), do: query
+  defp maybe_filter_counterparty_person_id(query, "all"), do: query
+
+  defp maybe_filter_counterparty_person_id(query, person_id) when is_binary(person_id) do
+    case Ecto.UUID.cast(person_id) do
+      {:ok, uuid} -> where(query, [todo], todo.counterparty_person_id == ^uuid)
+      :error -> where(query, [todo], false)
+    end
+  end
+
+  defp maybe_filter_counterparty_person_id(query, _person_id), do: query
 
   defp maybe_filter_source(query, nil), do: query
   defp maybe_filter_source(query, ""), do: query

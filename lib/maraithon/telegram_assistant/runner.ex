@@ -1810,6 +1810,18 @@ defmodule Maraithon.TelegramAssistant.Runner do
           prepared_action
         )
 
+      # SPEC 04 R10: the confirmed action of a PersonMergeSuggestions card
+      # invokes the already-existing merge_people assistant tool. This is
+      # the only path that reaches Crm.merge_people/4 from a suggestion —
+      # and only after explicit human confirmation.
+      "merge_people" ->
+        execute_tool_action(
+          "merge_people",
+          payload,
+          "Merged the duplicate person records.",
+          prepared_action
+        )
+
       _ ->
         {:error, "unsupported_prepared_action"}
     end
