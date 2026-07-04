@@ -216,6 +216,41 @@ defmodule Maraithon.TelegramAssistant.Context do
     ])
   end
 
+  # SPEC 09 R8: same fetcher set as :waiting_on — the commitment audit's
+  # extra reach (sent Gmail/Slack scanning) comes from tools, not prefetched
+  # context.
+  defp select_fetchers_for_focus(fetchers, :commitment_audit) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :open_loops,
+      :goals,
+      :relationships,
+      :todos,
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  # SPEC 09 R8: narrow recap set. `recent_turns` is included unconditionally
+  # in every Context.build/1 result — that is where the referent signal for
+  # "what else?" comes from.
+  defp select_fetchers_for_focus(fetchers, :continuity) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :open_loops,
+      :todos,
+      :briefing_schedule,
+      :defaults
+    ])
+  end
+
   defp select_fetchers_for_focus(fetchers, :person_context) do
     take_fetchers(fetchers, [
       :preference_memory,
@@ -264,6 +299,8 @@ defmodule Maraithon.TelegramAssistant.Context do
       "waiting_on" -> :waiting_on
       "linked_item_context" -> :linked_item_context
       "person_context" -> :person_context
+      "commitment_audit" -> :commitment_audit
+      "continuity" -> :continuity
       _other -> nil
     end
   end
@@ -442,7 +479,11 @@ defmodule Maraithon.TelegramAssistant.Context do
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp bounded_task(fun, timeout_ms) when is_function(fun, 0) do
+  @doc false
+  # Shared bounding primitive (Task.async + Task.yield + brutal-kill
+  # shutdown). Also used by `ModelRouting.classify_via_model/1` (SPEC 09 R6)
+  # so there is exactly one bounding shape, not two.
+  def bounded_task(fun, timeout_ms) when is_function(fun, 0) do
     parent = self()
 
     task =

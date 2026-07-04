@@ -45,72 +45,143 @@ defmodule Maraithon.TelegramAssistant.Runner do
     )
   end
 
+  # SPEC 09 R1: the Run row is minted (with a placeholder prompt_snapshot)
+  # and the liveness session started BEFORE the slow context-build +
+  # preflight block, so typing/progress feedback covers exactly the turns
+  # that feel slowest. The real prompt_snapshot is backfilled once context
+  # is built. R0's ChatWorker-level typing ping covers the routing window
+  # (profile_for/1, including the bounded classifier call) that still runs
+  # ahead of this.
   defp do_run_inbound(attrs) do
     model_profile = ModelRouting.profile_for(attrs)
     context_attrs = attrs_with_model_profile(attrs, model_profile)
-    context = ContextEngine.build_context(context_attrs)
-    context = ConnectedContextPreflight.apply(context, context_attrs)
     conversation = Map.get(attrs, :conversation)
 
-    case start_run(attrs, context, model_profile) do
-      {:ok, run} ->
-        runtime_context = build_runtime_context(run, attrs, context, model_profile)
-        _ = maybe_start_liveness_session(run, attrs)
+    with {:ok, run} <- start_run(attrs, %{}, model_profile),
+         _ = maybe_start_liveness_session(run, attrs),
+         {:ok, context} <- build_context_and_preflight(run, attrs, context_attrs) do
+      run = backfill_prompt_snapshot(run, context)
+      run_prepared_turn(run, attrs, context, conversation, model_profile)
+    else
+      {:error, reason} ->
+        {:fallback, reason}
+    end
+  end
 
-        with {:ok, _step_state} <- record_context_fetch(run, context),
-             :ok <- note_context_loaded(run),
-             {:ok, response, state} <-
-               run_loop(
-                 run,
-                 runtime_context,
-                 AssistantHarness.initial_loop_state(),
-                 System.monotonic_time(:millisecond)
-               ),
-             {:ok, status, summary} <-
-               deliver_final_response(conversation, run, response, state, attrs) do
-          summary =
-            summary
-            |> Map.put(:model_tier, Map.get(runtime_context, :model_tier))
-            |> Map.put(:model_name, Map.get(runtime_context, :model_name))
-            |> Map.put(:model_reasoning_effort, Map.get(runtime_context, :model_reasoning_effort))
-            |> Map.put(:task_class, Map.get(runtime_context, :task_class))
-            |> Map.put(:route_reason, Map.get(runtime_context, :route_reason))
+  # SPEC 09 R2: after the reorder, a crash inside context build/preflight
+  # would otherwise leave a Run parked at "running" forever with an orphaned
+  # LivenessSession still ticking — the same "stuck durable state, nothing
+  # notices" class as the 2026-07-03 incident. Tear both down and fall back
+  # exactly like a start_run failure.
+  defp build_context_and_preflight(run, attrs, context_attrs) do
+    context = ContextEngine.build_context(context_attrs)
+    context = ConnectedContextPreflight.apply(context, preflight_attrs(context_attrs, run, attrs))
+    {:ok, context}
+  rescue
+    error ->
+      teardown_failed_context_build(run, error)
+  catch
+    :exit, reason ->
+      teardown_failed_context_build(run, {:exit, reason})
 
-          {:ok, _run} =
-            TelegramAssistant.complete_run(run, %{status: status, result_summary: summary})
+    :throw, value ->
+      teardown_failed_context_build(run, {:throw, value})
+  end
 
-          :ok
-        else
-          {:fallback, reason} ->
-            _ = TelegramAssistant.cancel_liveness_session(run.id)
-            {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
+  defp teardown_failed_context_build(run, reason) do
+    _ = TelegramAssistant.cancel_liveness_session(run.id)
+    {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
 
-            Logger.warning("Telegram assistant falling back to legacy interpreter",
-              reason: inspect(reason)
-            )
+    Logger.warning("Telegram assistant context build failed after run start",
+      run_id: run.id,
+      reason: inspect(reason)
+    )
 
-            {:fallback, reason}
+    {:error, reason}
+  end
 
-          {:error, %Run{} = run, reason, state} ->
-            case maybe_escalate_and_retry(
-                   run,
-                   reason,
-                   attrs,
-                   context,
-                   conversation,
-                   model_profile
-                 ) do
-              :ok -> :ok
-              :pass -> handle_run_failure(run, reason, state, attrs)
-            end
+  # SPEC 09 R4: thread the run id into preflight so the existing
+  # "relationships" liveness hint can fire during the up-to-8s synchronous
+  # review window. Mobile runs have no liveness session, matching the
+  # note_context_loaded(%Run{surface: "mobile"}) skip.
+  defp preflight_attrs(context_attrs, run, attrs) do
+    if surface(attrs) == "mobile" do
+      context_attrs
+    else
+      Map.put(context_attrs, :liveness_run_id, run.id)
+    end
+  end
 
-          {:error, reason} ->
-            _ = TelegramAssistant.cancel_liveness_session(run.id)
-            {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
-            {:fallback, reason}
+  defp backfill_prompt_snapshot(run, context) do
+    case TelegramAssistant.update_run(run, %{
+           prompt_snapshot: ContextEngine.prompt_snapshot(context)
+         }) do
+      {:ok, updated_run} ->
+        updated_run
+
+      {:error, reason} ->
+        Logger.warning("Telegram assistant prompt snapshot backfill failed",
+          run_id: run.id,
+          reason: inspect(reason)
+        )
+
+        run
+    end
+  end
+
+  defp run_prepared_turn(run, attrs, context, conversation, model_profile) do
+    runtime_context = build_runtime_context(run, attrs, context, model_profile)
+
+    with {:ok, _step_state} <- record_context_fetch(run, context),
+         :ok <- note_context_loaded(run),
+         {:ok, response, state} <-
+           run_loop(
+             run,
+             runtime_context,
+             AssistantHarness.initial_loop_state(),
+             System.monotonic_time(:millisecond)
+           ),
+         {:ok, status, summary} <-
+           deliver_final_response(conversation, run, response, state, attrs) do
+      summary =
+        summary
+        |> Map.put(:model_tier, Map.get(runtime_context, :model_tier))
+        |> Map.put(:model_name, Map.get(runtime_context, :model_name))
+        |> Map.put(:model_reasoning_effort, Map.get(runtime_context, :model_reasoning_effort))
+        |> Map.put(:task_class, Map.get(runtime_context, :task_class))
+        |> Map.put(:route_reason, Map.get(runtime_context, :route_reason))
+
+      {:ok, _run} =
+        TelegramAssistant.complete_run(run, %{status: status, result_summary: summary})
+
+      :ok
+    else
+      {:fallback, reason} ->
+        _ = TelegramAssistant.cancel_liveness_session(run.id)
+        {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
+
+        Logger.warning("Telegram assistant falling back to legacy interpreter",
+          reason: inspect(reason)
+        )
+
+        {:fallback, reason}
+
+      {:error, %Run{} = run, reason, state} ->
+        case maybe_escalate_and_retry(
+               run,
+               reason,
+               attrs,
+               context,
+               conversation,
+               model_profile
+             ) do
+          :ok -> :ok
+          :pass -> handle_run_failure(run, reason, state, attrs)
         end
 
       {:error, reason} ->
+        _ = TelegramAssistant.cancel_liveness_session(run.id)
+        {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
         {:fallback, reason}
     end
   end

@@ -15,10 +15,16 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ProactiveQueue
+  alias Maraithon.TelegramChunking
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramResponder
 
   @default_push_limit_per_hour 3
+
+  # SPEC 09 R19: send-time chunk budget, matching MorningBriefing's
+  # @telegram_chunk_limit — conservative headroom under Telegram's 4096 wire
+  # cap (bodies here are already HTML-converted, so entities are counted).
+  @telegram_chunk_limit 3_300
 
   # Model-declared interrupt_now can still be forced through the hard
   # send-time budget gate below when it reflects genuine urgency; anything
@@ -213,7 +219,131 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     }
   end
 
+  # SPEC 09 R19: chunk at send time. A single-chunk body keeps today's
+  # behavior byte-for-byte (one send of the original body, one turn, one
+  # receipt); a multi-chunk body is sent as sequential ordered messages.
   defp send_candidate(candidate) do
+    case chunked_body(candidate.body) do
+      chunks when length(chunks) > 1 ->
+        send_candidate_chunks(candidate, chunks)
+
+      _single_or_empty ->
+        send_candidate_single(candidate)
+    end
+  end
+
+  defp chunked_body(body) when is_binary(body) do
+    body
+    |> TelegramChunking.chunks(@telegram_chunk_limit)
+    |> TelegramChunking.label_parts()
+  end
+
+  defp chunked_body(_body), do: []
+
+  # SPEC 09 R19/R20: sequential awaited sends (Telegram does not guarantee
+  # ordering for concurrent sends — never parallelize), `reply_markup` only
+  # on the last chunk, one Turn per physical message (so a reply to any part
+  # threads correctly), and exactly ONE PushReceipt for the whole send keyed
+  # by the candidate's dedupe_key, referencing the tail chunk's
+  # message/turn. That single receipt is what lets push_receipt_for/2
+  # recognize a redelivered candidate as already-sent and skip every chunk.
+  # A failure partway stops immediately, records no receipt, and returns
+  # {:error, reason} — the candidate is retried as a whole on the next cycle
+  # (message-level resume is out of scope).
+  defp send_candidate_chunks(candidate, chunks) do
+    last_index = length(chunks) - 1
+
+    chunks
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, nil}, fn {chunk, index}, {:ok, acc} ->
+      opts = chunk_telegram_opts(candidate.telegram_opts, index == last_index)
+
+      with {:ok, result} <- TelegramResponder.send(candidate.chat_id, chunk, opts),
+           message_id = normalize_id(Map.get(result, "message_id")),
+           {:ok, conversation} <- chunk_conversation(candidate, acc, message_id),
+           {:ok, {_conversation, turn}} <-
+             append_chunk_turn(conversation, candidate, chunk, message_id) do
+        {:cont, {:ok, %{conversation: conversation, message_id: message_id, turn: turn}}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, %{conversation: conversation, message_id: message_id, turn: turn}} ->
+        case TelegramAssistant.record_push_receipt(%{
+               user_id: candidate.user_id,
+               dedupe_key: candidate.dedupe_key,
+               origin_type: candidate.origin_type,
+               origin_id: candidate.origin_id,
+               decision: "sent_now",
+               conversation_turn_id: turn.id
+             }) do
+          {:ok, _receipt} ->
+            {:ok,
+             %{
+               decision: "sent_now",
+               message_id: message_id,
+               turn_id: turn.id,
+               conversation_id: conversation.id
+             }}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Mirror of the shipped morning-briefing pattern: markup rides only the
+  # last chunk.
+  defp chunk_telegram_opts(opts, true) when is_list(opts), do: opts
+
+  defp chunk_telegram_opts(opts, false) when is_list(opts),
+    do: Keyword.delete(opts, :reply_markup)
+
+  defp chunk_telegram_opts(opts, _last_chunk?), do: opts
+
+  defp chunk_conversation(candidate, nil, message_id) do
+    TelegramConversations.start_or_continue(candidate.user_id, candidate.chat_id, %{
+      "root_message_id" => message_id,
+      "linked_delivery_id" => candidate.linked_delivery_id,
+      "linked_insight_id" => candidate.linked_insight_id,
+      "metadata" =>
+        %{
+          "mode" => "push_thread",
+          "last_push_origin" => %{
+            "origin_type" => candidate.origin_type,
+            "origin_id" => candidate.origin_id
+          }
+        }
+        |> Map.merge(candidate.conversation_metadata)
+    })
+  end
+
+  defp chunk_conversation(_candidate, %{conversation: conversation}, _message_id),
+    do: {:ok, conversation}
+
+  defp append_chunk_turn(conversation, candidate, chunk, message_id) do
+    TelegramConversations.append_turn(conversation, %{
+      "role" => "assistant",
+      "telegram_message_id" => message_id,
+      "text" => chunk,
+      "turn_kind" => "assistant_push",
+      "origin_type" => candidate.origin_type,
+      "origin_id" => candidate.origin_id,
+      "structured_data" =>
+        %{
+          "title" => candidate.title,
+          "why_now" => candidate.why_now,
+          "urgency" => candidate.urgency
+        }
+        |> Map.merge(candidate.structured_data)
+    })
+  end
+
+  defp send_candidate_single(candidate) do
     case TelegramResponder.send(candidate.chat_id, candidate.body, candidate.telegram_opts) do
       {:ok, result} ->
         message_id = normalize_id(Map.get(result, "message_id"))
@@ -521,6 +651,11 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   defp todo_digest_delivery_todos(%Brief{}), do: []
 
+  # SPEC 09 R18: candidate bodies carry the FULL rendered brief (clamped only
+  # to the proactive_candidates.body ceiling); Telegram wire-size chunking
+  # happens at send time in send_candidate/1. reply_markup still comes from
+  # the (capped) payload function — markup construction doesn't depend on
+  # text length.
   defp standard_brief_candidate(%Brief{} = brief) do
     payload = Briefs.telegram_payload(brief)
 
@@ -530,7 +665,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       source_id: brief.id,
       dedupe_key: "brief:#{brief.id}",
       title: Briefs.public_title(brief),
-      body: payload.text,
+      body: Briefs.telegram_full_text(brief),
       urgency: 0.7,
       why_now: Briefs.public_summary(brief),
       structured_data: brief_structured_data(brief),
@@ -548,7 +683,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       source_id: brief.id,
       dedupe_key: "brief:#{brief.id}",
       title: Briefs.public_title(brief),
-      body: payload.text,
+      body: Briefs.todo_digest_full_text(brief, todos),
       urgency: 0.7,
       why_now: Briefs.public_summary(brief),
       structured_data:
@@ -578,7 +713,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
            origin_id: brief.id,
            dedupe_key: "brief:#{brief.id}",
            title: Briefs.public_title(brief),
-           body: payload.text,
+           body: Briefs.telegram_full_text(brief),
            urgency: 0.7,
            interrupt_now: true,
            why_now: Briefs.public_summary(brief),
@@ -623,7 +758,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
              origin_id: brief.id,
              dedupe_key: "brief:#{brief.id}",
              title: Briefs.public_title(brief),
-             body: payload.text,
+             body: Briefs.todo_digest_full_text(brief, todos),
              urgency: 0.7,
              interrupt_now: true,
              why_now: Briefs.public_summary(brief),

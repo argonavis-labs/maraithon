@@ -1411,6 +1411,100 @@ defmodule Maraithon.BriefsTest do
     Map.merge(defaults, override_map)
   end
 
+  describe "SPEC 09 uncapped full-text rendering" do
+    test "telegram_full_text keeps the tail that the wire cap would truncate",
+         %{user_id: user_id, agent: agent} do
+      closing = "The single move for today: close the Elena billing loop."
+
+      body =
+        String.duplicate("A paragraph of morning detail that adds up over a busy day.\n\n", 100) <>
+          closing
+
+      assert {:ok, %Brief{} = brief} =
+               Briefs.record(user_id, agent.id, %{
+                 "cadence" => "morning",
+                 "title" => "Morning brief",
+                 "summary" => "Busy day ahead.",
+                 "body" => body,
+                 "scheduled_for" => DateTime.utc_now(),
+                 "dedupe_key" => "spec09-full-text"
+               })
+
+      full = Briefs.telegram_full_text(brief)
+      capped = Briefs.telegram_payload(brief).text
+
+      # The capped payload drops the closing line and appends the trailer;
+      # the full text keeps the whole brief for send-time chunking.
+      assert full =~ "close the Elena billing loop"
+      refute full =~ "Full briefing in your email inbox."
+      assert String.length(capped) <= 3_900
+      refute capped =~ "close the Elena billing loop"
+      assert capped =~ "Full briefing in your email inbox."
+    end
+
+    test "telegram_full_text still clamps to the proactive-candidate body ceiling",
+         %{user_id: user_id, agent: agent} do
+      body = String.duplicate("Overlong detail line for ceiling clamping checks.\n\n", 300)
+
+      assert {:ok, %Brief{} = brief} =
+               Briefs.record(user_id, agent.id, %{
+                 "cadence" => "morning",
+                 "title" => "Morning brief",
+                 "summary" => "Very long.",
+                 "body" => body,
+                 "scheduled_for" => DateTime.utc_now(),
+                 "dedupe_key" => "spec09-full-text-clamp"
+               })
+
+      full = Briefs.telegram_full_text(brief)
+
+      assert String.length(full) <= 10_000
+    end
+
+    test "a long scheduled brief enqueues its FULL body as the proactive candidate",
+         %{user_id: user_id, agent: agent} do
+      original = Application.get_env(:maraithon, :telegram_assistant, [])
+
+      Application.put_env(
+        :maraithon,
+        :telegram_assistant,
+        Keyword.merge(original,
+          telegram_unified_push_enabled: true,
+          proactive_delivery_planner_enabled: true
+        )
+      )
+
+      on_exit(fn -> Application.put_env(:maraithon, :telegram_assistant, original) end)
+
+      closing = "The single move for today: close the Elena billing loop."
+
+      body =
+        String.duplicate("A paragraph of morning detail that adds up over a busy day.\n\n", 100) <>
+          closing
+
+      assert {:ok, %Brief{} = brief} =
+               Briefs.record(user_id, agent.id, %{
+                 "cadence" => "morning",
+                 "title" => "Morning brief",
+                 "summary" => "Busy day ahead.",
+                 "body" => body,
+                 "scheduled_for" => DateTime.utc_now(),
+                 "dedupe_key" => "spec09-full-candidate"
+               })
+
+      assert :ok = Briefs.send_brief(brief)
+
+      candidate = Repo.get_by!(ProactiveCandidate, user_id: user_id, dedupe_key: "brief:#{brief.id}")
+
+      # The candidate carries the uncapped rendering — the closing line
+      # survives to be chunked at send time instead of being truncated at
+      # candidate-creation time.
+      assert candidate.body =~ "close the Elena billing loop"
+      refute candidate.body =~ "Full briefing in your email inbox."
+      assert String.length(candidate.body) <= 10_000
+    end
+  end
+
   defp user_account_email, do: "briefs-user@example.com"
 
   defp sent_messages do

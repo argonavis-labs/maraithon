@@ -17,7 +17,7 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
          user_id when is_binary(user_id) <- read_user_id(context, attrs),
          query when is_binary(query) <- review_query(context, attrs),
          true <- String.trim(query) != "" do
-      run_review(context, user_id, query)
+      run_review(context, user_id, query, liveness_run_id(attrs))
     else
       _other -> context
     end
@@ -25,7 +25,14 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
 
   def apply(context, _attrs), do: context
 
-  defp run_review(context, user_id, query) do
+  defp liveness_run_id(attrs) do
+    case Map.get(attrs, :liveness_run_id) do
+      run_id when is_binary(run_id) -> run_id
+      _other -> nil
+    end
+  end
+
+  defp run_review(context, user_id, query, run_id) do
     args =
       %{
         "user_id" => user_id,
@@ -36,6 +43,13 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
         "timeout_ms" => @preflight_timeout_ms
       }
       |> maybe_put_person_id(resolve_person_id(user_id, query))
+
+    # SPEC 09 R4: surface the existing "relationships" liveness hint BEFORE
+    # the up-to-8s synchronous review, so the progress note updates during
+    # the window instead of only after it. `LivenessSession.note_tool/3`
+    # already tolerates a missing session (catch :exit -> :ok); no second
+    # guard here. Skipped when run_id is nil (mobile surface).
+    _ = maybe_note_liveness(run_id, args)
 
     case Tools.execute("review_connected_context", args, %{
            surface: "internal",
@@ -70,6 +84,12 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
         "query" => query,
         "error" => normalize_error(error)
       })
+  end
+
+  defp maybe_note_liveness(nil, _args), do: :ok
+
+  defp maybe_note_liveness(run_id, args) when is_binary(run_id) do
+    Maraithon.TelegramAssistant.note_liveness_tool(run_id, "review_connected_context", args)
   end
 
   # SPEC 07 R5: a cheap lexical People lookup (no embedding/HTTP round trip)

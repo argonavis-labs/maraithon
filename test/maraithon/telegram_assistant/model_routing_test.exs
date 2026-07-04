@@ -223,6 +223,192 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
     assert Keyword.fetch!(escalated.llm_opts, :max_tool_steps) == 18
   end
 
+  describe "model-based routing fallback (SPEC 09)" do
+    defp put_classifier(fun) do
+      :maraithon
+      |> Application.get_env(:telegram_assistant, [])
+      |> Keyword.put(:routing_classifier_complete, fun)
+      |> then(&Application.put_env(:maraithon, :telegram_assistant, &1))
+    end
+
+    test "routes 'What did I promise yesterday?' to commitment_audit when the model says so" do
+      put_classifier(fn prompt ->
+        assert prompt =~ "What did I promise yesterday?"
+        {:ok, ~s({"focus": "commitment_audit", "reason": "promise scan over a window"})}
+      end)
+
+      profile = ModelRouting.profile_for(%{text: "What did I promise yesterday?"})
+
+      assert profile.tier == :reasoning
+      assert profile.request_focus == :commitment_audit
+      assert profile.task_class == :commitment_audit
+      assert profile.route_reason == "commitment_scan_analysis"
+      assert profile.model == "reasoning-tier"
+      assert Keyword.fetch!(profile.llm_opts, :context_scope) == :commitment_audit
+      assert Keyword.fetch!(profile.llm_opts, :tool_scope) == :commitment_audit
+      # Budgets copied verbatim from the :waiting_on clause (R7).
+      assert Keyword.fetch!(profile.llm_opts, :max_wall_clock_ms) == 90_000
+      assert Keyword.fetch!(profile.llm_opts, :max_llm_turns) == 6
+      assert Keyword.fetch!(profile.llm_opts, :max_tool_steps) == 12
+      assert Keyword.fetch!(profile.llm_opts, :model_busy_max_retries) == 24
+      assert Keyword.fetch!(profile.llm_opts, :model_retry_max_delay_ms) == 1_500
+    end
+
+    test "routes 'Handled the billing thing, what else?' to continuity when the model says so" do
+      put_classifier(fn _prompt ->
+        {:ok, ~s({"focus": "continuity", "reason": "bare follow-up to a surfaced item"})}
+      end)
+
+      profile = ModelRouting.profile_for(%{text: "Handled the billing thing, what else?"})
+
+      assert profile.tier == :reasoning
+      assert profile.request_focus == :continuity
+      assert profile.task_class == :continuity
+      assert profile.route_reason == "continuity_followup"
+      assert Keyword.fetch!(profile.llm_opts, :context_scope) == :continuity
+      assert Keyword.fetch!(profile.llm_opts, :tool_scope) == :continuity
+      assert Keyword.fetch!(profile.llm_opts, :max_wall_clock_ms) == 90_000
+      assert Keyword.fetch!(profile.llm_opts, :max_tool_steps) == 12
+    end
+
+    test "a 'none' classification keeps the ambiguous default" do
+      put_classifier(fn _prompt ->
+        {:ok, ~s({"focus": "none", "reason": "open-ended chat"})}
+      end)
+
+      profile = ModelRouting.profile_for(%{text: "tell me something interesting"})
+
+      assert profile.tier == :chat
+      assert profile.request_focus == nil
+    end
+
+    test "a malformed classifier response falls back to chat/nil and never escalates" do
+      for content <- [
+            "not json at all",
+            ~s({"focus": "reasoning_forever"}),
+            ~s({"unexpected": true}),
+            ~s(["commitment_audit"])
+          ] do
+        put_classifier(fn _prompt -> {:ok, content} end)
+
+        profile = ModelRouting.profile_for(%{text: "tell me something interesting"})
+
+        assert profile.tier == :chat
+        assert profile.request_focus == nil
+      end
+    end
+
+    test "a classifier error falls back to chat/nil" do
+      put_classifier(fn _prompt -> {:error, :boom} end)
+
+      profile = ModelRouting.profile_for(%{text: "tell me something interesting"})
+
+      assert profile.tier == :chat
+      assert profile.request_focus == nil
+    end
+
+    test "a classifier timeout falls back to chat/nil without hanging the turn" do
+      :maraithon
+      |> Application.get_env(:telegram_assistant, [])
+      |> Keyword.put(:routing_classifier_timeout_ms, 30)
+      |> then(&Application.put_env(:maraithon, :telegram_assistant, &1))
+
+      put_classifier(fn _prompt ->
+        Process.sleep(500)
+        {:ok, ~s({"focus": "commitment_audit", "reason": "too late"})}
+      end)
+
+      started = System.monotonic_time(:millisecond)
+      profile = ModelRouting.profile_for(%{text: "tell me something interesting"})
+      elapsed = System.monotonic_time(:millisecond) - started
+
+      assert profile.tier == :chat
+      assert profile.request_focus == nil
+      assert elapsed < 400
+    end
+
+    test "a crashing classifier falls back to chat/nil" do
+      put_classifier(fn _prompt -> raise "classifier exploded" end)
+
+      profile = ModelRouting.profile_for(%{text: "tell me something interesting"})
+
+      assert profile.tier == :chat
+      assert profile.request_focus == nil
+    end
+
+    test "every regex-matched input keeps its fast path and never invokes the classifier" do
+      test_pid = self()
+
+      put_classifier(fn _prompt ->
+        send(test_pid, :classifier_invoked)
+        {:ok, ~s({"focus": "commitment_audit", "reason": "should never run"})}
+      end)
+
+      regex_matched_inputs = [
+        # light_chat?/1 + @quick_chat_patterns (fast tier)
+        "Perfect, thanks so much!",
+        "Rewrite this to sound friendlier",
+        # @planning_patterns
+        "Can you send me a morning briefing?",
+        "What should I do next?",
+        # @today_mode_patterns
+        "What matters today?",
+        # @waiting_on_patterns
+        "Who am I waiting on?",
+        # @meeting_prep_patterns
+        "What should I know before my meeting?",
+        # @person_context_patterns
+        "Who is Elena Fisher?",
+        # @connector_status_patterns
+        "Which connections are active?",
+        # source-hint identity chat
+        "Who is Charlie from Slack?"
+      ]
+
+      for text <- regex_matched_inputs do
+        _profile = ModelRouting.profile_for(%{text: text})
+      end
+
+      # @linked_item_context_patterns (reply-aware branch)
+      _profile =
+        ModelRouting.profile_for(%{
+          text: "Dismiss this todo as no longer relevant.",
+          reply_to_message_id: "todo-card-1"
+        })
+
+      # Explicit request_focus also bypasses the classifier.
+      _profile = ModelRouting.profile_for(%{text: "anything else?", request_focus: "waiting_on"})
+
+      refute_received :classifier_invoked
+    end
+
+    test "explicit commitment_audit/continuity request_focus values normalize end-to-end" do
+      profile = ModelRouting.profile_for(%{text: "anything", request_focus: "commitment_audit"})
+      assert profile.request_focus == :commitment_audit
+      assert profile.task_class == :commitment_audit
+
+      profile = ModelRouting.profile_for(%{text: "anything", request_focus: "continuity"})
+      assert profile.request_focus == :continuity
+      assert profile.task_class == :continuity
+    end
+
+    test "empty or whitespace text never invokes the classifier" do
+      test_pid = self()
+
+      put_classifier(fn _prompt ->
+        send(test_pid, :classifier_invoked)
+        {:ok, ~s({"focus": "continuity", "reason": "no"})}
+      end)
+
+      for text <- ["", "   "] do
+        profile = ModelRouting.profile_for(%{text: text})
+        assert profile.request_focus == nil
+      end
+
+      refute_received :classifier_invoked
+    end
+  end
+
   test "routes contact and stale follow-up review asks to reasoning with relationship context" do
     for text <- [
           "Which contacts are stale?",

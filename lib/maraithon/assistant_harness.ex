@@ -360,6 +360,7 @@ defmodule Maraithon.AssistantHarness do
     - For broad audit/trust questions — "what did you do today?", "what did you add/close today?", "what did you learn about me?", "why did you ping me (about X)?", or "what did you ignore?" — call `activity_report` (period `today`/`yesterday`, or an explicit `since`/`until` range) instead of reconstructing the answer from context or memory alone. For "why did you ping me about X", pass `topic` and answer from `matching_pings`' `why_now`/`model_summary` and source refs — the actual recorded rationale, not a guess. For "what did you ignore", answer from the `holds` section and its recorded reasons. Keep the reply Telegram-friendly: lead with the counts, then name a few notable items per section (not a table or a full dump), and offer to drill into any one of them.
     - If request_focus is `linked_item_context`, treat the quoted Telegram card as the object being discussed. Start from `linked_item.todo`, `linked_item.detail`, `linked_item.insight`, or `linked_item.project`; answer the user's short follow-up in that frame before doing broad source review. For linked work item action replies, use the exact `linked_item.todo.id`: done/handled -> `resolve_todo` status `done`; dismiss/delete/remove/no-longer-relevant -> `delete_todo`; change/update/snooze -> `update_todo`. Do not list or search before acting unless the linked id is missing.
     - If request_focus is `person_context`, the runtime has already run mandatory connected-source preflight when possible. Use `connected_context_review` plus People records, relationship context, open work, calendar, and memory to answer who the person is, why they matter, what they want, and what the operator owes. If preflight found source observations, prefer specific connected-source details over generic relationship labels.
+    - If `connected_context_review.status` is `"reviewed"` in context for the current query, treat it as the authoritative connected-source review result for this turn: read `connected_context_review.result` directly and do not call `review_connected_context` again with a matching or narrower query. Only call it again for a genuinely different or broader ask — a different person, an explicit "look further back", or more sources than the preflight covered.
     - If request_focus is `source_hint_identity`, answer the bounded identity question first. Use the named source hint, People records, relationship context, and recent local/source observations; do not turn it into broad open-loop triage unless the user asks.
     - If request_focus is `meeting_prep`, call `calendar_events_for_person` first for a named-person meeting-prep request, then use relationship context, open work/loops, and the practical talk track for the meeting. Keep it concise and grounded in connected-source details.
     - For linked-item questions like `Who is this?`, `What is this?`, `Why did you send this?`, or `What do I owe them?`, give the person/company/source context, why it matters, the specific request, and what is known versus uncertain. Use the linked work item or insight text directly when it is enough; call one focused People/open-work/source review tool only when the linked item lacks identity or relationship context.
@@ -381,6 +382,8 @@ defmodule Maraithon.AssistantHarness do
     - If the user asks about goals, priorities, direction, what supports or conflicts with their goals, or what would advance a goal today, call `list_goals`, `goal_context`, `get_goal`, or `review_goal_alignment` before answering unless the latest goal tool result is already current.
     - Use `get_open_loops` before answering when the user asks what is open, what they owe, what might be missed, what needs attention, or what should be reviewed across multiple sources.
     - If request_focus is `today_mode`, answer as a tight "what matters today / what can I handle now" chief-of-staff digest. Combine open work, open loops, personal/family calendar, relationship commitments, due/overdue work, and memory. Lead with the next move and use `todo_digest` when actionable work items should be sent as cards.
+    - If request_focus is `commitment_audit`, the operator is asking what they promised or committed to in a window ("What did I promise this week?"). Cross-reference `todos`, `open_loops`, and — only if the saved-work picture is still ambiguous — `gmail_search_messages`/`slack_search_messages` for promises made in the asked-about window. Answer with the specific commitments found (who, what, when it was promised), not a generic status summary.
+    - If request_focus is `continuity`, the operator is referring to something just surfaced in `recent_turns` without an explicit reply-to ("Handled the billing thing, what else?"). Resolve the referent from `recent_turns` in this conversation only — check `structured_data`/`linked_todo` on the last few assistant turns; never pull a referent from other conversations or sources. Resolve it before calling tools; if the referent truly cannot be resolved, ask one concise clarifying question rather than guessing. Once resolved, act on it (e.g. `resolve_todo` for "handled") and answer "what else?" from the remaining open work.
     - If request_focus is `waiting_on`, distinguish what the operator owes others from what others owe the operator using the durable `direction` field on saved work items, not guesswork. For "who am I waiting on?" or "who owes me?", call `get_open_loops` or `list_todos` with `direction:"owed_to_me"`. For "what do I owe?", call them with `direction:"owed_by_me"`. Use each item's `last_nudged_at`/`nudge_count`/`follow_up_channel` to say whether it has already been nudged (and when) or never nudged, and name the best follow-up channel from source context when known.
     - `connected_accounts` and `source_freshness` in context are the source of truth for connector, integration, account, and source-health questions. When the user asks which connections, connectors, integrations, accounts, or sources are connected, answer directly from those context fields or call `list_connected_accounts` if you need a fresh status read. Do not call `list_people`, `upsert_todos`, or any write tool for connector/account status; `list_people` is only for human People relationships.
     - For "what can you see right now?", "what sources can you see?", or similar connector-health questions, answer per-source from `source_freshness`: name each connected source, its status (fresh/stale/never_synced/error/reauth_required), and how long since its `last_successful_sync` (e.g. "since Tuesday", "3 days ago") rather than a generic connected/disconnected list. For any source that is not fresh, include its `reconnect_url` as the concrete next step (e.g. "Gmail needs reconnect: <reconnect_url>").
@@ -1547,6 +1550,55 @@ defmodule Maraithon.AssistantHarness do
     |> sanitize_prompt_context()
   end
 
+  # SPEC 09 R10: mirrors the :commitment_audit fetcher set in
+  # Maraithon.TelegramAssistant.Context plus the baseline fields every focus
+  # clause carries. No :connected_context_review — this is not a
+  # person-context ask.
+  defp focus_context(context, :commitment_audit) when is_map(context) do
+    take_existing(context, [
+      :user,
+      :chat,
+      :conversation,
+      :recent_turns,
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :open_loops,
+      :goals,
+      :relationships,
+      :todos,
+      :briefing_schedule,
+      :current_time,
+      :connected_accounts,
+      :source_freshness,
+      :defaults,
+      :context_diagnostics
+    ])
+    |> sanitize_prompt_context()
+  end
+
+  # SPEC 09 R10: mirrors the :continuity fetcher set plus baseline fields;
+  # `recent_turns` carries the referent for "what else?" follow-ups.
+  defp focus_context(context, :continuity) when is_map(context) do
+    take_existing(context, [
+      :user,
+      :chat,
+      :conversation,
+      :recent_turns,
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :open_loops,
+      :todos,
+      :briefing_schedule,
+      :current_time,
+      :defaults,
+      :context_diagnostics
+    ])
+    |> sanitize_prompt_context()
+  end
+
   defp focus_context(context, _scope) when is_map(context), do: sanitize_prompt_context(context)
   defp focus_context(context, _scope), do: context
 
@@ -1746,6 +1798,60 @@ defmodule Maraithon.AssistantHarness do
         write_memory
         list_connected_accounts
       ) ++ @local_context_tools)
+
+    Enum.filter(tools, fn tool ->
+      tool_definition_name(tool) in allowed
+    end)
+  end
+
+  # SPEC 09 R9: the :waiting_on allow-list plus gmail_search_messages and
+  # slack_search_messages so the model can actually scan sent history for
+  # promises, not just read cached todos/open_loops.
+  defp focus_tools(tools, :commitment_audit) when is_list(tools) do
+    allowed =
+      MapSet.new(~w(
+        get_open_loops
+        list_todos
+        resolve_todo
+        update_todo
+        delete_todo
+        upsert_todos
+        list_people
+        get_person
+        get_relationship_context
+        review_connected_context
+        learn_relationship_context
+        link_person_data
+        merge_people
+        delete_person
+        recall_memory
+        list_memories
+        record_memory_feedback
+        write_memory
+        list_connected_accounts
+        gmail_search_messages
+        slack_search_messages
+      ) ++ @local_context_tools)
+
+    Enum.filter(tools, fn tool ->
+      tool_definition_name(tool) in allowed
+    end)
+  end
+
+  # SPEC 09 R9: continuity is a read+resolve recap flow, not a
+  # person-editing flow — the :linked_item_context allow-list cut down to
+  # the tools a "what else?" follow-up actually needs.
+  defp focus_tools(tools, :continuity) when is_list(tools) do
+    allowed =
+      MapSet.new(~w(
+        list_todos
+        resolve_todo
+        get_open_loops
+        recall_memory
+        recall_anywhere
+        list_memories
+        calendar_events_around
+      ))
 
     Enum.filter(tools, fn tool ->
       tool_definition_name(tool) in allowed

@@ -120,8 +120,15 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     {:ok, state}
   end
 
+  # SPEC 09 R3: context-loaded is a real progress signal now — it updates
+  # the hint so a pending progress note (or an already-sent one, edited in
+  # place via the shared maybe_refresh_progress_message/2 helper) reflects
+  # that context gathering happened instead of the generic "working" copy.
   @impl true
-  def handle_cast(:context_loaded, state), do: {:noreply, state}
+  def handle_cast(:context_loaded, state) do
+    next_state = %{state | hint_category: "gathering_context", hint_labels: []}
+    {:noreply, maybe_refresh_progress_message(next_state, state)}
+  end
 
   def handle_cast({:tool, tool_name, args}, state) do
     {:noreply, note_tool_hint(state, tool_name, args)}
@@ -623,6 +630,10 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
         Logger.debug("Telegram stream flush failed", reason: inspect(reason))
         {:noreply, %{state | stream_last_flushed_at_ms: System.monotonic_time(:millisecond)}}
     end
+  end
+
+  defp progress_text(%{hint_category: "gathering_context"}) do
+    "Gathering context now."
   end
 
   defp progress_text(%{hint_category: "open_work"}) do

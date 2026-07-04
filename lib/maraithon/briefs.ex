@@ -35,6 +35,12 @@ defmodule Maraithon.Briefs do
   # multi-message chunking — is the right scope here.
   @telegram_text_cap 3900
   @telegram_truncation_trailer "… Full briefing in your email inbox."
+  # SPEC 09 R17: hard ceiling of `proactive_candidates.body`
+  # (`validate_length(:body, max: 10_000)`). The full-text renderers below
+  # clamp only to this — a much larger budget than the Telegram wire cap —
+  # so the candidate changeset never rejects a long brief outright. Telegram
+  # wire-size chunking happens at send time in `PushBroker.send_candidate/1`.
+  @proactive_candidate_body_cap 10_000
   @internal_brief_markers [
     "<redacted",
     "=>",
@@ -337,6 +343,31 @@ defmodule Maraithon.Briefs do
     }
   end
 
+  @doc """
+  Full (uncapped) Telegram rendering of a standard brief — same rendering as
+  `telegram_payload/1` but without `cap_telegram_text/1`, clamped only to the
+  proactive-candidate body ceiling (SPEC 09 R17). Chunked at send time by
+  `PushBroker.send_candidate/1` instead of truncating the tail (where Look
+  Ahead and the closing "today's move" directive live).
+  """
+  def telegram_full_text(%Brief{} = brief) do
+    brief
+    |> render_telegram_text()
+    |> clamp_length(@proactive_candidate_body_cap)
+  end
+
+  @doc """
+  Full (uncapped) Telegram rendering of a todo-digest brief intro — the
+  todo-digest sibling of `telegram_full_text/1` (SPEC 09 R17).
+  """
+  def todo_digest_full_text(%Brief{} = brief, todos \\ nil) do
+    todos = todos || todo_digest_todos(brief)
+
+    brief
+    |> render_todo_digest_telegram_text(todos)
+    |> clamp_length(@proactive_candidate_body_cap)
+  end
+
   def public_title(%Brief{} = brief), do: public_brief_title(brief.title)
   def public_title(value), do: public_brief_title(value)
 
@@ -429,8 +460,7 @@ defmodule Maraithon.Briefs do
       "agent_id" => agent_id,
       "cadence" => read_string(attrs, "cadence", "morning"),
       "title" => attrs |> read_string("title", @brief_title_fallback) |> clamp_length(180),
-      "summary" =>
-        attrs |> read_string("summary", @brief_summary_default) |> clamp_length(500),
+      "summary" => attrs |> read_string("summary", @brief_summary_default) |> clamp_length(500),
       "body" => attrs |> read_string("body", @brief_body_default) |> clamp_length(20_000),
       "status" => read_string(attrs, "status", "pending"),
       "scheduled_for" => read_datetime(attrs, "scheduled_for") || DateTime.utc_now(),
@@ -457,11 +487,13 @@ defmodule Maraithon.Briefs do
     ConnectedAccounts.telegram_destination(user_id)
   end
 
-  # Applies to both the legacy direct-send path (deliver_standard_brief /
-  # deliver_todo_digest_brief) and the DeliveryPlanner candidate path
-  # (standard_brief_candidate / todo_digest_candidate) — both build their
-  # Telegram body from telegram_payload/1 and todo_digest_telegram_payload/2,
-  # so capping here covers both send paths from one place.
+  # SPEC 09 R18 note: PushBroker's brief paths (candidate + direct deliver)
+  # now build bodies from telegram_full_text/1 / todo_digest_full_text/2 and
+  # chunk at send time. This cap still applies to telegram_payload/1 /
+  # todo_digest_telegram_payload/2, used by send_fallback_brief/2 (the
+  # unified-push-disabled direct-send fallback) and the manual
+  # todo-review-brief path — those deliberately stay single-message-truncated
+  # (see the one_gate_one_ledger_for_outbound follow-up).
   defp cap_telegram_text(text) when is_binary(text) do
     if String.length(text) <= @telegram_text_cap do
       text

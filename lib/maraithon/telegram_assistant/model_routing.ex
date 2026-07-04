@@ -7,12 +7,19 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   """
 
   alias Maraithon.LLM
+  alias Maraithon.TelegramAssistant.Context
+  alias Maraithon.TelegramConversations
+  alias Maraithon.TelegramConversations.Conversation
 
   @default_chat_reasoning_effort "none"
   @default_reasoning_max_tokens 6_000
   @default_reasoning_wall_clock_ms 120_000
   @default_reasoning_llm_turns 8
   @default_reasoning_tool_steps 18
+  # SPEC 09 R5/R6: bound for the ambiguous-fallthrough routing classifier,
+  # matching @deep_memory_recall_timeout_ms in Context. The classifier must
+  # never turn a fast turn into a slow one.
+  @default_routing_classifier_timeout_ms 2_500
 
   @planning_patterns [
     ~r/\bmorning\s+brief(?:ing)?\b/u,
@@ -130,8 +137,12 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   def profile_for(attrs) when is_map(attrs) do
     text = Map.get(attrs, :text) || Map.get(attrs, "text")
     routed_tier = tier_for_text(text)
-    tier = cap_tier_for_interactive_surface(routed_tier, attrs)
     request_focus = request_focus_for_attrs(attrs, text)
+
+    {routed_tier, request_focus} =
+      maybe_classify_via_model(routed_tier, request_focus, attrs, text)
+
+    tier = cap_tier_for_interactive_surface(routed_tier, attrs)
     task_class = task_class_for(tier, request_focus, text)
 
     route_reason =
@@ -208,6 +219,180 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   def tier_for_text(_text), do: :chat
 
+  # SPEC 09 R5: the model-based classifier runs ONLY when every regex,
+  # reply-aware, and explicit-focus route above fell through to the ambiguous
+  # default (tier :chat via the `true ->` fallthrough AND focus nil). Every
+  # regex-matched case keeps resolving with zero added latency or model calls.
+  defp maybe_classify_via_model(:chat, nil, attrs, text) when is_binary(text) do
+    if String.trim(text) == "" do
+      {:chat, nil}
+    else
+      case classify_via_model(attrs) do
+        :commitment_audit -> {:reasoning, :commitment_audit}
+        :continuity -> {:reasoning, :continuity}
+        _none -> {:chat, nil}
+      end
+    end
+  end
+
+  defp maybe_classify_via_model(tier, focus, _attrs, _text), do: {tier, focus}
+
+  @doc """
+  Model-based routing fallback for the ambiguous `:chat`/nil-focus default
+  (SPEC 09 R5/R6). Uses the same cheap routing-tier primitive
+  (`Maraithon.LLM.complete_routing/1`) as `Memory.Intelligence.select_relevant/4`,
+  bounded to #{@default_routing_classifier_timeout_ms}ms. The model decides
+  exactly one thing: commitment_audit, continuity, or none. Any timeout,
+  error, or malformed response degrades to `:none` — never escalates tier or
+  cost above the safe default.
+  """
+  def classify_via_model(attrs) when is_map(attrs) do
+    started_ms = System.monotonic_time(:millisecond)
+
+    outcome =
+      case Context.bounded_task(
+             fn -> request_classification(attrs) end,
+             routing_classifier_timeout_ms()
+           ) do
+        {:ok, {:ok, content}} -> parse_classification(content)
+        {:ok, {:error, _reason}} -> :error
+        _timeout_or_crash -> :timeout
+      end
+
+    focus =
+      case outcome do
+        :commitment_audit -> :commitment_audit
+        :continuity -> :continuity
+        _other -> :none
+      end
+
+    # SPEC 09 R12: routing-model spend must be visible — this call only
+    # fires on the ambiguous fallthrough, but invisible model spend is a
+    # known audit failure class.
+    :telemetry.execute(
+      [:maraithon, :telegram_assistant, :routing_classifier],
+      %{
+        duration_ms: System.monotonic_time(:millisecond) - started_ms,
+        count: 1
+      },
+      %{outcome: outcome, focus: focus}
+    )
+
+    focus
+  end
+
+  defp request_classification(attrs) do
+    text = Map.get(attrs, :text) || Map.get(attrs, "text") || ""
+    prompt = classification_prompt(text, classification_recent_turns(attrs))
+
+    case routing_classifier_complete_fun() do
+      fun when is_function(fun, 1) ->
+        fun.(prompt)
+
+      _other ->
+        params = %{
+          "messages" => [%{"role" => "user", "content" => prompt}],
+          "max_tokens" => 300,
+          "temperature" => 0,
+          "reasoning_effort" => "low"
+        }
+
+        case LLM.complete_routing(params) do
+          {:ok, %{content: content}} when is_binary(content) -> {:ok, content}
+          {:ok, _other} -> {:error, :invalid_classifier_response}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  rescue
+    # The task runs linked to the routing caller — a raise in here would
+    # otherwise propagate as an exit signal and crash the turn instead of
+    # degrading to the safe default.
+    error -> {:error, error}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp routing_classifier_complete_fun do
+    config()
+    |> Keyword.get(:routing_classifier_complete)
+    |> case do
+      fun when is_function(fun, 1) -> fun
+      _other -> nil
+    end
+  end
+
+  defp classification_prompt(text, recent_turns) do
+    recent_block =
+      case recent_turns do
+        [] -> "(none)"
+        turns -> Enum.join(turns, "\n")
+      end
+
+    """
+    You classify one inbound assistant message. Decide exactly one thing about it:
+
+    - "commitment_audit": the user is asking what they promised, committed to, or owe — a scan across their sent history and saved work for promises made in a time window (e.g. "What did I promise this week?").
+    - "continuity": a bare follow-up referencing something just surfaced in this conversation without an explicit reply (e.g. "Handled the billing thing, what else?").
+    - "none": genuine open-ended chat that is neither.
+
+    Respond with only JSON, no prose:
+    {"focus": "commitment_audit" | "continuity" | "none", "reason": "<one sentence>"}
+
+    RECENT_TURNS:
+    #{recent_block}
+
+    MESSAGE:
+    #{text}
+    """
+  end
+
+  # Compact recent-turn summary for the classifier. Runs inside the bounded
+  # task so a slow read cannot stall routing; scoped to the one conversation
+  # struct carried in attrs.
+  defp classification_recent_turns(attrs) do
+    case Map.get(attrs, :conversation) do
+      %Conversation{} = conversation ->
+        conversation
+        |> TelegramConversations.recent_turns(limit: 4)
+        |> Enum.map(fn turn ->
+          "#{turn.role}: #{String.slice(turn.text || "", 0, 240)}"
+        end)
+
+      _other ->
+        []
+    end
+  rescue
+    _error -> []
+  catch
+    _kind, _reason -> []
+  end
+
+  defp parse_classification(content) when is_binary(content) do
+    trimmed =
+      content
+      |> String.trim()
+      |> String.trim_leading("```json")
+      |> String.trim_leading("```")
+      |> String.trim_trailing("```")
+      |> String.trim()
+
+    case Jason.decode(trimmed) do
+      {:ok, %{"focus" => "commitment_audit"}} -> :commitment_audit
+      {:ok, %{"focus" => "continuity"}} -> :continuity
+      {:ok, %{"focus" => "none"}} -> :none
+      {:ok, _other} -> :invalid
+      _error -> :invalid
+    end
+  end
+
+  defp parse_classification(_content), do: :invalid
+
+  defp routing_classifier_timeout_ms do
+    config()
+    |> Keyword.get(:routing_classifier_timeout_ms, @default_routing_classifier_timeout_ms)
+    |> positive_integer(@default_routing_classifier_timeout_ms)
+  end
+
   # Interactive chat (mobile/web) starts on the chat tier even for
   # reasoning-pattern asks: the user is watching, and the chat model can
   # still hand off via request_deeper_analysis when depth is truly needed.
@@ -266,6 +451,8 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
       "meeting_prep" -> :meeting_prep
       "waiting_on" -> :waiting_on
       "person_context" -> :person_context
+      "commitment_audit" -> :commitment_audit
+      "continuity" -> :continuity
       _other -> nil
     end
   end
@@ -406,6 +593,32 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> Keyword.put(:model_retry_max_delay_ms, 1_500)
   end
 
+  # SPEC 09 R7: budgets copied verbatim from the :waiting_on clause above —
+  # only the atom differs.
+  defp maybe_put_focus(keyword, :commitment_audit) do
+    keyword
+    |> Keyword.put(:request_focus, :commitment_audit)
+    |> Keyword.put(:context_scope, :commitment_audit)
+    |> Keyword.put(:tool_scope, :commitment_audit)
+    |> Keyword.put(:max_wall_clock_ms, 90_000)
+    |> Keyword.put(:max_llm_turns, 6)
+    |> Keyword.put(:max_tool_steps, 12)
+    |> Keyword.put(:model_busy_max_retries, 24)
+    |> Keyword.put(:model_retry_max_delay_ms, 1_500)
+  end
+
+  defp maybe_put_focus(keyword, :continuity) do
+    keyword
+    |> Keyword.put(:request_focus, :continuity)
+    |> Keyword.put(:context_scope, :continuity)
+    |> Keyword.put(:tool_scope, :continuity)
+    |> Keyword.put(:max_wall_clock_ms, 90_000)
+    |> Keyword.put(:max_llm_turns, 6)
+    |> Keyword.put(:max_tool_steps, 12)
+    |> Keyword.put(:model_busy_max_retries, 24)
+    |> Keyword.put(:model_retry_max_delay_ms, 1_500)
+  end
+
   defp maybe_put_focus(keyword, :person_context) do
     keyword
     |> Keyword.put(:request_focus, :person_context)
@@ -468,6 +681,8 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   defp task_class_for(_tier, :meeting_prep, _text), do: :meeting_prep
   defp task_class_for(_tier, :person_context, _text), do: :person_context
   defp task_class_for(_tier, :waiting_on, _text), do: :waiting_on
+  defp task_class_for(_tier, :commitment_audit, _text), do: :commitment_audit
+  defp task_class_for(_tier, :continuity, _text), do: :continuity
   defp task_class_for(_tier, :quick_chat, _text), do: :quick_chat
 
   defp task_class_for(:reasoning, _focus, text) when is_binary(text) do
@@ -504,6 +719,8 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   defp route_reason_for(_tier, :meeting_prep, _text), do: "meeting_prep_requires_context"
   defp route_reason_for(_tier, :person_context, _text), do: "person_or_contact_context"
   defp route_reason_for(_tier, :waiting_on, _text), do: "waiting_on_or_commitment_analysis"
+  defp route_reason_for(_tier, :commitment_audit, _text), do: "commitment_scan_analysis"
+  defp route_reason_for(_tier, :continuity, _text), do: "continuity_followup"
   defp route_reason_for(_tier, :quick_chat, _text), do: "quick_wording_request"
 
   defp route_reason_for(:reasoning, _focus, text) when is_binary(text) do
