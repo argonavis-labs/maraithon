@@ -6,10 +6,15 @@ defmodule Maraithon.Runtime.IncidentLog do
   import Ecto.Query
 
   alias Maraithon.Agents.AgentRun
+  alias Maraithon.Briefs.Brief
+  alias Maraithon.Connectors.SourceCursor
   alias Maraithon.Effects.Effect
+  alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Repo
   alias Maraithon.Runtime.RuntimeIncident
   alias Maraithon.Runtime.ScheduledJob
+  alias Maraithon.TelegramAssistant.PreparedAction
+  alias Maraithon.TelegramAssistant.ProactiveCandidate
 
   require Logger
 
@@ -156,14 +161,30 @@ defmodule Maraithon.Runtime.IncidentLog do
     Enum.reverse(segments)
   end
 
+  # SPEC 02 R3: every key is computed behind its own rescue (`safe_count/1`)
+  # so one bad query degrades a single key to an error map instead of
+  # zeroing the entire snapshot (the pre-existing blanket rescue below stays
+  # as a last-resort backstop only).
   def backlog_snapshot(opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
     %{
-      "pending_effects" => count_status(repo, Effect, "pending"),
-      "failed_effects" => count_status(repo, Effect, "failed"),
-      "pending_scheduled_jobs" => count_status(repo, ScheduledJob, "pending"),
-      "running_agent_runs" => count_status(repo, AgentRun, "running")
+      "pending_effects" => safe_count(fn -> count_status(repo, Effect, "pending") end),
+      "failed_effects" => safe_count(fn -> count_status(repo, Effect, "failed") end),
+      "pending_scheduled_jobs" =>
+        safe_count(fn -> count_status(repo, ScheduledJob, "pending") end),
+      "running_agent_runs" => safe_count(fn -> count_status(repo, AgentRun, "running") end),
+      "pending_briefs" => safe_count(fn -> count_status(repo, Brief, "pending") end),
+      "live_proactive_candidates" =>
+        safe_count(fn -> count_statuses(repo, ProactiveCandidate, ["pending", "planned"]) end),
+      "held_proactive_candidates" =>
+        safe_count(fn -> count_status(repo, ProactiveCandidate, "held") end),
+      "pending_insight_deliveries" =>
+        safe_count(fn -> count_status(repo, Delivery, "pending") end),
+      "awaiting_prepared_actions" =>
+        safe_count(fn -> count_status(repo, PreparedAction, "awaiting_confirmation") end),
+      "watch_expired_source_cursors" =>
+        safe_count(fn -> count_watch_expired_source_cursors(repo) end)
     }
   rescue
     error ->
@@ -225,5 +246,26 @@ defmodule Maraithon.Runtime.IncidentLog do
     schema
     |> where([row], row.status == ^status)
     |> repo.aggregate(:count, :id)
+  end
+
+  defp count_statuses(repo, schema, statuses) when is_list(statuses) do
+    schema
+    |> where([row], row.status in ^statuses)
+    |> repo.aggregate(:count, :id)
+  end
+
+  defp count_watch_expired_source_cursors(repo) do
+    now = DateTime.utc_now()
+
+    SourceCursor
+    |> where([cursor], not is_nil(cursor.watch_expires_at))
+    |> where([cursor], cursor.watch_expires_at < ^now)
+    |> repo.aggregate(:count, :id)
+  end
+
+  defp safe_count(fun) when is_function(fun, 0) do
+    fun.()
+  rescue
+    error -> %{"error" => Exception.message(error)}
   end
 end

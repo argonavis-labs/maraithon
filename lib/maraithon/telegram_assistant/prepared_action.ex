@@ -63,5 +63,11 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:conversation_id)
     |> foreign_key_constraint(:run_id)
+    # SPEC 02 R11/R12: partial unique index on
+    # (user_id, action_type, payload->>'todo_id') where
+    # status = 'awaiting_confirmation'. `error_key: :user_id` is explicit
+    # rather than relying on Ecto's default first-column attribution for a
+    # multi-column (and expression-based) unique index.
+    |> unique_constraint(:user_id, name: :telegram_prepared_actions_awaiting_todo_index)
   end
 end

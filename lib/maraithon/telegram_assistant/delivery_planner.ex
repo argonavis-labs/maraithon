@@ -12,6 +12,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightFeedback
+  alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.InsightNotifications.MemoryGate
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
@@ -502,6 +503,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         {:ok, %{decision: "sent_now", conversation_id: conversation_id}} ->
           {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
           maybe_mark_brief_delivered(candidate)
+          maybe_mark_insight_delivery_sent(candidate)
           maybe_send_candidate_todo_cards(conversation_id, candidate)
           record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "sent_now"})
           %{acc | delivered: acc.delivered + 1}
@@ -509,6 +511,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         {:ok, %{decision: "sent_now"}} ->
           {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
           maybe_mark_brief_delivered(candidate)
+          maybe_mark_insight_delivery_sent(candidate)
           record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "sent_now"})
           %{acc | delivered: acc.delivered + 1}
 
@@ -516,6 +519,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           # Already delivered under this dedupe_key through another path.
           {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
           maybe_mark_brief_delivered(candidate)
+          maybe_mark_insight_delivery_sent(candidate)
 
           record_dispatch_decision(candidate, "proactive.sent", "sent", %{
             "decision" => "suppressed",
@@ -653,6 +657,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         {:ok, _conversation, turn, _telegram_result} ->
           {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
           maybe_mark_brief_delivered(candidate)
+          maybe_mark_insight_delivery_sent(candidate)
           record_merged_receipt(candidate, turn.id)
           record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "merged"})
           todo_counts = send_candidate_todo_cards(conversation, candidate)
@@ -701,6 +706,37 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   end
 
   defp maybe_mark_brief_delivered(_candidate), do: :ok
+
+  # SPEC 02 R6: the insight-side sibling of maybe_mark_brief_delivered/1.
+  # `PushBroker.enqueue_insight_candidate/1` sets `source_id: delivery.id`
+  # directly (same shape brief candidates use), so the id is already the
+  # Delivery primary key — no need to read structured_data (which may be
+  # nil/missing keys). Without this, the planner path never advances the
+  # `Delivery` off "pending" and `InsightNotifier` re-selects it every 60s,
+  # minting a fresh ProactiveCandidate (and a plan_delivery model call)
+  # forever. Only "pending"/"failed" rows are flipped: feedback statuses
+  # (`feedback_helpful`/`feedback_not_helpful`) already prove delivery and
+  # must not be clobbered back to "sent".
+  defp maybe_mark_insight_delivery_sent(%ProactiveCandidate{
+         source: "insight",
+         source_id: delivery_id
+       })
+       when is_binary(delivery_id) do
+    with {:ok, _uuid} <- Ecto.UUID.cast(delivery_id),
+         %Delivery{status: status} = delivery when status in ["pending", "failed"] <-
+           Repo.get(Delivery, delivery_id) do
+      PushBroker.mark_insight_delivery_delivered_elsewhere(delivery)
+      :ok
+    else
+      _other -> :ok
+    end
+  rescue
+    # A delivery-marking failure must never fail the candidate's own
+    # successful send (same contract as maybe_mark_brief_delivered/1).
+    _error -> :ok
+  end
+
+  defp maybe_mark_insight_delivery_sent(_candidate), do: :ok
 
   defp mark_held(candidates) do
     Enum.reduce(candidates, 0, fn candidate, count ->

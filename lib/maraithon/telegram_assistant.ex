@@ -328,6 +328,56 @@ defmodule Maraithon.TelegramAssistant do
 
   def find_awaiting_prepared_action_for_todo(_user_id, _todo_id), do: nil
 
+  @doc """
+  Finds the still-`awaiting_confirmation` PreparedAction for a todo,
+  scoped by `action_type` and *ignoring* `expires_at` (SPEC 02 R12).
+
+  `find_awaiting_prepared_action_for_todo/2` filters `expires_at > now`,
+  which makes it exactly the wrong query for resolving a conflict against
+  the `telegram_prepared_actions_awaiting_todo_index` partial unique index:
+  a row that is past `expires_at` but not yet swept still reads
+  `status: "awaiting_confirmation"` and is precisely what blocks a new
+  insert — this query finds it so the caller can force-expire and retry.
+  """
+  def find_awaiting_prepared_action_for_todo_ignoring_expiry(user_id, action_type, todo_id)
+      when is_binary(user_id) and is_binary(action_type) and is_binary(todo_id) do
+    PreparedAction
+    |> where(
+      [prepared_action],
+      prepared_action.user_id == ^user_id and
+        prepared_action.action_type == ^action_type and
+        prepared_action.status == "awaiting_confirmation" and
+        fragment("?->>'todo_id' = ?", prepared_action.payload, ^todo_id)
+    )
+    |> order_by([prepared_action], desc: prepared_action.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def find_awaiting_prepared_action_for_todo_ignoring_expiry(_user_id, _action_type, _todo_id),
+    do: nil
+
+  @doc """
+  Actively expires `awaiting_confirmation` prepared actions past their
+  `expires_at` (SPEC 02 R2/R11). Expiry was previously lazy-at-read only
+  (`prepared_action_expired?/1`), so a row nobody ever read again sat
+  `awaiting_confirmation` forever. Only touches rows still awaiting
+  confirmation, so re-running is a no-op. Returns the number of rows
+  expired.
+  """
+  def expire_stale_prepared_actions(now \\ DateTime.utc_now()) do
+    {count, _} =
+      Repo.update_all(
+        from(prepared_action in PreparedAction,
+          where: prepared_action.status == "awaiting_confirmation",
+          where: prepared_action.expires_at < ^now
+        ),
+        set: [status: "expired", error: "confirmation_expired", updated_at: now]
+      )
+
+    count
+  end
+
   def latest_prepared_action(%Conversation{} = conversation) do
     prepared_action_id = get_in(conversation.metadata || %{}, ["latest_prepared_action_id"])
 

@@ -136,6 +136,95 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueueTest do
     assert Repo.get!(ProactiveCandidate, fresh.id).status == "pending"
   end
 
+  # SPEC 02 R7: held candidates expire by updated_at (age since held), never
+  # by the stale pre-hold expires_at, and each expiry writes an audit fact.
+  test "expire_stale_held/2 expires only stale held candidates and records the drop", %{
+    user_id: user_id
+  } do
+    now = DateTime.utc_now()
+
+    {:ok, stale} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+    {:ok, fresh} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+    {:ok, _} = ProactiveQueue.mark_held(stale)
+    {:ok, _} = ProactiveQueue.mark_held(fresh)
+
+    eight_days_ago = DateTime.add(now, -8 * 86_400, :second)
+
+    {1, _} =
+      ProactiveCandidate
+      |> where([row], row.id == ^stale.id)
+      |> Repo.update_all(set: [updated_at: eight_days_ago])
+
+    expired = ProactiveQueue.expire_stale_held(now)
+
+    assert [%{id: expired_id, user_id: ^user_id}] = expired
+    assert expired_id == stale.id
+    assert Repo.get!(ProactiveCandidate, stale.id).status == "expired"
+    assert Repo.get!(ProactiveCandidate, fresh.id).status == "held"
+
+    [entry] =
+      Maraithon.ActionLedger.list_recent(user_id,
+        event_type: "held_interruption_expired",
+        limit: 5
+      )
+
+    assert entry.metadata["candidate_id"] == stale.id
+
+    # Idempotent: a second sweep finds nothing (expired rows are terminal).
+    assert ProactiveQueue.expire_stale_held(now) == []
+  end
+
+  # SPEC 02 R8: a CalendarCheckIn-recorded check-in brief carries
+  # held_interruption_ids in metadata, and the existing generic
+  # delivery-confirmation function flips those candidates to "delivered"
+  # once the brief sends — no cadence-specific plumbing.
+  test "check-in brief held_interruption_ids flip held candidates to delivered on send", %{
+    user_id: user_id
+  } do
+    {:ok, agent} =
+      Maraithon.Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "prompt_agent",
+        config: %{"name" => "check-in"}
+      })
+
+    {:ok, first} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+    {:ok, second} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+    {:ok, _} = ProactiveQueue.mark_held(first)
+    {:ok, _} = ProactiveQueue.mark_held(second)
+
+    held_ids =
+      user_id
+      |> ProactiveQueue.held_interruptions_for_prompt(limit: 25)
+      |> Enum.map(&Map.fetch!(&1, "id"))
+
+    assert Enum.sort(held_ids) == Enum.sort([first.id, second.id])
+
+    {:ok, brief} =
+      Maraithon.Briefs.record(user_id, agent.id, %{
+        "cadence" => "check_in",
+        "scheduled_for" => DateTime.to_iso8601(DateTime.utc_now()),
+        "dedupe_key" => "check-in-held-drain-#{System.unique_integer([:positive])}",
+        "status" => "pending",
+        "title" => "Open afternoon",
+        "summary" => "Quiet stretch after lunch.",
+        "body" => "You have the afternoon open.",
+        "metadata" => %{
+          "origin_skill_id" => "calendar_check_in",
+          "held_interruption_ids" => held_ids
+        }
+      })
+
+    # The confirmed-delivery path (PushBroker.mark_held_interruptions_delivered/1,
+    # called by both the legacy send path and DeliveryPlanner) is
+    # cadence-agnostic: the metadata key is the entire wiring.
+    :ok = Maraithon.TelegramAssistant.PushBroker.mark_held_interruptions_delivered(brief)
+
+    assert Repo.get!(ProactiveCandidate, first.id).status == "delivered"
+    assert Repo.get!(ProactiveCandidate, second.id).status == "delivered"
+    assert ProactiveQueue.list_held_for_user(user_id) == []
+  end
+
   defp candidate_attrs(user_id, overrides \\ %{}) do
     unique = System.unique_integer([:positive])
 

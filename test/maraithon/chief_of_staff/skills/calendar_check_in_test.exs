@@ -202,6 +202,65 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
              "You have 10:00-11:00 AM UTC-05:00 open.\n\nDraft the pricing reply before the next meeting"
   end
 
+  # SPEC 02 R8: the check-in folds held interruptions into its input and
+  # carries their ids in brief metadata so the generic delivery-confirmation
+  # path can drain them — previously only the morning brief did, so a user
+  # whose morning agent was idle never had held items drained.
+  test "folds held interruptions into the check-in input and brief metadata",
+       %{state: state, user_id: user_id} = ctx do
+    alias Maraithon.TelegramAssistant.ProactiveQueue
+
+    {:ok, candidate} =
+      ProactiveQueue.enqueue(%{
+        user_id: user_id,
+        source: "insight",
+        source_id: "held-checkin-#{System.unique_integer([:positive])}",
+        dedupe_key: "held-checkin-#{System.unique_integer([:positive])}",
+        title: "Reply Elena is waiting on",
+        body: "Elena is still waiting on the pricing reply.",
+        urgency: 0.6
+      })
+
+    {:ok, _held} = ProactiveQueue.mark_held(candidate)
+
+    events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
+
+    input = CalendarCheckIn.build_check_in_input(user_id, ctx.now, state, context(ctx, events))
+
+    assert [held_entry] = get_in(input, ["open_work", "held_interruptions"])
+    assert held_entry["id"] == candidate.id
+    assert held_entry["title"] == "Reply Elena is waiting on"
+
+    {:effect, {:llm_call, _params}, pending} =
+      CalendarCheckIn.handle_wakeup(state, context(ctx, events))
+
+    response = %{
+      content:
+        Jason.encode!(%{
+          "decision" => "send",
+          "title" => "Open afternoon",
+          "summary" => "Free stretch after lunch.",
+          "body" => "You have the afternoon open — Elena's pricing reply would fit here.",
+          "reason" => "Opening plus a held reply that fits."
+        })
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _final_state} =
+             CalendarCheckIn.handle_effect_result(
+               {:llm_call, response},
+               pending,
+               context(ctx, events)
+             )
+
+    brief = Repo.get!(Brief, payload.brief_id)
+    assert brief.metadata["held_interruption_ids"] == [candidate.id]
+
+    # Not yet delivered: candidates only flip once the brief send is
+    # confirmed (PushBroker.mark_held_interruptions_delivered/1).
+    assert Repo.get!(Maraithon.TelegramAssistant.ProactiveCandidate, candidate.id).status ==
+             "held"
+  end
+
   test "accepts markdown-fenced model JSON as a real check-in", %{state: state} = ctx do
     events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
 

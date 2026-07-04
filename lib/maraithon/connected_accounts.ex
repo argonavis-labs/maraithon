@@ -6,7 +6,6 @@ defmodule Maraithon.ConnectedAccounts do
   import Ecto.Query
 
   alias Maraithon.Accounts.ConnectedAccount
-  alias Maraithon.Connectors.Telegram
   alias Maraithon.EmailDelivery
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Token
@@ -380,7 +379,7 @@ defmodule Maraithon.ConnectedAccounts do
     email_content = recovery_email(account)
 
     [
-      reconnect_push_channel(account, message),
+      reconnect_push_channel(account, message, "recovered"),
       reconnect_email_channel(account, email_content)
     ]
     |> Enum.reject(&is_nil/1)
@@ -632,13 +631,13 @@ defmodule Maraithon.ConnectedAccounts do
     email_content = reconnect_notification_email(account, reconnect_url, reason)
 
     [
-      reconnect_push_channel(account, push_message),
+      reconnect_push_channel(account, push_message, reason),
       reconnect_email_channel(account, email_content)
     ]
     |> Enum.reject(&is_nil/1)
   end
 
-  defp reconnect_push_channel(%ConnectedAccount{} = account, message) do
+  defp reconnect_push_channel(%ConnectedAccount{} = account, message, reason) do
     case telegram_destination(account.user_id) do
       nil ->
         nil
@@ -647,7 +646,8 @@ defmodule Maraithon.ConnectedAccounts do
         %{
           "channel" => "push",
           "destination" => destination,
-          "message" => message
+          "message" => message,
+          "reason" => reason
         }
     end
   end
@@ -751,15 +751,73 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp send_reconnect_notifications(_account, _channels, _reason), do: :ok
 
+  # SPEC 02 R9: every system-initiated push rides PushBroker.deliver/1 —
+  # quiet-hours gate, PushReceipt audit trail, per-send dedupe — instead of
+  # calling the Telegram module directly (which could buzz the operator at
+  # 3am and leave no "why did you ping me?" trail).
+  #
+  # Only a confirmed delivery ("sent_now", or already-delivered-elsewhere:
+  # "merged"/"queued_digest"/suppressed-duplicate) returns `{:ok, channel}`
+  # and stamps the renotify window. "held_rate_limit" (quiet hours),
+  # `{:fallback, :disabled}` (unified broker globally off), and
+  # `{:error, :missing_chat_id}` are ordinary could-not-deliver-right-now
+  # outcomes: the channel is excluded from sent_channels so the next
+  # `FreshnessSweep`-driven `report_access_issue/3` (~hourly) retries
+  # naturally once the hold clears — no new retry loop needed.
   defp send_reconnect_notification_channel(
          %ConnectedAccount{} = account,
-         %{"channel" => "push", "destination" => destination, "message" => message}
+         %{"channel" => "push", "destination" => destination, "message" => message} = channel
        ) do
-    module = telegram_module()
+    reason = fetch_map_value(channel, "reason") || "reconnect"
 
-    case module.send_message(destination, message, parse_mode: "HTML") do
-      {:ok, _result} ->
+    case Maraithon.TelegramAssistant.PushBroker.deliver(%{
+           user_id: account.user_id,
+           chat_id: destination,
+           origin_type: "connector_health",
+           origin_id: "#{account.id}:#{reason}",
+           dedupe_key: reconnect_push_dedupe_key(account, reason),
+           title: "Connector health: #{provider_label(account.provider)}",
+           body: message,
+           bypass_budget_cap: true,
+           interrupt_now: false,
+           telegram_opts: [parse_mode: "HTML"]
+         }) do
+      {:ok, %{decision: "sent_now"}} ->
         {:ok, %{"channel" => "push", "destination" => to_string(destination)}}
+
+      {:ok, %{decision: decision}} when decision in ["merged", "queued_digest"] ->
+        {:ok, %{"channel" => "push", "destination" => to_string(destination)}}
+
+      {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
+        # Already delivered elsewhere under this dedupe_key.
+        {:ok, %{"channel" => "push", "destination" => to_string(destination)}}
+
+      {:ok, %{decision: "held_rate_limit"}} ->
+        Logger.info("Reconnect push held by quiet hours/interruption gate",
+          user_id: account.user_id,
+          provider: account.provider,
+          reason: reason
+        )
+
+        :ok
+
+      {:fallback, :disabled} ->
+        Logger.info("Reconnect push skipped; unified push broker disabled",
+          user_id: account.user_id,
+          provider: account.provider,
+          reason: reason
+        )
+
+        :ok
+
+      {:error, :missing_chat_id} ->
+        Logger.info("Reconnect push skipped; no Telegram destination",
+          user_id: account.user_id,
+          provider: account.provider,
+          reason: reason
+        )
+
+        :ok
 
       {:error, notification_error} ->
         Logger.warning("Failed to send reconnect push notification",
@@ -768,6 +826,9 @@ defmodule Maraithon.ConnectedAccounts do
           reason: inspect(notification_error)
         )
 
+        :ok
+
+      _other ->
         :ok
     end
   rescue
@@ -843,9 +904,19 @@ defmodule Maraithon.ConnectedAccounts do
 
   def telegram_destination(_user_id), do: nil
 
-  defp telegram_module do
-    Application.get_env(:maraithon, :connected_accounts, [])
-    |> Keyword.get(:telegram_module, Telegram)
+  # PushBroker's PushReceipt dedupe is a *per-send-attempt* layer (it
+  # prevents the same push from double-inserting within one attempt); the
+  # account-metadata `reconnect_notification` tracking +
+  # `renotify_after_days/0` stays the authoritative "have we nagged about
+  # this reason recently" layer. The two must not interfere: a
+  # `sent_now` receipt blocks its dedupe_key forever, so any key stable
+  # across attempts (account id + reason, even day-scoped) would silently
+  # swallow a legitimate renotify or a post-recovery re-arm as a
+  # "duplicate". The unique suffix keeps every attempt's receipt (audit
+  # trail: "why did you ping me?") without letting receipts second-guess
+  # the renotify-window logic.
+  defp reconnect_push_dedupe_key(%ConnectedAccount{} = account, reason) do
+    "connector_health:#{account.id}:#{reason}:#{Ecto.UUID.generate()}"
   end
 
   defp email_module do

@@ -27,6 +27,8 @@ defmodule Maraithon.ActionLedger.Action do
     agent_isolation.changed
     mobile_node.changed
     secret_ref.checked
+    held_interruption_expired
+    runtime.self_healed
   )
 
   @statuses ~w(allowed denied needs_confirmation completed failed held running sent)

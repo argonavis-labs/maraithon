@@ -418,6 +418,94 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     assert result.held == 2
   end
 
+  # SPEC 02 R6: a planner-dispatched insight must advance the underlying
+  # InsightNotifications.Delivery off "pending" — otherwise InsightNotifier
+  # re-selects it every tick, minting a fresh ProactiveCandidate (and a
+  # plan_delivery model call) forever.
+  test "planner dispatch marks the insight delivery sent and stops re-minting candidates", %{
+    user_id: user_id
+  } do
+    # Deterministic quiet-hours: the staged delivery's urgency is its score,
+    # which may sit under the 0.9 exemption threshold, so pin the
+    # quiet-hours window away from the current local hour.
+    local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user(user_id).hour
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(Application.get_env(:maraithon, :telegram_assistant, []),
+        quiet_hours_start_local: rem(local_hour + 2, 24),
+        quiet_hours_end_local: rem(local_hour + 3, 24)
+      )
+    )
+
+    {:ok, agent} =
+      Maraithon.Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "inbox_calendar_advisor",
+        config: %{}
+      })
+
+    {:ok, [insight]} =
+      Maraithon.Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Reply to customer escalation",
+          "summary" => "The thread is urgent and needs a same-day response.",
+          "recommended_action" => "Reply immediately with resolution steps.",
+          "priority" => 96,
+          "confidence" => 0.94,
+          "dedupe_key" => "email:planner:reply_urgent"
+        }
+      ])
+
+    # First InsightNotifier tick: stages the delivery and (with the planner
+    # enabled) enqueues one ProactiveCandidate; the Delivery stays pending.
+    _ = Maraithon.InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+
+    delivery =
+      Repo.get_by!(Maraithon.InsightNotifications.Delivery,
+        insight_id: insight.id,
+        user_id: user_id,
+        channel: "telegram"
+      )
+
+    assert delivery.status == "pending"
+
+    [candidate] = candidates_for_delivery(user_id, delivery.id)
+
+    llm_complete =
+      plan_llm(%{candidate.id => {"interrupt_now", "Escalation is time-sensitive."}})
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    assert result.delivered == 1
+    assert Repo.get!(ProactiveCandidate, candidate.id).status == "delivered"
+
+    # The stranded-pending bug: the Delivery must now be "sent".
+    assert Repo.get!(Maraithon.InsightNotifications.Delivery, delivery.id).status == "sent"
+
+    # A second InsightNotifier tick must not re-select the Delivery or mint
+    # a second ProactiveCandidate for it.
+    _ = Maraithon.InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+
+    assert length(candidates_for_delivery(user_id, delivery.id)) == 1
+    assert Repo.get!(Maraithon.InsightNotifications.Delivery, delivery.id).status == "sent"
+  end
+
+  defp candidates_for_delivery(user_id, delivery_id) do
+    import Ecto.Query
+
+    Repo.all(
+      from(candidate in ProactiveCandidate,
+        where: candidate.user_id == ^user_id,
+        where: candidate.dedupe_key == ^"insight_delivery:#{delivery_id}"
+      )
+    )
+  end
+
   defp plan_llm(dispositions_by_id) do
     fn _params ->
       dispositions =
