@@ -74,5 +74,36 @@ defmodule Maraithon.Behaviors.Behavior do
   """
   @callback next_wakeup(state()) :: wakeup_schedule()
 
-  @optional_callbacks handle_effect_error: 4
+  @doc """
+  Current version of the behavior's snapshot-state contract (SPEC 08).
+
+  Stored alongside every checkpoint snapshot and compared at restore time.
+  A behavior that doesn't implement this is treated as version `0`.
+  """
+  @callback schema_version() :: non_neg_integer()
+
+  @doc """
+  Migrate a snapshot's `behavior_state` written under an older schema version
+  (SPEC 08). Called at restore time, before the generic default-merge, only
+  when `stored_version < schema_version()`. Must be pure and idempotent. An
+  exception here is rescued by the runtime: migration is skipped and the raw
+  snapshot state is restored instead.
+  """
+  @callback migrate_state(stored_version :: non_neg_integer(), state(), config :: map()) ::
+              state()
+
+  @doc """
+  Reconcile a restored (default-merged, possibly migrated) state against the
+  CURRENT agent config (SPEC 08). Called only at restore time — never
+  per-wakeup — so config-derived state (e.g. an enabled-skill list) tracks
+  the live config instead of staying frozen at snapshot time. Must be pure
+  and idempotent. An exception here is rescued by the runtime: reconciliation
+  is skipped and the merged state is restored unreconciled.
+  """
+  @callback reconcile_restored_state(state(), config :: map()) :: state()
+
+  @optional_callbacks handle_effect_error: 4,
+                      schema_version: 0,
+                      migrate_state: 3,
+                      reconcile_restored_state: 2
 end
