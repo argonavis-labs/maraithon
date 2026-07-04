@@ -2456,4 +2456,124 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       assert [%{"title" => "Bundle note"}] = input["notes"]["items"]
     end
   end
+
+  # SPEC 09 R16: the smoke-brief chunking helpers moved to the shared
+  # Maraithon.TelegramChunking module. This oracle is a verbatim copy of the
+  # algorithm that used to live privately in MorningBriefing
+  # (markdown_chunks/2 + maybe_prefix_parts/1); the shared module must
+  # produce byte-identical output.
+  describe "telegram chunking extraction (SPEC 09 R16)" do
+    defp legacy_markdown_chunks(text, limit) do
+      text
+      |> legacy_chunk_units(limit)
+      |> Enum.reduce([], fn unit, chunks -> legacy_append_chunk(chunks, unit, limit) end)
+      |> Enum.reverse()
+    end
+
+    defp legacy_chunk_units(text, limit) do
+      text
+      |> String.split(~r/\n{2,}/, trim: true)
+      |> Enum.flat_map(fn block ->
+        cond do
+          String.length(block) <= limit ->
+            [block]
+
+          String.contains?(block, "\n") ->
+            block
+            |> String.split("\n", trim: true)
+            |> Enum.flat_map(&legacy_hard_split(&1, limit))
+
+          true ->
+            legacy_hard_split(block, limit)
+        end
+      end)
+    end
+
+    defp legacy_hard_split(text, limit) do
+      if String.length(text) <= limit do
+        [text]
+      else
+        {chunk, rest} = String.split_at(text, limit)
+        [chunk | legacy_hard_split(rest, limit)]
+      end
+    end
+
+    defp legacy_append_chunk([], unit, _limit), do: [unit]
+
+    defp legacy_append_chunk([current | rest], unit, limit) do
+      candidate = current <> "\n\n" <> unit
+
+      if String.length(candidate) <= limit do
+        [candidate | rest]
+      else
+        [unit, current | rest]
+      end
+    end
+
+    defp legacy_prefix_parts([_single] = chunks), do: chunks
+
+    defp legacy_prefix_parts(chunks) do
+      total = length(chunks)
+
+      chunks
+      |> Enum.with_index(1)
+      |> Enum.map(fn {chunk, index} -> "Part #{index}/#{total}\n\n#{chunk}" end)
+    end
+
+    test "Maraithon.TelegramChunking produces byte-identical output to the extracted helpers" do
+      inputs = [
+        {"Morning briefing\n\nShort summary.\n\nBody paragraph.", 3_300},
+        {"Morning briefing\n\n" <>
+           Enum.map_join(1..80, "\n\n", fn index ->
+             "Paragraph #{index}: " <> String.duplicate("substantive detail ", 10)
+           end), 3_300},
+        # A single oversized block with inner newlines (line-level split).
+        {Enum.map_join(1..300, "\n", fn index -> "line #{index} of one giant block" end), 500},
+        # A single line longer than the limit (hard character split).
+        {String.duplicate("x", 1_250), 500},
+        # Multi-blank-line separators and trailing whitespace blocks.
+        {"a\n\n\n\nb\n\n  \n\nc", 4},
+        {"", 3_300}
+      ]
+
+      for {text, limit} <- inputs do
+        legacy = text |> legacy_markdown_chunks(limit) |> legacy_prefix_parts()
+
+        shared =
+          text
+          |> Maraithon.TelegramChunking.chunks(limit)
+          |> Maraithon.TelegramChunking.label_parts()
+
+        assert shared == legacy
+      end
+    end
+
+    test "multi-part output respects the limit and labels every part" do
+      text =
+        Enum.map_join(1..80, "\n\n", fn index ->
+          "Paragraph #{index}: " <> String.duplicate("substantive detail ", 10)
+        end)
+
+      chunks =
+        text
+        |> Maraithon.TelegramChunking.chunks(3_300)
+        |> Maraithon.TelegramChunking.label_parts()
+
+      assert length(chunks) > 1
+
+      total = length(chunks)
+
+      for {chunk, index} <- Enum.with_index(chunks, 1) do
+        assert String.starts_with?(chunk, "Part #{index}/#{total}\n\n")
+      end
+
+      # Every raw chunk fits the limit (the short "Part N/M" label rides on
+      # top with ample headroom under Telegram's 4096 wire cap).
+      raw_chunks = Maraithon.TelegramChunking.chunks(text, 3_300)
+      assert Enum.all?(raw_chunks, &(String.length(&1) <= 3_300))
+
+      # Nothing is lost: rejoining the chunks reproduces the source text.
+      assert Enum.join(raw_chunks, "\n\n") == text
+    end
+  end
 end

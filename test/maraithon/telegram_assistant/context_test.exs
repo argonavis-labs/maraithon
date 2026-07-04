@@ -175,6 +175,48 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
     end
   end
 
+  describe "SPEC 09 focus fetcher scopes" do
+    test "commitment_audit uses the waiting_on fetcher set" do
+      assert Context.fetcher_keys_for_focus(:commitment_audit) ==
+               Context.fetcher_keys_for_focus(:waiting_on)
+
+      assert Context.fetcher_keys_for_focus(:commitment_audit) == [
+               :preference_memory,
+               :operator_memory,
+               :user_memory,
+               :deep_memory,
+               :open_loops,
+               :goals,
+               :relationships,
+               :todos,
+               :briefing_schedule,
+               :connected_accounts,
+               :source_freshness,
+               :defaults
+             ]
+    end
+
+    test "continuity uses a narrower recap fetcher set" do
+      assert Context.fetcher_keys_for_focus(:continuity) == [
+               :preference_memory,
+               :operator_memory,
+               :user_memory,
+               :open_loops,
+               :todos,
+               :briefing_schedule,
+               :defaults
+             ]
+    end
+
+    test "string focus values normalize to the new atoms" do
+      assert Context.fetcher_keys_for_focus("commitment_audit") ==
+               Context.fetcher_keys_for_focus(:commitment_audit)
+
+      assert Context.fetcher_keys_for_focus("continuity") ==
+               Context.fetcher_keys_for_focus(:continuity)
+    end
+  end
+
   describe "context fetch diagnostics" do
     test "summarizes crashed source fetches without leaking provider internals" do
       context =

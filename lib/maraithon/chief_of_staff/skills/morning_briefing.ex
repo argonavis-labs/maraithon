@@ -1144,8 +1144,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     [title, summary, body]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
-    |> markdown_chunks(@telegram_chunk_limit)
-    |> maybe_prefix_parts()
+    |> Maraithon.TelegramChunking.chunks(@telegram_chunk_limit)
+    |> Maraithon.TelegramChunking.label_parts()
     |> Enum.map(&Maraithon.TelegramMarkdown.to_html/1)
   end
 
@@ -1244,65 +1244,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp truncate_text(value, _max_length), do: value
-
-  defp markdown_chunks(text, limit) when is_binary(text) do
-    text
-    |> markdown_chunk_units(limit)
-    |> Enum.reduce([], fn unit, chunks ->
-      append_markdown_chunk(chunks, unit, limit)
-    end)
-    |> Enum.reverse()
-  end
-
-  defp markdown_chunk_units(text, limit) do
-    text
-    |> String.split(~r/\n{2,}/, trim: true)
-    |> Enum.flat_map(fn block ->
-      cond do
-        String.length(block) <= limit ->
-          [block]
-
-        String.contains?(block, "\n") ->
-          block
-          |> String.split("\n", trim: true)
-          |> Enum.flat_map(&hard_split_markdown_unit(&1, limit))
-
-        true ->
-          hard_split_markdown_unit(block, limit)
-      end
-    end)
-  end
-
-  defp hard_split_markdown_unit(text, limit) do
-    if String.length(text) <= limit do
-      [text]
-    else
-      {chunk, rest} = String.split_at(text, limit)
-      [chunk | hard_split_markdown_unit(rest, limit)]
-    end
-  end
-
-  defp append_markdown_chunk([], unit, _limit), do: [unit]
-
-  defp append_markdown_chunk([current | rest], unit, limit) do
-    candidate = current <> "\n\n" <> unit
-
-    if String.length(candidate) <= limit do
-      [candidate | rest]
-    else
-      [unit, current | rest]
-    end
-  end
-
-  defp maybe_prefix_parts([_single] = chunks), do: chunks
-
-  defp maybe_prefix_parts(chunks) do
-    total = length(chunks)
-
-    chunks
-    |> Enum.with_index(1)
-    |> Enum.map(fn {chunk, index} -> "Part #{index}/#{total}\n\n#{chunk}" end)
-  end
 
   defp read_message_id(%{"message_id" => message_id}), do: normalize_message_id(message_id)
   defp read_message_id(%{message_id: message_id}), do: normalize_message_id(message_id)
@@ -4973,7 +4914,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp briefing_memory_query(local_date, today_events, commercial_threads) do
     [
       "morning briefing #{Date.to_iso8601(local_date)}",
-      today_events |> Enum.map(&Map.get(&1, "summary")) |> Enum.reject(&blank?/1) |> Enum.take(6) |> Enum.join(" "),
+      today_events
+      |> Enum.map(&Map.get(&1, "summary"))
+      |> Enum.reject(&blank?/1)
+      |> Enum.take(6)
+      |> Enum.join(" "),
       commercial_threads
       |> Enum.map(&Map.get(&1, "subject"))
       |> Enum.reject(&blank?/1)

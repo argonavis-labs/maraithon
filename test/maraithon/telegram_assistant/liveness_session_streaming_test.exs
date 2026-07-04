@@ -107,4 +107,55 @@ defmodule Maraithon.TelegramAssistant.LivenessSessionStreamingTest do
 
     refute_receive {:telegram_edit, "c1", _, _, _}, 1_500
   end
+
+  defp session_pid(run_id) do
+    [{pid, _value}] = Registry.lookup(Maraithon.TelegramAssistant.LivenessRegistry, run_id)
+    pid
+  end
+
+  # SPEC 09 R3: the previously no-op :context_loaded cast now carries a real
+  # "gathering_context" hint into the progress copy.
+  describe "note_context_loaded (SPEC 09 R3)" do
+    test "sets the gathering_context hint for a pending progress note" do
+      run_id = "run-#{System.unique_integer([:positive])}"
+      start_session(run_id)
+
+      LivenessSession.note_context_loaded(run_id)
+      # Synchronize on the cast before firing the progress timer manually.
+      _ = :sys.get_state(session_pid(run_id))
+
+      send(session_pid(run_id), :show_progress)
+
+      assert_receive {:telegram_send, "c1", "Gathering context now."}, 1_000
+    end
+
+    test "edits an already-sent progress note in place via the shared refresh helper" do
+      run_id = "run-#{System.unique_integer([:positive])}"
+      start_session(run_id)
+
+      send(session_pid(run_id), :show_progress)
+      assert_receive {:telegram_send, "c1", "Working through the request now."}, 1_000
+
+      LivenessSession.note_context_loaded(run_id)
+
+      assert_receive {:telegram_edit, "c1", "9999", "Gathering context now.", _opts}, 1_000
+    end
+  end
+
+  # SPEC 09 R4 acceptance: the preflight-start liveness note reuses the
+  # existing "relationships" tool hint, so the progress note updates to name
+  # the person DURING the synchronous review window.
+  test "a review_connected_context note updates the progress message with the person" do
+    run_id = "run-#{System.unique_integer([:positive])}"
+    start_session(run_id)
+
+    send(session_pid(run_id), :show_progress)
+    assert_receive {:telegram_send, "c1", "Working through the request now."}, 1_000
+
+    :ok = LivenessSession.note_tool(run_id, "review_connected_context", %{"query" => "Elena"})
+
+    assert_receive {:telegram_edit, "c1", "9999",
+                    "Checking relationship context for Elena.", _opts},
+                   1_000
+  end
 end

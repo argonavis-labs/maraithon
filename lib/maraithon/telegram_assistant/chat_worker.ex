@@ -116,6 +116,17 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
         {:noreply, remember(state, message_id)}
 
       true ->
+        # SPEC 09 R0: fire a stateless "typing…" hint the moment a genuinely
+        # new message is picked up — strictly before transcription, routing
+        # (including the bounded model-routing classifier), context build,
+        # and preflight. `sendChatAction` is a fire-and-forget UI hint with
+        # no persisted state, so re-asserting it again ~1.2s later when the
+        # LivenessSession's own :start_typing timer fires is exactly as safe
+        # as the session's periodic typing refreshes. A retry of an
+        # already-completed message never reaches this branch (guards above),
+        # so the ping never fires for a turn the user already got a reply to.
+        _ = send_early_typing_ping(state.chat_id)
+
         # `run_router/2` never lets an exception, exit, or throw escape — it
         # always resolves to `:ok` (success, or a caught failure whose fallback
         # reply was actually delivered) or `:unhandled` (a caught failure whose
@@ -130,6 +141,40 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
           :unhandled -> {:noreply, state}
         end
     end
+  end
+
+  # A failed typing ping must never affect message processing or retry
+  # logic — `:ok` is a no-op continuation, errors are logged (ids/reason
+  # only) and swallowed.
+  defp send_early_typing_ping(chat_id) do
+    case TelegramResponder.send_chat_action(chat_id, :typing) do
+      {:ok, _result} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[telegram] early typing ping failed",
+          chat_id: chat_id,
+          reason: inspect(reason)
+        )
+
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning("[telegram] early typing ping crashed",
+        chat_id: chat_id,
+        reason: Exception.message(error)
+      )
+
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning("[telegram] early typing ping crashed",
+        chat_id: chat_id,
+        reason: inspect({kind, reason})
+      )
+
+      :ok
   end
 
   defp already_completed?(chat_id, message_id) do

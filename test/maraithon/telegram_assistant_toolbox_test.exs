@@ -1893,6 +1893,150 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert forgotten.memory.status == "archived"
   end
 
+  describe "review_connected_context preflight cache (SPEC 09 R14)" do
+    defp cached_review_runtime_context(user_id, review_overrides \\ %{}) do
+      review =
+        Map.merge(
+          %{
+            "status" => "reviewed",
+            "mandatory" => true,
+            "query" => "Elena Fisher",
+            "sources" => ~w(crm gmail google_contacts calendar slack open_loops memory),
+            "result" => %{
+              "summary" => "Elena is your billing contact.",
+              "source_observations" => []
+            }
+          },
+          review_overrides
+        )
+
+      %{user_id: user_id, context: %{connected_context_review: review}}
+    end
+
+    defp cache_user do
+      user_id = "toolbox-preflight-cache-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      user_id
+    end
+
+    test "a matching or narrower re-ask returns the cached result with cache_hit" do
+      user_id = cache_user()
+
+      assert {:ok, result} =
+               Toolbox.execute(
+                 "review_connected_context",
+                 %{
+                   "query" => "  elena FISHER ",
+                   "since_days" => 90,
+                   "sources" => ["gmail", "crm"]
+                 },
+                 cached_review_runtime_context(user_id)
+               )
+
+      assert result["cache_hit"] == true
+      assert result["summary"] == "Elena is your billing contact."
+    end
+
+    test "a re-ask with default since_days and sources also hits the cache" do
+      user_id = cache_user()
+
+      assert {:ok, result} =
+               Toolbox.execute(
+                 "review_connected_context",
+                 %{"query" => "Elena Fisher"},
+                 cached_review_runtime_context(user_id)
+               )
+
+      assert result["cache_hit"] == true
+    end
+
+    test "a broader since_days re-executes instead of short-circuiting" do
+      user_id = cache_user()
+
+      result =
+        Toolbox.execute(
+          "review_connected_context",
+          %{"query" => "Elena Fisher", "since_days" => 365, "timeout_ms" => 1_500},
+          cached_review_runtime_context(user_id)
+        )
+
+      refute match?({:ok, %{"cache_hit" => true}}, result)
+    end
+
+    test "a different person re-executes instead of short-circuiting" do
+      user_id = cache_user()
+
+      result =
+        Toolbox.execute(
+          "review_connected_context",
+          %{"query" => "Justin Marsh", "timeout_ms" => 1_500},
+          cached_review_runtime_context(user_id)
+        )
+
+      refute match?({:ok, %{"cache_hit" => true}}, result)
+    end
+
+    test "requesting more sources than the cached review covered re-executes" do
+      user_id = cache_user()
+
+      result =
+        Toolbox.execute(
+          "review_connected_context",
+          %{
+            "query" => "Elena Fisher",
+            "sources" => ["gmail", "messages"],
+            "timeout_ms" => 1_500
+          },
+          cached_review_runtime_context(user_id, %{"sources" => ["gmail", "crm"]})
+        )
+
+      refute match?({:ok, %{"cache_hit" => true}}, result)
+    end
+
+    test "a failed preflight never short-circuits" do
+      user_id = cache_user()
+
+      result =
+        Toolbox.execute(
+          "review_connected_context",
+          %{"query" => "Elena Fisher", "timeout_ms" => 1_500},
+          cached_review_runtime_context(user_id, %{
+            "status" => "failed",
+            "error" => "service problem",
+            "result" => nil
+          })
+        )
+
+      refute match?({:ok, %{"cache_hit" => true}}, result)
+    end
+
+    test "unknown reviewed sources fail open to re-executing" do
+      user_id = cache_user()
+
+      result =
+        Toolbox.execute(
+          "review_connected_context",
+          %{"query" => "Elena Fisher", "timeout_ms" => 1_500},
+          cached_review_runtime_context(user_id, %{"sources" => nil})
+        )
+
+      refute match?({:ok, %{"cache_hit" => true}}, result)
+    end
+
+    test "a turn with no cached review executes normally" do
+      user_id = cache_user()
+
+      result =
+        Toolbox.execute(
+          "review_connected_context",
+          %{"query" => "Elena Fisher", "timeout_ms" => 1_500},
+          %{user_id: user_id, context: %{}}
+        )
+
+      refute match?({:ok, %{"cache_hit" => true}}, result)
+    end
+  end
+
   test "project delivery tools can accept a recommendation, grant access, and start a run" do
     user_id = "toolbox-projects-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

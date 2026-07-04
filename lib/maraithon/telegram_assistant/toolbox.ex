@@ -1732,7 +1732,16 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         inject_user_and_execute("delete_person", runtime_context, args)
 
       "review_connected_context" ->
-        inject_user_and_execute("review_connected_context", runtime_context, args)
+        # SPEC 09 R14: person turns already paid for a synchronous preflight
+        # review — serve a matching re-ask from the current turn's context
+        # instead of re-running the same multi-source review.
+        case cached_connected_context_review(runtime_context, args) do
+          {:hit, cached_result} ->
+            {:ok, cached_result}
+
+          :miss ->
+            inject_user_and_execute("review_connected_context", runtime_context, args)
+        end
 
       "gmail_search_messages" ->
         inject_user_and_execute("gmail_search", runtime_context, args)
@@ -3734,6 +3743,116 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       {:error, reason} -> {:error, ActionFailureCopy.prepared_action(reason)}
     end
   end
+
+  # SPEC 09 R14/R15: per-turn cache for `review_connected_context`. Reads
+  # only the current turn's `runtime_context.context.connected_context_review`
+  # (rebuilt fresh per do_run_inbound call) — never persisted or reused
+  # across turns/runs. Short-circuits ONLY when:
+  #   * the cached status is "reviewed" (never "failed"),
+  #   * the requested query equals the cached query after trim+downcase
+  #     (exact-after-normalization, never semantic similarity),
+  #   * the requested since_days (default 180) is <= the cached window, and
+  #   * the requested sources are a subset of the cached reviewed sources —
+  #     nil/unknown reviewed sources fail open to re-executing.
+  @preflight_cache_default_since_days 180
+  @preflight_cache_default_sources ~w(crm gmail google_contacts calendar slack open_loops memory)
+
+  defp cached_connected_context_review(runtime_context, args) do
+    review =
+      runtime_context
+      |> Map.get(:context)
+      |> read_cache_field("connected_context_review")
+
+    with true <- is_map(review),
+         "reviewed" <- read_cache_field(review, "status"),
+         cached_query when is_binary(cached_query) <- read_cache_field(review, "query"),
+         requested_query when is_binary(requested_query) <- cache_arg(args, "query"),
+         true <- normalize_cache_query(requested_query) == normalize_cache_query(cached_query),
+         requested_since when is_integer(requested_since) <- requested_since_days(args),
+         true <- requested_since <= cached_since_days(review),
+         reviewed_sources when is_list(reviewed_sources) <- cached_reviewed_sources(review),
+         true <- sources_subset?(requested_sources(args), reviewed_sources),
+         result when is_map(result) <- read_cache_field(review, "result") do
+      {:hit, Map.merge(result, %{"cache_hit" => true})}
+    else
+      _other -> :miss
+    end
+  end
+
+  defp cache_arg(args, key) when is_map(args) do
+    Map.get(args, key) || Map.get(args, String.to_existing_atom(key))
+  rescue
+    ArgumentError -> Map.get(args, key)
+  end
+
+  defp normalize_cache_query(query) when is_binary(query) do
+    query |> String.trim() |> String.downcase()
+  end
+
+  defp requested_since_days(args) do
+    case cache_arg(args, "since_days") do
+      nil -> @preflight_cache_default_since_days
+      value when is_integer(value) -> value
+      value when is_binary(value) -> parse_cache_integer(value)
+      _other -> nil
+    end
+  end
+
+  defp parse_cache_integer(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} -> parsed
+      _other -> nil
+    end
+  end
+
+  defp cached_since_days(review) do
+    case read_cache_field(review, "since_days") do
+      value when is_integer(value) -> value
+      _other -> @preflight_cache_default_since_days
+    end
+  end
+
+  defp cached_reviewed_sources(review) do
+    case read_cache_field(review, "sources") || read_cache_field(review, "reviewed_sources") do
+      sources when is_list(sources) -> sources
+      _other -> nil
+    end
+  end
+
+  defp requested_sources(args) do
+    case cache_arg(args, "sources") do
+      sources when is_list(sources) and sources != [] -> sources
+      _other -> @preflight_cache_default_sources
+    end
+  end
+
+  defp sources_subset?(requested, reviewed) when is_list(requested) and is_list(reviewed) do
+    MapSet.subset?(cache_source_set(requested), cache_source_set(reviewed))
+  end
+
+  defp sources_subset?(_requested, _reviewed), do: false
+
+  defp cache_source_set(sources) do
+    sources
+    |> Enum.map(fn source -> source |> to_string() |> String.trim() |> String.downcase() end)
+    |> MapSet.new()
+  end
+
+  # Map/atom-tolerant lookup mirroring ConnectedContextPreflight.read_field/2.
+  defp read_cache_field(%_{} = struct, key), do: read_cache_field(Map.from_struct(struct), key)
+
+  defp read_cache_field(map, key) when is_map(map) and is_binary(key) do
+    Map.get(map, key) ||
+      Enum.find_value(map, fn
+        {map_key, value} when is_atom(map_key) ->
+          if Atom.to_string(map_key) == key, do: value
+
+        _other ->
+          nil
+      end)
+  end
+
+  defp read_cache_field(_map, _key), do: nil
 
   defp inject_user_and_execute(tool_name, runtime_context, args) do
     tool_name
