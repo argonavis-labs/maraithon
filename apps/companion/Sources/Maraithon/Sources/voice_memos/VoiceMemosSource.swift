@@ -265,7 +265,14 @@ final class VoiceMemosSource: SourceProtocol {
         let (raws, phase, queryFloor): ([RawVoiceMemo], String, Int64) = try await Task.detached(priority: .utility) {
             [databaseURL, batchLimit] () -> ([RawVoiceMemo], String, Int64) in
             let db = try VoiceMemosDatabase(url: databaseURL)
-            let newer = try db.recordingsNewerThan(rowid: newestSeenBefore, limit: batchLimit)
+            // DESC (newest first) only on the very first cycle; once a
+            // cursor exists the pull is ASC so a truncated batch stays
+            // contiguous with the cursor — with a batch limit this
+            // small, a newest-first catch-up would strand every
+            // recording between the old cursor and the fetched batch.
+            let newer = newestSeenBefore == 0
+                ? try db.recordingsNewerThan(rowid: newestSeenBefore, limit: batchLimit)
+                : try db.recordingsAfter(rowid: newestSeenBefore, limit: batchLimit)
             if !newer.isEmpty {
                 return (newer, "newer", newestSeenBefore)
             }

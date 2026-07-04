@@ -53,15 +53,18 @@ final class RemindersCursorTests: XCTestCase {
         )
     }
 
-    func testShouldPushTrueWhenModifiedAtIsNil() {
+    func testNilModifiedAtPushesOnFirstSightingOnly() {
         // EventKit can hand us a reminder without a lastModifiedDate
-        // (rare, but possible for very old rows). We treat that as a
-        // fresh sighting so we don't strand them — the server
-        // upserts, so re-pushing them is idempotent.
+        // (rare, but possible for very old rows). It pushes once as a
+        // fresh sighting and is recorded at the sentinel — re-pushing
+        // it every cycle would burn a batch slot forever and starve
+        // rows sorted after it. A later real timestamp compares newer
+        // than the sentinel and re-pushes.
         let cursor = RemindersCursor(defaults: defaults)
-        let t1 = Date(timeIntervalSinceReferenceDate: 1_000_000)
-        cursor.advance([(guid: "g", modifiedAt: t1)])
         XCTAssertTrue(cursor.shouldPush(guid: "g", modifiedAt: nil))
+        cursor.advance([(guid: "g", modifiedAt: nil as Date?)])
+        XCTAssertFalse(cursor.shouldPush(guid: "g", modifiedAt: nil))
+        XCTAssertTrue(cursor.shouldPush(guid: "g", modifiedAt: Date()))
     }
 
     func testAdvanceMergesEntries() {

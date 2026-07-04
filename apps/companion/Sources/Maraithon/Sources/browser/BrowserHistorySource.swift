@@ -17,11 +17,12 @@ final class BrowserHistorySource: SourceProtocol {
     let symbol: String = "safari"
     let statusPublisher: SourceStatusPublisher
 
-    /// Factory that builds a reader for a given browser. Returns `nil`
-    /// when the browser is not installed on this machine. Injected so
-    /// tests can hand in fixture readers without touching the user's
-    /// real history files.
-    typealias ReaderFactory = @Sendable (Browser) -> (any BrowserHistoryReader)?
+    /// Factory that builds the readers for a given browser — one per
+    /// on-disk history database, so multi-profile Chromium installs get
+    /// a reader per profile. Returns `[]` when the browser is not
+    /// installed on this machine. Injected so tests can hand in fixture
+    /// readers without touching the user's real history files.
+    typealias ReaderFactory = @Sendable (Browser) -> [any BrowserHistoryReader]
 
     private let cursor: BrowserHistoryCursor
     private let eventLog: EventLog
@@ -152,89 +153,104 @@ final class BrowserHistorySource: SourceProtocol {
         var ranAny = false
 
         for browser in Browser.allCases {
-            guard let reader = readerFactory(browser) else {
+            let readers = readerFactory(browser)
+            if readers.isEmpty {
                 // Browser not installed — skip silently.
                 continue
             }
             ranAny = true
-            let startID = cursor.lastSyncedID(for: browser)
-            let batchLimit = self.batchLimit
 
-            let rows: [BrowserVisitRecord]
-            do {
-                rows = try await Task.detached(priority: .utility) {
-                    try reader.visits(after: startID, limit: batchLimit)
-                }.value
-            } catch {
-                eventLog.error(
-                    "browser_history.read_failed",
+            for reader in readers {
+                let cursorKey = reader.cursorKey
+                let startID = cursor.lastSyncedID(forKey: cursorKey)
+                let batchLimit = self.batchLimit
+
+                let page: BrowserVisitPage
+                do {
+                    page = try await Task.detached(priority: .utility) {
+                        try reader.visits(after: startID, limit: batchLimit)
+                    }.value
+                } catch {
+                    eventLog.error(
+                        "browser_history.read_failed",
+                        source: .browser,
+                        payload: [
+                            "browser": browser.rawValue,
+                            "profile": reader.profile,
+                            "error": String(describing: error)
+                        ]
+                    )
+                    continue
+                }
+
+                if page.rows.isEmpty {
+                    // Nothing pushable, but rows locally dropped (empty
+                    // URLs) are still "done" — advance past them so a
+                    // window full of them can't stall the walk forever.
+                    if let maxID = page.maxFetchedID {
+                        cursor.advance(key: cursorKey, to: maxID)
+                    }
+                    eventLog.debug(
+                        "browser_history.cycle_empty",
+                        source: .browser,
+                        payload: [
+                            "browser": browser.rawValue,
+                            "profile": reader.profile,
+                            "since_id": String(startID)
+                        ]
+                    )
+                    continue
+                }
+
+                let deviceId = deviceIdProvider()
+                let batch = BrowserHistoryIngestBatch(
+                    deviceId: deviceId,
+                    source: "browser_history",
+                    visits: page.rows
+                )
+
+                let outcome: BrowserHistoryIngestOutcome
+                do {
+                    outcome = try await ingest.ingestVisits(batch: batch)
+                } catch {
+                    eventLog.error(
+                        "browser_history.push_failed",
+                        source: .browser,
+                        payload: [
+                            "browser": browser.rawValue,
+                            "profile": reader.profile,
+                            "error": String(describing: error)
+                        ]
+                    )
+                    continue
+                }
+
+                // Advance the cursor to the maximum native id the read
+                // examined. Rows the server filtered out (private hosts)
+                // and rows dropped locally are "done" from the source's
+                // perspective — we don't want to re-read them next cycle.
+                if let maxID = page.maxFetchedID {
+                    cursor.advance(key: cursorKey, to: maxID)
+                }
+
+                totalAccepted += outcome.accepted
+                totalDuplicate += outcome.duplicate
+                totalFiltered += outcome.filtered
+
+                eventLog.info(
+                    "browser_history.cycle_pushed",
                     source: .browser,
                     payload: [
                         "browser": browser.rawValue,
-                        "error": String(describing: error)
+                        "profile": reader.profile,
+                        "count": String(page.rows.count),
+                        "accepted": String(outcome.accepted),
+                        "duplicate": String(outcome.duplicate),
+                        "filtered": String(outcome.filtered),
+                        "cursor": String(cursor.lastSyncedID(forKey: cursorKey))
                     ]
                 )
-                continue
             }
-
-            if rows.isEmpty {
-                eventLog.debug(
-                    "browser_history.cycle_empty",
-                    source: .browser,
-                    payload: [
-                        "browser": browser.rawValue,
-                        "since_id": String(startID)
-                    ]
-                )
-                continue
-            }
-
-            let deviceId = deviceIdProvider()
-            let batch = BrowserHistoryIngestBatch(
-                deviceId: deviceId,
-                source: "browser_history",
-                visits: rows
-            )
-
-            let outcome: BrowserHistoryIngestOutcome
-            do {
-                outcome = try await ingest.ingestVisits(batch: batch)
-            } catch {
-                eventLog.error(
-                    "browser_history.push_failed",
-                    source: .browser,
-                    payload: [
-                        "browser": browser.rawValue,
-                        "error": String(describing: error)
-                    ]
-                )
-                continue
-            }
-
-            // Advance the cursor based on the maximum native id we just
-            // tried to push. Even rows the server filtered out (private
-            // hosts) are "done" from the source's perspective — we
-            // don't want to re-read them next cycle.
-            if let maxID = rows.compactMap({ Int64($0.localId) }).max() {
-                cursor.advance(browser, to: maxID)
-            }
-
-            totalAccepted += outcome.accepted
-            totalDuplicate += outcome.duplicate
-            totalFiltered += outcome.filtered
-
-            eventLog.info(
-                "browser_history.cycle_pushed",
-                source: .browser,
-                payload: [
-                    "browser": browser.rawValue,
-                    "count": String(rows.count),
-                    "accepted": String(outcome.accepted),
-                    "duplicate": String(outcome.duplicate),
-                    "filtered": String(outcome.filtered),
-                    "cursor": String(cursor.lastSyncedID(for: browser))
-                ]
-            )
         }
 
         if !ranAny {
@@ -256,21 +272,26 @@ final class BrowserHistorySource: SourceProtocol {
 
     // MARK: - Reader factory
 
-    /// Default factory: returns a reader for every browser whose
-    /// `liveDatabaseURL` resolves on the current machine. Throwing
-    /// initializers degrade to nil so a corrupt or locked database for
-    /// one browser doesn't block the others.
+    /// Default factory: returns a reader for every history database the
+    /// browser has on the current machine — one per Chromium profile.
+    /// Throwing initializers degrade to nothing so a corrupt or locked
+    /// database for one profile doesn't block the others.
     nonisolated static let defaultReaderFactory: ReaderFactory = { browser in
-        guard let liveURL = browser.liveDatabaseURL else { return nil }
-        do {
-            switch browser {
-            case .chrome, .arc, .brave:
-                return try ChromiumHistoryReader(browser: browser, liveURL: liveURL)
-            case .safari:
-                return try SafariHistoryReader(liveURL: liveURL)
+        browser.databaseLocations.compactMap { location in
+            do {
+                switch browser {
+                case .chrome, .arc, .brave:
+                    return try ChromiumHistoryReader(
+                        browser: browser,
+                        liveURL: location.url,
+                        profile: location.profile
+                    )
+                case .safari:
+                    return try SafariHistoryReader(liveURL: location.url)
+                }
+            } catch {
+                return nil
             }
-        } catch {
-            return nil
         }
     }
 }

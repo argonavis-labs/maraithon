@@ -35,11 +35,20 @@ enum BrowserHistoryFixture {
                 hidden INTEGER DEFAULT 0 NOT NULL
             );
             """)
+        try exec(db, """
+            CREATE TABLE visits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url INTEGER NOT NULL,
+                visit_time INTEGER NOT NULL,
+                FOREIGN KEY(url) REFERENCES urls(id)
+            );
+            """)
 
         let sql = """
             INSERT INTO urls (url, title, visit_count, typed_count, last_visit_time)
             VALUES (?, ?, ?, ?, ?);
             """
+        let visitSQL = "INSERT INTO visits (url, visit_time) VALUES (?, ?);"
         for row in rows {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -63,6 +72,26 @@ enum BrowserHistoryFixture {
                 throw NSError(
                     domain: "BrowserHistoryFixture",
                     code: 11,
+                    userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
+                )
+            }
+
+            let urlID = sqlite3_last_insert_rowid(db)
+            var vstmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, visitSQL, -1, &vstmt, nil) == SQLITE_OK else {
+                throw NSError(
+                    domain: "BrowserHistoryFixture",
+                    code: 12,
+                    userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
+                )
+            }
+            defer { sqlite3_finalize(vstmt) }
+            sqlite3_bind_int64(vstmt, 1, urlID)
+            sqlite3_bind_int64(vstmt, 2, row.lastVisitMicroseconds)
+            guard sqlite3_step(vstmt) == SQLITE_DONE else {
+                throw NSError(
+                    domain: "BrowserHistoryFixture",
+                    code: 13,
                     userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
                 )
             }

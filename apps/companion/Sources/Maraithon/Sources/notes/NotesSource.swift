@@ -200,7 +200,7 @@ final class NotesSource: SourceProtocol {
             [databaseURL, batchLimit] () -> ([BuiltNote], String, Int64) in
             let newer = try Self.buildRecords(
                 databaseURL: databaseURL,
-                kind: .newerThan(newestSeenBefore),
+                kind: .newerThan(newestSeenBefore, newestFirst: newestSeenBefore == 0),
                 limit: batchLimit
             )
             if !newer.isEmpty {
@@ -393,8 +393,12 @@ final class NotesSource: SourceProtocol {
     }
 
     /// Direction the Notes cursor walk is going on a given cycle.
+    /// `newerThan` is DESC only when `newestFirst` (first-ever cycle);
+    /// steady-state pulls are ASC so a truncated batch stays contiguous
+    /// with the cursor and catch-up after downtime cannot strand rows
+    /// the completed backfill walk never revisits.
     nonisolated enum QueryKind: Sendable {
-        case newerThan(Int64)
+        case newerThan(Int64, newestFirst: Bool)
         case olderThan(Int64)
     }
 
@@ -406,8 +410,10 @@ final class NotesSource: SourceProtocol {
         let db = try NotesDatabase(url: databaseURL)
         let raws: [RawNote]
         switch kind {
-        case .newerThan(let rowid):
-            raws = try db.notesNewerThan(rowid: rowid, limit: limit)
+        case .newerThan(let rowid, let newestFirst):
+            raws = newestFirst
+                ? try db.notesNewerThan(rowid: rowid, limit: limit)
+                : try db.notesModifiedAfter(rowid: rowid, limit: limit)
         case .olderThan(let rowid):
             raws = try db.notesOlderThan(rowid: rowid, limit: limit)
         }

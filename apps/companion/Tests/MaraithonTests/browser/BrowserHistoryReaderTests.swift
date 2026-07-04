@@ -21,7 +21,7 @@ final class BrowserHistoryReaderTests: XCTestCase {
         try BrowserHistoryFixture.buildChromium(at: dbURL)
 
         let reader = try ChromiumHistoryReader(browser: .chrome, liveURL: dbURL)
-        let rows = try reader.visits(after: 0, limit: 100)
+        let rows = try reader.visits(after: 0, limit: 100).rows
         XCTAssertEqual(rows.count, 3)
         let byUrl = Dictionary(uniqueKeysWithValues: rows.map { ($0.url, $0) })
 
@@ -41,7 +41,7 @@ final class BrowserHistoryReaderTests: XCTestCase {
         try BrowserHistoryFixture.buildChromium(at: dbURL)
 
         let reader = try ChromiumHistoryReader(browser: .chrome, liveURL: dbURL)
-        let rows = try reader.visits(after: 0, limit: 100)
+        let rows = try reader.visits(after: 0, limit: 100).rows
         let typed = rows.first { $0.url == "https://example.com/typed" }
         XCTAssertEqual(typed?.isTypedUrl, true)
     }
@@ -51,12 +51,12 @@ final class BrowserHistoryReaderTests: XCTestCase {
         try BrowserHistoryFixture.buildChromium(at: dbURL)
 
         let reader = try ChromiumHistoryReader(browser: .chrome, liveURL: dbURL)
-        let firstPage = try reader.visits(after: 0, limit: 1)
+        let firstPage = try reader.visits(after: 0, limit: 1).rows
         XCTAssertEqual(firstPage.count, 1)
         guard let firstID = Int64(firstPage[0].localId) else {
             return XCTFail("expected numeric localId")
         }
-        let secondPage = try reader.visits(after: firstID, limit: 100)
+        let secondPage = try reader.visits(after: firstID, limit: 100).rows
         XCTAssertEqual(secondPage.count, 2)
         XCTAssertFalse(secondPage.contains { $0.url == firstPage[0].url })
     }
@@ -66,7 +66,7 @@ final class BrowserHistoryReaderTests: XCTestCase {
         try BrowserHistoryFixture.buildChromium(at: dbURL)
 
         let reader = try ChromiumHistoryReader(browser: .arc, liveURL: dbURL)
-        let rows = try reader.visits(after: 0, limit: 100)
+        let rows = try reader.visits(after: 0, limit: 100).rows
         XCTAssertTrue(rows.allSatisfy { $0.browser == "arc" })
         XCTAssertTrue(rows.allSatisfy { $0.guid.hasPrefix("arc:") })
     }
@@ -76,7 +76,7 @@ final class BrowserHistoryReaderTests: XCTestCase {
         try BrowserHistoryFixture.buildChromium(at: dbURL)
 
         let reader = try ChromiumHistoryReader(browser: .brave, liveURL: dbURL)
-        let rows = try reader.visits(after: 0, limit: 100)
+        let rows = try reader.visits(after: 0, limit: 100).rows
         XCTAssertTrue(rows.allSatisfy { $0.browser == "brave" })
         XCTAssertTrue(rows.allSatisfy { $0.guid.hasPrefix("brave:") })
     }
@@ -131,7 +131,7 @@ final class BrowserHistoryReaderTests: XCTestCase {
         try BrowserHistoryFixture.buildSafari(at: dbURL)
 
         let reader = try SafariHistoryReader(liveURL: dbURL)
-        let rows = try reader.visits(after: 0, limit: 100)
+        let rows = try reader.visits(after: 0, limit: 100).rows
         XCTAssertEqual(rows.count, 2)
 
         let byUrl = Dictionary(uniqueKeysWithValues: rows.map { ($0.url, $0) })
@@ -156,7 +156,7 @@ final class BrowserHistoryReaderTests: XCTestCase {
             )
         ])
         let reader = try SafariHistoryReader(liveURL: dbURL)
-        let rows = try reader.visits(after: 0, limit: 100)
+        let rows = try reader.visits(after: 0, limit: 100).rows
         XCTAssertEqual(rows.first?.host, "fallback.example.com")
     }
 

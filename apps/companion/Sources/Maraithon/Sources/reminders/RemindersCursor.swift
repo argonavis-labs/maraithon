@@ -47,22 +47,28 @@ struct RemindersCursor: @unchecked Sendable {
 
     /// `true` when this guid hasn't been seen, or when the supplied
     /// modification timestamp is strictly newer than the persisted
-    /// one. `nil` modification dates always re-push (we treat them
-    /// like a fresh sighting because we can't compare).
+    /// one. A `nil` modification date pushes only on first sighting;
+    /// once recorded it stays quiet until EventKit reports a real
+    /// timestamp. (Always re-pushing nil-dated rows sounds safe but
+    /// wastes a batch slot every cycle, and under a batch cap the
+    /// rows sorted after them can be starved forever.)
     func shouldPush(guid: String, modifiedAt: Date?) -> Bool {
-        guard let modifiedAt else { return true }
         guard let last = snapshot[guid] else { return true }
+        guard let modifiedAt else { return false }
         return modifiedAt > last
     }
 
-    /// Record the modification timestamps of a batch we just pushed
-    /// successfully. Merges into the existing snapshot — entries for
-    /// guids not in `entries` are preserved.
-    func advance(_ entries: [(guid: String, modifiedAt: Date)]) {
+    /// Record a batch we just pushed successfully. Rows without a
+    /// modification date are recorded at the reference-date sentinel so
+    /// any future real timestamp compares strictly newer and re-pushes.
+    /// Merges into the existing snapshot — entries for guids not in
+    /// `entries` are preserved.
+    func advance(_ entries: [(guid: String, modifiedAt: Date?)]) {
         guard !entries.isEmpty else { return }
         var raw = defaults.dictionary(forKey: Self.defaultsKey) ?? [:]
         for entry in entries {
-            raw[entry.guid] = entry.modifiedAt.timeIntervalSinceReferenceDate
+            let recorded = entry.modifiedAt ?? Date(timeIntervalSinceReferenceDate: 0)
+            raw[entry.guid] = recorded.timeIntervalSinceReferenceDate
         }
         defaults.set(raw, forKey: Self.defaultsKey)
     }

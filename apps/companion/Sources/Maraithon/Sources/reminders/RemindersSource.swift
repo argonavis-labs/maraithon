@@ -241,15 +241,14 @@ final class RemindersSource: SourceProtocol {
 
         // Diff against the cursor: only re-push rows whose
         // lastModifiedDate is strictly newer than the persisted one.
-        // Reminders without a modifiedAt always push — that's a fresh
-        // sighting from EventKit's perspective.
+        // Reminders without a modifiedAt push on first sighting only —
+        // they're recorded at the sentinel so they don't burn a batch
+        // slot every cycle (see `RemindersCursor.shouldPush`).
         let cursorSnapshot = cursor.snapshot
         let candidates = snapshots.filter { snap in
-            guard let modified = snap.modifiedAt else { return true }
-            if let last = cursorSnapshot[snap.guid] {
-                return modified > last
-            }
-            return true
+            guard let last = cursorSnapshot[snap.guid] else { return true }
+            guard let modified = snap.modifiedAt else { return false }
+            return modified > last
         }
         // Sort newest-first so each cycle's batch ships the user's
         // most-recently-modified reminders. Reminders without a
@@ -263,9 +262,7 @@ final class RemindersSource: SourceProtocol {
             case (nil, nil): return lhs.guid < rhs.guid
             }
         }
-        let pushable = Array(sortedCandidates.prefix(batchLimit))
-
-        if pushable.isEmpty {
+        if sortedCandidates.isEmpty {
             eventLog.debug(
                 "reminders.cycle_empty",
                 source: .reminders,
@@ -279,20 +276,30 @@ final class RemindersSource: SourceProtocol {
             return
         }
 
-        let payloads = pushable.map(Self.payload(from:))
+        // Ship every candidate, chunked at `batchLimit` per POST, so a
+        // burst larger than one batch drains within the cycle instead
+        // of starving the oldest-modified tail. Advancing per chunk —
+        // including nil-modification sightings at the sentinel — means
+        // a failure mid-drain keeps earlier progress and the remainder
+        // retries next cycle.
         let deviceId = deviceIdProvider()
-        let outcome = try await outbox(deviceId, payloads)
-
-        let cursorEntries: [(guid: String, modifiedAt: Date)] = pushable.compactMap { snap in
-            guard let modified = snap.modifiedAt else { return nil }
-            return (guid: snap.guid, modifiedAt: modified)
+        var totalAccepted = 0
+        var totalDuplicate = 0
+        var chunkStart = 0
+        while chunkStart < sortedCandidates.count {
+            let chunkEnd = min(chunkStart + batchLimit, sortedCandidates.count)
+            let chunk = Array(sortedCandidates[chunkStart..<chunkEnd])
+            chunkStart = chunkEnd
+            let outcome = try await outbox(deviceId, chunk.map(Self.payload(from:)))
+            cursor.advance(chunk.map { (guid: $0.guid, modifiedAt: $0.modifiedAt) })
+            totalAccepted += outcome.accepted
+            totalDuplicate += outcome.duplicate
         }
-        cursor.advance(cursorEntries)
 
         statusPublisher.recordSync(
             at: Date(),
-            accepted: outcome.accepted,
-            duplicate: outcome.duplicate
+            accepted: totalAccepted,
+            duplicate: totalDuplicate
         )
         statusPublisher.update(state: .connected)
 
@@ -300,7 +307,7 @@ final class RemindersSource: SourceProtocol {
         // shipped, and a redacted preview of which lists they belong
         // to so the user can debug "why isn't this list syncing?"
         // without titles leaking into the log buffer.
-        let lists = pushable.compactMap(\.listName).reduce(into: [String: Int]()) { acc, name in
+        let lists = sortedCandidates.compactMap(\.listName).reduce(into: [String: Int]()) { acc, name in
             acc[name, default: 0] += 1
         }
         eventLog.info(
@@ -308,9 +315,9 @@ final class RemindersSource: SourceProtocol {
             source: .reminders,
             payload: [
                 "scanned": String(snapshots.count),
-                "pushed": String(pushable.count),
-                "accepted": String(outcome.accepted),
-                "duplicate": String(outcome.duplicate),
+                "pushed": String(sortedCandidates.count),
+                "accepted": String(totalAccepted),
+                "duplicate": String(totalDuplicate),
                 "tracked": String(cursor.trackedCount),
                 "lists": Self.listSummary(lists)
             ]

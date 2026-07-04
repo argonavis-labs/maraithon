@@ -205,7 +205,8 @@ struct FilesScanner: Sendable {
                         resourceValues: resourceValues,
                         rootPath: rootPath,
                         cursor: cursor,
-                        isBundle: true
+                        isBundle: true,
+                        includeText: true
                     ) {
                         collected.append(raw)
                     }
@@ -213,17 +214,17 @@ struct FilesScanner: Sendable {
                 continue
             }
 
+            // Oversize files still ship a metadata row — the file's
+            // existence, name, and size are context even though we
+            // never read or hash the bytes.
             let byteSize = Int64(resourceValues.fileSize ?? 0)
-            if Self.isOversize(byteSize: byteSize) {
-                continue
-            }
-
             if let raw = try? buildRawFile(
                 url: url,
                 resourceValues: resourceValues,
                 rootPath: rootPath,
                 cursor: cursor,
-                isBundle: false
+                isBundle: false,
+                includeText: !Self.isOversize(byteSize: byteSize)
             ) {
                 collected.append(raw)
             }
@@ -240,7 +241,8 @@ struct FilesScanner: Sendable {
         resourceValues: URLResourceValues,
         rootPath: String,
         cursor: [String: Date],
-        isBundle: Bool
+        isBundle: Bool,
+        includeText: Bool
     ) throws -> RawFile? {
         let modifiedAt = resourceValues.contentModificationDate
             ?? resourceValues.creationDate
@@ -250,13 +252,17 @@ struct FilesScanner: Sendable {
         let redactedPath = Self.redactHome(absolutePath)
 
         if let lastSeen = cursor[absolutePath],
-           lastSeen.timeIntervalSince(modifiedAt) > -0.001
+           abs(lastSeen.timeIntervalSince(modifiedAt)) < 0.001
         {
             // Within 1 ms of the recorded mtime — treat as
             // unchanged. The ISO-8601 round-trip used by
-            // `FilesCursor` can lose sub-millisecond precision, so a
-            // strict `>=` check would re-emit every file on every
-            // cycle.
+            // `FilesCursor` can lose sub-millisecond precision, so an
+            // exact-equality check would re-emit every file on every
+            // cycle. Any other difference counts as a change — mtimes
+            // that moved *backward* (git checkout, unzip, restores,
+            // `cp -p`) carry new content just as often as forward
+            // ones, and a newer-only comparison made those edits
+            // permanently invisible.
             return nil
         }
 
@@ -275,7 +281,7 @@ struct FilesScanner: Sendable {
 
         let guid = Self.stableGuid(path: absolutePath)
 
-        let textContent: String? = Self.extractableExtensions.contains(extLower)
+        let textContent: String? = includeText && Self.extractableExtensions.contains(extLower)
             ? Self.extractText(from: url, extension: extLower)
             : nil
 

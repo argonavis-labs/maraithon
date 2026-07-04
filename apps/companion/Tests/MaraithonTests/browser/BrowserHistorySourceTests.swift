@@ -87,8 +87,8 @@ final class BrowserHistorySourceTests: XCTestCase {
         try await env.source.syncNow()
 
         let cursor = BrowserHistoryCursor(defaults: defaultsSuite)
-        XCTAssertGreaterThan(cursor.lastSyncedID(for: .chrome), 0)
-        XCTAssertGreaterThan(cursor.lastSyncedID(for: .safari), 0)
+        XCTAssertGreaterThan(cursor.lastSyncedID(forKey: "chrome:Default#visits"), 0)
+        XCTAssertGreaterThan(cursor.lastSyncedID(forKey: "safari#visits"), 0)
 
         // Empty second cycle — both browsers say "no new rows", no POSTs.
         try await env.source.syncNow()
@@ -112,12 +112,12 @@ final class BrowserHistorySourceTests: XCTestCase {
         let env = try makeEnvironment(chromeURL: chromeURL, safariURL: nil)
         try await env.source.syncNow()
         XCTAssertGreaterThan(
-            BrowserHistoryCursor(defaults: defaultsSuite).lastSyncedID(for: .chrome),
+            BrowserHistoryCursor(defaults: defaultsSuite).lastSyncedID(forKey: "chrome:Default#visits"),
             0
         )
         env.source.clearLocalState()
         XCTAssertEqual(
-            BrowserHistoryCursor(defaults: defaultsSuite).lastSyncedID(for: .chrome),
+            BrowserHistoryCursor(defaults: defaultsSuite).lastSyncedID(forKey: "chrome:Default#visits"),
             0
         )
     }
@@ -139,7 +139,7 @@ final class BrowserHistorySourceTests: XCTestCase {
         )
         try await env.source.syncNow()
         XCTAssertGreaterThan(
-            BrowserHistoryCursor(defaults: defaultsSuite).lastSyncedID(for: .chrome),
+            BrowserHistoryCursor(defaults: defaultsSuite).lastSyncedID(forKey: "chrome:Default#visits"),
             0
         )
     }
@@ -199,13 +199,17 @@ final class BrowserHistorySourceTests: XCTestCase {
         let factory: BrowserHistorySource.ReaderFactory = { browser in
             switch browser {
             case .chrome:
-                guard let url = chromeURL else { return nil }
-                return try? ChromiumHistoryReader(browser: .chrome, liveURL: url)
+                guard let url = chromeURL,
+                      let reader = try? ChromiumHistoryReader(browser: .chrome, liveURL: url)
+                else { return [] }
+                return [reader]
             case .safari:
-                guard let url = safariURL else { return nil }
-                return try? SafariHistoryReader(liveURL: url)
+                guard let url = safariURL,
+                      let reader = try? SafariHistoryReader(liveURL: url)
+                else { return [] }
+                return [reader]
             case .arc, .brave:
-                return nil
+                return []
             }
         }
 

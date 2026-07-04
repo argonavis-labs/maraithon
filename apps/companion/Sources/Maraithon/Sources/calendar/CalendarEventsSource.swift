@@ -29,16 +29,19 @@ final class CalendarEventsSource: SourceProtocol {
     /// capture payloads without going through HTTP.
     typealias Outbox = @Sendable (UUID, [CalendarEventPayload]) async throws -> SyncOutcome
 
-    /// Days of past events to mirror. Keep tight enough that the row
-    /// count stays bounded for power users (a busy corporate calendar
-    /// is still well under a few thousand events in 90 days), wide
-    /// enough that "what did I do last month?" still works.
-    static let defaultLookbackDays: TimeInterval = 90
+    /// Days of past events to mirror. A full year so "what did I do
+    /// last quarter?" works and — since edits are only observed while
+    /// an event is inside the fetch window — reschedules or renames of
+    /// months-old events still propagate instead of leaving the server
+    /// copy stale. A busy corporate calendar is still only a few
+    /// thousand rows per year, and the cursor diff keeps re-pushes to
+    /// actual changes.
+    static let defaultLookbackDays: TimeInterval = 365
 
-    /// Days of upcoming events to mirror. Six months is enough to
-    /// cover quarterly planning + recurring annual meetings that
-    /// re-expand at the boundary.
-    static let defaultLookaheadDays: TimeInterval = 180
+    /// Days of upcoming events to mirror. A full year covers annual
+    /// recurrences (birthdays, renewals, yearly planning) that a
+    /// six-month horizon silently dropped until they drifted close.
+    static let defaultLookaheadDays: TimeInterval = 365
 
     private let cursor: CalendarCursor
     private let eventLog: EventLog
@@ -278,9 +281,7 @@ final class CalendarEventsSource: SourceProtocol {
             case (nil, nil): return lhs.guid < rhs.guid
             }
         }
-        let pushable = Array(sortedCandidates.prefix(batchLimit))
-
-        if pushable.isEmpty {
+        if sortedCandidates.isEmpty {
             eventLog.debug(
                 "calendar.cycle_empty",
                 source: .calendar,
@@ -294,17 +295,28 @@ final class CalendarEventsSource: SourceProtocol {
             return
         }
 
+        // Ship every candidate, chunked at `batchLimit` per POST, so a
+        // burst larger than one batch drains within the cycle instead
+        // of starving the oldest-modified tail. Advancing per chunk —
+        // including nil-modification sightings at the sentinel — means
+        // a failure mid-drain keeps earlier progress and the remainder
+        // retries next cycle.
         let deviceId = deviceIdProvider()
-        let pushResult = try await pushWithInvalidBatchIsolation(
-            deviceId: deviceId,
-            snapshots: pushable
-        )
-
-        let cursorEntries: [(guid: String, modifiedAt: Date)] = pushResult.processedSnapshots.compactMap { snap in
-            guard let modified = snap.modifiedAt else { return nil }
-            return (guid: snap.guid, modifiedAt: modified)
+        var pushResult = PushResult.empty
+        var chunkStart = 0
+        while chunkStart < sortedCandidates.count {
+            let chunkEnd = min(chunkStart + batchLimit, sortedCandidates.count)
+            let chunk = Array(sortedCandidates[chunkStart..<chunkEnd])
+            chunkStart = chunkEnd
+            let chunkResult = try await pushWithInvalidBatchIsolation(
+                deviceId: deviceId,
+                snapshots: chunk
+            )
+            cursor.advance(chunkResult.processedSnapshots.map {
+                (guid: $0.guid, modifiedAt: $0.modifiedAt)
+            })
+            pushResult.merge(chunkResult)
         }
-        cursor.advance(cursorEntries)
 
         statusPublisher.recordSync(
             at: Date(),
@@ -313,7 +325,7 @@ final class CalendarEventsSource: SourceProtocol {
         )
         statusPublisher.update(state: .connected)
 
-        let calendarCounts = pushable
+        let calendarCounts = sortedCandidates
             .compactMap(\.calendarName)
             .reduce(into: [String: Int]()) { acc, name in
                 acc[name, default: 0] += 1
@@ -324,7 +336,7 @@ final class CalendarEventsSource: SourceProtocol {
             source: .calendar,
             payload: [
                 "scanned": String(snapshots.count),
-                "pushed": String(pushable.count),
+                "pushed": String(sortedCandidates.count),
                 "accepted": String(pushResult.outcome.accepted),
                 "duplicate": String(pushResult.outcome.duplicate),
                 "invalid": String(pushResult.outcome.invalid),

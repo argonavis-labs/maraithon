@@ -58,9 +58,9 @@ final class IMessageDatabase: @unchecked Sendable {
     }
 
     /// Read every message with `ROWID > rowid`, ordered ASC, capped at
-    /// `limit`. Retained for tests / legacy callers; the live source
-    /// uses `messagesNewerThan` / `messagesOlderThan` (both DESC) to
-    /// drive the newest-first cycle.
+    /// `limit`. Drives the steady-state newer walk: ascending order
+    /// keeps a truncated batch contiguous with the cursor, so catch-up
+    /// after downtime cannot strand rows behind an advanced cursor.
     func messagesAfter(rowid: Int64, limit: Int = 200) throws -> [RawMessage] {
         try messagesWhere(predicate: "m.ROWID > ?", bound: rowid, ascending: true, limit: limit)
     }

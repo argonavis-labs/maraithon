@@ -27,10 +27,17 @@ final class CalendarCursorTests: XCTestCase {
         XCTAssertTrue(cursor.shouldPush(guid: "new", modifiedAt: Date()))
     }
 
-    func testShouldPushReturnsTrueWhenModifiedAtNil() {
+    func testNilModifiedAtPushesOnFirstSightingOnly() {
+        // A nil lastModifiedDate pushes once (fresh sighting) and is
+        // recorded at the sentinel; re-pushing it every cycle would
+        // burn a batch slot forever and starve rows sorted after it.
+        // A later real timestamp compares newer than the sentinel and
+        // re-pushes.
         let cursor = CalendarCursor(defaults: defaults)
-        cursor.advance([(guid: "g", modifiedAt: Date())])
         XCTAssertTrue(cursor.shouldPush(guid: "g", modifiedAt: nil))
+        cursor.advance([(guid: "g", modifiedAt: nil as Date?)])
+        XCTAssertFalse(cursor.shouldPush(guid: "g", modifiedAt: nil))
+        XCTAssertTrue(cursor.shouldPush(guid: "g", modifiedAt: Date()))
     }
 
     func testAdvanceAndShouldPushRespectsTimestamp() {

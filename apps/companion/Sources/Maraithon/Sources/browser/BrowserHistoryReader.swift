@@ -10,14 +10,25 @@ enum Browser: String, Codable, CaseIterable, Sendable {
     case arc
     case brave
 
-    /// Live database location on disk. `nil` when the browser is not
-    /// installed (i.e. the directory doesn't exist for the current user).
-    var liveDatabaseURL: URL? {
+    /// One on-disk history database for this browser. Chromium browsers
+    /// can have many (one per profile directory); Safari has exactly one
+    /// with an empty profile name.
+    struct DatabaseLocation: Sendable {
+        let profile: String
+        let url: URL
+    }
+
+    /// Every live history database on disk for this browser. Empty when
+    /// the browser is not installed for the current user. Chromium
+    /// browsers get one entry per profile directory (`Default`,
+    /// `Profile 1`, …) so multi-profile users sync all of them, not just
+    /// whichever profile happened to sort first.
+    var databaseLocations: [DatabaseLocation] {
         let home = FileManager.default.homeDirectoryForCurrentUser
 
         switch self {
         case .chrome:
-            return chromiumStyleDatabase(
+            return Self.chromiumStyleDatabases(
                 base: home
                     .appendingPathComponent("Library", isDirectory: true)
                     .appendingPathComponent("Application Support", isDirectory: true)
@@ -26,7 +37,7 @@ enum Browser: String, Codable, CaseIterable, Sendable {
             )
 
         case .arc:
-            return chromiumStyleDatabase(
+            return Self.chromiumStyleDatabases(
                 base: home
                     .appendingPathComponent("Library", isDirectory: true)
                     .appendingPathComponent("Application Support", isDirectory: true)
@@ -35,7 +46,7 @@ enum Browser: String, Codable, CaseIterable, Sendable {
             )
 
         case .brave:
-            return chromiumStyleDatabase(
+            return Self.chromiumStyleDatabases(
                 base: home
                     .appendingPathComponent("Library", isDirectory: true)
                     .appendingPathComponent("Application Support", isDirectory: true)
@@ -48,37 +59,27 @@ enum Browser: String, Codable, CaseIterable, Sendable {
                 .appendingPathComponent("Library", isDirectory: true)
                 .appendingPathComponent("Safari", isDirectory: true)
                 .appendingPathComponent("History.db", isDirectory: false)
-            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+            guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+            return [DatabaseLocation(profile: "", url: url)]
         }
     }
 
-    /// Pick the most plausible Chromium profile under `base/<profile>/History`.
-    /// Tries `Default` first, then falls back to the first profile-shaped
-    /// directory containing a `History` file. Returns `nil` if `base`
-    /// doesn't exist on disk — the source uses that to decide whether to
-    /// register a reader at all.
-    private func chromiumStyleDatabase(base: URL) -> URL? {
+    /// Every `base/<profile>/History` database, sorted by profile name
+    /// for a deterministic sync order. Returns `[]` if `base` doesn't
+    /// exist on disk — the source uses that to decide whether to
+    /// register readers at all.
+    private static func chromiumStyleDatabases(base: URL) -> [DatabaseLocation] {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: base.path) else { return nil }
+        guard fm.fileExists(atPath: base.path) else { return [] }
 
-        let defaultURL = base
-            .appendingPathComponent("Default", isDirectory: true)
-            .appendingPathComponent("History", isDirectory: false)
-        if fm.fileExists(atPath: defaultURL.path) {
-            return defaultURL
-        }
-
-        // Walk one level deep for `Profile 1`, `Profile 2`, etc. We pick
-        // the first one with a `History` file. Multi-profile users can
-        // override with a custom URL via the test-only initializer.
         let candidates = (try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? []
-        for url in candidates {
-            let history = url.appendingPathComponent("History", isDirectory: false)
-            if fm.fileExists(atPath: history.path) {
-                return history
+        return candidates
+            .compactMap { dir -> DatabaseLocation? in
+                let history = dir.appendingPathComponent("History", isDirectory: false)
+                guard fm.fileExists(atPath: history.path) else { return nil }
+                return DatabaseLocation(profile: dir.lastPathComponent, url: history)
             }
-        }
-        return nil
+            .sorted { $0.profile < $1.profile }
     }
 }
 
@@ -108,6 +109,16 @@ struct BrowserVisitRecord: Codable, Sendable, Equatable {
     }
 }
 
+/// One page of a visit walk: the pushable rows plus the highest native
+/// visit id the query examined. The source advances its cursor to
+/// `maxFetchedID`, not to the max of `rows` — rows dropped locally
+/// (empty URLs) are still "done", so a window full of them can't stall
+/// the walk forever.
+struct BrowserVisitPage: Sendable {
+    let rows: [BrowserVisitRecord]
+    let maxFetchedID: Int64?
+}
+
 /// Reads visits from one browser's history database. Each implementation
 /// is responsible for the per-browser SQL and timestamp conversions.
 ///
@@ -117,10 +128,30 @@ struct BrowserVisitRecord: Codable, Sendable, Equatable {
 protocol BrowserHistoryReader: AnyObject, Sendable {
     var browser: Browser { get }
 
-    /// Read every visit with a backend-native id greater than `cursor`,
-    /// capped at `limit`. The cursor monotonically increases per browser
-    /// — Chromium uses `urls.id`, Safari uses `history_items.id`.
-    func visits(after cursor: Int64, limit: Int) throws -> [BrowserVisitRecord]
+    /// Which on-disk database this reader covers — the Chromium profile
+    /// directory name, or `""` for Safari's single store.
+    var profile: String { get }
+
+    /// Read every visit with a backend-native per-visit id greater than
+    /// `cursor`, capped at `limit`. The id spaces are append-only per
+    /// visit — Chromium's `visits.id`, Safari's `history_visits.id` —
+    /// so revisits to an already-seen URL produce new rows. (Keying on
+    /// the URL-identity ids, `urls.id` / `history_items.id`, would make
+    /// this a distinct-new-URLs feed and silently drop every repeat
+    /// visit.)
+    func visits(after cursor: Int64, limit: Int) throws -> BrowserVisitPage
+}
+
+extension BrowserHistoryReader {
+    /// Cursor-map key for this reader's database. Namespaced with
+    /// `#visits` so values never collide with the pre-visit-cursor keys
+    /// (bare browser names holding `urls.id` values) still present in
+    /// existing installs' cursor maps.
+    var cursorKey: String {
+        profile.isEmpty
+            ? "\(browser.rawValue)#visits"
+            : "\(browser.rawValue):\(profile)#visits"
+    }
 }
 
 /// Read-only SQLite reader that copies the browser's live `History` file
@@ -131,16 +162,18 @@ protocol BrowserHistoryReader: AnyObject, Sendable {
 /// are consistent.
 final class ChromiumHistoryReader: BrowserHistoryReader, @unchecked Sendable {
     let browser: Browser
+    let profile: String
     private let liveURL: URL
     private let copy: TempDatabaseCopy
 
-    init(browser: Browser, liveURL: URL) throws {
+    init(browser: Browser, liveURL: URL, profile: String = "Default") throws {
         self.browser = browser
+        self.profile = profile
         self.liveURL = liveURL
         self.copy = try TempDatabaseCopy(liveURL: liveURL, prefix: "maraithon-\(browser.rawValue)")
     }
 
-    func visits(after cursor: Int64, limit: Int) throws -> [BrowserVisitRecord] {
+    func visits(after cursor: Int64, limit: Int) throws -> BrowserVisitPage {
         try copy.refresh()
 
         var db: OpaquePointer?
@@ -153,13 +186,16 @@ final class ChromiumHistoryReader: BrowserHistoryReader, @unchecked Sendable {
         }
         defer { sqlite3_close(db) }
 
-        // `urls.last_visit_time` is Chrome's WebKit timestamp:
-        // microseconds since 1601-01-01 UTC. Convert at read time.
+        // Walk the append-only `visits` table so every visit ships,
+        // including revisits to URLs synced long ago. `visits.visit_time`
+        // is Chrome's WebKit timestamp: microseconds since 1601-01-01
+        // UTC. Convert at read time.
         let sql = """
-            SELECT id, url, title, visit_count, typed_count, last_visit_time
-            FROM urls
-            WHERE id > ?
-            ORDER BY id ASC
+            SELECT v.id, u.url, u.title, u.visit_count, u.typed_count, v.visit_time
+            FROM visits v
+            JOIN urls u ON u.id = v.url
+            WHERE v.id > ?
+            ORDER BY v.id ASC
             LIMIT ?;
             """
         var stmt: OpaquePointer?
@@ -178,22 +214,26 @@ final class ChromiumHistoryReader: BrowserHistoryReader, @unchecked Sendable {
         let browserName = browser.rawValue
 
         var rows: [BrowserVisitRecord] = []
+        var maxFetchedID: Int64?
         while sqlite3_step(stmt) == SQLITE_ROW {
             let id = sqlite3_column_int64(stmt, 0)
+            maxFetchedID = max(maxFetchedID ?? id, id)
             let urlString = stringColumn(stmt, 1) ?? ""
             let title = stringColumn(stmt, 2)
             let visitCount = Int(sqlite3_column_int(stmt, 3))
             let typedCount = Int(sqlite3_column_int(stmt, 4))
-            let lastVisitTime = sqlite3_column_int64(stmt, 5)
+            let visitTime = sqlite3_column_int64(stmt, 5)
 
             guard !urlString.isEmpty else { continue }
 
             let host = URL(string: urlString)?.host
-            let date = Self.date(fromWebKitMicroseconds: lastVisitTime)
+            let date = Self.date(fromWebKitMicroseconds: visitTime)
 
             rows.append(
                 BrowserVisitRecord(
-                    guid: "\(browserName):\(id)",
+                    guid: profile.isEmpty
+                        ? "\(browserName):v\(id)"
+                        : "\(browserName):\(profile):v\(id)",
                     localId: String(id),
                     browser: browserName,
                     url: urlString,
@@ -205,7 +245,7 @@ final class ChromiumHistoryReader: BrowserHistoryReader, @unchecked Sendable {
                 )
             )
         }
-        return rows
+        return BrowserVisitPage(rows: rows, maxFetchedID: maxFetchedID)
     }
 
     /// Convert a Chromium WebKit timestamp (microseconds since
@@ -233,13 +273,14 @@ final class ChromiumHistoryReader: BrowserHistoryReader, @unchecked Sendable {
 /// same convention Notes and iMessage use.
 final class SafariHistoryReader: BrowserHistoryReader, @unchecked Sendable {
     let browser: Browser = .safari
+    let profile: String = ""
     private let copy: TempDatabaseCopy
 
     init(liveURL: URL) throws {
         self.copy = try TempDatabaseCopy(liveURL: liveURL, prefix: "maraithon-safari")
     }
 
-    func visits(after cursor: Int64, limit: Int) throws -> [BrowserVisitRecord] {
+    func visits(after cursor: Int64, limit: Int) throws -> BrowserVisitPage {
         try copy.refresh()
 
         var db: OpaquePointer?
@@ -252,26 +293,22 @@ final class SafariHistoryReader: BrowserHistoryReader, @unchecked Sendable {
         }
         defer { sqlite3_close(db) }
 
-        // Pair each history_items row with the most recent visit for it
-        // so we can surface a title and a `last_visited_at`. Most users
-        // re-visit a URL many times; we want the freshest visit per id.
+        // Walk the append-only `history_visits` table so every visit
+        // ships, including revisits to URLs synced long ago. Each visit
+        // row carries its own timestamp and title; the joined item row
+        // supplies the URL and cumulative visit count.
         let sql = """
             SELECT
-                items.id,
+                v.id,
                 items.url,
                 items.domain_expansion,
                 items.visit_count,
-                (SELECT MAX(history_visits.visit_time)
-                   FROM history_visits
-                   WHERE history_visits.history_item = items.id),
-                (SELECT history_visits.title
-                   FROM history_visits
-                   WHERE history_visits.history_item = items.id
-                   ORDER BY history_visits.visit_time DESC
-                   LIMIT 1)
-            FROM history_items AS items
-            WHERE items.id > ?
-            ORDER BY items.id ASC
+                v.visit_time,
+                v.title
+            FROM history_visits AS v
+            JOIN history_items AS items ON items.id = v.history_item
+            WHERE v.id > ?
+            ORDER BY v.id ASC
             LIMIT ?;
             """
         var stmt: OpaquePointer?
@@ -289,12 +326,14 @@ final class SafariHistoryReader: BrowserHistoryReader, @unchecked Sendable {
         iso.formatOptions = [.withInternetDateTime]
 
         var rows: [BrowserVisitRecord] = []
+        var maxFetchedID: Int64?
         while sqlite3_step(stmt) == SQLITE_ROW {
             let id = sqlite3_column_int64(stmt, 0)
+            maxFetchedID = max(maxFetchedID ?? id, id)
             let urlString = stringColumn(stmt, 1) ?? ""
             let domainExpansion = stringColumn(stmt, 2)
             let visitCount = Int(sqlite3_column_int(stmt, 3))
-            let lastVisitTime = sqlite3_column_type(stmt, 4) == SQLITE_NULL
+            let visitTime = sqlite3_column_type(stmt, 4) == SQLITE_NULL
                 ? nil
                 : sqlite3_column_double(stmt, 4)
             let title = stringColumn(stmt, 5)
@@ -302,11 +341,11 @@ final class SafariHistoryReader: BrowserHistoryReader, @unchecked Sendable {
             guard !urlString.isEmpty else { continue }
 
             let host = URL(string: urlString)?.host ?? domainExpansion
-            let date = lastVisitTime.map { Self.date(fromAppleSeconds: $0) }
+            let date = visitTime.map { Self.date(fromAppleSeconds: $0) }
 
             rows.append(
                 BrowserVisitRecord(
-                    guid: "safari:\(id)",
+                    guid: "safari:v\(id)",
                     localId: String(id),
                     browser: "safari",
                     url: urlString,
@@ -320,7 +359,7 @@ final class SafariHistoryReader: BrowserHistoryReader, @unchecked Sendable {
                 )
             )
         }
-        return rows
+        return BrowserVisitPage(rows: rows, maxFetchedID: maxFetchedID)
     }
 
     static let appleEpoch: Date = {

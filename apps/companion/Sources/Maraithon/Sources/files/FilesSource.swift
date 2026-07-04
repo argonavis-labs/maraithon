@@ -233,6 +233,11 @@ final class FilesSource: SourceProtocol {
         for raw in raws {
             nextCursor[raw.localId] = raw.modifiedAt
         }
+        // Prune entries whose file is gone: without this the map grows
+        // forever, and a stale timestamp shadows a file later recreated
+        // at the same path (its restored mtime looks "already seen").
+        let fm = FileManager.default
+        nextCursor = nextCursor.filter { fm.fileExists(atPath: $0.key) }
         cursor.write(nextCursor)
 
         statusPublisher.recordSync(

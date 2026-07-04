@@ -1,11 +1,15 @@
 import Foundation
 
-/// Per-browser cursor for the browser history source. Each browser
-/// keeps its own monotonic integer cursor — Chromium uses `urls.id`
-/// and Safari uses `history_items.id`. Storing them in one
-/// `UserDefaults` key as a `[String: Int64]` map (keyed by browser
-/// rawValue) keeps the registration story simple: install or remove a
-/// browser and the cursor lives or dies with it.
+/// Per-database cursor for the browser history source. Each history
+/// database keeps its own monotonic integer cursor over the browser's
+/// append-only per-visit id space — Chromium's `visits.id`, Safari's
+/// `history_visits.id` — keyed by the reader's `cursorKey`
+/// (`chrome:Default#visits`, `safari#visits`, …). Storing them in one
+/// `UserDefaults` key as a `[String: Int64]` map keeps the registration
+/// story simple: install or remove a browser and the cursor lives or
+/// dies with it. Bare browser-name keys from the pre-visit-cursor era
+/// (which held `urls.id` values) may linger in the map; nothing reads
+/// them.
 ///
 /// Stored in `UserDefaults` under
 /// `com.maraithon.companion.browser_history.cursor`. Tests substitute
@@ -19,21 +23,32 @@ struct BrowserHistoryCursor: @unchecked Sendable {
         self.defaults = defaults
     }
 
-    /// The last successfully-pushed cursor for the given browser, or 0
-    /// on first run.
-    func lastSyncedID(for browser: Browser) -> Int64 {
+    /// The last successfully-pushed cursor for the given key, or 0 on
+    /// first run.
+    func lastSyncedID(forKey key: String) -> Int64 {
         let map = readMap()
-        return map[browser.rawValue] ?? 0
+        return map[key] ?? 0
     }
 
-    /// Advance the cursor for the given browser. Refuses to move
-    /// backwards so out-of-order pushes can't undo progress.
-    func advance(_ browser: Browser, to id: Int64) {
+    /// Advance the cursor for the given key. Refuses to move backwards
+    /// so out-of-order pushes can't undo progress.
+    func advance(key: String, to id: Int64) {
         var map = readMap()
-        let current = map[browser.rawValue] ?? 0
+        let current = map[key] ?? 0
         guard id > current else { return }
-        map[browser.rawValue] = id
+        map[key] = id
         writeMap(map)
+    }
+
+    /// Browser-level convenience over the single-database key — used by
+    /// tests and any caller that predates multi-profile readers.
+    func lastSyncedID(for browser: Browser) -> Int64 {
+        lastSyncedID(forKey: browser.rawValue)
+    }
+
+    /// Browser-level convenience twin of `advance(key:to:)`.
+    func advance(_ browser: Browser, to id: Int64) {
+        advance(key: browser.rawValue, to: id)
     }
 
     /// Wipe every browser's cursor. Used by

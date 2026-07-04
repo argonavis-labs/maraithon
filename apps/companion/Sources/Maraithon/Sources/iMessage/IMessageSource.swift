@@ -196,9 +196,15 @@ final class IMessageSource: SourceProtocol {
         )
     }
 
-    /// Two-phase newest-first cycle:
-    ///   1. Pull rows with `rowid > newestSeen` (DESC) — today's
-    ///      messages first.
+    /// Two-phase cycle:
+    ///   1. Pull rows with `rowid > newestSeen` — DESC (newest first)
+    ///      only on the very first cycle, when `backfillFrom` still
+    ///      covers everything below the fetched batch. Once a cursor
+    ///      exists the pull is ASC so a truncated batch stays
+    ///      contiguous with the cursor; otherwise a catch-up after
+    ///      downtime would jump `newestSeen` to the tip and strand the
+    ///      rows between the old cursor and the batch — a range the
+    ///      completed backfill walk never revisits.
     ///   2. If none, pull rows with `rowid < backfillFrom` (DESC) —
     ///      walk history backward.
     /// Cursor pointers advance only after the ingest succeeds.
@@ -212,7 +218,7 @@ final class IMessageSource: SourceProtocol {
             [databaseURL, batchLimit] () -> ([BuiltRecord], String, Int64) in
             let newer = try Self.buildRecords(
                 databaseURL: databaseURL,
-                kind: .newerThan(newestSeenBefore),
+                kind: .newerThan(newestSeenBefore, newestFirst: newestSeenBefore == 0),
                 limit: batchLimit
             )
             if !newer.isEmpty {
@@ -366,11 +372,13 @@ final class IMessageSource: SourceProtocol {
     }
 
     /// Direction the cursor walk is going on a given cycle. `newerThan`
-    /// pulls everything strictly greater than the bound (sorted DESC);
-    /// `olderThan` pulls everything strictly less (also DESC). Both
-    /// queries are bounded by `limit`.
+    /// pulls everything strictly greater than the bound — sorted DESC
+    /// when `newestFirst` (first-ever cycle) and ASC otherwise, so
+    /// steady-state batches are contiguous with the cursor. `olderThan`
+    /// pulls everything strictly less (DESC). Both queries are bounded
+    /// by `limit`.
     nonisolated enum QueryKind: Sendable {
-        case newerThan(Int64)
+        case newerThan(Int64, newestFirst: Bool)
         case olderThan(Int64)
     }
 
@@ -382,8 +390,10 @@ final class IMessageSource: SourceProtocol {
         let db = try IMessageDatabase(url: databaseURL)
         let raws: [RawMessage]
         switch kind {
-        case .newerThan(let rowid):
-            raws = try db.messagesNewerThan(rowid: rowid, limit: limit)
+        case .newerThan(let rowid, let newestFirst):
+            raws = newestFirst
+                ? try db.messagesNewerThan(rowid: rowid, limit: limit)
+                : try db.messagesAfter(rowid: rowid, limit: limit)
         case .olderThan(let rowid):
             raws = try db.messagesOlderThan(rowid: rowid, limit: limit)
         }
