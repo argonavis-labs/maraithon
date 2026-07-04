@@ -22,15 +22,40 @@ defmodule Maraithon.LocalFiles do
 
   @max_text_bytes 200 * 1024
 
+  # Columns replaced when a device re-sends a guid it has pushed
+  # before. The file guid is a stable hash of the path, so an edited
+  # file arrives under the same guid — `on_conflict: :nothing` would
+  # silently discard every content update and freeze the mirror at
+  # first sighting. Identity columns (user/device/source/guid) and
+  # `inserted_at` are deliberately not replaced.
+  @upsert_fields [
+    :local_id,
+    :path,
+    :filename,
+    :extension,
+    :mime_type,
+    :byte_size,
+    :text_content,
+    :text_truncated,
+    :created_at,
+    :modified_at,
+    :encrypted_with_device_key,
+    :key_id,
+    :updated_at
+  ]
+
   @doc """
   Ingests a batch of file maps from a device for the given user.
 
   Each entry should be a string-keyed or atom-keyed map matching the
-  payload defined in the companion spec. Inserts are idempotent via the
-  `(user_id, device_id, source, guid)` unique constraint — re-sending
-  the same payload is a no-op.
+  payload defined in the companion spec. Rows are upserted via the
+  `(user_id, device_id, source, guid)` unique constraint, so edits to a
+  file the device already synced replace the stored copy (and refresh
+  its embedding) instead of leaving the assistant with stale content.
 
   Returns `{:ok, %{accepted: integer, duplicate: integer, invalid: integer}}`.
+  Because this path upserts mutable files, existing rows that are
+  refreshed are reported as accepted just like fresh inserts.
   """
   def ingest_batch(user_id, device_id, files)
       when is_binary(user_id) and is_list(files) do
@@ -45,21 +70,22 @@ defmodule Maraithon.LocalFiles do
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
 
-    {inserted_count, inserted_rows} =
+    {affected_count, affected_rows} =
       if rows == [] do
         {0, []}
       else
         Repo.insert_all(LocalFile, rows,
-          on_conflict: :nothing,
+          on_conflict: {:replace, @upsert_fields},
           conflict_target: [:user_id, :device_id, :source, :guid],
           returning: [:id]
         )
       end
 
-    enqueue_embed_jobs(user_id, inserted_rows)
+    enqueue_embed_jobs(user_id, affected_rows)
 
     total = length(rows)
-    duplicate_count = total - inserted_count
+    accepted_count = affected_count
+    duplicate_count = max(total - affected_count, 0)
     invalid_count = length(invalid)
     latency_ms = System.monotonic_time(:millisecond) - started_at
 
@@ -67,7 +93,7 @@ defmodule Maraithon.LocalFiles do
       [:maraithon, :companion, :files_ingested],
       %{
         count: length(files),
-        accepted: inserted_count,
+        accepted: accepted_count,
         duplicate: duplicate_count,
         invalid: invalid_count,
         latency_ms: latency_ms
@@ -77,7 +103,7 @@ defmodule Maraithon.LocalFiles do
 
     {:ok,
      %{
-       accepted: inserted_count,
+       accepted: accepted_count,
        duplicate: duplicate_count,
        invalid: invalid_count
      }}
