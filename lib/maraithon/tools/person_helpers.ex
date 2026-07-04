@@ -105,12 +105,14 @@ defmodule Maraithon.Tools.PersonHelpers do
     }
   end
 
-  def serialize_relationship_context(%{
-        person: %Person{} = person,
-        links: links,
-        todos: todos,
-        open_todo_count: open_todo_count
-      }) do
+  def serialize_relationship_context(
+        %{
+          person: %Person{} = person,
+          links: links,
+          todos: todos,
+          open_todo_count: open_todo_count
+        } = context
+      ) do
     %{
       person: serialize_person(person),
       link_count: length(links),
@@ -119,7 +121,26 @@ defmodule Maraithon.Tools.PersonHelpers do
       open_todo_count: open_todo_count,
       todos: Enum.map(todos, &serialize_todo/1)
     }
+    |> maybe_put_related_people(Map.get(context, :related_people))
+    |> maybe_put_possible_duplicate(Map.get(context, :possible_duplicate))
   end
+
+  # SPEC 04 R15: person<->person proxy edges, both directions, with the
+  # other endpoint already resolved to an id + display name.
+  defp maybe_put_related_people(result, related_people)
+       when is_list(related_people) and related_people != [] do
+    Map.put(result, :related_people, related_people)
+  end
+
+  defp maybe_put_related_people(result, _related_people), do: result
+
+  # SPEC 04 R11: unresolved soft-match duplicate pointer, so "who is Dan
+  # Bourke?" can mention the similar record even before a merge is confirmed.
+  defp maybe_put_possible_duplicate(result, %{} = possible_duplicate) do
+    Map.put(result, :possible_duplicate, possible_duplicate)
+  end
+
+  defp maybe_put_possible_duplicate(result, _possible_duplicate), do: result
 
   defp serialize_todo(%Todo{} = todo), do: TodoHelpers.serialize_todo(todo)
 

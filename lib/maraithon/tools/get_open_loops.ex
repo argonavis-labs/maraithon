@@ -18,6 +18,8 @@ defmodule Maraithon.Tools.GetOpenLoops do
   defp snapshot_opts(args) do
     []
     |> maybe_put(:query, optional_string(args, "query"))
+    |> maybe_put(:direction, optional_string(args, "direction"))
+    |> maybe_put(:person_id, optional_string(args, "person_id"))
     |> maybe_put(:limit, optional_integer(args, "limit"))
   end
 end

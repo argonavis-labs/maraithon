@@ -70,8 +70,14 @@ defmodule Maraithon.Crm.PersonLink do
     |> validate_change(:metadata, fn :metadata, value ->
       if is_map(value), do: [], else: [metadata: "must be a map"]
     end)
+    # SPEC 04 R12 TOCTOU verification: two concurrent ingestion windows can
+    # both pass attach_resource/3's pre-check and race to insert; this
+    # constraint turns the loser into a friendly changeset error. NB the
+    # name is Postgres's actual 63-char-truncated index name — the untruncated
+    # `..._resource_id_index` spelling never matched the real index, so a
+    # losing race previously raised an uncaught Ecto.ConstraintError.
     |> unique_constraint(:resource_id,
-      name: :crm_person_links_user_id_person_id_resource_type_resource_id_index
+      name: :crm_person_links_user_id_person_id_resource_type_resource_id_in
     )
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:person_id)

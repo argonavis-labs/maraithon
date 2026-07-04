@@ -13,6 +13,9 @@ defmodule Maraithon.RelationshipIntelligence do
   alias Maraithon.LLM
   alias Maraithon.Memory
   alias Maraithon.Memory.Item
+  alias Maraithon.UserIdentity
+
+  require Logger
 
   @sentinel "RELATIONSHIP_INTELLIGENCE_JSON_V1"
   @max_observations 16
@@ -24,7 +27,11 @@ defmodule Maraithon.RelationshipIntelligence do
   @default_people_limit 16
   @prompt_long_string_chars 1_200
   @prompt_string_chars 700
-  @valid_resource_types ~w(todo gmail_thread gmail_message calendar_event slack_thread slack_message telegram_message whatsapp_message source_observation)
+  # SPEC 04 R12: "person" makes proxy relationships (Emma's mom -> Emma) a
+  # queryable person->person edge instead of prose. Person-type resource_ids
+  # are resolved through the same person_index as the people decisions, never
+  # treated as raw external ids.
+  @valid_resource_types ~w(todo gmail_thread gmail_message calendar_event slack_thread slack_message telegram_message whatsapp_message source_observation person)
 
   def sentinel, do: @sentinel
 
@@ -156,6 +163,12 @@ defmodule Maraithon.RelationshipIntelligence do
       person. Omit `person_ref` for memories that are not about one person.
     - Link learned people to relevant source observations or todos when a
       resource id is available.
+    - When a parent, spouse, assistant, teacher, or other proxy relationship
+      to another already-known person is evidenced, also emit a `links` entry
+      with resource_type "person": person_ref = the proxy, resource_id = the
+      other person's person_ref/display_name/contact value, and role = a
+      short label ("proxy_for", "parent_of", "assistant_to", ...). Store it
+      with evidence; never assert a role the observations do not support.
     - Return ONLY valid JSON. No markdown.
 
     Output budget:
@@ -206,9 +219,10 @@ defmodule Maraithon.RelationshipIntelligence do
       "links": [
         {
           "person_ref": "person_ref, display_name, or contact value",
-          "resource_type": "todo | gmail_thread | gmail_message | calendar_event | slack_thread | telegram_message | whatsapp_message | source_observation",
-          "resource_id": "source id",
+          "resource_type": "todo | gmail_thread | gmail_message | calendar_event | slack_thread | telegram_message | whatsapp_message | source_observation | person",
+          "resource_id": "source id (for person links: the other person's person_ref/display_name/contact value)",
           "resource_source": "gmail | calendar | slack | telegram | whatsapp | ...",
+          "role": "for person links only: proxy_for | parent_of | assistant_to | similar short label",
           "title": "short source title",
           "summary": "why this source is attached to the person",
           "relationship_note": "how this item relates to the person",
@@ -429,10 +443,19 @@ defmodule Maraithon.RelationshipIntelligence do
 
     with %Person{} = person <- resolve_link_person(attrs, person_index),
          {:ok, resource_type} <- normalize_resource_type(attrs),
-         {:ok, resource_id} <- required_string(attrs, "resource_id") do
+         {:ok, resource_id} <- required_string(attrs, "resource_id"),
+         {:ok, resource_id} <-
+           resolve_person_edge_target(user_id, resource_type, resource_id, person, person_index) do
       link_attrs =
         attrs
-        |> Map.take(["resource_source", "title", "summary", "relationship_note", "metadata"])
+        |> Map.take([
+          "resource_source",
+          "title",
+          "summary",
+          "relationship_note",
+          "metadata",
+          "role"
+        ])
         |> Map.put("resource_type", resource_type)
         |> Map.put("resource_id", resource_id)
         |> Map.update("metadata", %{}, &normalize_map/1)
@@ -442,6 +465,50 @@ defmodule Maraithon.RelationshipIntelligence do
       nil -> {:skip, :person_not_found}
       {:error, reason} -> {:skip, reason}
     end
+  end
+
+  # SPEC 04 R12/R14: person-type edges resolve the model's `resource_id`
+  # through the same person_index built for the `people` decisions — it is
+  # another person_ref/display_name/contact lookup, never a raw external id.
+  # Unresolvable targets skip (`:person_resource_not_found`) so an edge can
+  # never dangle at a nonexistent id. The self-guard is runtime code, not a
+  # prompt line: the prompt already tells the model not to create person
+  # records for the user's own handles, but nothing enforced it in code —
+  # if either endpoint matches one of the user's own handles, skip and log
+  # (ids only, no free-text content).
+  defp resolve_person_edge_target(_user_id, resource_type, resource_id, _person, _person_index)
+       when resource_type != "person" do
+    {:ok, resource_id}
+  end
+
+  defp resolve_person_edge_target(user_id, "person", resource_id, %Person{} = person, index) do
+    case Map.get(index, normalize_lookup(resource_id)) do
+      %Person{} = target ->
+        cond do
+          target.id == person.id ->
+            {:error, :self_referential_person_link}
+
+          self_person?(user_id, person) or self_person?(user_id, target) ->
+            Logger.info(
+              "relationship_intelligence rejected self person edge " <>
+                "person_id=#{person.id} target_id=#{target.id}"
+            )
+
+            {:error, :self_person_link_rejected}
+
+          true ->
+            {:ok, target.id}
+        end
+
+      nil ->
+        {:error, :person_resource_not_found}
+    end
+  end
+
+  defp self_person?(user_id, %Person{} = person) do
+    person.contact_details
+    |> contact_values()
+    |> Enum.any?(&UserIdentity.own_handle?(user_id, &1))
   end
 
   defp normalize_resource_type(attrs) do

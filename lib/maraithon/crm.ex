@@ -389,18 +389,34 @@ defmodule Maraithon.Crm do
              {:ok, surviving} <- update_surviving_person(surviving, merged, now),
              %{repointed: repointed, collapsed: collapsed} <-
                move_person_links(user_id, surviving.id, merged.id),
+             %{repointed: repointed_person_edges, collapsed: collapsed_person_edges} <-
+               move_person_edge_targets(user_id, surviving.id, merged.id),
              %{repointed: repointed_goal_links, collapsed: collapsed_goal_links} <-
                move_goal_links(user_id, surviving.id, merged.id, now),
              {:ok, merged} <- mark_person_merged(merged, surviving, attrs, now),
              {:ok, audit} <- insert_person_merge_audit(user_id, surviving, merged, attrs, now) do
+          # SPEC 04 R7: merges never delete the loser row (the FK's
+          # on_delete: :nilify_all only fires on hard delete), so without
+          # this repoint every todo FK'd to the merged-away person silently
+          # diverges from its label forever.
+          repointed_todos = repoint_todo_counterparties(user_id, surviving.id, merged.id)
+
+          # A merged person's outgoing person-edge to the survivor becomes a
+          # survivor->survivor self edge after move_person_links/3 repoints
+          # the owner side; drop any such degenerate edge.
+          _ = delete_self_person_edges(user_id, surviving.id)
+
           %{
             surviving_person: surviving,
             merged_person: merged,
             audit: audit,
             repointed_link_count: repointed,
             collapsed_link_count: collapsed,
+            repointed_person_edge_count: repointed_person_edges,
+            collapsed_person_edge_count: collapsed_person_edges,
             repointed_goal_link_count: repointed_goal_links,
-            collapsed_goal_link_count: collapsed_goal_links
+            collapsed_goal_link_count: collapsed_goal_links,
+            repointed_todo_count: repointed_todos
           }
         else
           nil -> Repo.rollback(:person_not_found)
@@ -545,7 +561,9 @@ defmodule Maraithon.Crm do
            person: person,
            links: links,
            todos: todos,
-           open_todo_count: Enum.count(todos, &(&1.status in ["open", "snoozed"]))
+           open_todo_count: Enum.count(todos, &(&1.status in ["open", "snoozed"])),
+           related_people: related_people(user_id, person, links),
+           possible_duplicate: possible_duplicate(user_id, person)
          }}
 
       nil ->
@@ -554,6 +572,91 @@ defmodule Maraithon.Crm do
   end
 
   def relationship_context(_user_id, _attrs), do: {:error, :person_not_found}
+
+  # SPEC 04 R15: both directions of person<->person proxy edges.
+  # `list_links_for_person/3` only ever returns outgoing edges
+  # (link.person_id == person.id) — asking about Emma must also surface her
+  # mom's edge, which is stored under mom's person_id with Emma as the
+  # resource_id. The incoming query is not optional; it is the entire point
+  # of the feature (the canonical question queries the subject, not the
+  # proxy). Owning/target people are batch-loaded in one query to avoid the
+  # per-edge N+1 lookup.
+  defp related_people(user_id, %Person{} = person, links) do
+    outgoing = Enum.filter(links, &(&1.resource_type == "person"))
+
+    incoming =
+      PersonLink
+      |> where(
+        [link],
+        link.user_id == ^user_id and link.resource_type == "person" and
+          link.resource_id == ^person.id
+      )
+      |> order_by([link], desc: link.updated_at, desc: link.inserted_at)
+      |> limit(@default_link_limit)
+      |> Repo.all()
+
+    other_ids =
+      (Enum.map(outgoing, & &1.resource_id) ++ Enum.map(incoming, & &1.person_id))
+      |> Enum.flat_map(fn value ->
+        case Ecto.UUID.cast(value) do
+          {:ok, uuid} -> [uuid]
+          :error -> []
+        end
+      end)
+      |> Enum.uniq()
+
+    people_by_id =
+      if other_ids == [] do
+        %{}
+      else
+        Person
+        |> where([other], other.user_id == ^user_id and other.id in ^other_ids)
+        |> Repo.all()
+        |> Map.new(&{&1.id, &1})
+      end
+
+    Enum.flat_map(outgoing, fn link ->
+      person_edge_entry(link, "outgoing", Map.get(people_by_id, link.resource_id))
+    end) ++
+      Enum.flat_map(incoming, fn link ->
+        person_edge_entry(link, "incoming", Map.get(people_by_id, link.person_id))
+      end)
+  end
+
+  defp person_edge_entry(_link, _direction, nil), do: []
+
+  defp person_edge_entry(%PersonLink{} = link, direction, %Person{} = other) do
+    [
+      %{
+        direction: direction,
+        role: link.role,
+        relationship_note: link.relationship_note,
+        summary: link.summary,
+        person_id: other.id,
+        display_name: other.display_name
+      }
+    ]
+  end
+
+  # SPEC 04 R11: query-time safety net for unresolved soft-match merge
+  # candidates. When PersonMergeSuggestions has a pending candidate pair for
+  # this person, "Who is Dan Bourke?" surfaces the other half-record's
+  # id/display_name/evidence (a pointer, not a merge) so the model can offer
+  # to check both records before any merge is confirmed.
+  defp possible_duplicate(user_id, %Person{} = person) do
+    with %{"merge_suggestion" => %{} = suggestion} <- person.metadata || %{},
+         "pending" <- Map.get(suggestion, "status"),
+         other_id when is_binary(other_id) <- Map.get(suggestion, "other_person_id"),
+         %Person{status: "active"} = other <- get_person_for_user(user_id, other_id) do
+      %{
+        person_id: other.id,
+        display_name: other.display_name,
+        evidence: normalize_string(Map.get(suggestion, "evidence"))
+      }
+    else
+      _other -> nil
+    end
+  end
 
   def summarize_for_prompt(user_id, limit \\ 12)
 
@@ -673,6 +776,76 @@ defmodule Maraithon.Crm do
           %{counts | repointed: counts.repointed + 1}
       end
     end)
+  end
+
+  # SPEC 04 R7: repoint todos whose counterparty FK pointed at the
+  # merged-away person. Runs inside the merge transaction, before the loser
+  # commits to status "merged".
+  defp repoint_todo_counterparties(user_id, surviving_id, merged_id) do
+    {count, _} =
+      from(todo in Maraithon.Todos.Todo,
+        where: todo.user_id == ^user_id and todo.counterparty_person_id == ^merged_id
+      )
+      |> Repo.update_all(set: [counterparty_person_id: surviving_id])
+
+    count
+  end
+
+  # SPEC 04 R16: move_person_links/3 only rewrites the owner side
+  # (link.person_id == merged_id). Person->person proxy edges can also have
+  # the merged person as the *target* (resource_type == "person" and
+  # resource_id == merged_id — e.g. mom's edge pointing at a merged-away
+  # Emma record). Mirror move_goal_links/4, which already handles exactly
+  # this shape for GoalLink: repoint the target, collapsing into an existing
+  # survivor edge from the same owner when one exists.
+  defp move_person_edge_targets(user_id, surviving_id, merged_id) do
+    PersonLink
+    |> where(
+      [link],
+      link.user_id == ^user_id and link.resource_type == "person" and
+        link.resource_id == ^merged_id
+    )
+    |> Repo.all()
+    |> Enum.reduce(%{repointed: 0, collapsed: 0}, fn link, counts ->
+      cond do
+        link.person_id == surviving_id ->
+          # Repointing would create a survivor->survivor self edge.
+          {:ok, _deleted} = Repo.delete(link)
+          %{counts | collapsed: counts.collapsed + 1}
+
+        true ->
+          case get_existing_link(user_id, link.person_id, %{
+                 "resource_type" => "person",
+                 "resource_id" => surviving_id
+               }) do
+            %PersonLink{} = existing ->
+              {:ok, _existing} = merge_duplicate_link(existing, link)
+              {:ok, _deleted} = Repo.delete(link)
+              %{counts | collapsed: counts.collapsed + 1}
+
+            nil ->
+              {:ok, _link} =
+                link
+                |> Ecto.Changeset.change(resource_id: surviving_id)
+                |> Repo.update()
+
+              %{counts | repointed: counts.repointed + 1}
+          end
+      end
+    end)
+  end
+
+  defp delete_self_person_edges(user_id, person_id) do
+    {count, _} =
+      PersonLink
+      |> where(
+        [link],
+        link.user_id == ^user_id and link.person_id == ^person_id and
+          link.resource_type == "person" and link.resource_id == ^person_id
+      )
+      |> Repo.delete_all()
+
+    count
   end
 
   defp move_goal_links(user_id, surviving_id, merged_id, %DateTime{} = now) do

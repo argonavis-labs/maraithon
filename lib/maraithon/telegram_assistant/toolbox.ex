@@ -157,12 +157,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "get_open_loops",
-        "Fetch the linked user's durable open-loop snapshot across goals, open work, relationships, and memory. Pass direction:\"owed_to_me\" for \"who am I waiting on?\" (others owe the operator) or direction:\"owed_by_me\" for \"what do I owe?\" (the operator owes someone else).",
+        "Fetch the linked user's durable open-loop snapshot across goals, open work, relationships, and memory. Pass direction:\"owed_to_me\" for \"who am I waiting on?\" (others owe the operator) or direction:\"owed_by_me\" for \"what do I owe?\" (the operator owes someone else). Pass person_id (a CRM person id from list_people/get_person) to scope owed items to one counterparty, e.g. \"what do I owe Charlie?\".",
         %{
           "type" => "object",
           "properties" => %{
             "query" => %{"type" => "string"},
             "direction" => %{"type" => "string", "enum" => ["owed_to_me", "owed_by_me"]},
+            "person_id" => %{"type" => "string"},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
         }
@@ -2059,6 +2060,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
      OpenLoops.snapshot(runtime_context.user_id,
        query: Map.get(args, "query"),
        direction: Map.get(args, "direction"),
+       person_id: Map.get(args, "person_id"),
        limit: limit
      )}
   end
