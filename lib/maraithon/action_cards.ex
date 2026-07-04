@@ -665,17 +665,36 @@ defmodule Maraithon.ActionCards do
       is_integer(todo.nudge_count) and todo.nudge_count > 0 and
           match?(%DateTime{}, todo.last_nudged_at) ->
         nudge_subject_phrase(direction, age_days) <>
-          " nudged #{relative_nudge_label(todo.last_nudged_at)}."
-
-      is_integer(age_days) and age_days >= @nudge_min_age_days ->
-        nudge_subject_phrase(direction, age_days) <> ", never nudged."
+          " nudged #{relative_nudge_label(todo.last_nudged_at)}" <>
+          next_nudge_phrase(todo.next_nudge_at)
 
       true ->
-        nil
+        # SPEC 01 R5: "never nudged" copy is reserved for the actual
+        # zero-nudge case — a nudged row missing last_nudged_at falls back
+        # to the neutral phrasing instead of lying about nudge history.
+        nudged_before? = is_integer(todo.nudge_count) and todo.nudge_count > 0
+
+        cond do
+          nudged_before? ->
+            nudge_subject_phrase(direction, age_days) <>
+              ", nudged before" <> next_nudge_phrase(todo.next_nudge_at)
+
+          is_integer(age_days) and age_days >= @nudge_min_age_days ->
+            nudge_subject_phrase(direction, age_days) <> ", never nudged."
+
+          true ->
+            nil
+        end
     end
   end
 
   defp nudge_why_now(_todo, _profile), do: nil
+
+  defp next_nudge_phrase(%DateTime{} = next_nudge_at) do
+    "; next follow-up around #{Calendar.strftime(next_nudge_at, "%b %-d")}."
+  end
+
+  defp next_nudge_phrase(_next_nudge_at), do: "."
 
   defp nudge_subject_phrase("owed_to_me", age_days) when is_integer(age_days),
     do: "You've been waiting #{age_days} days"
@@ -795,17 +814,38 @@ defmodule Maraithon.ActionCards do
     base ++ nudge_prepared_actions(todo, profile)
   end
 
-  # SPEC 05 R4: suggests sending a follow-up nudge for old, never-nudged
-  # "owed_to_me" work. Silent once a nudge has already gone out or the item
-  # is too fresh to chase.
+  # SPEC 01 R5 (was SPEC 05 R4): suggests sending a follow-up nudge for aged
+  # "owed_to_me" work. The old `nudge_count > 0 -> []` guard made a single
+  # nudge permanently silence this suggestion; it is now cadence-aware — a
+  # 2nd/3rd/Nth nudge reappears once the scheduled `next_nudge_at` has
+  # elapsed (with a short 24h backoff after any send so the suggestion never
+  # instantly re-fires right after a nudge completes). Legacy rows with a
+  # prior nudge but no cadence (`next_nudge_at: nil`) re-suggest on the
+  # existing age/last-nudged signals rather than never or always.
+  @nudge_repeat_backoff_hours 24
+
   defp nudge_prepared_actions(%Todo{direction: "owed_to_me", status: status} = todo, profile)
        when status in @open_statuses do
+    nudge_count = if is_integer(todo.nudge_count), do: todo.nudge_count, else: 0
+    age_days = read_field(profile, "age_days")
+
     cond do
-      is_integer(todo.nudge_count) and todo.nudge_count > 0 ->
+      nudge_scheduled_in_future?(todo) ->
         []
 
-      is_integer(read_field(profile, "age_days")) and
-          read_field(profile, "age_days") >= @nudge_min_age_days ->
+      nudged_within_backoff?(todo) ->
+        []
+
+      nudge_count > 0 and nudge_cadence_elapsed?(todo) ->
+        [repeat_nudge_action(nudge_count)]
+
+      nudge_count > 0 ->
+        # next_nudge_at is nil on every pre-cadence row: "cadence unknown,
+        # safe to re-suggest" once the last nudge is old enough — not "never
+        # suggest again" (the old bug) and not "always suggest".
+        if legacy_renudge_due?(todo, age_days), do: [repeat_nudge_action(nudge_count)], else: []
+
+      is_integer(age_days) and age_days >= @nudge_min_age_days ->
         [
           %{
             "type" => "send_nudge",
@@ -819,6 +859,42 @@ defmodule Maraithon.ActionCards do
   end
 
   defp nudge_prepared_actions(_todo, _profile), do: []
+
+  defp repeat_nudge_action(nudge_count) do
+    %{
+      "type" => "send_nudge",
+      "label" => repeat_nudge_label(nudge_count)
+    }
+  end
+
+  defp repeat_nudge_label(1), do: "Send a follow-up nudge; 1 has gone out already."
+  defp repeat_nudge_label(count), do: "Send a follow-up nudge; #{count} have gone out already."
+
+  defp nudge_scheduled_in_future?(%Todo{next_nudge_at: %DateTime{} = next_nudge_at}) do
+    DateTime.compare(next_nudge_at, DateTime.utc_now()) == :gt
+  end
+
+  defp nudge_scheduled_in_future?(_todo), do: false
+
+  defp nudge_cadence_elapsed?(%Todo{next_nudge_at: %DateTime{} = next_nudge_at}) do
+    DateTime.compare(next_nudge_at, DateTime.utc_now()) != :gt
+  end
+
+  defp nudge_cadence_elapsed?(_todo), do: false
+
+  defp nudged_within_backoff?(%Todo{last_nudged_at: %DateTime{} = last_nudged_at}) do
+    DateTime.diff(DateTime.utc_now(), last_nudged_at, :hour) < @nudge_repeat_backoff_hours
+  end
+
+  defp nudged_within_backoff?(_todo), do: false
+
+  defp legacy_renudge_due?(%Todo{last_nudged_at: %DateTime{} = last_nudged_at}, _age_days) do
+    Date.diff(Date.utc_today(), DateTime.to_date(last_nudged_at)) >= @nudge_min_age_days
+  end
+
+  defp legacy_renudge_due?(_todo, age_days) do
+    is_integer(age_days) and age_days >= @nudge_min_age_days
+  end
 
   defp available_buttons(%Todo{status: status}, _attention_mode)
        when status not in @open_statuses,

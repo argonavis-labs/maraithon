@@ -2406,7 +2406,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             Todos.dismiss(runtime_context.user_id, todo_id, note: resolution_note)
 
           "snoozed" ->
-            with {:ok, snooze_until} <- resolve_snooze_until(args) do
+            with {:ok, snooze_until} <- resolve_snooze_until(runtime_context, args) do
               Todos.snooze(runtime_context.user_id, todo_id, snooze_until, note: resolution_note)
             end
 
@@ -4630,19 +4630,42 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     end
   end
 
-  defp resolve_snooze_until(args) do
+  # SPEC 01 R3: the conversational snooze accepts everything ingest accepts —
+  # a bare date ("2026-07-06") or naive datetime ("2026-07-06T09:00:00")
+  # resolves in the user's local time via the shared lenient coercion in
+  # `Maraithon.Todos.parse_flexible_datetime/2` instead of silently failing
+  # the strict full-offset ISO parse. A resolution that already passed (a
+  # model resolving "Monday" to last Monday) is clamped forward to the next
+  # occurrence of that weekday/time rather than snoozing into the past.
+  defp resolve_snooze_until(runtime_context, args) do
     case Map.get(args, "snooze_until") do
-      %DateTime{} = value ->
-        {:ok, value}
-
-      value when is_binary(value) ->
-        case DateTime.from_iso8601(String.trim(value)) do
-          {:ok, datetime, _offset} -> {:ok, datetime}
-          _ -> {:error, "invalid_snooze_until"}
-        end
-
-      _ ->
+      nil ->
         {:error, "missing_snooze_until"}
+
+      value ->
+        case Todos.parse_flexible_datetime(value, Map.get(runtime_context, :user_id)) do
+          %DateTime{} = datetime ->
+            {:ok, clamp_snooze_forward(datetime, DateTime.utc_now())}
+
+          _other ->
+            {:error, "invalid_snooze_until"}
+        end
+    end
+  end
+
+  defp clamp_snooze_forward(%DateTime{} = datetime, %DateTime{} = now) do
+    if DateTime.compare(datetime, now) == :gt do
+      datetime
+    else
+      week_seconds = 7 * 86_400
+      weeks_behind = div(DateTime.diff(now, datetime, :second), week_seconds) + 1
+      clamped = DateTime.add(datetime, weeks_behind * week_seconds, :second)
+
+      if DateTime.compare(clamped, now) == :gt do
+        clamped
+      else
+        DateTime.add(clamped, week_seconds, :second)
+      end
     end
   end
 

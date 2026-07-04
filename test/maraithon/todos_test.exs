@@ -2,6 +2,7 @@ defmodule Maraithon.TodosTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.Accounts
+  alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Todos
   alias Maraithon.Todos.FeedbackTrainer
@@ -499,6 +500,237 @@ defmodule Maraithon.TodosTest do
     assert memory.metadata["trainer"] == FeedbackTrainer.sentinel()
 
     assert Todos.list_open_for_user(user_id) == []
+  end
+
+  describe "SPEC 01 follow-up engine write boundary" do
+    test "owed_to_me todos persist next_nudge_at truncated to the second" do
+      user_id = unique_user_email("todos-next-nudge")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, [todo]} =
+        Todos.upsert_many(user_id, [
+          %{
+            "source" => "gmail",
+            "title" => "Waiting on Elena for the pricing doc",
+            "summary" => "Elena owes you the pricing doc for the renewal.",
+            "next_action" => "Nudge Elena if she stays quiet.",
+            "dedupe_key" => "todos-next-nudge-owed",
+            "direction" => "owed_to_me",
+            "counterparty_label" => "Elena",
+            "next_nudge_at" => "2099-07-09T15:30:00.123456Z",
+            "metadata" => %{"follow_up_reasoning" => "Customer-blocking ask, chase in 2 days."}
+          }
+        ])
+
+      assert todo.direction == "owed_to_me"
+      assert todo.next_nudge_at == ~U[2099-07-09 15:30:00Z]
+      assert todo.metadata["follow_up_reasoning"] =~ "chase in 2 days"
+    end
+
+    test "any non-owed_to_me direction forces next_nudge_at to nil even when attrs carry one" do
+      user_id = unique_user_email("todos-next-nudge-drop")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      for {direction, key} <- [{"owed_by_me", "a"}, {"fyi", "b"}] do
+        {:ok, [todo]} =
+          Todos.upsert_many(user_id, [
+            %{
+              "source" => "gmail",
+              "title" => "Send the launch summary note",
+              "summary" => "You owe the team the launch summary.",
+              "next_action" => "Write and send the launch summary.",
+              "dedupe_key" => "todos-next-nudge-drop-#{key}",
+              "direction" => direction,
+              "next_nudge_at" => "2099-07-09T15:30:00Z"
+            }
+          ])
+
+        assert todo.direction == direction
+        assert todo.next_nudge_at == nil
+      end
+    end
+
+    test "re-upserting without next_nudge_at preserves an existing cadence" do
+      user_id = unique_user_email("todos-next-nudge-preserve")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      base = %{
+        "source" => "gmail",
+        "title" => "Waiting on Elena for the pricing doc",
+        "summary" => "Elena owes you the pricing doc for the renewal.",
+        "next_action" => "Nudge Elena if she stays quiet.",
+        "dedupe_key" => "todos-next-nudge-preserve",
+        "direction" => "owed_to_me",
+        "counterparty_label" => "Elena"
+      }
+
+      {:ok, [todo]} =
+        Todos.upsert_many(user_id, [Map.put(base, "next_nudge_at", "2099-07-09T15:30:00Z")])
+
+      assert todo.next_nudge_at == ~U[2099-07-09 15:30:00Z]
+
+      {:ok, [reupserted]} = Todos.upsert_many(user_id, [base])
+      assert reupserted.id == todo.id
+      assert reupserted.next_nudge_at == ~U[2099-07-09 15:30:00Z]
+    end
+
+    test "bare dates resolve to local end-of-day for a timezone-configured user, DST-correct per date" do
+      user_id = unique_user_email("todos-local-due")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _agent} =
+        Agents.create_agent(%{
+          user_id: user_id,
+          behavior: "ai_chief_of_staff",
+          config: %{
+            "name" => "Chief of Staff",
+            "timezone" => "America/Toronto",
+            "timezone_name" => "America/Toronto",
+            "timezone_offset_hours" => -5
+          }
+        })
+
+      # 2026-03-08 is the US DST-start Sunday: 20:00 local that evening is
+      # already daylight time (-4), while the evening before is standard (-5).
+      cases = [
+        {"2026-03-08", ~U[2026-03-09 00:00:00Z]},
+        {"2026-03-07", ~U[2026-03-08 01:00:00Z]},
+        {"2026-07-10", ~U[2026-07-11 00:00:00Z]}
+      ]
+
+      for {{date, expected}, index} <- Enum.with_index(cases) do
+        {:ok, [todo]} =
+          Todos.upsert_many(user_id, [
+            %{
+              "source" => "manual",
+              "title" => "Send the board deck draft",
+              "summary" => "The board deck draft is due.",
+              "next_action" => "Finish and send the draft.",
+              "dedupe_key" => "todos-local-due-#{index}",
+              "due_at" => date
+            }
+          ])
+
+        assert DateTime.compare(todo.due_at, expected) == :eq,
+               "expected #{date} -> #{inspect(expected)}, got #{inspect(todo.due_at)}"
+      end
+
+      # A bare-date snooze resolves the same way through the same boundary.
+      {:ok, [snoozed]} =
+        Todos.upsert_many(user_id, [
+          %{
+            "source" => "manual",
+            "title" => "Revisit the vendor renewal quote",
+            "summary" => "The vendor renewal quote can wait until Friday.",
+            "next_action" => "Reopen the quote and decide.",
+            "dedupe_key" => "todos-local-snooze",
+            "status" => "snoozed",
+            "snoozed_until" => "2026-07-10"
+          }
+        ])
+
+      assert DateTime.compare(snoozed.snoozed_until, ~U[2026-07-11 00:00:00Z]) == :eq
+    end
+
+    test "bare dates fall back to UTC end-of-day, never midnight, when no timezone resolves" do
+      user_id = unique_user_email("todos-utc-due")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, [todo]} =
+        Todos.upsert_many(user_id, [
+          %{
+            "source" => "manual",
+            "title" => "Send the board deck draft",
+            "summary" => "The board deck draft is due.",
+            "next_action" => "Finish and send the draft.",
+            "dedupe_key" => "todos-utc-due",
+            "due_at" => "2026-07-10"
+          }
+        ])
+
+      assert DateTime.compare(todo.due_at, ~U[2026-07-10 23:59:59Z]) == :eq
+    end
+
+    test "instant timestamps keep instant semantics: source_occurred_at bare date stays midnight UTC" do
+      user_id = unique_user_email("todos-instant")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, [todo]} =
+        Todos.upsert_many(user_id, [
+          %{
+            "source" => "manual",
+            "title" => "Send the board deck draft",
+            "summary" => "The board deck draft is due.",
+            "next_action" => "Finish and send the draft.",
+            "dedupe_key" => "todos-instant",
+            "source_occurred_at" => "2026-07-10"
+          }
+        ])
+
+      assert DateTime.compare(todo.source_occurred_at, ~U[2026-07-10 00:00:00Z]) == :eq
+    end
+
+    test "parse_flexible_datetime reads naive datetimes as local wall time and keeps offsets" do
+      user_id = unique_user_email("todos-flexible-parse")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _agent} =
+        Agents.create_agent(%{
+          user_id: user_id,
+          behavior: "ai_chief_of_staff",
+          config: %{
+            "name" => "Chief of Staff",
+            "timezone" => "America/Toronto",
+            "timezone_name" => "America/Toronto",
+            "timezone_offset_hours" => -5
+          }
+        })
+
+      # Naive datetime = local wall clock (July -> DST -4).
+      assert Todos.parse_flexible_datetime("2026-07-06T09:00:00", user_id) ==
+               ~U[2026-07-06 13:00:00Z]
+
+      # Explicit offsets pass through untouched.
+      assert Todos.parse_flexible_datetime("2026-07-06T09:00:00Z", user_id) ==
+               ~U[2026-07-06 09:00:00Z]
+
+      # Bare date = local end-of-day.
+      assert Todos.parse_flexible_datetime("2026-07-06", user_id) == ~U[2026-07-07 00:00:00Z]
+
+      assert Todos.parse_flexible_datetime("not a datetime", user_id) == nil
+      assert Todos.parse_flexible_datetime("", user_id) == nil
+    end
+
+    test "clear_nudge_cadence clears next_nudge_at atomically, appends the note, keeps the todo open" do
+      user_id = unique_user_email("todos-clear-cadence")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, [todo]} =
+        Todos.upsert_many(user_id, [
+          %{
+            "source" => "gmail",
+            "title" => "Waiting on Elena for the pricing doc",
+            "summary" => "Elena owes you the pricing doc for the renewal.",
+            "next_action" => "Nudge Elena if she stays quiet.",
+            "dedupe_key" => "todos-clear-cadence",
+            "direction" => "owed_to_me",
+            "counterparty_label" => "Elena",
+            "next_nudge_at" => "2099-07-09T15:30:00Z",
+            "metadata" => %{"project" => "renewal"}
+          }
+        ])
+
+      assert %DateTime{} = todo.next_nudge_at
+
+      assert {:ok, cleared} = Todos.clear_nudge_cadence(user_id, todo.id)
+      assert cleared.next_nudge_at == nil
+      assert cleared.status == "open"
+      assert cleared.metadata["resolution_note"] =~ "cadence cleared"
+      # Atomic jsonb merge preserves the rest of metadata.
+      assert cleared.metadata["project"] == "renewal"
+
+      assert Todos.clear_nudge_cadence(user_id, Ecto.UUID.generate()) == {:error, :not_found}
+    end
   end
 
   defp gmail_todo_attrs(thread_id, title, overrides \\ []) do
