@@ -5,6 +5,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   @behaviour Maraithon.ChiefOfStaff.Skill
 
+  alias Maraithon.ActionLedger
   alias Maraithon.AgentHarness.MarkdownSkill
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.Acquisition
@@ -800,7 +801,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           user_id
           |> Todos.list_open_for_user(limit: 100)
           |> Enum.map(&todo_for_prompt/1),
-        "held_interruptions" => held_interruptions_for_prompt(user_id)
+        "held_interruptions" => held_interruptions_for_prompt(user_id),
+        "system_notices" => self_heal_notices_for_prompt(user_id)
       },
       "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
       "relationships" =>
@@ -1365,6 +1367,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        a decision into Needs Your Attention, Open Commitments, or another appropriate section
        using hold_reason and why_now for context, and skip any that are already fully covered by
        another item in this brief.
+
+       System notices rule:
+       open_work.system_notices lists things the agent itself noticed were stuck and fixed since
+       the last brief (self-heals). Mention one only if it is genuinely noteworthy — a real gap
+       the operator would want to know was closed, not routine bookkeeping. When you do, keep it
+       to one brief, matter-of-fact line without alarm. Otherwise say nothing about it; an empty
+       or unremarkable list should leave no trace in the brief.
 
        Source digest rule:
        The morning briefing payload is assembled from independently bounded source digests for
@@ -5409,21 +5418,29 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   # the operator (see mark_held_interruptions_delivered/1 in push_broker.ex).
   # If generation errors or the brief stays held/failed, they remain
   # "held" so the next brief re-fetches them via list_held_for_user/2.
+  # Field mapping shared with CalendarCheckIn via
+  # ProactiveQueue.held_interruptions_for_prompt/2 (SPEC 02 R8).
   defp held_interruptions_for_prompt(user_id) do
+    ProactiveQueue.held_interruptions_for_prompt(user_id, limit: 25)
+  end
+
+  # SPEC 02 R14: durable "the agent noticed something was stuck and cleared
+  # it" facts from the last 24 hours, surfaced to the model as
+  # open_work.system_notices. Model-gated: the runtime only supplies the
+  # facts; the prompt rule leaves whether/how to mention one to the model.
+  defp self_heal_notices_for_prompt(user_id) do
+    since = DateTime.add(DateTime.utc_now(), -24 * 3600, :second)
+
     user_id
-    |> ProactiveQueue.list_held_for_user(limit: 25)
-    |> Enum.map(fn candidate ->
+    |> ActionLedger.list_recent(event_type: "runtime.self_healed", since: since, limit: 10)
+    |> Enum.map(fn action ->
       %{
-        "id" => candidate.id,
-        "source" => candidate.source,
-        "title" => candidate.title,
-        "body" => candidate.body,
-        "why_now" => candidate.why_now,
-        "urgency" => candidate.urgency,
-        "hold_reason" => candidate.plan_reason,
-        "held_since" => prompt_time(candidate.updated_at)
+        "summary" => action.model_summary,
+        "at" => prompt_time(action.inserted_at)
       }
     end)
+  rescue
+    _error -> []
   end
 
   defp held_interruption_ids(brief_input) when is_map(brief_input) do

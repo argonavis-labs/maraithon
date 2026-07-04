@@ -11,6 +11,7 @@ defmodule Maraithon.Runtime.DogfoodDigest do
   alias Maraithon.Runtime.Config
   alias Maraithon.Runtime.IncidentLog
   alias Maraithon.Runtime.RuntimeIncident
+  alias Maraithon.TelegramAssistant.PushBroker
 
   require Logger
 
@@ -56,20 +57,63 @@ defmodule Maraithon.Runtime.DogfoodDigest do
     {:noreply, state}
   end
 
+  # SPEC 02 R10: the digest rides PushBroker.deliver/1 (quiet hours,
+  # PushReceipt audit trail, per-day dedupe) instead of a direct Telegram
+  # send. `held_rate_limit` is `{:ok, :skipped}` — a daily digest held by
+  # quiet hours is not a data-loss event; it composes fresh content again
+  # tomorrow. When the unified broker is globally off there is no gate to
+  # bypass, so `{:fallback, :disabled}` falls back to the legacy direct
+  # send rather than silently dropping the digest.
   def deliver(now \\ DateTime.utc_now(), opts \\ []) do
     opts = Map.new(opts)
     user_id = Map.get(opts, :user_id) || Config.get(:dogfood_user_id, nil)
-    telegram_module = Map.get(opts, :telegram_module, Telegram)
 
     with {:user_id, user_id} when is_binary(user_id) and user_id != "" <- {:user_id, user_id},
          destination when is_binary(destination) <-
            ConnectedAccounts.telegram_destination(user_id),
-         body <- compose(now, Map.put(opts, :user_id, user_id)),
-         {:ok, _response} <- telegram_module.send_message(destination, body) do
-      {:ok, :sent}
+         body <- compose(now, Map.put(opts, :user_id, user_id)) do
+      case PushBroker.deliver(%{
+             user_id: user_id,
+             chat_id: destination,
+             origin_type: "dogfood_digest",
+             origin_id: "dogfood_digest:#{Date.to_iso8601(DateTime.to_date(now))}",
+             dedupe_key: "dogfood_digest:#{Date.to_iso8601(Date.utc_today())}",
+             title: "Chief of Staff daily check",
+             body: body,
+             bypass_budget_cap: true,
+             interrupt_now: false
+           }) do
+        {:ok, %{decision: "sent_now"}} ->
+          {:ok, :sent}
+
+        {:ok, %{decision: decision}} when decision in ["merged", "queued_digest"] ->
+          {:ok, :sent}
+
+        {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
+          {:ok, :skipped}
+
+        {:ok, %{decision: "held_rate_limit"}} ->
+          Logger.info("Dogfood digest held by quiet hours/interruption gate", user_id: user_id)
+          {:ok, :skipped}
+
+        {:fallback, :disabled} ->
+          deliver_direct(Map.get(opts, :telegram_module, Telegram), destination, body)
+
+        {:error, reason} ->
+          {:error, reason}
+
+        other ->
+          {:error, other}
+      end
     else
       {:user_id, _} -> {:ok, :skipped}
       nil -> {:ok, :skipped}
+    end
+  end
+
+  defp deliver_direct(telegram_module, destination, body) do
+    case telegram_module.send_message(destination, body) do
+      {:ok, _response} -> {:ok, :sent}
       {:error, reason} -> {:error, reason}
       other -> {:error, other}
     end

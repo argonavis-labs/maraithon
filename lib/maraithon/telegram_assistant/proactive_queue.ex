@@ -5,13 +5,20 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
 
   import Ecto.Query
 
+  alias Maraithon.ActionLedger
   alias Maraithon.Normalization
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.ProactiveCandidate
 
+  require Logger
+
   @default_candidate_ttl_minutes 120
   @default_due_user_limit 25
   @live_statuses ~w(pending planned)
+  # SPEC 02 R7: a "held" candidate has no expires_at-based owner (its
+  # original expires_at is stale pre-hold data); age is measured from
+  # updated_at (when it was held). 7 days.
+  @default_held_ttl_minutes 10_080
 
   def enqueue(attrs) when is_map(attrs) do
     normalized = normalize_attrs(attrs)
@@ -76,6 +83,32 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
 
   def list_held_for_user(_user_id, _opts), do: []
 
+  @doc """
+  Held candidates mapped to the prompt shape shared by the morning briefing
+  and the calendar check-in (SPEC 02 R8). Kept here so both skills read one
+  field mapping instead of duplicating it.
+  """
+  def held_interruptions_for_prompt(user_id, opts \\ []) do
+    user_id
+    |> list_held_for_user(opts)
+    |> Enum.map(fn candidate ->
+      %{
+        "id" => candidate.id,
+        "source" => candidate.source,
+        "title" => candidate.title,
+        "body" => candidate.body,
+        "why_now" => candidate.why_now,
+        "urgency" => candidate.urgency,
+        "hold_reason" => candidate.plan_reason,
+        "held_since" => held_since(candidate.updated_at)
+      }
+    end)
+  end
+
+  defp held_since(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp held_since(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp held_since(_value), do: nil
+
   def pending_user_ids(opts \\ [])
 
   def pending_user_ids(limit) when is_integer(limit), do: pending_user_ids(limit: limit)
@@ -116,6 +149,82 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
 
     count
   end
+
+  @doc """
+  Expires "held" candidates that have sat unreviewed past the held TTL
+  (SPEC 02 R7). Age is measured from `updated_at` (when the candidate was
+  held) — never from `expires_at`, which reflects the stale pre-hold TTL,
+  and never in `list_held_for_user/2`'s urgency-ordered display window,
+  which would hide the low-urgency stale tail from the sweep.
+
+  Only touches `status == "held"` rows, so re-running is a no-op for rows
+  already expired. Each expired row gets one `ActionLedger` entry
+  (`held_interruption_expired`) so the drop is auditable, never silent.
+
+  Returns the list of expired rows as `%{id:, user_id:, title:, held_since:}`
+  maps so the caller (the stuck-state watchdog) can narrate the self-heal.
+  """
+  def expire_stale_held(now \\ DateTime.utc_now(), ttl_minutes \\ @default_held_ttl_minutes) do
+    cutoff = DateTime.add(now, -ttl_minutes * 60, :second)
+
+    stale =
+      ProactiveCandidate
+      |> where([candidate], candidate.status == "held")
+      |> where([candidate], candidate.updated_at <= ^cutoff)
+      |> select([candidate], %{
+        id: candidate.id,
+        user_id: candidate.user_id,
+        title: candidate.title,
+        held_since: candidate.updated_at
+      })
+      |> Repo.all()
+
+    case stale do
+      [] ->
+        []
+
+      rows ->
+        ids = Enum.map(rows, & &1.id)
+
+        {_count, expired_ids} =
+          ProactiveCandidate
+          |> where([candidate], candidate.id in ^ids)
+          |> where([candidate], candidate.status == "held")
+          |> select([candidate], candidate.id)
+          |> Repo.update_all(set: [status: "expired", updated_at: now])
+
+        expired_ids = MapSet.new(expired_ids || [])
+        expired = Enum.filter(rows, &MapSet.member?(expired_ids, &1.id))
+        Enum.each(expired, &record_held_expiry/1)
+        expired
+    end
+  end
+
+  defp record_held_expiry(row) do
+    _ =
+      ActionLedger.record(%{
+        user_id: row.user_id,
+        surface: "runtime",
+        event_type: "held_interruption_expired",
+        status: "completed",
+        metadata: %{
+          "candidate_id" => row.id,
+          "held_since" => held_since(row.held_since)
+        }
+      })
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("Failed to record held interruption expiry",
+        candidate_id: row.id,
+        reason: Exception.message(error)
+      )
+
+      :ok
+  end
+
+  def default_held_ttl_minutes, do: @default_held_ttl_minutes
 
   def candidate_ttl_minutes do
     :maraithon

@@ -58,23 +58,15 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
            telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
          }) do
       {:ok, %{decision: "sent_now", message_id: message_id}} ->
-        delivery
-        |> Ecto.Changeset.change(%{
-          status: "sent",
-          sent_at: DateTime.utc_now(),
-          provider_message_id: message_id,
-          metadata: Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
-        })
-        |> Repo.update()
-
+        mark_insight_delivery_sent(delivery, message_id)
         :ok
 
       {:ok, %{decision: decision}} when decision in ["merged", "queued_digest"] ->
-        mark_delivery_delivered_elsewhere(delivery)
+        mark_insight_delivery_delivered_elsewhere(delivery)
         :ok
 
       {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
-        mark_delivery_delivered_elsewhere(delivery)
+        mark_insight_delivery_delivered_elsewhere(delivery)
         :ok
 
       {:ok, %{decision: "held_rate_limit"}} ->
@@ -95,9 +87,38 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     end
   end
 
-  defp mark_delivery_delivered_elsewhere(%Delivery{} = delivery) do
+  @doc """
+  Marks an insight `Delivery` "sent" when its content reached the operator
+  through another confirmed path (merged into a digest, or suppressed as a
+  duplicate of an already-sent push).
+
+  Public because `DeliveryPlanner.maybe_mark_insight_delivery_sent/1` (the
+  planner-confirmed-delivery path, SPEC 02 R6) needs the same
+  implementation as this module's legacy direct-send path — without it the
+  `Delivery` row stays "pending" forever and `InsightNotifier` re-mints a
+  fresh `ProactiveCandidate` (and a `plan_delivery` model call) every tick.
+  """
+  def mark_insight_delivery_delivered_elsewhere(%Delivery{} = delivery) do
     delivery
     |> Ecto.Changeset.change(%{status: "sent", sent_at: delivery.sent_at || DateTime.utc_now()})
+    |> Repo.update()
+  end
+
+  @doc """
+  Marks an insight `Delivery` "sent" with the Telegram message id of the
+  push that carried it — the insight-side sibling of `mark_brief_sent/2`
+  (SPEC 02 R6).
+  """
+  def mark_insight_delivery_sent(%Delivery{} = delivery, message_id) do
+    message_id = normalize_id(message_id)
+
+    delivery
+    |> Ecto.Changeset.change(%{
+      status: "sent",
+      sent_at: DateTime.utc_now(),
+      provider_message_id: message_id,
+      metadata: Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
+    })
     |> Repo.update()
   end
 

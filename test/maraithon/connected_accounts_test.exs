@@ -19,13 +19,40 @@ defmodule Maraithon.ConnectedAccountsTest do
     })
 
     Application.put_env(:maraithon, :connected_accounts,
-      telegram_module: CapturingTelegram,
       email_module: CapturingEmail,
       reconnect_base_url: "https://maraithon.test"
     )
 
+    # SPEC 02 R9: reconnect pushes ride PushBroker (quiet hours, receipts),
+    # which sends through the :insights telegram module. Enable the unified
+    # broker and pin the quiet-hours window away from the current local hour
+    # so tests are deterministic regardless of when they run; the
+    # quiet-hours test below overrides the window explicitly.
+    original_insights = Application.get_env(:maraithon, :insights, [])
+    original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :insights,
+      Keyword.merge(original_insights, telegram_module: CapturingTelegram)
+    )
+
+    local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user("setup").hour
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(original_assistant,
+        telegram_unified_push_enabled: true,
+        quiet_hours_start_local: rem(local_hour + 2, 24),
+        quiet_hours_end_local: rem(local_hour + 3, 24)
+      )
+    )
+
     on_exit(fn ->
       Application.delete_env(:maraithon, :connected_accounts)
+      Application.put_env(:maraithon, :insights, original_insights)
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant)
     end)
 
     :ok
@@ -101,6 +128,97 @@ defmodule Maraithon.ConnectedAccountsTest do
 
     assert is_binary(
              get_in(account.metadata, ["reconnect_notification", "channels", "email", "sent_at"])
+           )
+  end
+
+  # SPEC 02 R9: a reconnect push attempted during quiet hours is held by
+  # PushBroker — not marked sent (renotify window not stamped), no
+  # sent_now PushReceipt — and the same attempt outside quiet hours goes
+  # through and is marked sent.
+  test "reconnect push during quiet hours is held and not marked sent; retried outside" do
+    user_id = "quiet-hours-reconnect-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram_account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "7223344",
+        metadata: %{"chat_id" => "7223344"}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:quiet@example.com", %{
+        access_token: "google-token",
+        refresh_token: "google-refresh",
+        metadata: %{"account_email" => "quiet@example.com"}
+      })
+
+    # Force quiet hours around the user's current local hour.
+    local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user(user_id).hour
+    assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(assistant_config,
+        quiet_hours_start_local: local_hour,
+        quiet_hours_end_local: rem(local_hour + 1, 24)
+      )
+    )
+
+    assert {:ok, _account} =
+             ConnectedAccounts.mark_error(
+               user_id,
+               "google:quiet@example.com",
+               "oauth_reauth_required"
+             )
+
+    # No Telegram message went out and no sent_now receipt exists.
+    assert Agent.get(:capturing_telegram_recorder, &Enum.reverse/1) == []
+
+    refute Repo.exists?(
+             from(receipt in Maraithon.TelegramAssistant.PushReceipt,
+               where: receipt.user_id == ^user_id and receipt.decision == "sent_now"
+             )
+           )
+
+    # The renotify window was not stamped for the push channel (email may
+    # still have gone out independently).
+    account = ConnectedAccounts.get(user_id, "google:quiet@example.com")
+
+    refute get_in(account.metadata, ["reconnect_notification", "channels", "push", "sent_at"])
+
+    # Quiet hours end; the next report_access_issue (FreshnessSweep would
+    # drive this hourly in production) retries and succeeds.
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(assistant_config,
+        quiet_hours_start_local: rem(local_hour + 2, 24),
+        quiet_hours_end_local: rem(local_hour + 3, 24)
+      )
+    )
+
+    assert :ok =
+             ConnectedAccounts.report_access_issue(
+               user_id,
+               "google:quiet@example.com",
+               "oauth_reauth_required"
+             )
+
+    messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{chat_id: "7223344", text: text}] = messages
+    assert text =~ "quiet@example.com"
+
+    assert Repo.exists?(
+             from(receipt in Maraithon.TelegramAssistant.PushReceipt,
+               where: receipt.user_id == ^user_id and receipt.decision == "sent_now"
+             )
+           )
+
+    account = ConnectedAccounts.get(user_id, "google:quiet@example.com")
+
+    assert is_binary(
+             get_in(account.metadata, ["reconnect_notification", "channels", "push", "sent_at"])
            )
   end
 

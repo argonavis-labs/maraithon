@@ -850,6 +850,214 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert untouched.status == "open"
   end
 
+  # ==========================================================================
+  # SPEC 02 R11/R12: the double-tap CREATE race is closed by a partial unique
+  # index, with graceful fallback for the loser and force-expire-and-retry
+  # for a stale expired-but-unswept blocker.
+  # ==========================================================================
+
+  test "unique index rejects a second awaiting prepared action for the same todo/channel", %{
+    user_id: user_id
+  } do
+    todo_id = Ecto.UUID.generate()
+
+    assert {:ok, _first} =
+             create_raw_prepared_action(user_id, "slack_post", todo_id)
+
+    assert {:error, changeset} =
+             create_raw_prepared_action(user_id, "slack_post", todo_id)
+
+    assert Enum.any?(changeset.errors, fn {_field, {_message, opts}} ->
+             Keyword.get(opts, :constraint_name) ==
+               "telegram_prepared_actions_awaiting_todo_index"
+           end)
+
+    awaiting =
+      Repo.all(
+        from(prepared_action in PreparedAction,
+          where:
+            prepared_action.user_id == ^user_id and
+              prepared_action.status == "awaiting_confirmation"
+        )
+      )
+
+    assert length(awaiting) == 1
+  end
+
+  test "two racing Send taps produce exactly one awaiting prepared action and no crash", %{
+    user_id: user_id
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "slack",
+          "title" => "Reply to the launch channel",
+          "summary" => "The team is waiting on a status update in Slack.",
+          "next_action" => "Reply in Slack with the launch status.",
+          "dedupe_key" => "todo-actions:send-race",
+          "metadata" => %{"team_id" => "T123", "channel_id" => "C123"},
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "slack",
+            "text" => "Quick update: the launch is on track for Friday."
+          }
+        }
+      ])
+
+    send_tap = fn message_id, callback_id ->
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: message_id,
+          callback_id: callback_id,
+          data: "tgtodo:#{todo.id}:send"
+        }
+      })
+    end
+
+    # Two truly concurrent taps: both may pass the soft read-then-write
+    # check before either insert commits; the unique index guarantees one
+    # winner, and the loser must fall back to the winner's row instead of
+    # crashing (DataCase runs async: false so the sandbox is shared).
+    results =
+      [
+        Task.async(fn -> send_tap.("todo-send-race-1", "cb-send-race-1") end),
+        Task.async(fn -> send_tap.("todo-send-race-2", "cb-send-race-2") end)
+      ]
+      |> Task.await_many(30_000)
+
+    assert Enum.all?(results, &(&1 == :ok))
+
+    awaiting =
+      Repo.all(
+        from(prepared_action in PreparedAction,
+          where:
+            prepared_action.user_id == ^user_id and
+              prepared_action.status == "awaiting_confirmation"
+        )
+      )
+
+    assert length(awaiting) == 1
+    assert hd(awaiting).payload["todo_id"] == todo.id
+  end
+
+  test "a stale expired-but-unswept prepared action does not block a new send", %{
+    user_id: user_id
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "slack",
+          "title" => "Reply to the launch channel",
+          "summary" => "The team is waiting on a status update in Slack.",
+          "next_action" => "Reply in Slack with the launch status.",
+          "dedupe_key" => "todo-actions:send-stale-expired",
+          "metadata" => %{"team_id" => "T123", "channel_id" => "C123"},
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "slack",
+            "text" => "Quick update: the launch is on track for Friday."
+          }
+        }
+      ])
+
+    # A prior prepared send for this todo that is past expires_at but still
+    # awaiting_confirmation (the active sweep has not reached it yet). The
+    # index predicate cannot exclude it (now() is not immutable), so it
+    # would block the insert without R12's force-expire-and-retry path.
+    {:ok, stale} =
+      create_raw_prepared_action(user_id, "slack_post", todo.id,
+        expires_at: DateTime.add(DateTime.utc_now(), -3600, :second)
+      )
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "todo-send-stale",
+          callback_id: "cb-send-stale",
+          data: "tgtodo:#{todo.id}:send"
+        }
+      })
+
+    # The stale blocker was force-expired and the new send succeeded.
+    assert Repo.get!(PreparedAction, stale.id).status == "expired"
+
+    awaiting =
+      Repo.all(
+        from(prepared_action in PreparedAction,
+          where:
+            prepared_action.user_id == ^user_id and
+              prepared_action.status == "awaiting_confirmation"
+        )
+      )
+
+    assert [fresh] = awaiting
+    refute fresh.id == stale.id
+    assert fresh.payload["todo_id"] == todo.id
+    assert last_telegram_message(:send).text =~ "Ready to send"
+  end
+
+  test "distinct action types for the same todo are independent prepared actions", %{
+    user_id: user_id
+  } do
+    todo_id = Ecto.UUID.generate()
+
+    # A pending gmail_draft_send for the todo must not collide with (or be
+    # returned as) a slack_post for the same todo — the index is scoped
+    # (user_id, action_type, todo_id): one prepared send per todo PER
+    # channel.
+    assert {:ok, gmail} = create_raw_prepared_action(user_id, "gmail_draft_send", todo_id)
+    assert {:ok, slack} = create_raw_prepared_action(user_id, "slack_post", todo_id)
+
+    refute gmail.id == slack.id
+
+    assert Maraithon.TelegramAssistant.find_awaiting_prepared_action_for_todo_ignoring_expiry(
+             user_id,
+             "slack_post",
+             todo_id
+           ).id == slack.id
+
+    assert Maraithon.TelegramAssistant.find_awaiting_prepared_action_for_todo_ignoring_expiry(
+             user_id,
+             "gmail_draft_send",
+             todo_id
+           ).id == gmail.id
+  end
+
+  defp create_raw_prepared_action(user_id, action_type, todo_id, opts \\ []) do
+    {:ok, run} =
+      Maraithon.TelegramAssistant.start_run(%{
+        user_id: user_id,
+        chat_id: "12345",
+        surface: "telegram",
+        trigger_type: "follow_up",
+        status: "completed",
+        model_provider: "deterministic",
+        model_name: "todo_send_action",
+        prompt_snapshot: %{},
+        result_summary: %{},
+        started_at: DateTime.utc_now(),
+        finished_at: DateTime.utc_now()
+      })
+
+    Maraithon.TelegramAssistant.create_prepared_action(%{
+      user_id: user_id,
+      chat_id: "12345",
+      surface: "telegram",
+      run_id: run.id,
+      action_type: action_type,
+      target_type: if(action_type == "slack_post", do: "slack_channel", else: "gmail_draft"),
+      payload: %{"todo_id" => todo_id, "text" => "Prepared body"},
+      preview_text: "Prepared body",
+      status: "awaiting_confirmation",
+      expires_at:
+        Keyword.get(opts, :expires_at, DateTime.add(DateTime.utc_now(), 3600, :second))
+    })
+  end
+
   defp last_telegram_message(type) do
     :capturing_telegram_recorder
     |> Agent.get(&Enum.reverse/1)

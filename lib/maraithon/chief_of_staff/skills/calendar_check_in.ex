@@ -17,6 +17,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
 
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.SourceBundle
+  alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Timezones
   alias Maraithon.Todos
   alias Maraithon.Tracing
@@ -239,7 +240,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
         "todos" =>
           user_id
           |> Todos.list_open_for_user(limit: 25)
-          |> Enum.map(&Todos.serialize_for_prompt/1)
+          |> Enum.map(&Todos.serialize_for_prompt/1),
+        # SPEC 02 R8: without this, a user whose morning-briefing agent is
+        # idle/deduped never has held interruptions drained — the morning
+        # brief was the only consumer. Same shape the morning brief uses
+        # (shared field mapping in ProactiveQueue).
+        "held_interruptions" => ProactiveQueue.held_interruptions_for_prompt(user_id, limit: 25)
       },
       "last_check_in_at" => state.last_check_in_at
     }
@@ -411,6 +417,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     notification. Use the local clock times from the input. Plain Telegram text,
     no markdown tables, no internal labels.
 
+    Held interruptions: open_work.held_interruptions lists proactive pushes that
+    were held instead of interrupting (quiet hours, the interruption budget, or a
+    hold decision) and still need to reach the operator. You may fold one in if it
+    fits the check-in naturally (use hold_reason and why_now for context), but do
+    not force one into a short check-in just because it is present.
+
     Return ONLY valid JSON with this exact shape:
     {
       "decision": "send" | "hold",
@@ -463,7 +475,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
         "origin_skill_id" => id(),
         "generation_mode" => "llm",
         "openings" => Map.get(check_in_input, "openings", []),
-        "reason" => read_string(check_in, "reason", nil)
+        "reason" => read_string(check_in, "reason", nil),
+        # SPEC 02 R8: PushBroker.mark_held_interruptions_delivered/1 (and
+        # DeliveryPlanner.maybe_mark_brief_delivered/1) read this key
+        # generically off any %Brief{} once delivery is confirmed — wiring
+        # the ids through metadata is the entire drain fix for check-ins.
+        "held_interruption_ids" => held_interruption_ids_from_input(check_in_input)
       }
     }
 
@@ -484,6 +501,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
         {:idle, cleared_state}
     end
   end
+
+  # Same extraction the morning brief uses (SPEC 02 R8):
+  # open_work.held_interruptions -> "id", binary ids only.
+  defp held_interruption_ids_from_input(check_in_input) when is_map(check_in_input) do
+    check_in_input
+    |> get_in(["open_work", "held_interruptions"])
+    |> Kernel.||([])
+    |> Enum.map(&Map.get(&1, "id"))
+    |> Enum.filter(&is_binary/1)
+  end
+
+  defp held_interruption_ids_from_input(_check_in_input), do: []
 
   defp user_facing_check_in(check_in, check_in_input) when is_map(check_in) do
     body = safe_check_in_body(read_string(check_in, "body", nil), check_in_input)

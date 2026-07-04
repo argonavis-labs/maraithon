@@ -12,7 +12,7 @@ defmodule Maraithon.TelegramAssistant.PushReceipt do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @origin_types ~w(insight brief agent_push assistant_digest)
+  @origin_types ~w(insight brief agent_push assistant_digest connector_health dogfood_digest)
   # `held_rate_limit` covers both interruption-budget and quiet-hours holds.
   # Unlike the other decisions, it must never dedupe-block a future retry —
   # see Maraithon.TelegramAssistant.push_receipt_for/2.

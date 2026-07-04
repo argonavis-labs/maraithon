@@ -11,7 +11,7 @@ defmodule Maraithon.Runtime.RuntimeIncident do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @kinds ~w(node_boot node_shutdown agent_crash agent_resumed agent_stopped_unexpectedly db_outage db_recovered)
+  @kinds ~w(node_boot node_shutdown agent_crash agent_resumed agent_stopped_unexpectedly db_outage db_recovered stuck_state_detected stuck_state_swept)
 
   schema "runtime_incidents" do
     field :kind, :string

@@ -231,6 +231,12 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   # two Confirm prompts and, if both were confirmed, two sends plus two
   # independent nudge_count increments. Reuse the existing awaiting
   # confirmation (if any) instead of creating a duplicate.
+  #
+  # SPEC 02 R11/R12: this soft read-then-write check only closes the window
+  # when the taps are far enough apart. The atomic backstop is the
+  # `telegram_prepared_actions_awaiting_todo_index` partial unique index —
+  # two truly concurrent taps both read nil here, both insert, and the loser
+  # falls back to the winner's row in `insert_prepared_send/5` below.
   defp prepare_todo_send(user_id, chat_id, %Todo{} = todo) do
     case TelegramAssistant.find_awaiting_prepared_action_for_todo(user_id, todo.id) do
       %{} = existing_prepared_action ->
@@ -248,18 +254,89 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
              "metadata" => %{"mode" => "assistant"}
            }),
          {:ok, attrs} <- TodoThreadPrimer.resolve_send_action_attrs(conversation, todo),
-         {:ok, run} <- create_send_run(conversation, todo),
-         {:ok, prepared_action} <-
-           attrs
-           |> Map.put(:surface, "telegram")
-           |> Map.put(:run_id, run.id)
-           |> TelegramAssistant.create_prepared_action() do
-      _ = TelegramAssistant.mark_conversation_awaiting_action(conversation, prepared_action)
-      {:ok, {:send_prepared, prepared_action}}
+         {:ok, run} <- create_send_run(conversation, todo) do
+      attrs =
+        attrs
+        |> Map.put(:surface, "telegram")
+        |> Map.put(:run_id, run.id)
+
+      insert_prepared_send(user_id, conversation, todo, attrs, _may_retry? = true)
     else
       :skip -> {:error, :no_send_destination}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp insert_prepared_send(user_id, conversation, %Todo{} = todo, attrs, may_retry?) do
+    case TelegramAssistant.create_prepared_action(attrs) do
+      {:ok, prepared_action} ->
+        _ = TelegramAssistant.mark_conversation_awaiting_action(conversation, prepared_action)
+        {:ok, {:send_prepared, prepared_action}}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        if awaiting_todo_conflict?(changeset) do
+          resolve_awaiting_todo_conflict(
+            user_id,
+            conversation,
+            todo,
+            attrs,
+            changeset,
+            may_retry?
+          )
+        else
+          {:error, changeset}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # SPEC 02 R12: the insert collided with the partial unique index. Look the
+  # blocking row up WITHOUT the `expires_at > now` filter —
+  # `find_awaiting_prepared_action_for_todo/2` filters it out, so it returns
+  # nil for exactly the stale-expired-but-unswept row that caused the
+  # conflict (the index predicate cannot reference expires_at; now() is not
+  # immutable in Postgres).
+  defp resolve_awaiting_todo_conflict(user_id, conversation, todo, attrs, changeset, may_retry?) do
+    action_type = Map.get(attrs, :action_type) || Map.get(attrs, "action_type")
+
+    case TelegramAssistant.find_awaiting_prepared_action_for_todo_ignoring_expiry(
+           user_id,
+           action_type,
+           todo.id
+         ) do
+      nil ->
+        # The blocking row disappeared between the failed insert and the
+        # lookup — should not happen in practice, but must not crash.
+        {:error, changeset}
+
+      existing_prepared_action ->
+        cond do
+          not TelegramAssistant.prepared_action_expired?(existing_prepared_action) ->
+            # The loser of the double-tap race gracefully falls back to the
+            # winner's row.
+            {:ok, {:send_prepared, existing_prepared_action}}
+
+          may_retry? ->
+            # Stale row past expires_at but not yet swept: force-expire it
+            # (removing it from the partial index scope) and retry the
+            # insert exactly once. A repeat conflict (third concurrent
+            # racer) falls through to the found-row handling above rather
+            # than retrying again — no loop.
+            _ = TelegramAssistant.expire_prepared_action(existing_prepared_action)
+            insert_prepared_send(user_id, conversation, todo, attrs, false)
+
+          true ->
+            {:ok, {:send_prepared, existing_prepared_action}}
+        end
+    end
+  end
+
+  defp awaiting_todo_conflict?(%Ecto.Changeset{errors: errors}) do
+    Enum.any?(errors, fn {_field, {_message, opts}} ->
+      Keyword.get(opts, :constraint_name) == "telegram_prepared_actions_awaiting_todo_index"
+    end)
   end
 
   defp create_send_run(%Conversation{} = conversation, %Todo{} = todo) do
