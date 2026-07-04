@@ -53,6 +53,11 @@ defmodule Maraithon.Todos.Todo do
     field :next_nudge_at, :utc_datetime
     field :follow_up_channel, :string
 
+    # SPEC 05: bulk-stamped by CrossSourceCompletion after each cycle so the
+    # backstop candidate rotation advances (never-checked items sort first).
+    # Purely DB-backed; never part of any agent snapshot.
+    field :last_completion_checked_at, :utc_datetime
+
     timestamps(type: :utc_datetime_usec)
   end
 
@@ -89,7 +94,8 @@ defmodule Maraithon.Todos.Todo do
     :last_nudged_at,
     :nudge_count,
     :next_nudge_at,
-    :follow_up_channel
+    :follow_up_channel,
+    :last_completion_checked_at
   ]
 
   def changeset(todo, attrs) do

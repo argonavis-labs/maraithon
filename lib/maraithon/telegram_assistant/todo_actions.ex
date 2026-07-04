@@ -16,11 +16,20 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
-  alias Maraithon.Todos.{ActionDrafts, PublicMetadata, Todo, UserFacingCopy}
+
+  alias Maraithon.Todos.{
+    ActionDrafts,
+    PublicMetadata,
+    StalenessBatch,
+    StalenessTriage,
+    Todo,
+    UserFacingCopy
+  }
 
   @callback_prefix "tgtodo"
   @feedback_values ~w(important helpful not_helpful see_less)
   @record_feedback_values ~w(helpful not_helpful)
+  @staleness_resolution_actions ~w(important done dismiss)
 
   def telegram_payload(todo) when is_map(todo) do
     telegram_payload(todo, [])
@@ -46,10 +55,21 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          {:ok, result} <- dispatch_action(user_id, chat_id, todo, action) do
       case result do
         {:todo_updated, updated_todo} ->
-          :ok = refresh_message(chat_id, message_id, updated_todo)
-          maybe_answer_callback(callback_id, callback_notice(action))
-          _ = BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action)
-          :ok
+          # SPEC 05 R12: a tap on a staleness batch card must re-render the
+          # ORIGINAL multi-item message, never the single-todo refresh below —
+          # that would silently destroy the other pending items' buttons.
+          case staleness_batch_for(chat_id, message_id) do
+            %StalenessBatch{} = batch ->
+              :ok = resolve_staleness_batch_item(user_id, batch, updated_todo, action)
+              maybe_answer_callback(callback_id, callback_notice(action))
+              :ok
+
+            nil ->
+              :ok = refresh_message(chat_id, message_id, updated_todo)
+              maybe_answer_callback(callback_id, callback_notice(action))
+              _ = BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action)
+              :ok
+          end
 
         {:draft_ready, draft_text, updated_todo} ->
           :ok = send_draft(chat_id, message_id, draft_text)
@@ -188,6 +208,72 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp todo_actor_opts(user_id),
     do: [actor_type: "user", actor_id: user_id, actor_label: "User"]
+
+  defp staleness_batch_for(chat_id, message_id)
+       when is_binary(chat_id) and is_binary(message_id) do
+    StalenessBatch.get_by_message(chat_id, message_id)
+  end
+
+  defp staleness_batch_for(_chat_id, _message_id), do: nil
+
+  # SPEC 05 R12/R13: record the tap in batch state (idempotent Map.put), stamp
+  # the "keep" decision on the todo, mark the batch complete when every item
+  # is resolved, and re-render the original multi-item message.
+  defp resolve_staleness_batch_item(user_id, %StalenessBatch{} = batch, %Todo{} = todo, action) do
+    batch =
+      if action in @staleness_resolution_actions do
+        case StalenessBatch.record_resolution(batch, todo.id, action) do
+          {:ok, updated} -> updated
+          {:error, _reason} -> batch
+        end
+      else
+        batch
+      end
+
+    _ = maybe_stamp_staleness_keep(user_id, todo, action)
+
+    batch =
+      if batch.status != "complete" and StalenessBatch.all_resolved?(batch) do
+        case StalenessBatch.mark_complete(batch) do
+          {:ok, complete} -> complete
+          {:error, _reason} -> batch
+        end
+      else
+        batch
+      end
+
+    payload = StalenessTriage.batch_payload(user_id, batch)
+
+    case TelegramResponder.edit(batch.chat_id, batch.message_id, payload.text,
+           parse_mode: "HTML",
+           reply_markup: payload.reply_markup
+         ) do
+      {:ok, _result} -> :ok
+      {:error, _reason} -> :ok
+    end
+  end
+
+  # "Keep active" on a batch item (SPEC 05 R13): a real "keep" signal for the
+  # R9 re-proposal guard, distinct from "never proposed". Merges into the
+  # existing staleness_triage metadata so `last_proposed_at` is never clobbered.
+  defp maybe_stamp_staleness_keep(user_id, %Todo{} = todo, "important") do
+    triage =
+      case Map.get(todo.metadata || %{}, "staleness_triage") do
+        %{} = existing -> existing
+        _other -> %{}
+      end
+      |> Map.put("last_decision", "keep")
+      |> Map.put("decision_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+    case Todos.update_for_user(user_id, todo.id, %{
+           "metadata" => %{"staleness_triage" => triage}
+         }) do
+      {:ok, _todo} -> :ok
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp maybe_stamp_staleness_keep(_user_id, _todo, _action), do: :ok
 
   defp refresh_message(chat_id, message_id, todo)
        when is_binary(chat_id) and is_binary(message_id) do

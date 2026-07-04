@@ -1058,6 +1058,163 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     })
   end
 
+  # ── SPEC 05 R12/R13: staleness batch cards ────────────────────────────────
+
+  defp stale_batch_todo_attrs(title, index) do
+    twelve_days_ago =
+      DateTime.utc_now()
+      |> DateTime.add(-12 * 24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
+    %{
+      "source" => "gmail",
+      "title" => title,
+      "summary" => "This item has been quiet for a while with no follow-through.",
+      "next_action" => "Confirm whether this thread still matters.",
+      "source_occurred_at" => twelve_days_ago,
+      "dedupe_key" => "staleness-batch-todo-#{index}-#{System.unique_integer([:positive])}"
+    }
+  end
+
+  defp tap_batch_button(todo_id, action, index) do
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "staleness-batch-msg",
+          callback_id: "cb-batch-#{index}",
+          data: "tgtodo:#{todo_id}:#{action}"
+        }
+      })
+  end
+
+  test "staleness batch taps record resolutions and re-render the batch message, never the single-todo card",
+       %{user_id: user_id} do
+    {:ok, [first, second, third]} =
+      Todos.upsert_many(user_id, [
+        stale_batch_todo_attrs("Chase the missing vendor invoice", 1),
+        stale_batch_todo_attrs("Close out the beta feedback thread", 2),
+        stale_batch_todo_attrs("Decide on the analytics tool trial", 3)
+      ])
+
+    # Seed the proposal stamp SPEC 05 R11 writes, so the R13 keep-decision
+    # stamp can prove it merges rather than clobbering last_proposed_at.
+    proposed_at =
+      DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.to_iso8601()
+
+    {:ok, _todo} =
+      Todos.update_for_user(user_id, third.id, %{
+        "metadata" => %{
+          "staleness_triage" => %{
+            "last_proposed_at" => proposed_at,
+            "rationale" => "Quiet for 12 days."
+          }
+        }
+      })
+
+    {:ok, _batch} =
+      Maraithon.Todos.StalenessBatch.create(%{
+        user_id: user_id,
+        chat_id: "12345",
+        message_id: "staleness-batch-msg",
+        todo_ids: [first.id, second.id, third.id],
+        rationales: %{
+          first.id => "No reply since capture.",
+          second.id => "The beta wrapped weeks ago.",
+          third.id => "Quiet for 12 days."
+        }
+      })
+
+    tap_batch_button(first.id, "done", 1)
+
+    assert Todos.get_for_user(user_id, first.id).status == "done"
+
+    batch = Maraithon.Todos.StalenessBatch.get_by_message("12345", "staleness-batch-msg")
+    assert batch.resolved[first.id]["action"] == "done"
+    assert batch.status == "open"
+    assert last_telegram_message(:callback).opts[:text] == "Marked done"
+
+    edit = last_telegram_message(:edit)
+    assert edit.message_id == "staleness-batch-msg"
+    assert edit.text =~ "still relevant?"
+    assert edit.text =~ "✅ Chase the missing vendor invoice — done"
+    # The other items stay intact — a single-todo refresh would have
+    # destroyed them (the trap R12 exists to close).
+    assert edit.text =~ "Close out the beta feedback thread"
+    assert edit.text =~ "Decide on the analytics tool trial"
+
+    rows = edit.opts[:reply_markup]["inline_keyboard"]
+    assert length(rows) == 2
+    callback_values = rows |> List.flatten() |> Enum.map(& &1["callback_data"])
+    assert "tgtodo:#{second.id}:done" in callback_values
+    assert "tgtodo:#{third.id}:important" in callback_values
+    refute Enum.any?(callback_values, &String.contains?(&1, first.id))
+
+    # Second tap on a different item: both resolved independently, the
+    # remaining pending item intact.
+    tap_batch_button(second.id, "dismiss", 2)
+
+    batch = Maraithon.Todos.StalenessBatch.get_by_message("12345", "staleness-batch-msg")
+    assert batch.resolved[first.id]["action"] == "done"
+    assert batch.resolved[second.id]["action"] == "dismiss"
+
+    edit = last_telegram_message(:edit)
+    assert edit.text =~ "✅ Chase the missing vendor invoice — done"
+    assert edit.text =~ "✅ Close out the beta feedback thread — dismissed"
+    assert edit.text =~ "Decide on the analytics tool trial"
+
+    rows = edit.opts[:reply_markup]["inline_keyboard"]
+    assert length(rows) == 1
+    assert rows |> List.flatten() |> Enum.map(& &1["callback_data"]) ==
+             [
+               "tgtodo:#{third.id}:important",
+               "tgtodo:#{third.id}:done",
+               "tgtodo:#{third.id}:dismiss"
+             ]
+
+    # Final tap (Keep active) completes the batch and stamps the R13 keep
+    # decision without clobbering the proposal stamp.
+    tap_batch_button(third.id, "important", 3)
+
+    batch = Maraithon.Todos.StalenessBatch.get_by_message("12345", "staleness-batch-msg")
+    assert batch.status == "complete"
+    assert Maraithon.Todos.StalenessBatch.all_resolved?(batch)
+
+    edit = last_telegram_message(:edit)
+    assert edit.text == "All set — 3 reviewed."
+    assert edit.opts[:reply_markup]["inline_keyboard"] == []
+    assert last_telegram_message(:callback).opts[:text] == "Kept active"
+
+    triage = Todos.get_for_user(user_id, third.id).metadata["staleness_triage"]
+    assert triage["last_decision"] == "keep"
+    assert is_binary(triage["decision_at"])
+    assert triage["last_proposed_at"] == proposed_at
+  end
+
+  test "non-batch todo callbacks keep the single-todo refresh path", %{user_id: user_id} do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [stale_batch_todo_attrs("Plain single card item", 9)])
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "plain-single-card",
+          callback_id: "cb-single",
+          data: "tgtodo:#{todo.id}:done"
+        }
+      })
+
+    assert Todos.get_for_user(user_id, todo.id).status == "done"
+
+    edit = last_telegram_message(:edit)
+    assert edit.message_id == "plain-single-card"
+    # Single-todo card render, not the batch header.
+    refute edit.text =~ "still relevant?"
+  end
+
   defp last_telegram_message(type) do
     :capturing_telegram_recorder
     |> Agent.get(&Enum.reverse/1)

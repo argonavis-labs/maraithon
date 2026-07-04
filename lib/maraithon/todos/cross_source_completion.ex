@@ -17,17 +17,26 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   import Ecto.Query
 
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle}
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm.Observation
   alias Maraithon.LLM
   alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant.PushBroker
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
 
   require Logger
 
   @open_statuses ~w(open snoozed)
+  # Per-cycle LLM prompt-size cap (SPEC 05 R3). This bounds "how many todos
+  # we check this cycle", not "which 40 we permanently limit to": every
+  # evidence-linked (delta) candidate is always included, and the remaining
+  # budget rotates through the backstop by `last_completion_checked_at`.
   @max_todos 40
+  # Safety bound on the open-todo scan for one pathological user; not the
+  # real per-cycle cap (see @max_todos above).
+  @max_open_todo_scan 500
   @max_observations 120
   @max_outgoing_messages 80
   @max_live_evidence_per_source 120
@@ -112,35 +121,151 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   """
   def run_for_user(user_id, opts \\ []) when is_binary(user_id) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
-    todos = candidate_todos(user_id, now)
+
+    # Cheap existence gate first (SPEC 05 R2): evidence acquisition — which
+    # fires live Gmail/Slack/etc. calls — must never run for a user with
+    # nothing to check, preserving the original zero-open-todos short-circuit.
+    open_todos = open_todo_pool(user_id, now)
 
     cond do
-      todos == [] ->
+      open_todos == [] ->
         {:skip, :no_open_todos}
 
       true ->
-        case collect_evidence(user_id, todos, now, opts) do
-          [] -> {:skip, :no_evidence}
-          evidence -> evaluate(user_id, todos, evidence, now, opts)
+        # Evidence before candidate selection (SPEC 05 R2): live acquisition
+        # is independent of which todos are checked (`build_live_source_bundle/4`
+        # takes `_todos` and never reads it), so collecting first lets R3
+        # partition candidates into evidence-linked vs backstop.
+        case collect_evidence(user_id, open_todos, now, opts) do
+          [] ->
+            {:skip, :no_evidence}
+
+          evidence ->
+            todos = select_candidates(user_id, open_todos, evidence)
+            result = evaluate(user_id, todos, evidence, now, opts)
+            stamp_completion_checked(user_id, todos, now)
+            result
         end
     end
   end
 
   # ── Candidates ────────────────────────────────────────────────────────────
 
-  defp candidate_todos(user_id, now) do
+  defp open_todo_pool(user_id, now) do
     age_cutoff = DateTime.add(now, -@min_todo_age_minutes * 60, :second)
 
     user_id
     |> Todos.list_for_user(
       statuses: @open_statuses,
-      limit: @max_todos,
+      limit: @max_open_todo_scan,
       sort_by: "updated",
       sort_dir: "asc"
     )
     |> Enum.filter(fn todo ->
       DateTime.compare(todo.inserted_at, age_cutoff) == :lt
     end)
+  end
+
+  # Delta-driven candidate selection with a bounded backstop (SPEC 05 R3):
+  # anything with fresh related activity ("active") is checked every cycle
+  # regardless of its position in any ordering; the remaining budget rotates
+  # deterministically through the rest by `last_completion_checked_at`
+  # ascending with never-checked items first.
+  defp select_candidates(user_id, todos, evidence) do
+    identifiers = evidence_identifiers(evidence)
+
+    {active, backstop} = Enum.split_with(todos, &evidence_linked?(&1, identifiers))
+
+    if length(active) > @max_todos do
+      # The cap only throttles the backstop, never the delta-relevant set —
+      # log so eventual prompt-size counts can be watched.
+      Logger.info("Cross-source completion active candidates exceed the per-cycle cap",
+        user_id: user_id,
+        active: length(active),
+        cap: @max_todos
+      )
+    end
+
+    backstop_fill =
+      backstop
+      |> Enum.sort_by(fn todo ->
+        case todo.last_completion_checked_at do
+          %DateTime{} = checked_at -> {1, DateTime.to_unix(checked_at, :second)}
+          _never_checked -> {0, 0}
+        end
+      end)
+      |> Enum.take(max(@max_todos - length(active), 0))
+
+    active ++ backstop_fill
+  end
+
+  defp evidence_identifiers(evidence) do
+    evidence
+    |> Enum.reject(fn item -> read_string(item, "channel", nil) == "source_health" end)
+    |> Enum.reduce(%{item_ids: MapSet.new(), label_items: []}, fn item, acc ->
+      ids =
+        [read_string(item, "thread_id", nil), read_string(item, "source_item_id", nil)]
+        |> Enum.reject(&is_nil/1)
+
+      acc = %{acc | item_ids: Enum.into(ids, acc.item_ids)}
+
+      channel = read_string(item, "channel", nil)
+      account = read_string(item, "account", nil)
+      subject = read_string(item, "subject", nil)
+
+      if channel && account && subject do
+        %{acc | label_items: [{channel, account, String.downcase(subject)} | acc.label_items]}
+      else
+        acc
+      end
+    end)
+  end
+
+  defp evidence_linked?(todo, %{item_ids: item_ids, label_items: label_items}) do
+    (is_binary(todo.source_item_id) and todo.source_item_id != "" and
+       MapSet.member?(item_ids, todo.source_item_id)) or
+      counterparty_label_linked?(todo, label_items)
+  end
+
+  defp counterparty_label_linked?(
+         %Todo{source: source, source_account_label: account, counterparty_label: label},
+         label_items
+       )
+       when is_binary(source) and is_binary(account) and is_binary(label) do
+    case String.trim(label) do
+      "" ->
+        false
+
+      trimmed ->
+        needle = String.downcase(trimmed)
+
+        Enum.any?(label_items, fn {channel, evidence_account, subject} ->
+          channel == source and evidence_account == account and
+            String.contains?(subject, needle)
+        end)
+    end
+  end
+
+  defp counterparty_label_linked?(_todo, _label_items), do: false
+
+  # Bulk-stamp every candidate considered this cycle (SPEC 05 R4) — including
+  # ones that did not close — so the backstop rotation advances even when
+  # nothing resolved. `update_all` with an explicit `set:` list (mirroring
+  # `Todos.record_nudge_sent/3`), namespaced by user and tolerant of ids that
+  # no longer exist (zero rows affected is fine). `updated_at` is deliberately
+  # not touched: a "we looked at it" stamp across 40 todos every cycle must
+  # not churn updated-ordering or freshness signals.
+  defp stamp_completion_checked(_user_id, [], _now), do: :ok
+
+  defp stamp_completion_checked(user_id, todos, now) do
+    ids = Enum.map(todos, & &1.id)
+    stamped_at = DateTime.truncate(now, :second)
+
+    Todo
+    |> where([todo], todo.id in ^ids and todo.user_id == ^user_id)
+    |> Repo.update_all(set: [last_completion_checked_at: stamped_at])
+
+    :ok
   end
 
   # ── Evidence ──────────────────────────────────────────────────────────────
@@ -561,7 +686,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
     with {:ok, response} <- llm_complete.(prompt),
          {:ok, resolutions} <- decode_response(response) do
-      completed = apply_resolutions(user_id, Map.new(todos, &{&1.id, &1}), resolutions)
+      completed = apply_resolutions(user_id, Map.new(todos, &{&1.id, &1}), resolutions, opts)
       %{checked: length(todos), completed: completed}
     else
       {:error, reason} ->
@@ -587,8 +712,15 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
           "title" => todo.title,
           "summary" => truncate(todo.summary, 300),
           "next_action" => truncate(todo.next_action, 200),
-          "captured_at" => DateTime.to_iso8601(todo.source_occurred_at || todo.inserted_at)
+          "captured_at" => DateTime.to_iso8601(todo.source_occurred_at || todo.inserted_at),
+          # SPEC 05 R5: structured linkage so the model can match a specific
+          # piece of inbound evidence to a specific waiting-on item.
+          "direction" => todo.direction,
+          "counterparty_label" => todo.counterparty_label,
+          "source_item_id" => todo.source_item_id,
+          "source_account_label" => todo.source_account_label
         }
+        |> compact_map()
       end)
       |> Jason.encode!()
 
@@ -625,6 +757,19 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     - Topic overlap alone is NOT completion. Future intent ("will pay
       tomorrow"), questions, reminders, or partial progress are NOT
       completion.
+    - When an item's `direction` is `owed_to_me`, a reply FROM the
+      counterparty (not from the user — check the evidence item's `kind`,
+      e.g. `email received`, `slack message`, `message received`, never
+      `... sent by the user`) that actually answers or resolves what the
+      item's `next_action`/`summary` describes is completion for that item,
+      exactly like the user doing the work — return it with
+      "completed": true and "reply_outcome": "answered". A reply that only
+      acknowledges ("got your message, will look at it") or defers ("will
+      get back to you Friday") is NOT completion — return that item with
+      "completed": false and "reply_outcome": "acknowledged_only", still
+      quoting the acknowledgment as evidence_quote, and leave it open. Omit
+      reply_outcome (or use "no_reply") when there is no counterparty-reply
+      signal for an item.
     - If a relevant connected source is unavailable or the source window is too
       weak to prove completion, leave the item open.
     - When unsure, leave the item open. Wrongly closing real work is worse
@@ -645,7 +790,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
           "evidence_channel": "slack | gmail | google_calendar | local_calendar | imessage | reminders | notes | files | browser_history | voice_memos | crm",
           "evidence_quote": "the exact activity text that proves completion",
           "reasoning": "one short sentence",
-          "confidence": 0.0
+          "confidence": 0.0,
+          "reply_outcome": "answered | acknowledged_only | no_reply — only for owed_to_me items with a counterparty-reply signal; omit otherwise"
         }
       ]
     }
@@ -696,44 +842,172 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     end
   end
 
-  defp apply_resolutions(user_id, todos_by_id, resolutions) do
+  # SPEC 05 shared contract (05 owns this dispatch; 01 only consumes it):
+  # the model emits exactly one `owed_to_me` reply-outcome per resolved item —
+  # "answered" closes (identical in effect to the user doing the work),
+  # "acknowledged_only" keeps the item open but clears its nudge cadence,
+  # "no_reply"/omitted leaves the item and its cadence untouched.
+  defp apply_resolutions(user_id, todos_by_id, resolutions, opts) do
     Enum.reduce(resolutions, 0, fn resolution, count ->
       with todo_id when is_binary(todo_id) <- resolution["todo_id"],
-           %Todo{} = todo <- Map.get(todos_by_id, todo_id),
-           true <- resolution["completed"] == true,
-           confidence when is_number(confidence) and confidence >= @min_confidence <-
-             resolution["confidence"],
-           quote_text when is_binary(quote_text) and quote_text != "" <-
-             resolution["evidence_quote"] do
-        note =
-          "Handled already — #{evidence_channel_label(resolution["evidence_channel"])} " <>
-            "shows it: \"#{truncate(quote_text, 200)}\""
-
-        case Todos.mark_done(user_id, todo.id, note: note) do
-          {:ok, _todo} ->
-            Logger.info("Cross-source completion closed todo",
-              user_id: user_id,
-              todo_id: todo.id,
-              todo_source: todo.source,
-              evidence_channel: resolution["evidence_channel"]
-            )
-
-            count + 1
-
-          {:error, reason} ->
-            Logger.warning("Cross-source completion could not close todo",
-              user_id: user_id,
-              todo_id: todo.id,
-              reason: inspect(reason)
-            )
-
-            count
-        end
+           %Todo{} = todo <- Map.get(todos_by_id, todo_id) do
+        apply_resolution(user_id, todo, resolution, opts, count)
       else
         _other -> count
       end
     end)
   end
+
+  # `owed_to_me` + acknowledgment-only counterparty reply (SPEC 05 R7): never
+  # a completion, regardless of what else the resolution claims — stop the
+  # old chase cadence but keep the item open, and never notify (an
+  # acknowledged-only reply is not a completion event worth a push).
+  defp apply_resolution(
+         user_id,
+         %Todo{direction: "owed_to_me"} = todo,
+         %{"reply_outcome" => "acknowledged_only"},
+         _opts,
+         count
+       ) do
+    case Todos.clear_nudge_cadence(user_id, todo.id) do
+      {:ok, _todo} ->
+        Logger.info("Cross-source completion cleared nudge cadence (acknowledged-only reply)",
+          user_id: user_id,
+          todo_id: todo.id
+        )
+
+      {:error, reason} ->
+        Logger.warning("Cross-source completion could not clear nudge cadence",
+          user_id: user_id,
+          todo_id: todo.id,
+          reason: inspect(reason)
+        )
+    end
+
+    count
+  end
+
+  defp apply_resolution(user_id, %Todo{} = todo, resolution, opts, count) do
+    with true <- resolution["completed"] == true,
+         confidence when is_number(confidence) and confidence >= @min_confidence <-
+           resolution["confidence"],
+         quote_text when is_binary(quote_text) and quote_text != "" <-
+           resolution["evidence_quote"] do
+      note = resolution_note(todo, resolution, quote_text)
+
+      case Todos.mark_done(user_id, todo.id, note: note) do
+        {:ok, _todo} ->
+          Logger.info("Cross-source completion closed todo",
+            user_id: user_id,
+            todo_id: todo.id,
+            todo_source: todo.source,
+            evidence_channel: resolution["evidence_channel"]
+          )
+
+          maybe_push_completion_confirmation(user_id, todo, resolution, opts)
+          count + 1
+
+        {:error, reason} ->
+          Logger.warning("Cross-source completion could not close todo",
+            user_id: user_id,
+            todo_id: todo.id,
+            reason: inspect(reason)
+          )
+
+          count
+      end
+    else
+      _other -> count
+    end
+  end
+
+  # Distinct confirmation copy for the counterparty-answered close (SPEC 05
+  # R7); everything else keeps the pre-existing generic note.
+  defp resolution_note(
+         %Todo{direction: "owed_to_me"} = todo,
+         %{"reply_outcome" => "answered"} = resolution,
+         quote_text
+       ) do
+    "#{counterparty_name(todo)} replied — closing that loop. " <>
+      "#{evidence_channel_label(resolution["evidence_channel"])} " <>
+      "shows it: \"#{truncate(quote_text, 200)}\""
+  end
+
+  defp resolution_note(_todo, resolution, quote_text) do
+    "Handled already — #{evidence_channel_label(resolution["evidence_channel"])} " <>
+      "shows it: \"#{truncate(quote_text, 200)}\""
+  end
+
+  # SPEC 05 R8: Telegram confirmation for the `owed_to_me` inbound-reply close
+  # only — `owed_by_me`/`fyi` closes stay silent exactly as before. Goes
+  # through `PushBroker.deliver/1` (the only path that respects quiet hours,
+  # the interruption budget, and push-receipt dedupe), never `TelegramResponder`
+  # directly. `chat_id` must be resolved explicitly — `deliver/1` hard-requires
+  # it and never supplies it.
+  defp maybe_push_completion_confirmation(
+         user_id,
+         %Todo{direction: "owed_to_me"} = todo,
+         %{"reply_outcome" => "answered"},
+         opts
+       ) do
+    case ConnectedAccounts.telegram_destination(user_id) do
+      nil ->
+        Logger.info(
+          "Cross-source completion skipped closing-loop push: no Telegram destination",
+          user_id: user_id,
+          todo_id: todo.id
+        )
+
+        :ok
+
+      chat_id ->
+        deliver = Keyword.get(opts, :push_deliver) || (&PushBroker.deliver/1)
+
+        candidate = %{
+          user_id: user_id,
+          chat_id: chat_id,
+          origin_type: "todo_completion_confirm",
+          origin_id: todo.id,
+          # Defense-in-depth idempotency: a todo can only close once (closing
+          # exits the open/snoozed candidate pool), but the receipt dedupe on
+          # this key means even a hypothetical double-apply cannot double-notify.
+          dedupe_key: "todo_completion_confirm:#{todo.id}",
+          # Low urgency, never the >= 0.9 quiet-hours exemption; rides the
+          # normal budget/quiet-hours path like any other low-urgency notice.
+          urgency: 0.3,
+          interrupt_now: false,
+          body: "#{counterparty_name(todo)} replied — closing that loop on: #{todo.title}."
+        }
+
+        case deliver.(candidate) do
+          {:ok, _result} ->
+            :ok
+
+          {:fallback, _reason} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Cross-source completion closing-loop push failed",
+              user_id: user_id,
+              todo_id: todo.id,
+              reason: inspect(reason)
+            )
+
+            :ok
+        end
+    end
+  end
+
+  defp maybe_push_completion_confirmation(_user_id, _todo, _resolution, _opts), do: :ok
+
+  defp counterparty_name(%Todo{counterparty_label: label}) when is_binary(label) do
+    case String.trim(label) do
+      "" -> "They"
+      trimmed -> trimmed
+    end
+  end
+
+  defp counterparty_name(_todo), do: "They"
 
   defp evidence_channel_label("gmail"), do: "your email activity"
   defp evidence_channel_label("slack"), do: "your Slack activity"
