@@ -561,6 +561,49 @@ defmodule Maraithon.OpenLoopsTest do
     end
   end
 
+  describe "SPEC 01 R2 local-date due bucketing" do
+    test "snapshot buckets due dates on the user's local calendar date, not UTC's" do
+      user_id = unique_user_email("open-loops-local-bucket")
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email(user_id)
+
+      # Due Friday 2026-07-10 at 11pm ET = Saturday 03:00 UTC. At Friday
+      # 10am ET (14:00 UTC Friday) the raw-UTC comparison used to call this
+      # :upcoming; on the local calendar it is due :today.
+      {:ok, [_todo]} =
+        Maraithon.Todos.upsert_many(user_id, [
+          %{
+            "source" => "manual",
+            "title" => "Send the contract before Friday night",
+            "summary" => "The contract must go out before Friday ends.",
+            "next_action" => "Send the signed contract.",
+            "dedupe_key" => "open-loops-local-bucket",
+            "due_at" => "2026-07-11T03:00:00Z"
+          }
+        ])
+
+      local_snapshot =
+        OpenLoops.snapshot(user_id,
+          now: ~U[2026-07-10 14:00:00Z],
+          timezone_offset_hours: -4,
+          limit: 10
+        )
+
+      assert [%{title: "Send the contract before Friday night"}] = local_snapshot.buckets.today
+      assert local_snapshot.totals.due_today == 1
+
+      # Saturday 10am ET: locally the Friday deadline has passed -> :overdue,
+      # even though it is still "today" on the raw UTC calendar.
+      overdue_snapshot =
+        OpenLoops.snapshot(user_id,
+          now: ~U[2026-07-11 14:00:00Z],
+          timezone_offset_hours: -4,
+          limit: 10
+        )
+
+      assert [%{title: "Send the contract before Friday night"}] = overdue_snapshot.buckets.overdue
+    end
+  end
+
   defp unique_user_email(prefix) do
     "#{prefix}-#{System.unique_integer([:positive])}@example.com"
   end

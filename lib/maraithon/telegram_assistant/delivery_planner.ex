@@ -746,9 +746,14 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     }
   end
 
+  # No catch-all on purpose: an unknown candidate source is a programming
+  # error and every addition to ProactiveCandidate.@sources MUST add a clause
+  # here — a missing clause raises FunctionClauseError inside dispatch and
+  # takes down the whole user's delivery batch (SPEC 01 edge cases).
   defp origin_type(%ProactiveCandidate{source: "insight"}), do: "insight"
   defp origin_type(%ProactiveCandidate{source: "brief"}), do: "brief"
   defp origin_type(%ProactiveCandidate{source: "proactive_check_in"}), do: "assistant_digest"
+  defp origin_type(%ProactiveCandidate{source: "nudge"}), do: "nudge"
 
   defp maybe_send_candidate_todo_cards(conversation_id, %ProactiveCandidate{} = candidate)
        when is_binary(conversation_id) do

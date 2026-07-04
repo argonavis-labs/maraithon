@@ -5,11 +5,13 @@ defmodule Maraithon.Todos do
 
   import Ecto.Query
 
+  alias Maraithon.BriefingSchedules
   alias Maraithon.Insights.Insight
   alias Maraithon.LLM.Embeddings
   alias Maraithon.LocalEmbeddings
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.Timezones
 
   alias Maraithon.Todos.{
     ActionDrafts,
@@ -617,6 +619,116 @@ defmodule Maraithon.Todos do
   def record_nudge_sent(_user_id, _todo_id, _opts), do: {:error, :not_found}
 
   @doc """
+  Clears the follow-up cadence on a todo without closing it (SPEC 01 R6).
+
+  Consumer of SPEC 05's `"acknowledged_only"` counterparty-reply outcome: the
+  counterparty acknowledged but did not actually answer, so the item stays
+  open for the operator while the stale nudge schedule stops firing. Uses the
+  same race-free atomic `Repo.update_all` style as `record_nudge_sent/3`
+  (never read-then-write) since it can race a concurrent nudge send for the
+  same todo. Until SPEC 05 ships this helper simply has no caller — that is
+  the intended degraded mode.
+  """
+  def clear_nudge_cadence(user_id, todo_id, opts \\ [])
+
+  def clear_nudge_cadence(user_id, todo_id, opts)
+      when is_binary(user_id) and is_binary(todo_id) and is_list(opts) do
+    now = Keyword.get(opts, :now, DateTime.utc_now()) |> DateTime.truncate(:second)
+
+    note =
+      Keyword.get(
+        opts,
+        :note,
+        "Counterparty acknowledged but didn't answer — cadence cleared, still open."
+      )
+
+    note_patch = %{"resolution_note" => note}
+
+    from(todo in Todo,
+      where: todo.id == ^todo_id and todo.user_id == ^user_id,
+      update: [
+        set: [
+          next_nudge_at: nil,
+          updated_at: ^now,
+          metadata:
+            fragment("coalesce(?, '{}'::jsonb) || ?", todo.metadata, type(^note_patch, :map))
+        ]
+      ]
+    )
+    |> Repo.update_all([])
+    |> case do
+      {1, _} ->
+        case Repo.get_by(Todo, id: todo_id, user_id: user_id) do
+          %Todo{} = todo -> {:ok, polish_todo_copy(todo)}
+          nil -> {:error, :not_found}
+        end
+
+      {0, _} ->
+        {:error, :not_found}
+    end
+  end
+
+  def clear_nudge_cadence(_user_id, _todo_id, _opts), do: {:error, :not_found}
+
+  @doc """
+  Lenient, timezone-aware datetime coercion shared by ingest and the
+  conversational snooze tool (SPEC 01 R2/R3).
+
+  Accepts `DateTime`/`NaiveDateTime`/`Date` structs and ISO-8601 strings with
+  or without an offset. A bare date resolves to a sane local end-of-day
+  (20:00) in the user's timezone and a naive datetime is read as local wall
+  time — both converted to UTC for storage.
+  When no timezone can be resolved, a bare date deterministically falls back
+  to UTC end-of-day (never midnight, which flips the calendar date for every
+  western-hemisphere operator). Returns `nil` for unparseable input.
+
+  The second argument is either a `user_id` (timezone resolved from
+  `Maraithon.BriefingSchedules.summarize_for_prompt/1`) or an already-resolved
+  timezone context map from `user_timezone_context/1`.
+  """
+  def parse_flexible_datetime(value, user_id_or_timezone \\ nil)
+
+  def parse_flexible_datetime(value, user_id) when is_binary(user_id) do
+    coerce_due_datetime(value, user_timezone_context(user_id))
+  end
+
+  def parse_flexible_datetime(value, %{} = timezone_context) do
+    coerce_due_datetime(value, timezone_context)
+  end
+
+  def parse_flexible_datetime(value, _user_id_or_timezone) do
+    coerce_due_datetime(value, nil)
+  end
+
+  @doc """
+  Resolves the user's timezone context (`%{timezone_name: ..., offset_hours: ...}`)
+  from their briefing schedule, or `nil` when it cannot be resolved (no
+  configured briefing agent, or a lookup failure). Callers fall back to
+  deterministic UTC handling on `nil`.
+  """
+  def user_timezone_context(user_id) when is_binary(user_id) do
+    summary = BriefingSchedules.summarize_for_prompt(user_id)
+
+    if Map.get(summary, :configured) do
+      %{
+        timezone_name: Map.get(summary, :timezone_name),
+        offset_hours: normalize_timezone_offset_hours(Map.get(summary, :timezone_offset_hours))
+      }
+    else
+      nil
+    end
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  def user_timezone_context(_user_id), do: nil
+
+  defp normalize_timezone_offset_hours(value) when is_integer(value), do: value
+  defp normalize_timezone_offset_hours(_value), do: 0
+
+  @doc """
   Bucket of open `owed_by_me` todos shaped like `Commitments.bucket_for_brief/2`,
   used by the morning briefing prompt (SPEC 05 R6). This replaces the retired
   `Commitment` schema as the brief's "what do I owe" source of truth.
@@ -902,11 +1014,21 @@ defmodule Maraithon.Todos do
     end
   end
 
-  defp brief_local_date(%DateTime{} = datetime, offset_hours) do
+  @doc """
+  The user-local calendar date for a UTC timestamp at a fixed hour offset.
+
+  SPEC 01 R2: this is the shared date-localization primitive underneath
+  `brief_overdue?`/`brief_due_today?` and `Maraithon.OpenLoops`' due-date
+  bucketing — comparing raw UTC calendar dates misclassifies items near
+  local midnight, so both call this instead of `DateTime.to_date/1`.
+  """
+  def brief_local_date(%DateTime{} = datetime, offset_hours) when is_integer(offset_hours) do
     datetime
     |> DateTime.add(offset_hours, :hour)
     |> DateTime.to_date()
   end
+
+  def brief_local_date(%DateTime{} = datetime, _offset_hours), do: DateTime.to_date(datetime)
 
   defp brief_display_due_label(nil, _offset_hours, _timezone_label), do: nil
 
@@ -1235,16 +1357,31 @@ defmodule Maraithon.Todos do
         nil
       end
 
+    direction = preserved_update_direction(existing, raw_attrs)
+
     attrs
     |> Map.put("status", status)
     |> Map.put("closed_at", closed_at)
     |> Map.put("snoozed_until", snoozed_until)
-    |> Map.put("direction", preserved_update_direction(existing, raw_attrs))
+    |> Map.put("direction", direction)
     |> Map.put(
       "counterparty_person_id",
       preserved_update_counterparty_person_id(existing, raw_attrs)
     )
     |> Map.put("counterparty_label", preserved_update_counterparty_label(existing, raw_attrs))
+    |> Map.put("next_nudge_at", preserved_update_next_nudge_at(existing, attrs, direction))
+  end
+
+  # SPEC 01 R1, mirroring preserved_update_direction/2 above: on the upsert
+  # update path, an incoming scan that simply omitted next_nudge_at must not
+  # wipe an existing cadence back to nil — but the owed_to_me-only invariant
+  # still wins, so any non-owed_to_me resolution clears it regardless.
+  defp preserved_update_next_nudge_at(%Todo{} = existing, attrs, direction) do
+    cond do
+      direction != "owed_to_me" -> nil
+      match?(%DateTime{}, Map.get(attrs, "next_nudge_at")) -> Map.get(attrs, "next_nudge_at")
+      true -> existing.next_nudge_at
+    end
   end
 
   # SPEC 05 review (Finding 2): normalize_attrs/2 always resolves a
@@ -1472,9 +1609,18 @@ defmodule Maraithon.Todos do
     kind = normalize_kind(read_string(attrs, "kind", "general"))
     source_item_id = read_string(attrs, "source_item_id", nil)
 
+    # SPEC 01 R2: due-date-shaped values (due_at/due_date/due/snoozed_until/
+    # next_nudge_at) resolve bare dates and naive datetimes in the user's
+    # local timezone instead of midnight UTC. Instant timestamps
+    # (source_occurred_at/closed_at — "when did this actually happen") keep
+    # the plain `read_datetime/2` coercion; they must never get the
+    # end-of-day-local shift.
+    due_tz = due_timezone_context(user_id, attrs)
+
     due_at =
-      read_datetime(attrs, "due_at") || read_datetime(attrs, "due_date") ||
-        read_datetime(attrs, "due")
+      read_due_datetime(attrs, "due_at", due_tz) ||
+        read_due_datetime(attrs, "due_date", due_tz) ||
+        read_due_datetime(attrs, "due", due_tz)
 
     owner_user_id = read_string(attrs, "owner_user_id", user_id)
     owner_label = read_string(attrs, "owner_label", read_string(attrs, "owner", nil))
@@ -1490,9 +1636,24 @@ defmodule Maraithon.Todos do
       normalize_direction(read_string(attrs, "direction", nil)) ||
         direction_from_legacy_metadata(metadata) || "owed_by_me"
 
+    # SPEC 01 R1: the runtime — not the model — enforces that only
+    # `owed_to_me` items ever carry a follow-up cadence. Whatever the model
+    # returned, any other direction persists next_nudge_at: nil. The column
+    # is `:utc_datetime` (second precision), so truncate before the changeset.
+    next_nudge_at =
+      if direction == "owed_to_me" do
+        case read_due_datetime(attrs, "next_nudge_at", due_tz) do
+          %DateTime{} = value -> DateTime.truncate(value, :second)
+          _other -> nil
+        end
+      else
+        nil
+      end
+
     %{
       "user_id" => user_id,
       "direction" => direction,
+      "next_nudge_at" => next_nudge_at,
       "counterparty_person_id" => read_uuid(attrs, "counterparty_person_id", nil),
       "counterparty_label" =>
         read_string(attrs, "counterparty_label", counterparty_label_from_metadata(metadata)),
@@ -1514,7 +1675,7 @@ defmodule Maraithon.Todos do
       "action_draft" => read_action_draft(attrs),
       "priority" => clamp_integer(read_integer(attrs, "priority", 50), 0, 100),
       "status" => normalize_status(read_string(attrs, "status", "open")),
-      "snoozed_until" => read_datetime(attrs, "snoozed_until"),
+      "snoozed_until" => read_due_datetime(attrs, "snoozed_until", due_tz),
       "closed_at" => read_datetime(attrs, "closed_at"),
       "source_item_id" => source_item_id,
       "source_occurred_at" => read_datetime(attrs, "source_occurred_at"),
@@ -2378,6 +2539,97 @@ defmodule Maraithon.Todos do
     attrs
     |> fetch_attr(key)
     |> coerce_datetime()
+  end
+
+  # SPEC 01 R2 — due-date-shaped coercion. Deliberately a separate function
+  # from `coerce_datetime/1` (instant semantics) so the two can never be
+  # accidentally swapped at a call site: due dates get local end-of-day /
+  # local-wall-time resolution, instants (`source_occurred_at`, `closed_at`,
+  # query filters) stay on the plain UTC reading.
+  @due_shaped_keys ~w(due_at due_date due snoozed_until next_nudge_at)
+  @due_local_end_of_day ~T[20:00:00]
+  @due_utc_fallback_end_of_day ~T[23:59:59]
+
+  defp due_timezone_context(user_id, attrs) do
+    if Enum.any?(@due_shaped_keys, fn key -> fetch_attr(attrs, key) not in [nil, ""] end) do
+      user_timezone_context(user_id)
+    else
+      nil
+    end
+  end
+
+  defp read_due_datetime(attrs, key, timezone_context) do
+    attrs
+    |> fetch_attr(key)
+    |> coerce_due_datetime(timezone_context)
+  end
+
+  defp coerce_due_datetime(%DateTime{} = value, _timezone_context), do: value
+
+  defp coerce_due_datetime(%NaiveDateTime{} = value, timezone_context) do
+    local_naive_to_utc(value, timezone_context)
+  end
+
+  defp coerce_due_datetime(%Date{} = value, %{} = timezone_context) do
+    value
+    |> NaiveDateTime.new!(@due_local_end_of_day)
+    |> local_naive_to_utc(timezone_context)
+  end
+
+  defp coerce_due_datetime(%Date{} = value, _timezone_context) do
+    # Deterministic no-timezone fallback: UTC end-of-day, never midnight —
+    # midnight UTC is the previous evening for every US timezone (the bug
+    # class behind the 2026-07-03 briefing incident).
+    DateTime.new!(value, @due_utc_fallback_end_of_day, "Etc/UTC")
+  end
+
+  defp coerce_due_datetime(value, timezone_context) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    cond do
+      trimmed == "" ->
+        nil
+
+      true ->
+        case DateTime.from_iso8601(trimmed) do
+          {:ok, parsed, _offset} ->
+            parsed
+
+          _ ->
+            case NaiveDateTime.from_iso8601(trimmed) do
+              {:ok, naive} ->
+                coerce_due_datetime(naive, timezone_context)
+
+              _ ->
+                case Date.from_iso8601(trimmed) do
+                  {:ok, date} -> coerce_due_datetime(date, timezone_context)
+                  _ -> nil
+                end
+            end
+        end
+    end
+  end
+
+  defp coerce_due_datetime(_value, _timezone_context), do: nil
+
+  # Reads a naive datetime as the user's local wall clock and converts to a
+  # UTC instant. Uses `Timezones.offset_for_local/3` with the datetime being
+  # resolved (per-date DST correctness), never "now"'s offset.
+  defp local_naive_to_utc(%NaiveDateTime{} = naive, %{} = timezone_context) do
+    local_as_utc = DateTime.from_naive!(naive, "Etc/UTC")
+
+    offset =
+      Timezones.offset_for_local(
+        Map.get(timezone_context, :timezone_name),
+        local_as_utc,
+        Map.get(timezone_context, :offset_hours, 0)
+      )
+
+    DateTime.add(local_as_utc, -offset, :hour)
+  end
+
+  defp local_naive_to_utc(%NaiveDateTime{} = naive, _timezone_context) do
+    DateTime.from_naive!(naive, "Etc/UTC")
   end
 
   defp coerce_datetime(%DateTime{} = value), do: value

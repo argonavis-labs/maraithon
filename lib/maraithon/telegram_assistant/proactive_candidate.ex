@@ -11,7 +11,10 @@ defmodule Maraithon.TelegramAssistant.ProactiveCandidate do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @sources ~w(insight brief proactive_check_in)
+  # "nudge" (SPEC 01 R4) is NudgeSweep's time-based follow-up proposals.
+  # Plain changeset inclusion list — the DB column is an unconstrained
+  # string, so no migration accompanies additions here.
+  @sources ~w(insight brief proactive_check_in nudge)
   @statuses ~w(pending planned delivered held expired)
   @dispositions ~w(interrupt_now digest hold)
 

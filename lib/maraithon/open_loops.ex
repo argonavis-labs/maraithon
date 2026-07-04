@@ -6,6 +6,7 @@ defmodule Maraithon.OpenLoops do
   into a compact user-scoped state snapshot for agents and tools.
   """
 
+  alias Maraithon.BriefingSchedules
   alias Maraithon.Crm
   alias Maraithon.Crm.{Person, PersonLink}
   alias Maraithon.Goals
@@ -74,9 +75,11 @@ defmodule Maraithon.OpenLoops do
     query = opts |> Keyword.get(:query) |> normalize_text()
     direction = opts |> Keyword.get(:direction) |> normalize_direction_filter()
 
+    offset_hours = snapshot_offset_hours(user_id, Keyword.get(opts, :timezone_offset_hours))
+
     todos = todos_for_snapshot(user_id, direction, limit)
 
-    bucketed = bucket_todos(todos, now)
+    bucketed = bucket_todos(todos, now, offset_hours)
     people = relationship_snapshots(user_id, query, limit)
     goals = Goals.open_loop_snapshot(user_id, query: query, limit: limit, now: now)
 
@@ -1185,7 +1188,28 @@ defmodule Maraithon.OpenLoops do
     end
   end
 
-  defp bucket_todos(todos, now) do
+  # SPEC 01 R2: the user's timezone offset for due-date bucketing. Comparing
+  # raw UTC calendar dates misclassifies items near local midnight (a
+  # due-Friday-11:59pm-ET item is Saturday in UTC), so the snapshot threads
+  # an offset into `bucket_todos/3`, defaulting from the briefing schedule
+  # when the caller does not supply one.
+  defp snapshot_offset_hours(_user_id, offset) when is_integer(offset), do: offset
+
+  defp snapshot_offset_hours(user_id, _offset) do
+    user_id
+    |> BriefingSchedules.summarize_for_prompt()
+    |> Map.get(:timezone_offset_hours)
+    |> case do
+      value when is_integer(value) -> value
+      _other -> 0
+    end
+  rescue
+    _error -> 0
+  catch
+    _kind, _reason -> 0
+  end
+
+  defp bucket_todos(todos, now, offset_hours) do
     base = %{
       overdue: [],
       today: [],
@@ -1196,30 +1220,37 @@ defmodule Maraithon.OpenLoops do
     }
 
     Enum.reduce(todos, base, fn todo, acc ->
-      bucket = todo_bucket(todo, now)
+      bucket = todo_bucket(todo, now, offset_hours)
       Map.update!(acc, bucket, &[serialize_todo(todo) | &1])
     end)
     |> Map.new(fn {bucket, todos} -> {bucket, Enum.reverse(todos)} end)
   end
 
-  defp todo_bucket(%Todo{status: "snoozed", snoozed_until: %DateTime{} = snoozed_until}, now) do
+  defp todo_bucket(
+         %Todo{status: "snoozed", snoozed_until: %DateTime{} = snoozed_until},
+         now,
+         _offset_hours
+       ) do
     if DateTime.compare(snoozed_until, now) == :gt, do: :snoozed, else: :upcoming
   end
 
-  defp todo_bucket(%Todo{attention_mode: "monitor"}, _now), do: :monitor
-  defp todo_bucket(%Todo{due_at: nil}, _now), do: :no_due_date
+  defp todo_bucket(%Todo{attention_mode: "monitor"}, _now, _offset_hours), do: :monitor
+  defp todo_bucket(%Todo{due_at: nil}, _now, _offset_hours), do: :no_due_date
 
-  defp todo_bucket(%Todo{due_at: %DateTime{} = due_at}, now) do
-    today = DateTime.to_date(now)
+  defp todo_bucket(%Todo{due_at: %DateTime{} = due_at}, now, offset_hours) do
+    # Local calendar dates on both sides (SPEC 01 R2) — the shared primitive
+    # `Todos.brief_local_date/2` is the same date-localization the briefing
+    # buckets already use; never compare `DateTime.to_date/1` in raw UTC here.
+    today = Todos.brief_local_date(now, offset_hours)
 
-    case Date.compare(DateTime.to_date(due_at), today) do
+    case Date.compare(Todos.brief_local_date(due_at, offset_hours), today) do
       :lt -> :overdue
       :eq -> :today
       :gt -> :upcoming
     end
   end
 
-  defp todo_bucket(_todo, _now), do: :no_due_date
+  defp todo_bucket(_todo, _now, _offset_hours), do: :no_due_date
 
   defp trim_buckets(bucketed, limit) do
     Map.new(bucketed, fn {bucket, todos} ->
@@ -1560,6 +1591,7 @@ defmodule Maraithon.OpenLoops do
           "limit" -> :limit
           "query" -> :query
           "now" -> :now
+          "timezone_offset_hours" -> :timezone_offset_hours
           _other -> nil
         end
 

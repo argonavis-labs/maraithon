@@ -49,6 +49,7 @@ defmodule Maraithon.Runtime.Supervisor do
           Maraithon.Runtime.BriefNotifier,
           Maraithon.Runtime.ProactiveCheckIn,
           Maraithon.Runtime.TodoCompletionSweep,
+          Maraithon.Runtime.NudgeSweep,
           Maraithon.Runtime.TokenRefresher,
           Maraithon.Runtime.WatchRenewer,
           Maraithon.Runtime.FreshnessSweep,

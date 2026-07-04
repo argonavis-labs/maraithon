@@ -401,6 +401,15 @@ defmodule Maraithon.Todos.Intelligence do
          `owed_by_me` and any `pending_reply`/`user_owes`/`waiting_on_*`
          evidence to `owed_to_me`. Name the counterparty in
          `counterparty_label` whenever source evidence identifies them.
+       - Whenever you set `direction: "owed_to_me"`, also set `next_nudge_at`:
+         the ISO-8601 datetime when Maraithon should propose the first
+         follow-up nudge if the counterparty stays quiet. Size the cadence to
+         the counterparty and urgency — a customer-blocking or deadline-bound
+         ask about 2 days out, a normal work request 3-5 days, a casual intro
+         or low-stakes favor 7-10 days. Put a one-line rationale for the
+         chosen cadence in `metadata.follow_up_reasoning`. Never set
+         `next_nudge_at` for `owed_by_me` or `fyi` items — the runtime drops
+         it for any direction other than `owed_to_me`.
        - Return ONLY valid JSON. No markdown.
 
        Return JSON shaped like:
@@ -438,9 +447,11 @@ defmodule Maraithon.Todos.Intelligence do
                "dedupe_key": "same stable semantic key",
                "direction": "owed_by_me | owed_to_me | fyi",
                "counterparty_label": "the person or team this is owed to/from, or omitted",
+               "next_nudge_at": "ISO-8601 datetime or omitted, owed_to_me only",
                "metadata": {
                  "crm_people": [],
-                 "relationship_memories": []
+                 "relationship_memories": [],
+                 "follow_up_reasoning": "one line on the chosen follow-up cadence, owed_to_me only"
                }
              }
            }

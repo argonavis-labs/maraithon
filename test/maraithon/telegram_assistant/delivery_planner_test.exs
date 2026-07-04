@@ -418,6 +418,108 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     assert result.held == 2
   end
 
+  describe "SPEC 01 nudge-sourced candidates" do
+    test "a nudge candidate dispatches through interrupt_now without raising and records a nudge receipt",
+         %{user_id: user_id} do
+      todo = owed_to_me_todo(user_id, "nudge-interrupt")
+
+      {:ok, candidate} =
+        ProactiveQueue.enqueue(
+          candidate_attrs(user_id, %{
+            source: "nudge",
+            source_id: todo.id,
+            dedupe_key: "nudge:#{todo.id}:nudge_due:0",
+            title: "Nudge Elena about the pricing doc",
+            body: "You've been waiting on Elena since the 1st — want me to send a nudge?",
+            urgency: 0.9,
+            structured_data: %{
+              "todo_ids" => [todo.id],
+              "message_class" => "todo_digest",
+              "nudge_reason" => "follow_up_due"
+            }
+          })
+        )
+
+      llm_complete = plan_llm(%{candidate.id => {"interrupt_now", "The follow-up moment arrived."}})
+
+      assert {:ok, result} =
+               DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+      assert result.interrupt_now == 1
+      assert result.delivered == 1
+      assert result.failed == 0
+
+      assert Repo.get!(ProactiveCandidate, candidate.id).status == "delivered"
+
+      receipt = Repo.get_by!(PushReceipt, user_id: user_id, dedupe_key: candidate.dedupe_key)
+      assert receipt.origin_type == "nudge"
+      assert receipt.decision == "sent_now"
+
+      # The candidate's todo card (with its own interactive buttons) rides
+      # along via the existing todo_digest path — no new dispatch code.
+      messages = telegram_messages()
+      assert Enum.any?(messages, &(&1.text =~ "waiting on Elena"))
+      assert Enum.any?(messages, &(&1.text =~ "pricing doc"))
+    end
+
+    test "a nudge candidate dispatches through the digest path without raising", %{
+      user_id: user_id
+    } do
+      todo = owed_to_me_todo(user_id, "nudge-digest")
+
+      {:ok, candidate} =
+        ProactiveQueue.enqueue(
+          candidate_attrs(user_id, %{
+            source: "nudge",
+            source_id: todo.id,
+            dedupe_key: "nudge:#{todo.id}:overdue:2026-07-04",
+            title: "The pricing doc deadline passed",
+            body: "The pricing doc you are waiting on from Elena is now overdue.",
+            urgency: 0.6,
+            structured_data: %{
+              "todo_ids" => [todo.id],
+              "message_class" => "todo_digest",
+              "nudge_reason" => "overdue"
+            }
+          })
+        )
+
+      llm_complete = plan_llm(%{candidate.id => {"digest", "Batch it with the digest."}})
+
+      assert {:ok, result} =
+               DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+      assert result.digest == 1
+      assert result.delivered == 1
+      assert result.failed == 0
+
+      assert Repo.get!(ProactiveCandidate, candidate.id).status == "delivered"
+
+      receipt =
+        Repo.get_by!(PushReceipt, user_id: user_id, dedupe_key: candidate.dedupe_key)
+
+      assert receipt.origin_type == "nudge"
+      assert receipt.decision == "merged"
+    end
+  end
+
+  defp owed_to_me_todo(user_id, key) do
+    {:ok, [todo]} =
+      Maraithon.Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Waiting on Elena for the pricing doc",
+          "summary" => "Elena owes you the pricing doc for the renewal.",
+          "next_action" => "Nudge Elena if she stays quiet.",
+          "dedupe_key" => "delivery-planner-#{key}",
+          "direction" => "owed_to_me",
+          "counterparty_label" => "Elena"
+        }
+      ])
+
+    todo
+  end
+
   defp plan_llm(dispositions_by_id) do
     fn _params ->
       dispositions =

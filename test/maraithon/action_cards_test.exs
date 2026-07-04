@@ -921,4 +921,119 @@ defmodule Maraithon.ActionCardsTest do
     refute rendered =~ "owner, ETA"
     refute rendered =~ "exact artifact or update"
   end
+
+  describe "SPEC 01 R5 cadence-aware repeat nudges" do
+    test "a twice-nudged owed_to_me todo re-suggests the follow-up once its next_nudge_at elapses",
+         %{user_id: user_id} do
+      todo = nudged_todo(user_id, "elapsed", nudge_count: 2, next_nudge_at: hours_from_now(-6))
+
+      card = ActionCards.for_todo(todo, include_disconnected: false)
+      actions = card["prepared_actions"]
+
+      assert [nudge_action] = Enum.filter(actions, &(&1["type"] == "send_nudge"))
+      assert nudge_action["label"] =~ "2 have gone out already"
+      refute nudge_action["label"] =~ "none has gone out yet"
+    end
+
+    test "no nudge is suggested while a future next_nudge_at is pending", %{user_id: user_id} do
+      todo = nudged_todo(user_id, "pending", nudge_count: 2, next_nudge_at: hours_from_now(48))
+
+      card = ActionCards.for_todo(todo, include_disconnected: false)
+
+      assert Enum.filter(card["prepared_actions"], &(&1["type"] == "send_nudge")) == []
+    end
+
+    test "no nudge is re-suggested within the 24h backoff right after a send completes", %{
+      user_id: user_id
+    } do
+      todo =
+        nudged_todo(user_id, "backoff",
+          nudge_count: 1,
+          next_nudge_at: hours_from_now(-1),
+          last_nudged_at: hours_from_now(-2)
+        )
+
+      card = ActionCards.for_todo(todo, include_disconnected: false)
+
+      assert Enum.filter(card["prepared_actions"], &(&1["type"] == "send_nudge")) == []
+    end
+
+    test "legacy rows (nudged before, no cadence) re-suggest on the age/last-nudged signals", %{
+      user_id: user_id
+    } do
+      todo = nudged_todo(user_id, "legacy", nudge_count: 1, next_nudge_at: nil)
+
+      card = ActionCards.for_todo(todo, include_disconnected: false)
+
+      assert [nudge_action] = Enum.filter(card["prepared_actions"], &(&1["type"] == "send_nudge"))
+      assert nudge_action["label"] =~ "1 has gone out already"
+    end
+
+    test "nudge_why_now names the repeat-nudge state and the next follow-up", %{user_id: user_id} do
+      # Shaped so every richer why_now candidate stays silent (high priority
+      # avoids the stale-check copy; no waiting/business/family/due signals),
+      # leaving the nudge-state candidate to fire.
+      todo =
+        nudged_todo(user_id, "why-now",
+          nudge_count: 2,
+          next_nudge_at: hours_from_now(6 * 24),
+          last_nudged_at: hours_from_now(-6 * 24),
+          direction: "owed_by_me",
+          title: "Prepare the quarterly board memo",
+          summary: "The quarterly board memo is still open.",
+          next_action: "Finish the board memo and send it out.",
+          priority: 90
+        )
+
+      card = ActionCards.for_todo(todo, include_disconnected: false)
+
+      assert card["why_now"] =~ "nudged 6 days ago"
+      assert card["why_now"] =~ "next follow-up around"
+      refute card["why_now"] =~ "never nudged"
+    end
+  end
+
+  defp nudged_todo(user_id, key, opts) do
+    nudge_count = Keyword.fetch!(opts, :nudge_count)
+    old = DateTime.add(DateTime.utc_now(), -9 * 24 * 3600, :second)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => Keyword.get(opts, :title, "Waiting on Elena for the pricing doc"),
+          "summary" =>
+            Keyword.get(opts, :summary, "Elena owes you the pricing doc for the renewal."),
+          "next_action" => Keyword.get(opts, :next_action, "Nudge Elena if she stays quiet."),
+          "dedupe_key" => "action-cards-nudge-#{key}",
+          "direction" => Keyword.get(opts, :direction, "owed_to_me"),
+          "counterparty_label" => "Elena",
+          "priority" => Keyword.get(opts, :priority, 50),
+          "source_occurred_at" => DateTime.to_iso8601(old)
+        }
+      ])
+
+    # Set nudge history directly: record_nudge_sent is the send-path bump and
+    # always stamps last_nudged_at "now"; these tests need historical shapes.
+    {1, _} =
+      Repo.update_all(
+        from(t in Todo, where: t.id == ^todo.id),
+        set: [
+          nudge_count: nudge_count,
+          last_nudged_at: truncate_second(Keyword.get(opts, :last_nudged_at, old)),
+          next_nudge_at: truncate_second(Keyword.get(opts, :next_nudge_at)),
+          inserted_at: old
+        ]
+      )
+
+    Repo.get!(Todo, todo.id)
+  end
+
+  defp truncate_second(nil), do: nil
+  defp truncate_second(%DateTime{} = datetime), do: DateTime.truncate(datetime, :second)
+
+  defp hours_from_now(hours) do
+    DateTime.add(DateTime.utc_now(), hours * 3600, :second)
+  end
 end
