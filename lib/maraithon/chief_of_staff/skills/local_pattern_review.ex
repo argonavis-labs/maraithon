@@ -1,24 +1,29 @@
 defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
   @moduledoc """
-  Model relevance gate for `Maraithon.Proactive.LocalPatterns` candidates.
+  Model relevance gate for heuristic proactive-nudge candidates.
 
-  SPEC 04 R5: `LocalPatterns`' six detectors (cold thread, dropped
-  commitment, untranscribed memo, note follow-up, calendar conflict, file
-  mention) are keyword/token-overlap heuristics, not a model decision — they
-  now record `status: "candidate"` insights instead of directly-deliverable
-  ones (GOALS Principle 3: the app must not rely on keyword heuristics for
-  relevance). This skill is the only path that turns a candidate into a
-  user-facing insight: on every Chief of Staff wakeup it looks for pending
-  candidates and, only when there are any, asks the model which are worth
-  surfacing right now. Approved candidates are promoted to `"new"` (and flow
-  through the existing Insight -> InsightNotifications -> PushBroker/Telegram
-  pipeline unchanged); the rest are dismissed.
+  SPEC 04 R5: `Maraithon.Proactive.LocalPatterns`' six detectors (cold
+  thread, dropped commitment, untranscribed memo, note follow-up, calendar
+  conflict, file mention) are keyword/token-overlap heuristics, not a model
+  decision — they record `status: "candidate"` insights instead of
+  directly-deliverable ones (GOALS Principle 3: the app must not rely on
+  keyword heuristics for relevance). SPEC 03 adds a second candidate
+  producer to the same wakeup: `Maraithon.Crm.RelationshipDrift` turns the
+  CRM's overdue-cadence / gone-quiet reconnect signals into
+  relationship-drift observations. This skill is the only path that turns
+  any candidate into a user-facing insight: on every Chief of Staff wakeup
+  it runs both gatherers, looks for pending candidates and, only when there
+  are any, asks the model which are worth surfacing right now. Approved
+  candidates are promoted to `"new"` (and flow through the existing
+  Insight -> InsightNotifications -> PushBroker/Telegram pipeline
+  unchanged); the rest are dismissed.
 
   A quiet cycle with no pending candidates costs nothing (no model call).
   """
 
   @behaviour Maraithon.ChiefOfStaff.Skill
 
+  alias Maraithon.Crm.RelationshipDrift
   alias Maraithon.Insights
   alias Maraithon.Insights.Insight
   alias Maraithon.Proactive.LocalPatterns
@@ -38,7 +43,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
 
   @impl true
   def description do
-    "Reviews local-source pattern candidates (cold threads, dropped commitments, ...) and decides which are worth surfacing."
+    "Reviews heuristic pattern candidates (cold threads, dropped commitments, relationship drift, ...) and decides which are worth surfacing."
   end
 
   @impl true
@@ -95,6 +100,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
         # spend) as part of the same CoS wakeup that reviews them — R6
         # (SPEC 04): LocalPatterns has no separate detection cadence anymore.
         _ = local_patterns_module().run_for_user(user_id, now: now)
+        # SPEC 03 R7: relationship-drift candidates ride the same batched
+        # review — list_candidates_for_user/2 picks up every "candidate"
+        # insight regardless of producer, so no second model call is needed.
+        _ = relationship_drift_module().run_for_user(user_id, now: now)
 
         candidates = Insights.list_candidates_for_user(user_id, limit: state.candidate_limit)
 
@@ -181,12 +190,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
 
   defp review_prompt(input_json, context) do
     """
-    You are the operator's chief of staff. A keyword/pattern detector flagged
-    the candidate signals below (cold threads, dropped commitments,
-    untranscribed memos, note follow-ups, calendar conflicts, file mentions).
-    Detectors are dumb pattern matches, not judgment — decide which candidates
-    are actually worth interrupting the operator about right now, and which
-    are noise, stale, or not worth a Telegram nudge.
+    You are the operator's chief of staff. Heuristic detectors flagged the
+    candidate signals below (cold threads, dropped commitments,
+    untranscribed memos, note follow-ups, calendar conflicts, file mentions,
+    and relationship-drift observations — important relationships whose
+    usual contact cadence has lapsed or that are going quiet). Detectors are
+    dumb pattern matches, not judgment — decide which candidates are
+    actually worth interrupting the operator about right now, and which are
+    noise, stale, or not worth a Telegram nudge.
 
     #{previous_cycle_memo_section(context)}#{previous_decision_ledger_section(context)}Return ONLY valid JSON with this exact shape:
     {
@@ -459,5 +470,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
   defp local_patterns_module do
     Application.get_env(:maraithon, __MODULE__, [])
     |> Keyword.get(:local_patterns_module, LocalPatterns)
+  end
+
+  defp relationship_drift_module do
+    Application.get_env(:maraithon, __MODULE__, [])
+    |> Keyword.get(:relationship_drift_module, RelationshipDrift)
   end
 end
