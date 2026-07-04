@@ -50,6 +50,7 @@ defmodule Maraithon.Runtime.Supervisor do
           Maraithon.Runtime.ProactiveCheckIn,
           Maraithon.Runtime.TodoCompletionSweep,
           Maraithon.Runtime.NudgeSweep,
+          Maraithon.Runtime.StalenessTriageSweep,
           Maraithon.Runtime.TokenRefresher,
           Maraithon.Runtime.WatchRenewer,
           Maraithon.Runtime.FreshnessSweep,

@@ -3,6 +3,8 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ChiefOfStaff.SourceBundle
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Repo
   alias Maraithon.Todos
   alias Maraithon.Todos.CrossSourceCompletion
 
@@ -28,6 +30,9 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
       "dedupe_key" => Map.get(overrides, "dedupe_key", "cross-source:#{Ecto.UUID.generate()}"),
       "metadata" => Map.get(overrides, "metadata", %{})
     }
+    # Pass through any additional attrs (e.g. direction/counterparty_label)
+    # the defaults above don't cover.
+    |> Map.merge(overrides)
   end
 
   test "closes stale event-creation work when later source evidence shows the event is live" do
@@ -285,6 +290,373 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
                source_bundle: source_bundle,
                llm_complete: llm_complete
              )
+  end
+
+  defp bulk_todo_attrs(title, source_at, index) do
+    open_todo_attrs(title, source_at, %{
+      "source_item_id" => "bulk-item-#{index}:#{System.unique_integer([:positive])}",
+      "dedupe_key" => "cross-source-bulk:#{index}:#{Ecto.UUID.generate()}"
+    })
+  end
+
+  defp gmail_reply_bundle(now, thread_id, text) do
+    %{timestamp: now, trigger: %{type: :wakeup}}
+    |> SourceBundle.empty(%{})
+    |> SourceBundle.put_gmail(%{
+      "status" => "ready",
+      "fetched_at" => now,
+      "messages" => [
+        %{
+          "message_id" => "gmail-#{thread_id}",
+          "thread_id" => thread_id,
+          "subject" => "Re: the thing you are waiting on",
+          "text_body" => text,
+          "internal_date" => now,
+          "labels" => ["INBOX"]
+        }
+      ]
+    })
+  end
+
+  test "evidence-linked todo is checked even when it is not among the 40 oldest open todos" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-18 18:56:06Z]
+
+    backstop_attrs =
+      Enum.map(1..44, fn index ->
+        bulk_todo_attrs("Backstop bulk item number #{index}", source_at, index)
+      end)
+
+    {:ok, _todos} = Todos.upsert_many(user_id, backstop_attrs)
+
+    # Created LAST, so it is the newest by updated_at — the old 40-oldest cap
+    # would never check it.
+    {:ok, [target]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Evidence linked newest waiting item", source_at, %{
+          "source_item_id" => "thread-evidence-linked-newest",
+          "dedupe_key" => "cross-source-bulk:target:#{Ecto.UUID.generate()}"
+        })
+      ])
+
+    source_bundle =
+      gmail_reply_bundle(now, "thread-evidence-linked-newest", "Here is the answer you needed.")
+
+    test_pid = self()
+
+    llm_complete = fn prompt ->
+      send(test_pid, {:prompt, prompt})
+      {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
+    end
+
+    assert %{checked: 40, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_complete: llm_complete
+             )
+
+    assert_receive {:prompt, prompt}
+    assert prompt =~ "Evidence linked newest waiting item"
+
+    # The cycle stamp advanced for the checked target.
+    assert %DateTime{} = Todos.get_for_user(user_id, target.id).last_completion_checked_at
+  end
+
+  test "backstop rotation prefers never-checked todos over ones stamped last cycle" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-18 18:56:06Z]
+
+    attrs =
+      Enum.map(1..45, fn index ->
+        bulk_todo_attrs("Rotation bulk item number #{index}", source_at, index)
+      end)
+
+    {:ok, todos} = Todos.upsert_many(user_id, attrs)
+
+    # No todo matches the evidence, so all 45 compete for the 40-slot backstop.
+    source_bundle = gmail_reply_bundle(now, "thread-unrelated-to-everything", "Unrelated note.")
+
+    test_pid = self()
+
+    llm_complete = fn prompt ->
+      send(test_pid, {:prompt, prompt})
+      {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
+    end
+
+    assert %{checked: 40, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_complete: llm_complete
+             )
+
+    assert_receive {:prompt, first_prompt}
+
+    left_out =
+      Enum.filter(todos, fn todo -> not String.contains?(first_prompt, todo.title) end)
+
+    assert length(left_out) == 5
+
+    # Every checked candidate was stamped, including non-closers.
+    checked = Enum.find(todos, fn todo -> String.contains?(first_prompt, todo.title) end)
+    assert %DateTime{} = Todos.get_for_user(user_id, checked.id).last_completion_checked_at
+
+    assert %{checked: 40, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: DateTime.add(now, 3600, :second),
+               source_bundle: source_bundle,
+               llm_complete: llm_complete
+             )
+
+    assert_receive {:prompt, second_prompt}
+
+    # The five never-checked todos sort ahead of the just-stamped forty.
+    for todo <- left_out do
+      assert second_prompt =~ todo.title
+    end
+  end
+
+  test "counterparty reply that answers an owed_to_me item closes it with distinct copy and a Telegram confirmation" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-18 18:56:06Z]
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "556677",
+        metadata: %{"username" => "cross-source"}
+      })
+
+    {:ok, [waiting, owed_by_me]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Waiting on Elena for the pricing doc", source_at, %{
+          "source" => "gmail",
+          "direction" => "owed_to_me",
+          "counterparty_label" => "Elena Fisher",
+          "source_item_id" => "thread-elena-pricing",
+          "next_action" => "Wait for Elena to send the pricing doc.",
+          "dedupe_key" => "cross-source-owed:#{Ecto.UUID.generate()}"
+        }),
+        open_todo_attrs("Send the board update yourself", source_at, %{
+          "source" => "gmail",
+          "direction" => "owed_by_me",
+          "source_item_id" => "thread-board-update",
+          "dedupe_key" => "cross-source-owed-by:#{Ecto.UUID.generate()}"
+        })
+      ])
+
+    source_bundle =
+      gmail_reply_bundle(now, "thread-elena-pricing", "Here's the pricing doc you asked for.")
+
+    test_pid = self()
+
+    llm_complete = fn prompt ->
+      assert prompt =~ "\"direction\":\"owed_to_me\""
+      assert prompt =~ "Elena Fisher"
+      assert prompt =~ "thread-elena-pricing"
+      assert prompt =~ "reply_outcome"
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "resolutions" => [
+               %{
+                 "todo_id" => waiting.id,
+                 "completed" => true,
+                 "evidence_channel" => "gmail",
+                 "evidence_quote" => "Here's the pricing doc you asked for.",
+                 "reasoning" => "Elena's inbound reply carries the doc the user was waiting on.",
+                 "confidence" => 0.93,
+                 "reply_outcome" => "answered"
+               },
+               %{
+                 "todo_id" => owed_by_me.id,
+                 "completed" => true,
+                 "evidence_channel" => "gmail",
+                 "evidence_quote" => "Board update sent, thanks all.",
+                 "reasoning" => "The user sent the board update.",
+                 "confidence" => 0.91
+               }
+             ]
+           })
+       }}
+    end
+
+    push_deliver = fn candidate ->
+      send(test_pid, {:push, candidate})
+      {:ok, %{decision: "sent_now", message_id: "1"}}
+    end
+
+    assert %{checked: 2, completed: 2} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_complete: llm_complete,
+               push_deliver: push_deliver
+             )
+
+    closed_waiting = Todos.get_for_user(user_id, waiting.id)
+    assert closed_waiting.status == "done"
+
+    assert closed_waiting.metadata["resolution_note"] =~
+             "Elena Fisher replied — closing that loop."
+
+    refute closed_waiting.metadata["resolution_note"] =~ "Handled already"
+
+    closed_owed_by_me = Todos.get_for_user(user_id, owed_by_me.id)
+    assert closed_owed_by_me.status == "done"
+    assert closed_owed_by_me.metadata["resolution_note"] =~ "Handled already"
+
+    # Exactly one push: the owed_to_me answered close. owed_by_me stays silent.
+    assert_receive {:push, candidate}
+    refute_receive {:push, _another}
+
+    assert candidate.user_id == user_id
+    assert candidate.chat_id == "556677"
+    assert candidate.origin_type == "todo_completion_confirm"
+    assert candidate.origin_id == waiting.id
+    assert candidate.dedupe_key == "todo_completion_confirm:#{waiting.id}"
+    assert candidate.urgency == 0.3
+    assert candidate.interrupt_now == false
+    assert candidate.body =~ "Elena Fisher replied — closing that loop on:"
+  end
+
+  test "acknowledged-only counterparty reply clears the nudge cadence without closing or pushing" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-18 18:56:06Z]
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "556688",
+        metadata: %{"username" => "cross-source-ack"}
+      })
+
+    {:ok, [waiting]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Waiting on Sam for the contract review", source_at, %{
+          "source" => "gmail",
+          "direction" => "owed_to_me",
+          "counterparty_label" => "Sam Ortiz",
+          "source_item_id" => "thread-sam-contract",
+          "dedupe_key" => "cross-source-ack:#{Ecto.UUID.generate()}"
+        })
+      ])
+
+    {:ok, _stamped} =
+      Todos.get_for_user(user_id, waiting.id)
+      |> Ecto.Changeset.change(next_nudge_at: ~U[2099-06-29 14:00:00Z])
+      |> Repo.update()
+
+    source_bundle =
+      gmail_reply_bundle(now, "thread-sam-contract", "Got it, will take a look next week.")
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "resolutions" => [
+               %{
+                 "todo_id" => waiting.id,
+                 "completed" => false,
+                 "evidence_channel" => "gmail",
+                 "evidence_quote" => "Got it, will take a look next week.",
+                 "reasoning" => "Sam only acknowledged; the review itself hasn't happened.",
+                 "confidence" => 0.9,
+                 "reply_outcome" => "acknowledged_only"
+               }
+             ]
+           })
+       }}
+    end
+
+    test_pid = self()
+
+    push_deliver = fn candidate ->
+      send(test_pid, {:push, candidate})
+      {:ok, %{decision: "sent_now", message_id: "1"}}
+    end
+
+    assert %{checked: 1, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_complete: llm_complete,
+               push_deliver: push_deliver
+             )
+
+    updated = Todos.get_for_user(user_id, waiting.id)
+    assert updated.status == "open"
+    assert is_nil(updated.next_nudge_at)
+    assert updated.metadata["resolution_note"] =~ "cadence cleared"
+
+    refute_receive {:push, _candidate}
+  end
+
+  test "owed_to_me confirmation push is skipped when no Telegram destination resolves, with They fallback copy" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-18 18:56:06Z]
+
+    {:ok, [waiting]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Waiting on the vendor security answers", source_at, %{
+          "source" => "gmail",
+          "direction" => "owed_to_me",
+          "source_item_id" => "thread-vendor-security",
+          "dedupe_key" => "cross-source-nochat:#{Ecto.UUID.generate()}"
+        })
+      ])
+
+    source_bundle =
+      gmail_reply_bundle(now, "thread-vendor-security", "Answers attached for every question.")
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "resolutions" => [
+               %{
+                 "todo_id" => waiting.id,
+                 "completed" => true,
+                 "evidence_channel" => "gmail",
+                 "evidence_quote" => "Answers attached for every question.",
+                 "reasoning" => "The counterparty reply delivers exactly what was awaited.",
+                 "confidence" => 0.92,
+                 "reply_outcome" => "answered"
+               }
+             ]
+           })
+       }}
+    end
+
+    test_pid = self()
+
+    push_deliver = fn candidate ->
+      send(test_pid, {:push, candidate})
+      {:ok, %{decision: "sent_now", message_id: "1"}}
+    end
+
+    assert %{checked: 1, completed: 1} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_complete: llm_complete,
+               push_deliver: push_deliver
+             )
+
+    updated = Todos.get_for_user(user_id, waiting.id)
+    assert updated.status == "done"
+    assert updated.metadata["resolution_note"] =~ "They replied — closing that loop."
+
+    # No connected Telegram account: the push candidate is never built.
+    refute_receive {:push, _candidate}
   end
 
   test "live source acquisition timeout is surfaced as source health evidence" do
