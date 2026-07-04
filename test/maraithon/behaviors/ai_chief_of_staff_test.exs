@@ -1,8 +1,10 @@
 defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
   use Maraithon.DataCase, async: false
 
+  alias Maraithon.Accounts
   alias Maraithon.Behaviors.AIChiefOfStaff
   alias Maraithon.ChiefOfStaff.Skills
+  alias Maraithon.OperatorEvents
   alias Maraithon.TestSupport.ChiefOfStaffTestSkill
 
   # SPEC 04 R3: once every skill in a cycle has run, `finalize_cycle/1` first
@@ -135,7 +137,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
         :last_watermarks,
         :last_cycle_stats,
         :cycle_memory,
-        :cycle_memo_generated
+        :cycle_memo_generated,
+        :decision_ledger
       ])
 
     assert {_directive, _state_or_effect, _next} =
@@ -617,6 +620,279 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
       assert next_state.cycle_memo_generated == false
       # The memo carries forward unchanged since this cycle had nothing new.
       assert next_state.cycle_memory["memo"] == "Nothing outstanding as of last check."
+    end
+  end
+
+  describe "skill effect error isolation (SPEC 07 R1)" do
+    test "a skill lacking handle_effect_error/4 no longer aborts the cycle: later skills run, finalize_cycle runs, and an operator event is recorded",
+         %{context: context} do
+      # OperatorEvents.record/1 enforces a user FK.
+      {:ok, _user} = Accounts.get_or_create_user_by_email(context.user_id)
+
+      state =
+        AIChiefOfStaff.init(%{
+          "user_id" => context.user_id,
+          "skill_configs" => %{
+            # ChiefOfStaffTestSkill exports no handle_effect_error/4 — the
+            # exact class of skill (followthrough/travel_logistics/...) this
+            # generic path exists for.
+            "alpha" => %{
+              "wakeup_mode" => "effect",
+              "effect_kind" => "llm_call",
+              "effect_params" => %{"messages" => [%{"role" => "user", "content" => "hi"}]}
+            },
+            "beta" => %{
+              "wakeup_mode" => "emit",
+              "wakeup_emit_type" => "briefs_recorded",
+              "wakeup_payload" => %{
+                "count" => 1,
+                "user_id" => context.user_id,
+                "cadences" => ["morning"]
+              }
+            }
+          }
+        })
+
+      assert {:effect, {:llm_call, _params}, waiting_state} =
+               AIChiefOfStaff.handle_wakeup(state, context)
+
+      assert waiting_state.pending_effect_skill_id == "alpha"
+      assert waiting_state.resume_index == 1
+      cycle_id = waiting_state.assistant_cycle_id
+
+      # Alpha's effect fails; the cycle must continue at beta and reach
+      # finalize_cycle/1 (via the memo round-trip) instead of returning a
+      # terminal {:idle, ...} with a frozen cycle_skill_ids/resume_index.
+      assert {:emit, {:briefs_recorded, payload}, next_state} =
+               AIChiefOfStaff.handle_effect_error(
+                 :llm_call,
+                 {:rate_limited, 429},
+                 waiting_state,
+                 context
+               )
+               |> resolve_cycle_result(context)
+
+      assert payload["cadences"] == ["morning"]
+      assert next_state.cycle_skill_ids == nil
+      assert next_state.resume_index == 0
+      assert next_state.pending_effect_skill_id == nil
+
+      assert [event] =
+               OperatorEvents.list_events(
+                 user_id: context.user_id,
+                 event_type: "cycle.skill_effect_error"
+               )
+
+      assert event.source == "chief_of_staff"
+      assert event.source_item_id == "alpha"
+      assert event.dedupe_key == "cos_skill_effect_error:#{cycle_id}:alpha"
+      assert event.payload["effect_type"] == "llm_call"
+      assert event.payload["reason"] =~ "rate_limited"
+      assert event.payload["resume_index"] == 1
+    end
+  end
+
+  defp pubsub_context(context, topic) do
+    %{
+      context
+      | trigger: %{type: :pubsub_event, topic: topic},
+        event: %{topic: topic, payload: %{"history_id" => "123"}}
+    }
+  end
+
+  defp ledger_emitting_state(context, ledger_entries, extra_alpha_config \\ %{}) do
+    AIChiefOfStaff.init(%{
+      "user_id" => context.user_id,
+      "skill_configs" => %{
+        "alpha" =>
+          Map.merge(
+            %{
+              "interest_mode" => "always",
+              "wakeup_mode" => "emit",
+              "wakeup_emit_type" => "insights_recorded",
+              "wakeup_payload" => %{
+                "count" => 1,
+                "user_id" => context.user_id,
+                "categories" => ["general"],
+                "ledger_entries" => ledger_entries
+              }
+            },
+            extra_alpha_config
+          ),
+        "beta" => %{"interest_mode" => "scheduled_only", "wakeup_mode" => "idle"}
+      }
+    })
+  end
+
+  describe "decision ledger + scheduled-only memo (SPEC 07 R5/R6/R8/R9)" do
+    test "a pubsub cycle skips the memo LLM call, leaves cycle_memory untouched, and still merges ledger entries",
+         %{context: context} do
+      event_context = pubsub_context(context, "slack:T123")
+
+      previous_memory = %{
+        "memo" => "Rich scheduled-scan memo.",
+        "updated_at" => "2026-03-15T00:00:00Z",
+        "cycle_id" => "prior-cycle"
+      }
+
+      state = %{
+        ledger_emitting_state(context, [
+          %{
+            "item_id" => "insight-1",
+            "item_type" => "insight",
+            "decision" => "suppressed",
+            "reason" => "recurring detector noise"
+          },
+          # Malformed entries are dropped, never crash the cycle (R6).
+          %{"item_id" => "", "decision" => "bogus"},
+          "not-a-map"
+        ])
+        | cycle_memory: previous_memory
+      }
+
+      # R9: the emit comes back directly — no `{:effect, {:llm_call, ...}}`
+      # memo round-trip for a non-scheduled cycle.
+      assert {:emit, {:insights_recorded, payload}, next_state} =
+               AIChiefOfStaff.handle_wakeup(state, event_context)
+
+      # R6: the internal bookkeeping key never reaches the outgoing emit.
+      refute Map.has_key?(payload, "ledger_entries")
+      refute Map.has_key?(payload, :ledger_entries)
+
+      # cycle_memory is byte-for-byte unchanged; the ledger still updated.
+      assert next_state.cycle_memory == previous_memory
+      assert next_state.cycle_memo_generated == false
+      assert next_state.cycle_skill_ids == nil
+
+      assert %{
+               "item_type" => "insight",
+               "decision" => "suppressed",
+               "reason" => "recurring detector noise",
+               "skill_id" => "alpha"
+             } = next_state.decision_ledger["insight-1"]
+
+      assert is_binary(next_state.decision_ledger["insight-1"]["first_seen_cycle"])
+      assert map_size(next_state.decision_ledger) == 1
+    end
+
+    test "ledger upserts preserve first_seen_cycle and overwrite decision/reason", %{
+      context: context
+    } do
+      event_context = pubsub_context(context, "email:chief@example.com")
+
+      state =
+        ledger_emitting_state(context, [
+          %{
+            "item_id" => "todo-9",
+            "item_type" => "todo",
+            "decision" => "held",
+            "reason" => "waiting on reply"
+          }
+        ])
+
+      assert {:emit, _emit, first_state} = AIChiefOfStaff.handle_wakeup(state, event_context)
+      first_entry = first_state.decision_ledger["todo-9"]
+      assert first_entry["decision"] == "held"
+      assert is_binary(first_entry["first_seen_cycle"])
+
+      second_state =
+        put_in(first_state, [:skill_states, "alpha", :wakeup_payload, "ledger_entries"], [
+          %{
+            "item_id" => "todo-9",
+            "item_type" => "todo",
+            "decision" => "watch",
+            "reason" => "they just replied"
+          }
+        ])
+
+      assert {:emit, _emit, next_state} =
+               AIChiefOfStaff.handle_wakeup(second_state, event_context)
+
+      entry = next_state.decision_ledger["todo-9"]
+      assert entry["decision"] == "watch"
+      assert entry["reason"] == "they just replied"
+      # first_seen_cycle survives the upsert; last_seen_cycle moves.
+      assert entry["first_seen_cycle"] == first_entry["first_seen_cycle"]
+      refute entry["last_seen_cycle"] == first_entry["last_seen_cycle"]
+    end
+
+    test "the ledger caps at 40 entries, dropping oldest resolved entries first", %{
+      context: context
+    } do
+      event_context = pubsub_context(context, "email:chief@example.com")
+
+      seeded_ledger =
+        Map.new(1..40, fn n ->
+          decision = if n == 1, do: "resolved", else: "held"
+
+          {"seed-#{n}",
+           %{
+             "item_type" => "todo",
+             "decision" => decision,
+             "reason" => "seed #{n}",
+             "skill_id" => "alpha",
+             "first_seen_cycle" => "c0",
+             "last_seen_cycle" => "c0",
+             "updated_at" => "2026-01-01T00:00:#{String.pad_leading("#{n}", 2, "0")}Z"
+           }}
+        end)
+
+      state = %{
+        ledger_emitting_state(context, [
+          %{
+            "item_id" => "fresh-1",
+            "item_type" => "insight",
+            "decision" => "suppressed",
+            "reason" => "noise"
+          }
+        ])
+        | decision_ledger: seeded_ledger
+      }
+
+      assert {:emit, _emit, next_state} = AIChiefOfStaff.handle_wakeup(state, event_context)
+
+      assert map_size(next_state.decision_ledger) == 40
+      assert Map.has_key?(next_state.decision_ledger, "fresh-1")
+      # "seed-1" is the only resolved entry — dropped first despite not being
+      # the oldest overall (all seeds share the same date prefix; resolved
+      # status outranks recency for eviction).
+      refute Map.has_key?(next_state.decision_ledger, "seed-1")
+    end
+
+    test "skill context carries the ledger newest-first (R8)", %{context: context} do
+      event_context = pubsub_context(context, "email:chief@example.com")
+
+      state = %{
+        ledger_emitting_state(context, [], %{
+          "include_context_keys" => ["previous_decision_ledger"]
+        })
+        | decision_ledger: %{
+            "old-item" => %{
+              "item_type" => "insight",
+              "decision" => "suppressed",
+              "reason" => "older decision",
+              "skill_id" => "alpha",
+              "first_seen_cycle" => "c1",
+              "last_seen_cycle" => "c1",
+              "updated_at" => "2026-01-01T00:00:00Z"
+            },
+            "new-item" => %{
+              "item_type" => "insight",
+              "decision" => "watch",
+              "reason" => "newer decision",
+              "skill_id" => "alpha",
+              "first_seen_cycle" => "c2",
+              "last_seen_cycle" => "c2",
+              "updated_at" => "2026-02-01T00:00:00Z"
+            }
+          }
+      }
+
+      assert {:emit, {:insights_recorded, payload}, _next_state} =
+               AIChiefOfStaff.handle_wakeup(state, event_context)
+
+      assert [%{"reason" => "newer decision"}, %{"reason" => "older decision"}] =
+               payload["previous_decision_ledger"]
     end
   end
 end

@@ -498,10 +498,72 @@ defmodule Maraithon.Runtime.Agent do
 
   def waiting_effect(:state_timeout, :effect_timeout, data) do
     Logger.warning("Effect timeout")
-    data = fail_current_run(data, "effect_timeout")
-    data = clear_transient_context(data)
-    schedule_next_wakeup(data)
-    {:next_state, :idle, data}
+
+    # R4 (SPEC 07): waiting_effect only ever holds the single in-flight
+    # effect request_effect/2 just registered, and no effect_id is bound in
+    # this clause — clear the whole map so the stale entry stops inflating
+    # pending_effect_timeout_ms/1's Enum.max for every later effect and
+    # leaking across the agent's lifetime.
+    effect_info =
+      case Map.values(data.pending_effects) do
+        [effect_info | _rest] -> effect_info
+        [] -> nil
+      end
+
+    data = %{data | pending_effects: %{}}
+
+    # R3 (SPEC 07): route the timeout through the behavior exactly like the
+    # {:error, reason} effect_result branch above, so the waiting skill gets
+    # its handle_effect_error/4 turn and a mid-cycle timeout can resume the
+    # rest of the cycle instead of silently dropping the continuation.
+    # Timeouts never decrement budget — unchanged by this spec. If
+    # pending_effects was unexpectedly empty, fall back to today's behavior.
+    if effect_info != nil and function_exported?(data.behavior_module, :handle_effect_error, 4) do
+      update_current_run_error(data.current_run_id, effect_info, "effect_timeout")
+
+      data =
+        emit_event(data, "effect_failed", %{
+          effect_type: effect_info.type,
+          error: "effect_timeout"
+        })
+
+      context = build_context(data)
+
+      case data.behavior_module.handle_effect_error(
+             effect_info.type,
+             "effect_timeout",
+             data.behavior_state,
+             context
+           ) do
+        {:emit, {event_type, payload}, new_behavior_state} ->
+          data = %{data | behavior_state: new_behavior_state}
+          data = emit_event(data, to_string(event_type), payload)
+          data = complete_current_run(data, event_type, payload)
+          data = clear_transient_context(data)
+          schedule_next_wakeup(data)
+          {:next_state, :idle, data}
+
+        {:idle, new_behavior_state} ->
+          data = %{data | behavior_state: new_behavior_state}
+          data = complete_current_run(data, :idle, %{})
+          data = clear_transient_context(data)
+          schedule_next_wakeup(data)
+          {:next_state, :idle, data}
+
+        {:effect, effect, new_behavior_state} ->
+          data = %{data | behavior_state: new_behavior_state}
+          request_effect(data, effect)
+
+        {:continue, new_behavior_state} ->
+          data = %{data | behavior_state: new_behavior_state}
+          {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
+      end
+    else
+      data = fail_current_run(data, "effect_timeout")
+      data = clear_transient_context(data)
+      schedule_next_wakeup(data)
+      {:next_state, :idle, data}
+    end
   end
 
   def waiting_effect(:info, {:wakeup, _, _, _} = msg, data) do

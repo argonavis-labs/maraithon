@@ -10,6 +10,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   alias Maraithon.ChiefOfStaff.{Acquisition, AttentionArbiter, Skills}
   alias Maraithon.Connectors.SourceCursors
+  alias Maraithon.OperatorEvents
 
   require Logger
 
@@ -50,6 +51,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       last_cycle_stats: %{},
       cycle_memory: %{"memo" => nil, "updated_at" => nil, "cycle_id" => nil},
       cycle_memo_generated: false,
+      # R5 (SPEC 07): structured cross-cycle decision ledger, keyed by stable
+      # item_id (todo id, insight id — never an ephemeral cycle id). Sibling
+      # of the prose `cycle_memory`, never a replacement.
+      decision_ledger: %{},
       wakeup_interval_ms:
         config
         |> Map.get("wakeup_interval_ms")
@@ -68,7 +73,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     last_watermarks: %{},
     last_cycle_stats: %{},
     cycle_memory: %{"memo" => nil, "updated_at" => nil, "cycle_id" => nil},
-    cycle_memo_generated: false
+    cycle_memo_generated: false,
+    # R5 (SPEC 07): redundant with SPEC 08's generic init/1-merge on restore,
+    # but harmless — kept so ensure_state_keys/1 also back-fills mid-wakeup.
+    decision_ledger: %{}
   }
 
   defp ensure_state_keys(state) when is_map(state) do
@@ -188,9 +196,46 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
               run_from_index(state.resume_index || 0, state, context)
           end
         else
-          {:idle, %{state | pending_effect_skill_id: nil}}
+          # R1 (SPEC 07): a skill without handle_effect_error/4 must not
+          # terminate the whole cycle with a bare {:idle, ...} — that skips
+          # every remaining skill AND finalize_cycle/1 (watermarks, emits,
+          # cycle_skill_ids/resume_index reset), freezing a stale cycle that
+          # any later trigger would resume against old data. Log, record an
+          # operator event, and resume at the next skill; resume_index was
+          # already stashed at effect-request time (run_from_index/3 set it
+          # to index + 1) — do not recompute it. Return run_from_index/3's
+          # result unmodified: all four callback shapes are legal here.
+          Logger.warning("ChiefOfStaff skill effect failed; continuing cycle at next skill",
+            skill_id: skill_id,
+            effect_type: inspect(effect_type),
+            reason: inspect(reason),
+            assistant_cycle_id: state.assistant_cycle_id
+          )
+
+          record_skill_effect_error(state, skill_id, effect_type, reason)
+
+          state = %{state | pending_effect_skill_id: nil}
+          run_from_index(state.resume_index || 0, state, context)
         end
     end
+  end
+
+  defp record_skill_effect_error(state, skill_id, effect_type, reason) do
+    _ =
+      OperatorEvents.record(%{
+        user_id: state.user_id,
+        source: "chief_of_staff",
+        event_type: "cycle.skill_effect_error",
+        source_item_id: skill_id,
+        dedupe_key: "cos_skill_effect_error:#{state.assistant_cycle_id}:#{skill_id}",
+        payload: %{
+          "effect_type" => to_string(effect_type),
+          "reason" => inspect(reason),
+          "resume_index" => state.resume_index
+        }
+      })
+
+    :ok
   end
 
   @impl true
@@ -290,7 +335,22 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     skill_ids = cycle_skill_ids(state)
 
     if index >= length(skill_ids) do
-      request_cycle_memo(%{state | resume_index: 0}, context)
+      state = %{state | resume_index: 0}
+
+      # R9 (SPEC 07): only a scheduled cycle re-synthesizes the prose memo —
+      # a :message/:pubsub_event partial cycle ran 1-2 skills against thin
+      # activity and must not overwrite the last full scan's richer memo (or
+      # pay the LLM call). mark_cycle_memo_done/1 still runs so
+      # cycle_memo_generated/pending_effect_skill_id reset consistently for
+      # the next cycle, exactly as request_cycle_memo/2's :skip branch does;
+      # cycle_memory itself is left untouched. The decision-ledger merge is
+      # NOT gated this way — it already happened in stash_emit/4 for every
+      # cycle regardless of trigger type.
+      if scheduled_trigger?(context) do
+        request_cycle_memo(state, context)
+      else
+        finalize_cycle(mark_cycle_memo_done(state))
+      end
     else
       skill_id = Enum.at(skill_ids, index)
       module = Skills.get!(skill_id)
@@ -364,6 +424,16 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   defp mark_cycle_memo_done(state) do
     %{state | pending_effect_skill_id: nil, cycle_memo_generated: true}
+  end
+
+  # R9 (SPEC 07): identical semantics to goal_alignment.ex's
+  # scheduled_trigger?/1 so "scheduled" is defined the same way everywhere.
+  defp scheduled_trigger?(context) do
+    case get_in(context, [:trigger, :type]) do
+      nil -> is_nil(context[:event]) and is_nil(context[:last_message])
+      :wakeup -> true
+      _other -> false
+    end
   end
 
   defp put_cycle_memo(state, nil, _context), do: state
@@ -628,6 +698,12 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   end
 
   defp stash_emit(state, emit, skill_id, index) do
+    # R6 (SPEC 07): pop the internal "ledger_entries" bookkeeping key out of
+    # the payload before anything else touches it — the user-facing emit must
+    # never carry it, and merge_emit/2's per-event-type clauses never see it.
+    {emit, ledger_entries} = pop_ledger_entries(emit)
+    state = merge_ledger_entries(state, ledger_entries, skill_id)
+
     %{
       state
       | pending_emit: merge_emit(state.pending_emit, emit),
@@ -643,6 +719,114 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     }
   end
 
+  # ==========================================================================
+  # R5/R6/R8 (SPEC 07): structured cross-cycle decision ledger — capped map
+  # keyed by stable item_id, sibling of the prose cycle_memory. The key is
+  # deliberately "ledger_entries", never "decisions": commitment_tracker
+  # already uses a `decisions` list for an unrelated todo-persistence-mode
+  # concept.
+  # ==========================================================================
+
+  @decision_ledger_cap 40
+  @decision_ledger_prompt_limit 20
+  @ledger_decision_values ~w(held suppressed watch resolved)
+
+  defp pop_ledger_entries({event_type, payload}) when is_map(payload) do
+    {string_entries, payload} = Map.pop(payload, "ledger_entries")
+    {atom_entries, payload} = Map.pop(payload, :ledger_entries)
+
+    entries =
+      [string_entries, atom_entries]
+      |> Enum.flat_map(fn
+        entries when is_list(entries) -> entries
+        _other -> []
+      end)
+
+    {{event_type, payload}, entries}
+  end
+
+  defp pop_ledger_entries(emit), do: {emit, []}
+
+  defp merge_ledger_entries(state, [], _skill_id), do: state
+
+  defp merge_ledger_entries(state, entries, skill_id) when is_list(entries) do
+    updated_at = DateTime.to_iso8601(DateTime.utc_now())
+    cycle_id = state.assistant_cycle_id
+
+    ledger =
+      entries
+      |> Enum.reduce(Map.get(state, :decision_ledger) || %{}, fn entry, acc ->
+        case normalize_ledger_entry(entry) do
+          {:ok, item_id, ledger_value} ->
+            existing = Map.get(acc, item_id) || %{}
+
+            Map.put(
+              acc,
+              item_id,
+              Map.merge(ledger_value, %{
+                "skill_id" => skill_id,
+                "first_seen_cycle" => Map.get(existing, "first_seen_cycle") || cycle_id,
+                "last_seen_cycle" => cycle_id,
+                "updated_at" => updated_at
+              })
+            )
+
+          :error ->
+            # Malformed entries must never crash a cycle — drop and move on.
+            Logger.debug("ChiefOfStaff dropped malformed ledger entry: #{inspect(entry)}")
+            acc
+        end
+      end)
+      |> cap_decision_ledger()
+
+    Map.put(state, :decision_ledger, ledger)
+  end
+
+  defp merge_ledger_entries(state, _entries, _skill_id), do: state
+
+  defp normalize_ledger_entry(entry) when is_map(entry) do
+    item_id = payload_string(entry, :item_id)
+    item_type = payload_string(entry, :item_type)
+    decision = payload_string(entry, :decision)
+    reason = payload_string(entry, :reason)
+
+    if item_id && item_type && reason && decision in @ledger_decision_values do
+      {:ok, item_id, %{"item_type" => item_type, "decision" => decision, "reason" => reason}}
+    else
+      :error
+    end
+  end
+
+  defp normalize_ledger_entry(_entry), do: :error
+
+  # Over cap: drop "resolved" entries first (oldest updated_at first), then
+  # fall back to the oldest updated_at overall.
+  defp cap_decision_ledger(ledger) when map_size(ledger) <= @decision_ledger_cap, do: ledger
+
+  defp cap_decision_ledger(ledger) do
+    drop_ids =
+      ledger
+      |> Enum.sort_by(fn {_item_id, entry} ->
+        {
+          if(Map.get(entry, "decision") == "resolved", do: 0, else: 1),
+          Map.get(entry, "updated_at") || ""
+        }
+      end)
+      |> Enum.take(map_size(ledger) - @decision_ledger_cap)
+      |> Enum.map(&elem(&1, 0))
+
+    Map.drop(ledger, drop_ids)
+  end
+
+  # R8 (SPEC 07): prompt-injection view of the ledger — newest first, capped
+  # to 20 entries (the 40-entry state cap is a storage cap, not a prompt cap).
+  defp previous_decision_ledger(state) do
+    (Map.get(state, :decision_ledger) || %{})
+    |> Map.values()
+    |> Enum.sort_by(&(Map.get(&1, "updated_at") || ""), :desc)
+    |> Enum.take(@decision_ledger_prompt_limit)
+  end
+
   defp skill_context(state, context, skill_id, index) do
     context
     |> Map.put(:source_bundle, state.source_bundle)
@@ -656,6 +840,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       Map.get(state.cycle_memory || %{}, "updated_at")
     )
     |> Map.put(:previous_cycle_memo_cycle_id, Map.get(state.cycle_memory || %{}, "cycle_id"))
+    |> Map.put(:previous_decision_ledger, previous_decision_ledger(state))
   end
 
   defp build_skill_configs(config, user_id, enabled_skill_ids) do

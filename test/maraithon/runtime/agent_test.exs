@@ -915,5 +915,87 @@ defmodule Maraithon.Runtime.AgentTest do
       assert [%{payload: %{"cadences" => ["morning"]}}] =
                Maraithon.Events.list_events(agent.id, types: ["briefs_recorded"])
     end
+
+    # SPEC 07 R3/R4: an effect timeout must route through the behavior's
+    # handle_effect_error/4 (when exported) instead of unconditionally
+    # failing the run, must clear the timed-out entry from pending_effects,
+    # and must not decrement budget.
+    test "routes an effect timeout through handle_effect_error, clears pending_effects, and keeps budget",
+         %{scheduler_pid: _scheduler_pid} do
+      previous_skills_config = Application.fetch_env(:maraithon, Skills)
+
+      Application.put_env(:maraithon, Skills,
+        skill_modules: %{"alpha" => ChiefOfStaffTestSkill},
+        default_enabled_ids: ["alpha"]
+      )
+
+      on_exit(fn ->
+        case previous_skills_config do
+          {:ok, config} -> Application.put_env(:maraithon, Skills, config)
+          :error -> Application.delete_env(:maraithon, Skills)
+        end
+      end)
+
+      user_id = "runtime-effect-timeout@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          user_id: user_id,
+          behavior: "ai_chief_of_staff",
+          config: %{
+            "user_id" => user_id,
+            "enabled_skills" => ["alpha"],
+            "skill_configs" => %{
+              "alpha" => %{
+                "wakeup_mode" => "effect",
+                "effect_kind" => "llm_call",
+                "effect_params" => %{
+                  "messages" => [%{"role" => "user", "content" => "first pass"}]
+                }
+              }
+            }
+          },
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      pid = start_supervised!({RuntimeAgent, agent})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      {:idle, _data} = :sys.get_state(pid)
+
+      send(pid, {:wakeup, "wakeup", Ecto.UUID.generate(), %{}})
+
+      {:waiting_effect, waiting_data} = :sys.get_state(pid)
+      assert [timed_out_effect_id] = Map.keys(waiting_data.pending_effects)
+
+      # Drive the :state_timeout clause directly with the real in-flight
+      # data — waiting out the multi-minute llm_call timeout is not viable
+      # in a test, and the clause is a plain state function.
+      result = RuntimeAgent.waiting_effect(:state_timeout, :effect_timeout, waiting_data)
+
+      # AIChiefOfStaff exports handle_effect_error/4; skill "alpha" does
+      # not, so the generic path records an operator event and continues
+      # the cycle to the cycle-memo effect instead of failing the run —
+      # the agent goes back to waiting_effect on the NEW effect.
+      assert {:next_state, :waiting_effect, next_data} = result
+      assert map_size(next_data.pending_effects) == 1
+      # R4: the timed-out entry was removed, not left to leak/inflate
+      # future pending_effect_timeout_ms calculations.
+      refute Map.has_key?(next_data.pending_effects, timed_out_effect_id)
+      # Timeouts never decrement budget.
+      assert next_data.budget == waiting_data.budget
+
+      assert [event] =
+               OperatorEvents.list_events(
+                 user_id: user_id,
+                 event_type: "cycle.skill_effect_error"
+               )
+
+      assert event.source_item_id == "alpha"
+      assert event.payload["effect_type"] == "llm_call"
+      assert event.payload["reason"] =~ "effect_timeout"
+    end
   end
 end

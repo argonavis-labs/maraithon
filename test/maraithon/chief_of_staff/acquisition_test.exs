@@ -1040,4 +1040,86 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
                Maraithon.Connectors.SourceCursors.get(account.id, "gmail_poll_watermark")
     end
   end
+
+  # SPEC 07 R10/R11: pubsub-triggered cycles on the three subscribed topic
+  # families skip news/weather/companion fetchers entirely, while always
+  # fetching gmail + calendar + slack together; every other trigger (and any
+  # unrecognized pubsub topic) fails open to the full unscoped fetch.
+  @companion_sources ~w(calendar_local imessage voice_memos notes reminders files browser_history)
+
+  defp scoped_build_context(trigger, event) do
+    %{
+      agent_id: "chief-agent-1",
+      user_id: "chief@example.com",
+      timestamp: ~U[2026-07-01 13:00:00Z],
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: trigger,
+      event: event
+    }
+  end
+
+  defp build_sources(context) do
+    {_bundle, telemetry, _watermarks} =
+      Acquisition.build(
+        "chief@example.com",
+        ["followthrough"],
+        %{"followthrough" => %{"lookback_hours" => 48}},
+        context
+      )
+
+    Map.keys(telemetry["sources"])
+  end
+
+  describe "trigger-scoped acquisition (SPEC 07 R10/R11)" do
+    test "a pubsub email trigger fetches gmail+calendar+slack but not news/weather/companion sources" do
+      sources =
+        build_sources(
+          scoped_build_context(
+            %{type: :pubsub_event, topic: "email:chief@example.com"},
+            %{topic: "email:chief@example.com", payload: %{"history_id" => "1"}}
+          )
+        )
+
+      # R11: all three connector sources are attempted together (they report
+      # unavailable/partial without connected accounts, but are never skipped).
+      assert "gmail" in sources
+      assert "calendar" in sources
+      assert "slack" in sources
+
+      refute "news" in sources
+      refute "weather" in sources
+
+      for companion <- @companion_sources do
+        refute companion in sources
+      end
+    end
+
+    test "a message-triggered cycle still fetches every source" do
+      sources =
+        build_sources(scoped_build_context(%{type: :message}, nil))
+
+      assert "gmail" in sources
+      assert "calendar" in sources
+      assert "slack" in sources
+
+      for companion <- @companion_sources do
+        assert companion in sources
+      end
+    end
+
+    test "an unrecognized pubsub topic fails open to the full fetch" do
+      sources =
+        build_sources(
+          scoped_build_context(
+            %{type: :pubsub_event, topic: "telegram:updates"},
+            %{topic: "telegram:updates", payload: %{}}
+          )
+        )
+
+      for companion <- @companion_sources do
+        assert companion in sources
+      end
+    end
+  end
 end
