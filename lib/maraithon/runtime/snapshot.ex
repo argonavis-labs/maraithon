@@ -27,11 +27,12 @@ defmodule Maraithon.Runtime.Snapshot do
     field :state_name, :string
     field :state_data, :map
     field :budget, :map
+    field :schema_version, :integer
 
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
-  @required ~w(agent_id sequence_num state_name state_data budget)a
+  @required ~w(agent_id sequence_num state_name state_data budget schema_version)a
 
   def changeset(snapshot, attrs) do
     snapshot
@@ -41,17 +42,21 @@ defmodule Maraithon.Runtime.Snapshot do
 
   @doc """
   Persist a checkpoint snapshot of an agent's behavior state and budget.
+
+  `schema_version` is the behavior's declared state-contract version at write
+  time (SPEC 08 R1/R4); behaviors that don't declare one write `0`.
   """
-  @spec persist(binary(), integer(), atom() | String.t(), term(), term()) ::
+  @spec persist(binary(), integer(), atom() | String.t(), term(), term(), non_neg_integer()) ::
           {:ok, %__MODULE__{}} | {:error, Ecto.Changeset.t()}
-  def persist(agent_id, sequence_num, state_name, behavior_state, budget) do
+  def persist(agent_id, sequence_num, state_name, behavior_state, budget, schema_version) do
     %__MODULE__{}
     |> changeset(%{
       agent_id: agent_id,
       sequence_num: sequence_num,
       state_name: to_string(state_name),
       state_data: wrap_term(behavior_state),
-      budget: wrap_term(budget)
+      budget: wrap_term(budget),
+      schema_version: schema_version
     })
     |> Repo.insert()
   end
@@ -59,16 +64,19 @@ defmodule Maraithon.Runtime.Snapshot do
   @doc """
   Load the most recent snapshot for an agent.
 
-  Returns `%{sequence_num, state_name, behavior_state, budget}` with the terms
-  decoded back to their original Elixir form, or `nil` when the agent has never
-  been checkpointed.
+  Returns `%{sequence_num, state_name, behavior_state, budget, schema_version}`
+  with the terms decoded back to their original Elixir form, or `nil` when the
+  agent has never been checkpointed. `schema_version` is never `nil`: the DB
+  default backfills legacy rows to `0`, and this defends against hand-edited
+  rows regardless.
   """
   @spec latest(binary()) ::
           %{
             sequence_num: integer(),
             state_name: String.t(),
             behavior_state: term(),
-            budget: term()
+            budget: term(),
+            schema_version: non_neg_integer()
           }
           | nil
   def latest(agent_id) do
@@ -87,7 +95,8 @@ defmodule Maraithon.Runtime.Snapshot do
           sequence_num: snapshot.sequence_num,
           state_name: snapshot.state_name,
           behavior_state: unwrap_term(snapshot.state_data),
-          budget: unwrap_term(snapshot.budget)
+          budget: unwrap_term(snapshot.budget),
+          schema_version: snapshot.schema_version || 0
         }
     end
   end

@@ -145,6 +145,137 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
               end)
   end
 
+  test "declares snapshot schema_version 1 (SPEC 08 R5)" do
+    assert AIChiefOfStaff.schema_version() == 1
+  end
+
+  describe "reconcile_restored_state/2 (SPEC 08 R6)" do
+    test "adds a newly-shipped skill to a stale snapshot list without re-initing existing skills" do
+      # Snapshot era: only "alpha" existed/enabled.
+      Skills.put_process_override(
+        skill_modules: %{"alpha" => ChiefOfStaffTestSkill},
+        default_enabled_ids: ["alpha"]
+      )
+
+      config = %{"user_id" => "chief@example.com"}
+      old_state = AIChiefOfStaff.init(config)
+      # Real accumulated per-skill history that must survive reconciliation.
+      old_state = put_in(old_state, [:skill_states, "alpha", :accumulated_marker], 42)
+
+      # Current release: "local_pattern_review" shipped and enabled by
+      # default — the motivating frozen-skill-list case.
+      Skills.put_process_override(
+        skill_modules: %{
+          "alpha" => ChiefOfStaffTestSkill,
+          "local_pattern_review" => ChiefOfStaffTestSkill
+        },
+        default_enabled_ids: ["alpha", "local_pattern_review"]
+      )
+
+      reconciled = AIChiefOfStaff.reconcile_restored_state(old_state, config)
+
+      assert reconciled.enabled_skill_ids == ["alpha", "local_pattern_review"]
+      assert Map.has_key?(reconciled.skill_states, "local_pattern_review")
+      assert Map.has_key?(reconciled.skill_configs, "local_pattern_review")
+      # An id already present in skill_states is never re-init'd.
+      assert reconciled.skill_states["alpha"].accumulated_marker == 42
+    end
+
+    test "leaves in-flight and accumulated keys untouched while enabled_skill_ids reflects the new list" do
+      Skills.put_process_override(
+        skill_modules: %{"alpha" => ChiefOfStaffTestSkill},
+        default_enabled_ids: ["alpha"]
+      )
+
+      config = %{"user_id" => "chief@example.com"}
+
+      mid_cycle_state = %{
+        AIChiefOfStaff.init(config)
+        | cycle_skill_ids: ["alpha"],
+          resume_index: 1,
+          pending_effect_skill_id: "alpha",
+          pending_watermarks: [%{kind: "history"}],
+          last_watermarks: %{"gmail:history" => "123"},
+          cycle_memory: %{"memo" => "held two threads", "updated_at" => "t", "cycle_id" => "c1"}
+      }
+
+      Skills.put_process_override(
+        skill_modules: %{"alpha" => ChiefOfStaffTestSkill, "beta" => ChiefOfStaffTestSkill},
+        default_enabled_ids: ["alpha", "beta"]
+      )
+
+      reconciled = AIChiefOfStaff.reconcile_restored_state(mid_cycle_state, config)
+
+      # In-flight keys: untouched — the running cycle keeps its frozen list.
+      assert reconciled.cycle_skill_ids == ["alpha"]
+      assert reconciled.resume_index == 1
+      assert reconciled.pending_effect_skill_id == "alpha"
+      assert reconciled.pending_watermarks == [%{kind: "history"}]
+      # Accumulated keys: untouched.
+      assert reconciled.last_watermarks == %{"gmail:history" => "123"}
+      assert reconciled.cycle_memory["memo"] == "held two threads"
+      # Config-derived keys: reflect the live config immediately; the next
+      # fresh cycle (ensure_cycle with cycle_skill_ids == nil) picks this up.
+      assert reconciled.enabled_skill_ids == ["alpha", "beta"]
+      assert Map.has_key?(reconciled.skill_states, "beta")
+    end
+
+    test "never prunes a skill_states entry referenced by the in-flight cycle" do
+      Skills.put_process_override(
+        skill_modules: %{"alpha" => ChiefOfStaffTestSkill, "beta" => ChiefOfStaffTestSkill},
+        default_enabled_ids: ["alpha", "beta"]
+      )
+
+      config = %{}
+      old_state = %{AIChiefOfStaff.init(config) | cycle_skill_ids: ["beta"]}
+
+      # "beta" disabled since the snapshot — a light trim (1 of 2 remains),
+      # not a degenerate collapse, so config wins for enabled_skill_ids...
+      Skills.put_process_override(
+        skill_modules: %{"alpha" => ChiefOfStaffTestSkill, "beta" => ChiefOfStaffTestSkill},
+        default_enabled_ids: ["alpha"]
+      )
+
+      reconciled = AIChiefOfStaff.reconcile_restored_state(old_state, config)
+
+      assert reconciled.enabled_skill_ids == ["alpha"]
+      # ...but the in-flight cycle still Map.fetch!-es "beta": its state and
+      # config entries must survive until that cycle finishes.
+      assert Map.has_key?(reconciled.skill_states, "beta")
+      assert Map.has_key?(reconciled.skill_configs, "beta")
+      assert reconciled.cycle_skill_ids == ["beta"]
+    end
+
+    test "degenerate config guard: a collapsed live skill list defers to the snapshot, dropping nothing" do
+      five = ["s1", "s2", "s3", "s4", "s5"]
+      modules = Map.new(five, &{&1, ChiefOfStaffTestSkill})
+
+      Skills.put_process_override(skill_modules: modules, default_enabled_ids: five)
+
+      config = %{}
+      old_state = AIChiefOfStaff.init(config)
+
+      old_state =
+        Enum.reduce(five, old_state, fn id, acc ->
+          put_in(acc, [:skill_states, id, :accumulated_marker], id)
+        end)
+
+      # Transient blip: the enabled list collapses to 2 of 5 (2 < 5/2) while
+      # the modules themselves are still compiled and registered. Trusting it
+      # would permanently discard three skills' accumulated skill_states on
+      # the next checkpoint — snapshot wins instead, for this restore.
+      Skills.put_process_override(skill_modules: modules, default_enabled_ids: ["s1", "s2"])
+
+      reconciled = AIChiefOfStaff.reconcile_restored_state(old_state, config)
+
+      assert reconciled.enabled_skill_ids == five
+
+      for id <- five do
+        assert reconciled.skill_states[id].accumulated_marker == id
+      end
+    end
+  end
+
   test "merges emitted outputs from multiple skills in one wakeup", %{context: context} do
     state =
       AIChiefOfStaff.init(%{

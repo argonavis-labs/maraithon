@@ -208,6 +208,82 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   def default_skill_ids, do: Skills.default_enabled_ids()
 
+  # SPEC 08 R5: version 1 is the contract that includes the runtime's generic
+  # default-merge on restore plus reconcile_restored_state/2 below. Bump this
+  # and add a matching migrate_state/3 clause only when a future change needs
+  # bespoke restructuring (renaming/reshaping a key) beyond what the generic
+  # merge handles.
+  @impl true
+  def schema_version, do: 1
+
+  # SPEC 08 R6: called by the runtime only at restore time (never per-wakeup —
+  # context deliberately does not carry raw agent_config). Recomputes the
+  # config-derived slice of state — enabled_skill_ids, skill_configs, and
+  # skill *existence* in skill_states — from the CURRENT config, so a skill
+  # shipped after the snapshot was written (local_pattern_review) actually
+  # turns on for existing agents. Touches ONLY those three keys; every
+  # in-flight and accumulated key passes through untouched, and an existing
+  # skill_states entry is never re-init'd (that would discard real
+  # accumulated per-skill history). Pure and idempotent.
+  @impl true
+  def reconcile_restored_state(state, config) do
+    live_ids = Skills.enabled_ids(config)
+    snapshot_ids = state.enabled_skill_ids || []
+    desired_ids = degenerate_config_guard(live_ids, snapshot_ids)
+
+    # Never prune a skill_states entry referenced by an in-flight cycle —
+    # run_from_index/handle_effect_result Map.fetch! those ids. An orphaned
+    # entry for a since-disabled skill is pruned on a later restore, once the
+    # cycle that referenced it has finished.
+    in_flight_ids = state.cycle_skill_ids || []
+    keep_ids = Enum.uniq(desired_ids ++ in_flight_ids)
+    desired_configs = build_skill_configs(config, state.user_id, keep_ids)
+
+    skill_states =
+      Enum.reduce(keep_ids, %{}, fn skill_id, acc ->
+        case Map.fetch(state.skill_states, skill_id) do
+          {:ok, existing} ->
+            Map.put(acc, skill_id, existing)
+
+          :error ->
+            module = Skills.get!(skill_id)
+            skill_config = Map.get(desired_configs, skill_id, module.default_config())
+            Map.put(acc, skill_id, module.init(skill_config))
+        end
+      end)
+
+    %{
+      state
+      | enabled_skill_ids: desired_ids,
+        skill_configs: desired_configs,
+        skill_states: skill_states
+    }
+  end
+
+  # Guard against a transient/misread config being mistaken for a deliberate
+  # "disable (almost) everything" operator change. `Skills.enabled_ids/1`
+  # returning `[]`, or a list far shorter than what the snapshot already had
+  # enabled, is more plausibly a config-read blip (env var missing on this
+  # particular restart, a partially-applied config change mid-deploy) than a
+  # real intent to strip most of a user's enabled skills in one shot — and the
+  # failure mode of guessing wrong the "config wins" way is severe and
+  # irreversible-by-default: every skill_states entry not in the (wrongly)
+  # shrunk desired_ids list is dropped from this restore's skill_states,
+  # permanently discarding that skill's accumulated per-skill history the
+  # moment this reconciled state is next checkpointed. Guessing wrong the
+  # "snapshot wins" way, by contrast, only costs one extra restart cycle
+  # before a genuine config change fully takes effect — a much cheaper
+  # mistake. A normal config change (e.g. adding `local_pattern_review`, the
+  # motivating case) only ever *grows* or lightly trims the list and never
+  # trips this guard.
+  defp degenerate_config_guard(live_ids, snapshot_ids) do
+    cond do
+      live_ids == [] and snapshot_ids != [] -> snapshot_ids
+      snapshot_ids != [] and length(live_ids) < length(snapshot_ids) / 2 -> snapshot_ids
+      true -> live_ids
+    end
+  end
+
   defp run_from_index(index, state, context) when index < 0, do: run_from_index(0, state, context)
 
   defp run_from_index(index, state, context) do

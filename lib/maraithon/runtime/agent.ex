@@ -129,11 +129,18 @@ defmodule Maraithon.Runtime.Agent do
     # The snapshot is the recovery boundary — events between the last checkpoint
     # and a crash are not replayed (replaying behavior handlers would re-run
     # their side effects).
+    #
+    # SPEC 08 R3: restore MERGES the snapshot onto fresh init/1 defaults (with
+    # optional versioned migration and config reconciliation hooks) instead of
+    # installing it wholesale — a snapshot predating a newly-read state key
+    # must never be able to crash every subsequent wakeup (prod 2026-07-03,
+    # :pending_watermarks), and config-derived state must not stay frozen at
+    # snapshot time (the LocalPatternReview never-enabled bug).
     {behavior_state, budget} =
       case safe_load_snapshot(agent.id) do
-        %{behavior_state: snapshot_state, budget: snapshot_budget, sequence_num: seq} ->
+        %{sequence_num: seq} = snapshot ->
           Logger.info("Agent restoring behavior state from snapshot", sequence_num: seq)
-          {snapshot_state, snapshot_budget}
+          restore_from_snapshot(behavior_module, agent_config, snapshot, agent.id)
 
         nil ->
           {behavior_module.init(agent_config), init_budget(agent_config["budget"])}
@@ -550,7 +557,8 @@ defmodule Maraithon.Runtime.Agent do
            data.sequence_num,
            :idle,
            data.behavior_state,
-           data.budget
+           data.budget,
+           behavior_schema_version(data.behavior_module)
          ) do
       {:ok, _snapshot} ->
         :ok
@@ -585,6 +593,134 @@ defmodule Maraithon.Runtime.Agent do
       )
 
       nil
+  end
+
+  # SPEC 08 R3 — layered snapshot restore. Returns `{behavior_state, budget}`.
+  #
+  # Three independent rescue boundaries, deliberately NOT collapsed into one:
+  # a bug in a behavior's own migrate_state/3 (step 4) or
+  # reconcile_restored_state/2 (step 6) degrades to "skip that step, keep
+  # restoring" rather than "abandon the entire snapshot and start with zero
+  # accumulated context". The outer boundary here mirrors
+  # safe_load_snapshot/1's philosophy: anything else unexpected falls all the
+  # way back to a fresh init, exactly like the no-snapshot branch.
+  #
+  # Public (@doc false) so restore semantics are directly testable; production
+  # calls it only from recovering/2.
+  @doc false
+  def restore_from_snapshot(behavior_module, agent_config, snapshot, agent_id) do
+    {restore_behavior_state(behavior_module, agent_config, snapshot),
+     restore_budget(agent_config, snapshot)}
+  rescue
+    error ->
+      Logger.error("Agent snapshot restore failed, starting with fresh behavior state",
+        agent_id: agent_id,
+        behavior: inspect(behavior_module),
+        reason: Exception.message(error)
+      )
+
+      {behavior_module.init(agent_config), init_budget(agent_config["budget"])}
+  end
+
+  defp restore_behavior_state(behavior_module, agent_config, snapshot) do
+    # Step 1: fresh defaults. Used ONLY as the fallback source for keys absent
+    # from the snapshot — every key present in the snapshot overwrites its
+    # default in the merge below, so any id/timestamp init/1 happens to mint
+    # for a snapshotted key is discarded, never persisted, never observed.
+    defaults = behavior_module.init(agent_config)
+
+    current_version = behavior_schema_version(behavior_module)
+    # Defensive nil-guard even though the DB default guarantees 0 for legacy
+    # rows — a hand-edited row or a map built elsewhere must still restore.
+    stored_version = Map.get(snapshot, :schema_version) || 0
+
+    snapshot.behavior_state
+    |> maybe_migrate_state(behavior_module, stored_version, current_version, agent_config)
+    |> merge_onto_defaults(defaults)
+    |> maybe_reconcile_restored_state(behavior_module, agent_config)
+  end
+
+  # Step 4: optional versioned migration, own rescue boundary — a broken
+  # migration skips migration, not the restore.
+  defp maybe_migrate_state(state, behavior_module, stored_version, current_version, agent_config)
+       when stored_version < current_version do
+    if function_exported?(behavior_module, :migrate_state, 3) do
+      try do
+        behavior_module.migrate_state(stored_version, state, agent_config)
+      rescue
+        error ->
+          Logger.warning("Behavior migrate_state failed, restoring unmigrated snapshot state",
+            behavior: inspect(behavior_module),
+            stored_version: stored_version,
+            current_version: current_version,
+            reason: Exception.message(error)
+          )
+
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp maybe_migrate_state(state, _behavior_module, _stored, _current, _agent_config), do: state
+
+  # Step 5: shallow, top-level merge — snapshot/migrated value wins for every
+  # key present in it; a key absent from it (new in this release) falls back
+  # to the fresh init/1 default. Deliberately NOT a deep merge: nested maps
+  # are replaced wholesale by the behaviors that own them, and a recursive
+  # merge would resurrect stale sub-keys from init/1 placeholders over real
+  # accumulated data. Non-map states (Behavior.state() is any()) restore
+  # verbatim — there are no defaults to merge onto.
+  defp merge_onto_defaults(restored, defaults)
+       when is_map(restored) and not is_struct(restored) and
+              is_map(defaults) and not is_struct(defaults) do
+    Map.merge(defaults, restored)
+  end
+
+  defp merge_onto_defaults(restored, _defaults), do: restored
+
+  # Step 6: optional config reconciliation, own rescue boundary — a broken
+  # reconciliation skips reconciliation, not the restore.
+  defp maybe_reconcile_restored_state(state, behavior_module, agent_config) do
+    if function_exported?(behavior_module, :reconcile_restored_state, 2) do
+      try do
+        behavior_module.reconcile_restored_state(state, agent_config)
+      rescue
+        error ->
+          Logger.warning("Behavior reconcile_restored_state failed, keeping merged state",
+            behavior: inspect(behavior_module),
+            reason: Exception.message(error)
+          )
+
+          state
+      end
+    else
+      state
+    end
+  end
+
+  # Step 7: budget merges over fresh defaults the same shallow, snapshot-wins
+  # way — generalizing the `refilled_at` defensive-read prior art
+  # (maybe_refill_budget/1) so any future budget key is tolerant by
+  # construction instead of needing another defensive Map.get at its read
+  # site.
+  defp restore_budget(agent_config, snapshot) do
+    snapshot_budget =
+      case snapshot.budget do
+        budget when is_map(budget) and not is_struct(budget) -> budget
+        _other -> %{}
+      end
+
+    Map.merge(init_budget(agent_config["budget"]), snapshot_budget)
+  end
+
+  defp behavior_schema_version(behavior_module) do
+    if function_exported?(behavior_module, :schema_version, 0) do
+      behavior_module.schema_version()
+    else
+      0
+    end
   end
 
   defp schedule_heartbeat(data) do
