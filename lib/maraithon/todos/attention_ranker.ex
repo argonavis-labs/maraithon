@@ -6,6 +6,20 @@ defmodule Maraithon.Todos.AttentionRanker do
   Telegram renderers a stable first pass that reflects the product priority
   stack: personal/family first, strong relationships waiting, active business
   obligations, intros, meetings, then everything else.
+
+  Known, flagged gap (SPEC 06 R9): the `@family_terms_strong`/`@waiting_terms`/
+  `@intro_terms` lists and `business_project?/2` are keyword/regex heuristics —
+  a cheap deterministic first pass only, which sits in tension with GOALS
+  Principle 3 ("no keyword heuristics for relevance/prioritization"). Two
+  consequences for callers:
+
+    * User-facing "why" copy must come from the model's semantic read of this
+      profile's `"context"` map (person/company/why/age), never from printing
+      the bucket label or other internal fields (`"business_project_waiting"`,
+      `"stale_confirmation_candidate"`, scores) verbatim.
+    * A full model-driven re-rank replacing this keyword scoring is a
+      separate, larger future spec — do not grow these keyword lists as a
+      substitute for it.
   """
 
   # A single strong term is enough; weak terms are everyday business words

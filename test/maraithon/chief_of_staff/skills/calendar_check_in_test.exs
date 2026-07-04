@@ -33,14 +33,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     %{user_id: user_id, agent: agent, state: state, date: date, now: now}
   end
 
+  # Mirrors what SourceBundle.put_calendar/2 produces after a real acquisition
+  # pass: events plus a "ready" freshness entry. SPEC 06 R1 gates gap math on
+  # SourceBundle.fetched?/2, so a bundle without freshness evidence now means
+  # "calendar unavailable", not "wide-open day".
   defp context(ctx, events, now \\ nil) do
     %{
       user_id: ctx.user_id,
       agent_id: ctx.agent.id,
       timestamp: now || ctx.now,
       trigger: %{type: :wakeup},
-      source_bundle: %{"calendar" => %{"events" => events}}
+      source_bundle: %{
+        "calendar" => %{"events" => events},
+        "freshness" => %{"calendar" => %{"source" => "calendar", "status" => "ready"}}
+      }
     }
+  end
+
+  defp unfetched_context(ctx, events) do
+    %{context(ctx, events) | source_bundle: %{"calendar" => %{"events" => events}}}
   end
 
   defp event(date, start_time, end_time, summary \\ "Meeting") do
@@ -131,6 +142,82 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
 
     assert brief.body ==
              "You have 11:00 AM-12:00 PM ET open.\n\nDraft the pricing reply before the next meeting"
+  end
+
+  # SPEC 06 R1: a never-fetched calendar (no freshness entry — e.g. Google
+  # Calendar was never connected) must not be read as a fully-free day.
+  test "idles honestly when the calendar source was never fetched", %{state: state} = ctx do
+    input = CalendarCheckIn.build_check_in_input(ctx.user_id, ctx.now, state, unfetched_context(ctx, []))
+
+    assert input["openings"] == []
+    assert input["calendar_status"] == "unavailable"
+
+    assert {:idle, _state} = CalendarCheckIn.handle_wakeup(state, unfetched_context(ctx, []))
+  end
+
+  test "treats a fetched calendar with zero events as a genuinely open day",
+       %{state: state} = ctx do
+    input = CalendarCheckIn.build_check_in_input(ctx.user_id, ctx.now, state, context(ctx, []))
+
+    assert input["calendar_status"] == "ok"
+    assert [opening | _] = input["openings"]
+    assert opening["minutes"] > 0
+    # Last (only) opening of the day — deterministic next-meeting prep has
+    # nothing to point at.
+    assert opening["next_event"] == nil
+  end
+
+  # SPEC 06 R2/R4: two-sided waiting-on, cross-direction due buckets, and a
+  # deterministic next-meeting line per opening.
+  test "enriches check-in input with waiting-on splits, due buckets, and next meeting",
+       %{state: state, user_id: user_id} = ctx do
+    yesterday =
+      ctx.now |> DateTime.add(-24 * 3600, :second) |> DateTime.truncate(:second)
+
+    {:ok, _todos} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Waiting on Elena for the pricing doc",
+          "summary" => "Elena owes the pricing doc for the renewal.",
+          "next_action" => "Nudge Elena if she stays quiet.",
+          "dedupe_key" => "checkin-enrich-owed-to-me",
+          "direction" => "owed_to_me",
+          "counterparty_label" => "Elena",
+          "due_at" => DateTime.to_iso8601(yesterday)
+        },
+        %{
+          "source" => "gmail",
+          "title" => "Send Alex the revised enterprise pricing",
+          "summary" => "You owe Alex the revised pricing.",
+          "next_action" => "Send the revised pricing.",
+          "dedupe_key" => "checkin-enrich-i-owe",
+          "direction" => "owed_by_me",
+          "counterparty_label" => "Alex"
+        }
+      ])
+
+    events = [event(ctx.date, ~T[17:00:00], ~T[18:00:00], "Pricing sync with Elena")]
+
+    input = CalendarCheckIn.build_check_in_input(user_id, ctx.now, state, context(ctx, events))
+
+    assert [waiting] = input["waiting_on_me"]
+    assert waiting.title =~ "Elena"
+    assert is_map(waiting.attention_profile)
+
+    assert [owed] = input["i_owe"]
+    assert owed.title =~ "Alex"
+
+    assert input["due"]["source"] == "todos_open_all"
+    assert [overdue_item] = input["due"]["overdue"]
+    assert overdue_item["title"] =~ "Elena"
+    assert input["due"]["due_today"] == []
+
+    # The opening before the 17:00 UTC (noon local) meeting carries that
+    # meeting as its deterministic next_event.
+    assert [first_opening | _] = input["openings"]
+    assert first_opening["next_event"]["summary"] == "Pricing sync with Elena"
+    assert first_opening["next_event"]["local_start"] == "12:00:00"
   end
 
   test "idles when the work day is fully booked", %{state: state} = ctx do

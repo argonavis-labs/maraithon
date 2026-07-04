@@ -1164,6 +1164,112 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     refute create.preview_text =~ "prompt_agent"
   end
 
+  # SPEC 06 R6: curated Today-mode read tool.
+  test "get_today_focus renders honest zeros and an unavailable calendar for a fresh user" do
+    user_id = "today-focus-empty-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    runtime_context = %{user_id: user_id, context: %{projects: []}}
+
+    assert {:ok, focus} = Toolbox.execute("get_today_focus", %{}, runtime_context)
+
+    # Nil/empty-shape invariant: counts are 0, never nil; empty buckets are
+    # present, never missing keys — "nothing fits right now" must be a
+    # renderable, complete answer.
+    assert focus.counts == %{overdue: 0, due_today: 0, waiting_on_me: 0, i_owe: 0}
+    assert focus.waiting_on_me == []
+    assert focus.i_owe == []
+    assert focus.overdue == []
+    assert focus.due_today == []
+
+    # No companion device has ever synced calendar data — empty must not mean
+    # free, so no fabricated block.
+    assert focus.calendar_status == "unavailable"
+    assert focus.next_free_block == nil
+  end
+
+  test "get_today_focus counts full sets, truncates item lists, and finds a real free block" do
+    user_id = "today-focus-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    # Deterministic Wednesday: 15:00 UTC = 10:00 local at the default -5.
+    now = ~U[2026-05-13 15:00:00Z]
+    yesterday = now |> DateTime.add(-24 * 3600, :second) |> DateTime.to_iso8601()
+
+    waiting_todos =
+      for index <- 1..3 do
+        %{
+          "source" => "gmail",
+          "title" => "Waiting on counterparty #{index}",
+          "summary" => "They owe reply #{index}.",
+          "next_action" => "Nudge if quiet.",
+          "dedupe_key" => "today-focus-waiting-#{index}",
+          "direction" => "owed_to_me",
+          "counterparty_label" => "Person #{index}"
+        }
+        |> Map.merge(if index <= 2, do: %{"due_at" => yesterday}, else: %{})
+      end
+
+    {:ok, _todos} =
+      Todos.upsert_many(
+        user_id,
+        waiting_todos ++
+          [
+            %{
+              "source" => "gmail",
+              "title" => "Send the pricing update",
+              "summary" => "You owe the pricing update.",
+              "next_action" => "Send it.",
+              "dedupe_key" => "today-focus-i-owe",
+              "direction" => "owed_by_me"
+            }
+          ]
+      )
+
+    # Fresh Mac-companion sync evidence + one local meeting at noon local.
+    device_id = Ecto.UUID.generate()
+
+    {:ok, %{device: _device, token: _token}} =
+      CompanionDevices.register(user_id, device_id, device_name: "Executive Mac")
+
+    {:ok, %{accepted: 1}} =
+      Maraithon.LocalCalendar.ingest_batch(user_id, device_id, [
+        %{
+          "local_id" => "evt:today-focus-1",
+          "guid" => "today-focus-1",
+          "calendar_name" => "Work",
+          "title" => "Pricing sync",
+          "location" => "Zoom",
+          "start_at" => "2026-05-13T17:00:00Z",
+          "end_at" => "2026-05-13T18:00:00Z",
+          "is_all_day" => false,
+          "organizer_email" => "elena@example.com"
+        }
+      ])
+
+    runtime_context = %{user_id: user_id, context: %{projects: []}, now: now}
+
+    assert {:ok, focus} = Toolbox.execute("get_today_focus", %{"limit" => 1}, runtime_context)
+
+    # Counts reflect the full filtered sets even though each list is
+    # truncated to the requested limit.
+    assert focus.counts == %{overdue: 2, due_today: 0, waiting_on_me: 3, i_owe: 1}
+    assert length(focus.waiting_on_me) == 1
+    assert length(focus.overdue) == 1
+    assert [i_owe_item] = focus.i_owe
+    assert i_owe_item.title == "Send the pricing update"
+    assert is_map(i_owe_item.attention_profile)
+
+    # 10:00 -> 12:00 local gap before the noon meeting, with the meeting as
+    # the deterministic next_event.
+    assert focus.calendar_status == "ok"
+    assert focus.next_free_block["minutes"] == 120
+    assert focus.next_free_block["local_start"] == "10:00:00"
+    assert focus.next_free_block["local_end"] == "12:00:00"
+    assert focus.next_free_block["next_event"]["summary"] == "Pricing sync"
+    assert focus.next_free_block["next_event"]["local_start"] == "12:00:00"
+  end
+
   test "todo tools can persist, search, and resolve durable work" do
     user_id = "toolbox-todos-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

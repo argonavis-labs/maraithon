@@ -502,6 +502,101 @@ defmodule Maraithon.TodosTest do
     assert Todos.list_open_for_user(user_id) == []
   end
 
+  describe "SPEC 06 bucket_for_brief direction option" do
+    # One overdue owed_to_me, one due-today owed_by_me, one no-deadline fyi —
+    # enough to see each direction scope a different subset.
+    defp seed_directional_todos(user_id, now) do
+      yesterday = now |> DateTime.add(-24 * 3600, :second) |> DateTime.to_iso8601()
+      later_today = now |> DateTime.add(2 * 3600, :second) |> DateTime.to_iso8601()
+
+      {:ok, todos} =
+        Todos.upsert_many(user_id, [
+          %{
+            "source" => "gmail",
+            "title" => "Waiting on Elena for the pricing doc",
+            "summary" => "Elena owes the pricing doc for the renewal.",
+            "next_action" => "Nudge Elena if she stays quiet.",
+            "dedupe_key" => "bucket-direction-owed-to-me",
+            "direction" => "owed_to_me",
+            "counterparty_label" => "Elena",
+            "due_at" => yesterday
+          },
+          %{
+            "source" => "gmail",
+            "title" => "Send Alex the revised enterprise pricing",
+            "summary" => "You owe Alex the revised pricing.",
+            "next_action" => "Send the revised pricing today.",
+            "dedupe_key" => "bucket-direction-owed-by-me",
+            "direction" => "owed_by_me",
+            "counterparty_label" => "Alex",
+            "due_at" => later_today
+          },
+          %{
+            "source" => "slack",
+            "title" => "Team offsite notes shared",
+            "summary" => "FYI notes from the offsite.",
+            "next_action" => "Skim when convenient.",
+            "dedupe_key" => "bucket-direction-fyi",
+            "direction" => "fyi"
+          }
+        ])
+
+      todos
+    end
+
+    test "default call is unchanged: owed_by_me scope and label" do
+      user_id = unique_user_email("bucket-direction-default")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      now = ~U[2026-05-13 15:00:00Z]
+      seed_directional_todos(user_id, now)
+
+      bucket = Todos.bucket_for_brief(user_id, now: now, timezone_offset_hours: -5)
+
+      assert bucket["source"] == "todos_owed_by_me"
+      assert Map.keys(bucket) |> Enum.sort() ==
+               ~w(active_count coming_up due_today no_deadline overdue source)
+
+      assert bucket["active_count"] == 1
+      assert [%{"title" => "Send Alex the revised enterprise pricing"}] = bucket["due_today"]
+      assert bucket["overdue"] == []
+    end
+
+    test "direction: \"owed_to_me\" buckets what others owe the operator" do
+      user_id = unique_user_email("bucket-direction-owed-to-me")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      now = ~U[2026-05-13 15:00:00Z]
+      seed_directional_todos(user_id, now)
+
+      bucket =
+        Todos.bucket_for_brief(user_id,
+          direction: "owed_to_me",
+          now: now,
+          timezone_offset_hours: -5
+        )
+
+      assert bucket["source"] == "todos_owed_to_me"
+      assert bucket["active_count"] == 1
+      assert [%{"title" => "Waiting on Elena for the pricing doc"}] = bucket["overdue"]
+      assert bucket["due_today"] == []
+    end
+
+    test "direction: :all buckets every open todo with no direction filter" do
+      user_id = unique_user_email("bucket-direction-all")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      now = ~U[2026-05-13 15:00:00Z]
+      seed_directional_todos(user_id, now)
+
+      bucket =
+        Todos.bucket_for_brief(user_id, direction: :all, now: now, timezone_offset_hours: -5)
+
+      assert bucket["source"] == "todos_open_all"
+      assert bucket["active_count"] == 3
+      assert [%{"title" => "Waiting on Elena for the pricing doc"}] = bucket["overdue"]
+      assert [%{"title" => "Send Alex the revised enterprise pricing"}] = bucket["due_today"]
+      assert [%{"title" => "Team offsite notes shared"}] = bucket["no_deadline"]
+    end
+  end
+
   describe "SPEC 01 follow-up engine write boundary" do
     test "owed_to_me todos persist next_nudge_at truncated to the second" do
       user_id = unique_user_email("todos-next-nudge")

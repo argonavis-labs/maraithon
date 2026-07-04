@@ -8,12 +8,14 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Agents
   alias Maraithon.ActionLedger
   alias Maraithon.BriefingSchedules
+  alias Maraithon.Calendar.FreeBlocks
   alias Maraithon.Companion.Devices, as: CompanionDevices
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.Linear
   alias Maraithon.Goals
   alias Maraithon.Insights
+  alias Maraithon.LocalCalendar
   alias Maraithon.Memory
   alias Maraithon.OperatorMemory
   alias Maraithon.OAuth
@@ -34,6 +36,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.ToolPolicy
   alias Maraithon.Tools
+  alias Maraithon.Tools.LocalCalendarHelpers
   alias Maraithon.UserMemory
 
   @immediate_agent_actions ~w(start stop restart)
@@ -99,7 +102,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   }
 
   @toolbox_read_tools MapSet.new(~w(
-    get_open_work_summary list_connected_accounts get_open_loops inspect_open_insight list_preferences
+    get_open_work_summary list_connected_accounts get_open_loops get_today_focus inspect_open_insight list_preferences
     list_memories recall_memory list_todos list_people get_person get_relationship_context
     review_connected_context gmail_search_messages gmail_get_message calendar_list_events
     slack_search_messages slack_get_thread_context linear_list_or_lookup notaui_list_tasks
@@ -161,6 +164,25 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "query" => %{"type" => "string"},
             "direction" => %{"type" => "string", "enum" => ["owed_to_me", "owed_by_me"]},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "get_today_focus",
+        "Curated 'what matters right now' view — counts first, then a few concrete items, " <>
+          "each with a plain-language why, for answering 'what fits right now' or 'what can " <>
+          "I handle in N minutes'. Includes waiting-on (both directions), overdue/due-today, " <>
+          "and the next open calendar block if available (from the local/companion calendar; " <>
+          "calendar_status says whether that data exists at all — never claim free time when " <>
+          "it is 'unavailable'). counts cover the full result sets even when the item lists " <>
+          "are truncated, so always state totals from counts. attention_profile/why fields " <>
+          "are for grounding your own phrasing — do not print them verbatim or expose " <>
+          "bucket/internal field names. You decide what fits the available minutes; empty " <>
+          "buckets with zero counts mean 'nothing fits right now' is the honest, complete answer.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 15}
           }
         }
       ),
@@ -1545,6 +1567,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "get_open_loops" ->
         get_open_loops(runtime_context, args)
 
+      "get_today_focus" ->
+        get_today_focus(runtime_context, args)
+
       "list_goals" ->
         list_goals(runtime_context, args)
 
@@ -2037,6 +2062,183 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
        limit: limit
      )}
   end
+
+  # SPEC 06 R6: curated "what matters right now" (Today mode). Read-only and
+  # side-effect-free — it must never call Briefs.record, PushBroker, or create
+  # a ProactiveCandidate/Delivery; the SPEC 08 interruption budget governs
+  # pushes and this tool adds no push. Counts are computed over the full
+  # filtered sets so the composing model can state honest totals even when the
+  # per-bucket item lists are truncated to `limit`.
+  @today_focus_open_statuses ~w(open snoozed)
+  @today_focus_due_fetch_limit 200
+  # The proactive check-in's 45-minute floor is an interruption-worthiness
+  # threshold ("is this gap worth a ping?"), not ground truth about free time.
+  # This is a pull query answering "what fits right now", so it reports any
+  # genuine gap of at least this floor and lets the model judge fit.
+  @today_focus_min_opening_minutes 15
+
+  defp get_today_focus(runtime_context, args) do
+    user_id = runtime_context.user_id
+    limit = normalize_limit(Map.get(args, "limit"), 8, 15)
+    # Internal test seam only — the model-facing args stay limit-only (no
+    # `minutes`, no server-side effort filtering, per the SPEC 06 invariant).
+    now = Map.get(runtime_context, :now) || DateTime.utc_now()
+
+    # Pinned offset source (SPEC 06 R6): state-free, per-datetime, DST-aware —
+    # BriefingSchedules.summarize_for_prompt/1 resolves via Timezones.offset_at/3,
+    # the same primitive CalendarCheckIn reaches through its supervised state.
+    # Its house-wide default is an acceptable degrade for unconfigured users;
+    # never add a second independent hardcoded offset here.
+    schedule = BriefingSchedules.summarize_for_prompt(user_id, now: now)
+    offset = Map.get(schedule, :timezone_offset_hours)
+    timezone = Map.get(schedule, :local_timezone)
+
+    due =
+      Todos.bucket_for_brief(user_id,
+        direction: :all,
+        timezone_offset_hours: offset,
+        timezone_label: timezone,
+        now: now,
+        limit: @today_focus_due_fetch_limit
+      )
+
+    overdue = Map.get(due, "overdue", [])
+    due_today = Map.get(due, "due_today", [])
+
+    {calendar_status, next_free_block} = today_free_block(user_id, now, offset, timezone)
+
+    {:ok,
+     %{
+       counts: %{
+         overdue: length(overdue),
+         due_today: length(due_today),
+         waiting_on_me: count_open_direction(user_id, "owed_to_me"),
+         i_owe: count_open_direction(user_id, "owed_by_me")
+       },
+       waiting_on_me:
+         user_id
+         |> Todos.list_owed_to_me(limit: limit)
+         |> Enum.map(&Todos.serialize_for_prompt/1),
+       i_owe:
+         user_id
+         |> Todos.list_owed_by_me(limit: limit)
+         |> Enum.map(&Todos.serialize_for_prompt/1),
+       overdue: Enum.take(overdue, limit),
+       due_today: Enum.take(due_today, limit),
+       next_free_block: next_free_block,
+       calendar_status: calendar_status,
+       timezone: timezone
+     }}
+  end
+
+  # Same filter set list_owed_to_me/list_owed_by_me apply through
+  # list_open_for_user, expressed as a count query so the total reflects the
+  # full filtered set rather than whatever got truncated into the list.
+  defp count_open_direction(user_id, direction) do
+    Todos.count_for_user(user_id,
+      statuses: @today_focus_open_statuses,
+      open_due_only: true,
+      direction: direction
+    )
+  end
+
+  # SPEC 06 edge case: an empty LocalCalendar is ambiguous between "genuinely
+  # free" and "no companion device ever synced calendar data". Only claim a
+  # free block when there is fresh desktop sync evidence; otherwise degrade
+  # honestly to calendar_status "unavailable" with no fabricated block.
+  defp today_free_block(user_id, now, offset, timezone) do
+    if local_calendar_fresh?(user_id) do
+      local_date = now |> DateTime.add(offset, :hour) |> DateTime.to_date()
+
+      work_end_utc =
+        FreeBlocks.work_day_end_utc(local_date, today_focus_work_day_end_hour(user_id), offset)
+
+      events =
+        if DateTime.compare(now, work_end_utc) == :lt do
+          user_id
+          |> LocalCalendar.events_around(since: now, until: work_end_utc, limit: 100)
+          # Timed-work gap math ignores all-day events, matching the
+          # acquisition-fed path (where all-day events never parse into an
+          # interval). Normalization to the shared FreeBlocks event shape
+          # happens here at the call site, per SPEC 06 R7.
+          |> Enum.reject(&(&1.is_all_day == true))
+          |> Enum.map(&local_event_for_free_blocks/1)
+        else
+          []
+        end
+
+      block =
+        events
+        |> FreeBlocks.openings(now,
+          # A pull, in-the-moment query: the window starts now, not at a
+          # configured work-day start.
+          work_start_utc: now,
+          work_end_utc: work_end_utc,
+          min_opening_minutes: @today_focus_min_opening_minutes,
+          offset: offset,
+          timezone: timezone
+        )
+        |> FreeBlocks.attach_next_events(events, offset, timezone)
+        |> List.first()
+
+      {"ok", block}
+    else
+      {"unavailable", nil}
+    end
+  end
+
+  defp local_calendar_fresh?(user_id) do
+    user_id
+    |> SourceFreshness.for_user()
+    |> Enum.any?(fn snapshot ->
+      Map.get(snapshot, :provider) == "desktop" and Map.get(snapshot, :status) == "fresh"
+    end)
+  end
+
+  # LocalEvent.title/.notes are Cloak-encrypted and auto-decrypt on load —
+  # safe to serialize into tool output, never queried/filtered at SQL level
+  # and never logged as a raw struct.
+  defp local_event_for_free_blocks(event) do
+    summary = LocalCalendarHelpers.serialize_summary(event)
+
+    %{
+      "start" => summary.start_at,
+      "end" => summary.end_at,
+      "summary" => summary.title,
+      "location" => summary.location,
+      "organizer" => summary.organizer_email
+    }
+  end
+
+  # SPEC 06 R7 work-day-end bound: prefer the user's configured
+  # calendar_check_in work_day_end_hour (same place CalendarCheckIn.init/1
+  # reads it) so the reactive path never silently disagrees with what the
+  # proactive skill would compute for the same user; fall back to the shared
+  # FreeBlocks default (18:00 local) when no such agent/config exists.
+  defp today_focus_work_day_end_hour(user_id) do
+    Agents.list_agents(user_id: user_id)
+    |> Enum.find(&(&1.behavior == "ai_chief_of_staff"))
+    |> case do
+      nil ->
+        FreeBlocks.default_work_day_end_hour()
+
+      agent ->
+        (agent.config || %{})
+        |> get_in(["skill_configs", "calendar_check_in", "work_day_end_hour"])
+        |> normalize_work_day_end_hour()
+    end
+  end
+
+  defp normalize_work_day_end_hour(value) when is_integer(value) and value in 1..24, do: value
+
+  defp normalize_work_day_end_hour(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {hour, ""} when hour in 1..24 -> hour
+      _ -> FreeBlocks.default_work_day_end_hour()
+    end
+  end
+
+  defp normalize_work_day_end_hour(_value), do: FreeBlocks.default_work_day_end_hour()
 
   defp list_goals(runtime_context, args) do
     limit = normalize_limit(Map.get(args, "limit"), 20, 50)
