@@ -21,5 +21,18 @@
     <!-- Contacts.framework read access for CRM identity merging. -->
     <key>com.apple.security.personal-information.addressbook</key>
     <true/>
+
+    <!--
+      EventKit access. Without these, requestFullAccessToEvents /
+      requestFullAccessToReminders auto-deny without ever presenting
+      the permission prompt (observed on macOS 26: instant
+      granted=false with no TCC row and a valid usage-description
+      string). The existing Reminders grant predates the check; any
+      fresh prompt needs the entitlement.
+    -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+    <key>com.apple.security.personal-information.reminders</key>
+    <true/>
 </dict>
 </plist>
