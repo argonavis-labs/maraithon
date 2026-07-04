@@ -153,6 +153,43 @@ defmodule Maraithon.Tools.InputSchemas do
           })
         )
 
+      "calendar_create_event" ->
+        user_object(
+          %{
+            "title" => @string,
+            "start_at" => @string,
+            "end_at" => @string,
+            "timezone" => @string,
+            "description" => @string,
+            "todo_id" => @string,
+            "client_event_id" => @string
+          },
+          ["title", "start_at", "end_at", "timezone", "client_event_id"]
+        )
+
+      "calendar_update_event" ->
+        user_object(
+          %{
+            "event_id" => @string,
+            "title" => @string,
+            "start_at" => @string,
+            "end_at" => @string,
+            "timezone" => @string,
+            "description" => @string,
+            "todo_id" => @string
+          },
+          ["event_id"]
+        )
+
+      "calendar_cancel_event" ->
+        user_object(
+          %{
+            "event_id" => @string,
+            "todo_id" => @string
+          },
+          ["event_id"]
+        )
+
       "review_connected_context" ->
         user_object(%{
           "query" => @string,

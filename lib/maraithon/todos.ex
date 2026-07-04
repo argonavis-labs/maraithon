@@ -683,6 +683,79 @@ defmodule Maraithon.Todos do
   def clear_nudge_cadence(_user_id, _todo_id, _opts), do: {:error, :not_found}
 
   @doc """
+  Stamps the calendar block Maraithon created for this todo onto
+  `metadata["calendar_block"]` (SPEC 12 R9). `block` carries string keys:
+  `event_id` / `calendar_id` / `start_at` / `end_at` / `created_at`.
+
+  Tolerant of todos created before SPEC 12 shipped — this only merges the
+  one metadata key, never assumes any prior shape.
+  """
+  def record_calendar_block(user_id, todo_id, %{} = block)
+      when is_binary(user_id) and is_binary(todo_id) do
+    update_calendar_block_metadata(user_id, todo_id, fn _current -> block end)
+  end
+
+  def record_calendar_block(_user_id, _todo_id, _block), do: {:error, :not_found}
+
+  @doc """
+  Merges `changes` (e.g. moved `start_at`/`end_at`) into the stored
+  `metadata["calendar_block"]` — only when the stored pointer names the same
+  `event_id`, so a stale/hand-edited pointer is never overwritten with data
+  about a different event (SPEC 12 R9/R11).
+  """
+  def update_calendar_block(user_id, todo_id, event_id, %{} = changes)
+      when is_binary(user_id) and is_binary(todo_id) and is_binary(event_id) do
+    update_calendar_block_metadata(user_id, todo_id, fn
+      %{"event_id" => ^event_id} = current -> Map.merge(current, changes)
+      current -> current
+    end)
+  end
+
+  def update_calendar_block(_user_id, _todo_id, _event_id, _changes), do: {:error, :not_found}
+
+  @doc """
+  Removes the stored `metadata["calendar_block"]` pointer after the matching
+  event was cancelled (SPEC 12 R9). A mismatched or absent pointer is a
+  no-op — never an error, since the user may have deleted/edited the event
+  directly in Google Calendar.
+  """
+  def clear_calendar_block(user_id, todo_id, event_id)
+      when is_binary(user_id) and is_binary(todo_id) and is_binary(event_id) do
+    update_calendar_block_metadata(user_id, todo_id, fn
+      %{"event_id" => ^event_id} -> :delete
+      current -> current
+    end)
+  end
+
+  def clear_calendar_block(_user_id, _todo_id, _event_id), do: {:error, :not_found}
+
+  defp update_calendar_block_metadata(user_id, todo_id, fun) do
+    case Repo.get_by(Todo, id: todo_id, user_id: user_id) do
+      nil ->
+        {:error, :not_found}
+
+      %Todo{} = todo ->
+        metadata = todo.metadata || %{}
+        current = Map.get(metadata, "calendar_block")
+
+        metadata =
+          case fun.(current) do
+            :delete -> Map.delete(metadata, "calendar_block")
+            nil -> metadata
+            %{} = block -> Map.put(metadata, "calendar_block", block)
+          end
+
+        if metadata == (todo.metadata || %{}) do
+          {:ok, todo}
+        else
+          todo
+          |> Todo.changeset(%{metadata: metadata})
+          |> Repo.update()
+        end
+    end
+  end
+
+  @doc """
   Lenient, timezone-aware datetime coercion shared by ingest and the
   conversational snooze tool (SPEC 01 R2/R3).
 

@@ -691,6 +691,21 @@ defmodule MaraithonWeb.OAuthControllerTest do
     end
 
     @doc """
+    SPEC 12 R1: `scopes=calendar_write` is a valid connector-page-reachable
+    connect URL requesting BOTH the readonly and events-write scopes.
+    """
+    test "handles calendar_write scope", %{conn: conn} do
+      connect_telegram("user_123")
+      conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: "calendar_write"})
+
+      redirect_url = redirected_to(conn)
+      assert redirect_url =~ "https://accounts.google.com"
+      decoded = URI.decode(redirect_url)
+      assert decoded =~ "https://www.googleapis.com/auth/calendar.events"
+      assert decoded =~ "https://www.googleapis.com/auth/calendar.readonly"
+    end
+
+    @doc """
     Verifies that whitespace in scopes is handled gracefully.
     Users might accidentally include spaces in the scopes parameter.
     """
@@ -830,6 +845,81 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert get_in(token.metadata, ["account_email"]) == "founder@example.com"
       assert get_in(token.metadata, ["account_name"]) == "Founder"
       assert get_in(token.metadata, ["account_sub"]) == "google-sub-123"
+    end
+
+    # SPEC 12 R1: a reconnect with `scopes=calendar_write` UNIONS the newly
+    # granted scopes with whatever the account already held — a user who
+    # upgrades for calendar writes keeps their existing Gmail access. This
+    # confirms `handle_google_tokens/5`'s existing scope-union behavior for
+    # the new service rather than assuming it.
+    test "reconnect with calendar_write unions scopes with the existing grant", %{conn: conn} do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google,
+        client_id: "test_google_client_id",
+        client_secret: "test_google_client_secret",
+        redirect_uri: "http://localhost:4000/auth/google/callback",
+        token_url: "http://localhost:#{bypass.port}/token",
+        userinfo_url: "http://localhost:#{bypass.port}/userinfo"
+      )
+
+      user_id = "calendar_write_union_user"
+      :ok = ensure_user_id(user_id)
+
+      {:ok, _existing} =
+        Maraithon.OAuth.store_tokens(user_id, "google:founder@example.com", %{
+          access_token: "old_access_token",
+          refresh_token: "old_refresh_token",
+          expires_in: 3600,
+          scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+          metadata: %{"services" => ["gmail"], "account_email" => "founder@example.com"}
+        })
+
+      Bypass.expect_once(bypass, "POST", "/token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "new_access_token",
+            "expires_in" => 3600,
+            "scope" =>
+              "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email",
+            "token_type" => "Bearer"
+          })
+        )
+      end)
+
+      Bypass.expect_once(bypass, "GET", "/userinfo", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"email" => "founder@example.com", "sub" => "google-sub-123"})
+        )
+      end)
+
+      state = signed_google_state(user_id, ["calendar_write"])
+      conn = get(conn, "/auth/google/callback", %{code: "valid_code", state: state})
+      response = json_response(conn, 200)
+
+      assert response["status"] == "connected"
+
+      token = Maraithon.OAuth.get_token(user_id, "google:founder@example.com")
+      assert token.access_token == "new_access_token"
+
+      # New write scope granted...
+      assert "https://www.googleapis.com/auth/calendar.events" in token.scopes
+      assert "https://www.googleapis.com/auth/calendar.readonly" in token.scopes
+      # ...without dropping the previously granted Gmail scope.
+      assert "https://www.googleapis.com/auth/gmail.readonly" in token.scopes
+      # A refresh token isn't re-issued on reconnect; the stored one is kept.
+      assert token.refresh_token == "old_refresh_token"
+
+      services = get_in(token.metadata, ["services"]) || []
+      assert "gmail" in services
+      assert "calendar_write" in services
+      assert "calendar" in services
     end
   end
 

@@ -114,6 +114,35 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
 
   def insight_action(_reason), do: @generic_action_failure
 
+  # SPEC 12 R6/R10: calendar time-blocking failure copy. The scope-required
+  # message carries a reconnect link because the missing write scope is the
+  # common case for every already-connected Google account — and this is a
+  # per-action failure surfaced in the chat turn, never an account-level
+  # health flip (the read/sync/watch path is still working).
+  def calendar_action("calendar_write_scope_required") do
+    "Google Calendar is connected read-only, so Maraithon can't book time blocks yet. " <>
+      "Reconnect Google once with calendar write access, then confirm again: " <>
+      Maraithon.ConnectedAccounts.reconnect_url("google")
+  end
+
+  def calendar_action("slot_no_longer_free") do
+    "That slot is no longer free — something else landed on the calendar since this was proposed. Nothing was booked; pick a new time."
+  end
+
+  def calendar_action("calendar_block_start_passed") do
+    "The proposed start time has already passed, so nothing was booked. Pick a new time."
+  end
+
+  def calendar_action("calendar_event_not_managed") do
+    "That calendar event was not created by Maraithon, so it was left untouched."
+  end
+
+  def calendar_action("calendar_event_already_gone") do
+    "That calendar block no longer exists on the calendar. Propose a fresh block if the time still needs holding."
+  end
+
+  def calendar_action(_reason), do: @generic_action_failure
+
   def todo_callback(reason) when reason in [:not_found, "not_found"] do
     "That work item is no longer available. Use the latest open-work message."
   end
@@ -205,6 +234,21 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
         "Could not prepare that action. No change was made; use the latest message before deciding."
     end
   end
+
+  defp tool_error_for_code("calendar_write_scope_required"),
+    do: calendar_action("calendar_write_scope_required")
+
+  defp tool_error_for_code("slot_no_longer_free"),
+    do: calendar_action("slot_no_longer_free")
+
+  defp tool_error_for_code("calendar_block_start_passed"),
+    do: calendar_action("calendar_block_start_passed")
+
+  defp tool_error_for_code("calendar_event_not_managed"),
+    do: calendar_action("calendar_event_not_managed")
+
+  defp tool_error_for_code("calendar_event_already_gone"),
+    do: calendar_action("calendar_event_already_gone")
 
   defp tool_error_for_code("linear_not_connected"), do: linear_lookup("linear_not_connected")
   defp tool_error_for_code("linear_reauth_required"), do: linear_lookup("linear_reauth_required")

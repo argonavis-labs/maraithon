@@ -6,7 +6,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.AssistantHarness
   alias Maraithon.ActionLedger
   alias Maraithon.ActionCards
+  alias Maraithon.Calendar.FreeBlocks
   alias Maraithon.ChiefOfStaff.SourceScope
+  alias Maraithon.Connectors.GoogleCalendar
   alias Maraithon.ContextEngine
   alias Maraithon.Memory
   alias Maraithon.OperatorEvents
@@ -1822,9 +1824,115 @@ defmodule Maraithon.TelegramAssistant.Runner do
           prepared_action
         )
 
+      # SPEC 12 R4: calendar block creation is NOT routed through the plain
+      # `execute_tool_action/4` helper because it needs two extra steps —
+      # the fresh double-booking recheck (R10, plus the past-start guard)
+      # before the connector call, and the deterministic client event id
+      # (R7) derived from this prepared action for idempotent retries.
+      "calendar_create_event" ->
+        execute_calendar_create_event(payload, prepared_action)
+
+      # SPEC 12 R9: lifecycle actions against the block Maraithon created.
+      # Ownership-marker verification (R8) happens inside the tools, before
+      # any Google mutation.
+      "calendar_update_event" ->
+        execute_tool_action(
+          "calendar_update_event",
+          payload,
+          "Updated the calendar block.",
+          prepared_action
+        )
+
+      "calendar_cancel_event" ->
+        execute_tool_action(
+          "calendar_cancel_event",
+          payload,
+          "Cancelled the calendar block.",
+          prepared_action
+        )
+
       _ ->
         {:error, "unsupported_prepared_action"}
     end
+  end
+
+  defp execute_calendar_create_event(payload, prepared_action) do
+    payload = payload || %{}
+    user_id = Map.get(payload, "user_id") || Map.get(payload, :user_id)
+    client_event_id = calendar_client_event_id(prepared_action.id)
+
+    with {:ok, start_at, end_at} <- calendar_block_window(payload),
+         :ok <- ensure_calendar_block_in_future(start_at),
+         :ok <- ensure_calendar_slot_free(user_id, start_at, end_at, client_event_id) do
+      execute_tool_action(
+        "calendar_create_event",
+        Map.put(payload, "client_event_id", client_event_id),
+        "Booked the block on your calendar.",
+        prepared_action
+      )
+    end
+  end
+
+  # SPEC 12 R7: deterministic RFC2938 base32hex id (lowercase a-v, 0-9)
+  # derived from the prepared action, so a retried confirm or a retried HTTP
+  # call inside execute is idempotent at Google's side.
+  defp calendar_client_event_id(prepared_action_id) do
+    :crypto.hash(:sha256, "calendar_create_event:" <> to_string(prepared_action_id))
+    |> Base.hex_encode32(case: :lower, padding: false)
+  end
+
+  defp calendar_block_window(payload) do
+    with start_raw when is_binary(start_raw) <- Map.get(payload, "start_at"),
+         end_raw when is_binary(end_raw) <- Map.get(payload, "end_at"),
+         {:ok, start_at, _} <- DateTime.from_iso8601(start_raw),
+         {:ok, end_at, _} <- DateTime.from_iso8601(end_raw),
+         :lt <- DateTime.compare(start_at, end_at) do
+      {:ok, start_at, end_at}
+    else
+      _ -> {:error, "invalid_calendar_block_window"}
+    end
+  end
+
+  # SPEC 12 edge case: the confirmation window (default 15 min) can outlive
+  # the proposed slot — never create a block in the past.
+  defp ensure_calendar_block_in_future(start_at) do
+    if DateTime.compare(start_at, DateTime.utc_now()) == :gt do
+      :ok
+    else
+      {:error, "calendar_block_start_passed"}
+    end
+  end
+
+  # SPEC 12 R10: a genuinely fresh read immediately before creating — never
+  # a cached proposal-time fetch. On conflict, fail honestly instead of
+  # silently picking a different time. All-day events don't block timed work
+  # (same rule as `FreeBlocks`), and this action's own event (already
+  # created by a prior lost-response attempt, R7) is not a conflict.
+  defp ensure_calendar_slot_free(user_id, start_at, end_at, client_event_id) do
+    case GoogleCalendar.events_in_window(user_id, start_at, end_at) do
+      {:ok, events} ->
+        conflict? =
+          Enum.any?(events, fn event ->
+            Map.get(event, :event_id) != client_event_id and
+              overlaps_window?(FreeBlocks.event_interval(event), start_at, end_at)
+          end)
+
+        if conflict?, do: {:error, "slot_no_longer_free"}, else: :ok
+
+      {:error, reason} ->
+        # The recheck read failed (no token, reauth, transient API error):
+        # fail honestly rather than creating a block that was never verified
+        # free. Reuse the calendar tool's error translation so the failure
+        # copy matches the connector-error vocabulary.
+        {:error, Maraithon.Tools.CalendarCreateEvent.translate_error(reason, "check the calendar")}
+    end
+  end
+
+  defp overlaps_window?(nil, _start_at, _end_at), do: false
+
+  defp overlaps_window?({event_start, event_end}, start_at, end_at) do
+    DateTime.compare(event_start, end_at) == :lt and
+      DateTime.compare(event_end, start_at) == :gt
   end
 
   defp execute_tool_action(tool_name, payload, success_message, prepared_action) do
