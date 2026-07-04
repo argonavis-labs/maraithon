@@ -378,6 +378,41 @@ defmodule Maraithon.TelegramAssistant do
     count
   end
 
+  @doc """
+  Like `expire_stale_prepared_actions/1`, but also reports how many of the
+  expired rows were minted recently and how old the oldest one was — so the
+  stuck-state watchdog can tell "fresh confirmations are systematically
+  failing" (alarm-worthy) apart from "first sweep chewed through a historical
+  backlog" (self-healing, not an emergency).
+
+  Returns `%{count:, recent_count:, oldest_inserted_at:}` where
+  `recent_count` counts rows inserted within `recent_window_hours` of `now`.
+  """
+  def expire_stale_prepared_actions_with_stats(now \\ DateTime.utc_now(), recent_window_hours \\ 48) do
+    recent_cutoff = DateTime.add(now, -recent_window_hours * 60 * 60, :second)
+
+    stats =
+      Repo.one(
+        from(prepared_action in PreparedAction,
+          where: prepared_action.status == "awaiting_confirmation",
+          where: prepared_action.expires_at < ^now,
+          select: %{
+            recent_count:
+              fragment("count(*) FILTER (WHERE ? > ?)", prepared_action.inserted_at, ^recent_cutoff),
+            oldest_inserted_at: min(prepared_action.inserted_at)
+          }
+        )
+      ) || %{recent_count: 0, oldest_inserted_at: nil}
+
+    count = expire_stale_prepared_actions(now)
+
+    %{
+      count: count,
+      recent_count: stats.recent_count || 0,
+      oldest_inserted_at: stats.oldest_inserted_at
+    }
+  end
+
   def latest_prepared_action(%Conversation{} = conversation) do
     prepared_action_id = get_in(conversation.metadata || %{}, ["latest_prepared_action_id"])
 

@@ -193,6 +193,38 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
     assert incidents == []
   end
 
+  test "a mass expiry of OLD prepared actions records a backlog incident without alarming",
+       %{operator_id: operator_id, opts: opts} do
+    # 21 rows (> threshold 20), all minted well outside the 48h recent
+    # window: this is a historical-backlog cleanup, not confirmations
+    # breaking — the watchdog must log it, not page the operator.
+    prepared_actions = for _ <- 1..21, do: expired_prepared_action(operator_id)
+    backdated = DateTime.add(DateTime.utc_now(), -30 * 24 * 60 * 60, :second)
+
+    Repo.update_all(
+      from(prepared_action in PreparedAction,
+        where: prepared_action.id in ^Enum.map(prepared_actions, & &1.id)
+      ),
+      set: [inserted_at: backdated]
+    )
+
+    result = StuckStateWatchdog.run_cycle(opts)
+    assert result.swept >= 21
+    assert result.alerted == 0
+
+    reasons =
+      RuntimeIncident
+      |> where([incident], incident.kind == "stuck_state_swept")
+      |> where(
+        [incident],
+        fragment("?->>'table' = ?", incident.metadata, "telegram_prepared_actions")
+      )
+      |> select([incident], incident.reason)
+      |> Repo.all()
+
+    assert "prepared-action backlog cleanup" in reasons
+  end
+
   test "clean database detects nothing and sends no email", %{opts: opts} do
     result = StuckStateWatchdog.run_cycle(opts)
 

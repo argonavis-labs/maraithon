@@ -447,33 +447,66 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
   defp sortable_held_since(_row), do: 0
 
   # A user never tapping Confirm is normal UX — flip silently. Only a mass
-  # expiry (> @prepared_action_mass_expiry_threshold in one tick) is
-  # pathological (something is systematically preventing confirmations) and
-  # gets an incident + operator alarm.
+  # expiry of RECENTLY-minted actions (> @prepared_action_mass_expiry_threshold
+  # rows inserted in the last 48h expiring in one tick) is pathological —
+  # something is systematically preventing confirmations. A mass expiry of
+  # old rows is the sweep doing its job on a historical backlog (the very
+  # stranded state this module exists to heal): record the incident so it's
+  # auditable, but don't page the operator with a false "confirmations
+  # broken?" alarm for a one-time cleanup.
   defp sweep_prepared_actions(now, _opts) do
-    count = TelegramAssistant.expire_stale_prepared_actions(now)
+    %{count: count, recent_count: recent_count, oldest_inserted_at: oldest_inserted_at} =
+      TelegramAssistant.expire_stale_prepared_actions_with_stats(now)
+
+    oldest_age_seconds =
+      case oldest_inserted_at do
+        %DateTime{} = at -> max(DateTime.diff(now, at, :second), 0)
+        %NaiveDateTime{} = at -> max(DateTime.diff(now, DateTime.from_naive!(at, "Etc/UTC"), :second), 0)
+        _ -> 0
+      end
 
     alarms =
-      if count > @prepared_action_mass_expiry_threshold do
-        _ =
-          IncidentLog.record(%{
-            kind: "stuck_state_swept",
-            reason: "unusually large prepared-action expiry batch",
-            metadata: %{"table" => "telegram_prepared_actions", "count" => count}
-          })
+      cond do
+        recent_count > @prepared_action_mass_expiry_threshold ->
+          _ =
+            IncidentLog.record(%{
+              kind: "stuck_state_swept",
+              reason: "unusually large prepared-action expiry batch",
+              metadata: %{
+                "table" => "telegram_prepared_actions",
+                "count" => count,
+                "recent_count" => recent_count
+              }
+            })
 
-        [
-          %{
-            table: "telegram_prepared_actions",
-            count: count,
-            oldest_age_seconds: 0,
-            reason:
-              "#{count} prepared actions expired unconfirmed in one sweep " <>
-                "(are Telegram confirmations broken?)"
-          }
-        ]
-      else
-        []
+          [
+            %{
+              table: "telegram_prepared_actions",
+              count: recent_count,
+              oldest_age_seconds: oldest_age_seconds,
+              reason:
+                "#{recent_count} prepared actions minted in the last 48h expired " <>
+                  "unconfirmed in one sweep (are Telegram confirmations broken?)"
+            }
+          ]
+
+        count > @prepared_action_mass_expiry_threshold ->
+          _ =
+            IncidentLog.record(%{
+              kind: "stuck_state_swept",
+              reason: "prepared-action backlog cleanup",
+              metadata: %{
+                "table" => "telegram_prepared_actions",
+                "count" => count,
+                "recent_count" => recent_count,
+                "oldest_inserted_at" => oldest_inserted_at && to_string(oldest_inserted_at)
+              }
+            })
+
+          []
+
+        true ->
+          []
       end
 
     %{swept: count, alarms: alarms}
