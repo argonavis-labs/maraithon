@@ -25,6 +25,7 @@ defmodule Maraithon.Insights.Insight do
     "meeting_follow_up",
     "important_fyi",
     "product_opportunity",
+    "relationship_drift",
     "general"
   ]
 

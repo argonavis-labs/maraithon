@@ -172,6 +172,68 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
     refute message["content"] =~ "unrelated todo hold"
   end
 
+  test "relationship-drift candidates ride the same review batch and are promoted on keep (SPEC 03)",
+       %{user_id: user_id, agent: agent, state: state, context: context} do
+    pattern = candidate_insight(user_id, agent.id, "drift-batch")
+
+    # A real drifted person: handle_wakeup's own RelationshipDrift gatherer
+    # (not a hand-inserted row) must produce the candidate.
+    {:ok, person} =
+      Maraithon.Crm.create_person(user_id, %{
+        "first_name" => "Charlie",
+        "display_name" => "Charlie Beckwith",
+        "metadata" => %{
+          "communication_signals" => %{
+            "overdue" => true,
+            "days_since_last" => 18,
+            "cadence_days" => 7,
+            "computed_at" => DateTime.to_iso8601(DateTime.utc_now())
+          }
+        }
+      })
+
+    # communication_score is system-owned; seed it so the person enters
+    # ReconnectSuggestions' candidate pool.
+    Maraithon.Repo.update_all(
+      from(p in Maraithon.Crm.Person, where: p.id == ^person.id),
+      set: [communication_score: 55]
+    )
+
+    assert {:effect, {:llm_call, params}, pending_state} =
+             LocalPatternReview.handle_wakeup(state, context)
+
+    drift = Enum.find(pending_state.pending_candidates, &(&1.category == "relationship_drift"))
+
+    assert drift
+    assert drift.status == "candidate"
+    assert drift.tracking_key == "relationship_drift:#{person.id}"
+
+    assert [message] = params["messages"]
+    assert message["content"] =~ drift.id
+    assert message["content"] =~ pattern.id
+
+    response = %{
+      "content" =>
+        Jason.encode!(%{
+          "decisions" => [
+            %{"id" => drift.id, "decision" => "keep", "reason" => "important relationship"},
+            %{"id" => pattern.id, "decision" => "discard", "reason" => "noise"}
+          ]
+        })
+    }
+
+    assert {:emit, {:insights_recorded, payload}, _next_state} =
+             LocalPatternReview.handle_effect_result({:llm_call, response}, pending_state, context)
+
+    assert payload.count == 1
+    assert "relationship_drift" in payload.categories
+
+    assert [open] = Insights.list_open_for_user(user_id)
+    assert open.id == drift.id
+    assert open.status == "new"
+    assert open.category == "relationship_drift"
+  end
+
   test "leaves candidates untouched when the model call fails", %{
     user_id: user_id,
     agent: agent,

@@ -608,4 +608,27 @@ defmodule Maraithon.InsightsTest do
                Insights.snooze(user_id, Ecto.UUID.generate(), DateTime.utc_now())
     end
   end
+
+  describe "Insight.changeset/2 categories" do
+    test "accepts the relationship_drift category (SPEC 03 R1)", %{
+      user_id: user_id,
+      agent: agent
+    } do
+      changeset =
+        Maraithon.Insights.Insight.changeset(%Maraithon.Insights.Insight{}, %{
+          user_id: user_id,
+          agent_id: agent.id,
+          source: "relationship_drift",
+          category: "relationship_drift",
+          title: "Reconnect with Charlie",
+          summary: "18 days since you spoke with Charlie — you usually connect every week.",
+          recommended_action: "Send Charlie a quick note to reconnect.",
+          dedupe_key: "relationship_drift:person-123",
+          tracking_key: "relationship_drift:person-123"
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :category) == "relationship_drift"
+    end
+  end
 end
