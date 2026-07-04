@@ -112,6 +112,12 @@ struct RemindersReader: @unchecked Sendable {
         if let fetchOverride {
             return try await fetchOverride()
         }
+        // Query through a store created *after* authorization was
+        // granted — a pre-grant store holds a stale daemon connection
+        // that can block fetches forever (see CalendarEventReader).
+        // The long-lived `store` is still what `requestAccess()`
+        // prompts through.
+        let store = EKEventStore()
         let predicate = store.predicateForReminders(in: nil)
         return try await withCheckedThrowingContinuation { continuation in
             store.fetchReminders(matching: predicate) { reminders in

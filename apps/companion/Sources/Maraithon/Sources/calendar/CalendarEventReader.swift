@@ -137,8 +137,14 @@ struct CalendarEventReader: @unchecked Sendable {
         if let fetchOverride {
             return try await fetchOverride(start, end)
         }
-        let store = self.store
+        // Query through a store created *after* authorization was
+        // granted. A store instantiated pre-grant (app launch on a
+        // fresh install) holds a stale daemon connection: its
+        // `events(matching:)` blocks indefinitely and wedges the poll
+        // loop even though access is now authorized. The long-lived
+        // `store` is still what `requestAccess()` prompts through.
         return await Task.detached(priority: .utility) {
+            let store = EKEventStore()
             let predicate = store.predicateForEvents(
                 withStart: start,
                 end: end,
