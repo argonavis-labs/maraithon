@@ -132,11 +132,14 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
         result = process_ingestion_window(window_id)
 
         # New communications change who matters; refresh the activity-based
-        # ranking after each learned window.
+        # ranking, the relationship graph, and downstream intelligence after
+        # each learned window.
         with {:ok, user_id} <- require_user_id(job) do
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_communication_score_refresh(user_id)
+          _ = Maraithon.Runtime.BackgroundJobs.enqueue_relationship_graph_refresh(user_id)
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_person_dedupe(user_id)
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_goal_people_discovery(user_id)
+          _ = Maraithon.Runtime.BackgroundJobs.enqueue_person_enrichment(user_id)
         end
 
         result
@@ -150,6 +153,27 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
     with {:ok, user_id} <- require_user_id(job) do
       case Maraithon.Crm.CommunicationScore.refresh_for_user(user_id) do
         {:ok, summary} -> {:ok, Map.put(summary, :source, "communication_score_refresh")}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "relationship_graph_refresh"} = job) do
+    with {:ok, user_id} <- require_user_id(job) do
+      case Maraithon.Crm.RelationshipGraph.refresh_for_user(user_id) do
+        {:ok, summary} -> {:ok, Map.put(summary, :source, "relationship_graph_refresh")}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "person_enrichment"} = job) do
+    with {:ok, user_id} <- require_user_id(job) do
+      case Maraithon.Crm.PersonEnrichment.run_for_upcoming(user_id,
+             days: payload_integer(job, "days", 21),
+             max: payload_integer(job, "max", 5)
+           ) do
+        {:ok, summary} -> {:ok, Map.put(summary, :source, "person_enrichment")}
         {:error, reason} -> {:error, reason}
       end
     end

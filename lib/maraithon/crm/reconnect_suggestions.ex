@@ -5,9 +5,12 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
 
   The mobile People tab's job-to-be-done is not "list every contact" — it is
   "show me the people I should reach out to right now, and why." This module
-  ranks the user's people on three signals the rest of Maraithon already
-  computes, and attaches a concrete reason to each:
+  ranks the user's people on signals the rest of Maraithon already computes,
+  and attaches a concrete reason to each:
 
+    * **Meeting soon** — the person is on the user's calendar in the next
+      few weeks. Prep beats reaction: the meeting is a hard deadline for
+      reviewing open work and recent context with them.
     * **Open work** — the person is linked to open todos/commitments. This is
       the "based on your work" hook: someone is waiting on you, or you owe
       them a reply, and that thread is the reason to reconnect.
@@ -15,8 +18,12 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
       `Maraithon.Crm.CommunicationScore`): you usually talk every N days and
       it has been well past that.
     * **Going quiet** — a strong relationship (by communication score /
-      relationship strength) that has gone silent, even without a learned
-      cadence yet.
+      relationship strength / network rank) that has gone silent, even
+      without a learned cadence yet.
+
+  Priorities also blend `network_rank` (from
+  `Maraithon.Crm.RelationshipGraph`), so people who sit at the center of the
+  meetings and threads that matter rise above raw message volume.
 
   People with none of these reasons are dropped — this is a curated
   reconnect list, not a ranked dump of the whole address book.
@@ -26,6 +33,7 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
 
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.PersonLink
+  alias Maraithon.Crm.UpcomingMeetings
   alias Maraithon.Goals.{Goal, GoalLink}
   alias Maraithon.Repo
   alias Maraithon.Todos
@@ -99,7 +107,13 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
 
   defp ranked_suggestions(user_id, now) do
     goal_links_by_person = active_goal_links_by_person(user_id)
-    people = candidate_people(user_id, Map.keys(goal_links_by_person))
+    meeting_by_person = UpcomingMeetings.by_person_id(user_id, now: now)
+
+    people =
+      candidate_people(
+        user_id,
+        Enum.uniq(Map.keys(goal_links_by_person) ++ Map.keys(meeting_by_person))
+      )
 
     contexts =
       Maraithon.Crm.relationship_contexts(user_id, people, resource_type: "todo", link_limit: 5)
@@ -110,7 +124,8 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     |> Enum.map(fn person ->
       context = Map.get(context_by_person, person.id, %{todos: []})
       goal_links = Map.get(goal_links_by_person, person.id, [])
-      build_suggestion(person, context, goal_links, now)
+      meeting = Map.get(meeting_by_person, person.id)
+      build_suggestion(person, context, goal_links, meeting, now)
     end)
     |> Enum.reject(&is_nil/1)
     |> Enum.sort_by(& &1.priority, :desc)
@@ -131,9 +146,10 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     ranked_people =
       Person
       |> where([p], p.user_id == ^user_id and p.status == "active")
-      |> where([p], p.communication_score > 0 or p.relationship_strength > 0)
+      |> where([p], p.communication_score > 0 or p.relationship_strength > 0 or p.network_rank > 0)
       |> order_by([p],
         desc: p.communication_score,
+        desc: p.network_rank,
         desc: p.relationship_strength,
         desc_nulls_last: p.last_interaction_at
       )
@@ -199,7 +215,7 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     |> Enum.uniq()
   end
 
-  defp build_suggestion(%Person{} = person, context, goal_links, now) do
+  defp build_suggestion(%Person{} = person, context, goal_links, meeting, now) do
     signals = communication_signals(person)
     open_work = open_work_items(context)
     days_since = days_since_last(person, signals, now)
@@ -207,7 +223,7 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     score = person.communication_score || 0
     overdue? = signals["overdue"] == true
 
-    case classify(person, open_work, goal_links, overdue?, days_since, score) do
+    case classify(person, open_work, goal_links, meeting, overdue?, days_since, score) do
       nil ->
         nil
 
@@ -216,15 +232,19 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
           person: person,
           category: category,
           headline: headline(category),
-          reason: reason(category, person, open_work, goal_links, days_since, cadence),
-          suggested_action: suggested_action(category, person, open_work, goal_links),
+          reason: reason(category, person, open_work, goal_links, meeting, days_since, cadence, now),
+          suggested_action: suggested_action(category, person, open_work, goal_links, meeting),
           days_since_last: days_since,
           cadence_days: cadence,
           communication_score: score,
+          network_rank: person.network_rank || 0,
           overdue: overdue?,
           open_work: Enum.map(open_work, &%{id: &1.id, title: &1.title}),
           goals: Enum.map(goal_links, &%{id: &1.goal_id, title: &1.goal_title}),
-          priority: priority(category, person, open_work, overdue?, days_since, cadence, score)
+          next_meeting_at: meeting && meeting.next_meeting_at,
+          next_meeting_title: meeting && meeting.next_meeting_title,
+          priority:
+            priority(category, person, open_work, meeting, overdue?, days_since, cadence, score, now)
         }
     end
   end
@@ -240,45 +260,81 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
       person: person,
       category: :goal_aligned,
       headline: headline(:goal_aligned),
-      reason: reason(:goal_aligned, person, open_work, goal_links, days_since, cadence),
-      suggested_action: suggested_action(:goal_aligned, person, open_work, goal_links),
+      reason: reason(:goal_aligned, person, open_work, goal_links, nil, days_since, cadence, now),
+      suggested_action: suggested_action(:goal_aligned, person, open_work, goal_links, nil),
       days_since_last: days_since,
       cadence_days: cadence,
       communication_score: score,
+      network_rank: person.network_rank || 0,
       overdue: signals["overdue"] == true,
       open_work: Enum.map(open_work, &%{id: &1.id, title: &1.title}),
       goals: Enum.map(goal_links, &%{id: &1.goal_id, title: &1.goal_title}),
+      next_meeting_at: nil,
+      next_meeting_title: nil,
       priority: goal_opportunity_priority(person, goal_links, open_work, days_since)
     }
   end
 
   defp build_goal_opportunity(_person, _context, _goal_links, _now), do: nil
 
-  # Reason precedence: real open work is the strongest reconnect trigger, then
-  # an overdue learned cadence, then a strong relationship gone quiet.
-  defp classify(person, open_work, goal_links, overdue?, days_since, score) do
+  # Reason precedence: an imminent meeting is the strongest prep trigger,
+  # then real open work, then an overdue learned cadence, then a strong
+  # relationship gone quiet.
+  defp classify(person, open_work, goal_links, meeting, overdue?, days_since, score) do
     strength = person.relationship_strength || 0
+    network = person.network_rank || 0
 
     cond do
+      meeting != nil -> :meeting_soon
       open_work != [] -> :open_work
       goal_links != [] -> :goal_aligned
       overdue? -> :overdue
-      going_quiet?(strength, score, days_since) -> :going_quiet
+      going_quiet?(strength, score, network, days_since) -> :going_quiet
       true -> nil
     end
   end
 
-  defp going_quiet?(strength, score, days_since) do
+  defp going_quiet?(strength, score, network, days_since) do
     is_integer(days_since) and days_since >= @going_quiet_days and
-      (strength >= @going_quiet_strength or score >= @going_quiet_strength)
+      (strength >= @going_quiet_strength or score >= @going_quiet_strength or
+         network >= @going_quiet_strength)
   end
 
+  defp headline(:meeting_soon), do: "Meeting soon"
   defp headline(:open_work), do: "Open work"
   defp headline(:goal_aligned), do: "Goal aligned"
   defp headline(:overdue), do: "Overdue"
   defp headline(:going_quiet), do: "Going quiet"
 
-  defp reason(:open_work, person, open_work, _goal_links, _days, _cadence) do
+  defp reason(:meeting_soon, person, open_work, _goal_links, meeting, days_since, _cadence, now) do
+    name = first_name(person)
+    when_phrase = meeting_when_phrase(meeting.next_meeting_at, now)
+
+    lead =
+      case meeting.next_meeting_title do
+        title when is_binary(title) and title != "" ->
+          "Meeting #{name} #{when_phrase}: #{title}."
+
+        _ ->
+          "Meeting #{name} #{when_phrase}."
+      end
+
+    context =
+      cond do
+        open_work != [] ->
+          " #{length(open_work)} open #{if length(open_work) == 1, do: "item", else: "items"} to review first."
+
+        is_integer(days_since) and days_since >= 14 ->
+          " Last spoke #{days_since} days ago."
+
+        true ->
+          ""
+      end
+
+    lead <> context
+  end
+
+  defp reason(:open_work, person, open_work, _goal_links, _meeting, _days, _cadence, _now) do
     name = first_name(person)
     count = length(open_work)
 
@@ -297,7 +353,7 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     end
   end
 
-  defp reason(:goal_aligned, person, _open_work, goal_links, _days, _cadence) do
+  defp reason(:goal_aligned, person, _open_work, goal_links, _meeting, _days, _cadence, _now) do
     name = first_name(person)
 
     case List.first(goal_links) do
@@ -309,7 +365,7 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     end
   end
 
-  defp reason(:overdue, person, _open_work, _goal_links, days_since, cadence) do
+  defp reason(:overdue, person, _open_work, _goal_links, _meeting, days_since, cadence, _now) do
     name = first_name(person)
 
     cond do
@@ -324,7 +380,7 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     end
   end
 
-  defp reason(:going_quiet, person, _open_work, _goal_links, days_since, _cadence) do
+  defp reason(:going_quiet, person, _open_work, _goal_links, _meeting, days_since, _cadence, _now) do
     name = first_name(person)
 
     case days_since do
@@ -336,7 +392,22 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     end
   end
 
-  defp suggested_action(:open_work, person, open_work, _goal_links) do
+  defp suggested_action(:meeting_soon, person, open_work, _goal_links, meeting) do
+    name = first_name(person)
+
+    case {meeting.next_meeting_title, open_work} do
+      {title, [_ | _]} when is_binary(title) and title != "" ->
+        "Prep for \"#{title}\" — review the open items with #{name} before you meet."
+
+      {title, _} when is_binary(title) and title != "" ->
+        "Prep for \"#{title}\" — skim recent context with #{name} before you meet."
+
+      _ ->
+        "Review recent context with #{name} before your meeting."
+    end
+  end
+
+  defp suggested_action(:open_work, person, open_work, _goal_links, _meeting) do
     case List.first(open_work) do
       %{title: title} when is_binary(title) and title != "" ->
         "Reach out to #{first_name(person)} to move \"#{title}\" forward."
@@ -346,7 +417,7 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     end
   end
 
-  defp suggested_action(:goal_aligned, person, _open_work, goal_links) do
+  defp suggested_action(:goal_aligned, person, _open_work, goal_links, _meeting) do
     case List.first(goal_links) do
       %{goal_title: title} when is_binary(title) and title != "" ->
         "Review whether #{first_name(person)} can help move \"#{title}\" forward."
@@ -356,7 +427,8 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     end
   end
 
-  defp suggested_action(_category, person, _open_work, _goal_links), do: contact_action(person)
+  defp suggested_action(_category, person, _open_work, _goal_links, _meeting),
+    do: contact_action(person)
 
   defp contact_action(%Person{} = person) do
     name = first_name(person)
@@ -370,13 +442,15 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
   # Priority blends the curated reasons with the underlying strength/score so
   # the most consequential reconnections rise first. Open work dominates;
   # overdue magnitude and relationship strength refine the order.
-  defp priority(category, person, open_work, overdue?, days_since, cadence, score) do
+  defp priority(category, person, open_work, meeting, overdue?, days_since, cadence, score, now) do
     strength = person.relationship_strength || 0
+    network = person.network_rank || 0
 
-    base = score * 0.3 + strength * 0.4
+    base = score * 0.25 + strength * 0.3 + network * 0.25
 
     category_weight =
       case category do
+        :meeting_soon -> 95 + meeting_proximity_bump(meeting, now)
         :open_work -> 80 + min(length(open_work), 3) * 12
         :goal_aligned -> 72
         :overdue -> 35
@@ -395,6 +469,27 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
 
     base + category_weight + overdue_magnitude + quiet_magnitude
   end
+
+  # Sooner meetings need prep sooner: up to +15 for a same-day meeting,
+  # tapering to 0 at three weeks out.
+  defp meeting_proximity_bump(%{next_meeting_at: %DateTime{} = at}, now) do
+    days_until = max(DateTime.diff(at, now, :day), 0)
+    round(max(21 - days_until, 0) / 21 * 15)
+  end
+
+  defp meeting_proximity_bump(_meeting, _now), do: 0
+
+  defp meeting_when_phrase(%DateTime{} = at, now) do
+    case DateTime.diff(at, now, :day) do
+      0 -> "today"
+      1 -> "tomorrow"
+      d when d <= 6 -> Calendar.strftime(at, "%A")
+      d when d <= 13 -> "next " <> Calendar.strftime(at, "%A")
+      _ -> "on " <> Calendar.strftime(at, "%b %-d")
+    end
+  end
+
+  defp meeting_when_phrase(_at, _now), do: "soon"
 
   defp goal_opportunity_priority(person, goal_links, open_work, days_since) do
     strength = person.relationship_strength || 0

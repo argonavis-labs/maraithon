@@ -26,6 +26,7 @@ defmodule Maraithon.Crm.Person do
     field :relationship_strength, :integer, default: 0
     field :affinity_score, :integer, default: 0
     field :communication_score, :integer, default: 0
+    field :network_rank, :integer, default: 0
     field :last_interaction_at, :utc_datetime_usec
     field :status, :string, default: "active"
     field :merged_at, :utc_datetime_usec

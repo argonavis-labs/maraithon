@@ -186,7 +186,11 @@ defmodule Maraithon.Crm.PersonEmbeddings do
      |> Map.put(:embedding_refreshed_at, now)}
   end
 
-  defp embedding_storage_available? do
+  @doc """
+  Whether the `crm_people.embedding` column exists (pgvector enabled).
+  Cached per process; callers use it to gate semantic paths.
+  """
+  def embedding_storage_available? do
     case Process.get(:maraithon_pgvector_available) do
       nil ->
         available =

@@ -6,19 +6,30 @@ defmodule Maraithon.Crm.GoalPeopleDiscovery do
   surface: scan active contacts against active goals, then write goal links for
   people who plausibly help move a goal forward. The UI can then rank from
   source-backed goal links instead of "who Kent talks to most."
+
+  Matching is embeddings-first: each goal's text is embedded and compared
+  against `crm_people.embedding` by cosine similarity, so "raise a seed
+  round" finds the angel investor whose notes never use the word "seed."
+  The lexical term-overlap scorer remains as the floor (and the only path
+  when pgvector/embeddings are unavailable).
   """
 
   import Ecto.Query
 
-  alias Maraithon.Crm.Person
+  alias Maraithon.Crm.{Person, PersonEmbeddings}
   alias Maraithon.Goals
   alias Maraithon.Goals.Goal
   alias Maraithon.Repo
+
+  require Logger
 
   @default_people_limit 500
   @default_goal_limit 20
   @default_links_per_goal 12
   @min_confidence 0.32
+  @semantic_threshold 0.45
+  @semantic_limit 25
+  @semantic_confidence_scale 0.9
   @stopwords MapSet.new(~w(
     a about after all also am an and any are as at be by can close do for from get goal going
     has have how i if in into is it its me my of on or our out over own plan so that the this
@@ -70,10 +81,11 @@ defmodule Maraithon.Crm.GoalPeopleDiscovery do
 
   defp candidate_links(user_id, %Goal{} = goal, people, links_per_goal) do
     ambiguous_name_terms = ambiguous_name_terms(people)
+    semantic_by_person = semantic_scores(user_id, goal)
 
     people
     |> Enum.map(&score_person(goal, &1, ambiguous_name_terms))
-    |> Enum.reject(&is_nil/1)
+    |> merge_semantic_candidates(people, semantic_by_person, goal)
     |> Enum.sort_by(& &1.confidence, :desc)
     |> Enum.take(links_per_goal)
     |> Enum.map(fn candidate ->
@@ -94,6 +106,111 @@ defmodule Maraithon.Crm.GoalPeopleDiscovery do
         }
       }
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Semantic path
+  # ---------------------------------------------------------------------------
+
+  # %{person_id => similarity} for people semantically close to the goal.
+  # Returns an empty map whenever embeddings are unavailable so the lexical
+  # scorer remains the floor.
+  defp semantic_scores(user_id, %Goal{} = goal) do
+    with true <- PersonEmbeddings.embedding_storage_available?(),
+         {:ok, vector} <- Maraithon.LLM.Embeddings.embed(goal_text(goal), []) do
+      pgvector = Pgvector.new(vector)
+
+      %{rows: rows} =
+        Repo.query!(
+          """
+          SELECT id, 1 - (embedding <=> $1::vector) AS similarity
+          FROM crm_people
+          WHERE user_id = $2 AND status = 'active' AND embedding IS NOT NULL
+          ORDER BY embedding <=> $1::vector
+          LIMIT $3
+          """,
+          [pgvector, user_id, @semantic_limit]
+        )
+
+      rows
+      |> Enum.flat_map(fn [uuid_bin, similarity] ->
+        if is_number(similarity) and similarity >= @semantic_threshold do
+          {:ok, uuid} = Ecto.UUID.load(uuid_bin)
+          [{uuid, similarity}]
+        else
+          []
+        end
+      end)
+      |> Map.new()
+    else
+      false ->
+        %{}
+
+      {:error, reason} ->
+        Logger.debug("Goal semantic scoring unavailable", reason: inspect(reason))
+        %{}
+    end
+  rescue
+    error ->
+      Logger.warning("Goal semantic scoring failed",
+        goal_id: goal.id,
+        reason: Exception.message(error)
+      )
+
+      %{}
+  end
+
+  # Lift lexical candidates with their semantic similarity and add
+  # semantic-only candidates the term overlap missed entirely.
+  defp merge_semantic_candidates(lexical_candidates, people, semantic_by_person, goal) do
+    lexical_candidates = Enum.reject(lexical_candidates, &is_nil/1)
+
+    if semantic_by_person == %{} do
+      lexical_candidates
+    else
+      lexical_by_person = Map.new(lexical_candidates, &{&1.person.id, &1})
+      people_by_id = Map.new(people, &{&1.id, &1})
+
+      lifted =
+        Enum.map(lexical_candidates, fn candidate ->
+          case Map.get(semantic_by_person, candidate.person.id) do
+            similarity when is_number(similarity) ->
+              semantic_confidence = Float.round(similarity * @semantic_confidence_scale, 2)
+
+              if semantic_confidence > candidate.confidence do
+                %{candidate | confidence: semantic_confidence}
+              else
+                candidate
+              end
+
+            _ ->
+              candidate
+          end
+        end)
+
+      semantic_only =
+        semantic_by_person
+        |> Enum.reject(fn {person_id, _sim} -> Map.has_key?(lexical_by_person, person_id) end)
+        |> Enum.flat_map(fn {person_id, similarity} ->
+          case Map.get(people_by_id, person_id) do
+            nil ->
+              []
+
+            person ->
+              [
+                %{
+                  person: person,
+                  confidence: Float.round(similarity * @semantic_confidence_scale, 2),
+                  matched_terms: [],
+                  reason:
+                    "#{person.display_name} is semantically related to the goal \"#{goal.title}\"."
+                }
+              ]
+          end
+        end)
+
+      lifted ++ semantic_only
+    end
   end
 
   defp score_person(%Goal{} = goal, %Person{} = person, ambiguous_name_terms) do

@@ -71,6 +71,19 @@ defmodule Maraithon.Crm do
 
   def goal_people_opportunities(_user_id, _opts), do: []
 
+  @doc """
+  People the user is meeting in the next few weeks, resolved from the
+  calendar mirror. Delegates to
+  `Maraithon.Crm.UpcomingMeetings.people_meeting_soon/2`.
+  """
+  def meeting_soon(user_id, opts \\ [])
+
+  def meeting_soon(user_id, opts) when is_binary(user_id) do
+    Maraithon.Crm.UpcomingMeetings.people_meeting_soon(user_id, opts)
+  end
+
+  def meeting_soon(_user_id, _opts), do: []
+
   def people_for_resource(user_id, resource_type, resource_id, opts \\ [])
 
   def people_for_resource(user_id, resource_type, resource_id, opts)

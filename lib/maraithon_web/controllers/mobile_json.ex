@@ -153,18 +153,62 @@ defmodule MaraithonWeb.MobileJSON do
       relationship: person.relationship,
       communication_frequency: person.communication_frequency,
       interaction_count: person.interaction_count,
+      network_rank: person.network_rank || 0,
       relationship_health: RelationshipPresentation.health_level(person.relationship_strength),
       relationship_warmth: RelationshipPresentation.warmth_level(person.affinity_score),
       last_interaction_at: json_value(person.last_interaction_at),
       status: person.status,
       notes: person.notes,
       metadata: public_person_metadata(person.metadata || %{}),
+      enrichment: person_enrichment(person.metadata || %{}),
+      top_connections: person_top_connections(person.metadata || %{}),
       inserted_at: json_value(person.inserted_at),
       updated_at: json_value(person.updated_at)
     }
   end
 
   def public_person_metadata(metadata), do: PublicMetadata.person(metadata)
+
+  # Web enrichment is stored as a structured map; the generic metadata
+  # filter only passes scalars, so serialize the curated shape explicitly.
+  defp person_enrichment(metadata) do
+    case Map.get(metadata, "enrichment") do
+      %{} = enrichment ->
+        %{
+          sources:
+            enrichment
+            |> Map.get("sources", [])
+            |> Enum.map(fn source ->
+              %{
+                title: source["title"],
+                url: source["url"],
+                snippet: source["snippet"]
+              }
+            end),
+          page_excerpt: enrichment["page_excerpt"],
+          fetched_at: enrichment["fetched_at"]
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  defp person_top_connections(metadata) do
+    case get_in(metadata, ["graph_signals", "top_connections"]) do
+      connections when is_list(connections) ->
+        Enum.map(connections, fn connection ->
+          %{
+            person_id: connection["person_id"],
+            name: connection["name"],
+            weight: connection["weight"]
+          }
+        end)
+
+      _ ->
+        []
+    end
+  end
 
   @doc """
   Serializes a reconnect suggestion (from `Crm.reconnect_suggestions/2`):
@@ -180,6 +224,9 @@ defmodule MaraithonWeb.MobileJSON do
       days_since_last: suggestion[:days_since_last],
       cadence_days: suggestion[:cadence_days],
       communication_score: suggestion[:communication_score],
+      network_rank: suggestion[:network_rank] || 0,
+      next_meeting_at: suggestion[:next_meeting_at],
+      next_meeting_title: suggestion[:next_meeting_title],
       overdue: suggestion[:overdue] || false,
       open_work:
         suggestion

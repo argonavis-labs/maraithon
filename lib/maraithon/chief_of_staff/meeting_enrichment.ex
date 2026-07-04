@@ -810,12 +810,40 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       "preferred_communication_method" => read_string(person, "preferred_communication_method"),
       "communication_frequency" => read_string(person, "communication_frequency"),
       "notes" => read_string(person, "notes"),
-      "contact_details" => compact_contact_details(read_any(person, "contact_details"))
+      "contact_details" => compact_contact_details(read_any(person, "contact_details")),
+      "web_enrichment" => compact_enrichment(read_any(person, "metadata"))
     }
     |> compact_map()
   end
 
   defp compact_crm_person(_person), do: nil
+
+  # Durable public-web context stored by Maraithon.Crm.PersonEnrichment —
+  # gives the dossier public facts even for well-known contacts.
+  defp compact_enrichment(%{} = metadata) do
+    case Map.get(metadata, "enrichment") do
+      %{} = enrichment ->
+        %{
+          "snippets" =>
+            enrichment
+            |> Map.get("sources", [])
+            |> Enum.map(fn source ->
+              [source["title"], source["snippet"]]
+              |> Enum.reject(&is_nil/1)
+              |> Enum.join(" — ")
+            end)
+            |> Enum.reject(&(&1 == "")),
+          "page_excerpt" => enrichment["page_excerpt"],
+          "fetched_at" => enrichment["fetched_at"]
+        }
+        |> compact_map()
+
+      _ ->
+        nil
+    end
+  end
+
+  defp compact_enrichment(_metadata), do: nil
 
   defp compact_contact_details(details) when is_map(details) do
     details

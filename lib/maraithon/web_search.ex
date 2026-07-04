@@ -290,7 +290,8 @@ defmodule Maraithon.WebSearch do
     end)
   end
 
-  defp enabled?(opts) do
+  @doc "Whether public web search is enabled (config/opts gate)."
+  def enabled?(opts \\ []) do
     case Keyword.get(opts, :enabled, configured(:enabled, true)) do
       false -> false
       "false" -> false
