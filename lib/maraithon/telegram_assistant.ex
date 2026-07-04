@@ -9,6 +9,7 @@ defmodule Maraithon.TelegramAssistant do
   alias Maraithon.Repo
 
   alias Maraithon.TelegramAssistant.{
+    ActionFailureCopy,
     LivenessSession,
     LivenessSupervisor,
     BriefTodoReview,
@@ -898,6 +899,7 @@ defmodule Maraithon.TelegramAssistant do
                 })
 
               _ = maybe_record_todo_nudge(executed_action)
+              _ = maybe_record_calendar_block(executed_action, result)
 
               {:ok, executed_action, result}
 
@@ -984,6 +986,9 @@ defmodule Maraithon.TelegramAssistant do
   defp prepared_action_label("linear_update_issue_state"), do: "the Linear issue status update"
   defp prepared_action_label("notaui_complete_task"), do: "the Notaui task"
   defp prepared_action_label("notaui_update_task"), do: "the Notaui task update"
+  defp prepared_action_label("calendar_create_event"), do: "the calendar block"
+  defp prepared_action_label("calendar_update_event"), do: "the calendar block update"
+  defp prepared_action_label("calendar_cancel_event"), do: "the calendar block cancellation"
   defp prepared_action_label("agent_create"), do: "the agent creation"
   defp prepared_action_label("agent_update"), do: "the agent update"
   defp prepared_action_label("agent_delete"), do: "the agent removal"
@@ -1002,6 +1007,9 @@ defmodule Maraithon.TelegramAssistant do
 
   defp prepared_action_failure_label("notaui_complete_task"), do: "complete the Notaui task"
   defp prepared_action_failure_label("notaui_update_task"), do: "update the Notaui task"
+  defp prepared_action_failure_label("calendar_create_event"), do: "book the calendar block"
+  defp prepared_action_failure_label("calendar_update_event"), do: "update the calendar block"
+  defp prepared_action_failure_label("calendar_cancel_event"), do: "cancel the calendar block"
   defp prepared_action_failure_label("agent_create"), do: "create the automation"
   defp prepared_action_failure_label("agent_update"), do: "update the automation"
   defp prepared_action_failure_label("agent_delete"), do: "remove the automation"
@@ -1045,6 +1053,24 @@ defmodule Maraithon.TelegramAssistant do
 
   defp prepared_action_failure_detail_from_text(reason) do
     cond do
+      # SPEC 12 R6/R10: calendar time-blocking failure copy carries the
+      # concrete next step (reconnect link, new slot), so it must win over
+      # the generic google/reauth buckets below.
+      String.contains?(reason, "calendar_write_scope_required") ->
+        ActionFailureCopy.calendar_action("calendar_write_scope_required")
+
+      String.contains?(reason, "slot_no_longer_free") ->
+        ActionFailureCopy.calendar_action("slot_no_longer_free")
+
+      String.contains?(reason, "calendar_block_start_passed") ->
+        ActionFailureCopy.calendar_action("calendar_block_start_passed")
+
+      String.contains?(reason, "calendar_event_not_managed") ->
+        ActionFailureCopy.calendar_action("calendar_event_not_managed")
+
+      String.contains?(reason, "calendar_event_already_gone") ->
+        ActionFailureCopy.calendar_action("calendar_event_already_gone")
+
       String.contains?(reason, "confirmation_expired") ->
         "The confirmation expired before it could run."
 
@@ -1170,6 +1196,79 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp maybe_record_todo_nudge(_prepared_action), do: :ok
+
+  # SPEC 12 R9: parallel to `maybe_record_todo_nudge/1` — stamp calendar
+  # block bookkeeping onto the linked todo's metadata after a successful
+  # execute. `result` is the runner's normalized (string-keyed) tool result.
+  defp maybe_record_calendar_block(
+         %PreparedAction{action_type: "calendar_create_event", user_id: user_id, payload: payload},
+         result
+       ) do
+    with todo_id when is_binary(todo_id) <- read_string(payload || %{}, "todo_id"),
+         event_id when is_binary(event_id) <- calendar_result_event_id(result) do
+      _ =
+        Todos.record_calendar_block(user_id, todo_id, %{
+          "event_id" => event_id,
+          "calendar_id" => "primary",
+          "start_at" => read_string(payload || %{}, "start_at"),
+          "end_at" => read_string(payload || %{}, "end_at"),
+          "created_at" => DateTime.to_iso8601(DateTime.utc_now())
+        })
+
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  defp maybe_record_calendar_block(
+         %PreparedAction{action_type: "calendar_update_event", user_id: user_id, payload: payload},
+         _result
+       ) do
+    payload = payload || %{}
+
+    with todo_id when is_binary(todo_id) <- read_string(payload, "todo_id"),
+         event_id when is_binary(event_id) <- read_string(payload, "event_id") do
+      changes =
+        %{}
+        |> maybe_put_present("start_at", read_string(payload, "start_at"))
+        |> maybe_put_present("end_at", read_string(payload, "end_at"))
+
+      _ = Todos.update_calendar_block(user_id, todo_id, event_id, changes)
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  defp maybe_record_calendar_block(
+         %PreparedAction{action_type: "calendar_cancel_event", user_id: user_id, payload: payload},
+         _result
+       ) do
+    payload = payload || %{}
+
+    with todo_id when is_binary(todo_id) <- read_string(payload, "todo_id"),
+         event_id when is_binary(event_id) <- read_string(payload, "event_id") do
+      _ = Todos.clear_calendar_block(user_id, todo_id, event_id)
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  defp maybe_record_calendar_block(_prepared_action, _result), do: :ok
+
+  defp calendar_result_event_id(result) when is_map(result) do
+    case get_in(result, ["event", "event_id"]) do
+      event_id when is_binary(event_id) and event_id != "" -> event_id
+      _ -> nil
+    end
+  end
+
+  defp calendar_result_event_id(_result), do: nil
+
+  defp maybe_put_present(map, _key, nil), do: map
+  defp maybe_put_present(map, key, value), do: Map.put(map, key, value)
 
   defp close_or_nudge_todo(user_id, todo_id, %PreparedAction{
          action_type: action_type,

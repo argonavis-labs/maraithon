@@ -963,6 +963,93 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert prepared_action.payload["todo_id"] == todo.id
   end
 
+  # SPEC 12 R3: the calendar-block card names the day, local time range, and
+  # title — never raw ISO strings — and the target id stays nil at prepare
+  # time (no event exists until execute succeeds).
+  test "prepare_external_action calendar_create_event renders a concrete local-time preview" do
+    user_id = "toolbox-prepared-calendar-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(config,
+        telegram_full_chat_enabled: true,
+        telegram_assistant_write_tools_enabled: true
+      )
+    )
+
+    runtime_context = toolbox_run_context(user_id)
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "calendar_create_event",
+                 "payload" => %{
+                   "title" => "Hyatt prep",
+                   "start_at" => "2026-07-09T14:00:00Z",
+                   "end_at" => "2026-07-09T14:45:00Z",
+                   "timezone" => "America/New_York"
+                 }
+               },
+               runtime_context
+             )
+
+    # 14:00Z on 2026-07-09 (a Thursday) is 10:00 AM Eastern (DST offset -4).
+    assert result.preview_text ==
+             "Block 45 min Thursday Jul 9, 10:00-10:45 AM ET for \"Hyatt prep\"."
+
+    refute result.preview_text =~ "2026-07-09T14:00:00Z"
+
+    prepared_action = Repo.get!(PreparedAction, result.prepared_action_id)
+    assert prepared_action.action_type == "calendar_create_event"
+    assert prepared_action.target_type == "calendar_event"
+    assert prepared_action.target_id == nil
+    assert prepared_action.payload["timezone"] == "America/New_York"
+  end
+
+  # SPEC 12 R3: a model that calls calendar_create_event by name still only
+  # gets the confirmable card — nothing executes without confirmation.
+  test "calling calendar_create_event directly prepares a confirmable action instead of executing" do
+    user_id = "toolbox-calendar-direct-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(config,
+        telegram_full_chat_enabled: true,
+        telegram_assistant_write_tools_enabled: true
+      )
+    )
+
+    runtime_context = toolbox_run_context(user_id)
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "calendar_create_event",
+               %{
+                 "title" => "Hyatt prep",
+                 "start_at" => "2026-07-09T14:00:00Z",
+                 "end_at" => "2026-07-09T14:45:00Z",
+                 "timezone" => "America/New_York"
+               },
+               runtime_context
+             )
+
+    assert result.requires_confirmation == true
+    assert result.status == "awaiting_confirmation"
+
+    prepared_action = Repo.get!(PreparedAction, result.prepared_action_id)
+    assert prepared_action.status == "awaiting_confirmation"
+    assert prepared_action.action_type == "calendar_create_event"
+  end
+
   test "prepare_external_action does not override a todo_id the model already supplied" do
     user_id =
       "toolbox-prepared-todo-link-explicit-#{System.unique_integer([:positive])}@example.com"

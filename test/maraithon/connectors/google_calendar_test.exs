@@ -760,7 +760,405 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
     end
   end
 
+  # ============================================================================
+  # SPEC 12 — calendar time-blocking write path
+  # ============================================================================
+
+  describe "create_event/2 (SPEC 12)" do
+    setup do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google_calendar,
+        api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
+      )
+
+      user_id = "cal_create_user_#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens(user_id, "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["https://www.googleapis.com/auth/calendar.readonly"]
+        })
+
+      {:ok, bypass: bypass, user_id: user_id}
+    end
+
+    test "sends the client id, timeZone names, and ownership markers", %{
+      bypass: bypass,
+      user_id: user_id
+    } do
+      client_event_id = deterministic_client_id("prepared-action-1")
+      parent = self()
+
+      Bypass.expect_once(bypass, "POST", "/calendar/v3/calendars/primary/events", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = Jason.decode!(body)
+        send(parent, {:request_body, params})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => params["id"],
+            "summary" => params["summary"],
+            "status" => "confirmed",
+            "start" => params["start"],
+            "end" => params["end"],
+            "htmlLink" => "https://calendar.google.com/event/#{params["id"]}",
+            "organizer" => %{"email" => user_id},
+            "extendedProperties" => %{
+              "private" => params["extendedProperties"]["private"]
+            }
+          })
+        )
+      end)
+
+      assert {:ok, event} = GoogleCalendar.create_event(user_id, create_attrs(client_event_id))
+      assert event.event_id == client_event_id
+      assert event.private_properties["maraithon_managed"] == "true"
+      assert event.private_properties["maraithon_client_key"] == client_event_id
+
+      assert_receive {:request_body, params}
+      assert params["id"] == client_event_id
+      # R7: the client id is RFC2938 base32hex — lowercase a-v / 0-9 only.
+      assert Regex.match?(~r/^[a-v0-9]{5,1024}$/, params["id"])
+      # DST edge case: an explicit IANA zone name on both sides — never a
+      # hand-computed UTC offset.
+      assert params["start"]["timeZone"] == "America/New_York"
+      assert params["end"]["timeZone"] == "America/New_York"
+      assert params["extendedProperties"]["private"]["maraithon_todo_id"] == "todo-1"
+    end
+
+    test "derives the same client id from the same prepared action across calls", %{
+      bypass: bypass,
+      user_id: user_id
+    } do
+      client_event_id = deterministic_client_id("prepared-action-same")
+      assert client_event_id == deterministic_client_id("prepared-action-same")
+
+      parent = self()
+
+      Bypass.expect(bypass, "POST", "/calendar/v3/calendars/primary/events", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:sent_id, Jason.decode!(body)["id"]})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => client_event_id,
+            "summary" => "Hyatt prep",
+            "start" => %{"dateTime" => "2026-07-09T14:00:00Z"},
+            "end" => %{"dateTime" => "2026-07-09T14:45:00Z"},
+            "organizer" => %{"email" => user_id}
+          })
+        )
+      end)
+
+      assert {:ok, _} = GoogleCalendar.create_event(user_id, create_attrs(client_event_id))
+      assert {:ok, _} = GoogleCalendar.create_event(user_id, create_attrs(client_event_id))
+
+      assert_receive {:sent_id, first_id}
+      assert_receive {:sent_id, second_id}
+      assert first_id == client_event_id
+      assert second_id == client_event_id
+    end
+
+    test "recovers a 409 on the client id by fetching the existing event", %{
+      bypass: bypass,
+      user_id: user_id
+    } do
+      client_event_id = deterministic_client_id("prepared-action-409")
+
+      Bypass.expect_once(bypass, "POST", "/calendar/v3/calendars/primary/events", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          409,
+          Jason.encode!(%{"error" => %{"code" => 409, "message" => "The requested identifier already exists."}})
+        )
+      end)
+
+      Bypass.expect_once(
+        bypass,
+        "GET",
+        "/calendar/v3/calendars/primary/events/#{client_event_id}",
+        fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(
+            200,
+            Jason.encode!(%{
+              "id" => client_event_id,
+              "summary" => "Hyatt prep",
+              "start" => %{"dateTime" => "2026-07-09T14:00:00Z"},
+              "end" => %{"dateTime" => "2026-07-09T14:45:00Z"},
+              "organizer" => %{"email" => user_id},
+              "extendedProperties" => %{
+                "private" => %{
+                  "maraithon_managed" => "true",
+                  "maraithon_client_key" => client_event_id
+                }
+              }
+            })
+          )
+        end
+      )
+
+      assert {:ok, event} = GoogleCalendar.create_event(user_id, create_attrs(client_event_id))
+      assert event.event_id == client_event_id
+    end
+
+    test "409 recovery fails when the ownership marker does not match", %{
+      bypass: bypass,
+      user_id: user_id
+    } do
+      client_event_id = deterministic_client_id("prepared-action-collision")
+
+      Bypass.expect_once(bypass, "POST", "/calendar/v3/calendars/primary/events", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(409, Jason.encode!(%{"error" => %{"code" => 409}}))
+      end)
+
+      Bypass.expect_once(
+        bypass,
+        "GET",
+        "/calendar/v3/calendars/primary/events/#{client_event_id}",
+        fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(
+            200,
+            Jason.encode!(%{
+              "id" => client_event_id,
+              "summary" => "Someone else's event",
+              "start" => %{"dateTime" => "2026-07-09T14:00:00Z"},
+              "end" => %{"dateTime" => "2026-07-09T14:45:00Z"},
+              "organizer" => %{"email" => user_id}
+            })
+          )
+        end
+      )
+
+      assert {:error, :calendar_event_id_conflict} =
+               GoogleCalendar.create_event(user_id, create_attrs(client_event_id))
+    end
+
+    test "translates an insufficient-scope 403 to :calendar_write_scope_required", %{
+      bypass: bypass,
+      user_id: user_id
+    } do
+      Bypass.expect_once(bypass, "POST", "/calendar/v3/calendars/primary/events", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          403,
+          Jason.encode!(%{
+            "error" => %{
+              "code" => 403,
+              "message" => "Request had insufficient authentication scopes.",
+              "status" => "PERMISSION_DENIED",
+              "details" => [%{"reason" => "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]
+            }
+          })
+        )
+      end)
+
+      assert {:error, :calendar_write_scope_required} =
+               GoogleCalendar.create_event(
+                 user_id,
+                 create_attrs(deterministic_client_id("prepared-action-403"))
+               )
+    end
+
+    test "passes a non-scope 403 through unchanged", %{bypass: bypass, user_id: user_id} do
+      Bypass.expect_once(bypass, "POST", "/calendar/v3/calendars/primary/events", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          403,
+          Jason.encode!(%{"error" => %{"code" => 403, "message" => "Rate limit exceeded."}})
+        )
+      end)
+
+      assert {:error, {:http_status, 403, _body}} =
+               GoogleCalendar.create_event(
+                 user_id,
+                 create_attrs(deterministic_client_id("prepared-action-403-other"))
+               )
+    end
+
+    # DST-boundary: two dates straddling the US spring-forward transition
+    # (2026-03-08) both carry the IANA timeZone name — Google resolves DST
+    # from the zone, so there is no hand-computed offset to drift.
+    test "sends the IANA timeZone for dates on both sides of a DST transition", %{
+      bypass: bypass,
+      user_id: user_id
+    } do
+      parent = self()
+
+      Bypass.expect(bypass, "POST", "/calendar/v3/calendars/primary/events", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = Jason.decode!(body)
+        send(parent, {:dst_body, params})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => params["id"],
+            "summary" => params["summary"],
+            "start" => params["start"],
+            "end" => params["end"],
+            "organizer" => %{"email" => user_id}
+          })
+        )
+      end)
+
+      before_dst =
+        create_attrs(deterministic_client_id("dst-before"))
+        |> Map.merge(%{start: "2026-03-06T15:00:00Z", end: "2026-03-06T15:45:00Z"})
+
+      after_dst =
+        create_attrs(deterministic_client_id("dst-after"))
+        |> Map.merge(%{start: "2026-03-09T14:00:00Z", end: "2026-03-09T14:45:00Z"})
+
+      assert {:ok, _} = GoogleCalendar.create_event(user_id, before_dst)
+      assert {:ok, _} = GoogleCalendar.create_event(user_id, after_dst)
+
+      assert_receive {:dst_body, first}
+      assert_receive {:dst_body, second}
+
+      for body <- [first, second] do
+        assert body["start"]["timeZone"] == "America/New_York"
+        assert body["end"]["timeZone"] == "America/New_York"
+        refute Map.has_key?(body["start"], "offset")
+      end
+
+      assert first["start"]["dateTime"] == "2026-03-06T15:00:00Z"
+      assert second["start"]["dateTime"] == "2026-03-09T14:00:00Z"
+    end
+  end
+
+  describe "delete_event/2 (SPEC 12)" do
+    setup do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google_calendar,
+        api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
+      )
+
+      user_id = "cal_delete_user_#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens(user_id, "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600
+        })
+
+      {:ok, bypass: bypass, user_id: user_id}
+    end
+
+    test "treats an already-deleted event (410) as a successful no-op", %{
+      bypass: bypass,
+      user_id: user_id
+    } do
+      Bypass.expect_once(
+        bypass,
+        "DELETE",
+        "/calendar/v3/calendars/primary/events/gone-event",
+        fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(410, Jason.encode!(%{"error" => %{"code" => 410}}))
+        end
+      )
+
+      assert {:ok, :already_gone} = GoogleCalendar.delete_event(user_id, "gone-event")
+    end
+  end
+
+  describe "events_in_window/3 (SPEC 12 R10)" do
+    test "fetches events overlapping the window with a fresh read", %{} do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google_calendar,
+        api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
+      )
+
+      user_id = "cal_window_user_#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens(user_id, "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600
+        })
+
+      Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
+        query = URI.decode_query(conn.query_string)
+        assert query["timeMin"] == "2026-07-09T14:00:00Z"
+        assert query["timeMax"] == "2026-07-09T14:45:00Z"
+        assert query["singleEvents"] == "true"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "items" => [
+              %{
+                "id" => "overlapping-event",
+                "summary" => "Landed meeting",
+                "start" => %{"dateTime" => "2026-07-09T14:15:00Z"},
+                "end" => %{"dateTime" => "2026-07-09T14:30:00Z"},
+                "organizer" => %{"email" => user_id}
+              }
+            ]
+          })
+        )
+      end)
+
+      assert {:ok, [event]} =
+               GoogleCalendar.events_in_window(
+                 user_id,
+                 "2026-07-09T14:00:00Z",
+                 "2026-07-09T14:45:00Z"
+               )
+
+      assert event.event_id == "overlapping-event"
+    end
+  end
+
   # Helper functions
+
+  defp create_attrs(client_event_id) do
+    %{
+      client_event_id: client_event_id,
+      summary: "Hyatt prep",
+      description: "Prep block",
+      start: "2026-07-09T14:00:00Z",
+      end: "2026-07-09T14:45:00Z",
+      timezone: "America/New_York",
+      extended_private_properties: %{
+        "maraithon_managed" => "true",
+        "maraithon_todo_id" => "todo-1",
+        "maraithon_client_key" => client_event_id
+      }
+    }
+  end
+
+  defp deterministic_client_id(prepared_action_id) do
+    :crypto.hash(:sha256, "calendar_create_event:" <> prepared_action_id)
+    |> Base.hex_encode32(case: :lower, padding: false)
+  end
 
   defp build_conn_with_headers(headers) do
     conn = %Plug.Conn{req_headers: []}

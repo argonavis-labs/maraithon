@@ -27,6 +27,9 @@ defmodule Maraithon.Capabilities do
     "gmail_filters" => Maraithon.Tools.GmailFilters,
     "google_contacts_search" => Maraithon.Tools.GoogleContactsSearch,
     "google_calendar_list_events" => Maraithon.Tools.GoogleCalendarListEvents,
+    "calendar_create_event" => Maraithon.Tools.CalendarCreateEvent,
+    "calendar_update_event" => Maraithon.Tools.CalendarUpdateEvent,
+    "calendar_cancel_event" => Maraithon.Tools.CalendarCancelEvent,
     "review_connected_context" => Maraithon.Tools.ReviewConnectedContext,
     "list_connected_accounts" => Maraithon.Tools.ListConnectedAccounts,
     "get_open_loops" => Maraithon.Tools.GetOpenLoops,
@@ -128,6 +131,12 @@ defmodule Maraithon.Capabilities do
     "gmail_filters" => "List, get, create, and delete Gmail filters.",
     "google_contacts_search" => "Search connected Google Contacts.",
     "google_calendar_list_events" => "List Google Calendar events.",
+    "calendar_create_event" =>
+      "Create a Maraithon-managed time block on the user's primary Google Calendar. Runs only through the prepared-action confirm pipeline; requires the calendar_write OAuth scope.",
+    "calendar_update_event" =>
+      "Update a Maraithon-created calendar time block (move or retitle). Verifies Maraithon's ownership markers before touching the event; runs only through the prepared-action confirm pipeline.",
+    "calendar_cancel_event" =>
+      "Cancel a Maraithon-created calendar time block. Verifies Maraithon's ownership markers before deleting; an already-deleted event is a successful no-op.",
     "review_connected_context" =>
       "Review connected People records, Gmail, contacts, calendar, Slack, open loops, memory, and Mac companion app sources like iMessage, Apple Notes, Reminders, files, browser history, and voice memos for source-grounded context.",
     "list_connected_accounts" =>
@@ -281,12 +290,14 @@ defmodule Maraithon.Capabilities do
   @destructive_tools MapSet.new(~w(
     delete_person delete_todo resolve_todo forget_memory gmail_batch_modify gmail_filters gmail_labels
     gmail_drafts notaui_complete_task notaui_update_task notion_update_page notion_blocks
+    calendar_cancel_event
   ))
 
   @external_send_tools MapSet.new(~w(
     gmail_send_message github_create_issue_comment slack_post_message
     linear_create_comment linear_create_issue linear_update_issue linear_update_issue_state
     linear_update_issue notion_create_page
+    calendar_create_event calendar_update_event
   ))
 
   @write_tools MapSet.new(~w(
@@ -401,10 +412,16 @@ defmodule Maraithon.Capabilities do
       type: "connector",
       display_name: "Google Calendar",
       provider: "google",
-      oauth_scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
+      oauth_scopes: [
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events"
+      ],
       account_status_labels: @default_status_labels,
       event_types: ["calendar.event", "calendar.sync"],
-      tool_names: ~w(google_calendar_list_events)
+      tool_names: ~w(
+        google_calendar_list_events calendar_create_event calendar_update_event
+        calendar_cancel_event
+      )
     },
     "google_contacts" => %{
       id: "google_contacts",
@@ -928,6 +945,9 @@ defmodule Maraithon.Capabilities do
       "notaui_complete_task" -> ~w(update complete)
       "notaui_update_task" -> ~w(update patch)
       "notion_create_page" -> ~w(create)
+      "calendar_create_event" -> ~w(create)
+      "calendar_update_event" -> ~w(update patch)
+      "calendar_cancel_event" -> ~w(delete)
       "notion_update_page" -> ~w(update delete archive)
       "notion_blocks" -> ~w(read list create update delete archive)
       _ -> default_operation_tags(name)

@@ -98,6 +98,22 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     "notaui_update_task" => %{
       tool: "notaui_update_task",
       target_type: "task"
+    },
+    # SPEC 12: calendar time-block writes. Confirmable-only — the model
+    # proposes them via `prepare_external_action`; the runner executes the
+    # matching calendar_* tool after explicit user confirmation (create adds
+    # a fresh double-booking recheck and an idempotent client event id).
+    "calendar_create_event" => %{
+      tool: "calendar_create_event",
+      target_type: "calendar_event"
+    },
+    "calendar_update_event" => %{
+      tool: "calendar_update_event",
+      target_type: "calendar_event"
+    },
+    "calendar_cancel_event" => %{
+      tool: "calendar_cancel_event",
+      target_type: "calendar_event"
     }
   }
 
@@ -129,6 +145,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     prepare_external_action query_agent create_scheduled_task pause_scheduled_task
     cancel_scheduled_task gmail_drafts draft_message create_goal update_goal
     record_goal_progress link_goal_resource review_goal_alignment
+    calendar_create_event
   ))
 
   def tool_definitions(_context) do
@@ -1213,13 +1230,42 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "prepare_external_action",
-        "Prepare a Gmail, saved Gmail draft, Slack, Linear, or Notaui write action for confirmation.",
+        "Prepare a Gmail, saved Gmail draft, Slack, Linear, Notaui, or Google Calendar time-block write action for confirmation. Calendar action types: \"calendar_create_event\" (payload: title, start_at, end_at, timezone, optional todo_id/description), \"calendar_update_event\" and \"calendar_cancel_event\" (payload: event_id from the todo's metadata.calendar_block, optional todo_id) — Maraithon only ever updates or cancels calendar events it created itself.",
         %{
           "type" => "object",
           "required" => ["action_type", "payload"],
           "properties" => %{
             "action_type" => %{"type" => "string"},
             "payload" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
+        "calendar_create_event",
+        "Book a Maraithon-managed time block on the user's primary Google Calendar for a work item that has a deadline and a genuinely free slot. NEVER executed directly: propose it only via prepare_external_action with action_type:\"calendar_create_event\" (calling this tool by name just prepares that confirmable card). Ground start_at/end_at in a free block the runtime computed (get_today_focus next_free_block or calendar openings) or in fresh calendar reads — never fabricate free time, and never claim the event exists until the user confirms and execution succeeds.",
+        %{
+          "type" => "object",
+          "required" => ["title", "start_at", "end_at", "timezone"],
+          "properties" => %{
+            "title" => %{"type" => "string"},
+            "start_at" => %{
+              "type" => "string",
+              "description" => "Proposed block start as an ISO-8601 datetime."
+            },
+            "end_at" => %{
+              "type" => "string",
+              "description" => "Proposed block end as an ISO-8601 datetime."
+            },
+            "timezone" => %{
+              "type" => "string",
+              "description" => "IANA timezone name, e.g. \"America/New_York\"."
+            },
+            "todo_id" => %{
+              "type" => "string",
+              "description" =>
+                "Optional saved work item id to link the block to for lifecycle tracking."
+            },
+            "description" => %{"type" => "string"}
           }
         }
       ),
@@ -1753,6 +1799,16 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "prepare_external_action" ->
         prepare_external_action(runtime_context, args)
+
+      # SPEC 12 R3: calendar_create_event is never directly executable. A
+      # model that calls it by name still only gets the confirmable
+      # prepared-action card — the event is created solely by the runner
+      # after explicit user confirmation.
+      "calendar_create_event" ->
+        prepare_external_action(runtime_context, %{
+          "action_type" => "calendar_create_event",
+          "payload" => args
+        })
 
       "query_agent" ->
         query_agent(runtime_context, args)
@@ -3834,8 +3890,73 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     "Update #{notaui_task_label(payload)}."
   end
 
+  # SPEC 12 R3: concrete human preview — duration + local day/time range,
+  # never raw ISO strings.
+  defp external_action_preview("calendar_create_event", payload) do
+    title = preview_value(payload, ["title"], "this work")
+
+    case calendar_block_range_label(payload) do
+      {minutes, range_label} ->
+        "Block #{minutes} min #{range_label} for \"#{title}\"."
+
+      nil ->
+        "Block calendar time for \"#{title}\"."
+    end
+  end
+
+  defp external_action_preview("calendar_update_event", payload) do
+    title = preview_value(payload, ["title"], nil)
+    label = if title, do: " for \"#{title}\"", else: ""
+
+    case calendar_block_range_label(payload) do
+      {_minutes, range_label} ->
+        "Move the Maraithon calendar block#{label} to #{range_label}."
+
+      nil ->
+        "Update the Maraithon calendar block#{label}."
+    end
+  end
+
+  defp external_action_preview("calendar_cancel_event", payload) do
+    case preview_value(payload, ["title"], nil) do
+      nil -> "Cancel the Maraithon calendar block."
+      title -> "Cancel the Maraithon calendar block for \"#{title}\"."
+    end
+  end
+
   defp external_action_preview(_action_type, _payload),
     do: "Prepare the requested external action."
+
+  # "Thursday Jul 9, 10:00-10:45 AM ET" — local wall-clock computed with the
+  # per-date DST-aware offset (`Timezones.offset_at/3`), never "now"'s offset
+  # applied to a different date, and displayed via the shared
+  # `FreeBlocks.display_clock_range/4` formatting.
+  defp calendar_block_range_label(payload) when is_map(payload) do
+    with start_raw when is_binary(start_raw) <- Map.get(payload, "start_at"),
+         end_raw when is_binary(end_raw) <- Map.get(payload, "end_at"),
+         {:ok, start_at, start_offset_seconds} <- DateTime.from_iso8601(start_raw),
+         {:ok, end_at, _} <- DateTime.from_iso8601(end_raw),
+         :lt <- DateTime.compare(start_at, end_at) do
+      timezone = Map.get(payload, "timezone")
+      fallback_offset = div(start_offset_seconds, 3600)
+      offset = Maraithon.Timezones.offset_at(timezone, start_at, fallback_offset)
+      timezone_label = Maraithon.Timezones.label(timezone, offset)
+
+      minutes = end_at |> DateTime.diff(start_at, :second) |> div(60)
+      range = FreeBlocks.display_clock_range(start_at, end_at, offset, timezone_label)
+
+      day_label =
+        start_at
+        |> DateTime.add(offset, :hour)
+        |> Calendar.strftime("%A %b %-d")
+
+      {minutes, "#{day_label}, #{range}"}
+    else
+      _ -> nil
+    end
+  end
+
+  defp calendar_block_range_label(_payload), do: nil
 
   defp preview_value(payload, keys, fallback) do
     Enum.find_value(keys, fn key ->
@@ -3984,6 +4105,14 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     Map.get(payload, "draft_id") || Map.get(payload, "thread_id") || Map.get(payload, "channel") ||
       Map.get(payload, "task_id")
   end
+
+  # SPEC 12 R3: no event exists yet at prepare time — the Google event id is
+  # only known after execute. Never invent a placeholder.
+  defp external_target_id("calendar_create_event", _payload), do: nil
+
+  defp external_target_id(action_type, payload)
+       when action_type in ["calendar_update_event", "calendar_cancel_event"],
+       do: Map.get(payload, "event_id")
 
   defp external_target_id(_action_type, payload),
     do: Map.get(payload, "issue_id") || Map.get(payload, "state_id")

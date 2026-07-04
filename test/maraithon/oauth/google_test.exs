@@ -25,6 +25,27 @@ defmodule Maraithon.OAuth.GoogleTest do
       assert scopes == ["https://www.googleapis.com/auth/calendar.readonly"]
     end
 
+    # SPEC 12 R1: `calendar_write` requests the readonly scope AND the
+    # narrow event-write scope together, so a write reconnect keeps read
+    # access; the plain `calendar` service stays readonly-only and the broad
+    # `.../auth/calendar` scope is never requested.
+    test "returns readonly plus events scope for calendar_write" do
+      scopes = Google.scopes_for(["calendar_write"])
+
+      assert scopes == [
+               "https://www.googleapis.com/auth/calendar.readonly",
+               "https://www.googleapis.com/auth/calendar.events"
+             ]
+
+      refute "https://www.googleapis.com/auth/calendar" in scopes
+    end
+
+    test "calendar service remains readonly-only after calendar_write exists" do
+      assert Google.scopes_for(["calendar"]) == [
+               "https://www.googleapis.com/auth/calendar.readonly"
+             ]
+    end
+
     test "returns gmail scope" do
       scopes = Google.scopes_for(["gmail"])
 

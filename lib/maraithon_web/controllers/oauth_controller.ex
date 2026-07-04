@@ -18,7 +18,7 @@ defmodule MaraithonWeb.OAuthController do
 
   @oauth_state_salt "oauth_state"
   @oauth_state_max_age_seconds 600
-  @google_supported_services ["calendar", "gmail", "contacts"]
+  @google_supported_services ["calendar", "calendar_write", "gmail", "contacts"]
 
   @doc """
   Initiates Google OAuth flow.
@@ -822,6 +822,13 @@ defmodule MaraithonWeb.OAuthController do
             end
 
           "contacts" ->
+            %{status: "connected"}
+
+          # SPEC 12: `calendar_write` grants the events-write scope; the watch
+          # itself is set up under the derived `"calendar"` service (the write
+          # scope always ships alongside the readonly scope, so
+          # `google_services_from_scopes/1` adds `"calendar"` too).
+          "calendar_write" ->
             %{status: "connected"}
 
           _ ->

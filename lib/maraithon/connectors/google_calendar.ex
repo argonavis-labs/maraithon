@@ -313,6 +313,317 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   end
 
   # ===========================================================================
+  # Event Writes (SPEC 12 — calendar time-blocking)
+  # ===========================================================================
+
+  @doc """
+  Creates an event on the user's primary calendar (SPEC 12 R2).
+
+  `event_attrs` keys:
+
+    * `:summary` (required string)
+    * `:description` (optional string)
+    * `:start` / `:end` (required, `%DateTime{}` or ISO-8601 string)
+    * `:timezone` (required IANA name, e.g. `"America/New_York"` — passed as
+      the `timeZone` of both `start` and `end` so Google resolves DST, never
+      a hand-computed UTC offset)
+    * `:client_event_id` (required, RFC2938 base32hex id derived from the
+      prepared action, SPEC 12 R7 — makes retried creates idempotent)
+    * `:extended_private_properties` (map, SPEC 12 R8 ownership markers)
+
+  A `409` on the client-generated id means a prior attempt actually created
+  the event and the response was lost: the event is fetched back and returned
+  as success when its `maraithon_client_key` marker matches (R7).
+
+  A `403` carrying Google's insufficient-scope signature returns the distinct
+  `{:error, :calendar_write_scope_required}` so callers surface a reconnect
+  prompt instead of flowing into the generic connector-health path (R6) —
+  never call `ConnectedAccounts.mark_error/3` / `report_access_issue/3` for
+  this error, since the account's read/sync/watch path is still healthy.
+  """
+  def create_event(user_id, event_attrs) when is_map(event_attrs) do
+    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google"),
+         {:ok, client_event_id} <- fetch_client_event_id(event_attrs),
+         {:ok, start_iso} <- event_time_iso(read_attr(event_attrs, :start)),
+         {:ok, end_iso} <- event_time_iso(read_attr(event_attrs, :end)),
+         {:ok, timezone} <- fetch_timezone(event_attrs) do
+      body =
+        %{
+          id: client_event_id,
+          summary: read_attr(event_attrs, :summary),
+          start: %{dateTime: start_iso, timeZone: timezone},
+          end: %{dateTime: end_iso, timeZone: timezone},
+          extendedProperties: %{
+            private: read_attr(event_attrs, :extended_private_properties) || %{}
+          }
+        }
+        |> maybe_put_description(read_attr(event_attrs, :description))
+
+      url = "#{api_base_url()}/calendars/primary/events"
+
+      case Google.api_request(:post, url, token, body) do
+        {:ok, response} when is_map(response) ->
+          {:ok, parse_event_detail(response)}
+
+        {:error, {:http_status, 403, response_body}} = error ->
+          if insufficient_scope_body?(response_body) do
+            {:error, :calendar_write_scope_required}
+          else
+            # A non-scope 403 (revoked token etc.) keeps the generic shape so
+            # the existing connector error handling still applies.
+            error
+          end
+
+        {:error, {:http_status, 409, _body}} ->
+          recover_existing_event(user_id, client_event_id)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Fetches one event from the primary calendar, including its
+  `extendedProperties.private` map (as `:private_properties`) so callers can
+  verify the SPEC 12 R8 ownership markers before any update/delete.
+
+  Returns `{:error, :event_gone}` on 404/410.
+  """
+  def get_event(user_id, event_id) when is_binary(event_id) and event_id != "" do
+    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google") do
+      url = "#{api_base_url()}/calendars/primary/events/#{URI.encode(event_id)}"
+
+      case Google.api_request(:get, url, token) do
+        {:ok, response} when is_map(response) ->
+          {:ok, parse_event_detail(response)}
+
+        {:error, {:http_status, status, _body}} when status in [404, 410] ->
+          {:error, :event_gone}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  def get_event(_user_id, _event_id), do: {:error, :missing_event_id}
+
+  @doc """
+  Patches an event on the primary calendar (SPEC 12 R9). Callers MUST have
+  verified the R8 ownership markers via `get_event/2` first — this function
+  is transport only. Datetime changes carry the explicit IANA `timeZone`.
+
+  Returns `{:error, :event_gone}` on 404/410 (event since deleted by the
+  user — callers degrade to "propose a fresh block", never a crash).
+  """
+  def update_event(user_id, event_id, event_attrs)
+      when is_binary(event_id) and event_id != "" and is_map(event_attrs) do
+    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google"),
+         {:ok, body} <- update_event_body(event_attrs) do
+      url = "#{api_base_url()}/calendars/primary/events/#{URI.encode(event_id)}"
+
+      case Google.api_request(:patch, url, token, body) do
+        {:ok, response} when is_map(response) ->
+          {:ok, parse_event_detail(response)}
+
+        {:error, {:http_status, 403, response_body}} = error ->
+          if insufficient_scope_body?(response_body) do
+            {:error, :calendar_write_scope_required}
+          else
+            error
+          end
+
+        {:error, {:http_status, status, _body}} when status in [404, 410] ->
+          {:error, :event_gone}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Deletes an event from the primary calendar (SPEC 12 R9). Callers MUST have
+  verified the R8 ownership markers via `get_event/2` first.
+
+  Idempotent: a 404/410 (already deleted) returns `{:ok, :already_gone}` —
+  a second delete of an already-deleted event is success, not error.
+  """
+  def delete_event(user_id, event_id) when is_binary(event_id) and event_id != "" do
+    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google") do
+      url = "#{api_base_url()}/calendars/primary/events/#{URI.encode(event_id)}"
+
+      case Google.api_request(:delete, url, token) do
+        {:ok, _response} ->
+          {:ok, :deleted}
+
+        {:error, {:http_status, status, _body}} when status in [404, 410] ->
+          {:ok, :already_gone}
+
+        {:error, {:http_status, 403, response_body}} = error ->
+          if insufficient_scope_body?(response_body) do
+            {:error, :calendar_write_scope_required}
+          else
+            error
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Fresh read of events overlapping `[time_min, time_max]` on the primary
+  calendar (SPEC 12 R10 double-booking recheck). Google's `timeMin`/`timeMax`
+  bounds are exclusive against event end/start respectively, so this returns
+  exactly the events that genuinely overlap the window.
+  """
+  def events_in_window(user_id, time_min, time_max) do
+    with {:ok, token} <- OAuth.get_valid_access_token(user_id, "google"),
+         {:ok, time_min_iso} <- event_time_iso(time_min),
+         {:ok, time_max_iso} <- event_time_iso(time_max) do
+      params =
+        URI.encode_query(%{
+          timeMin: time_min_iso,
+          timeMax: time_max_iso,
+          singleEvents: true,
+          maxResults: 50,
+          orderBy: "startTime"
+        })
+
+      url = "#{api_base_url()}/calendars/primary/events?#{params}"
+
+      case Google.api_request(:get, url, token) do
+        {:ok, response} -> {:ok, parse_events(response["items"] || [])}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  # 409 on the client-generated id: the event already exists from a prior
+  # attempt whose response was lost. Fetch it back and treat as success only
+  # when the R8 `maraithon_client_key` marker proves it is this action's
+  # event (defense against a hash collision with an unrelated event).
+  defp recover_existing_event(user_id, client_event_id) do
+    case get_event(user_id, client_event_id) do
+      {:ok, event} ->
+        if Map.get(event.private_properties || %{}, "maraithon_client_key") == client_event_id do
+          {:ok, event}
+        else
+          {:error, :calendar_event_id_conflict}
+        end
+
+      {:error, :event_gone} ->
+        {:error, :calendar_event_id_conflict}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_client_event_id(event_attrs) do
+    case read_attr(event_attrs, :client_event_id) do
+      value when is_binary(value) ->
+        if Regex.match?(~r/^[a-v0-9]{5,1024}$/, value) do
+          {:ok, value}
+        else
+          {:error, :invalid_client_event_id}
+        end
+
+      _ ->
+        {:error, :missing_client_event_id}
+    end
+  end
+
+  defp fetch_timezone(event_attrs) do
+    case read_attr(event_attrs, :timezone) do
+      value when is_binary(value) and value != "" -> {:ok, value}
+      _ -> {:error, :missing_timezone}
+    end
+  end
+
+  defp event_time_iso(%DateTime{} = datetime), do: {:ok, DateTime.to_iso8601(datetime)}
+
+  defp event_time_iso(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, _datetime, _offset} -> {:ok, value}
+      _ -> {:error, :invalid_event_time}
+    end
+  end
+
+  defp event_time_iso(_value), do: {:error, :invalid_event_time}
+
+  defp maybe_put_description(body, description)
+       when is_binary(description) and description != "",
+       do: Map.put(body, :description, description)
+
+  defp maybe_put_description(body, _description), do: body
+
+  defp update_event_body(event_attrs) do
+    base =
+      case read_attr(event_attrs, :summary) do
+        summary when is_binary(summary) and summary != "" -> %{summary: summary}
+        _ -> %{}
+      end
+
+    base = maybe_put_description(base, read_attr(event_attrs, :description))
+
+    case {read_attr(event_attrs, :start), read_attr(event_attrs, :end)} do
+      {nil, nil} ->
+        if base == %{}, do: {:error, :empty_event_update}, else: {:ok, base}
+
+      {start_value, end_value} ->
+        with {:ok, timezone} <- fetch_timezone(event_attrs),
+             {:ok, start_iso} <- event_time_iso(start_value),
+             {:ok, end_iso} <- event_time_iso(end_value) do
+          {:ok,
+           Map.merge(base, %{
+             start: %{dateTime: start_iso, timeZone: timezone},
+             end: %{dateTime: end_iso, timeZone: timezone}
+           })}
+        end
+    end
+  end
+
+  # Google phrases the insufficient-scope 403 several ways depending on API
+  # surface ("insufficient authentication scopes",
+  # reason: "insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT").
+  # Match any of them case-insensitively rather than an exact body match.
+  defp insufficient_scope_body?(body) when is_binary(body) do
+    normalized = String.downcase(body)
+
+    String.contains?(normalized, "insufficient authentication scopes") or
+      String.contains?(normalized, "insufficientpermissions") or
+      String.contains?(normalized, "access_token_scope_insufficient") or
+      String.contains?(normalized, "insufficient_scope")
+  end
+
+  defp insufficient_scope_body?(body) when is_map(body) do
+    case Jason.encode(body) do
+      {:ok, encoded} -> insufficient_scope_body?(encoded)
+      _ -> false
+    end
+  end
+
+  defp insufficient_scope_body?(_body), do: false
+
+  defp parse_event_detail(item) when is_map(item) do
+    [parsed] = parse_events([item])
+
+    Map.put(
+      parsed,
+      :private_properties,
+      get_in(item, ["extendedProperties", "private"]) || %{}
+    )
+  end
+
+  defp read_attr(attrs, key) when is_map(attrs) and is_atom(key) do
+    Map.get(attrs, key, Map.get(attrs, Atom.to_string(key)))
+  end
+
+  # ===========================================================================
   # Private Functions
   # ===========================================================================
 

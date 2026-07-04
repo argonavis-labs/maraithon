@@ -14,6 +14,8 @@ defmodule Maraithon.OAuth.Google do
   ## Supported Scopes
 
   - Calendar: `https://www.googleapis.com/auth/calendar.readonly`
+  - Calendar write (SPEC 12): adds `https://www.googleapis.com/auth/calendar.events`
+    (event create/update/delete only — never the broad `.../auth/calendar` scope)
   - Gmail: read, modify, send, compose, and basic settings scopes
   - Contacts: `https://www.googleapis.com/auth/contacts.readonly`
   """
@@ -26,6 +28,7 @@ defmodule Maraithon.OAuth.Google do
   @default_userinfo_url "https://www.googleapis.com/oauth2/v3/userinfo"
 
   @scope_calendar "https://www.googleapis.com/auth/calendar.readonly"
+  @scope_calendar_events "https://www.googleapis.com/auth/calendar.events"
   @scope_gmail_readonly "https://www.googleapis.com/auth/gmail.readonly"
   @scope_gmail_modify "https://www.googleapis.com/auth/gmail.modify"
   @scope_gmail_send "https://www.googleapis.com/auth/gmail.send"
@@ -59,6 +62,10 @@ defmodule Maraithon.OAuth.Google do
   end
 
   defp scope_for("calendar"), do: [@scope_calendar]
+
+  # SPEC 12: event-write access is additive — a `calendar_write` connect keeps
+  # read access rather than replacing the readonly `"calendar"` service scope.
+  defp scope_for("calendar_write"), do: [@scope_calendar, @scope_calendar_events]
 
   defp scope_for("gmail"), do: [@scope_gmail_readonly]
 
