@@ -230,8 +230,9 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
     assert_received {:apns_send, _url, payload}
     refute_received {:telegram_send, _count, _chat, _text, _opts}
 
-    # HTML stripped for the push, brief deep-links to the Today tab.
-    assert payload["aps"]["alert"]["body"] =~ "Morning brief"
+    # A brief's push carries the summary (why_now), not the full rendered
+    # text, and deep-links to the Today tab where the app renders it.
+    assert payload["aps"]["alert"]["body"] == "test"
     refute payload["aps"]["alert"]["body"] =~ "<b>"
     assert payload["deeplink"] == "maraithon://today"
 
@@ -248,6 +249,8 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
              PushBroker.deliver(candidate(user_id, nil, "Insight body", %{origin_type: "insight"}))
 
     assert_received {:apns_send, _url, payload}
+    # Non-brief origins keep their (short) body as the push body.
+    assert payload["aps"]["alert"]["body"] == "Insight body"
     assert payload["deeplink"] == "maraithon://stream"
   end
 

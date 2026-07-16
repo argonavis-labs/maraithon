@@ -236,7 +236,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   defp send_candidate_mobile(candidate) do
     attrs = %{
       title: candidate.title || push_fallback_title(candidate.origin_type),
-      body: push_plain_text(candidate.body),
+      body: push_body(candidate),
       deeplink: push_deeplink(candidate),
       thread_id: candidate.origin_type,
       collapse_id: candidate.dedupe_key
@@ -267,6 +267,16 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
         {:error, reason}
     end
   end
+
+  # A brief's full rendered text belongs on the Today tab, not in a lock
+  # screen banner — the push is the doorbell, the app is the content. Use
+  # the summary (why_now) when the candidate has one; everything else sends
+  # its (short) body.
+  defp push_body(%{origin_type: "brief", why_now: why_now}) when is_binary(why_now) do
+    push_plain_text(why_now)
+  end
+
+  defp push_body(candidate), do: push_plain_text(candidate.body)
 
   # Push bodies are plain text; candidate bodies arrive HTML-converted for
   # the Telegram wire. Strip tags and unescape the few entities Telegram's
