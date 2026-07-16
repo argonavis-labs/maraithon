@@ -18,6 +18,8 @@ defmodule Maraithon.SourceFreshness do
   alias Maraithon.SourceErrorCopy
   alias Maraithon.SourceLabels
 
+  require Logger
+
   @default_stale_after_hours 24
   @desktop_stale_after_hours 24
   @provider_stale_after_hours %{
@@ -220,6 +222,50 @@ defmodule Maraithon.SourceFreshness do
   end
 
   def mark_success(_user_id, _provider, _attrs), do: {:error, :invalid_source_reference}
+
+  # Telegram is webhook-push: nothing polls it, so its freshness only
+  # advances when traffic proves the channel alive. Inbound messages are one
+  # such proof; successful outbound sends are the other — a user who quietly
+  # *receives* briefs all week must never be flagged source_stale just
+  # because they didn't write back (prod 2026-07-10: a healthy bot was
+  # error-flagged, which nil'd telegram_destination and silently blocked
+  # every morning brief). The lookup deliberately ignores account status so
+  # a wrongly-flagged account heals on the next proof of life in either
+  # direction.
+  @telegram_liveness_touch_interval_hours 6
+
+  def touch_telegram_liveness(chat_id, attrs \\ %{})
+
+  def touch_telegram_liveness(chat_id, attrs) when is_binary(chat_id) do
+    account = ConnectedAccounts.get_by_external_account_any_status("telegram", chat_id)
+
+    with %ConnectedAccount{user_id: user_id, metadata: metadata} <- account,
+         true <- telegram_liveness_touch_due?(metadata) do
+      mark_success(user_id, "telegram", attrs)
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("Telegram liveness touch failed",
+        chat_id: chat_id,
+        reason: Exception.message(error)
+      )
+
+      :ok
+  end
+
+  def touch_telegram_liveness(_chat_id, _attrs), do: :ok
+
+  defp telegram_liveness_touch_due?(metadata) do
+    with value when is_binary(value) <- get_in(metadata || %{}, ["last_successful_sync_at"]),
+         {:ok, last_success, _offset} <- DateTime.from_iso8601(value) do
+      DateTime.diff(DateTime.utc_now(), last_success, :hour) >=
+        @telegram_liveness_touch_interval_hours
+    else
+      _missing_or_unparseable -> true
+    end
+  end
 
   def mark_error(user_id, provider, reason, attrs \\ %{})
 

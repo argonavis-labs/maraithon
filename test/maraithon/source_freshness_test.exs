@@ -26,8 +26,30 @@ defmodule Maraithon.SourceFreshnessTest do
       reconnect_base_url: "https://maraithon.test"
     )
 
+    # Recovery confirmations ride PushBroker (SPEC 02 R9), whose sends go
+    # through TelegramResponder and the :insights telegram module, and the
+    # broker itself defaults to disabled in tests — without both overrides
+    # the captured-notification assertions silently test nothing.
+    previous_insights = Application.get_env(:maraithon, :insights, [])
+
+    Application.put_env(
+      :maraithon,
+      :insights,
+      Keyword.put(previous_insights, :telegram_module, CapturingTelegram)
+    )
+
+    previous_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(previous_assistant, :telegram_unified_push_enabled, true)
+    )
+
     on_exit(fn ->
       Application.delete_env(:maraithon, :connected_accounts)
+      Application.put_env(:maraithon, :insights, previous_insights)
+      Application.put_env(:maraithon, :telegram_assistant, previous_assistant)
     end)
 
     :ok

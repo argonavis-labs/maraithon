@@ -363,6 +363,14 @@ defmodule Maraithon.Connectors.Telegram do
   end
 
   @doc """
+  Gets info about a chat. Silent (no user-visible effect), so it doubles as
+  a liveness probe for self-healing soft-flagged accounts.
+  """
+  def get_chat(chat_id) do
+    api_request("getChat", %{chat_id: chat_id})
+  end
+
+  @doc """
   Sends a photo.
   """
   def send_photo(chat_id, photo, opts \\ []) do

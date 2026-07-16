@@ -25,7 +25,32 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
       email_module: CapturingEmail
     )
 
-    on_exit(fn -> Application.delete_env(:maraithon, :connected_accounts) end)
+    # Reconnect pushes ride PushBroker (SPEC 02 R9), whose sends go through
+    # TelegramResponder and the :insights telegram module — stub that too or
+    # the captured-notification assertions silently test nothing.
+    previous_insights = Application.get_env(:maraithon, :insights, [])
+
+    Application.put_env(
+      :maraithon,
+      :insights,
+      Keyword.put(previous_insights, :telegram_module, CapturingTelegram)
+    )
+
+    # ... and the broker itself defaults to disabled in tests, which turns
+    # every reconnect push into a silent skip.
+    previous_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(previous_assistant, :telegram_unified_push_enabled, true)
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:maraithon, :connected_accounts)
+      Application.put_env(:maraithon, :insights, previous_insights)
+      Application.put_env(:maraithon, :telegram_assistant, previous_assistant)
+    end)
 
     :ok
   end
@@ -179,5 +204,69 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
 
     account = ConnectedAccounts.get(user_id, "google")
     assert get_in(account.metadata, ["last_error", "reason"]) == "watch_expired"
+  end
+
+  test "self-heals a soft-flagged Telegram account when the probe answers" do
+    user_id = "freshness-sweep-heal-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "556677"})
+
+    ConnectedAccounts.report_access_issue(user_id, "telegram", "source_stale")
+
+    flagged = ConnectedAccounts.get_by_external_account_any_status("telegram", "556677")
+    assert flagged.status == "error"
+
+    Application.put_env(:maraithon, :freshness_sweep, telegram_module: CapturingTelegram)
+    on_exit(fn -> Application.delete_env(:maraithon, :freshness_sweep) end)
+
+    start_supervised!(
+      {FreshnessSweep,
+       name: nil,
+       observer: self(),
+       interval_ms: :timer.hours(1),
+       batch_size: 5_000,
+       initial_delay_ms: 10}
+    )
+
+    assert_receive {:freshness_sweep_cycle, %{healed: healed}}, 2_000
+    assert healed >= 1
+
+    healed_account = ConnectedAccounts.get(user_id, "telegram")
+    assert healed_account.status == "connected"
+    assert get_in(healed_account.metadata, ["last_error"]) == nil
+
+    # The probe was the silent getChat, not a user-visible message.
+    assert :capturing_telegram_recorder
+           |> Agent.get(&Enum.reverse/1)
+           |> Enum.any?(&(&1.type == :get_chat and &1.chat_id == "556677"))
+  end
+
+  test "does not heal a hard-failed Telegram account" do
+    user_id = "freshness-sweep-hard-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "778899"})
+
+    ConnectedAccounts.report_access_issue(user_id, "telegram", :reauth_required)
+
+    Application.put_env(:maraithon, :freshness_sweep, telegram_module: CapturingTelegram)
+    on_exit(fn -> Application.delete_env(:maraithon, :freshness_sweep) end)
+
+    start_supervised!(
+      {FreshnessSweep,
+       name: nil,
+       observer: self(),
+       interval_ms: :timer.hours(1),
+       batch_size: 5_000,
+       initial_delay_ms: 10}
+    )
+
+    assert_receive {:freshness_sweep_cycle, %{}}, 2_000
+
+    account = ConnectedAccounts.get_by_external_account_any_status("telegram", "778899")
+    assert account.status == "error"
   end
 end

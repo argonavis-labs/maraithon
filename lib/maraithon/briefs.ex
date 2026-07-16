@@ -12,6 +12,7 @@ defmodule Maraithon.Briefs do
   alias Maraithon.DeliveryErrorCopy
   alias Maraithon.Repo
   alias Maraithon.Redaction
+  alias Maraithon.SourceFreshness
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.Todos
@@ -570,6 +571,9 @@ defmodule Maraithon.Briefs do
            reply_markup: payload.reply_markup
          ) do
       {:ok, result} ->
+        # A delivered brief proves the channel alive — keeps a receive-only
+        # user's Telegram account from being false-flagged source_stale.
+        SourceFreshness.touch_telegram_liveness(destination)
         mark_fallback_sent(brief, read_message_id(result))
 
       {:error, reason} ->

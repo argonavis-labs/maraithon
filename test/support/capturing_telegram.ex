@@ -27,6 +27,12 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
     {:ok, true}
   end
 
+  def get_chat(chat_id) do
+    record_event(%{type: :get_chat, chat_id: normalize_chat_id(chat_id)})
+
+    {:ok, %{"id" => chat_id, "type" => "private"}}
+  end
+
   def answer_callback_query(_callback_query_id, opts \\ []) do
     record_event(%{type: :callback, opts: opts})
 

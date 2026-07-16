@@ -14,6 +14,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Companion
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm
+  alias Maraithon.EmailDelivery
   alias Maraithon.Insights
   alias Maraithon.LocalBrowserHistory
   alias Maraithon.LocalCalendar
@@ -23,6 +24,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
   alias Maraithon.Memory
+  alias Maraithon.OperatorEvents
   alias Maraithon.Spend
   alias Maraithon.OpenLoops
   alias Maraithon.SourceFreshness
@@ -320,7 +322,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       is_nil(user_id) ->
         {:idle, state}
 
-      ConnectedAccounts.telegram_destination(user_id) == nil ->
+      # Generation must never be gated on any single delivery channel being
+      # healthy (a false-stale Telegram flag silently killed every morning
+      # brief for days — prod 2026-07-16). Email always works because user
+      # ids are email addresses, so this only blocks when there is truly
+      # nowhere to deliver — and then it says so instead of idling silently.
+      not deliverable?(user_id) ->
+        record_generation_blocked(user_id, dedupe_key)
         {:idle, %{state | user_id: user_id}}
 
       Map.get(state.last_generated_keys, "morning") == period_key ->
@@ -361,6 +369,45 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             )
         end
     end
+  end
+
+  # A brief is deliverable when any channel can carry it. Email is the
+  # baseline channel (user ids are email addresses); Telegram is a bonus.
+  defp deliverable?(user_id) do
+    email_deliverable?(user_id) or ConnectedAccounts.telegram_destination(user_id) != nil
+  end
+
+  defp email_deliverable?(user_id) do
+    String.contains?(user_id, "@") and email_module().configured?()
+  end
+
+  defp email_module do
+    Application.get_env(:maraithon, :morning_briefing, [])
+    |> Keyword.get(:email_module, EmailDelivery)
+  end
+
+  # Once per briefing day, not per wakeup — the cron retries every 30
+  # minutes and a blocked day must not turn into a log/event flood.
+  defp record_generation_blocked(user_id, dedupe_key) do
+    Logger.warning("Morning briefing generation blocked: no deliverable channel",
+      user_id: user_id,
+      dedupe_key: dedupe_key
+    )
+
+    _ =
+      OperatorEvents.record_once(%{
+        user_id: user_id,
+        source: "chief_of_staff",
+        event_type: "morning_briefing.generation_blocked",
+        source_item_id: dedupe_key,
+        dedupe_key: "morning_briefing:generation_blocked:#{dedupe_key}",
+        occurred_at: DateTime.utc_now(),
+        payload: %{"reason" => "no_deliverable_channel"}
+      })
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   @impl true

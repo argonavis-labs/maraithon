@@ -1861,9 +1861,59 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert state.last_generated_keys["morning"] == "2026-05-07"
   end
 
-  test "does not generate a morning brief when Telegram is not connected", %{agent: agent} do
+  # Generation must never be gated on any single delivery channel: a
+  # false-stale Telegram flag silently killed every morning brief for days
+  # (prod 2026-07-16). Email is the baseline channel, Telegram a bonus.
+  test "generates a morning brief when Telegram is not connected but email is deliverable",
+       %{agent: agent} do
     user_id = "morning-briefing-no-telegram-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    previous = Application.get_env(:maraithon, :morning_briefing, [])
+
+    Application.put_env(
+      :maraithon,
+      :morning_briefing,
+      Keyword.put(previous, :email_module, __MODULE__.ConfiguredEmail)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :morning_briefing, previous) end)
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      trigger: %{type: :wakeup},
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    assert {:effect, {:llm_call, _params}, pending_state} =
+             MorningBriefing.handle_wakeup(state, context)
+
+    assert pending_state.pending_dedupe_key == "morning_briefing:2026-05-07"
+  end
+
+  test "idles and records an operator event when no delivery channel exists", %{agent: agent} do
+    user_id = "morning-briefing-no-channel-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    previous = Application.get_env(:maraithon, :morning_briefing, [])
+
+    Application.put_env(
+      :maraithon,
+      :morning_briefing,
+      Keyword.put(previous, :email_module, __MODULE__.DisabledEmail)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :morning_briefing, previous) end)
 
     state =
       MorningBriefing.init(%{
@@ -1883,6 +1933,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert {:idle, _state} = MorningBriefing.handle_wakeup(state, context)
     assert [] = Briefs.list_recent_for_user(user_id, limit: 1)
+
+    assert [event] =
+             Maraithon.OperatorEvents.list_events(
+               user_id: user_id,
+               event_type: "morning_briefing.generation_blocked"
+             )
+
+    assert event.source_item_id == "morning_briefing:2026-05-07"
   end
 
   describe "local source ingestion" do
@@ -2575,5 +2633,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       # Nothing is lost: rejoining the chunks reproduces the source text.
       assert Enum.join(raw_chunks, "\n\n") == text
     end
+  end
+
+  defmodule ConfiguredEmail do
+    def configured?, do: true
+  end
+
+  defmodule DisabledEmail do
+    def configured?, do: false
   end
 end

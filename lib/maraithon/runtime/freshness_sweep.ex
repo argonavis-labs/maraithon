@@ -29,6 +29,15 @@ defmodule Maraithon.Runtime.FreshnessSweep do
       well before they expire (default 24h lookahead); an already-expired
       watch means renewal attempts have been failing. The sweep flags,
       `WatchRenewer` renews — this module never calls the Google APIs.
+
+  The sweep also *un-flags*: a Telegram account it soft-flagged
+  (`source_stale`/`watch_expired`) is probed with `getChat` each cycle and
+  marked successful when the channel answers. Without this, a soft flag is
+  self-sustaining — error status filters the account out of every outbound
+  path, so no traffic can ever prove it alive again, and briefings stay
+  dead until the user happens to message the bot (prod 2026-07-16: six
+  silent days). Hard failures (send rejected, bot blocked) are never
+  soft-flagged and are left alone.
   """
 
   use GenServer
@@ -97,10 +106,11 @@ defmodule Maraithon.Runtime.FreshnessSweep do
   def handle_info(:tick, state) do
     result = run_cycle(state)
 
-    if result.checked > 0 or result.flagged > 0 do
+    if result.checked > 0 or result.flagged > 0 or result.healed > 0 do
       Logger.info("Source freshness sweep cycle",
         checked: result.checked,
-        flagged: result.flagged
+        flagged: result.flagged,
+        healed: result.healed
       )
     end
 
@@ -122,10 +132,12 @@ defmodule Maraithon.Runtime.FreshnessSweep do
 
     account_result = sweep_accounts(state, now)
     cursor_result = sweep_expired_watches(state, now)
+    heal_result = heal_soft_flagged_telegram(state)
 
     %{
       checked: account_result.checked + cursor_result.checked,
-      flagged: account_result.flagged + cursor_result.flagged
+      flagged: account_result.flagged + cursor_result.flagged,
+      healed: heal_result.healed
     }
   end
 
@@ -252,6 +264,63 @@ defmodule Maraithon.Runtime.FreshnessSweep do
     ConnectedAccounts.report_access_issue(user_id, provider, reason)
   rescue
     _ -> :ok
+  end
+
+  # Undo only the sweep's own guesses: probe soft-flagged Telegram accounts
+  # (see the moduledoc) and mark success when the channel answers. A probe
+  # failure leaves the account exactly as it was.
+  defp heal_soft_flagged_telegram(state) do
+    if telegram_module().configured?() do
+      ConnectedAccount
+      |> where([account], account.provider == "telegram" and account.status == "error")
+      |> order_by([account], asc_nulls_first: account.last_refreshed_at)
+      |> limit(^state.batch_size)
+      |> Repo.all()
+      |> Enum.filter(&soft_flagged?/1)
+      |> Enum.reduce(%{healed: 0}, fn account, acc ->
+        case probe_and_heal(account) do
+          :healed -> %{acc | healed: acc.healed + 1}
+          :ok -> acc
+        end
+      end)
+    else
+      %{healed: 0}
+    end
+  end
+
+  defp soft_flagged?(%ConnectedAccount{metadata: metadata}) do
+    reason = get_in(metadata || %{}, ["last_error", "reason"])
+    is_binary(reason) and reason in ConnectedAccounts.soft_reconnect_reasons()
+  end
+
+  defp probe_and_heal(%ConnectedAccount{} = account) do
+    chat_id = account.external_account_id || get_in(account.metadata || %{}, ["chat_id"])
+
+    with true <- is_binary(chat_id) and String.trim(chat_id) != "",
+         {:ok, _chat} <- telegram_module().get_chat(chat_id),
+         {:ok, _account} <- SourceFreshness.mark_success(account.user_id, "telegram", %{}) do
+      Logger.info("Healed soft-flagged Telegram account",
+        user_id: account.user_id,
+        chat_id: chat_id
+      )
+
+      :healed
+    else
+      _ -> :ok
+    end
+  rescue
+    error ->
+      Logger.warning("Telegram self-heal probe failed",
+        user_id: account.user_id,
+        reason: Exception.message(error)
+      )
+
+      :ok
+  end
+
+  defp telegram_module do
+    Application.get_env(:maraithon, :freshness_sweep, [])
+    |> Keyword.get(:telegram_module, Maraithon.Connectors.Telegram)
   end
 
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do

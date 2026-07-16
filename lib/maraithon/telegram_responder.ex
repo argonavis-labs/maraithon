@@ -10,7 +10,17 @@ defmodule Maraithon.TelegramResponder do
 
   def send(chat_id, text, opts \\ []) when is_binary(chat_id) and is_binary(text) do
     {text, opts} = prepare_text(text, opts)
-    telegram_module().send_message(chat_id, text, opts)
+
+    case telegram_module().send_message(chat_id, text, opts) do
+      {:ok, _result} = ok ->
+        # A delivered message proves the channel alive — this is what keeps a
+        # receive-only user from ever being false-flagged source_stale.
+        Maraithon.SourceFreshness.touch_telegram_liveness(chat_id)
+        ok
+
+      other ->
+        other
+    end
   end
 
   def reply(chat_id, reply_to_message_id, text, opts \\ [])

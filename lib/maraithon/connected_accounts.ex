@@ -886,6 +886,13 @@ defmodule Maraithon.ConnectedAccounts do
 
   @soft_reconnect_reasons ~w(source_stale watch_expired)
 
+  @doc """
+  Reasons that mark an account error-status on the sweep's *inference*
+  (silence, an expired watch) rather than an observed failure. These are the
+  only flags the freshness sweep is allowed to self-heal by active probing.
+  """
+  def soft_reconnect_reasons, do: @soft_reconnect_reasons
+
   defp soft_reconnect_reason?(reason), do: reason in @soft_reconnect_reasons
 
   def telegram_destination(user_id) when is_binary(user_id) do

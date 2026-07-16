@@ -431,42 +431,12 @@ defmodule Maraithon.InsightNotifications do
     |> String.trim()
   end
 
-  # Telegram is webhook-push: nothing polls it, so without this touch its
-  # SourceFreshness never records a success and the freshness sweep will
-  # eventually flag a perfectly healthy bot as source_stale, erroring the
-  # account (which every status-filtered lookup then ignores — bricking
-  # linking and preference commands too). Inbound traffic IS the liveness
-  # signal; the lookup deliberately ignores account status so a
-  # wrongly-flagged account heals on the next message.
-  @telegram_freshness_touch_interval_hours 6
-
+  # Inbound webhook traffic is one proof of Telegram liveness; successful
+  # outbound sends are the other. Both route through
+  # `SourceFreshness.touch_telegram_liveness/2` (throttled, status-blind so a
+  # wrongly-flagged account heals on the next proof of life).
   defp touch_telegram_freshness(chat_id) do
-    account = ConnectedAccounts.get_by_external_account_any_status("telegram", chat_id)
-
-    with %{user_id: user_id, metadata: metadata} <- account,
-         true <- telegram_freshness_touch_due?(metadata) do
-      SourceFreshness.mark_success(user_id, "telegram", %{last_webhook_at: DateTime.utc_now()})
-    end
-
-    :ok
-  rescue
-    error ->
-      Logger.warning("Telegram freshness touch failed",
-        chat_id: chat_id,
-        reason: Exception.message(error)
-      )
-
-      :ok
-  end
-
-  defp telegram_freshness_touch_due?(metadata) do
-    with value when is_binary(value) <- get_in(metadata || %{}, ["last_successful_sync_at"]),
-         {:ok, last_success, _offset} <- DateTime.from_iso8601(value) do
-      DateTime.diff(DateTime.utc_now(), last_success, :hour) >=
-        @telegram_freshness_touch_interval_hours
-    else
-      _missing_or_unparseable -> true
-    end
+    SourceFreshness.touch_telegram_liveness(chat_id, %{last_webhook_at: DateTime.utc_now()})
   end
 
   defp link_telegram_chat(chat_id, command_text, from_user) do
