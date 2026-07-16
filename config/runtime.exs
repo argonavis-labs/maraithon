@@ -504,6 +504,16 @@ config :maraithon, Maraithon.Runtime,
   # Retries
   max_effect_attempts: String.to_integer(System.get_env("MAX_EFFECT_ATTEMPTS", "3"))
 
+config :maraithon, :apns,
+  team_id: System.get_env("APNS_TEAM_ID"),
+  key_id: System.get_env("APNS_KEY_ID"),
+  private_key: System.get_env("APNS_PRIVATE_KEY"),
+  topic: System.get_env("APNS_TOPIC"),
+  environment: System.get_env("APNS_ENVIRONMENT")
+
+config :maraithon, :mobile_push,
+  enabled: boolean_env.("MOBILE_PUSH_ENABLED", true)
+
 config :maraithon, :telegram_assistant,
   chat_reasoning_effort: System.get_env("TELEGRAM_CHAT_REASONING_EFFORT", "none"),
   telegram_full_chat_enabled: optional_boolean_env.("TELEGRAM_FULL_CHAT_ENABLED"),

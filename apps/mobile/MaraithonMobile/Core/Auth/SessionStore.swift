@@ -92,6 +92,11 @@ final class SessionStore {
         isBusy = true
         defer { isBusy = false }
 
+        // Remove this phone's push registration while the session token is
+        // still valid — a signed-out phone must not keep receiving another
+        // account's notifications.
+        await PushCoordinator.shared.unregisterCurrentDevice()
+
         do {
             try await authProvider.signOut()
         } catch {

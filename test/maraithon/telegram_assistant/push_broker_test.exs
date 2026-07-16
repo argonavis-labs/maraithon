@@ -186,4 +186,95 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
     refute_received {:telegram_send, 2, _chat, _text, _opts}
     assert receipts(user_id) == []
   end
+
+  # ---------------------------------------------------------------------------
+  # Mobile push cutover
+  # ---------------------------------------------------------------------------
+
+  defmodule RecordingAPNSHTTP do
+    def post(url, _headers, body) do
+      send(self(), {:apns_send, url, Jason.decode!(body)})
+      {:ok, 200, ""}
+    end
+  end
+
+  defp enable_apns do
+    previous = Application.get_env(:maraithon, :apns, [])
+
+    ec_key = :public_key.generate_key({:namedCurve, {1, 2, 840, 10_045, 3, 1, 7}})
+    pem = :public_key.pem_encode([:public_key.pem_entry_encode(:ECPrivateKey, ec_key)])
+
+    Application.put_env(:maraithon, :apns,
+      team_id: "TEAM123456",
+      key_id: "KEY1234567",
+      private_key: pem,
+      http_module: RecordingAPNSHTTP
+    )
+
+    Maraithon.Push.APNS.reset_jwt_cache()
+
+    on_exit(fn ->
+      Maraithon.Push.APNS.reset_jwt_cache()
+      Application.put_env(:maraithon, :apns, previous)
+    end)
+  end
+
+  test "a user with a registered device gets APNs instead of Telegram",
+       %{user_id: user_id, chat_id: chat_id} do
+    enable_apns()
+    {:ok, _} = Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("a", 64)})
+
+    assert {:ok, %{decision: "sent_now"}} =
+             PushBroker.deliver(candidate(user_id, chat_id, "<b>Morning brief</b>\n\nBody."))
+
+    assert_received {:apns_send, _url, payload}
+    refute_received {:telegram_send, _count, _chat, _text, _opts}
+
+    # HTML stripped for the push, brief deep-links to the Today tab.
+    assert payload["aps"]["alert"]["body"] =~ "Morning brief"
+    refute payload["aps"]["alert"]["body"] =~ "<b>"
+    assert payload["deeplink"] == "maraithon://today"
+
+    # The same receipt machinery records the send.
+    assert [receipt] = receipts(user_id)
+    assert receipt.decision == "sent_now"
+  end
+
+  test "a push-user candidate with no Telegram chat id still delivers", %{user_id: user_id} do
+    enable_apns()
+    {:ok, _} = Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("b", 64)})
+
+    assert {:ok, %{decision: "sent_now"}} =
+             PushBroker.deliver(candidate(user_id, nil, "Insight body", %{origin_type: "insight"}))
+
+    assert_received {:apns_send, _url, payload}
+    assert payload["deeplink"] == "maraithon://stream"
+  end
+
+  test "the kill switch reverts a device-holding user to Telegram",
+       %{user_id: user_id, chat_id: chat_id} do
+    enable_apns()
+    {:ok, _} = Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("c", 64)})
+
+    previous = Application.get_env(:maraithon, :mobile_push, [])
+    Application.put_env(:maraithon, :mobile_push, enabled: false)
+    on_exit(fn -> Application.put_env(:maraithon, :mobile_push, previous) end)
+
+    assert {:ok, %{decision: "sent_now"}} =
+             PushBroker.deliver(candidate(user_id, chat_id, "Body."))
+
+    assert_received {:telegram_send, 1, ^chat_id, _text, _opts}
+    refute_received {:apns_send, _url, _payload}
+  end
+
+  test "a user with no device keeps Telegram untouched",
+       %{user_id: user_id, chat_id: chat_id} do
+    enable_apns()
+
+    assert {:ok, %{decision: "sent_now"}} =
+             PushBroker.deliver(candidate(user_id, chat_id, "Body."))
+
+    assert_received {:telegram_send, 1, ^chat_id, _text, _opts}
+    refute_received {:apns_send, _url, _payload}
+  end
 end

@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 enum AppTab: Hashable {
@@ -54,6 +55,12 @@ struct AppShellView: View {
         .environment(navigation)
         .task {
             await checkIdentity()
+            await PushCoordinator.shared.enablePush()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .maraithonDeepLink)) { note in
+            if let url = note.object as? URL {
+                navigation.route(url)
+            }
         }
         .sheet(item: $identityPrefill) { prefill in
             IdentityOnboardingView(prefill: prefill) {

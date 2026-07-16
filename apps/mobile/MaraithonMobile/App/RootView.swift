@@ -27,8 +27,14 @@ struct RootView: View {
             )
         }
         .onOpenURL { url in
-            Task {
-                await sessionStore.handleIncomingURL(url)
+            // Navigation deep links (maraithon://today, .../todos, .../chat/<id>)
+            // route the UI; everything else is treated as a magic sign-in link.
+            if AppNavigation.isNavigationURL(url) {
+                NotificationCenter.default.post(name: .maraithonDeepLink, object: url)
+            } else {
+                Task {
+                    await sessionStore.handleIncomingURL(url)
+                }
             }
         }
     }

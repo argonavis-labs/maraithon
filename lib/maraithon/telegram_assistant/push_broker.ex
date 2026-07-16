@@ -12,6 +12,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.DeliveryErrorCopy
   alias Maraithon.InsightNotifications.Actions
   alias Maraithon.InsightNotifications.Delivery
+  alias Maraithon.Push.Notifier, as: MobilePush
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ProactiveQueue
@@ -156,7 +157,9 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       candidate = normalize_candidate(candidate)
 
       cond do
-        is_nil(candidate.chat_id) ->
+        # A missing Telegram chat id is only fatal when Telegram is the
+        # channel; a user whose phone is registered needs no chat id at all.
+        is_nil(candidate.chat_id) and not MobilePush.enabled_for_user?(candidate.user_id) ->
           {:error, :missing_chat_id}
 
         TelegramAssistant.push_receipt_for(candidate.user_id, candidate.dedupe_key) ->
@@ -219,10 +222,88 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     }
   end
 
+  # Channel routing — the hard-cutover choke point. A user with a registered
+  # phone gets APNs; everyone else keeps Telegram. Everything upstream
+  # (dedupe, hourly cap, quiet hours, receipts) applies identically to both.
+  defp send_candidate(candidate) do
+    if MobilePush.enabled_for_user?(candidate.user_id) do
+      send_candidate_mobile(candidate)
+    else
+      send_candidate_telegram(candidate)
+    end
+  end
+
+  defp send_candidate_mobile(candidate) do
+    attrs = %{
+      title: candidate.title || push_fallback_title(candidate.origin_type),
+      body: push_plain_text(candidate.body),
+      deeplink: push_deeplink(candidate),
+      thread_id: candidate.origin_type,
+      collapse_id: candidate.dedupe_key
+    }
+
+    case MobilePush.notify(candidate.user_id, attrs) do
+      {:ok, _delivered} ->
+        case TelegramAssistant.record_push_receipt(%{
+               user_id: candidate.user_id,
+               dedupe_key: candidate.dedupe_key,
+               origin_type: candidate.origin_type,
+               origin_id: candidate.origin_id,
+               decision: "sent_now"
+             }) do
+          {:ok, _receipt} ->
+            {:ok, %{decision: "sent_now", message_id: nil, turn_id: nil, conversation_id: nil}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, :no_devices} ->
+        # The last device unregistered between the gate and the send; the
+        # candidate must not vanish into the gap.
+        send_candidate_telegram(candidate)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Push bodies are plain text; candidate bodies arrive HTML-converted for
+  # the Telegram wire. Strip tags and unescape the few entities Telegram's
+  # HTML mode uses.
+  defp push_plain_text(body) when is_binary(body) do
+    body
+    |> String.replace(~r/<[^>]*>/, "")
+    |> String.replace("&amp;", "&")
+    |> String.replace("&lt;", "<")
+    |> String.replace("&gt;", ">")
+    |> String.replace("&quot;", "\"")
+    |> String.trim()
+  end
+
+  defp push_plain_text(_body), do: ""
+
+  defp push_fallback_title("brief"), do: "Your briefing is ready"
+  defp push_fallback_title("insight"), do: "New insight"
+  defp push_fallback_title("nudge"), do: "Worth a look"
+  defp push_fallback_title(_origin_type), do: "Maraithon"
+
+  # Deep links route notification taps to the surface that renders the
+  # content natively — the phone shows the real thing, not a text dump.
+  defp push_deeplink(%{origin_type: "brief"}), do: "maraithon://today"
+  defp push_deeplink(%{origin_type: "insight"}), do: "maraithon://stream"
+  defp push_deeplink(%{origin_type: "nudge"}), do: "maraithon://people"
+
+  defp push_deeplink(%{structured_data: %{"message_class" => "todo_digest"}}),
+    do: "maraithon://todos"
+
+  defp push_deeplink(%{origin_type: "assistant_digest"}), do: "maraithon://todos"
+  defp push_deeplink(_candidate), do: "maraithon://today"
+
   # SPEC 09 R19: chunk at send time. A single-chunk body keeps today's
   # behavior byte-for-byte (one send of the original body, one turn, one
   # receipt); a multi-chunk body is sent as sequential ordered messages.
-  defp send_candidate(candidate) do
+  defp send_candidate_telegram(candidate) do
     case chunked_body(candidate.body) do
       chunks when length(chunks) > 1 ->
         send_candidate_chunks(candidate, chunks)

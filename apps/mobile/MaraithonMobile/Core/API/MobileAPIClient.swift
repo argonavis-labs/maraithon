@@ -1145,8 +1145,10 @@ struct MobileAPIClient: Sendable {
 
         switch httpResponse.statusCode {
         case 200..<300:
-            if Response.self == EmptyResponse.self, data.isEmpty {
-                return EmptyResponse() as! Response
+            // 204-style responses carry no body; any all-optional/empty
+            // Decodable should succeed rather than choking on zero bytes.
+            if data.isEmpty, let empty = try? decoder.decode(Response.self, from: Data("{}".utf8)) {
+                return empty
             }
             return try decoder.decode(Response.self, from: data)
         case 401:

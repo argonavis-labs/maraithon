@@ -143,6 +143,8 @@ defmodule MaraithonWeb.Router do
 
     get "/me", MobileAuthController, :me
     delete "/session", MobileAuthController, :delete
+    post "/push/devices", MobilePushDeviceController, :create
+    delete "/push/devices/:device_token", MobilePushDeviceController, :delete
     get "/identity", MobileIdentityController, :show
     put "/identity", MobileIdentityController, :update
     get "/todo-activity", MobileTodoController, :activity

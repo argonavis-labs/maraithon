@@ -81,6 +81,10 @@ struct ChatThreadsView: View {
             .onChange(of: appNavigation.requestedChatPrompt) { _, _ in
                 consumeRequestedPromptIfNeeded()
             }
+            .onAppear(perform: consumeRequestedThreadIfNeeded)
+            .onChange(of: appNavigation.requestedChatThreadID) { _, _ in
+                consumeRequestedThreadIfNeeded()
+            }
             .navigationDestination(for: UUID.self) { threadID in
                 if let thread = threads.first(where: { $0.id == threadID }) {
                     let pendingPrompt = pendingPromptByThreadID[threadID]
@@ -157,6 +161,21 @@ struct ChatThreadsView: View {
         if createThread(initialPrompt: prompt, shouldAutoSend: true) {
             appNavigation.requestedChatPrompt = nil
         }
+    }
+
+    /// Opens the thread a push notification deep-linked to. The link carries
+    /// the server conversation id, matched against each thread's `remoteID`;
+    /// an unknown id (thread not synced yet) leaves the user on the list,
+    /// where the refreshed threads surface the new reply on top.
+    private func consumeRequestedThreadIfNeeded() {
+        guard let requestedID = appNavigation.requestedChatThreadID else { return }
+
+        if let remoteID = UUID(uuidString: requestedID),
+           let thread = threads.first(where: { $0.remoteID == remoteID }) {
+            path.append(thread.id)
+        }
+
+        appNavigation.requestedChatThreadID = nil
     }
 
     @discardableResult

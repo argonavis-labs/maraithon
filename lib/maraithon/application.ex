@@ -22,6 +22,13 @@ defmodule Maraithon.Application do
       Maraithon.Accounts.AdminBootstrap,
       {DNSCluster, query: Application.get_env(:maraithon, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Maraithon.PubSub},
+      # APNs requires HTTP/2; one small dedicated pool per Apple host.
+      {Finch,
+       name: Maraithon.Push.Finch,
+       pools: %{
+         "https://api.push.apple.com" => [protocols: [:http2], count: 1],
+         "https://api.sandbox.push.apple.com" => [protocols: [:http2], count: 1]
+       }},
       Maraithon.LogBuffer,
       Maraithon.ContextCache,
       Maraithon.UserIdentity,
