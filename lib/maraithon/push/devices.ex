@@ -66,6 +66,20 @@ defmodule Maraithon.Push.Devices do
   def any_active?(_user_id), do: false
 
   @doc """
+  Users who can currently receive push — the iteration base for batch
+  producers (proactive check-ins) now that "connected to Telegram" no
+  longer defines the audience.
+  """
+  def user_ids_with_active(limit) when is_integer(limit) and limit > 0 do
+    Device
+    |> where([d], d.status == "active")
+    |> distinct([d], d.user_id)
+    |> limit(^limit)
+    |> select([d], d.user_id)
+    |> Repo.all()
+  end
+
+  @doc """
   Disables a device APNs reported as gone (410 Unregistered / BadDeviceToken).
   Kept as a row (not deleted) for the audit trail; re-registration reactivates.
   """

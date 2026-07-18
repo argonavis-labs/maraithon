@@ -7,12 +7,9 @@ defmodule Maraithon.Briefs do
 
   alias Maraithon.Briefs.Brief
   alias Maraithon.AppUrl
-  alias Maraithon.ConnectedAccounts
-  alias Maraithon.Connectors.Telegram
   alias Maraithon.DeliveryErrorCopy
   alias Maraithon.Repo
   alias Maraithon.Redaction
-  alias Maraithon.SourceFreshness
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.Todos
@@ -265,29 +262,25 @@ defmodule Maraithon.Briefs do
     |> Repo.update()
   end
 
-  def dispatch_telegram_batch(opts \\ []) do
-    expire_stale_pending()
+  def dispatch_pending_batch(opts \\ []) do
+    expire_stale_pending(Keyword.get(opts, :now, DateTime.utc_now()))
 
     batch_size = Keyword.get(opts, :batch_size, 10)
     pending = list_pending(batch_size)
 
     # Morning briefs also go to the user's inbox. Email delivery is
-    # idempotent per brief and independent of the Telegram state machine,
-    # so a Telegram outage cannot block the daily ritual.
+    # idempotent per brief and independent of the push state machine, so a
+    # push outage cannot block the daily ritual.
     Enum.each(pending, &Maraithon.Briefs.Email.maybe_deliver/1)
 
-    if telegram_module().configured?() do
-      pending
-      |> Enum.reduce(%{sent: 0, failed: 0, skipped: 0}, fn brief, acc ->
-        case send_brief(brief) do
-          :ok -> %{acc | sent: acc.sent + 1}
-          :skip -> %{acc | skipped: acc.skipped + 1}
-          {:error, _reason} -> %{acc | failed: acc.failed + 1}
-        end
-      end)
-    else
-      %{sent: 0, failed: 0, skipped: 0}
-    end
+    pending
+    |> Enum.reduce(%{sent: 0, failed: 0, skipped: 0}, fn brief, acc ->
+      case send_brief(brief) do
+        :ok -> %{acc | sent: acc.sent + 1}
+        :skip -> %{acc | skipped: acc.skipped + 1}
+        {:error, _reason} -> %{acc | failed: acc.failed + 1}
+      end
+    end)
   end
 
   def send_brief(%Brief{} = brief) do
@@ -300,35 +293,17 @@ defmodule Maraithon.Briefs do
         :ok
 
       {:fallback, :disabled} ->
-        case telegram_destination(brief.user_id) do
-          nil ->
-            :skip
+        # Unified push broker globally off: nothing to send (email already
+        # went out above for morning briefs).
+        :skip
 
-          destination ->
-            case send_fallback_brief(brief, destination) do
-              {:ok, updated_brief} ->
-                maybe_mark_travel_delivered(updated_brief)
-                :ok
-
-              {:error, reason} ->
-                Logger.warning("Failed to send Telegram brief",
-                  reason: inspect(reason),
-                  brief_id: brief.id
-                )
-
-                brief
-                |> Ecto.Changeset.change(%{
-                  status: "failed",
-                  error_message: DeliveryErrorCopy.storage_message(reason)
-                })
-                |> Repo.update()
-
-                {:error, reason}
-            end
-        end
+      {:error, :no_push_device} ->
+        # No registered phone yet; the brief stays pending until one
+        # registers or the expiry sweep retires it.
+        :skip
 
       {:error, reason} ->
-        Logger.warning("Failed to broker Telegram brief",
+        Logger.warning("Failed to broker brief push",
           reason: inspect(reason),
           brief_id: brief.id
         )
@@ -484,17 +459,8 @@ defmodule Maraithon.Briefs do
   defp preserve_status("sent"), do: "sent"
   defp preserve_status(_), do: "pending"
 
-  defp telegram_destination(user_id) do
-    ConnectedAccounts.telegram_destination(user_id)
-  end
-
-  # SPEC 09 R18 note: PushBroker's brief paths (candidate + direct deliver)
-  # now build bodies from telegram_full_text/1 / todo_digest_full_text/2 and
-  # chunk at send time. This cap still applies to telegram_payload/1 /
-  # todo_digest_telegram_payload/2, used by send_fallback_brief/2 (the
-  # unified-push-disabled direct-send fallback) and the manual
-  # todo-review-brief path — those deliberately stay single-message-truncated
-  # (see the one_gate_one_ledger_for_outbound follow-up).
+  # Rendering cap for the manual todo-review-brief path; the push path
+  # clamps separately in APNS.payload/1.
   defp cap_telegram_text(text) when is_binary(text) do
     if String.length(text) <= @telegram_text_cap do
       text
@@ -561,24 +527,6 @@ defmodule Maraithon.Briefs do
     #{Maraithon.TelegramMarkdown.to_html(intro)}
     """
     |> String.trim()
-  end
-
-  defp send_fallback_brief(%Brief{} = brief, destination) do
-    payload = telegram_payload(brief)
-
-    case telegram_module().send_message(destination, payload.text,
-           parse_mode: "HTML",
-           reply_markup: payload.reply_markup
-         ) do
-      {:ok, result} ->
-        # A delivered brief proves the channel alive — keeps a receive-only
-        # user's Telegram account from being false-flagged source_stale.
-        SourceFreshness.touch_telegram_liveness(destination)
-        mark_fallback_sent(brief, read_message_id(result))
-
-      {:error, reason} ->
-        {:error, reason}
-    end
   end
 
   defp mark_fallback_sent(%Brief{} = brief, message_id) do
@@ -759,12 +707,6 @@ defmodule Maraithon.Briefs do
 
   defp safe(value), do: value |> to_string() |> safe()
 
-  defp read_message_id(%{"message_id" => value}) when is_integer(value),
-    do: Integer.to_string(value)
-
-  defp read_message_id(%{"message_id" => value}) when is_binary(value), do: value
-  defp read_message_id(_), do: nil
-
   defp normalize_message_id(value) when is_integer(value), do: Integer.to_string(value)
   defp normalize_message_id(value) when is_binary(value), do: value
   defp normalize_message_id(_value), do: nil
@@ -911,11 +853,6 @@ defmodule Maraithon.Briefs do
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false
-
-  defp telegram_module do
-    Application.get_env(:maraithon, :briefs, [])
-    |> Keyword.get(:telegram_module, Telegram)
-  end
 
   defp read_string(map, key, default) when is_map(map) do
     case fetch_attr(map, key) do

@@ -5,14 +5,14 @@ defmodule Maraithon.SourceFreshnessTest do
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ConnectedAccounts
   alias Maraithon.SourceFreshness
+  alias Maraithon.TestSupport.CapturingAPNS
   alias Maraithon.TestSupport.CapturingEmail
-  alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.TelegramAssistant.Context
 
   setup do
     start_supervised!(%{
-      id: :capturing_telegram_recorder,
-      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
+      id: :capturing_apns_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_apns_recorder]]}
     })
 
     start_supervised!(%{
@@ -21,34 +21,30 @@ defmodule Maraithon.SourceFreshnessTest do
     })
 
     Application.put_env(:maraithon, :connected_accounts,
-      telegram_module: CapturingTelegram,
       email_module: CapturingEmail,
       reconnect_base_url: "https://maraithon.test"
     )
 
-    # Recovery confirmations ride PushBroker (SPEC 02 R9), whose sends go
-    # through TelegramResponder and the :insights telegram module, and the
-    # broker itself defaults to disabled in tests — without both overrides
-    # the captured-notification assertions silently test nothing.
-    previous_insights = Application.get_env(:maraithon, :insights, [])
-
-    Application.put_env(
-      :maraithon,
-      :insights,
-      Keyword.put(previous_insights, :telegram_module, CapturingTelegram)
-    )
-
+    # Recovery confirmations ride PushBroker (SPEC 02 R9), which now
+    # delivers via APNs to the user's registered devices. The broker itself
+    # defaults to disabled in tests — enable it, and pin the quiet-hours
+    # window away from the current local hour so pushes are never held.
     previous_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user("setup").hour
 
     Application.put_env(
       :maraithon,
       :telegram_assistant,
-      Keyword.put(previous_assistant, :telegram_unified_push_enabled, true)
+      Keyword.merge(previous_assistant,
+        telegram_unified_push_enabled: true,
+        quiet_hours_start_local: rem(local_hour + 2, 24),
+        quiet_hours_end_local: rem(local_hour + 3, 24)
+      )
     )
 
     on_exit(fn ->
       Application.delete_env(:maraithon, :connected_accounts)
-      Application.put_env(:maraithon, :insights, previous_insights)
       Application.put_env(:maraithon, :telegram_assistant, previous_assistant)
     end)
 
@@ -76,7 +72,7 @@ defmodule Maraithon.SourceFreshnessTest do
                at: now
              )
 
-    assert Agent.get(:capturing_telegram_recorder, &Enum.reverse/1) == []
+    assert CapturingAPNS.recorded() == []
 
     assert [
              %{
@@ -159,12 +155,7 @@ defmodule Maraithon.SourceFreshnessTest do
   test "mark_success sends a one-time recovery confirmation and re-arms notifications (R4)" do
     user_id = "source-freshness-recovery-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     {:ok, _google} =
       ConnectedAccounts.upsert_manual(user_id, "google:founder@example.com", %{
@@ -179,21 +170,20 @@ defmodule Maraithon.SourceFreshnessTest do
                "oauth_reauth_required"
              )
 
-    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
-    Agent.update(:capturing_telegram_recorder, fn _ -> [] end)
+    assert [%{payload: notify_payload}] = CapturingAPNS.recorded()
+    assert notify_payload["aps"]["alert"]["title"] == "Connector health: Google"
+    Agent.update(:capturing_apns_recorder, fn _ -> [] end)
 
     assert {:ok, recovered} = SourceFreshness.mark_success(user_id, "google:founder@example.com")
     assert recovered.status == "connected"
     refute get_in(recovered.metadata, ["reconnect_notification"])
 
-    assert [%{chat_id: "6114124042", text: text}] =
-             Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
-
-    assert text =~ "connected again"
+    assert [%{payload: recovery_payload}] = CapturingAPNS.recorded()
+    assert recovery_payload["aps"]["alert"]["body"] =~ "connected again"
 
     # A second success with nothing pending must not re-confirm.
     assert {:ok, _recovered} = SourceFreshness.mark_success(user_id, "google:founder@example.com")
-    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{payload: _payload}] = CapturingAPNS.recorded()
   end
 
   test "injects compact freshness into Telegram assistant context" do

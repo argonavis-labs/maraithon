@@ -41,7 +41,7 @@ defmodule Maraithon.Crm.UpcomingMeetings do
     user_id
     |> upcoming_events(now, horizon)
     |> Enum.flat_map(fn event ->
-      ([event.organizer_email | List.wrap(event.attendee_emails)])
+      [event.organizer_email | List.wrap(event.attendee_emails)]
       |> Enum.map(&InteractionEvents.normalize_handle/1)
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()

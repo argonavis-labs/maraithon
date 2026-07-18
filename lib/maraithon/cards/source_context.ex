@@ -330,10 +330,17 @@ defmodule Maraithon.Cards.SourceContext do
 
   defp local_speaker(message) do
     cond do
-      message.is_from_me -> "You"
-      present?(message.chat_display_name) and message.chat_style != "group" -> message.chat_display_name
-      present?(message.sender_handle) -> message.sender_handle
-      true -> "Them"
+      message.is_from_me ->
+        "You"
+
+      present?(message.chat_display_name) and message.chat_style != "group" ->
+        message.chat_display_name
+
+      present?(message.sender_handle) ->
+        message.sender_handle
+
+      true ->
+        "Them"
     end
   end
 

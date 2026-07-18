@@ -316,7 +316,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     local_date = now |> DateTime.add(offset, :hour) |> DateTime.to_date()
 
     FreeBlocks.openings(events, now,
-      work_start_utc: FreeBlocks.work_day_start_utc(local_date, state.work_day_start_hour, offset),
+      work_start_utc:
+        FreeBlocks.work_day_start_utc(local_date, state.work_day_start_hour, offset),
       work_end_utc: FreeBlocks.work_day_end_utc(local_date, state.work_day_end_hour, offset),
       min_opening_minutes: state.min_opening_minutes,
       offset: offset,

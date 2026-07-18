@@ -52,7 +52,10 @@ defmodule MaraithonWeb.TodoChatLive do
     else
       user_id = socket.assigns.current_user.id
 
-      case AssistantChat.send_message(user_id, socket.assigns.thread.id, %{"body" => body, "client_message_id" => Ecto.UUID.generate()}) do
+      case AssistantChat.send_message(user_id, socket.assigns.thread.id, %{
+             "body" => body,
+             "client_message_id" => Ecto.UUID.generate()
+           }) do
         {:ok, %{thread: thread}} ->
           {:noreply,
            socket

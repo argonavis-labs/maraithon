@@ -147,7 +147,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
   # SPEC 06 R1: a never-fetched calendar (no freshness entry — e.g. Google
   # Calendar was never connected) must not be read as a fully-free day.
   test "idles honestly when the calendar source was never fetched", %{state: state} = ctx do
-    input = CalendarCheckIn.build_check_in_input(ctx.user_id, ctx.now, state, unfetched_context(ctx, []))
+    input =
+      CalendarCheckIn.build_check_in_input(
+        ctx.user_id,
+        ctx.now,
+        state,
+        unfetched_context(ctx, [])
+      )
 
     assert input["openings"] == []
     assert input["calendar_status"] == "unavailable"

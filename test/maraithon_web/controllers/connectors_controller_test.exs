@@ -27,7 +27,7 @@ defmodule MaraithonWeb.ConnectorsControllerTest do
     html = html_response(conn, 200)
 
     assert html =~ "Connected Apps"
-    assert html =~ "Connect Telegram first so Maraithon can send proactive updates."
+    refute html =~ "Connect Telegram first"
     assert html =~ "Connection needed"
     refute html =~ "OAuth"
     refute html =~ "Configure OAuth first"

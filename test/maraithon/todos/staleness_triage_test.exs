@@ -101,7 +101,9 @@ defmodule Maraithon.Todos.StalenessTriageTest do
       Todos.get_for_user(user_id, nudged_todo.id)
       |> Ecto.Changeset.change(
         last_nudged_at:
-          DateTime.utc_now() |> DateTime.add(-2 * 24 * 3600, :second) |> DateTime.truncate(:second)
+          DateTime.utc_now()
+          |> DateTime.add(-2 * 24 * 3600, :second)
+          |> DateTime.truncate(:second)
       )
       |> Repo.update()
 

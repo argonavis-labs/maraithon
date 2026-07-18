@@ -88,7 +88,6 @@
 # - Slack: HMAC-SHA256 with timestamp in X-Slack-Signature header
 # - WhatsApp: HMAC-SHA256 in X-Hub-Signature-256 header (same as GitHub)
 # - Linear: HMAC-SHA256 in Linear-Signature header
-# - Telegram: Secret path in URL (e.g., /webhooks/telegram/{secret})
 # - Google: No signature (relies on channel token validation)
 #
 # Test Categories:
@@ -453,69 +452,6 @@ defmodule MaraithonWeb.WebhookControllerTest do
   # Telegram uses a secret path for verification (no signature header).
   # ============================================================================
 
-  describe "POST /webhooks/telegram/:secret_path" do
-    @doc """
-    Verifies that incoming Telegram messages are processed.
-    Messages contain chat info, sender info, and message content.
-    Published to topic "telegram:{chat_id}".
-    """
-    test "handles text message", %{conn: conn} do
-      payload = %{
-        "message" => %{
-          "message_id" => 123,
-          "from" => %{"id" => 456, "first_name" => "John"},
-          "chat" => %{"id" => 789, "type" => "private"},
-          "text" => "Hello bot"
-        }
-      }
-
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> assign(:raw_body, Jason.encode!(payload))
-        |> post("/webhooks/telegram/secret123", payload)
-
-      assert json_response(conn, 200)["status"] == "published"
-    end
-
-    @doc """
-    Verifies that requests with wrong secret path are rejected.
-    This is Telegram's authentication mechanism - the webhook URL includes
-    a secret that only Telegram and your server know.
-    """
-    test "rejects invalid secret path", %{conn: conn} do
-      # Temporarily disable allow_unsigned
-      Application.put_env(:maraithon, :telegram,
-        bot_token: "123456:ABC-DEF",
-        webhook_secret_path: "secret123",
-        allow_unsigned: false
-      )
-
-      payload = %{
-        "message" => %{
-          "message_id" => 123,
-          "from" => %{"id" => 456},
-          "chat" => %{"id" => 789, "type" => "private"},
-          "text" => "Hello"
-        }
-      }
-
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> assign(:raw_body, Jason.encode!(payload))
-        |> post("/webhooks/telegram/wrong_secret", payload)
-
-      assert json_response(conn, 401)["error"] == "Invalid request"
-
-      Application.put_env(:maraithon, :telegram,
-        bot_token: "123456:ABC-DEF",
-        webhook_secret_path: "secret123",
-        allow_unsigned: true
-      )
-    end
-  end
-
   # ============================================================================
   # GOOGLE CALENDAR WEBHOOK TESTS
   # ============================================================================
@@ -571,9 +507,7 @@ defmodule MaraithonWeb.WebhookControllerTest do
       assert json_response(conn, 200)["status"] == "published"
 
       [job] =
-        Maraithon.Runtime.BackgroundJobs.list(
-          user_id: "webhook-calendar-exists@example.com"
-        )
+        Maraithon.Runtime.BackgroundJobs.list(user_id: "webhook-calendar-exists@example.com")
 
       assert job.job_type == "calendar_incremental_sync"
     end
@@ -766,27 +700,6 @@ defmodule MaraithonWeb.WebhookControllerTest do
   # ============================================================================
   # ERROR HANDLING TESTS - TELEGRAM
   # ============================================================================
-
-  describe "POST /webhooks/telegram - error handling" do
-    @doc """
-    Verifies that updates without message/callback are ignored.
-    Telegram sends many update types; we only care about some.
-    """
-    test "handles ignored events", %{conn: conn} do
-      payload = %{
-        "update_id" => 123
-        # No message, callback_query, etc.
-      }
-
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> assign(:raw_body, Jason.encode!(payload))
-        |> post("/webhooks/telegram/secret123", payload)
-
-      assert json_response(conn, 200)["status"] == "ignored"
-    end
-  end
 
   # ============================================================================
   # RAW BODY HANDLING TESTS

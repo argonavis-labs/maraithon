@@ -1995,7 +1995,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
         # fail honestly rather than creating a block that was never verified
         # free. Reuse the calendar tool's error translation so the failure
         # copy matches the connector-error vocabulary.
-        {:error, Maraithon.Tools.CalendarCreateEvent.translate_error(reason, "check the calendar")}
+        {:error,
+         Maraithon.Tools.CalendarCreateEvent.translate_error(reason, "check the calendar")}
     end
   end
 

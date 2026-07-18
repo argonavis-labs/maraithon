@@ -46,7 +46,11 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
         config: %{"name" => "watchdog"}
       })
 
-    %{operator_id: operator_id, agent: agent, opts: [operator_id: operator_id, email_module: CapturingEmail]}
+    %{
+      operator_id: operator_id,
+      agent: agent,
+      opts: [operator_id: operator_id, email_module: CapturingEmail]
+    }
   end
 
   test "stale detect-only rows alarm exactly once per table per day",

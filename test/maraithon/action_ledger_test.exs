@@ -298,5 +298,6 @@ defmodule Maraithon.ActionLedgerTest do
     end
   end
 
-  defp unique_user_email(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}@example.com"
+  defp unique_user_email(prefix),
+    do: "#{prefix}-#{System.unique_integer([:positive])}@example.com"
 end

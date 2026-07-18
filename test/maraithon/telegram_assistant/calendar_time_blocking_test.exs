@@ -193,6 +193,7 @@ defmodule Maraithon.TelegramAssistant.CalendarTimeBlockingTest do
     assert_receive {:create_body, params}
     assert params["id"] == client_event_id
     assert params["start"]["timeZone"] == "America/New_York"
+
     assert params["extendedProperties"]["private"] == %{
              "maraithon_managed" => "true",
              "maraithon_todo_id" => todo.id,

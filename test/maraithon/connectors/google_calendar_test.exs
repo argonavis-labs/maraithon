@@ -83,7 +83,8 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
     end
 
     test "enqueues a background job instead of syncing inline" do
-      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("cal_webhook_user@example.com")
+      {:ok, _user} =
+        Maraithon.Accounts.get_or_create_user_by_email("cal_webhook_user@example.com")
 
       conn =
         build_conn_with_headers(%{
@@ -585,7 +586,8 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
         api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
       )
 
-      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("cal_cursor_user_2@example.com")
+      {:ok, _user} =
+        Maraithon.Accounts.get_or_create_user_by_email("cal_cursor_user_2@example.com")
 
       {:ok, _token} =
         Maraithon.OAuth.store_tokens("cal_cursor_user_2@example.com", "google", %{
@@ -879,7 +881,9 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
           409,
-          Jason.encode!(%{"error" => %{"code" => 409, "message" => "The requested identifier already exists."}})
+          Jason.encode!(%{
+            "error" => %{"code" => 409, "message" => "The requested identifier already exists."}
+          })
         )
       end)
 

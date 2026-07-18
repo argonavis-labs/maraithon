@@ -4,13 +4,13 @@ defmodule Maraithon.ConnectedAccountsTest do
   alias Maraithon.Accounts
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
+  alias Maraithon.TestSupport.CapturingAPNS
   alias Maraithon.TestSupport.CapturingEmail
-  alias Maraithon.TestSupport.CapturingTelegram
 
   setup do
     start_supervised!(%{
-      id: :capturing_telegram_recorder,
-      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
+      id: :capturing_apns_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_apns_recorder]]}
     })
 
     start_supervised!(%{
@@ -24,18 +24,11 @@ defmodule Maraithon.ConnectedAccountsTest do
     )
 
     # SPEC 02 R9: reconnect pushes ride PushBroker (quiet hours, receipts),
-    # which sends through the :insights telegram module. Enable the unified
-    # broker and pin the quiet-hours window away from the current local hour
-    # so tests are deterministic regardless of when they run; the
-    # quiet-hours test below overrides the window explicitly.
-    original_insights = Application.get_env(:maraithon, :insights, [])
+    # which now delivers via APNs to the user's registered devices. Enable
+    # the unified broker and pin the quiet-hours window away from the
+    # current local hour so tests are deterministic regardless of when they
+    # run; the quiet-hours test below overrides the window explicitly.
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
-
-    Application.put_env(
-      :maraithon,
-      :insights,
-      Keyword.merge(original_insights, telegram_module: CapturingTelegram)
-    )
 
     local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user("setup").hour
 
@@ -51,7 +44,6 @@ defmodule Maraithon.ConnectedAccountsTest do
 
     on_exit(fn ->
       Application.delete_env(:maraithon, :connected_accounts)
-      Application.put_env(:maraithon, :insights, original_insights)
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
     end)
 
@@ -61,12 +53,7 @@ defmodule Maraithon.ConnectedAccountsTest do
   test "mark_error/3 sends one push and email reconnect alert for oauth_reauth_required" do
     user_id = "reauth-alert-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     {:ok, _token} =
       OAuth.store_tokens(user_id, "google:founder@example.com", %{
@@ -90,17 +77,13 @@ defmodule Maraithon.ConnectedAccountsTest do
                "oauth_reauth_required"
              )
 
-    messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{payload: payload}] = CapturingAPNS.recorded()
 
-    assert [
-             %{
-               chat_id: "6114124042",
-               text: text
-             }
-           ] = messages
+    assert payload["aps"]["alert"]["title"] == "Connector health: Google"
 
-    assert text =~ "founder@example.com"
-    assert text =~ "https://maraithon.test/connectors/google"
+    body = payload["aps"]["alert"]["body"]
+    assert body =~ "founder@example.com"
+    assert body =~ "needs re-authentication"
 
     emails = Agent.get(:capturing_email_recorder, &Enum.reverse/1)
 
@@ -138,12 +121,7 @@ defmodule Maraithon.ConnectedAccountsTest do
   test "reconnect push during quiet hours is held and not marked sent; retried outside" do
     user_id = "quiet-hours-reconnect-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "7223344",
-        metadata: %{"chat_id" => "7223344"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     {:ok, _token} =
       OAuth.store_tokens(user_id, "google:quiet@example.com", %{
@@ -172,8 +150,8 @@ defmodule Maraithon.ConnectedAccountsTest do
                "oauth_reauth_required"
              )
 
-    # No Telegram message went out and no sent_now receipt exists.
-    assert Agent.get(:capturing_telegram_recorder, &Enum.reverse/1) == []
+    # No push went out and no sent_now receipt exists.
+    assert CapturingAPNS.recorded() == []
 
     refute Repo.exists?(
              from(receipt in Maraithon.TelegramAssistant.PushReceipt,
@@ -205,9 +183,8 @@ defmodule Maraithon.ConnectedAccountsTest do
                "oauth_reauth_required"
              )
 
-    messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
-    assert [%{chat_id: "7223344", text: text}] = messages
-    assert text =~ "quiet@example.com"
+    assert [%{payload: payload}] = CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["body"] =~ "quiet@example.com"
 
     assert Repo.exists?(
              from(receipt in Maraithon.TelegramAssistant.PushReceipt,
@@ -225,12 +202,7 @@ defmodule Maraithon.ConnectedAccountsTest do
   test "mark_error/3 sends email when legacy metadata only proves prior push delivery" do
     user_id = "legacy-reconnect-alert-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     # SPEC 10 R3: re-notify-after-N-days makes `sent_at` recency matter now,
     # so this must be "recently sent" (within the renotify window) - the
@@ -259,7 +231,7 @@ defmodule Maraithon.ConnectedAccountsTest do
                "oauth_reauth_required"
              )
 
-    assert Agent.get(:capturing_telegram_recorder, &Enum.reverse/1) == []
+    assert CapturingAPNS.recorded() == []
 
     assert [
              %{
@@ -305,12 +277,7 @@ defmodule Maraithon.ConnectedAccountsTest do
   test "report_access_issue/3 sends one push and email reconnect alert when Gmail access is unavailable" do
     user_id = "access-issue-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     assert {:ok, _token} =
              OAuth.store_tokens(user_id, "google:founder@example.com", %{
@@ -322,17 +289,10 @@ defmodule Maraithon.ConnectedAccountsTest do
     :ok = ConnectedAccounts.report_access_issue(user_id, "google:founder@example.com", :no_token)
     :ok = ConnectedAccounts.report_access_issue(user_id, "google:founder@example.com", :no_token)
 
-    messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{payload: payload}] = CapturingAPNS.recorded()
 
-    assert [
-             %{
-               chat_id: "6114124042",
-               text: text
-             }
-           ] = messages
-
-    assert text =~ "founder@example.com"
-    assert text =~ "https://maraithon.test/connectors/google"
+    assert payload["aps"]["alert"]["title"] == "Connector health: Google"
+    assert payload["aps"]["alert"]["body"] =~ "founder@example.com"
 
     assert [
              %{
@@ -353,12 +313,7 @@ defmodule Maraithon.ConnectedAccountsTest do
   test "mark_disconnected/3 sends one push and email reconnect alert for unexpected disconnects" do
     user_id = "disconnect-alert-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     {:ok, _token} =
       OAuth.store_tokens(user_id, "google:founder@example.com", %{
@@ -373,18 +328,11 @@ defmodule Maraithon.ConnectedAccountsTest do
     assert {:ok, _account} =
              ConnectedAccounts.mark_disconnected(user_id, "google:founder@example.com")
 
-    messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{payload: payload}] = CapturingAPNS.recorded()
 
-    assert [
-             %{
-               chat_id: "6114124042",
-               text: text
-             }
-           ] = messages
-
-    assert text =~ "founder@example.com"
-    assert text =~ "was disconnected"
-    assert text =~ "https://maraithon.test/connectors/google"
+    body = payload["aps"]["alert"]["body"]
+    assert body =~ "founder@example.com"
+    assert body =~ "was disconnected"
 
     assert [
              %{
@@ -394,6 +342,7 @@ defmodule Maraithon.ConnectedAccountsTest do
            ] = Agent.get(:capturing_email_recorder, &Enum.reverse/1)
 
     assert email.text_body =~ "was disconnected"
+    assert email.text_body =~ "https://maraithon.test/connectors/google"
 
     account = ConnectedAccounts.get(user_id, "google:founder@example.com")
     assert account.status == "disconnected"
@@ -403,12 +352,7 @@ defmodule Maraithon.ConnectedAccountsTest do
   test "mark_disconnected/3 can suppress reconnect alerts for intentional disconnects" do
     user_id = "manual-disconnect-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     {:ok, _token} =
       OAuth.store_tokens(user_id, "google:founder@example.com", %{
@@ -424,9 +368,7 @@ defmodule Maraithon.ConnectedAccountsTest do
                [notify?: false]
              ])
 
-    messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
-
-    assert messages == []
+    assert CapturingAPNS.recorded() == []
     assert Agent.get(:capturing_email_recorder, &Enum.reverse/1) == []
 
     account = ConnectedAccounts.get(user_id, "google:founder@example.com")
@@ -437,12 +379,7 @@ defmodule Maraithon.ConnectedAccountsTest do
   test "report_access_issue/3 sends a soft 'gone quiet' notice for source_stale (R3)" do
     user_id = "source-stale-alert-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     {:ok, _token} =
       OAuth.store_tokens(user_id, "google:founder@example.com", %{
@@ -454,9 +391,9 @@ defmodule Maraithon.ConnectedAccountsTest do
     :ok =
       ConnectedAccounts.report_access_issue(user_id, "google:founder@example.com", "source_stale")
 
-    assert [%{chat_id: "6114124042", text: text}] =
-             Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{payload: payload}] = CapturingAPNS.recorded()
 
+    text = payload["aps"]["alert"]["body"]
     assert text =~ "connector check"
     assert text =~ "haven't seen"
     assert text =~ "may need attention"
@@ -471,12 +408,7 @@ defmodule Maraithon.ConnectedAccountsTest do
   test "still-broken sources re-notify after the renotify window (R3)" do
     user_id = "renotify-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     old_sent_at = DateTime.utc_now() |> DateTime.add(-4, :day) |> DateTime.to_iso8601()
 
@@ -490,7 +422,7 @@ defmodule Maraithon.ConnectedAccountsTest do
             "reason" => "oauth_reauth_required",
             "sent_at" => old_sent_at,
             "channels" => %{
-              "push" => %{"sent_at" => old_sent_at, "destination" => "6114124042"}
+              "push" => %{"sent_at" => old_sent_at}
             }
           }
         }
@@ -503,7 +435,7 @@ defmodule Maraithon.ConnectedAccountsTest do
                "oauth_reauth_required"
              )
 
-    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{payload: _payload}] = CapturingAPNS.recorded()
 
     account = ConnectedAccounts.get(user_id, "google:founder@example.com")
 
@@ -521,18 +453,13 @@ defmodule Maraithon.ConnectedAccountsTest do
                "oauth_reauth_required"
              )
 
-    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{payload: _payload}] = CapturingAPNS.recorded()
   end
 
   test "reconnecting via OAuth sends exactly one recovery confirmation and re-arms notifications (R4)" do
     user_id = "recovery-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     {:ok, _token} =
       OAuth.store_tokens(user_id, "google:founder@example.com", %{
@@ -549,7 +476,7 @@ defmodule Maraithon.ConnectedAccountsTest do
              )
 
     # Clear the notification recorder so only the recovery send is counted.
-    Agent.update(:capturing_telegram_recorder, fn _ -> [] end)
+    Agent.update(:capturing_apns_recorder, fn _ -> [] end)
 
     assert {:ok, recovered_account} =
              ConnectedAccounts.upsert_from_oauth(user_id, "google:founder@example.com", %{
@@ -561,10 +488,8 @@ defmodule Maraithon.ConnectedAccountsTest do
     assert recovered_account.status == "connected"
     refute get_in(recovered_account.metadata, ["reconnect_notification"])
 
-    assert [%{chat_id: "6114124042", text: text}] =
-             Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
-
-    assert text =~ "connected again"
+    assert [%{payload: payload}] = CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["body"] =~ "connected again"
 
     # A second successful refresh with nothing previously pending must not
     # send another recovery confirmation.
@@ -575,7 +500,7 @@ defmodule Maraithon.ConnectedAccountsTest do
                metadata: %{"account_email" => "founder@example.com"}
              })
 
-    assert [%{chat_id: "6114124042"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{payload: _payload}] = CapturingAPNS.recorded()
 
     # A fresh failure after recovery should be able to notify again
     # (re-armed) once the flap-damping window has passed. Flap damping
@@ -607,19 +532,14 @@ defmodule Maraithon.ConnectedAccountsTest do
                "oauth_reauth_required"
              )
 
-    assert [_recovery, %{chat_id: "6114124042"}] =
-             Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [_recovery, %{payload: renotify_payload}] = CapturingAPNS.recorded()
+    assert renotify_payload["aps"]["alert"]["body"] =~ "re-authentication"
   end
 
   test "rapid fail/recover/fail/recover flapping is damped to one notify and one confirm, and re-arms after the window (R4 flap damping)" do
     user_id = "flap-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram_account} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "6114124042",
-        metadata: %{"chat_id" => "6114124042"}
-      })
+    :ok = CapturingAPNS.enable(user_id)
 
     {:ok, _token} =
       OAuth.store_tokens(user_id, "google:founder@example.com", %{
@@ -636,10 +556,10 @@ defmodule Maraithon.ConnectedAccountsTest do
                "oauth_reauth_required"
              )
 
-    assert [%{text: notify1}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
-    assert notify1 =~ "re-authentication"
+    assert [%{payload: notify1_payload}] = CapturingAPNS.recorded()
+    assert notify1_payload["aps"]["alert"]["body"] =~ "re-authentication"
 
-    Agent.update(:capturing_telegram_recorder, fn _ -> [] end)
+    Agent.update(:capturing_apns_recorder, fn _ -> [] end)
 
     # recover1 -> confirm1
     assert {:ok, _account} =
@@ -649,10 +569,10 @@ defmodule Maraithon.ConnectedAccountsTest do
                metadata: %{"account_email" => "founder@example.com"}
              })
 
-    assert [%{text: confirm1}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
-    assert confirm1 =~ "connected again"
+    assert [%{payload: confirm1_payload}] = CapturingAPNS.recorded()
+    assert confirm1_payload["aps"]["alert"]["body"] =~ "connected again"
 
-    Agent.update(:capturing_telegram_recorder, fn _ -> [] end)
+    Agent.update(:capturing_apns_recorder, fn _ -> [] end)
 
     # fail2, immediately after recover1 (still inside the damping window) ->
     # error state is still recorded, but the notification is held.
@@ -664,7 +584,7 @@ defmodule Maraithon.ConnectedAccountsTest do
              )
 
     assert failed_again_account.status == "error"
-    assert Agent.get(:capturing_telegram_recorder, &Enum.reverse/1) == []
+    assert CapturingAPNS.recorded() == []
 
     # recover2, also immediately -> no pending notification to confirm, so no
     # second "connected again" either. The flap stays silent both directions.
@@ -675,7 +595,7 @@ defmodule Maraithon.ConnectedAccountsTest do
                metadata: %{"account_email" => "founder@example.com"}
              })
 
-    assert Agent.get(:capturing_telegram_recorder, &Enum.reverse/1) == []
+    assert CapturingAPNS.recorded() == []
 
     # A genuine failure after the damping window has elapsed still notifies
     # immediately (re-arm intact). Backdate recovery_confirmed_at instead of
@@ -701,8 +621,8 @@ defmodule Maraithon.ConnectedAccountsTest do
                "oauth_reauth_required"
              )
 
-    assert [%{text: notify2}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
-    assert notify2 =~ "re-authentication"
+    assert [%{payload: notify2_payload}] = CapturingAPNS.recorded()
+    assert notify2_payload["aps"]["alert"]["body"] =~ "re-authentication"
   end
 
   test "get_connected_by_external_account/2 falls back to Telegram metadata chat_id" do

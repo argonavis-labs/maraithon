@@ -6,10 +6,18 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.OAuth
   alias Maraithon.Runtime.FreshnessSweep
+  alias Maraithon.TestSupport.CapturingAPNS
   alias Maraithon.TestSupport.CapturingEmail
   alias Maraithon.TestSupport.CapturingTelegram
 
   setup do
+    start_supervised!(%{
+      id: :capturing_apns_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_apns_recorder]]}
+    })
+
+    # Still used by the Telegram self-heal probe tests below (the silent
+    # getChat probe is not a delivery, so it stays on CapturingTelegram).
     start_supervised!(%{
       id: :capturing_telegram_recorder,
       start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
@@ -20,35 +28,29 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
       start: {Agent, :start_link, [fn -> [] end, [name: :capturing_email_recorder]]}
     })
 
-    Application.put_env(:maraithon, :connected_accounts,
-      telegram_module: CapturingTelegram,
-      email_module: CapturingEmail
-    )
+    Application.put_env(:maraithon, :connected_accounts, email_module: CapturingEmail)
 
-    # Reconnect pushes ride PushBroker (SPEC 02 R9), whose sends go through
-    # TelegramResponder and the :insights telegram module — stub that too or
-    # the captured-notification assertions silently test nothing.
-    previous_insights = Application.get_env(:maraithon, :insights, [])
-
-    Application.put_env(
-      :maraithon,
-      :insights,
-      Keyword.put(previous_insights, :telegram_module, CapturingTelegram)
-    )
-
-    # ... and the broker itself defaults to disabled in tests, which turns
-    # every reconnect push into a silent skip.
+    # Reconnect pushes ride PushBroker (SPEC 02 R9), which now delivers via
+    # APNs to the user's registered devices. The broker defaults to disabled
+    # in tests (which turns every reconnect push into a silent skip), so
+    # enable it, and pin the quiet-hours window away from the current local
+    # hour so the sweep's pushes are never held by the quiet-hours gate.
     previous_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user("setup").hour
 
     Application.put_env(
       :maraithon,
       :telegram_assistant,
-      Keyword.put(previous_assistant, :telegram_unified_push_enabled, true)
+      Keyword.merge(previous_assistant,
+        telegram_unified_push_enabled: true,
+        quiet_hours_start_local: rem(local_hour + 2, 24),
+        quiet_hours_end_local: rem(local_hour + 3, 24)
+      )
     )
 
     on_exit(fn ->
       Application.delete_env(:maraithon, :connected_accounts)
-      Application.put_env(:maraithon, :insights, previous_insights)
       Application.put_env(:maraithon, :telegram_assistant, previous_assistant)
     end)
 
@@ -58,9 +60,7 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
   test "R2: flags a source that has gone quiet beyond its staleness threshold" do
     user_id = "freshness-sweep-stale-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-    {:ok, _telegram} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "112233"})
+    :ok = CapturingAPNS.enable(user_id)
 
     stale_at = DateTime.add(DateTime.utc_now(), -30, :hour)
 
@@ -90,15 +90,13 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
     assert account.status == "error"
     assert get_in(account.metadata, ["last_error", "reason"]) == "source_stale"
 
-    # Filter to this test's own destination: the sweep also walks any other
-    # connected accounts already present (this suite does not run against a
-    # pristine per-test database), so other rows may notify too.
-    assert [%{text: text}] =
-             :capturing_telegram_recorder
-             |> Agent.get(&Enum.reverse/1)
-             |> Enum.filter(&(&1.chat_id == "112233"))
+    # Only this test's user has a registered push device, so every recorded
+    # APNs send belongs to this test even though the sweep walks any other
+    # connected accounts already present.
+    assert [%{payload: payload}] = CapturingAPNS.recorded()
 
-    assert text =~ "haven't seen"
+    assert payload["aps"]["alert"]["title"] == "Connector health: Google"
+    assert payload["aps"]["alert"]["body"] =~ "haven't seen"
   end
 
   test "R2: does not flag a freshly connected account that has not synced yet" do

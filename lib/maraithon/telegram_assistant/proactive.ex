@@ -12,7 +12,6 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   alias Maraithon.ActionLedger
   alias Maraithon.AssistantHarness
   alias Maraithon.BriefingSchedules
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.Timezones
@@ -46,7 +45,7 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   def plan_check_in(user_id, opts \\ [])
 
   def plan_check_in(user_id, opts) when is_binary(user_id) do
-    chat_id = Keyword.get(opts, :chat_id) || ConnectedAccounts.telegram_destination(user_id)
+    chat_id = Keyword.get(opts, :chat_id)
 
     payload = %{
       trigger: proactive_trigger(user_id, chat_id, opts),
@@ -71,8 +70,8 @@ defmodule Maraithon.TelegramAssistant.Proactive do
       not Keyword.get(opts, :force, false) and not enabled?() ->
         {:ok, %{decision: "disabled"}}
 
-      is_nil(Keyword.get(opts, :chat_id) || ConnectedAccounts.telegram_destination(user_id)) ->
-        {:error, :telegram_not_connected}
+      not Maraithon.Push.Notifier.enabled_for_user?(user_id) ->
+        {:error, :no_push_device}
 
       true ->
         do_deliver_check_in(user_id, opts)
@@ -85,12 +84,11 @@ defmodule Maraithon.TelegramAssistant.Proactive do
     if enabled?() or Keyword.get(opts, :force, false) do
       batch_size = Keyword.get(opts, :batch_size, @default_due_batch_size)
 
-      "telegram"
-      |> ConnectedAccounts.list_connected_provider()
-      |> Enum.take(batch_size)
-      |> Enum.reduce(%{sent: 0, held: 0, suppressed: 0, failed: 0, disabled: 0}, fn account,
+      batch_size
+      |> Maraithon.Push.Devices.user_ids_with_active()
+      |> Enum.reduce(%{sent: 0, held: 0, suppressed: 0, failed: 0, disabled: 0}, fn user_id,
                                                                                     acc ->
-        case deliver_check_in(account.user_id, opts) do
+        case deliver_check_in(user_id, opts) do
           {:ok, %{"decision" => "sent_now"}} -> %{acc | sent: acc.sent + 1}
           {:ok, %{decision: "sent_now"}} -> %{acc | sent: acc.sent + 1}
           {:ok, %{"decision" => "queued"}} -> %{acc | sent: acc.sent + 1}
@@ -110,7 +108,7 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   end
 
   defp do_deliver_check_in(user_id, opts) do
-    chat_id = Keyword.get(opts, :chat_id) || ConnectedAccounts.telegram_destination(user_id)
+    chat_id = Keyword.get(opts, :chat_id)
 
     context =
       Keyword.get(opts, :context) ||

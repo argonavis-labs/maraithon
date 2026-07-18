@@ -170,6 +170,7 @@ defmodule Maraithon.Todos.Intelligence do
     existing_ids = MapSet.new(existing, & &1.id)
     limit = Keyword.get(opts, :semantic_dedupe_limit, 5)
     embed_opts = Keyword.get(opts, :embed_opts, [])
+
     max_candidates =
       Keyword.get(opts, :semantic_dedupe_max_candidates, @semantic_dedupe_max_candidates)
 

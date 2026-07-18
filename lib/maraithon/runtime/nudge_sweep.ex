@@ -330,7 +330,8 @@ defmodule Maraithon.Runtime.NudgeSweep do
           "due_at_local" => local_label(todo.due_at, timezone_context),
           "snoozed_until_local" => local_label(todo.snoozed_until, timezone_context),
           "last_nudged_at_local" => local_label(todo.last_nudged_at, timezone_context),
-          "follow_up_was_scheduled_for_local" => local_label(todo.next_nudge_at, timezone_context),
+          "follow_up_was_scheduled_for_local" =>
+            local_label(todo.next_nudge_at, timezone_context),
           "captured_at_local" =>
             local_label(todo.source_occurred_at || todo.inserted_at, timezone_context),
           "days_waiting" => days_between(todo.source_occurred_at || todo.inserted_at, now)
@@ -558,7 +559,9 @@ defmodule Maraithon.Runtime.NudgeSweep do
     surfaced
     |> Enum.group_by(fn %{todo: todo} ->
       cond do
-        is_binary(todo.counterparty_person_id) -> {:person, todo.counterparty_person_id}
+        is_binary(todo.counterparty_person_id) ->
+          {:person, todo.counterparty_person_id}
+
         is_binary(todo.counterparty_label) and String.trim(todo.counterparty_label) != "" ->
           {:label, todo.counterparty_label |> String.trim() |> String.downcase()}
 
@@ -707,7 +710,10 @@ defmodule Maraithon.Runtime.NudgeSweep do
       Keyword.get(
         opts,
         :due_soon_horizon_hours,
-        Config.positive_integer(:nudge_sweep_due_soon_horizon_hours, @default_due_soon_horizon_hours)
+        Config.positive_integer(
+          :nudge_sweep_due_soon_horizon_hours,
+          @default_due_soon_horizon_hours
+        )
       ),
       @default_due_soon_horizon_hours
     )

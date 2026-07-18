@@ -553,6 +553,7 @@ defmodule Maraithon.TodosTest do
       bucket = Todos.bucket_for_brief(user_id, now: now, timezone_offset_hours: -5)
 
       assert bucket["source"] == "todos_owed_by_me"
+
       assert Map.keys(bucket) |> Enum.sort() ==
                ~w(active_count coming_up due_today no_deadline overdue source)
 

@@ -460,9 +460,14 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
 
     oldest_age_seconds =
       case oldest_inserted_at do
-        %DateTime{} = at -> max(DateTime.diff(now, at, :second), 0)
-        %NaiveDateTime{} = at -> max(DateTime.diff(now, DateTime.from_naive!(at, "Etc/UTC"), :second), 0)
-        _ -> 0
+        %DateTime{} = at ->
+          max(DateTime.diff(now, at, :second), 0)
+
+        %NaiveDateTime{} = at ->
+          max(DateTime.diff(now, DateTime.from_naive!(at, "Etc/UTC"), :second), 0)
+
+        _ ->
+          0
       end
 
     alarms =

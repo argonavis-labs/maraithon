@@ -637,18 +637,16 @@ defmodule Maraithon.ConnectedAccounts do
     |> Enum.reject(&is_nil/1)
   end
 
+  # Telegram is retired: the push channel means the user's phone. The broker
+  # resolves registered devices itself, so no destination is needed here.
   defp reconnect_push_channel(%ConnectedAccount{} = account, message, reason) do
-    case telegram_destination(account.user_id) do
-      nil ->
-        nil
-
-      destination ->
-        %{
-          "channel" => "push",
-          "destination" => destination,
-          "message" => message,
-          "reason" => reason
-        }
+    if Maraithon.Push.Notifier.enabled_for_user?(account.user_id) do
+      %{
+        "channel" => "push",
+        "destination" => nil,
+        "message" => message,
+        "reason" => reason
+      }
     end
   end
 

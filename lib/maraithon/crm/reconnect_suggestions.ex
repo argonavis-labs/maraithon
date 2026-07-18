@@ -146,7 +146,10 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
     ranked_people =
       Person
       |> where([p], p.user_id == ^user_id and p.status == "active")
-      |> where([p], p.communication_score > 0 or p.relationship_strength > 0 or p.network_rank > 0)
+      |> where(
+        [p],
+        p.communication_score > 0 or p.relationship_strength > 0 or p.network_rank > 0
+      )
       |> order_by([p],
         desc: p.communication_score,
         desc: p.network_rank,
@@ -232,7 +235,8 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
           person: person,
           category: category,
           headline: headline(category),
-          reason: reason(category, person, open_work, goal_links, meeting, days_since, cadence, now),
+          reason:
+            reason(category, person, open_work, goal_links, meeting, days_since, cadence, now),
           suggested_action: suggested_action(category, person, open_work, goal_links, meeting),
           days_since_last: days_since,
           cadence_days: cadence,
@@ -244,7 +248,17 @@ defmodule Maraithon.Crm.ReconnectSuggestions do
           next_meeting_at: meeting && meeting.next_meeting_at,
           next_meeting_title: meeting && meeting.next_meeting_title,
           priority:
-            priority(category, person, open_work, meeting, overdue?, days_since, cadence, score, now)
+            priority(
+              category,
+              person,
+              open_work,
+              meeting,
+              overdue?,
+              days_since,
+              cadence,
+              score,
+              now
+            )
         }
     end
   end

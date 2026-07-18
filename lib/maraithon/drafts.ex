@@ -101,7 +101,8 @@ defmodule Maraithon.Drafts do
       # SPEC 07 R1: thread the draft's subject/recipient alongside purpose so
       # the recall query reflects who/what the draft is actually about, not
       # just the free-text purpose.
-      deep_memory: Memory.prompt_context(user_id, query: draft_memory_query(purpose, attrs), limit: 8)
+      deep_memory:
+        Memory.prompt_context(user_id, query: draft_memory_query(purpose, attrs), limit: 8)
     }
 
     response_shape =

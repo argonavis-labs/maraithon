@@ -8,6 +8,7 @@ defmodule Maraithon.DeliveryErrorCopy do
   """
 
   @missing_chat "Telegram is not linked yet. Connect Telegram before sending this message."
+  @no_push_device "Notifications are waiting for the Maraithon app. Sign in on your phone to receive them."
   @needs_reconnect "Telegram needs reconnecting before delivery can continue."
   @temporarily_unavailable "Telegram is temporarily unavailable. Wait a minute before sending another delivery."
   @timed_out "Delivery timed out. Check Telegram status before sending another delivery."
@@ -73,6 +74,12 @@ defmodule Maraithon.DeliveryErrorCopy do
 
   defp classify_reason(reason) when reason in ["missing_chat_id", ":missing_chat_id"] do
     @missing_chat
+  end
+
+  # Deliberately non-terminal: the delivery becomes sendable the moment a
+  # device registers.
+  defp classify_reason(reason) when reason in ["no_push_device", ":no_push_device"] do
+    @no_push_device
   end
 
   defp classify_reason(reason)

@@ -16,15 +16,6 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def provider_subtitle(_provider), do: "Connection details unavailable."
 
-  def telegram_connected?(providers) when is_list(providers) do
-    Enum.any?(providers, fn provider ->
-      provider.provider == "telegram" and
-        (provider.status == :connected or provider[:disconnectable?] == true)
-    end)
-  end
-
-  def telegram_connected?(_providers), do: false
-
   def setup_completion_text(%{setup_status: :configured}), do: "Connection ready"
   def setup_completion_text(_provider), do: "Connection needs attention"
 
@@ -51,23 +42,18 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def provider_account_summary(_provider), do: "0 accounts connected"
 
-  def empty_accounts_message(%{provider: "desktop"}, _telegram_connected),
+  def empty_accounts_message(%{provider: "desktop"}),
     do: "Install and sign in to the Mac companion app to pair this Mac."
 
-  def empty_accounts_message(provider, telegram_connected) when is_map(provider) do
-    cond do
-      requires_telegram_first?(provider) and not telegram_connected ->
-        "Connect Telegram first, then add #{Map.get(provider, :label, "this source")}."
-
-      connection_action_enabled?(provider) ->
-        "#{connection_primary_action(provider)} to make context available."
-
-      true ->
-        "Finish connecting this source to make context available."
+  def empty_accounts_message(provider) when is_map(provider) do
+    if connection_action_enabled?(provider) do
+      "#{connection_primary_action(provider)} to make context available."
+    else
+      "Finish connecting this source to make context available."
     end
   end
 
-  def empty_accounts_message(_provider, _telegram_connected),
+  def empty_accounts_message(_provider),
     do: "Finish connecting this source to make context available."
 
   def connection_error_detail(%{details: details}), do: public_error_detail(details)
@@ -83,12 +69,6 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connected_accounts_heading(%{provider: "slack"}), do: "Connected Workspaces"
   def connected_accounts_heading(%{provider: "desktop"}), do: "Paired Macs"
   def connected_accounts_heading(_provider), do: "Connected Accounts"
-
-  def requires_telegram_first?(provider) when is_map(provider) do
-    Map.get(provider, :provider) != "telegram" and Map.get(provider, :requires_telegram?, true)
-  end
-
-  def requires_telegram_first?(_provider), do: true
 
   def provider_grant_panels_visible?(provider) when is_map(provider) do
     case Map.get(provider, :provider) do
@@ -116,14 +96,6 @@ defmodule MaraithonWeb.ConnectorsHTML do
     do: "Reconnect Google"
 
   def connection_primary_action(%{provider: "google"}), do: "Connect Google"
-
-  def connection_primary_action(%{provider: "telegram", status: :connected}),
-    do: "View Telegram"
-
-  def connection_primary_action(%{provider: "telegram", status: :needs_refresh}),
-    do: "Reconnect Telegram"
-
-  def connection_primary_action(%{provider: "telegram"}), do: "Link Telegram"
 
   def connection_primary_action(%{provider: "desktop", status: status})
       when status in [:connected, :partial],
@@ -165,10 +137,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_primary_action_visible_on_detail?(provider),
     do: connection_action_enabled?(provider)
 
-  def account_reconnect_visible?(provider, account, telegram_connected) do
+  def account_reconnect_visible?(provider, account) do
     account[:reconnect_url] &&
       account[:needs_reconnect?] == true &&
-      (provider.provider == "telegram" || telegram_connected) &&
       provider[:connect_blocked?] != true
   end
 
@@ -416,7 +387,6 @@ defmodule MaraithonWeb.ConnectorsHTML do
   defp connector_logo_src(:linear), do: "/images/connector-logos/linear.svg"
   defp connector_logo_src(:notion), do: "/images/connector-logos/notion.png"
   defp connector_logo_src(:notaui), do: "/images/connector-logos/notaui.png"
-  defp connector_logo_src(:telegram), do: "/images/connector-logos/telegram.png"
   defp connector_logo_src(:desktop), do: "/favicon.ico"
   defp connector_logo_src(_provider), do: "/favicon.ico"
 

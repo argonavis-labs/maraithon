@@ -154,8 +154,8 @@ defmodule Maraithon.TelegramAssistant.LivenessSessionStreamingTest do
 
     :ok = LivenessSession.note_tool(run_id, "review_connected_context", %{"query" => "Elena"})
 
-    assert_receive {:telegram_edit, "c1", "9999",
-                    "Checking relationship context for Elena.", _opts},
+    assert_receive {:telegram_edit, "c1", "9999", "Checking relationship context for Elena.",
+                    _opts},
                    1_000
   end
 end

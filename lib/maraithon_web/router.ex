@@ -209,7 +209,6 @@ defmodule MaraithonWeb.Router do
     get "/admin/open-work/rebuild/:job_id", AdminController, :open_work_rebuild_status
     post "/admin/open-work/restore-recent", AdminController, :restore_recent_open_work
     post "/admin/operator-state/reset", AdminController, :reset_operator_state
-    post "/admin/telegram/push", AdminController, :push_telegram
     post "/admin/insights/refresh", AdminController, :refresh_insights
     post "/admin/chief_of_staff/ensure", AdminController, :ensure_chief_of_staff
     post "/admin/chief-of-staff/ensure", AdminController, :ensure_chief_of_staff
@@ -271,6 +270,5 @@ defmodule MaraithonWeb.Router do
     get "/whatsapp", WebhookController, :whatsapp
     post "/whatsapp", WebhookController, :whatsapp
     post "/linear", WebhookController, :linear
-    post "/telegram/:secret_path", WebhookController, :telegram
   end
 end

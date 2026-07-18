@@ -2008,13 +2008,17 @@ defmodule Maraithon.TelegramAssistantTest do
         }
       ])
 
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
     assert %{sent: 1, failed: 0} = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
 
     delivery =
       Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
 
     assert delivery.status == "sent"
-    assert is_binary(delivery.provider_message_id)
+
+    assert [%{payload: payload}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["title"] == "Send Sarah the deck"
+    assert payload["deeplink"] == "maraithon://stream"
 
     receipt =
       Repo.one!(
@@ -2026,28 +2030,6 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert receipt.origin_type == "insight"
     assert receipt.decision == "sent_now"
-
-    conversation =
-      Repo.one!(
-        from conversation in Conversation,
-          where: conversation.linked_delivery_id == ^delivery.id,
-          order_by: [desc: conversation.inserted_at],
-          limit: 1
-      )
-
-    assert get_in(conversation.metadata, ["mode"]) == "push_thread"
-
-    turn =
-      Repo.one!(
-        from turn in Turn,
-          where: turn.conversation_id == ^conversation.id,
-          order_by: [desc: turn.inserted_at],
-          limit: 1
-      )
-
-    assert turn.turn_kind == "assistant_push"
-    assert turn.origin_type == "insight"
-    assert turn.origin_id == delivery.id
   end
 
   test "check-in briefs deliver an intro with a review open work button", %{
@@ -2081,57 +2063,18 @@ defmodule Maraithon.TelegramAssistantTest do
                }
              })
 
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
     assert :ok = Briefs.send_brief(brief)
 
-    sends =
-      telegram_events()
-      |> Enum.filter(&(&1.type == :send))
-
-    assert length(sends) == 1
-    [intro] = sends
-
-    assert intro.text =~ "<b>Chief of staff check-in</b>"
-    assert intro.text =~ "<b>Check-in: 2 items ready for a decision</b>"
-    assert intro.text =~ "1 new today"
-    assert intro.text =~ "1 carried over from earlier"
-
-    assert intro.text =~ "Best next move: Reply to Charlie about the budget."
-    assert intro.text =~ "Open work: 1 new today. 1 carried over from earlier."
-
-    assert intro.text =~ "Then decide the rest"
-    assert intro.text =~ "mark done, snooze, keep active, or dismiss each one"
-    assert {best_index, _} = :binary.match(intro.text, "Best next move")
-    assert {open_work_index, _} = :binary.match(intro.text, "Open work:")
-    assert best_index < open_work_index
-    refute intro.text =~ "here's the open work"
-    refute intro.text =~ "not important"
-    refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
-
-    keyboard = get_in(intro.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Review open work"))
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Maraithon"))
+    # Delivery is a phone push: banner carries the summary, the app renders
+    # the digest (and never the internal placeholder body).
+    assert [%{payload: payload}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["title"] =~ "Check-in: 2 items ready for a decision"
+    assert payload["aps"]["alert"]["body"] =~ "Two open communication loops"
+    refute payload["aps"]["alert"]["body"] =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
 
     updated_brief = Repo.get!(Maraithon.Briefs.Brief, brief.id)
     assert updated_brief.status == "sent"
-    assert updated_brief.provider_message_id == intro.message_id
-
-    conversation =
-      Repo.one!(
-        from conversation in Conversation,
-          where: conversation.user_id == ^user_id,
-          order_by: [desc: conversation.inserted_at],
-          limit: 1
-      )
-
-    turns =
-      Repo.all(
-        from turn in Turn,
-          where: turn.conversation_id == ^conversation.id,
-          order_by: [asc: turn.inserted_at]
-      )
-
-    assert Enum.map(turns, & &1.turn_kind) == ["assistant_push"]
-    assert get_in(hd(turns).structured_data, ["todo_ids"]) == [new_todo.id, older_todo.id]
   end
 
   test "end-of-day briefs deliver an intro with a review open work button", %{
@@ -2165,34 +2108,14 @@ defmodule Maraithon.TelegramAssistantTest do
                }
              })
 
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
     assert :ok = Briefs.send_brief(brief)
 
-    sends =
-      telegram_events()
-      |> Enum.filter(&(&1.type == :send))
+    assert [%{payload: payload}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["title"] =~ "End-of-day review: 2 items to close or reset"
+    refute payload["aps"]["alert"]["body"] =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
 
-    assert length(sends) == 1
-    [intro] = sends
-
-    assert intro.text =~ "<b>End-of-day review</b>"
-    assert intro.text =~ "<b>End-of-day review: 2 items to close or reset</b>"
-    refute intro.text =~ "debt"
-    assert intro.text =~ "1 new today"
-    assert intro.text =~ "1 carried over from earlier"
-
-    assert intro.text =~ "Best next move: Reply to David about the laptop."
-    assert intro.text =~ "Open work: 1 new today. 1 carried over from earlier."
-
-    assert intro.text =~ "mark done, snooze, keep active, or dismiss each one"
-    assert {best_index, _} = :binary.match(intro.text, "Best next move")
-    assert {open_work_index, _} = :binary.match(intro.text, "Open work:")
-    assert best_index < open_work_index
-    refute intro.text =~ "stale"
-    refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
-
-    keyboard = get_in(intro.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Review open work"))
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Maraithon"))
+    assert Repo.get!(Maraithon.Briefs.Brief, brief.id).status == "sent"
   end
 
   test "medium runs emit native typing without a progress note" do

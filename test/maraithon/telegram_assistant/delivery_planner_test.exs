@@ -528,7 +528,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
           })
         )
 
-      llm_complete = plan_llm(%{candidate.id => {"interrupt_now", "The follow-up moment arrived."}})
+      llm_complete =
+        plan_llm(%{candidate.id => {"interrupt_now", "The follow-up moment arrived."}})
 
       assert {:ok, result} =
                DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)

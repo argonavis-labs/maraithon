@@ -10,7 +10,6 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ChiefOfStaff.OpenWorkRebuild
   alias Maraithon.ChiefOfStaff.SourceScope
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connections
   alias Maraithon.Diagnostics.Export, as: DiagnosticsExport
   alias Maraithon.InsightNotifications.Delivery
@@ -18,7 +17,6 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.Insights.Insight
   alias Maraithon.Repo
   alias Maraithon.Runtime
-  alias Maraithon.TelegramResponder
   alias Maraithon.TelegramAssistant.PushReceipt
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
@@ -434,36 +432,6 @@ defmodule MaraithonWeb.AdminController do
     end
   end
 
-  def push_telegram(conn, params) do
-    user_id = parse_user_id(params["user_id"])
-    message = blank_to_nil(params["message"] || params["body"])
-
-    with body when is_binary(body) <- message,
-         chat_id when is_binary(chat_id) <-
-           blank_to_nil(params["chat_id"]) || telegram_chat_id(user_id),
-         {:ok, result} <- TelegramResponder.send(chat_id, body, parse_mode: "HTML") do
-      json(conn, %{
-        status: "sent",
-        user_id: user_id,
-        chat_id: chat_id,
-        message_id: result["message_id"]
-      })
-    else
-      nil ->
-        conn
-        |> put_status(:bad_request)
-        |> json(%{
-          error: "invalid_params",
-          message: "message and connected Telegram chat are required"
-        })
-
-      {:error, reason} ->
-        conn
-        |> put_status(:bad_gateway)
-        |> json(%{error: "telegram_push_failed", message: admin_error(:telegram_push, reason)})
-    end
-  end
-
   def refresh_insights(conn, params) do
     user_id = parse_user_id(params["user_id"])
 
@@ -650,21 +618,6 @@ defmodule MaraithonWeb.AdminController do
 
   defp falsey_param?(value) when value in [false, "false", "0", 0, "no", "off"], do: true
   defp falsey_param?(_value), do: false
-
-  defp telegram_chat_id(user_id) when is_binary(user_id) do
-    case ConnectedAccounts.get(user_id, "telegram") do
-      %{status: "connected", external_account_id: value} when is_binary(value) ->
-        blank_to_nil(value)
-
-      %{status: "connected", metadata: metadata} when is_map(metadata) ->
-        blank_to_nil(metadata["chat_id"])
-
-      _ ->
-        nil
-    end
-  end
-
-  defp telegram_chat_id(_user_id), do: nil
 
   defp parse_apps_param(nil), do: {:ok, []}
   defp parse_apps_param(""), do: {:ok, []}

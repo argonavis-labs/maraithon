@@ -523,7 +523,11 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     assert Enum.any?(gmail_buttons, &(&1["text"] == "Send"))
     assert Enum.any?(gmail_buttons, &(&1["text"] == "Redraft Email"))
-    assert Enum.any?(gmail_buttons, &(&1["callback_data"] == "tgtodo:#{gmail_todo.id}:draft_email"))
+
+    assert Enum.any?(
+             gmail_buttons,
+             &(&1["callback_data"] == "tgtodo:#{gmail_todo.id}:draft_email")
+           )
 
     {:ok, [slack_todo]} =
       Todos.upsert_many(user_id, [
@@ -547,7 +551,11 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     assert Enum.any?(slack_buttons, &(&1["text"] == "Send"))
     assert Enum.any?(slack_buttons, &(&1["text"] == "Redraft Slack"))
-    assert Enum.any?(slack_buttons, &(&1["callback_data"] == "tgtodo:#{slack_todo.id}:draft_slack"))
+
+    assert Enum.any?(
+             slack_buttons,
+             &(&1["callback_data"] == "tgtodo:#{slack_todo.id}:draft_slack")
+           )
   end
 
   test "draft callback persists the generated draft onto the todo and refreshes the card with a Send button",
@@ -844,7 +852,9 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     assert last_telegram_message(:callback).opts[:text] =~ "Could not find where to send this"
 
-    refute Repo.exists?(from(prepared_action in PreparedAction, where: prepared_action.user_id == ^user_id))
+    refute Repo.exists?(
+             from(prepared_action in PreparedAction, where: prepared_action.user_id == ^user_id)
+           )
 
     untouched = Todos.get_for_user(user_id, todo.id)
     assert untouched.status == "open"
@@ -1053,8 +1063,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
       payload: %{"todo_id" => todo_id, "text" => "Prepared body"},
       preview_text: "Prepared body",
       status: "awaiting_confirmation",
-      expires_at:
-        Keyword.get(opts, :expires_at, DateTime.add(DateTime.utc_now(), 3600, :second))
+      expires_at: Keyword.get(opts, :expires_at, DateTime.add(DateTime.utc_now(), 3600, :second))
     })
   end
 
@@ -1166,6 +1175,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     rows = edit.opts[:reply_markup]["inline_keyboard"]
     assert length(rows) == 1
+
     assert rows |> List.flatten() |> Enum.map(& &1["callback_data"]) ==
              [
                "tgtodo:#{third.id}:important",

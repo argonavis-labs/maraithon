@@ -8,11 +8,8 @@ defmodule MaraithonWeb.WebhookController do
     Gmail,
     Slack,
     WhatsApp,
-    Linear,
-    Telegram
+    Linear
   }
-
-  alias Maraithon.InsightNotifications
 
   require Logger
 
@@ -112,21 +109,6 @@ defmodule MaraithonWeb.WebhookController do
     )
   end
 
-  @doc """
-  Handle Telegram webhooks.
-
-  POST /webhooks/telegram/:secret_path
-  """
-  def telegram(conn, params) do
-    handle_signed_connector(conn, params,
-      connector_module: Telegram,
-      signature_log: "Telegram verification failed",
-      signature_error: "Invalid request",
-      failure_log: "Telegram webhook failed",
-      on_event: &handle_telegram_event/1
-    )
-  end
-
   defp handle_slack(conn, params) do
     case Slack.handle_webhook(conn, params) do
       {:challenge, challenge} ->
@@ -203,10 +185,6 @@ defmodule MaraithonWeb.WebhookController do
     error ->
       Logger.warning("Connector side-effect handler failed", reason: Exception.message(error))
       :ok
-  end
-
-  defp handle_telegram_event(event) do
-    InsightNotifications.handle_telegram_event(event)
   end
 
   defp handle_signed_connector(conn, params, opts) do

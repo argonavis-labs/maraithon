@@ -102,8 +102,12 @@ defmodule Maraithon.Memory.EmbeddingBackfill do
 
       %Item{} = item ->
         case Embedding.refresh(item, opts) do
-          {:ok, :stored} -> :refreshed
-          {:ok, _other} -> :skipped
+          {:ok, :stored} ->
+            :refreshed
+
+          {:ok, _other} ->
+            :skipped
+
           {:error, reason} ->
             Logger.warning("memory item embedding backfill failed",
               memory_id: id,

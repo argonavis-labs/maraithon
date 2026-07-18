@@ -10,7 +10,6 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   alias Maraithon.BriefingSchedules
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightFeedback
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.InsightNotifications.MemoryGate
@@ -72,8 +71,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           {:ok, empty_user_summary(user_id)}
 
         [_ | _] ->
-          with chat_id when is_binary(chat_id) <- telegram_destination(user_id, opts),
-               payload <- build_payload(user_id, chat_id, candidates, opts),
+          with true <- deliverable?(user_id),
+               payload <- build_payload(user_id, nil, candidates, opts),
                {:ok, raw_plan} <- AssistantHarness.plan_delivery(payload, opts) do
             plan =
               raw_plan
@@ -87,7 +86,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
             dispatch_counts =
               if dispatch? do
-                dispatch(user_id, chat_id, planned, plan)
+                dispatch(user_id, nil, planned, plan)
               else
                 %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}
               end
@@ -107,7 +106,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
                failed: dispatch_counts.failed
              }}
           else
-            nil -> {:error, :telegram_not_connected}
+            false -> {:error, :no_push_device}
             {:error, reason} -> {:error, reason}
           end
       end
@@ -505,14 +504,22 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           maybe_mark_brief_delivered(candidate)
           maybe_mark_insight_delivery_sent(candidate)
           maybe_send_candidate_todo_cards(conversation_id, candidate)
-          record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "sent_now"})
+
+          record_dispatch_decision(candidate, "proactive.sent", "sent", %{
+            "decision" => "sent_now"
+          })
+
           %{acc | delivered: acc.delivered + 1}
 
         {:ok, %{decision: "sent_now"}} ->
           {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
           maybe_mark_brief_delivered(candidate)
           maybe_mark_insight_delivery_sent(candidate)
-          record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "sent_now"})
+
+          record_dispatch_decision(candidate, "proactive.sent", "sent", %{
+            "decision" => "sent_now"
+          })
+
           %{acc | delivered: acc.delivered + 1}
 
         {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
@@ -562,7 +569,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   defp bump_reason(reasons, _reason), do: reasons
 
-  defp dispatch_digest(_user_id, _chat_id, [], _plan), do: %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}
+  defp dispatch_digest(_user_id, _chat_id, [], _plan),
+    do: %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}
 
   defp dispatch_digest(user_id, chat_id, candidates, plan) do
     digest_intro = digest_intro(plan)
@@ -608,11 +616,23 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
       {:ok, %{decision: "held_rate_limit", reason: reason}} ->
         hold_digest_candidates(candidates, reason)
-        %{delivered: 0, failed: 0, held: length(candidates), hold_reasons: %{reason => length(candidates)}}
+
+        %{
+          delivered: 0,
+          failed: 0,
+          held: length(candidates),
+          hold_reasons: %{reason => length(candidates)}
+        }
 
       {:ok, _result} ->
         hold_digest_candidates(candidates, "unknown")
-        %{delivered: 0, failed: 0, held: length(candidates), hold_reasons: %{"unknown" => length(candidates)}}
+
+        %{
+          delivered: 0,
+          failed: 0,
+          held: length(candidates),
+          hold_reasons: %{"unknown" => length(candidates)}
+        }
 
       {:error, _reason} ->
         %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
@@ -1008,8 +1028,11 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   defp load_conversation(_conversation_id), do: nil
 
-  defp telegram_destination(user_id, opts) do
-    Keyword.get(opts, :chat_id) || ConnectedAccounts.telegram_destination(user_id)
+  # Telegram is retired; planning proceeds only for users whose phone can
+  # receive the result. Candidates for everyone else stay pending until a
+  # device registers (or they expire on the queue's own TTL).
+  defp deliverable?(user_id) do
+    Maraithon.Push.Notifier.enabled_for_user?(user_id)
   end
 
   defp disposition_counts(planned) do

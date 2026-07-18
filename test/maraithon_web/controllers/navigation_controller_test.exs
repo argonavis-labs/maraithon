@@ -19,13 +19,12 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Connected Apps"
-      assert html =~ "Connect Telegram first so Maraithon can send proactive updates."
       assert html =~ "Maraithon Mac companion"
       assert html =~ "Google Workspace"
       assert html =~ "Notaui"
       assert html =~ "Slack"
-      assert html =~ "Telegram required"
-      assert html =~ "Connect Telegram first"
+      # Telegram is retired: no card, no gating copy.
+      refute html =~ "Telegram"
       assert html =~ "Set up Mac companion"
     end
 
@@ -228,7 +227,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Connected Apps"
       assert html =~ "GitHub"
       assert html =~ "0 accounts connected"
-      assert html =~ "Connect Telegram first, then add GitHub."
+      refute html =~ "Connect Telegram first"
       refute html =~ "No accounts connected."
       refute html =~ "No connected accounts yet."
       refute html =~ "Connection readiness"
@@ -380,41 +379,6 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Disconnect"
     end
 
-    test "GET /connectors/telegram shows connected chat details without linked copy", %{
-      conn: conn
-    } do
-      user_id = "telegram-user@example.com"
-      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-      {:ok, _agent} =
-        Agents.create_agent(%{
-          user_id: user_id,
-          behavior: "founder_followthrough_agent",
-          config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5}
-        })
-
-      {:ok, account} =
-        ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-          external_account_id: "6114124042",
-          metadata: %{"username" => "kentfenwick"}
-        })
-
-      Repo.update_all(
-        from(connected_account in ConnectedAccount, where: connected_account.id == ^account.id),
-        set: [updated_at: ~U[2026-05-30 18:30:00Z]]
-      )
-
-      conn = conn |> log_in_test_user(user_id) |> get("/connectors/telegram")
-      html = html_response(conn, 200)
-
-      assert html =~ "Delivery linked to @kentfenwick"
-      assert html =~ "Last updated May 30, 2026 at 2:30 PM ET"
-      refute html =~ "2026-05-30 18:30 UTC"
-      refute html =~ "Chat ID 6114124042"
-      refute html =~ "6114124042"
-      refute html =~ "Linked chat"
-    end
-
     test "GET /how-it-works renders the guide page", %{conn: conn} do
       conn = conn |> log_in_test_user() |> get("/how-it-works")
       html = html_response(conn, 200)
@@ -476,8 +440,8 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert redirected_to(conn) == "/connectors"
     end
 
-    test "GET /auth/google requires telegram before starting OAuth", %{conn: conn} do
-      user_id = "oauth-telegram-required-#{System.unique_integer([:positive])}@example.com"
+    test "GET /auth/google starts OAuth without any Telegram prerequisite", %{conn: conn} do
+      user_id = "oauth-no-telegram-#{System.unique_integer([:positive])}@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
       conn =
@@ -489,10 +453,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
           "return_to" => "/connectors"
         })
 
-      assert redirected_to(conn) == "/connectors"
-
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) ==
-               "Connect Telegram before linking other apps."
+      assert redirected_to(conn) =~ "accounts.google.com"
     end
   end
 

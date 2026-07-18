@@ -29,7 +29,7 @@ defmodule Maraithon.BriefsTest do
       :telegram_assistant,
       Keyword.merge(original_assistant,
         telegram_full_chat_enabled: true,
-        telegram_unified_push_enabled: false,
+        telegram_unified_push_enabled: true,
         proactive_delivery_planner_enabled: false
       )
     )
@@ -48,6 +48,11 @@ defmodule Maraithon.BriefsTest do
     start_supervised!(%{
       id: :capturing_telegram_recorder,
       start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
+    })
+
+    start_supervised!(%{
+      id: :capturing_apns_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_apns_recorder]]}
     })
 
     Repo.delete_all(Brief)
@@ -71,7 +76,8 @@ defmodule Maraithon.BriefsTest do
     %{user_id: user_id, agent: agent}
   end
 
-  test "dispatches pending briefs to Telegram", %{user_id: user_id, agent: agent} do
+  test "dispatches pending briefs to the phone", %{user_id: user_id, agent: agent} do
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
     scheduled_for = DateTime.utc_now()
 
     assert {:ok, %Brief{} = brief} =
@@ -84,20 +90,16 @@ defmodule Maraithon.BriefsTest do
                "dedupe_key" => "brief:morning:test"
              })
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    result = Briefs.dispatch_pending_batch(batch_size: 10)
     assert result.sent == 1
 
-    [message] = Agent.get(:capturing_telegram_recorder, & &1)
+    assert [%{payload: payload}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["title"] =~ "Morning brief"
+    # The push is the doorbell: summary in the banner, full brief in the app.
+    assert payload["aps"]["alert"]["body"] == "Two high-signal loops look open this morning."
+    assert payload["deeplink"] == "maraithon://today"
 
-    updated = Repo.get!(Brief, brief.id)
-    assert updated.status == "sent"
-    assert updated.provider_message_id == message.message_id
-
-    assert message.type == :send
-    assert message.chat_id == "777123"
-    assert message.text =~ "Morning brief"
-    refute message.text =~ "Scheduled for"
-    assert get_in(message.opts, [:reply_markup, "inline_keyboard"]) != nil
+    assert Repo.get!(Brief, brief.id).status == "sent"
   end
 
   test "empty briefing fallback copy uses review-ready language", %{
@@ -128,88 +130,75 @@ defmodule Maraithon.BriefsTest do
                "dedupe_key" => "brief:morning:legacy-default-copy"
              })
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
+    result = Briefs.dispatch_pending_batch(batch_size: 10)
     assert result.sent == 1
 
-    [message] = sent_messages()
-    assert message.text =~ "No priority follow-up is ready to review."
-    refute message.text =~ "connected sources yet"
-    refute message.text =~ "No clear follow-up"
+    assert [%{payload: payload}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    body = payload["aps"]["alert"]["body"]
+    assert body =~ "No priority follow-up is ready to review."
+    refute body =~ "connected sources yet"
+    refute body =~ "No clear follow-up"
   end
 
-  test "fallback delivery failures store product-safe copy", %{
+  test "push delivery failures leave the brief pending for retry", %{
     user_id: user_id,
     agent: agent
   } do
-    Application.put_env(:maraithon, :briefs,
-      telegram_module: Maraithon.TestSupport.FailingTelegram
-    )
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
 
-    Application.put_env(:maraithon, :failing_telegram,
-      reason: {:telegram_error, 500, "RuntimeError token=secret stacktrace %{chat_id: 777123}"}
+    Application.put_env(
+      :maraithon,
+      :apns,
+      Keyword.put(
+        Application.get_env(:maraithon, :apns),
+        :http_module,
+        Maraithon.BriefsTest.FailingAPNS
+      )
     )
 
     assert {:ok, %Brief{} = brief} =
              Briefs.record(user_id, agent.id, %{
                "cadence" => "morning",
                "title" => "Morning brief delivery failure",
-               "summary" => "A brief should fail with safe copy.",
-               "body" => "Keep the failure message suitable for product surfaces.",
+               "summary" => "A brief should stay retryable on a push outage.",
+               "body" => "Keep the brief pending; the next notifier tick retries.",
                "scheduled_for" => DateTime.utc_now(),
-               "dedupe_key" => "brief:morning:fallback-delivery-failure"
+               "dedupe_key" => "brief:morning:push-delivery-failure"
              })
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    result = Briefs.dispatch_pending_batch(batch_size: 10)
     assert result.failed == 1
 
+    # A push outage is retryable: "failed" with non-terminal copy re-enters
+    # list_pending/1 after the retry window (the expiry sweep bounds how
+    # long), and nothing internal leaks into the stored message.
     updated = Repo.get!(Brief, brief.id)
     assert updated.status == "failed"
-
-    assert updated.error_message ==
-             "Telegram is temporarily unavailable. Wait a minute before sending another delivery."
-
-    refute String.contains?(String.downcase(updated.error_message), "try again")
-    refute updated.error_message =~ "token"
-    refute updated.error_message =~ "stacktrace"
-    refute updated.error_message =~ "chat_id"
+    refute DeliveryErrorCopy.terminal?(updated.error_message)
+    refute String.contains?(updated.error_message || "", "InternalServerError")
   end
 
-  test "unified delivery stores terminal missing-chat copy and does not retry it", %{
+  test "a user with no registered phone skips delivery and leaves the brief pending", %{
     user_id: user_id,
     agent: agent
   } do
-    assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
-
-    Application.put_env(
-      :maraithon,
-      :telegram_assistant,
-      Keyword.merge(assistant_config,
-        telegram_full_chat_enabled: true,
-        telegram_unified_push_enabled: true,
-        proactive_delivery_planner_enabled: false
-      )
-    )
-
-    assert {:ok, _account} = ConnectedAccounts.mark_disconnected(user_id, "telegram")
-
     assert {:ok, %Brief{} = brief} =
              Briefs.record(user_id, agent.id, %{
                "cadence" => "morning",
-               "title" => "Morning brief missing chat",
-               "summary" => "A brief cannot send without a linked Telegram chat.",
-               "body" => "The failure should tell the user what to fix.",
+               "title" => "Morning brief without a phone",
+               "summary" => "A brief waits until a device registers.",
+               "body" => "Email already carried the morning brief regardless.",
                "scheduled_for" => DateTime.utc_now(),
-               "dedupe_key" => "brief:morning:unified-missing-chat"
+               "dedupe_key" => "brief:morning:no-push-device"
              })
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
-    assert result.failed == 1
+    result = Briefs.dispatch_pending_batch(batch_size: 10)
+    assert result.skipped == 1
 
     updated = Repo.get!(Brief, brief.id)
-    assert updated.status == "failed"
-    assert updated.error_message == DeliveryErrorCopy.storage_message(:missing_chat_id)
-    assert DeliveryErrorCopy.terminal?(updated.error_message)
-    refute Enum.any?(Briefs.list_pending(10), &(&1.id == updated.id))
+    assert updated.status == "pending"
+    assert Enum.any?(Briefs.list_pending(10), &(&1.id == updated.id))
   end
 
   test "checked fallback briefs keep executive action buttons", %{
@@ -397,7 +386,7 @@ defmodule Maraithon.BriefsTest do
                "metadata" => %{"generation_mode" => "error"}
              })
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    result = Briefs.dispatch_pending_batch(batch_size: 10)
     assert result.sent == 1
 
     candidate =
@@ -618,7 +607,7 @@ defmodule Maraithon.BriefsTest do
     assert still_pending.status == "pending"
   end
 
-  test "dispatch_telegram_batch sweeps stale backlog first so it cannot starve a fresh brief", %{
+  test "dispatch_pending_batch sweeps stale backlog first so it cannot starve a fresh brief", %{
     user_id: user_id,
     agent: agent
   } do
@@ -649,13 +638,15 @@ defmodule Maraithon.BriefsTest do
                "dedupe_key" => "brief:morning:backlog-starve-fresh"
              })
 
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
+
     # A small batch size that would previously have been entirely consumed
     # by the stale backlog (Bug 1's failure mode).
-    result = Briefs.dispatch_telegram_batch(batch_size: 2)
+    result = Briefs.dispatch_pending_batch(batch_size: 2)
     assert result.sent == 1
 
-    [message] = sent_messages()
-    assert message.text =~ "Fresh morning brief"
+    assert [%{payload: payload}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["title"] =~ "Fresh morning brief"
 
     assert Repo.get!(Brief, fresh_brief.id).status == "sent"
 
@@ -691,12 +682,13 @@ defmodule Maraithon.BriefsTest do
     assert String.length(payload.text) <= 3900
     assert payload.text =~ "… Full briefing in your email inbox."
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
+    result = Briefs.dispatch_pending_batch(batch_size: 10)
     assert result.sent == 1
 
-    [message] = sent_messages()
-    assert String.length(message.text) <= 3900
-    assert message.text =~ "… Full briefing in your email inbox."
+    # The push clamps independently of the renderer cap.
+    assert [%{payload: push}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    assert String.length(push["aps"]["alert"]["body"]) <= 900
   end
 
   test "check-in todo digests group new and older items for delivery", %{
@@ -1494,7 +1486,8 @@ defmodule Maraithon.BriefsTest do
 
       assert :ok = Briefs.send_brief(brief)
 
-      candidate = Repo.get_by!(ProactiveCandidate, user_id: user_id, dedupe_key: "brief:#{brief.id}")
+      candidate =
+        Repo.get_by!(ProactiveCandidate, user_id: user_id, dedupe_key: "brief:#{brief.id}")
 
       # The candidate carries the uncapped rendering — the closing line
       # survives to be chunked at send time instead of being truncated at
@@ -1517,5 +1510,9 @@ defmodule Maraithon.BriefsTest do
     :capturing_telegram_recorder
     |> Agent.get(&Enum.reverse/1)
     |> Enum.filter(&(&1.type == :callback))
+  end
+
+  defmodule FailingAPNS do
+    def post(_url, _headers, _body), do: {:ok, 500, ~s({"reason":"InternalServerError"})}
   end
 end

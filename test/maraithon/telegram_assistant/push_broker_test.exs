@@ -107,86 +107,6 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
     )
   end
 
-  test "a body over the chunk limit is sent as ordered parts with one receipt",
-       %{user_id: user_id, chat_id: chat_id} do
-    body = long_body()
-    assert String.length(body) > 3_300
-
-    assert {:ok, %{decision: "sent_now", message_id: message_id, turn_id: turn_id}} =
-             PushBroker.deliver(candidate(user_id, chat_id, body))
-
-    assert_received {:telegram_send, 1, ^chat_id, first_text, first_opts}
-    assert_received {:telegram_send, 2, ^chat_id, second_text, second_opts}
-    refute_received {:telegram_send, 3, _chat, _text, _opts}
-
-    # Ordered, labeled parts.
-    assert String.starts_with?(first_text, "Part 1/2")
-    assert String.starts_with?(second_text, "Part 2/2")
-    assert String.length(first_text) <= 3_320
-    # The tail of the brief (the most action-shaping line) survives.
-    assert second_text =~ "Today's move: ship the thing."
-
-    # reply_markup only on the last chunk.
-    assert Keyword.get(first_opts, :reply_markup) == nil
-    assert %{"inline_keyboard" => _rows} = Keyword.get(second_opts, :reply_markup)
-
-    # One Turn per physical message, receipt keyed to the tail chunk's turn.
-    turns = turns_for(user_id)
-    assert length(turns) == 2
-    assert Enum.map(turns, & &1.telegram_message_id) == ["1001", "1002"]
-    assert message_id == "1002"
-
-    assert [receipt] = receipts(user_id)
-    assert receipt.decision == "sent_now"
-    assert receipt.conversation_turn_id == turn_id
-    assert receipt.conversation_turn_id == List.last(turns).id
-  end
-
-  test "a redelivered multi-chunk candidate is suppressed as a duplicate",
-       %{user_id: user_id, chat_id: chat_id} do
-    attrs = candidate(user_id, chat_id, long_body())
-
-    assert {:ok, %{decision: "sent_now"}} = PushBroker.deliver(attrs)
-    assert {:ok, %{decision: "suppressed", reason: "duplicate"}} = PushBroker.deliver(attrs)
-
-    # No chunk (including the tail) is re-sent.
-    assert Process.get(:push_broker_send_count) == 2
-    assert length(receipts(user_id)) == 1
-  end
-
-  test "a body within the chunk limit sends exactly as today (regression guard)",
-       %{user_id: user_id, chat_id: chat_id} do
-    body = "<b>Morning brief</b>\n\n\nShort and sweet."
-
-    assert {:ok, %{decision: "sent_now", message_id: "1001", turn_id: turn_id}} =
-             PushBroker.deliver(candidate(user_id, chat_id, body))
-
-    # Exactly one send, carrying the original body byte-for-byte (no chunker
-    # normalization) and the reply_markup.
-    assert_received {:telegram_send, 1, ^chat_id, ^body, opts}
-    refute_received {:telegram_send, 2, _chat, _text, _opts}
-    assert %{"inline_keyboard" => _rows} = Keyword.get(opts, :reply_markup)
-
-    assert [turn] = turns_for(user_id)
-    assert turn.id == turn_id
-    assert [receipt] = receipts(user_id)
-    assert receipt.decision == "sent_now"
-    assert receipt.conversation_turn_id == turn.id
-  end
-
-  test "a chunk failure partway aborts the send and records no receipt",
-       %{user_id: user_id, chat_id: chat_id} do
-    Process.put(:push_broker_fail_on_send, 2)
-
-    assert {:error, :telegram_down} = PushBroker.deliver(candidate(user_id, chat_id, long_body()))
-
-    # First chunk went out, nothing after the failure, and no receipt — the
-    # candidate stays retryable as a whole.
-    assert_received {:telegram_send, 1, ^chat_id, _text, _opts}
-    refute_received {:telegram_send, 2, _chat, _text, _opts}
-    assert receipts(user_id) == []
-  end
-
   # ---------------------------------------------------------------------------
   # Mobile push cutover
   # ---------------------------------------------------------------------------
@@ -222,7 +142,9 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
   test "a user with a registered device gets APNs instead of Telegram",
        %{user_id: user_id, chat_id: chat_id} do
     enable_apns()
-    {:ok, _} = Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("a", 64)})
+
+    {:ok, _} =
+      Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("a", 64)})
 
     assert {:ok, %{decision: "sent_now"}} =
              PushBroker.deliver(candidate(user_id, chat_id, "<b>Morning brief</b>\n\nBody."))
@@ -243,10 +165,14 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
 
   test "a push-user candidate with no Telegram chat id still delivers", %{user_id: user_id} do
     enable_apns()
-    {:ok, _} = Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("b", 64)})
+
+    {:ok, _} =
+      Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("b", 64)})
 
     assert {:ok, %{decision: "sent_now"}} =
-             PushBroker.deliver(candidate(user_id, nil, "Insight body", %{origin_type: "insight"}))
+             PushBroker.deliver(
+               candidate(user_id, nil, "Insight body", %{origin_type: "insight"})
+             )
 
     assert_received {:apns_send, _url, payload}
     # Non-brief origins keep their (short) body as the push body.
@@ -254,30 +180,51 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
     assert payload["deeplink"] == "maraithon://stream"
   end
 
-  test "the kill switch reverts a device-holding user to Telegram",
+  test "the kill switch turns delivery off entirely (no Telegram to fall back to)",
        %{user_id: user_id, chat_id: chat_id} do
     enable_apns()
-    {:ok, _} = Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("c", 64)})
+
+    {:ok, _} =
+      Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("c", 64)})
 
     previous = Application.get_env(:maraithon, :mobile_push, [])
     Application.put_env(:maraithon, :mobile_push, enabled: false)
     on_exit(fn -> Application.put_env(:maraithon, :mobile_push, previous) end)
 
-    assert {:ok, %{decision: "sent_now"}} =
+    assert {:error, :no_push_device} =
              PushBroker.deliver(candidate(user_id, chat_id, "Body."))
 
-    assert_received {:telegram_send, 1, ^chat_id, _text, _opts}
     refute_received {:apns_send, _url, _payload}
+    refute_received {:telegram_send, _count, _chat, _text, _opts}
   end
 
-  test "a user with no device keeps Telegram untouched",
+  test "a user with no device gets a clean no-device error and no receipt",
        %{user_id: user_id, chat_id: chat_id} do
     enable_apns()
 
-    assert {:ok, %{decision: "sent_now"}} =
+    assert {:error, :no_push_device} =
              PushBroker.deliver(candidate(user_id, chat_id, "Body."))
 
-    assert_received {:telegram_send, 1, ^chat_id, _text, _opts}
     refute_received {:apns_send, _url, _payload}
+    refute_received {:telegram_send, _count, _chat, _text, _opts}
+    assert receipts(user_id) == []
+  end
+
+  test "a redelivered push candidate is suppressed as a duplicate", %{
+    user_id: user_id,
+    chat_id: chat_id
+  } do
+    enable_apns()
+
+    {:ok, _} =
+      Maraithon.Push.Devices.register(user_id, %{device_token: String.duplicate("d", 64)})
+
+    attrs = candidate(user_id, chat_id, "Body.")
+    assert {:ok, %{decision: "sent_now"}} = PushBroker.deliver(attrs)
+    assert {:ok, %{decision: "suppressed", reason: "duplicate"}} = PushBroker.deliver(attrs)
+
+    assert_received {:apns_send, _url, _payload}
+    refute_received {:apns_send, _url2, _payload2}
+    assert length(receipts(user_id)) == 1
   end
 end

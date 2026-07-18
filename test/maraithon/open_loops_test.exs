@@ -600,7 +600,8 @@ defmodule Maraithon.OpenLoopsTest do
           limit: 10
         )
 
-      assert [%{title: "Send the contract before Friday night"}] = overdue_snapshot.buckets.overdue
+      assert [%{title: "Send the contract before Friday night"}] =
+               overdue_snapshot.buckets.overdue
     end
   end
 

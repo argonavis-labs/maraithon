@@ -117,8 +117,10 @@ defmodule Maraithon.InsightNotificationsTest do
         Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
 
       assert delivery.status == "failed"
-      assert delivery.error_message == DeliveryErrorCopy.storage_message(:telegram_not_connected)
-      assert DeliveryErrorCopy.terminal?(delivery.error_message)
+      assert delivery.error_message == DeliveryErrorCopy.storage_message(:no_push_device)
+      # Deliberately retryable: the delivery becomes sendable the moment a
+      # device registers.
+      refute DeliveryErrorCopy.terminal?(delivery.error_message)
       refute delivery.error_message =~ "token"
       refute delivery.error_message =~ "Forbidden"
     end

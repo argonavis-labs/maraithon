@@ -471,6 +471,7 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
     config = tracker_config(user_id, source_scope, opts)
     skill_configs = %{@skill_id => config}
     context = tracker_context(user_id, agent.id, now, job_id)
+
     {source_bundle, telemetry, _proposed_watermarks} =
       Acquisition.build(user_id, [@skill_id], skill_configs, context)
 

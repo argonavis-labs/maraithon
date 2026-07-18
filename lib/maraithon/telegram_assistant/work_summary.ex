@@ -71,7 +71,6 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     |> drop_blank_values()
   end
 
-
   def for_run(_run), do: nil
 
   def for_message(%Turn{} = turn) do

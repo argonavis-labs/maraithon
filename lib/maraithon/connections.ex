@@ -6,11 +6,9 @@ defmodule Maraithon.Connections do
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Companion.Devices
   alias Maraithon.ConnectedAccounts
-  alias Maraithon.Connectors.Telegram
   alias Maraithon.OAuth
   alias Maraithon.OAuth.{GitHub, Google, Linear, Notaui, Notion, Slack, Token}
   alias MaraithonWeb.LocalTime
-  alias MaraithonWeb.TelegramLink
 
   @google_services [
     %{
@@ -128,14 +126,10 @@ defmodule Maraithon.Connections do
     token_by_provider = Map.new(tokens, &{&1.provider, &1})
     google_tokens = Enum.filter(tokens, &google_provider?(&1.provider))
     slack_tokens = Enum.filter(tokens, &slack_provider?(&1.provider))
-    telegram_account = ConnectedAccounts.get(user_id, "telegram")
     timezone_info = LocalTime.timezone_info_for_user(user_id)
-
-    telegram_connected? = connected_account?(telegram_account)
 
     providers =
       [
-        telegram_card(user_id, telegram_account, return_to, timezone_info),
         desktop_card(user_id, return_to, timezone_info),
         google_card(user_id, google_tokens, account_by_provider, return_to, timezone_info),
         github_card(
@@ -168,14 +162,12 @@ defmodule Maraithon.Connections do
           timezone_info
         )
       ]
-      |> Enum.map(&enforce_telegram_first(&1, telegram_connected?))
 
     %{
       user_id: user_id,
       providers: providers,
       raw_tokens: Enum.map(tokens, &serialize_token/1),
       connected_count: Enum.count(providers, &(&1.status in [:connected, :partial])),
-      telegram_connected?: telegram_connected?,
       degraded: false,
       errors: []
     }
@@ -288,7 +280,6 @@ defmodule Maraithon.Connections do
 
     providers =
       [
-        telegram_card(user_id, nil, return_to, timezone_info),
         desktop_unavailable_card(),
         google_card(user_id, [], %{}, return_to, timezone_info),
         github_card(user_id, nil, nil, return_to, timezone_info),
@@ -297,7 +288,6 @@ defmodule Maraithon.Connections do
         notion_card(user_id, nil, nil, return_to, timezone_info),
         notaui_card(user_id, nil, nil, return_to, timezone_info)
       ]
-      |> Enum.map(&enforce_telegram_first(&1, false))
       |> Enum.map(&mark_unavailable/1)
 
     %{
@@ -305,7 +295,6 @@ defmodule Maraithon.Connections do
       providers: providers,
       raw_tokens: [],
       connected_count: 0,
-      telegram_connected?: false,
       degraded: true,
       errors: [
         %{
@@ -620,46 +609,6 @@ defmodule Maraithon.Connections do
     |> enrich_provider_setup()
   end
 
-  defp telegram_card(user_id, account, return_to, timezone_info) do
-    configured? = Telegram.configured?()
-    metadata = if account, do: account.metadata || %{}, else: %{}
-    username = metadata["username"]
-
-    status =
-      cond do
-        not configured? -> :not_configured
-        account && account.status == "connected" -> :connected
-        true -> :disconnected
-      end
-
-    %{
-      id: "telegram",
-      provider: "telegram",
-      label: "Telegram Bot",
-      description: "Receive urgent Maraithon insights with inline helpful/not-helpful feedback.",
-      status: status,
-      configured?: configured?,
-      updated_at: account && account.updated_at,
-      disconnectable?: account && account.status == "connected",
-      connect_url:
-        TelegramLink.deep_link(user_id) || auth_url("/connectors/telegram", user_id, return_to),
-      disconnect_label: "Disconnect Telegram",
-      refresh_token_status: :not_applicable,
-      details:
-        if account && account.status == "connected" do
-          [
-            telegram_chat_detail(username),
-            "Last updated #{format_datetime(account.updated_at, timezone_info)}"
-          ]
-          |> Enum.reject(&is_nil/1)
-        else
-          telegram_unlinked_details(user_id)
-        end,
-      services: []
-    }
-    |> enrich_provider_setup()
-  end
-
   defp desktop_totals(device_entries) do
     empty_totals = Enum.into(@desktop_services, %{}, &{&1.stat_key, 0})
 
@@ -942,13 +891,6 @@ defmodule Maraithon.Connections do
   defp normalize_service(""), do: nil
   defp normalize_service(service), do: to_string(service)
 
-  defp telegram_unlinked_details(user_id) do
-    case TelegramLink.bot_username() do
-      nil -> ["Not linked yet. Send /start #{user_id} to your bot chat."]
-      username -> ["Not linked yet. Open @#{username} or send /start #{user_id} to the bot."]
-    end
-  end
-
   defp notion_card(user_id, token, account, return_to, timezone_info) do
     configured? = Notion.configured?()
 
@@ -1048,37 +990,6 @@ defmodule Maraithon.Connections do
     if reauth_required_account?(account), do: :needs_refresh, else: :connected
   end
 
-  defp connected_account?(%ConnectedAccount{status: "connected"}), do: true
-  defp connected_account?(_account), do: false
-
-  defp enforce_telegram_first(%{provider: "telegram"} = provider, _telegram_connected?) do
-    provider
-    |> Map.put(:requires_telegram?, false)
-    |> Map.put(:connect_blocked?, false)
-    |> Map.put(:connect_block_reason, nil)
-  end
-
-  defp enforce_telegram_first(%{provider: "desktop"} = provider, _telegram_connected?) do
-    provider
-    |> Map.put(:requires_telegram?, false)
-    |> Map.put(:connect_blocked?, false)
-    |> Map.put(:connect_block_reason, nil)
-  end
-
-  defp enforce_telegram_first(provider, true) do
-    provider
-    |> Map.put(:requires_telegram?, true)
-    |> Map.put(:connect_blocked?, false)
-    |> Map.put(:connect_block_reason, nil)
-  end
-
-  defp enforce_telegram_first(provider, false) do
-    provider
-    |> Map.put(:requires_telegram?, true)
-    |> Map.put(:connect_blocked?, true)
-    |> Map.put(:connect_block_reason, "Connect Telegram first")
-  end
-
   defp google_details([]), do: ["Not connected yet."]
 
   defp google_details(tokens) when is_list(tokens) do
@@ -1093,11 +1004,6 @@ defmodule Maraithon.Connections do
     [connected_at | items]
     |> Enum.reject(&is_nil/1)
   end
-
-  defp telegram_chat_detail(username) when is_binary(username) and username != "",
-    do: "Delivery linked to @#{username}"
-
-  defp telegram_chat_detail(_username), do: "Telegram delivery linked"
 
   defp serialize_token(%Token{} = token) do
     %{

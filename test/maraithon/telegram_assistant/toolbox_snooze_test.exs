@@ -100,7 +100,11 @@ defmodule Maraithon.TelegramAssistant.ToolboxSnoozeTest do
     assert {:error, invalid_reason} =
              Toolbox.execute(
                "resolve_todo",
-               %{"todo_id" => todo.id, "status" => "snoozed", "snooze_until" => "next Monday-ish"},
+               %{
+                 "todo_id" => todo.id,
+                 "status" => "snoozed",
+                 "snooze_until" => "next Monday-ish"
+               },
                runtime_context
              )
 

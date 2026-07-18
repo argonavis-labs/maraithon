@@ -75,7 +75,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
   def init(config) do
     %{
       user_id: normalize_string(config["user_id"]),
-      candidate_limit: integer_in_range(config["candidate_limit"], @default_candidate_limit, 1, 50),
+      candidate_limit:
+        integer_in_range(config["candidate_limit"], @default_candidate_limit, 1, 50),
       llm_model: normalize_string(config["llm_model"]),
       llm_max_tokens:
         integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 256, 4_000),
@@ -427,8 +428,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
 
   defp memo_meta_suffix(context) do
     parts =
-      [{"cycle", context[:previous_cycle_memo_cycle_id]},
-       {"at", context[:previous_cycle_memo_updated_at]}]
+      [
+        {"cycle", context[:previous_cycle_memo_cycle_id]},
+        {"at", context[:previous_cycle_memo_updated_at]}
+      ]
       |> Enum.reject(fn {_label, value} -> normalize_string(value) == nil end)
       |> Enum.map(fn {label, value} -> "#{label} #{value}" end)
 

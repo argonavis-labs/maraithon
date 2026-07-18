@@ -68,6 +68,11 @@ defmodule Maraithon.TravelTest do
       start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
     })
 
+    start_supervised!(%{
+      id: :capturing_apns_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_apns_recorder]]}
+    })
+
     user_id = "travel-user@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
@@ -125,49 +130,19 @@ defmodule Maraithon.TravelTest do
     assert {:ok, %{queued_briefs: []}} =
              Travel.sync_recent_trip_data(user_id, agent.id, now: now, timezone_offset_hours: -5)
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
+    result = Briefs.dispatch_pending_batch(batch_size: 10, now: now)
     assert result.sent == 1
 
     itinerary = Travel.list_recent_for_user(user_id) |> List.first()
     assert itinerary.status == "brief_sent"
     assert itinerary.briefed_for_local_date == ~D[2026-03-15]
 
-    [message] = telegram_events(:send)
-    assert message.chat_id == "777123"
-    assert message.text =~ "Here are your travel details for tomorrow (Mar 15)"
-    assert message.text =~ "Booking Ref: ABC123"
-    assert message.text =~ "Itinerary #: H98765"
-    assert Keyword.get(message.opts, :reply_markup) == nil
-
-    conversation =
-      Repo.one!(
-        from conversation in Conversation,
-          where: conversation.user_id == ^user_id,
-          order_by: [desc: conversation.inserted_at],
-          limit: 1
-      )
-
-    assert get_in(conversation.metadata, ["mode"]) == "push_thread"
-    assert get_in(conversation.metadata, ["travel_itinerary_id"]) == itinerary.id
-
-    turn =
-      Repo.one!(
-        from turn in Turn,
-          where: turn.conversation_id == ^conversation.id,
-          order_by: [desc: turn.inserted_at],
-          limit: 1
-      )
-
-    assert turn.turn_kind == "assistant_push"
-    assert turn.origin_type == "brief"
-    assert turn.origin_id == recorded_brief.id
-    assert get_in(turn.structured_data, ["brief_type"]) == "travel_prep"
-    assert get_in(turn.structured_data, ["travel_itinerary_id"]) == itinerary.id
-
-    context = Context.build(%{user_id: user_id, chat_id: "777123", conversation: conversation})
-
-    assert get_in(context, [:linked_item, :travel, :id]) == itinerary.id
-    assert length(get_in(context, [:linked_item, :travel, :items])) == 2
+    # Delivery is a phone push now: the banner is the doorbell, the itinerary
+    # details live on the brief the app renders.
+    assert [%{payload: payload}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["title"] == Briefs.public_title(recorded_brief)
+    assert payload["deeplink"] == "maraithon://today"
   end
 
   test "queues a travel update when Gmail evidence changes after the initial brief is sent", %{
@@ -178,7 +153,8 @@ defmodule Maraithon.TravelTest do
     assert {:ok, %{queued_briefs: [_brief]}} =
              Travel.sync_recent_trip_data(user_id, agent.id, now: now, timezone_offset_hours: -5)
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
+    result = Briefs.dispatch_pending_batch(batch_size: 10, now: now)
     assert result.sent == 1
 
     updated_contents =
@@ -205,15 +181,13 @@ defmodule Maraithon.TravelTest do
     refute recorded_update.body =~ "I detected"
     refute recorded_update.body =~ "I found"
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    result = Briefs.dispatch_pending_batch(batch_size: 10, now: now)
     assert result.sent == 1
 
-    [latest_message | _rest] = telegram_events(:send)
-    assert latest_message.text =~ "Travel details changed. Current itinerary:"
-    assert latest_message.text =~ "Check-out: Mar 18, 2026"
-    assert latest_message.text =~ "Room: Suite 1108"
-    refute latest_message.text =~ "I detected"
-    refute latest_message.text =~ "I found"
+    assert [_first, %{payload: update_payload}] =
+             Maraithon.TestSupport.CapturingAPNS.recorded()
+
+    assert update_payload["aps"]["alert"]["title"] == Briefs.public_title(recorded_update)
 
     itinerary = Travel.list_recent_for_user(user_id) |> List.first()
     assert itinerary.status == "brief_sent"
@@ -234,11 +208,12 @@ defmodule Maraithon.TravelTest do
     assert recorded_brief.title == "Travel today: Austin"
     assert recorded_brief.body =~ "Here are your travel details for today (Mar 15)"
 
-    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
+    result = Briefs.dispatch_pending_batch(batch_size: 10, now: now)
     assert result.sent == 1
 
-    [message] = telegram_events(:send)
-    assert message.text =~ "Here are your travel details for today (Mar 15)"
+    assert [%{payload: payload}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["title"] == "Travel today: Austin"
   end
 
   test "consumes a shared chief-of-staff source bundle and stamps assistant metadata", %{

@@ -36,7 +36,16 @@ defmodule Maraithon.Todos.StalenessBatch do
 
   def changeset(batch, attrs) do
     batch
-    |> cast(attrs, [:id, :user_id, :chat_id, :message_id, :todo_ids, :rationales, :resolved, :status])
+    |> cast(attrs, [
+      :id,
+      :user_id,
+      :chat_id,
+      :message_id,
+      :todo_ids,
+      :rationales,
+      :resolved,
+      :status
+    ])
     |> validate_required([:user_id, :chat_id, :message_id, :todo_ids])
     |> validate_inclusion(:status, @statuses)
     |> unique_constraint([:chat_id, :message_id])

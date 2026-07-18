@@ -63,10 +63,12 @@ defmodule Maraithon.Runtime.NudgeSweepTest do
                  "todo_id" => todo.id,
                  "surface" => true,
                  "title" => "Nudge Elena about the pricing doc",
-                 "body" => "You've been waiting on Elena since the 1st — want me to send a nudge?",
+                 "body" =>
+                   "You've been waiting on Elena since the 1st — want me to send a nudge?",
                  "urgency" => 0.7,
                  "why_now" => "The scheduled follow-up moment arrived and no reply is recorded.",
-                 "draft_text" => "Hi Elena — checking in on the pricing doc when you get a chance."
+                 "draft_text" =>
+                   "Hi Elena — checking in on the pricing doc when you get a chance."
                }
              ]
            })
@@ -279,7 +281,9 @@ defmodule Maraithon.Runtime.NudgeSweepTest do
 
   test "due todos waiting on the same counterparty bundle into one candidate", %{user_id: user_id} do
     first = owed_to_me_todo(user_id, "bundle-a", next_nudge_at: hours_ago(2), label: "Elena Ruiz")
-    second = owed_to_me_todo(user_id, "bundle-b", next_nudge_at: hours_ago(4), label: "elena ruiz")
+
+    second =
+      owed_to_me_todo(user_id, "bundle-b", next_nudge_at: hours_ago(4), label: "elena ruiz")
 
     llm_complete = fn _prompt ->
       decisions =

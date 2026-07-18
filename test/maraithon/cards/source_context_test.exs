@@ -44,7 +44,10 @@ defmodule Maraithon.Cards.SourceContextTest do
           "from" => "Pedro Alvarez <pedro@acme.com>",
           "person" => "Pedro Alvarez",
           "crm_people" => [
-            %{"display_name" => "Pedro Alvarez", "contact_details" => %{"email" => "pedro@acme.com"}},
+            %{
+              "display_name" => "Pedro Alvarez",
+              "contact_details" => %{"email" => "pedro@acme.com"}
+            },
             %{"display_name" => "Sam Hill", "contact_details" => %{"email" => "sam@hill.co"}}
           ]
         }
@@ -56,7 +59,10 @@ defmodule Maraithon.Cards.SourceContextTest do
     assert length(pedro_entries) == 1
     assert hd(pedro_entries)["role"] == "from"
 
-    assert Enum.any?(participants, &(&1["handle"] == "sam@hill.co" and &1["role"] == "participant"))
+    assert Enum.any?(
+             participants,
+             &(&1["handle"] == "sam@hill.co" and &1["role"] == "participant")
+           )
   end
 
   test "builds a conversation excerpt with the sender as speaker" do
@@ -69,7 +75,12 @@ defmodule Maraithon.Cards.SourceContextTest do
         }
       })
 
-    assert [%{"speaker" => "Pedro Alvarez", "text" => "Can you confirm the Q3 numbers before Friday?"}] =
+    assert [
+             %{
+               "speaker" => "Pedro Alvarez",
+               "text" => "Can you confirm the Q3 numbers before Friday?"
+             }
+           ] =
              context["conversation"]
   end
 

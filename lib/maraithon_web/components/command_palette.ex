@@ -417,11 +417,6 @@ defmodule MaraithonWeb.Components.CommandPalette do
         description: "Connect Slack workspace context and DMs.",
         keywords: "slack connect oauth workspace dm",
         priority: 140
-      ),
-      command("Review Telegram readiness", "/connectors/telegram", :connectors, "Suggested",
-        description: "Check proactive delivery and chat readiness.",
-        keywords: "telegram readiness delivery chat proactive",
-        priority: 135
       )
     ]
   end

@@ -64,7 +64,8 @@ defmodule Maraithon.Runtime.BackgroundJobHandlerConnectorsTest do
         payload: %{}
       }
 
-      assert {:error, {:connected_account_not_found, "google"}} = BackgroundJobHandler.execute(job)
+      assert {:error, {:connected_account_not_found, "google"}} =
+               BackgroundJobHandler.execute(job)
     end
   end
 

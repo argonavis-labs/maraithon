@@ -8,7 +8,6 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.BriefingSchedules
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.DeliveryErrorCopy
   alias Maraithon.InsightNotifications.Actions
   alias Maraithon.InsightNotifications.Delivery
@@ -16,16 +15,8 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ProactiveQueue
-  alias Maraithon.TelegramChunking
-  alias Maraithon.TelegramConversations
-  alias Maraithon.TelegramResponder
 
   @default_push_limit_per_hour 3
-
-  # SPEC 09 R19: send-time chunk budget, matching MorningBriefing's
-  # @telegram_chunk_limit — conservative headroom under Telegram's 4096 wire
-  # cap (bodies here are already HTML-converted, so entities are counted).
-  @telegram_chunk_limit 3_300
 
   # Model-declared interrupt_now can still be forced through the hard
   # send-time budget gate below when it reflects genuine urgency; anything
@@ -157,11 +148,6 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       candidate = normalize_candidate(candidate)
 
       cond do
-        # A missing Telegram chat id is only fatal when Telegram is the
-        # channel; a user whose phone is registered needs no chat id at all.
-        is_nil(candidate.chat_id) and not MobilePush.enabled_for_user?(candidate.user_id) ->
-          {:error, :missing_chat_id}
-
         TelegramAssistant.push_receipt_for(candidate.user_id, candidate.dedupe_key) ->
           {:ok, %{decision: "suppressed", reason: "duplicate"}}
 
@@ -222,14 +208,15 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     }
   end
 
-  # Channel routing — the hard-cutover choke point. A user with a registered
-  # phone gets APNs; everyone else keeps Telegram. Everything upstream
-  # (dedupe, hourly cap, quiet hours, receipts) applies identically to both.
+  # Telegram is retired: the phone is the only proactive channel. A user
+  # without a registered device gets a clean error — the candidate stays
+  # pending and the producer's cycle retries once a device registers (briefs
+  # additionally reach the inbox by email regardless).
   defp send_candidate(candidate) do
     if MobilePush.enabled_for_user?(candidate.user_id) do
       send_candidate_mobile(candidate)
     else
-      send_candidate_telegram(candidate)
+      {:error, :no_push_device}
     end
   end
 
@@ -259,9 +246,8 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
         end
 
       {:error, :no_devices} ->
-        # The last device unregistered between the gate and the send; the
-        # candidate must not vanish into the gap.
-        send_candidate_telegram(candidate)
+        # The last device unregistered between the gate and the send.
+        {:error, :no_push_device}
 
       {:error, reason} ->
         {:error, reason}
@@ -309,191 +295,6 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   defp push_deeplink(%{origin_type: "assistant_digest"}), do: "maraithon://todos"
   defp push_deeplink(_candidate), do: "maraithon://today"
-
-  # SPEC 09 R19: chunk at send time. A single-chunk body keeps today's
-  # behavior byte-for-byte (one send of the original body, one turn, one
-  # receipt); a multi-chunk body is sent as sequential ordered messages.
-  defp send_candidate_telegram(candidate) do
-    case chunked_body(candidate.body) do
-      chunks when length(chunks) > 1 ->
-        send_candidate_chunks(candidate, chunks)
-
-      _single_or_empty ->
-        send_candidate_single(candidate)
-    end
-  end
-
-  defp chunked_body(body) when is_binary(body) do
-    body
-    |> TelegramChunking.chunks(@telegram_chunk_limit)
-    |> TelegramChunking.label_parts()
-  end
-
-  defp chunked_body(_body), do: []
-
-  # SPEC 09 R19/R20: sequential awaited sends (Telegram does not guarantee
-  # ordering for concurrent sends — never parallelize), `reply_markup` only
-  # on the last chunk, one Turn per physical message (so a reply to any part
-  # threads correctly), and exactly ONE PushReceipt for the whole send keyed
-  # by the candidate's dedupe_key, referencing the tail chunk's
-  # message/turn. That single receipt is what lets push_receipt_for/2
-  # recognize a redelivered candidate as already-sent and skip every chunk.
-  # A failure partway stops immediately, records no receipt, and returns
-  # {:error, reason} — the candidate is retried as a whole on the next cycle
-  # (message-level resume is out of scope).
-  defp send_candidate_chunks(candidate, chunks) do
-    last_index = length(chunks) - 1
-
-    chunks
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, nil}, fn {chunk, index}, {:ok, acc} ->
-      opts = chunk_telegram_opts(candidate.telegram_opts, index == last_index)
-
-      with {:ok, result} <- TelegramResponder.send(candidate.chat_id, chunk, opts),
-           message_id = normalize_id(Map.get(result, "message_id")),
-           {:ok, conversation} <- chunk_conversation(candidate, acc, message_id),
-           {:ok, {_conversation, turn}} <-
-             append_chunk_turn(conversation, candidate, chunk, message_id) do
-        {:cont, {:ok, %{conversation: conversation, message_id: message_id, turn: turn}}}
-      else
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, %{conversation: conversation, message_id: message_id, turn: turn}} ->
-        case TelegramAssistant.record_push_receipt(%{
-               user_id: candidate.user_id,
-               dedupe_key: candidate.dedupe_key,
-               origin_type: candidate.origin_type,
-               origin_id: candidate.origin_id,
-               decision: "sent_now",
-               conversation_turn_id: turn.id
-             }) do
-          {:ok, _receipt} ->
-            {:ok,
-             %{
-               decision: "sent_now",
-               message_id: message_id,
-               turn_id: turn.id,
-               conversation_id: conversation.id
-             }}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # Mirror of the shipped morning-briefing pattern: markup rides only the
-  # last chunk.
-  defp chunk_telegram_opts(opts, true) when is_list(opts), do: opts
-
-  defp chunk_telegram_opts(opts, false) when is_list(opts),
-    do: Keyword.delete(opts, :reply_markup)
-
-  defp chunk_telegram_opts(opts, _last_chunk?), do: opts
-
-  defp chunk_conversation(candidate, nil, message_id) do
-    TelegramConversations.start_or_continue(candidate.user_id, candidate.chat_id, %{
-      "root_message_id" => message_id,
-      "linked_delivery_id" => candidate.linked_delivery_id,
-      "linked_insight_id" => candidate.linked_insight_id,
-      "metadata" =>
-        %{
-          "mode" => "push_thread",
-          "last_push_origin" => %{
-            "origin_type" => candidate.origin_type,
-            "origin_id" => candidate.origin_id
-          }
-        }
-        |> Map.merge(candidate.conversation_metadata)
-    })
-  end
-
-  defp chunk_conversation(_candidate, %{conversation: conversation}, _message_id),
-    do: {:ok, conversation}
-
-  defp append_chunk_turn(conversation, candidate, chunk, message_id) do
-    TelegramConversations.append_turn(conversation, %{
-      "role" => "assistant",
-      "telegram_message_id" => message_id,
-      "text" => chunk,
-      "turn_kind" => "assistant_push",
-      "origin_type" => candidate.origin_type,
-      "origin_id" => candidate.origin_id,
-      "structured_data" =>
-        %{
-          "title" => candidate.title,
-          "why_now" => candidate.why_now,
-          "urgency" => candidate.urgency
-        }
-        |> Map.merge(candidate.structured_data)
-    })
-  end
-
-  defp send_candidate_single(candidate) do
-    case TelegramResponder.send(candidate.chat_id, candidate.body, candidate.telegram_opts) do
-      {:ok, result} ->
-        message_id = normalize_id(Map.get(result, "message_id"))
-
-        with {:ok, conversation} <-
-               TelegramConversations.start_or_continue(candidate.user_id, candidate.chat_id, %{
-                 "root_message_id" => message_id,
-                 "linked_delivery_id" => candidate.linked_delivery_id,
-                 "linked_insight_id" => candidate.linked_insight_id,
-                 "metadata" =>
-                   %{
-                     "mode" => "push_thread",
-                     "last_push_origin" => %{
-                       "origin_type" => candidate.origin_type,
-                       "origin_id" => candidate.origin_id
-                     }
-                   }
-                   |> Map.merge(candidate.conversation_metadata)
-               }),
-             {:ok, {_conversation, turn}} <-
-               TelegramConversations.append_turn(conversation, %{
-                 "role" => "assistant",
-                 "telegram_message_id" => message_id,
-                 "text" => candidate.body,
-                 "turn_kind" => "assistant_push",
-                 "origin_type" => candidate.origin_type,
-                 "origin_id" => candidate.origin_id,
-                 "structured_data" =>
-                   %{
-                     "title" => candidate.title,
-                     "why_now" => candidate.why_now,
-                     "urgency" => candidate.urgency
-                   }
-                   |> Map.merge(candidate.structured_data)
-               }),
-             {:ok, _receipt} <-
-               TelegramAssistant.record_push_receipt(%{
-                 user_id: candidate.user_id,
-                 dedupe_key: candidate.dedupe_key,
-                 origin_type: candidate.origin_type,
-                 origin_id: candidate.origin_id,
-                 decision: "sent_now",
-                 conversation_turn_id: turn.id
-               }) do
-          {:ok,
-           %{
-             decision: "sent_now",
-             message_id: message_id,
-             turn_id: turn.id,
-             conversation_id: conversation.id
-           }}
-        else
-          {:error, reason} -> {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
 
   defp normalize_candidate(candidate) do
     %{
@@ -636,12 +437,6 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   end
 
   defp normalize_hour(_value, default), do: default
-
-  defp telegram_destination(user_id) when is_binary(user_id) do
-    ConnectedAccounts.telegram_destination(user_id)
-  end
-
-  defp telegram_destination(_user_id), do: nil
 
   defp truthy?(value) when value in [true, "true", "TRUE", "1", 1], do: true
   defp truthy?(_value), do: false
@@ -799,7 +594,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
     case deliver(%{
            user_id: brief.user_id,
-           chat_id: telegram_destination(brief.user_id),
+           chat_id: nil,
            origin_type: "brief",
            origin_id: brief.id,
            dedupe_key: "brief:#{brief.id}",
@@ -826,9 +621,15 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
       {:ok, %{decision: "held_rate_limit"}} ->
         # Quiet hours or the interruption budget held this brief. Leave it
-        # "pending" so Briefs.dispatch_telegram_batch retries it instead of
+        # "pending" so Briefs.dispatch_pending_batch retries it instead of
         # it silently vanishing.
         :ok
+
+      {:error, :no_push_device} ->
+        # No registered phone yet: not a failure, just not deliverable — the
+        # brief stays pending until a device registers or the sweep expires
+        # it (email already carried morning briefs regardless).
+        {:error, :no_push_device}
 
       {:error, reason} ->
         mark_brief_failed(brief, reason)
@@ -844,7 +645,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
       case deliver(%{
              user_id: brief.user_id,
-             chat_id: telegram_destination(brief.user_id),
+             chat_id: nil,
              origin_type: "brief",
              origin_id: brief.id,
              dedupe_key: "brief:#{brief.id}",
@@ -877,6 +678,9 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
         {:ok, %{decision: "held_rate_limit"}} ->
           :ok
+
+        {:error, :no_push_device} ->
+          {:error, :no_push_device}
 
         {:error, reason} ->
           mark_brief_failed(brief, reason)

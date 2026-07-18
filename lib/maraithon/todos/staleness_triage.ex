@@ -325,7 +325,8 @@ defmodule Maraithon.Todos.StalenessTriage do
           stamp_proposed(user_id, todo, Map.get(rationales, todo.id), now_iso)
         end)
 
-        {:ok, %{sent: true, decision: "sent_now", batch_id: batch.id, todo_count: length(todo_ids)}}
+        {:ok,
+         %{sent: true, decision: "sent_now", batch_id: batch.id, todo_count: length(todo_ids)}}
 
       {:error, reason} ->
         Logger.warning("Staleness triage could not persist batch state",

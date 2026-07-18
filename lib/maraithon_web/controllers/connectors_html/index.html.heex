@@ -18,14 +18,6 @@
       </.alert>
     <% end %>
 
-    <%= if not telegram_connected?(@providers) do %>
-      <.alert color="blue" title="Connect Telegram first">
-        <p>
-          Connect Telegram first so Maraithon can send proactive updates. The Mac companion app can still make local context available from your Mac.
-        </p>
-      </.alert>
-    <% end %>
-
     <ul role="list" class="divide-y divide-zinc-950/5 overflow-hidden rounded-lg border border-zinc-950/10 bg-white">
       <li :for={provider <- @providers}>
         <a
@@ -62,8 +54,6 @@
 
           <span class="flex items-center justify-end gap-3 lg:col-span-3">
             <%= cond do %>
-              <% requires_telegram_first?(provider) and not telegram_connected?(@providers) -> %>
-                <span class="text-xs/5 text-zinc-400">Telegram required</span>
               <% provider[:connect_blocked?] -> %>
                 <span class="text-xs/5 text-zinc-400">
                   <%= provider[:connect_block_reason] %>

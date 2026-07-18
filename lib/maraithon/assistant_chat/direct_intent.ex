@@ -414,10 +414,16 @@ defmodule Maraithon.AssistantChat.DirectIntent do
       MapSet.member?(@linked_done_phrases, normalized) ->
         {:ok, :done}
 
-      Regex.match?(~r/\b(mark|set|move)\b.*\b(done|complete|completed|handled|resolved)\b/u, normalized) ->
+      Regex.match?(
+        ~r/\b(mark|set|move)\b.*\b(done|complete|completed|handled|resolved)\b/u,
+        normalized
+      ) ->
         {:ok, :done}
 
-      Regex.match?(~r/\b(this|it)\b.*\b(is|was)\b.*\b(done|complete|completed|handled|resolved)\b/u, normalized) ->
+      Regex.match?(
+        ~r/\b(this|it)\b.*\b(is|was)\b.*\b(done|complete|completed|handled|resolved)\b/u,
+        normalized
+      ) ->
         {:ok, :done}
 
       MapSet.member?(@linked_dismiss_phrases, normalized) ->

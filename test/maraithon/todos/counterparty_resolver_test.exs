@@ -329,6 +329,7 @@ defmodule Maraithon.Todos.CounterpartyResolverTest do
 
       resolved = Todos.get_for_user(user_id, todo.id)
       assert resolved.counterparty_person_id == sam_a.id
+
       assert %{"result" => "resolved", "resolved_by" => "model"} =
                resolved.metadata["counterparty_resolution"]
     end

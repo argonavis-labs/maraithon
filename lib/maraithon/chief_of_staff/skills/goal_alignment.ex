@@ -377,8 +377,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
 
   defp memo_meta_suffix(context) do
     parts =
-      [{"cycle", context[:previous_cycle_memo_cycle_id]},
-       {"at", context[:previous_cycle_memo_updated_at]}]
+      [
+        {"cycle", context[:previous_cycle_memo_cycle_id]},
+        {"at", context[:previous_cycle_memo_updated_at]}
+      ]
       |> Enum.reject(fn {_label, value} -> normalize_string(value) == nil end)
       |> Enum.map(fn {label, value} -> "#{label} #{value}" end)
 

@@ -253,10 +253,13 @@ defmodule Maraithon.Crm.RelationshipGraph do
         []
       else
         person_ids =
-          ([event.organizer_email | List.wrap(event.attendee_emails)])
+          [event.organizer_email | List.wrap(event.attendee_emails)]
           |> resolve_person_ids(handle_index, own_handles)
 
-        pair_edges(person_ids, @co_attendance_weight * InteractionEvents.decay(event.start_at, now))
+        pair_edges(
+          person_ids,
+          @co_attendance_weight * InteractionEvents.decay(event.start_at, now)
+        )
       end
     end)
   end
@@ -326,7 +329,8 @@ defmodule Maraithon.Crm.RelationshipGraph do
   # ---------------------------------------------------------------------------
 
   defp percentiles(ranks) do
-    positive = ranks |> Enum.filter(fn {_id, mass} -> mass > 0.0 end) |> Enum.sort_by(&elem(&1, 1))
+    positive =
+      ranks |> Enum.filter(fn {_id, mass} -> mass > 0.0 end) |> Enum.sort_by(&elem(&1, 1))
 
     case length(positive) do
       0 ->

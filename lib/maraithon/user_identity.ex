@@ -268,7 +268,6 @@ defmodule Maraithon.UserIdentity do
   defp provider_email("google:" <> email), do: email
   defp provider_email(_provider), do: nil
 
-
   # CRM person records holding any seed handle are the user; absorb their
   # other handles and their display names.
   defp self_person_data(user_id, seeds) do

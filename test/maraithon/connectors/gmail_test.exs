@@ -569,7 +569,8 @@ defmodule Maraithon.Connectors.GmailTest do
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
 
-      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("gmail_cursor_user@example.com")
+      {:ok, _user} =
+        Maraithon.Accounts.get_or_create_user_by_email("gmail_cursor_user@example.com")
 
       {:ok, _token} =
         Maraithon.OAuth.store_tokens("gmail_cursor_user@example.com", "google", %{
@@ -607,7 +608,8 @@ defmodule Maraithon.Connectors.GmailTest do
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
 
-      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("gmail_expired_user@example.com")
+      {:ok, _user} =
+        Maraithon.Accounts.get_or_create_user_by_email("gmail_expired_user@example.com")
 
       {:ok, _token} =
         Maraithon.OAuth.store_tokens("gmail_expired_user@example.com", "google", %{

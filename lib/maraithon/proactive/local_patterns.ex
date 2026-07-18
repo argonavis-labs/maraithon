@@ -87,7 +87,14 @@ defmodule Maraithon.Proactive.LocalPatterns do
 
   # ~w would split "follow up" into the markers "follow" and "up", and bare
   # "up" substring-matches almost every note ("update", "pickup", ...).
-  @note_follow_up_markers ["todo", "remember to", "follow up", "follow-up", "don't forget", "do not forget"]
+  @note_follow_up_markers [
+    "todo",
+    "remember to",
+    "follow up",
+    "follow-up",
+    "don't forget",
+    "do not forget"
+  ]
 
   # ---------------------------------------------------------------------
   # Public API

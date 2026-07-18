@@ -11,7 +11,8 @@ defmodule MaraithonWeb.BriefingLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, socket |> assign(:current_path, "/briefing") |> assign_identity_onboarding() |> refresh()}
+    {:ok,
+     socket |> assign(:current_path, "/briefing") |> assign_identity_onboarding() |> refresh()}
   end
 
   @impl true
@@ -70,7 +71,10 @@ defmodule MaraithonWeb.BriefingLive do
     |> assign(:identity_confirmed?, confirmed?)
     |> assign(
       :identity_prefill,
-      if(confirmed?, do: %{display_name: nil, emails: [], phones: []}, else: UserIdentity.onboarding_prefill(user_id))
+      if(confirmed?,
+        do: %{display_name: nil, emails: [], phones: []},
+        else: UserIdentity.onboarding_prefill(user_id)
+      )
     )
   end
 

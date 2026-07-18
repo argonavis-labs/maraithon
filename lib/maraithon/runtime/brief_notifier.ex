@@ -1,6 +1,6 @@
 defmodule Maraithon.Runtime.BriefNotifier do
   @moduledoc """
-  Periodically dispatches Telegram chief-of-staff briefs.
+  Periodically dispatches pending chief-of-staff briefs (email + phone push).
   """
 
   use GenServer
@@ -29,7 +29,7 @@ defmodule Maraithon.Runtime.BriefNotifier do
 
   @impl true
   def handle_info(:tick, state) do
-    result = Briefs.dispatch_telegram_batch(batch_size: state.batch_size)
+    result = Briefs.dispatch_pending_batch(batch_size: state.batch_size)
 
     if result.sent > 0 or result.failed > 0 do
       Logger.info("Brief notifier cycle",

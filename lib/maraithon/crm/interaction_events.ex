@@ -168,7 +168,7 @@ defmodule Maraithon.Crm.InteractionEvents do
       if (event.attendees_count || 0) > @max_event_attendees do
         []
       else
-        ([event.organizer_email | List.wrap(event.attendee_emails)])
+        [event.organizer_email | List.wrap(event.attendee_emails)]
         |> Enum.map(&normalize_handle/1)
         |> Enum.reject(&is_nil/1)
         |> Enum.uniq()
@@ -179,7 +179,14 @@ defmodule Maraithon.Crm.InteractionEvents do
               []
 
             person_id ->
-              [%{person_id: person_id, at: event.start_at, source: "calendar", direction: "mutual"}]
+              [
+                %{
+                  person_id: person_id,
+                  at: event.start_at,
+                  source: "calendar",
+                  direction: "mutual"
+                }
+              ]
           end
         end)
       end

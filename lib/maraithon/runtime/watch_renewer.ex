@@ -127,7 +127,9 @@ defmodule Maraithon.Runtime.WatchRenewer do
     kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
   end
 
-  defp do_renew(%SourceCursor{connected_account_id: id, user_id: user_id, provider: provider} = cursor) do
+  defp do_renew(
+         %SourceCursor{connected_account_id: id, user_id: user_id, provider: provider} = cursor
+       ) do
     case Repo.get(ConnectedAccount, id) do
       nil ->
         {:error, :connected_account_not_found}
@@ -189,7 +191,8 @@ defmodule Maraithon.Runtime.WatchRenewer do
     end
   end
 
-  defp renew_watch(_kind, _cursor, _account, _user_id, _token), do: {:error, :unsupported_cursor_kind}
+  defp renew_watch(_kind, _cursor, _account, _user_id, _token),
+    do: {:error, :unsupported_cursor_kind}
 
   defp stop_previous_calendar_watch(user_id, %SourceCursor{} = cursor, new_watch) do
     channel_id = cursor.watch_channel_id

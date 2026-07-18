@@ -18,7 +18,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
       })
 
     state = LocalPatternReview.init(%{"user_id" => user_id})
-    context = %{user_id: user_id, agent_id: agent.id, timestamp: DateTime.utc_now(), trigger: %{type: :wakeup}}
+
+    context = %{
+      user_id: user_id,
+      agent_id: agent.id,
+      timestamp: DateTime.utc_now(),
+      trigger: %{type: :wakeup}
+    }
 
     %{user_id: user_id, agent: agent, state: state, context: context}
   end
@@ -94,7 +100,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
     }
 
     assert {:emit, {:insights_recorded, payload}, next_state} =
-             LocalPatternReview.handle_effect_result({:llm_call, response}, pending_state, context)
+             LocalPatternReview.handle_effect_result(
+               {:llm_call, response},
+               pending_state,
+               context
+             )
 
     assert payload.count == 1
     assert next_state.pending_candidates == []
@@ -128,7 +138,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
     }
 
     assert {:emit, {:insights_recorded, payload}, _next_state} =
-             LocalPatternReview.handle_effect_result({:llm_call, response}, pending_state, context)
+             LocalPatternReview.handle_effect_result(
+               {:llm_call, response},
+               pending_state,
+               context
+             )
 
     assert payload.count == 0
     assert [entry] = payload["ledger_entries"]
@@ -223,7 +237,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
     }
 
     assert {:emit, {:insights_recorded, payload}, _next_state} =
-             LocalPatternReview.handle_effect_result({:llm_call, response}, pending_state, context)
+             LocalPatternReview.handle_effect_result(
+               {:llm_call, response},
+               pending_state,
+               context
+             )
 
     assert payload.count == 1
     assert "relationship_drift" in payload.categories

@@ -389,7 +389,10 @@ defmodule Maraithon.TelegramAssistant do
   Returns `%{count:, recent_count:, oldest_inserted_at:}` where
   `recent_count` counts rows inserted within `recent_window_hours` of `now`.
   """
-  def expire_stale_prepared_actions_with_stats(now \\ DateTime.utc_now(), recent_window_hours \\ 48) do
+  def expire_stale_prepared_actions_with_stats(
+        now \\ DateTime.utc_now(),
+        recent_window_hours \\ 48
+      ) do
     recent_cutoff = DateTime.add(now, -recent_window_hours * 60 * 60, :second)
 
     stats =
@@ -399,7 +402,11 @@ defmodule Maraithon.TelegramAssistant do
           where: prepared_action.expires_at < ^now,
           select: %{
             recent_count:
-              fragment("count(*) FILTER (WHERE ? > ?)", prepared_action.inserted_at, ^recent_cutoff),
+              fragment(
+                "count(*) FILTER (WHERE ? > ?)",
+                prepared_action.inserted_at,
+                ^recent_cutoff
+              ),
             oldest_inserted_at: min(prepared_action.inserted_at)
           }
         )
@@ -732,7 +739,8 @@ defmodule Maraithon.TelegramAssistant do
           )
         else
           if callback_id,
-            do: TelegramResponder.answer_callback(callback_id, "This action isn't available here.")
+            do:
+              TelegramResponder.answer_callback(callback_id, "This action isn't available here.")
 
           :ok
         end
@@ -1201,7 +1209,11 @@ defmodule Maraithon.TelegramAssistant do
   # block bookkeeping onto the linked todo's metadata after a successful
   # execute. `result` is the runner's normalized (string-keyed) tool result.
   defp maybe_record_calendar_block(
-         %PreparedAction{action_type: "calendar_create_event", user_id: user_id, payload: payload},
+         %PreparedAction{
+           action_type: "calendar_create_event",
+           user_id: user_id,
+           payload: payload
+         },
          result
        ) do
     with todo_id when is_binary(todo_id) <- read_string(payload || %{}, "todo_id"),
@@ -1222,7 +1234,11 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp maybe_record_calendar_block(
-         %PreparedAction{action_type: "calendar_update_event", user_id: user_id, payload: payload},
+         %PreparedAction{
+           action_type: "calendar_update_event",
+           user_id: user_id,
+           payload: payload
+         },
          _result
        ) do
     payload = payload || %{}
@@ -1242,7 +1258,11 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp maybe_record_calendar_block(
-         %PreparedAction{action_type: "calendar_cancel_event", user_id: user_id, payload: payload},
+         %PreparedAction{
+           action_type: "calendar_cancel_event",
+           user_id: user_id,
+           payload: payload
+         },
          _result
        ) do
     payload = payload || %{}

@@ -69,7 +69,11 @@ defmodule Maraithon.Calendar.FreeBlocksTest do
   end
 
   test "all-day events never block timed work and short gaps are dropped" do
-    all_day = %{"summary" => "Offsite", "start" => %{"date" => "2026-05-13"}, "end" => %{"date" => "2026-05-14"}}
+    all_day = %{
+      "summary" => "Offsite",
+      "start" => %{"date" => "2026-05-13"},
+      "end" => %{"date" => "2026-05-14"}
+    }
 
     assert [_single_giant_opening] = FreeBlocks.openings([all_day], @now, opening_opts())
 

@@ -511,8 +511,7 @@ config :maraithon, :apns,
   topic: System.get_env("APNS_TOPIC"),
   environment: System.get_env("APNS_ENVIRONMENT")
 
-config :maraithon, :mobile_push,
-  enabled: boolean_env.("MOBILE_PUSH_ENABLED", true)
+config :maraithon, :mobile_push, enabled: boolean_env.("MOBILE_PUSH_ENABLED", true)
 
 config :maraithon, :telegram_assistant,
   chat_reasoning_effort: System.get_env("TELEGRAM_CHAT_REASONING_EFFORT", "none"),
