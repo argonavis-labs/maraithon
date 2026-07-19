@@ -2,10 +2,12 @@ defmodule MaraithonWeb.MobilePushDeviceController do
   use MaraithonWeb, :controller
 
   alias Maraithon.Push.Devices
+  alias Maraithon.Push.Notifier
   alias MaraithonWeb.MobileJSON
 
   def create(conn, params) do
     user_id = conn.assigns.current_user.id
+    first_device? = not Devices.any_active?(user_id)
 
     attrs = %{
       "device_token" => params["device_token"],
@@ -16,6 +18,8 @@ defmodule MaraithonWeb.MobilePushDeviceController do
 
     case Devices.register(user_id, attrs) do
       {:ok, device} ->
+        if first_device?, do: send_welcome_push(user_id)
+
         conn
         |> put_status(:created)
         |> json(%{device: device_json(device)})
@@ -31,6 +35,19 @@ defmodule MaraithonWeb.MobilePushDeviceController do
     user_id = conn.assigns.current_user.id
     {:ok, _count} = Devices.unregister(user_id, device_token)
     send_resp(conn, :no_content, "")
+  end
+
+  # Confirms the channel works the moment a user's first device comes online —
+  # the push the user sees right after granting notification permission.
+  defp send_welcome_push(user_id) do
+    Task.Supervisor.start_child(Maraithon.Runtime.EffectSupervisor, fn ->
+      Notifier.notify(user_id, %{
+        title: "Notifications are on",
+        body: "Maraithon will reach you here — briefings, nudges, and chat replies.",
+        deeplink: "maraithon://today",
+        collapse_id: "push-welcome"
+      })
+    end)
   end
 
   defp device_json(device) do
