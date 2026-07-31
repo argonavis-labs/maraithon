@@ -20,6 +20,12 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   # cadence *faster*, never forced back up to the old hourly loop.
   @default_wakeup_interval_ms :timer.minutes(10)
   @min_wakeup_interval_ms :timer.minutes(5)
+  # Periodic deep re-scan cadence: incremental (cursor-delta) acquisition runs
+  # every wakeup, but a full deep-lookback pass — the one that re-reads the
+  # multi-day window rather than just the delta — recurs on this interval in
+  # addition to the daily briefing/commitment-review cycles. A good chief of
+  # staff re-checks the whole desk a few times a day, not once at dawn.
+  @default_deep_scan_interval_hours 4
 
   @impl true
   def init(config) do
@@ -59,7 +65,13 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         config
         |> Map.get("wakeup_interval_ms")
         |> positive_integer(@default_wakeup_interval_ms)
-        |> max(@min_wakeup_interval_ms)
+        |> max(@min_wakeup_interval_ms),
+      last_deep_scan_at: nil,
+      deep_scan_interval_ms:
+        config
+        |> Map.get("deep_scan_interval_hours")
+        |> positive_integer(@default_deep_scan_interval_hours)
+        |> :timer.hours()
     }
   end
 
@@ -76,7 +88,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     cycle_memo_generated: false,
     # R5 (SPEC 07): redundant with SPEC 08's generic init/1-merge on restore,
     # but harmless — kept so ensure_state_keys/1 also back-fills mid-wakeup.
-    decision_ledger: %{}
+    decision_ledger: %{},
+    last_deep_scan_at: nil,
+    deep_scan_interval_ms: :timer.hours(@default_deep_scan_interval_hours)
   }
 
   defp ensure_state_keys(state) when is_map(state) do
@@ -666,7 +680,12 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   # (see Acquisition's `deep_lookback?`/`defer_watermark_advance`).
   defp ensure_cycle(%{cycle_skill_ids: nil} = state, context) do
     cycle_skill_ids = selected_skill_ids(state, context)
-    acquisition_context = Map.put(context, :defer_watermark_advance, true)
+    now = context[:timestamp] || DateTime.utc_now()
+
+    acquisition_context =
+      context
+      |> Map.put(:defer_watermark_advance, true)
+      |> maybe_request_deep_scan(state, now)
 
     {source_bundle, assistant_fetch_telemetry, proposed_watermarks} =
       acquisition_module().build(
@@ -683,11 +702,44 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         source_bundle: source_bundle,
         assistant_fetch_telemetry: assistant_fetch_telemetry,
         pending_watermarks: proposed_watermarks,
-        cycle_memo_generated: false
+        cycle_memo_generated: false,
+        last_deep_scan_at: note_deep_scan(state, assistant_fetch_telemetry, now)
     }
   end
 
   defp ensure_cycle(state, _context), do: state
+
+  # Recurring deep pass: request a full deep-lookback acquisition when the
+  # last one is older than the configured interval. Acquisition also runs
+  # deep on its own for the briefing/commitment-review cycles; whichever
+  # trigger fired, note_deep_scan/3 records it from the returned plan so the
+  # periodic timer resets on every deep pass, not just the requested ones.
+  defp maybe_request_deep_scan(acquisition_context, state, now) do
+    interval_ms =
+      Map.get(state, :deep_scan_interval_ms) || :timer.hours(@default_deep_scan_interval_hours)
+
+    due? =
+      case Map.get(state, :last_deep_scan_at) do
+        %DateTime{} = last -> DateTime.diff(now, last, :millisecond) >= interval_ms
+        _never -> true
+      end
+
+    if due? do
+      Map.put(acquisition_context, :acquisition_deep_lookback, true)
+    else
+      acquisition_context
+    end
+  end
+
+  defp note_deep_scan(state, telemetry, now) do
+    plan = (is_map(telemetry) && Map.get(telemetry, "plan")) || %{}
+
+    if Map.get(plan, :deep_lookback?) == true do
+      now
+    else
+      Map.get(state, :last_deep_scan_at)
+    end
+  end
 
   defp selected_skill_ids(state, context) do
     state.enabled_skill_ids

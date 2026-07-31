@@ -1685,7 +1685,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     # acquisition fetch window). Morning briefings and explicit
     # backfill/rebuild callers (`context[:acquisition_deep_lookback]`) opt
     # back into the deeper window.
-    deep_lookback? = morning_brief? or truthy?(Map.get(context, :acquisition_deep_lookback))
+    # Deep lookback also fires when the daily commitment review is due — that
+    # skill audits the full multi-day window, so running it on an incremental
+    # delta bundle would gut the review. The behavior additionally opts in on
+    # its periodic deep-scan cadence via `:acquisition_deep_lookback`.
+    deep_lookback? =
+      morning_brief? or
+        commitment_review_due?(user_id, skill_ids, skill_configs, context) or
+        truthy?(Map.get(context, :acquisition_deep_lookback))
     raw_lookback_hours = max(max_lookback_hours, 24)
 
     scheduled_scan_lookback_hours =
@@ -2095,6 +2102,49 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp morning_brief_due?(_user_id, _skill_ids, _skill_configs, _context), do: false
+
+  # Same shape as morning_brief_due?, keyed on the commitment tracker's daily
+  # review: due once local time passes commitment_review_hour_local and no
+  # "commitment_tracker:<local-date>" brief has been recorded yet.
+  defp commitment_review_due?(user_id, skill_ids, skill_configs, context)
+       when is_binary(user_id) do
+    "commitment_tracker" in skill_ids and
+      get_in(context, [:trigger, :type]) == :wakeup and
+      commitment_review_window_open?(user_id, skill_ids, skill_configs, context)
+  end
+
+  defp commitment_review_due?(_user_id, _skill_ids, _skill_configs, _context), do: false
+
+  defp commitment_review_window_open?(user_id, skill_ids, skill_configs, context) do
+    now = context[:timestamp] || DateTime.utc_now()
+    tracker_config = Map.get(skill_configs, "commitment_tracker", %{})
+
+    offset_fallback =
+      first_skill_integer(
+        skill_ids,
+        skill_configs,
+        "timezone_offset_hours",
+        @default_timezone_offset_hours
+      )
+
+    timezone_name =
+      normalize_string(
+        Map.get(tracker_config, "timezone") || Map.get(tracker_config, "timezone_name")
+      )
+
+    hour =
+      tracker_config
+      |> Map.get("commitment_review_hour_local")
+      |> then(fn value -> if is_integer(value) and value in 0..23, do: value, else: 7 end)
+
+    local_now = DateTime.add(now, Timezones.offset_at(timezone_name, now, offset_fallback), :hour)
+
+    Time.compare(DateTime.to_time(local_now), Time.new!(hour, 0, 0)) != :lt and
+      not Briefs.exists?(
+        user_id,
+        "commitment_tracker:" <> Date.to_iso8601(DateTime.to_date(local_now))
+      )
+  end
 
   defp truthy?(true), do: true
   defp truthy?(_other), do: false
