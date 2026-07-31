@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 struct MaraithonMobileApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var sessionStore: SessionStore
-    private let modelContainer: ModelContainer
+    @State private var modelContainer: ModelContainer
 
     init() {
         let authProvider = ProductionMagicAuthProvider()
@@ -45,11 +45,22 @@ struct MaraithonMobileApp: App {
             store?.user?.sessionToken
         }
 
+        // Any API call answered 401 signs the whole app out, not just launch.
+        MobileAPIClient.unauthorizedHandler = { [weak store] in
+            store?.handleUnauthorized()
+        }
+
+        let container: ModelContainer
         do {
-            modelContainer = try PersistenceController.makeModelContainer()
+            container = try PersistenceController.makeModelContainer()
         } catch {
+            // makeModelContainer only throws if even its in-memory fallback fails.
             fatalError("Unable to create SwiftData container: \(error)")
         }
+        _modelContainer = State(initialValue: container)
+
+        // Sign-out wipes the previous user's SwiftData rows via this container.
+        store.modelContainer = container
     }
 
     var body: some Scene {

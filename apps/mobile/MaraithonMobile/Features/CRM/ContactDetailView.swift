@@ -11,6 +11,8 @@ struct ContactDetailView: View {
     @State private var actionErrorMessage: String?
 
     var body: some View {
+        // Sorted once per body pass; the section reads it twice.
+        let relatedWork = contact.todos.sorted(by: relatedWorkSort)
         Form {
             if let actionErrorMessage {
                 Section {
@@ -175,7 +177,12 @@ struct ContactDetailView: View {
     }
 
     private var careRecommendation: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // Computed once per render; the layout reads several fields and the
+        // care signal walks the contact's history each time it is evaluated.
+        let careSummary = RelationshipCareSignal.summary(for: contact)
+        let careTint = careTint(for: careSummary.level)
+
+        return VStack(alignment: .leading, spacing: 12) {
             Label {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(careSummary.title)
@@ -216,12 +223,8 @@ struct ContactDetailView: View {
         .padding(.vertical, 4)
     }
 
-    private var careSummary: RelationshipCareSummary {
-        RelationshipCareSignal.summary(for: contact)
-    }
-
-    private var careTint: Color {
-        switch careSummary.level {
+    private func careTint(for level: RelationshipCareLevel) -> Color {
+        switch level {
         case .archived: .secondary
         case .warm: .green
         case .new: .indigo
@@ -233,10 +236,6 @@ struct ContactDetailView: View {
     private var contactContext: String {
         let value = contact.company.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "Relationship context not set" : value
-    }
-
-    private var relatedWork: [TodoItem] {
-        contact.todos.sorted(by: relatedWorkSort)
     }
 
     private var followUpNotes: String {
@@ -459,8 +458,13 @@ enum ContactDetailCopy {
 private struct ContactLinkedWorkRow: View {
     let todo: TodoItem
 
-    private var decisionContext: TodoDecisionContext {
-        TodoDecisionContext(todo: todo)
+    /// Built once per row construction; each construction runs the
+    /// copy-cleaning pipeline over ~8 fields.
+    private let decisionContext: TodoDecisionContext
+
+    init(todo: TodoItem) {
+        self.todo = todo
+        self.decisionContext = TodoDecisionContext(todo: todo)
     }
 
     var body: some View {

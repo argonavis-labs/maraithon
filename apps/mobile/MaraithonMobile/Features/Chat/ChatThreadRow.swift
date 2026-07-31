@@ -4,7 +4,8 @@ struct ChatThreadRow: View {
     let thread: ChatThread
 
     private var latestMessage: ChatMessage? {
-        thread.sortedMessages.last
+        // O(n) max instead of sorting the whole relationship for one element.
+        thread.messages.max { $0.sentAt < $1.sentAt }
     }
 
     var body: some View {

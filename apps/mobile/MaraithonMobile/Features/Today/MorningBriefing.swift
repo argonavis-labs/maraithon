@@ -92,6 +92,16 @@ struct MorningBriefingCard: View {
 struct BriefDetailView: View {
     let brief: MobileAPIClient.RemoteBrief
 
+    /// Parsed once at construction; the brief body is immutable for the life
+    /// of this view, so re-parsing markdown per render was pure waste. Blocks
+    /// are identified by their (stable) index.
+    private let blocks: [BriefMarkdown.Block]
+
+    init(brief: MobileAPIClient.RemoteBrief) {
+        self.brief = brief
+        self.blocks = BriefMarkdown.blocks(from: brief.body ?? "")
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -117,8 +127,8 @@ struct BriefDetailView: View {
 
                 Divider()
 
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                    blockView(block)
+                ForEach(blocks.indices, id: \.self) { index in
+                    blockView(blocks[index])
                 }
             }
             .padding(20)
@@ -127,10 +137,6 @@ struct BriefDetailView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(MorningBriefingCopy.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private var blocks: [BriefMarkdown.Block] {
-        BriefMarkdown.blocks(from: brief.body ?? "")
     }
 
     @ViewBuilder
@@ -242,9 +248,11 @@ enum MorningBriefingCopy {
     static let readBriefingTitle = "Read the briefing"
     static let previousSectionTitle = "Previous briefings"
 
+    private static let dayLabelStyle: Date.FormatStyle = .dateTime.weekday(.wide).month(.abbreviated).day()
+
     static func dayLabel(for date: Date, calendar: Calendar = .current) -> String {
         if calendar.isDateInToday(date) { return "Today" }
         if calendar.isDateInYesterday(date) { return "Yesterday" }
-        return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+        return date.formatted(dayLabelStyle)
     }
 }

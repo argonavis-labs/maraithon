@@ -3,18 +3,29 @@ import Foundation
 enum AppFormatters {
     static let shortDate: Date.FormatStyle = .dateTime.month(.abbreviated).day().year(.defaultDigits)
 
-    static func currencyString(for value: Decimal) -> String {
+    /// Foundation formatter construction is expensive and these run on every
+    /// row render, so build each once. Formatters are safe to share for
+    /// formatting as long as they are not mutated after setup.
+    private nonisolated(unsafe) static let currencyFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
         formatter.currencyCode = Locale.current.currency?.identifier ?? "USD"
         formatter.maximumFractionDigits = 0
-        return formatter.string(from: value as NSDecimalNumber) ?? "$0"
+        return formatter
+    }()
+
+    private nonisolated(unsafe) static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    static func currencyString(for value: Decimal) -> String {
+        currencyFormatter.string(from: value as NSDecimalNumber) ?? "$0"
     }
 
     static func relativeString(for date: Date, relativeTo referenceDate: Date = Date()) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: referenceDate)
+        relativeFormatter.localizedString(for: date, relativeTo: referenceDate)
     }
 
     static func chatTimeString(for date: Date) -> String {
@@ -35,6 +46,6 @@ enum AppFormatters {
             return "Yesterday"
         }
 
-        return date.formatted(.dateTime.month(.abbreviated).day().year(.defaultDigits))
+        return date.formatted(shortDate)
     }
 }

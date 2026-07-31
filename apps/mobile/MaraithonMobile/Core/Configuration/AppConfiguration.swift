@@ -5,7 +5,10 @@ enum AppConfiguration {
         static let mobileAPIBaseURL = "MaraithonMobileAPIBaseURL"
     }
 
-    static var mobileAPIBaseURL: URL {
+    // Evaluated once; a missing or invalid Info.plist value still traps on
+    // first access, matching the old computed-var precondition semantics
+    // without re-parsing the plist on every request.
+    static let mobileAPIBaseURL: URL = {
         guard let value = Bundle.main.object(forInfoDictionaryKey: Keys.mobileAPIBaseURL) as? String,
               let url = URL(string: value),
               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -13,5 +16,5 @@ enum AppConfiguration {
         }
 
         return url
-    }
+    }()
 }

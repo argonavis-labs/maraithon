@@ -31,27 +31,33 @@ enum ProductionDataSync {
             sessionToken: sessionToken,
             includeCards: includeCards
         )
+
+        // All regex-heavy string cleaning runs off the main actor; the loop
+        // below only assigns precomputed values to @Model objects.
+        let preparedTodos = await Task.detached(priority: .userInitiated) {
+            prepare(remoteTodos)
+        }.value
+
         let localTodos = try modelContext.fetch(FetchDescriptor<TodoItem>())
-        let localByID = Dictionary(uniqueKeysWithValues: localTodos.map { ($0.id, $0) })
+        let localByID = Dictionary(localTodos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let localContacts = try modelContext.fetch(FetchDescriptor<CRMContact>())
-        let contactsByID = Dictionary(uniqueKeysWithValues: localContacts.map { ($0.id, $0) })
+        let contactsByID = Dictionary(localContacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var seenRemoteIDs = Set<UUID>()
 
-        for remoteTodo in remoteTodos {
-            guard let id = UUID(uuidString: remoteTodo.id) else { continue }
-            seenRemoteIDs.insert(id)
+        for prepared in preparedTodos {
+            seenRemoteIDs.insert(prepared.id)
 
-            guard shouldKeepRemoteTodo(remoteTodo) else {
-                if let todo = localByID[id] {
+            guard prepared.keep else {
+                if let todo = localByID[prepared.id] {
                     modelContext.delete(todo)
                 }
                 continue
             }
 
-            if let todo = localByID[id] {
-                apply(remoteTodo, to: todo, includeCards: includeCards, contactsByID: contactsByID)
+            if let todo = localByID[prepared.id] {
+                apply(prepared, to: todo, includeCards: includeCards, contactsByID: contactsByID)
             } else {
-                modelContext.insert(todo(from: remoteTodo, id: id, contactsByID: contactsByID))
+                modelContext.insert(todoItem(from: prepared, contactsByID: contactsByID))
             }
         }
 
@@ -68,7 +74,7 @@ enum ProductionDataSync {
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
         let remotePeople = try await MobileAPIClient().listPeople(sessionToken: sessionToken)
         let localContacts = try modelContext.fetch(FetchDescriptor<CRMContact>())
-        let localByID = Dictionary(uniqueKeysWithValues: localContacts.map { ($0.id, $0) })
+        let localByID = Dictionary(localContacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var seenRemoteIDs = Set<UUID>()
 
         for remotePerson in remotePeople {
@@ -88,27 +94,128 @@ enum ProductionDataSync {
         try modelContext.save()
     }
 
+    /// Snapshot of a remote todo with every string already cleaned. Built off
+    /// the main actor so the MainActor merge loop only assigns values.
+    struct PreparedTodo: Sendable {
+        let id: UUID
+        let keep: Bool
+        let title: String
+        let notes: String
+        let nextAction: String?
+        let priority: TodoPriority
+        let dueDate: Date?
+        let isCompleted: Bool
+        let completedAt: Date?
+        let relatedPersonIDs: [UUID]
+        let sourceSystem: String?
+        let card: PreparedCard
+    }
+
+    struct PreparedCard: Sendable {
+        let decisionPrompt: String?
+        let decisionContextSummary: String?
+        let whyNow: String?
+        let sourceContext: String?
+        let nextBestAction: String?
+        let draftPreview: String?
+        let evidenceExcerpt: String?
+        let sourceProvider: String?
+        let sourceProviderLabel: String?
+        let sourceOpenURLString: String?
+        let sourceOpenLabel: String?
+        let draftText: String?
+        let draftKind: String?
+        let draftRecipient: String?
+        let draftRecipientHandle: String?
+        let sourceSubject: String?
+        let sourceContextData: Data?
+    }
+
+    /// Performs ALL string cleaning (the regex-heavy ChiefOfStaffCopy passes)
+    /// for a page of remote todos. Nonisolated so callers can run it off the
+    /// main actor before handing the results to the MainActor merge.
+    nonisolated static func prepare(_ remoteTodos: [MobileAPIClient.RemoteTodo]) -> [PreparedTodo] {
+        remoteTodos.compactMap { remoteTodo in
+            UUID(uuidString: remoteTodo.id).map { prepare(remoteTodo, id: $0) }
+        }
+    }
+
+    nonisolated static func prepare(_ remoteTodo: MobileAPIClient.RemoteTodo, id: UUID) -> PreparedTodo {
+        PreparedTodo(
+            id: id,
+            keep: shouldKeepRemoteTodo(remoteTodo),
+            title: remoteTodo.title,
+            notes: remoteTodo.notes ?? remoteTodo.summary ?? "",
+            nextAction: remoteTodo.nextAction,
+            priority: priority(from: remoteTodo.priority),
+            dueDate: remoteTodo.dueAt,
+            isCompleted: remoteTodo.status == "done",
+            completedAt: remoteTodo.closedAt,
+            relatedPersonIDs: remoteTodo.relatedPeople.compactMap { UUID(uuidString: $0.id) },
+            sourceSystem: cleanedText(remoteTodo.source),
+            card: preparedCard(from: remoteTodo.actionCard)
+        )
+    }
+
+    nonisolated private static func preparedCard(
+        from actionCard: MobileAPIClient.RemoteActionCard?
+    ) -> PreparedCard {
+        PreparedCard(
+            decisionPrompt: cleanedText(actionCard?.decisionPrompt),
+            decisionContextSummary: actionCardContextSummary(actionCard),
+            whyNow: cleanedText(actionCard?.whyNow),
+            sourceContext: cleanedText(actionCard?.sourceContext),
+            nextBestAction: cleanedText(actionCard?.nextBestAction),
+            draftPreview: cleanedText(actionCard?.draftPreview),
+            evidenceExcerpt: cleanedText(actionCard?.evidenceExcerpt),
+            sourceProvider: cleanedText(actionCard?.sourceAction?.provider),
+            sourceProviderLabel: cleanedText(actionCard?.sourceAction?.providerLabel),
+            sourceOpenURLString: cleanedText(actionCard?.sourceAction?.openURL),
+            sourceOpenLabel: cleanedText(actionCard?.sourceAction?.openLabel),
+            draftText: cleanedText(actionCard?.sourceAction?.draftText),
+            draftKind: cleanedText(actionCard?.sourceAction?.draftKind),
+            draftRecipient: cleanedText(actionCard?.sourceAction?.recipient),
+            draftRecipientHandle: cleanedText(actionCard?.sourceAction?.recipientHandle),
+            sourceSubject: cleanedText(actionCard?.sourceAction?.subject),
+            sourceContextData: encodedSourceContext(actionCard?.sourceAction)
+        )
+    }
+
     static func apply(
         _ remoteTodo: MobileAPIClient.RemoteTodo,
         to todo: TodoItem,
         includeCards: Bool = true,
         contactsByID: [UUID: CRMContact]? = nil
     ) {
-        todo.title = remoteTodo.title
-        todo.notes = remoteTodo.notes ?? remoteTodo.summary ?? ""
-        todo.nextAction = remoteTodo.nextAction
-        todo.priority = priority(from: remoteTodo.priority)
-        todo.dueDate = remoteTodo.dueAt
-        todo.isCompleted = remoteTodo.status == "done"
-        todo.completedAt = remoteTodo.closedAt
+        apply(
+            prepare(remoteTodo, id: todo.id),
+            to: todo,
+            includeCards: includeCards,
+            contactsByID: contactsByID
+        )
+    }
+
+    static func apply(
+        _ prepared: PreparedTodo,
+        to todo: TodoItem,
+        includeCards: Bool = true,
+        contactsByID: [UUID: CRMContact]? = nil
+    ) {
+        todo.title = prepared.title
+        todo.notes = prepared.notes
+        todo.nextAction = prepared.nextAction
+        todo.priority = prepared.priority
+        todo.dueDate = prepared.dueDate
+        todo.isCompleted = prepared.isCompleted
+        todo.completedAt = prepared.completedAt
         if let contactsByID {
-            todo.contact = relatedContact(for: remoteTodo, contactsByID: contactsByID)
+            todo.contact = relatedContact(personIDs: prepared.relatedPersonIDs, contactsByID: contactsByID)
         }
-        todo.sourceSystem = cleanedText(remoteTodo.source)
+        todo.sourceSystem = prepared.sourceSystem
         // A cards-omitted refresh must not wipe existing decision-card context; those
         // fields are filled by the background card pass.
         if includeCards {
-            apply(remoteTodo.actionCard, to: todo)
+            apply(prepared.card, to: todo)
         }
     }
 
@@ -227,7 +334,7 @@ enum ProductionDataSync {
         )
     }
 
-    static func shouldKeepRemoteTodo(_ remoteTodo: MobileAPIClient.RemoteTodo) -> Bool {
+    nonisolated static func shouldKeepRemoteTodo(_ remoteTodo: MobileAPIClient.RemoteTodo) -> Bool {
         remoteTodo.status != "dismissed"
     }
 
@@ -236,38 +343,47 @@ enum ProductionDataSync {
         id: UUID,
         contactsByID: [UUID: CRMContact]? = nil
     ) -> TodoItem {
+        todoItem(from: prepare(remoteTodo, id: id), contactsByID: contactsByID)
+    }
+
+    static func todoItem(
+        from prepared: PreparedTodo,
+        contactsByID: [UUID: CRMContact]? = nil
+    ) -> TodoItem {
         TodoItem(
-            id: id,
-            title: remoteTodo.title,
-            notes: remoteTodo.notes ?? remoteTodo.summary ?? "",
-            nextAction: remoteTodo.nextAction,
-            priority: priority(from: remoteTodo.priority),
-            dueDate: remoteTodo.dueAt,
-            isCompleted: remoteTodo.status == "done",
-            completedAt: remoteTodo.closedAt,
-            decisionPrompt: cleanedText(remoteTodo.actionCard?.decisionPrompt),
-            decisionContextSummary: actionCardContextSummary(remoteTodo.actionCard),
-            whyNow: cleanedText(remoteTodo.actionCard?.whyNow),
-            sourceContext: cleanedText(remoteTodo.actionCard?.sourceContext),
-            nextBestAction: cleanedText(remoteTodo.actionCard?.nextBestAction),
-            draftPreview: cleanedText(remoteTodo.actionCard?.draftPreview),
-            evidenceExcerpt: cleanedText(remoteTodo.actionCard?.evidenceExcerpt),
-            sourceSystem: cleanedText(remoteTodo.source),
-            sourceProvider: cleanedText(remoteTodo.actionCard?.sourceAction?.provider),
-            sourceProviderLabel: cleanedText(remoteTodo.actionCard?.sourceAction?.providerLabel),
-            sourceOpenURLString: cleanedText(remoteTodo.actionCard?.sourceAction?.openURL),
-            sourceOpenLabel: cleanedText(remoteTodo.actionCard?.sourceAction?.openLabel),
-            draftText: cleanedText(remoteTodo.actionCard?.sourceAction?.draftText),
-            draftKind: cleanedText(remoteTodo.actionCard?.sourceAction?.draftKind),
-            draftRecipient: cleanedText(remoteTodo.actionCard?.sourceAction?.recipient),
-            draftRecipientHandle: cleanedText(remoteTodo.actionCard?.sourceAction?.recipientHandle),
-            sourceSubject: cleanedText(remoteTodo.actionCard?.sourceAction?.subject),
-            sourceContextData: encodedSourceContext(remoteTodo.actionCard?.sourceAction),
-            contact: contactsByID.flatMap { relatedContact(for: remoteTodo, contactsByID: $0) }
+            id: prepared.id,
+            title: prepared.title,
+            notes: prepared.notes,
+            nextAction: prepared.nextAction,
+            priority: prepared.priority,
+            dueDate: prepared.dueDate,
+            isCompleted: prepared.isCompleted,
+            completedAt: prepared.completedAt,
+            decisionPrompt: prepared.card.decisionPrompt,
+            decisionContextSummary: prepared.card.decisionContextSummary,
+            whyNow: prepared.card.whyNow,
+            sourceContext: prepared.card.sourceContext,
+            nextBestAction: prepared.card.nextBestAction,
+            draftPreview: prepared.card.draftPreview,
+            evidenceExcerpt: prepared.card.evidenceExcerpt,
+            sourceSystem: prepared.sourceSystem,
+            sourceProvider: prepared.card.sourceProvider,
+            sourceProviderLabel: prepared.card.sourceProviderLabel,
+            sourceOpenURLString: prepared.card.sourceOpenURLString,
+            sourceOpenLabel: prepared.card.sourceOpenLabel,
+            draftText: prepared.card.draftText,
+            draftKind: prepared.card.draftKind,
+            draftRecipient: prepared.card.draftRecipient,
+            draftRecipientHandle: prepared.card.draftRecipientHandle,
+            sourceSubject: prepared.card.sourceSubject,
+            sourceContextData: prepared.card.sourceContextData,
+            contact: contactsByID.flatMap { relatedContact(personIDs: prepared.relatedPersonIDs, contactsByID: $0) }
         )
     }
 
-    private static func encodedSourceContext(
+    nonisolated private static let sourceContextEncoder = JSONEncoder()
+
+    nonisolated private static func encodedSourceContext(
         _ sourceAction: MobileAPIClient.RemoteActionCard.SourceAction?
     ) -> Data? {
         guard let sourceAction,
@@ -276,7 +392,7 @@ enum ProductionDataSync {
             return nil
         }
 
-        return try? JSONEncoder().encode(
+        return try? sourceContextEncoder.encode(
             TodoStoredSourceContext(
                 participants: sourceAction.participants,
                 conversation: sourceAction.conversation
@@ -284,24 +400,24 @@ enum ProductionDataSync {
         )
     }
 
-    private static func apply(_ actionCard: MobileAPIClient.RemoteActionCard?, to todo: TodoItem) {
-        todo.decisionPrompt = cleanedText(actionCard?.decisionPrompt)
-        todo.decisionContextSummary = actionCardContextSummary(actionCard)
-        todo.whyNow = cleanedText(actionCard?.whyNow)
-        todo.sourceContext = cleanedText(actionCard?.sourceContext)
-        todo.nextBestAction = cleanedText(actionCard?.nextBestAction)
-        todo.draftPreview = cleanedText(actionCard?.draftPreview)
-        todo.evidenceExcerpt = cleanedText(actionCard?.evidenceExcerpt)
-        todo.sourceProvider = cleanedText(actionCard?.sourceAction?.provider)
-        todo.sourceProviderLabel = cleanedText(actionCard?.sourceAction?.providerLabel)
-        todo.sourceOpenURLString = cleanedText(actionCard?.sourceAction?.openURL)
-        todo.sourceOpenLabel = cleanedText(actionCard?.sourceAction?.openLabel)
-        todo.draftText = cleanedText(actionCard?.sourceAction?.draftText)
-        todo.draftKind = cleanedText(actionCard?.sourceAction?.draftKind)
-        todo.draftRecipient = cleanedText(actionCard?.sourceAction?.recipient)
-        todo.draftRecipientHandle = cleanedText(actionCard?.sourceAction?.recipientHandle)
-        todo.sourceSubject = cleanedText(actionCard?.sourceAction?.subject)
-        todo.sourceContextData = encodedSourceContext(actionCard?.sourceAction)
+    private static func apply(_ card: PreparedCard, to todo: TodoItem) {
+        todo.decisionPrompt = card.decisionPrompt
+        todo.decisionContextSummary = card.decisionContextSummary
+        todo.whyNow = card.whyNow
+        todo.sourceContext = card.sourceContext
+        todo.nextBestAction = card.nextBestAction
+        todo.draftPreview = card.draftPreview
+        todo.evidenceExcerpt = card.evidenceExcerpt
+        todo.sourceProvider = card.sourceProvider
+        todo.sourceProviderLabel = card.sourceProviderLabel
+        todo.sourceOpenURLString = card.sourceOpenURLString
+        todo.sourceOpenLabel = card.sourceOpenLabel
+        todo.draftText = card.draftText
+        todo.draftKind = card.draftKind
+        todo.draftRecipient = card.draftRecipient
+        todo.draftRecipientHandle = card.draftRecipientHandle
+        todo.sourceSubject = card.sourceSubject
+        todo.sourceContextData = card.sourceContextData
     }
 
     static func contact(from remotePerson: MobileAPIClient.RemotePerson, id: UUID) -> CRMContact {
@@ -319,7 +435,7 @@ enum ProductionDataSync {
         )
     }
 
-    private static func priority(from value: Int?) -> TodoPriority {
+    nonisolated private static func priority(from value: Int?) -> TodoPriority {
         switch value ?? 50 {
         case 90...: .critical
         case 75..<90: .high
@@ -371,23 +487,21 @@ enum ProductionDataSync {
     }
 
     private static func relatedContact(
-        for remoteTodo: MobileAPIClient.RemoteTodo,
+        personIDs: [UUID],
         contactsByID: [UUID: CRMContact]
     ) -> CRMContact? {
-        remoteTodo.relatedPeople.lazy.compactMap { relatedPerson in
-            UUID(uuidString: relatedPerson.id).flatMap { contactsByID[$0] }
-        }.first
+        personIDs.lazy.compactMap { contactsByID[$0] }.first
     }
 
     private static func isoString(for date: Date) -> String {
         Date.ISO8601FormatStyle(includingFractionalSeconds: false).format(date)
     }
 
-    private static func cleanedText(_ value: String?) -> String? {
+    nonisolated private static func cleanedText(_ value: String?) -> String? {
         ChiefOfStaffCopy.clean(value)
     }
 
-    private static func actionCardContextSummary(_ actionCard: MobileAPIClient.RemoteActionCard?) -> String? {
+    nonisolated private static func actionCardContextSummary(_ actionCard: MobileAPIClient.RemoteActionCard?) -> String? {
         guard let actionCard else { return nil }
 
         let values = actionCard.contextItems.compactMap { item in

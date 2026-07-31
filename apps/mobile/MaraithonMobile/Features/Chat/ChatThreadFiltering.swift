@@ -2,17 +2,17 @@ import Foundation
 
 enum ChatThreadFiltering {
     static func filter(_ threads: [ChatThread], searchText: String) -> [ChatThread] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return threads }
 
         return threads.filter { thread in
-            searchableValues(for: thread).contains { value in
-                value.lowercased().contains(query)
+            if thread.title.localizedCaseInsensitiveContains(query) {
+                return true
+            }
+
+            return thread.messages.contains { message in
+                message.body.localizedCaseInsensitiveContains(query)
             }
         }
-    }
-
-    private static func searchableValues(for thread: ChatThread) -> [String] {
-        [thread.title] + thread.messages.map(\.body)
     }
 }

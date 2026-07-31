@@ -154,20 +154,57 @@ struct TodoFilterCounts: Equatable {
 }
 
 enum TodoFiltering {
+    /// Single pass over the todos with per-filter accumulators; the previous
+    /// implementation ran the full filter pipeline seven times.
     static func counts(
         in todos: [TodoItem],
         searchText: String = "",
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> TodoFilterCounts {
-        TodoFilterCounts(
-            all: filter(todos, by: .all, searchText: searchText, now: now, calendar: calendar).count,
-            open: filter(todos, by: .open, searchText: searchText, now: now, calendar: calendar).count,
-            decisions: filter(todos, by: .decisions, searchText: searchText, now: now, calendar: calendar).count,
-            today: filter(todos, by: .today, searchText: searchText, now: now, calendar: calendar).count,
-            overdue: filter(todos, by: .overdue, searchText: searchText, now: now, calendar: calendar).count,
-            upcoming: filter(todos, by: .upcoming, searchText: searchText, now: now, calendar: calendar).count,
-            completed: filter(todos, by: .completed, searchText: searchText, now: now, calendar: calendar).count
+        let query = normalizedQuery(searchText)
+        var all = 0
+        var open = 0
+        var decisions = 0
+        var today = 0
+        var overdue = 0
+        var upcoming = 0
+        var completed = 0
+
+        for todo in todos {
+            guard matchesSearch(todo, query: query) else { continue }
+
+            all += 1
+
+            if todo.isCompleted {
+                completed += 1
+            } else {
+                open += 1
+            }
+
+            if TodoDecisionSignals.needsDecision(todo) {
+                decisions += 1
+            }
+
+            if !todo.isCompleted, let dueDate = todo.dueDate {
+                if calendar.isDate(dueDate, inSameDayAs: now) {
+                    today += 1
+                } else if dueDate < now {
+                    overdue += 1
+                } else if dueDate > now {
+                    upcoming += 1
+                }
+            }
+        }
+
+        return TodoFilterCounts(
+            all: all,
+            open: open,
+            decisions: decisions,
+            today: today,
+            overdue: overdue,
+            upcoming: upcoming,
+            completed: completed
         )
     }
 
@@ -178,8 +215,10 @@ enum TodoFiltering {
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> [TodoItem] {
-        todos.filter { todo in
-            guard matchesSearch(todo, searchText: searchText) else { return false }
+        let query = normalizedQuery(searchText)
+
+        return todos.filter { todo in
+            guard matchesSearch(todo, query: query) else { return false }
 
             switch filter {
             case .all:
@@ -211,22 +250,55 @@ enum TodoFiltering {
         filter(todos, by: .overdue, now: now, calendar: calendar).count
     }
 
-    private static func matchesSearch(_ todo: TodoItem, searchText: String) -> Bool {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    private static func normalizedQuery(_ searchText: String) -> String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func matchesSearch(_ todo: TodoItem, query: String) -> Bool {
         guard !query.isEmpty else { return true }
 
-        let searchableValues = [
-            todo.title,
-            todo.notes,
-            todo.nextAction ?? "",
-            todo.priority.title,
-            todo.contact?.name ?? "",
-            todo.contact?.company ?? ""
-        ]
+        if todo.title.lowercased().contains(query) { return true }
+        if todo.notes.lowercased().contains(query) { return true }
+        if let nextAction = todo.nextAction, nextAction.lowercased().contains(query) { return true }
+        if todo.priority.title.lowercased().contains(query) { return true }
 
-        return searchableValues.contains { value in
-            value.lowercased().contains(query)
+        if let contact = todo.contact {
+            if contact.name.lowercased().contains(query) { return true }
+            if contact.company.lowercased().contains(query) { return true }
         }
+
+        return false
+    }
+}
+
+/// Content fingerprint over the todo fields that feed derived list state
+/// (filters, counts, decision signals, focus queues). Views compare it in
+/// `onChange` to decide when a cached snapshot must be rebuilt; identity-based
+/// array equality would miss in-place edits like completing a todo.
+enum TodoListSignature {
+    static func signature(for todos: [TodoItem]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(todos.count)
+
+        for todo in todos {
+            hasher.combine(todo.id)
+            hasher.combine(todo.title)
+            hasher.combine(todo.notes)
+            hasher.combine(todo.nextAction)
+            hasher.combine(todo.isCompleted)
+            hasher.combine(todo.dueDate)
+            hasher.combine(todo.priorityRawValue)
+            hasher.combine(todo.decisionPrompt)
+            hasher.combine(todo.decisionContextSummary)
+            hasher.combine(todo.whyNow)
+            hasher.combine(todo.sourceContext)
+            hasher.combine(todo.nextBestAction)
+            hasher.combine(todo.draftPreview)
+            hasher.combine(todo.evidenceExcerpt)
+            hasher.combine(todo.sourceSystem)
+        }
+
+        return hasher.finalize()
     }
 }
 

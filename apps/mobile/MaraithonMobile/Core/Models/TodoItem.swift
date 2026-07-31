@@ -115,9 +115,25 @@ final class TodoItem {
         return action.isEmpty ? nil : action
     }
 
+    /// Memoizes the decoded source-context payload; `sourceAction` reads it on
+    /// every row render. The box keeps cache writes off observed properties and
+    /// self-invalidates when `sourceContextData` changes.
+    @Transient private var sourceContextCache = DecodedSourceContextCache()
+
+    /// `JSONDecoder` is stateless after configuration and safe to share.
+    private nonisolated(unsafe) static let sourceContextDecoder = JSONDecoder()
+
     var storedSourceContext: TodoStoredSourceContext? {
         guard let sourceContextData else { return nil }
-        return try? JSONDecoder().decode(TodoStoredSourceContext.self, from: sourceContextData)
+
+        if sourceContextCache.raw == sourceContextData {
+            return sourceContextCache.decoded
+        }
+
+        let decoded = try? Self.sourceContextDecoder.decode(TodoStoredSourceContext.self, from: sourceContextData)
+        sourceContextCache.raw = sourceContextData
+        sourceContextCache.decoded = decoded
+        return decoded
     }
 
     func setSourceContext(participants: [CardParticipant], conversation: [CardConversationMessage]) {
@@ -152,6 +168,13 @@ final class TodoItem {
         isCompleted = completed
         completedAt = completed ? date : nil
     }
+}
+
+/// Per-instance memo for the decoded `sourceContextData` payload. A
+/// reference-type box keeps cache writes off the model's observed properties.
+private final class DecodedSourceContextCache {
+    var raw: Data?
+    var decoded: TodoStoredSourceContext?
 }
 
 /// Codable bundle persisted on TodoItem for participants + conversation.

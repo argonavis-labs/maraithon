@@ -36,6 +36,9 @@ struct ChatSyncService {
 
     private let maxConsecutivePollFailures = 5
 
+    private static let metadataEncoder = JSONEncoder()
+    private static let isoDateFormatter = ISO8601DateFormatter()
+
     init(
         api: any MobileChatAPI = MobileAPIClient(),
         now: @escaping () -> Date = Date.init,
@@ -60,6 +63,17 @@ struct ChatSyncService {
                 preferredThread: localThreads[remoteThread.id],
                 localThreadsByRemoteID: localThreads
             )
+        }
+
+        // A short (non-truncated) page is the complete remote list, so local
+        // threads that vanished remotely should be removed. A full page may be
+        // truncated and omit live threads beyond it; never delete on that
+        // evidence alone. Threads without a remoteID are local-only drafts.
+        if remoteThreads.count < MobileAPIClient.chatThreadsPageLimit {
+            let remoteIDs = Set(remoteThreads.map(\.id))
+            for (remoteID, thread) in localThreads where !remoteIDs.contains(remoteID) {
+                modelContext.delete(thread)
+            }
         }
 
         try modelContext.save()
@@ -213,15 +227,26 @@ struct ChatSyncService {
         let sessionToken = try sessionToken(from: sessionStore)
         var consecutiveFailures = 0
 
-        for _ in 0..<maxPollAttempts {
+        // Exponential backoff (1x, 2x, 5x, then capped at 10x the base
+        // interval) keeps the total wall-clock budget the same as the old
+        // fixed-interval loop while cutting request and radio churn.
+        let baseInterval = Duration.nanoseconds(pollIntervalNanoseconds)
+        let totalBudget = baseInterval * maxPollAttempts
+        var elapsed = Duration.zero
+        var attempt = 0
+
+        while elapsed < totalBudget {
             try Task.checkCancellation()
 
             do {
                 let run = try await api.getChatRun(sessionToken: sessionToken, id: runID)
 
                 if run.runStatus.isPending {
-                    apply(run, to: thread)
-                    try modelContext.save()
+                    // Skip the save entirely when the poll changed nothing;
+                    // most pending ticks are no-ops.
+                    if applyReportingChanges(run, to: thread) {
+                        try modelContext.save()
+                    }
                 } else {
                     // Refresh the thread first so the assistant reply and the
                     // pending-state clear land in one merge.
@@ -246,10 +271,24 @@ struct ChatSyncService {
                 }
             }
 
-            try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
+            let delay = baseInterval * Self.backoffMultiplier(attempt: attempt)
+            // Task.sleep(for:) throws on cancellation, keeping the poll
+            // responsive to view teardown.
+            try await Task.sleep(for: delay)
+            elapsed += delay
+            attempt += 1
         }
 
         throw ChatSyncError.pollingTimedOut
+    }
+
+    private static func backoffMultiplier(attempt: Int) -> Int {
+        switch attempt {
+        case 0: 1
+        case 1: 2
+        case 2: 5
+        default: 10
+        }
     }
 
     func decidePreparedAction(
@@ -435,8 +474,12 @@ struct ChatSyncService {
                 return existing
             }
         } else {
-            let threads = try modelContext.fetch(FetchDescriptor<ChatThread>())
-            if let existing = threads.first(where: { $0.remoteID == remoteThread.id }) {
+            let remoteThreadID = remoteThread.id
+            var descriptor = FetchDescriptor<ChatThread>(
+                predicate: #Predicate { $0.remoteID == remoteThreadID }
+            )
+            descriptor.fetchLimit = 1
+            if let existing = try modelContext.fetch(descriptor).first {
                 return existing
             }
         }
@@ -548,6 +591,14 @@ struct ChatSyncService {
         modelContext.delete(message)
     }
 
+    /// Applies the run to the thread and reports whether anything actually
+    /// changed, so pollers can skip redundant saves.
+    private func applyReportingChanges(_ run: MobileAPIClient.RemoteChatRun, to thread: ChatThread) -> Bool {
+        let before = (thread.pendingRunID, thread.pendingRunWorkSummary, thread.remoteStatusRawValue)
+        apply(run, to: thread)
+        return before != (thread.pendingRunID, thread.pendingRunWorkSummary, thread.remoteStatusRawValue)
+    }
+
     private func apply(_ run: MobileAPIClient.RemoteChatRun, to thread: ChatThread) {
         if run.runStatus.isPending {
             thread.pendingRunID = run.id
@@ -599,7 +650,7 @@ struct ChatSyncService {
             workSummary: remoteMessage.workSummary,
             structuredData: publicStructuredData(remoteMessage.structuredData)
         )
-        return try JSONEncoder().encode(metadata)
+        return try Self.metadataEncoder.encode(metadata)
     }
 
     private func publicStructuredData(_ structuredData: [String: JSONValue]) -> [String: JSONValue] {
@@ -615,8 +666,9 @@ struct ChatSyncService {
             return
         }
 
-        let todos = try modelContext.fetch(FetchDescriptor<TodoItem>())
-        guard let todo = todos.first(where: { $0.id == id }) else { return }
+        var descriptor = FetchDescriptor<TodoItem>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        guard let todo = try modelContext.fetch(descriptor).first else { return }
 
         if todoData["status"]?.string == "dismissed" {
             todo.isCompleted = true
@@ -659,12 +711,12 @@ struct ChatSyncService {
 
     private func date(from value: JSONValue?) -> Date? {
         guard let string = value?.string else { return nil }
-        return ISO8601DateFormatter().date(from: string)
+        return Self.isoDateFormatter.date(from: string)
     }
 
     private func encodedWorkSummary(_ workSummary: ChatWorkSummary?) -> Data? {
         guard let workSummary else { return nil }
-        return try? JSONEncoder().encode(workSummary)
+        return try? Self.metadataEncoder.encode(workSummary)
     }
 
     private func sessionToken(from sessionStore: SessionStore) throws -> String {

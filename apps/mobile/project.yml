@@ -4,9 +4,13 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    CURRENT_PROJECT_VERSION: 20260731030802
+    CURRENT_PROJECT_VERSION: 20260731121930
     MARKETING_VERSION: 1.0.1
-    SWIFT_VERSION: 6.3
+    # Swift *language mode*, not the toolchain version — 6.3 is not a valid
+    # language mode and Xcode silently coerces it. 6 turns on full
+    # strict-concurrency checking, which this codebase is written for.
+    SWIFT_VERSION: 6
+    SWIFT_STRICT_CONCURRENCY: complete
     IPHONEOS_DEPLOYMENT_TARGET: 26.0
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     DEVELOPMENT_TEAM: PS5W7BFTQ2

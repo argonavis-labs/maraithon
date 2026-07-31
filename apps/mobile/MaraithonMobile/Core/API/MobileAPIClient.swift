@@ -1,6 +1,7 @@
 import Foundation
 
 enum MobileAPIError: LocalizedError, Equatable, Sendable {
+    case invalidRequest
     case invalidResponse
     case unauthorized
     case server(String)
@@ -8,6 +9,8 @@ enum MobileAPIError: LocalizedError, Equatable, Sendable {
 
     var errorDescription: String? {
         switch self {
+        case .invalidRequest:
+            return "Maraithon could not build that request."
         case .invalidResponse:
             return "Maraithon returned an unexpected response."
         case .unauthorized:
@@ -33,6 +36,11 @@ enum MobileAPIError: LocalizedError, Equatable, Sendable {
 
 struct MobileAPIClient: Sendable {
     typealias RequestBody = [String: JSONValue]
+
+    /// Invoked whenever any request comes back HTTP 401. SessionStore assigns
+    /// this so an expired session forces a sign-out instead of stranding the
+    /// user on silently failing screens.
+    @MainActor static var unauthorizedHandler: (() -> Void)?
 
     struct MagicLinkResponse: Decodable, Sendable {
         struct MagicLink: Decodable, Sendable {
@@ -1058,10 +1066,15 @@ struct MobileAPIClient: Sendable {
 
     func listPeople(sessionToken: String) async throws -> [RemotePerson] {
         let pageSize = 500
+        // Hard cap keeps a misbehaving endpoint (e.g. one that ignores offset)
+        // from looping forever; 20 pages x 500 is far beyond any real CRM here.
+        let maxPages = 20
         var offset = 0
         var people: [RemotePerson] = []
 
-        while true {
+        for _ in 0..<maxPages {
+            try Task.checkCancellation()
+
             let response: PeopleResponse = try await send(
                 path: "/people?limit=\(pageSize)&offset=\(offset)&status=all",
                 sessionToken: sessionToken,
@@ -1071,11 +1084,13 @@ struct MobileAPIClient: Sendable {
             people.append(contentsOf: response.people)
 
             if response.people.count < pageSize {
-                return people
+                break
             }
 
             offset += pageSize
         }
+
+        return people
     }
 
     func reconnectSuggestions(
@@ -1119,11 +1134,15 @@ struct MobileAPIClient: Sendable {
         body: RequestBody? = nil,
         responseType: Response.Type
     ) async throws -> Response {
-        let base = baseURL.absoluteString.hasSuffix("/")
-            ? baseURL
-            : URL(string: baseURL.absoluteString + "/")!
+        let baseString = baseURL.absoluteString.hasSuffix("/")
+            ? baseURL.absoluteString
+            : baseURL.absoluteString + "/"
         let relativePath = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        let url = URL(string: relativePath, relativeTo: base)!.absoluteURL
+        guard let base = URL(string: baseString),
+              let url = URL(string: relativePath, relativeTo: base)?.absoluteURL
+        else {
+            throw MobileAPIError.invalidRequest
+        }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -1135,7 +1154,7 @@ struct MobileAPIClient: Sendable {
 
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder().encode(JSONValue.object(body))
+            request.httpBody = try Self.encoder.encode(JSONValue.object(body))
         }
 
         let (data, response) = try await session.data(for: request)
@@ -1147,14 +1166,17 @@ struct MobileAPIClient: Sendable {
         case 200..<300:
             // 204-style responses carry no body; any all-optional/empty
             // Decodable should succeed rather than choking on zero bytes.
-            if data.isEmpty, let empty = try? decoder.decode(Response.self, from: Data("{}".utf8)) {
+            if data.isEmpty, let empty = try? Self.decoder.decode(Response.self, from: Data("{}".utf8)) {
                 return empty
             }
-            return try decoder.decode(Response.self, from: data)
+            return try Self.decoder.decode(Response.self, from: data)
         case 401:
+            Task { @MainActor in
+                MobileAPIClient.unauthorizedHandler?()
+            }
             throw MobileAPIError.unauthorized
         default:
-            if let error = try? decoder.decode(ServerError.self, from: data) {
+            if let error = try? Self.decoder.decode(ServerError.self, from: data) {
                 if let message = error.message?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !message.isEmpty
                 {
@@ -1173,7 +1195,9 @@ struct MobileAPIClient: Sendable {
         }
     }
 
-    private var decoder: JSONDecoder {
+    private static let encoder = JSONEncoder()
+
+    private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
@@ -1184,7 +1208,7 @@ struct MobileAPIClient: Sendable {
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ISO8601 date.")
         }
         return decoder
-    }
+    }()
 
     private struct ServerError: Decodable, Sendable {
         let error: String?

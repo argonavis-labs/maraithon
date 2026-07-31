@@ -29,9 +29,26 @@ final class ChatThread {
         return ChatRunStatus(rawValue: value)
     }
 
+    /// Memoizes the decoded pending-run work summary per raw payload; the chat
+    /// pending row reads this on every render while a run is polling. The box
+    /// keeps cache writes off observed properties and self-invalidates when
+    /// `pendingRunWorkSummary` changes.
+    @Transient private var workSummaryCache = DecodedWorkSummaryCache()
+
+    /// `JSONDecoder` is stateless after configuration and safe to share.
+    private nonisolated(unsafe) static let workSummaryDecoder = JSONDecoder()
+
     var pendingWorkSummary: ChatWorkSummary? {
         guard let pendingRunWorkSummary else { return nil }
-        return try? JSONDecoder().decode(ChatWorkSummary.self, from: pendingRunWorkSummary)
+
+        if workSummaryCache.raw == pendingRunWorkSummary {
+            return workSummaryCache.decoded
+        }
+
+        let decoded = try? Self.workSummaryDecoder.decode(ChatWorkSummary.self, from: pendingRunWorkSummary)
+        workSummaryCache.raw = pendingRunWorkSummary
+        workSummaryCache.decoded = decoded
+        return decoded
     }
 
     init(
@@ -57,4 +74,11 @@ final class ChatThread {
         self.pendingRunWorkSummary = pendingRunWorkSummary
         self.lastSyncedAt = lastSyncedAt
     }
+}
+
+/// Per-instance memo for the decoded pending-run work summary. A reference-type
+/// box keeps cache writes off the model's observed properties.
+private final class DecodedWorkSummaryCache {
+    var raw: Data?
+    var decoded: ChatWorkSummary?
 }

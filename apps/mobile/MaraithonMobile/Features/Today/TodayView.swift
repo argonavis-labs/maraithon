@@ -12,18 +12,7 @@ struct TodayView: View {
     @State private var actionErrorMessage: String?
     @State private var isRefreshing = false
     @State private var briefs: [MobileAPIClient.RemoteBrief] = []
-
-    private var metrics: TodayMetrics {
-        TodayWorkEngine.metrics(todos: todos)
-    }
-
-    private var brief: TodayBrief {
-        TodayWorkEngine.brief(todos: todos)
-    }
-
-    private var focusItems: [TodayFocusItem] {
-        TodayWorkEngine.focusQueue(todos: todos)
-    }
+    @State private var snapshot: TodaySnapshot?
 
     private var recentThreads: [ChatThread] {
         Array(threads.prefix(3))
@@ -44,11 +33,15 @@ struct TodayView: View {
         }
     }
 
-    private var briefingGroups: [BriefingGroups.Group] {
-        BriefingGroups.groups(todos: todos)
+    /// Cheap content fingerprint over the fields the snapshot derives from.
+    /// `onChange` compares it every body pass; identity-based array equality
+    /// would miss in-place edits like completing a todo.
+    private var todoSignature: Int {
+        TodoListSignature.signature(for: todos)
     }
 
     var body: some View {
+        let snapshot = self.snapshot ?? TodaySnapshot(todos: todos)
         NavigationStack {
             List {
                 if let refreshErrorMessage {
@@ -78,8 +71,8 @@ struct TodayView: View {
                     }
                 }
 
-                briefingHeroSection
-                briefingGroupSections
+                briefingHeroSection(snapshot.brief)
+                briefingGroupSections(snapshot.briefingGroups)
 
                 Section(TodayViewCopy.actionSectionTitle) {
                     VStack(spacing: 1) {
@@ -96,7 +89,7 @@ struct TodayView: View {
                         CommandRow(
                             title: TodayViewCopy.decisionsTitle,
                             subtitle: TodayViewCopy.decisionsSubtitle,
-                            value: "\(metrics.decisionTodos)",
+                            value: "\(snapshot.metrics.decisionTodos)",
                             systemImage: "checkmark.seal",
                             tint: .purple
                         ) {
@@ -106,7 +99,7 @@ struct TodayView: View {
                         CommandRow(
                             title: TodayViewCopy.openWorkTitle,
                             subtitle: TodayViewCopy.openWorkSubtitle,
-                            value: "\(metrics.openTodos)",
+                            value: "\(snapshot.metrics.openTodos)",
                             systemImage: "circle",
                             tint: .blue
                         ) {
@@ -116,7 +109,7 @@ struct TodayView: View {
                         CommandRow(
                             title: TodayViewCopy.overdueTitle,
                             subtitle: TodayViewCopy.overdueSubtitle,
-                            value: "\(metrics.overdueTodos)",
+                            value: "\(snapshot.metrics.overdueTodos)",
                             systemImage: "clock.badge.exclamationmark",
                             tint: .orange
                         ) {
@@ -126,7 +119,7 @@ struct TodayView: View {
                         CommandRow(
                             title: TodayViewCopy.dueTodayTitle,
                             subtitle: TodayViewCopy.dueTodaySubtitle,
-                            value: "\(metrics.dueTodayTodos)",
+                            value: "\(snapshot.metrics.dueTodayTodos)",
                             systemImage: "calendar.badge.clock",
                             tint: .indigo
                         ) {
@@ -139,15 +132,15 @@ struct TodayView: View {
                 }
 
                 Section(TodayViewCopy.focusSectionTitle) {
-                    if focusItems.isEmpty {
+                    if snapshot.focusItems.isEmpty {
                         ContentUnavailableView(
                             TodayViewCopy.emptyFocusTitle,
                             systemImage: "sparkles",
                             description: Text(TodayViewCopy.emptyFocusDescription)
                         )
                     } else {
-                        ForEach(focusItems) { item in
-                            focusRow(for: item)
+                        ForEach(snapshot.focusItems) { item in
+                            focusRow(for: item, todosByID: snapshot.todosByID)
                         }
                     }
                 }
@@ -185,6 +178,13 @@ struct TodayView: View {
                 TodoEditorView(todo: todo)
             }
             .task {
+                self.snapshot = TodaySnapshot(todos: todos)
+                await refreshLatestData()
+            }
+            .onChange(of: todoSignature) { _, _ in
+                self.snapshot = TodaySnapshot(todos: todos)
+            }
+            .refreshable {
                 await refreshLatestData()
             }
         }
@@ -195,37 +195,33 @@ struct TodayView: View {
         isRefreshing = true
         defer { isRefreshing = false }
 
+        // The briefs fetch is a pure network read; run it alongside the
+        // SwiftData sync instead of after it.
+        let sessionToken = sessionStore.user?.sessionToken
+        async let fetchedBriefs = Self.fetchBriefs(sessionToken: sessionToken)
+
         do {
-            // First paint: load the list fast without server-generated decision cards.
             try await ProductionDataSync.refreshAll(
                 sessionStore: sessionStore,
                 modelContext: modelContext,
-                includeCards: false
+                includeCards: true
             )
             refreshErrorMessage = nil
         } catch {
             refreshErrorMessage = "Could not refresh your latest brief. \(MobileErrorCopy.message(for: error))"
         }
 
-        // Enrich with decision cards in the background; the brief is already on screen.
-        try? await ProductionDataSync.refreshTodos(
-            sessionStore: sessionStore,
-            modelContext: modelContext,
-            includeCards: true
-        )
-
-        await refreshBriefs()
-    }
-
-    private func refreshBriefs() async {
-        guard let sessionToken = sessionStore.user?.sessionToken else { return }
-
-        if let fetched = try? await MobileAPIClient().listBriefs(sessionToken: sessionToken) {
+        if let fetched = await fetchedBriefs {
             briefs = fetched
         }
     }
 
-    private var briefingHeroSection: some View {
+    private static func fetchBriefs(sessionToken: String?) async -> [MobileAPIClient.RemoteBrief]? {
+        guard let sessionToken else { return nil }
+        return try? await MobileAPIClient().listBriefs(sessionToken: sessionToken)
+    }
+
+    private func briefingHeroSection(_ engineBrief: TodayBrief) -> some View {
         Section {
             if let todayBrief {
                 NavigationLink {
@@ -237,9 +233,9 @@ struct TodayView: View {
             } else {
                 TodayBriefCard(
                     greeting: greeting,
-                    brief: brief
+                    brief: engineBrief
                 ) {
-                    navigate(to: brief.destination)
+                    navigate(to: engineBrief.destination)
                 }
             }
         }
@@ -247,8 +243,8 @@ struct TodayView: View {
         .listRowSeparator(.hidden)
     }
 
-    private var briefingGroupSections: some View {
-        ForEach(briefingGroups) { group in
+    private func briefingGroupSections(_ groups: [BriefingGroups.Group]) -> some View {
+        ForEach(groups) { group in
             Section(group.title) {
                 ForEach(group.todos) { todo in
                     NavigationLink {
@@ -288,10 +284,10 @@ struct TodayView: View {
     }
 
     @ViewBuilder
-    private func focusRow(for item: TodayFocusItem) -> some View {
+    private func focusRow(for item: TodayFocusItem, todosByID: [UUID: TodoItem]) -> some View {
         switch item.kind {
         case .todo:
-            if let todo = todo(for: item) {
+            if let todo = todosByID[item.referenceID] {
                 NavigationLink {
                     TodoDetailView(todo: todo)
                 } label: {
@@ -323,10 +319,6 @@ struct TodayView: View {
                 TodayFocusRow(item: item)
             }
         }
-    }
-
-    private func todo(for item: TodayFocusItem) -> TodoItem? {
-        todos.first { $0.id == item.referenceID }
     }
 
     private func completeFocusTodo(_ todo: TodoItem) {
@@ -425,6 +417,25 @@ struct TodayView: View {
         default:
             return "evening"
         }
+    }
+}
+
+/// One derived snapshot of everything the Today body reads from the todos
+/// query. Rebuilt only when the todo content signature changes, so the body no
+/// longer runs the O(n) work-engine passes on every render.
+private struct TodaySnapshot {
+    let metrics: TodayMetrics
+    let brief: TodayBrief
+    let focusItems: [TodayFocusItem]
+    let briefingGroups: [BriefingGroups.Group]
+    let todosByID: [UUID: TodoItem]
+
+    init(todos: [TodoItem]) {
+        metrics = TodayWorkEngine.metrics(todos: todos)
+        brief = TodayWorkEngine.brief(todos: todos)
+        focusItems = TodayWorkEngine.focusQueue(todos: todos)
+        briefingGroups = BriefingGroups.groups(todos: todos)
+        todosByID = Dictionary(todos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 }
 

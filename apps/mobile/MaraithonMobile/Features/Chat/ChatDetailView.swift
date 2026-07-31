@@ -25,6 +25,8 @@ struct ChatDetailView: View {
     @State private var sendTask: Task<Void, Never>?
     @State private var renameTask: Task<Void, Never>?
     @State private var deleteTask: Task<Void, Never>?
+    @State private var scenePollTask: Task<Void, Never>?
+    @State private var timelineRows: [ChatTimelineRow]
     @FocusState private var isComposerFocused: Bool
 
     private let chatSyncService = ChatSyncService()
@@ -48,10 +50,15 @@ struct ChatDetailView: View {
         self.contextHeader = contextHeader
         self.sourceAction = sourceAction
         self.quickPrompts = quickPrompts
+        // Seed the timeline so the first frame renders without an empty flash;
+        // it is kept fresh via onChange(of: thread.messages.count). The body
+        // re-runs on every draft keystroke, so the sort must not live in a
+        // computed property.
+        _timelineRows = State(initialValue: ChatMessageTimeline.rows(for: thread.messages))
     }
 
-    private var timelineRows: [ChatTimelineRow] {
-        ChatMessageTimeline.rows(for: thread.messages)
+    private func rebuildTimelineRows() {
+        timelineRows = ChatMessageTimeline.rows(for: thread.messages)
     }
 
     var body: some View {
@@ -123,6 +130,7 @@ struct ChatDetailView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .defaultScrollAnchor(.bottom)
                 .onChange(of: thread.messages.count) { _, _ in
+                    rebuildTimelineRows()
                     scrollToBottom(proxy)
                 }
                 .onAppear {
@@ -143,7 +151,8 @@ struct ChatDetailView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            Task {
+            scenePollTask?.cancel()
+            scenePollTask = Task {
                 await pollPendingRunIfNeeded()
             }
         }
@@ -151,6 +160,7 @@ struct ChatDetailView: View {
             sendTask?.cancel()
             renameTask?.cancel()
             deleteTask?.cancel()
+            scenePollTask?.cancel()
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
@@ -408,6 +418,8 @@ struct ChatDetailView: View {
             )
             errorMessage = nil
             lastFailedMessage = nil
+            // A merge can update existing messages without changing the count.
+            rebuildTimelineRows()
         } catch is CancellationError {
             return
         } catch ChatSyncError.missingSession {
@@ -569,6 +581,8 @@ private struct ChatDateHeader: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(.thinMaterial, in: Capsule())
+            // Solid fill instead of .thinMaterial: material blur is expensive
+            // inside scrolling rows.
+            .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
     }
 }

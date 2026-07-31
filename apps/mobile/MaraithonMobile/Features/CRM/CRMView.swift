@@ -16,34 +16,66 @@ struct CRMView: View {
     @State private var isRefreshing = false
     @State private var goals: [MobileAPIClient.RemoteGoal] = []
     @State private var reconnectSuggestions: [MobileAPIClient.RemoteReconnectSuggestion] = []
-
-    private var peopleContexts: [PeopleContactContext] {
-        PeoplePriorityEngine.contexts(
-            contacts: contacts,
-            todos: todos,
-            goals: goals,
-            suggestions: reconnectSuggestions,
-            searchText: searchText
-        )
-    }
-
-    private var selectedPeopleContexts: [PeopleContactContext] {
-        PeoplePriorityEngine.contexts(
-            for: selectedTab,
-            contexts: peopleContexts,
-            suggestions: reconnectSuggestions
-        )
-    }
-
-    private var focusCounts: PeopleFocusCounts {
-        PeoplePriorityEngine.counts(from: peopleContexts)
-    }
+    @State private var peopleSnapshot: PeopleSnapshot?
 
     private var emptyState: PeopleEmptyState {
         selectedTab.emptyState(searchText: searchText, hasAnyPeople: !contacts.isEmpty)
     }
 
+    /// Cheap content fingerprint over the contact and todo fields the priority
+    /// engine derives from. `onChange` compares it every body pass;
+    /// identity-based array equality would miss in-place edits like logging an
+    /// outreach.
+    private var peopleSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(contacts.count)
+
+        for contact in contacts {
+            hasher.combine(contact.id)
+            hasher.combine(contact.name)
+            hasher.combine(contact.company)
+            hasher.combine(contact.email)
+            hasher.combine(contact.phone)
+            hasher.combine(contact.statusRawValue)
+            hasher.combine(contact.dealStageRawValue)
+            hasher.combine(contact.notes)
+            hasher.combine(contact.lastContactedAt)
+            hasher.combine(contact.createdAt)
+        }
+
+        hasher.combine(todos.count)
+
+        for todo in todos {
+            hasher.combine(todo.id)
+            hasher.combine(todo.title)
+            hasher.combine(todo.notes)
+            hasher.combine(todo.nextAction)
+            hasher.combine(todo.isCompleted)
+            hasher.combine(todo.dueDate)
+            hasher.combine(todo.priorityRawValue)
+            hasher.combine(todo.contact?.id)
+        }
+
+        return hasher.finalize()
+    }
+
+    private func makePeopleSnapshot() -> PeopleSnapshot {
+        PeopleSnapshot(
+            contacts: contacts,
+            todos: todos,
+            goals: goals,
+            suggestions: reconnectSuggestions,
+            searchText: searchText,
+            tab: selectedTab
+        )
+    }
+
+    private func rebuildPeopleSnapshot() {
+        peopleSnapshot = makePeopleSnapshot()
+    }
+
     var body: some View {
+        let snapshot = peopleSnapshot ?? makePeopleSnapshot()
         NavigationStack {
             List {
                 if let refreshErrorMessage {
@@ -80,7 +112,7 @@ struct CRMView: View {
                             FilterCountOption(
                                 value: tab,
                                 title: tab.title,
-                                count: focusCounts.value(for: tab),
+                                count: snapshot.counts.value(for: tab),
                                 tint: tab.tint
                             )
                         },
@@ -92,14 +124,14 @@ struct CRMView: View {
                 }
 
                 Section(selectedTab.sectionTitle) {
-                    if selectedPeopleContexts.isEmpty {
+                    if snapshot.selected.isEmpty {
                         ContentUnavailableView(
                             emptyState.title,
                             systemImage: emptyState.systemImage,
                             description: Text(emptyState.description)
                         )
                     } else {
-                        ForEach(selectedPeopleContexts) { context in
+                        ForEach(snapshot.selected) { context in
                             NavigationLink {
                                 ContactDetailView(contact: context.contact)
                             } label: {
@@ -161,10 +193,20 @@ struct CRMView: View {
                 ContactEditorView(contact: contact)
             }
             .task {
+                rebuildPeopleSnapshot()
                 await refreshPriorityPeople()
             }
             .refreshable {
                 await refreshPriorityPeople()
+            }
+            .onChange(of: peopleSignature) { _, _ in
+                rebuildPeopleSnapshot()
+            }
+            .onChange(of: searchText) { _, _ in
+                rebuildPeopleSnapshot()
+            }
+            .onChange(of: selectedTab) { _, _ in
+                rebuildPeopleSnapshot()
             }
             .onAppear(perform: applyRequestedFilterIfNeeded)
             .onChange(of: appNavigation.requestedPeopleFilter) { _, _ in
@@ -206,6 +248,13 @@ struct CRMView: View {
         isRefreshing = true
         defer { isRefreshing = false }
 
+        // Goals and reconnect suggestions are pure network fetches, so they run
+        // alongside the SwiftData syncs. The two ProductionDataSync calls mix
+        // fetch + model-context merge and stay serialized.
+        let sessionToken = sessionStore.user?.sessionToken
+        async let fetchedGoals = Self.fetchGoals(sessionToken: sessionToken)
+        async let fetchedSuggestions = Self.fetchReconnectSuggestions(sessionToken: sessionToken)
+
         do {
             try await ProductionDataSync.refreshPeople(
                 sessionStore: sessionStore,
@@ -225,41 +274,31 @@ struct CRMView: View {
             includeCards: false
         )
 
-        await refreshGoals()
-        await refreshReconnectSuggestions()
+        goals = await fetchedGoals
+        reconnectSuggestions = await fetchedSuggestions
+        rebuildPeopleSnapshot()
     }
 
-    private func refreshGoals() async {
-        guard let sessionToken = sessionStore.user?.sessionToken else {
-            goals = []
-            return
-        }
+    private static func fetchGoals(sessionToken: String?) async -> [MobileAPIClient.RemoteGoal] {
+        guard let sessionToken else { return [] }
 
-        do {
-            let remoteGoals = try await MobileAPIClient().listGoals(
-                sessionToken: sessionToken,
-                status: "active",
-                category: "all",
-                limit: 100
-            )
-            await MainActor.run { goals = remoteGoals }
-        } catch {
-            await MainActor.run { goals = [] }
-        }
+        let remoteGoals = try? await MobileAPIClient().listGoals(
+            sessionToken: sessionToken,
+            status: "active",
+            category: "all",
+            limit: 100
+        )
+        return remoteGoals ?? []
     }
 
-    private func refreshReconnectSuggestions() async {
-        guard let sessionToken = sessionStore.user?.sessionToken else { return }
-
-        do {
-            let suggestions = try await MobileAPIClient().reconnectSuggestions(sessionToken: sessionToken)
-            await MainActor.run { reconnectSuggestions = suggestions }
-        } catch {
-            // The reconnect surface is additive intelligence on top of the
-            // directory; if it cannot load we silently fall back to the list
-            // rather than blocking people management with an error banner.
-            await MainActor.run { reconnectSuggestions = [] }
-        }
+    private static func fetchReconnectSuggestions(
+        sessionToken: String?
+    ) async -> [MobileAPIClient.RemoteReconnectSuggestion] {
+        // The reconnect surface is additive intelligence on top of the
+        // directory; if it cannot load we silently fall back to the list
+        // rather than blocking people management with an error banner.
+        guard let sessionToken else { return [] }
+        return (try? await MobileAPIClient().reconnectSuggestions(sessionToken: sessionToken)) ?? []
     }
 
     private func applyRequestedFilterIfNeeded() {
@@ -278,6 +317,38 @@ struct CRMView: View {
             actionErrorMessage = failureMessage
             return false
         }
+    }
+}
+
+/// Derived people state for the People tab, rebuilt only when the underlying
+/// content, search text, or tab changes. The priority-engine graph is far too
+/// expensive to rebuild several times per body pass.
+private struct PeopleSnapshot {
+    let contexts: [PeopleContactContext]
+    let selected: [PeopleContactContext]
+    let counts: PeopleFocusCounts
+
+    init(
+        contacts: [CRMContact],
+        todos: [TodoItem],
+        goals: [MobileAPIClient.RemoteGoal],
+        suggestions: [MobileAPIClient.RemoteReconnectSuggestion],
+        searchText: String,
+        tab: PeopleFocusTab
+    ) {
+        contexts = PeoplePriorityEngine.contexts(
+            contacts: contacts,
+            todos: todos,
+            goals: goals,
+            suggestions: suggestions,
+            searchText: searchText
+        )
+        selected = PeoplePriorityEngine.contexts(
+            for: tab,
+            contexts: contexts,
+            suggestions: suggestions
+        )
+        counts = PeoplePriorityEngine.counts(from: contexts)
     }
 }
 

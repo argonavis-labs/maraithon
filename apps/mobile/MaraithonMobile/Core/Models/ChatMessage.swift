@@ -42,9 +42,27 @@ final class ChatMessage {
         storedMetadata?.workSummary
     }
 
+    /// Decoding runs on every access and MessageBubble touches the derived
+    /// properties several times per render, so memoize the decode per raw
+    /// payload. The cache lives in a transient box so reads never trigger
+    /// observation, and it invalidates automatically when `structuredData`
+    /// changes.
+    @Transient private var metadataCache = DecodedMetadataCache()
+
+    /// `JSONDecoder` is stateless after configuration and safe to share.
+    private nonisolated(unsafe) static let metadataDecoder = JSONDecoder()
+
     var storedMetadata: ChatMessageStoredMetadata? {
         guard let structuredData else { return nil }
-        return try? JSONDecoder().decode(ChatMessageStoredMetadata.self, from: structuredData)
+
+        if metadataCache.raw == structuredData {
+            return metadataCache.decoded
+        }
+
+        let decoded = try? Self.metadataDecoder.decode(ChatMessageStoredMetadata.self, from: structuredData)
+        metadataCache.raw = structuredData
+        metadataCache.decoded = decoded
+        return decoded
     }
 
     init(
@@ -74,4 +92,11 @@ final class ChatMessage {
         self.structuredData = structuredData
         self.thread = thread
     }
+}
+
+/// Per-instance memo for the decoded `structuredData` payload. A reference-type
+/// box keeps cache writes off the model's observed properties.
+private final class DecodedMetadataCache {
+    var raw: Data?
+    var decoded: ChatMessageStoredMetadata?
 }

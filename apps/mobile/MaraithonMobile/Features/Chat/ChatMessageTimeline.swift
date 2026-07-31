@@ -59,7 +59,9 @@ enum ChatMessageTimeline {
     private static func sorted(_ messages: [ChatMessage]) -> [ChatMessage] {
         messages.sorted {
             if $0.sentAt == $1.sentAt {
-                return $0.id.uuidString < $1.id.uuidString
+                // UUID's Comparable compares the raw bytes; no per-comparison
+                // string allocation.
+                return $0.id < $1.id
             }
             return $0.sentAt < $1.sentAt
         }

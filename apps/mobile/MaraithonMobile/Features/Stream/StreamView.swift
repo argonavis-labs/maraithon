@@ -9,6 +9,9 @@ struct StreamView: View {
     @State private var filter: StreamFilter = .all
     @State private var isLoading = true
     @State private var errorMessage: String?
+    /// Regrouping and sorting run only when the events or the filter change,
+    /// not on every body pass.
+    @State private var filteredDays: [StreamDay] = []
 
     var body: some View {
         NavigationStack {
@@ -55,6 +58,9 @@ struct StreamView: View {
             .refreshable {
                 await loadActivity()
             }
+            .onChange(of: filter) { _, _ in
+                rebuildFilteredDays()
+            }
         }
     }
 
@@ -66,8 +72,8 @@ struct StreamView: View {
         }
     }
 
-    private var filteredDays: [StreamDay] {
-        StreamDay.group(events: events.filter(filter.matches))
+    private func rebuildFilteredDays() {
+        filteredDays = StreamDay.group(events: events.filter(filter.matches))
     }
 
     private func loadActivity() async {
@@ -75,6 +81,7 @@ struct StreamView: View {
             events = []
             errorMessage = StreamCopy.signedOutMessage
             isLoading = false
+            rebuildFilteredDays()
             return
         }
 
@@ -88,6 +95,7 @@ struct StreamView: View {
         }
 
         isLoading = false
+        rebuildFilteredDays()
     }
 }
 
@@ -117,7 +125,7 @@ enum StreamFilter: String, CaseIterable, Identifiable {
 
 /// One calendar day of activity, newest day first.
 struct StreamDay: Identifiable {
-    let id: String
+    let id: Date
     let title: String
     let events: [MobileAPIClient.RemoteTodoActivity]
 
@@ -129,7 +137,7 @@ struct StreamDay: Identifiable {
 
         return grouped.keys.sorted(by: >).map { day in
             StreamDay(
-                id: day.formatted(.iso8601),
+                id: day,
                 title: StreamCopy.dayTitle(for: day),
                 events: (grouped[day] ?? []).sorted { $0.occurredAt > $1.occurredAt }
             )
@@ -208,10 +216,12 @@ enum StreamCopy {
         return note
     }
 
+    private static let dayTitleStyle: Date.FormatStyle = .dateTime.weekday(.wide).month(.abbreviated).day()
+
     static func dayTitle(for day: Date) -> String {
         let calendar = Calendar.current
         if calendar.isDateInToday(day) { return "Today" }
         if calendar.isDateInYesterday(day) { return "Yesterday" }
-        return day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+        return day.formatted(dayTitleStyle)
     }
 }

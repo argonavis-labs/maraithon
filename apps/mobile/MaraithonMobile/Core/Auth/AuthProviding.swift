@@ -9,8 +9,12 @@ protocol AuthProviding {
     func locallyStoredUser() -> AuthenticatedUser?
     func restoreSession() async throws -> AuthenticatedUser?
     func signOut() async throws
+    /// Removes any locally persisted session without a network round-trip,
+    /// e.g. after the server reports the session unauthorized.
+    func clearLocalSession()
 }
 
 extension AuthProviding {
     func locallyStoredUser() -> AuthenticatedUser? { nil }
+    func clearLocalSession() {}
 }

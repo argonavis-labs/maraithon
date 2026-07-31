@@ -4,8 +4,14 @@ struct TodoRow: View {
     let todo: TodoItem
     let onToggle: () -> Void
 
-    private var decisionContext: TodoDecisionContext {
-        TodoDecisionContext(todo: todo)
+    /// Built once per row construction; the body reads it several times and
+    /// each construction runs the copy-cleaning pipeline over ~8 fields.
+    private let decisionContext: TodoDecisionContext
+
+    init(todo: TodoItem, onToggle: @escaping () -> Void) {
+        self.todo = todo
+        self.onToggle = onToggle
+        self.decisionContext = TodoDecisionContext(todo: todo)
     }
 
     var body: some View {

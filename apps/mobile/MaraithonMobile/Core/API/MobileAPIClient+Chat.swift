@@ -288,9 +288,14 @@ extension MobileAPIClient: MobileChatAPI {
         }
     }
 
+    /// Page size requested by `listChatThreads`. A response with exactly this
+    /// many threads may be truncated; callers must not treat it as the full
+    /// remote thread list (e.g. for delete reconciliation).
+    static let chatThreadsPageLimit = 100
+
     func listChatThreads(sessionToken: String) async throws -> [RemoteChatThread] {
         let response: ChatThreadsResponse = try await send(
-            path: "/chat/threads?limit=100",
+            path: "/chat/threads?limit=\(Self.chatThreadsPageLimit)",
             sessionToken: sessionToken,
             responseType: ChatThreadsResponse.self
         )

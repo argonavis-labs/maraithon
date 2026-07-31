@@ -29,8 +29,10 @@ struct RootView: View {
         .onOpenURL { url in
             // Navigation deep links (maraithon://today, .../todos, .../chat/<id>)
             // route the UI; everything else is treated as a magic sign-in link.
+            // Routing goes through the coordinator's buffer so a link that
+            // arrives before the shell mounts (cold launch) isn't dropped.
             if AppNavigation.isNavigationURL(url) {
-                NotificationCenter.default.post(name: .maraithonDeepLink, object: url)
+                PushCoordinator.shared.routeDeepLink(url)
             } else {
                 Task {
                     await sessionStore.handleIncomingURL(url)

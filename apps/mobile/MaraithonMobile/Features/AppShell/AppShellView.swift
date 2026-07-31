@@ -11,10 +11,11 @@ enum AppTab: Hashable {
 
 struct AppShellView: View {
     @Environment(SessionStore.self) private var sessionStore
+    @Environment(\.scenePhase) private var scenePhase
     @State private var navigation = AppNavigation()
     @State private var identityPrefill: MobileAPIClient.IdentityResponse.Identity?
     @State private var didCheckIdentity = false
-    @AppStorage("aiDataSharingConsentAccepted") private var aiConsentAccepted = false
+    @AppStorage(AuthSessionStorageKeys.aiConsentAccepted) private var aiConsentAccepted = false
 
     var body: some View {
         if aiConsentAccepted {
@@ -54,19 +55,36 @@ struct AppShellView: View {
         .tabBarMinimizeBehavior(.onScrollDown)
         .environment(navigation)
         .task {
+            PushCoordinator.shared.clearBadge()
+
+            // A push tap or deep link may have arrived before this shell
+            // mounted (cold launch); route it now that navigation exists.
+            drainPendingDeepLink()
+
+            // Push permission must not wait on the identity network call.
+            async let pushSetup: Void = PushCoordinator.shared.enablePush()
             await checkIdentity()
-            await PushCoordinator.shared.enablePush()
+            await pushSetup
         }
-        .onReceive(NotificationCenter.default.publisher(for: .maraithonDeepLink)) { note in
-            if let url = note.object as? URL {
-                navigation.route(url)
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                PushCoordinator.shared.clearBadge()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .maraithonDeepLink)) { _ in
+            drainPendingDeepLink()
         }
         .sheet(item: $identityPrefill) { prefill in
             IdentityOnboardingView(prefill: prefill) {
                 identityPrefill = nil
             }
         }
+    }
+
+    private func drainPendingDeepLink() {
+        guard let url = PushCoordinator.shared.pendingDeepLink else { return }
+        PushCoordinator.shared.pendingDeepLink = nil
+        navigation.route(url)
     }
 
     private func checkIdentity() async {

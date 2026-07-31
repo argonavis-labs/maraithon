@@ -4,11 +4,13 @@ import SwiftData
 @MainActor
 enum DataSeeder {
     static func seedIfNeeded(in modelContext: ModelContext) {
+        #if DEBUG
         let descriptor = FetchDescriptor<CRMContact>()
         let existingContacts = (try? modelContext.fetchCount(descriptor)) ?? 0
         guard existingContacts == 0 else { return }
 
         try? seedDemoData(in: modelContext)
+        #endif
     }
 
     static func resetDemoData(in modelContext: ModelContext) throws {
@@ -28,7 +30,11 @@ enum DataSeeder {
         try seedDemoData(in: modelContext)
     }
 
+    /// Demo content is a development convenience only; release builds keep the
+    /// symbol (call sites still compile) but seed nothing, so demo contacts and
+    /// todos can never leak into a production store.
     static func seedDemoData(in modelContext: ModelContext) throws {
+        #if DEBUG
         let calendar = Calendar.current
         let now = Date()
         let ada = CRMContact(
@@ -105,5 +111,6 @@ enum DataSeeder {
         welcomeThread.messages.append(intro)
 
         try modelContext.save()
+        #endif
     }
 }

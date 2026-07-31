@@ -1,9 +1,39 @@
 import Foundation
 
 enum ChiefOfStaffCopy {
+    /// Memoizes `clean(_:)`. The same strings are cleaned thousands of times per
+    /// render pass (row contexts, decision signals, and focus queues all funnel
+    /// through the same ~95-regex pipeline), so cache input -> output. `NSCache`
+    /// is thread-safe and evicts under memory pressure; a miss just re-runs the
+    /// pipeline. The stored box also remembers "cleans to nil" results.
+    private final class CleanedResult {
+        let value: String?
+
+        init(_ value: String?) {
+            self.value = value
+        }
+    }
+
+    private nonisolated(unsafe) static let cleanCache: NSCache<NSString, CleanedResult> = {
+        let cache = NSCache<NSString, CleanedResult>()
+        cache.countLimit = 2000
+        return cache
+    }()
+
     static func clean(_ value: String?) -> String? {
         guard let value else { return nil }
 
+        let key = value as NSString
+        if let cached = cleanCache.object(forKey: key) {
+            return cached.value
+        }
+
+        let cleaned = cleanUncached(value)
+        cleanCache.setObject(CleanedResult(cleaned), forKey: key)
+        return cleaned
+    }
+
+    private static func cleanUncached(_ value: String) -> String? {
         let lines = value
             .components(separatedBy: .newlines)
             .compactMap(cleanLine)

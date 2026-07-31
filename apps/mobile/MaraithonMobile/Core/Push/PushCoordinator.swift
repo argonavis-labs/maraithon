@@ -1,4 +1,5 @@
 import Foundation
+import os
 import UIKit
 import UserNotifications
 
@@ -17,15 +18,35 @@ final class PushCoordinator: NSObject {
     /// Supplied by the app at launch so token uploads can authenticate.
     var sessionTokenProvider: (() -> String?)?
 
+    /// Deep link that arrived before the app shell was mounted (cold-launch
+    /// push tap, sign-in still restoring). The shell drains it on appear.
+    var pendingDeepLink: URL?
+
     private let apiClient = MobileAPIClient()
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "MaraithonMobile",
+        category: "push"
+    )
     private var pendingDeviceToken: String?
     private var uploadedDeviceToken: String?
+
+    /// Routes a navigation deep link. The URL is buffered so a shell mounted
+    /// later (cold launch) still routes it; the notification wakes an
+    /// already-mounted shell to drain the buffer immediately.
+    func routeDeepLink(_ url: URL) {
+        pendingDeepLink = url
+        NotificationCenter.default.post(name: .maraithonDeepLink, object: url)
+    }
+
+    /// Clears the app icon badge; call whenever the app becomes active.
+    func clearBadge() {
+        UNUserNotificationCenter.current().setBadgeCount(0)
+    }
 
     /// Call whenever the user is (or becomes) signed in. Asking again after a
     /// prior grant is a no-op; a denial leaves everything quiet.
     func enablePush() async {
         let center = UNUserNotificationCenter.current()
-        center.delegate = self
 
         let granted = (try? await center.requestAuthorization(options: [.alert, .badge, .sound])) ?? false
         guard granted else { return }
@@ -46,17 +67,21 @@ final class PushCoordinator: NSObject {
 
     func handleRegistrationFailure(_ error: Error) {
         // Simulators and denied capability both land here; nothing to do but log.
-        print("Push registration failed: \(error.localizedDescription)")
+        logger.error("Push registration failed: \(error.localizedDescription, privacy: .public)")
     }
 
     /// Sign-out: remove this device's registration so a signed-out phone stops
     /// receiving another account's notifications.
     func unregisterCurrentDevice() async {
+        defer {
+            pendingDeviceToken = nil
+            uploadedDeviceToken = nil
+        }
+
         guard let token = uploadedDeviceToken ?? pendingDeviceToken,
               let sessionToken = sessionTokenProvider?() else { return }
 
         try? await apiClient.unregisterPushDevice(sessionToken: sessionToken, deviceToken: token)
-        uploadedDeviceToken = nil
     }
 
     private func uploadPendingTokenIfPossible() async {
@@ -73,7 +98,7 @@ final class PushCoordinator: NSObject {
             uploadedDeviceToken = token
         } catch {
             // Leave the token pending; the next launch or sign-in retries.
-            print("Push token upload failed: \(error.localizedDescription)")
+            logger.error("Push token upload failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
@@ -98,7 +123,7 @@ extension PushCoordinator: UNUserNotificationCenterDelegate {
               let url = URL(string: deeplink) else { return }
 
         await MainActor.run {
-            NotificationCenter.default.post(name: .maraithonDeepLink, object: url)
+            PushCoordinator.shared.routeDeepLink(url)
         }
     }
 }

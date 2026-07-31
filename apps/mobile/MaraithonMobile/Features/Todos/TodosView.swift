@@ -14,23 +14,27 @@ struct TodosView: View {
     @State private var actionErrorMessage: String?
     @State private var refreshErrorMessage: String?
     @State private var isRefreshing = false
-
-    private var filteredTodos: [TodoItem] {
-        TodoFiltering.filter(todos, by: filter, searchText: searchText)
-    }
-
-    private var filterCounts: TodoFilterCounts {
-        TodoFiltering.counts(in: todos, searchText: searchText)
-    }
+    @State private var workLists: TodoWorkLists?
 
     private var emptyState: TodoEmptyState {
         filter.emptyState(searchText: searchText, hasAnyWork: !todos.isEmpty)
     }
 
+    /// Cheap content fingerprint compared in `onChange`; identity-based array
+    /// equality would miss in-place edits like completing a todo.
+    private var todoSignature: Int {
+        TodoListSignature.signature(for: todos)
+    }
+
+    private var currentWorkLists: TodoWorkLists {
+        workLists ?? TodoWorkLists(todos: todos, filter: filter, searchText: searchText)
+    }
+
     var body: some View {
+        let lists = currentWorkLists
         NavigationStack {
             VStack(spacing: 0) {
-                TodoFilterStrip(selection: $filter, counts: filterCounts)
+                TodoFilterStrip(selection: $filter, counts: lists.counts)
 
                 if let refreshErrorMessage {
                     SyncIssueBanner(
@@ -52,14 +56,14 @@ struct TodosView: View {
                 }
 
                 List {
-                    if filteredTodos.isEmpty {
+                    if lists.filtered.isEmpty {
                         ContentUnavailableView(
                             emptyState.title,
                             systemImage: emptyState.systemImage,
                             description: Text(emptyState.description)
                         )
                     } else {
-                        ForEach(filteredTodos) { todo in
+                        ForEach(lists.filtered) { todo in
                             TodoRow(todo: todo) {
                                 toggle(todo)
                             }
@@ -123,6 +127,19 @@ struct TodosView: View {
                 TodoDetailView(todo: todo)
             }
             .task {
+                rebuildWorkLists()
+                await refreshLatestWork()
+            }
+            .onChange(of: todoSignature) { _, _ in
+                rebuildWorkLists()
+            }
+            .onChange(of: searchText) { _, _ in
+                rebuildWorkLists()
+            }
+            .onChange(of: filter) { _, _ in
+                rebuildWorkLists()
+            }
+            .refreshable {
                 await refreshLatestWork()
             }
             .onAppear(perform: applyRequestedFilterIfNeeded)
@@ -132,29 +149,25 @@ struct TodosView: View {
         }
     }
 
+    private func rebuildWorkLists() {
+        workLists = TodoWorkLists(todos: todos, filter: filter, searchText: searchText)
+    }
+
     private func refreshLatestWork() async {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
 
         do {
-            // First paint: load the list fast without server-generated decision cards.
             try await ProductionDataSync.refreshTodos(
                 sessionStore: sessionStore,
                 modelContext: modelContext,
-                includeCards: false
+                includeCards: true
             )
             refreshErrorMessage = nil
         } catch {
             refreshErrorMessage = "Could not refresh work. \(MobileErrorCopy.message(for: error))"
         }
-
-        // Enrich with decision cards in the background; the list is already on screen.
-        try? await ProductionDataSync.refreshTodos(
-            sessionStore: sessionStore,
-            modelContext: modelContext,
-            includeCards: true
-        )
     }
 
     private func toggle(_ todo: TodoItem) {
@@ -185,7 +198,10 @@ struct TodosView: View {
     }
 
     private func deleteTodos(at offsets: IndexSet) {
-        let todosToDelete = offsets.map { filteredTodos[$0] }
+        let filtered = currentWorkLists.filtered
+        let todosToDelete = offsets.compactMap { index in
+            filtered.indices.contains(index) ? filtered[index] : nil
+        }
         todosToDelete.forEach(delete)
     }
 
@@ -232,6 +248,18 @@ struct TodosView: View {
             actionErrorMessage = failureMessage
             return false
         }
+    }
+}
+
+/// Derived list state for the Todos tab, rebuilt only when the todos content,
+/// search text, or filter changes instead of on every body pass.
+private struct TodoWorkLists {
+    let filtered: [TodoItem]
+    let counts: TodoFilterCounts
+
+    init(todos: [TodoItem], filter: TodoFilter, searchText: String) {
+        filtered = TodoFiltering.filter(todos, by: filter, searchText: searchText)
+        counts = TodoFiltering.counts(in: todos, searchText: searchText)
     }
 }
 

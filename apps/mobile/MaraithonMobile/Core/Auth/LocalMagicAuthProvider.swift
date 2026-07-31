@@ -119,6 +119,10 @@ final class LocalMagicAuthProvider: AuthProviding {
     func signOut() async throws {
         pendingLinks.removeAll()
         pendingCodes.removeAll()
+        clearLocalSession()
+    }
+
+    func clearLocalSession() {
         userDefaults.removeObject(forKey: AuthSessionStorageKeys.authenticatedUser)
     }
 
