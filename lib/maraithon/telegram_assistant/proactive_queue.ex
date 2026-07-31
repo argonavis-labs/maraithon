@@ -140,6 +140,15 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
   def mark_delivered(candidate_or_id), do: update_status(candidate_or_id, "delivered")
   def mark_held(candidate_or_id), do: update_status(candidate_or_id, "held")
 
+  @doc """
+  Returns a candidate whose dispatch failed to "pending" so the next planner
+  cycle retries it. "planned" is not a resting state — nothing re-reads it —
+  so leaving a failed dispatch there strands the candidate (and, through the
+  live-dedupe index, blocks its source from re-enqueueing) until the TTL
+  sweep expires it. Retries stay bounded by `expires_at`.
+  """
+  def mark_pending(candidate_or_id), do: update_status(candidate_or_id, "pending")
+
   def expire_stale(now \\ DateTime.utc_now()) do
     {count, _rows} =
       ProactiveCandidate

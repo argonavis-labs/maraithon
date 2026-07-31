@@ -57,7 +57,7 @@ defmodule Maraithon.Push.APNS do
         url = "#{host(config)}/3/device/#{device_token}"
         body = Jason.encode!(payload)
 
-        case http_module().post(url, headers, body) do
+        case post_with_retry(url, headers, body) do
           {:ok, 200, _body} ->
             :ok
 
@@ -65,9 +65,28 @@ defmodule Maraithon.Push.APNS do
             classify_failure(status, response_body)
 
           {:error, reason} ->
-            Logger.warning("APNs request failed", reason: inspect(reason))
+            Logger.warning("APNs request failed after retry", reason: inspect(reason))
             {:error, :retryable}
         end
+    end
+  end
+
+  # Sends to APNs are sparse, and the pool holds one HTTP/2 connection that
+  # Apple closes when idle — so the first request after a quiet stretch
+  # routinely dies at the transport layer. One immediate retry lands on a
+  # fresh connection. HTTP-status failures are not retried here; they
+  # reached APNs and classify_failure/2 decides.
+  defp post_with_retry(url, headers, body) do
+    case http_module().post(url, headers, body) do
+      {:error, reason} ->
+        Logger.debug("APNs transport failure, retrying on a fresh connection",
+          reason: inspect(reason)
+        )
+
+        http_module().post(url, headers, body)
+
+      result ->
+        result
     end
   end
 

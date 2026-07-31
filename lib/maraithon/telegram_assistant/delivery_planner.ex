@@ -33,6 +33,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Tracing
 
+  require Logger
+
   @default_batch_size 25
   @recent_push_limit 8
 
@@ -554,13 +556,41 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
           %{acc | held: acc.held + 1, hold_reasons: bump_reason(acc.hold_reasons, "unknown")}
 
-        {:error, _reason} ->
+        {:error, reason} ->
+          requeue_failed_dispatch(candidate, reason)
           %{acc | failed: acc.failed + 1}
 
-        {:fallback, _reason} ->
+        {:fallback, reason} ->
+          requeue_failed_dispatch(candidate, reason)
           %{acc | failed: acc.failed + 1}
       end
     end)
+  end
+
+  # A dispatch failure (a transient APNs error, the broker disabled) must
+  # not leave the candidate in "planned" — no process re-reads that status,
+  # so it would strand there (dedupe-blocking its source from re-enqueueing)
+  # until the TTL sweep. Back to "pending": the next planner cycle retries,
+  # bounded by expires_at.
+  defp requeue_failed_dispatch(%ProactiveCandidate{} = candidate, reason) do
+    case ProactiveQueue.mark_pending(candidate) do
+      {:ok, _candidate} ->
+        :ok
+
+      {:error, requeue_error} ->
+        Logger.warning("Failed to return candidate to pending after dispatch failure",
+          candidate_id: candidate.id,
+          reason: inspect(requeue_error)
+        )
+    end
+
+    Logger.warning("Proactive dispatch failed; candidate returned to pending for retry",
+      candidate_id: candidate.id,
+      dedupe_key: candidate.dedupe_key,
+      reason: inspect(reason)
+    )
+
+    :ok
   end
 
   defp bump_reason(reasons, reason) when is_map(reasons) and is_binary(reason) do
@@ -611,7 +641,13 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
             |> Map.merge(%{held: 0, hold_reasons: %{}})
 
           nil ->
-            %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
+            # Mobile path: the digest push IS the delivery — there is no
+            # Telegram conversation to fan per-candidate cards into. The
+            # user has been notified, so every bundled candidate is
+            # delivered (leaving them "planned" here stranded them while
+            # the phone had already buzzed — the 2026-07-30 stuck-briefs
+            # incident).
+            mark_digest_delivered(candidates)
         end
 
       {:ok, %{decision: "held_rate_limit", reason: reason}} ->
@@ -634,12 +670,29 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           hold_reasons: %{"unknown" => length(candidates)}
         }
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        Enum.each(candidates, &requeue_failed_dispatch(&1, reason))
         %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
 
-      {:fallback, _reason} ->
+      {:fallback, reason} ->
+        Enum.each(candidates, &requeue_failed_dispatch(&1, reason))
         %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
     end
+  end
+
+  # The delivered contract of send_digest_cards/2 without the Telegram card
+  # fan-out: candidate status, brief/insight source rows, merged receipts,
+  # and the ledger trail all advance exactly as they do on the card path.
+  defp mark_digest_delivered(candidates) do
+    Enum.each(candidates, fn candidate ->
+      {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+      maybe_mark_brief_delivered(candidate)
+      maybe_mark_insight_delivery_sent(candidate)
+      record_merged_receipt(candidate, nil)
+      record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "merged"})
+    end)
+
+    %{delivered: length(candidates), failed: 0, held: 0, hold_reasons: %{}}
   end
 
   # The digest bundle itself was held (quiet hours; the hourly cap is

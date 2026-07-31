@@ -18,6 +18,30 @@ defmodule Maraithon.Push.APNSTest do
     def post(_url, _headers, _body), do: {:ok, 429, ~s({"reason":"TooManyRequests"})}
   end
 
+  defmodule StaleConnectionHTTP do
+    # First request fails at the transport layer (idle HTTP/2 connection was
+    # closed under us); the retry lands on a fresh connection and succeeds.
+    def post(url, _headers, _body) do
+      case Process.get(:stale_connection_http_calls, 0) do
+        0 ->
+          Process.put(:stale_connection_http_calls, 1)
+          {:error, %Mint.TransportError{reason: :closed}}
+
+        calls ->
+          Process.put(:stale_connection_http_calls, calls + 1)
+          send(self(), {:apns_retry_request, url})
+          {:ok, 200, ""}
+      end
+    end
+  end
+
+  defmodule DownHTTP do
+    def post(_url, _headers, _body) do
+      Process.put(:down_http_calls, Process.get(:down_http_calls, 0) + 1)
+      {:error, %Mint.TransportError{reason: :closed}}
+    end
+  end
+
   setup do
     previous = Application.get_env(:maraithon, :apns, [])
 
@@ -93,6 +117,29 @@ defmodule Maraithon.Push.APNSTest do
     )
 
     assert {:error, :retryable} = APNS.send("busy", %{"aps" => %{}})
+  end
+
+  test "a transport failure is retried once on a fresh connection" do
+    Application.put_env(
+      :maraithon,
+      :apns,
+      Keyword.put(Application.get_env(:maraithon, :apns), :http_module, StaleConnectionHTTP)
+    )
+
+    assert :ok = APNS.send("stale-conn", %{"aps" => %{}})
+    assert Process.get(:stale_connection_http_calls) == 2
+    assert_receive {:apns_retry_request, _url}
+  end
+
+  test "a persistent transport failure classifies as :retryable after one retry" do
+    Application.put_env(
+      :maraithon,
+      :apns,
+      Keyword.put(Application.get_env(:maraithon, :apns), :http_module, DownHTTP)
+    )
+
+    assert {:error, :retryable} = APNS.send("down", %{"aps" => %{}})
+    assert Process.get(:down_http_calls) == 2
   end
 
   test "payload carries alert, thread id, and deeplink outside aps" do
