@@ -72,6 +72,14 @@ defmodule Maraithon.ChiefOfStaff.Skills do
     end
   end
 
+  @doc """
+  Whether `id` names a skill in the current registry. Snapshots restored from
+  older releases can reference removed/renamed ids; callers use this to drop
+  them instead of letting `get!/1` raise.
+  """
+  def known?(id) when is_binary(id), do: Map.has_key?(modules(), id)
+  def known?(_id), do: false
+
   def label(id) when is_binary(id) do
     id
     |> get()

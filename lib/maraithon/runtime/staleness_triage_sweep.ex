@@ -24,7 +24,6 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
 
   @name __MODULE__
   @default_interval_ms :timer.hours(24)
-  @default_batch_size 100
   @open_statuses ~w(open snoozed)
 
   def start_link(opts \\ []) do
@@ -35,21 +34,21 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
   Runs one full sweep synchronously (directly callable in tests, no timer).
   """
   def run_once(opts \\ []) do
-    user_limit = positive_integer(Keyword.get(opts, :user_limit), @default_batch_size)
-
     user_ids =
       case Keyword.get(opts, :user_ids) do
         user_ids when is_list(user_ids) ->
           user_ids
 
         _other ->
-          # Same user-enumeration pattern as CrossSourceCompletion.run_for_all_users/1.
+          # Same user-enumeration pattern as CrossSourceCompletion.run_for_all_users/1:
+          # every user with open todos, no cap — a capped enumeration with no
+          # rotation would starve users past the cutoff forever, and user
+          # counts are small.
           Repo.all(
             from(t in Todo,
               where: t.status in @open_statuses,
               distinct: true,
-              select: t.user_id,
-              limit: ^user_limit
+              select: t.user_id
             )
           )
       end
@@ -111,15 +110,7 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
         Config.positive_integer(:staleness_triage_sweep_initial_delay_ms, interval_ms)
       )
 
-    state = %{
-      interval_ms: interval_ms,
-      user_limit:
-        Keyword.get(
-          opts,
-          :user_limit,
-          Config.positive_integer(:staleness_triage_sweep_user_limit, @default_batch_size)
-        )
-    }
+    state = %{interval_ms: interval_ms}
 
     schedule_tick(initial_delay_ms)
     {:ok, state}
@@ -127,7 +118,7 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
 
   @impl true
   def handle_info(:tick, state) do
-    summary = run_once(user_limit: state.user_limit)
+    summary = run_once()
 
     if summary.proposed > 0 or summary.errors > 0 do
       Logger.info("Staleness triage sweep cycle",
@@ -150,7 +141,4 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
     Process.send_after(self(), :tick, delay_ms)
   end
-
-  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
-  defp positive_integer(_value, default), do: default
 end

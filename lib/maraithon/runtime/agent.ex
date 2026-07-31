@@ -28,6 +28,7 @@ defmodule Maraithon.Runtime.Agent do
   @effect_timeout_buffer_ms 10_000
   @global_register_retry_ms 25
   @global_register_retries 80
+  @max_deferred_messages 200
 
   defstruct [
     :agent_id,
@@ -826,11 +827,18 @@ defmodule Maraithon.Runtime.Agent do
       run_step_id: record_effect_step(data, effect_type, tool_name, params)
     }
 
-    # Write to effect outbox
-    Maraithon.Effects.request(data.agent_id, effect_type, tool_name, params, %{
-      effect_id: effect_id,
-      idempotency_key: idempotency_key
-    })
+    # Write to effect outbox. A failed write must not park the agent in
+    # waiting_effect with a phantom pending effect nothing will ever resolve —
+    # surface it through the normal effect-error path instead.
+    write_result =
+      try do
+        Maraithon.Effects.request(data.agent_id, effect_type, tool_name, params, %{
+          effect_id: effect_id,
+          idempotency_key: idempotency_key
+        })
+      rescue
+        exception -> {:error, {:effect_write_failed, Exception.message(exception)}}
+      end
 
     data =
       emit_event(data, "effect_requested", %{
@@ -840,7 +848,25 @@ defmodule Maraithon.Runtime.Agent do
       })
 
     data = %{data | pending_effects: Map.put(data.pending_effects, effect_id, effect_info)}
-    {:next_state, :waiting_effect, data}
+
+    # Re-arm the effect timeout explicitly: a same-state transition
+    # (waiting_effect -> waiting_effect on a chained effect) does not run the
+    # :enter callback, so without this the whole chain runs on the first
+    # effect's deadline.
+    actions = [{:state_timeout, pending_effect_timeout_ms(data.pending_effects), :effect_timeout}]
+
+    case write_result do
+      {:ok, _effect_id} ->
+        {:next_state, :waiting_effect, data, actions}
+
+      {:error, reason} ->
+        Logger.error("Effect outbox write failed for agent #{data.agent_id}: #{inspect(reason)}")
+
+        failure = {:error, {:effect_write_failed, reason}}
+
+        {:next_state, :waiting_effect, data,
+         actions ++ [{:next_event, :info, {:effect_result, effect_id, failure}}]}
+    end
   end
 
   defp pending_effect_timeout_ms(pending_effects) when is_map(pending_effects) do
@@ -1398,8 +1424,10 @@ defmodule Maraithon.Runtime.Agent do
     set = MapSet.put(set, item)
 
     if MapSet.size(set) > max_size do
-      # Remove oldest (arbitrary since MapSet is unordered, but good enough)
-      set |> MapSet.to_list() |> Enum.drop(1) |> MapSet.new()
+      # Evict an arbitrary element, but never the one just added — evicting
+      # the new id would immediately re-open the dedupe window for it.
+      victim = set |> MapSet.delete(item) |> Enum.at(0)
+      MapSet.delete(set, victim)
     else
       set
     end
@@ -1473,7 +1501,20 @@ defmodule Maraithon.Runtime.Agent do
   # the busy states' catch-all clauses.
   defp defer_message(data, msg) do
     maybe_ack_wakeup(msg)
-    %{data | deferred_messages: [msg | data.deferred_messages]}
+    buffer = [msg | data.deferred_messages]
+
+    # Bound the buffer: a busy pubsub feed during a long cycle must not grow
+    # process state without limit. Oldest messages are dropped first; scans
+    # are cycle-based, so the next wakeup re-covers anything dropped here.
+    buffer =
+      if length(buffer) > @max_deferred_messages do
+        Logger.warning("Deferred message buffer full for agent #{data.agent_id}; dropping oldest")
+        List.delete_at(buffer, -1)
+      else
+        buffer
+      end
+
+    %{data | deferred_messages: buffer}
   end
 
   # A wakeup is "delivered" the moment it lands in the agent's mailbox, in any

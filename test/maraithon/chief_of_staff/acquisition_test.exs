@@ -783,7 +783,13 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       timestamp: now,
       budget: %{llm_calls: 10, tool_calls: 10},
       recent_events: [],
-      trigger: %{type: :wakeup, job_type: "wakeup"},
+      # News is only fetched on an actual briefing cycle (the cron-scheduled
+      # wakeup), not on every 10-minute scheduled scan.
+      trigger: %{
+        type: :wakeup,
+        job_type: "wakeup",
+        payload: %{"source" => "briefing_cron", "cadence" => "morning"}
+      },
       event: nil
     }
 

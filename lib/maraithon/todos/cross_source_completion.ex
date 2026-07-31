@@ -30,9 +30,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   @open_statuses ~w(open snoozed)
   # Per-cycle LLM prompt-size cap (SPEC 05 R3). This bounds "how many todos
-  # we check this cycle", not "which 40 we permanently limit to": every
-  # evidence-linked (delta) candidate is always included, and the remaining
-  # budget rotates through the backstop by `last_completion_checked_at`.
+  # we check this cycle", not "which 40 we permanently limit to":
+  # evidence-linked (delta) candidates fill the budget first, and whatever
+  # remains rotates through the backstop by `last_completion_checked_at`.
   @max_todos 40
   # Safety bound on the open-todo scan for one pathological user; not the
   # real per-cycle cap (see @max_todos above).
@@ -76,20 +76,20 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   Runs the cross-source pass for every user with open todos.
   """
   def run_for_all_users(opts \\ []) do
-    user_limit = positive_integer(Keyword.get(opts, :user_limit), 100)
-
     user_ids =
       case Keyword.get(opts, :user_ids) do
         user_ids when is_list(user_ids) ->
           user_ids
 
         _other ->
+          # Every user with open todos: a capped enumeration with no rotation
+          # would starve users past the cutoff forever, and user counts are
+          # small, so `:user_limit` is deliberately ignored here.
           Repo.all(
             from(t in Todo,
               where: t.status in @open_statuses,
               distinct: true,
-              select: t.user_id,
-              limit: ^user_limit
+              select: t.user_id
             )
           )
       end
@@ -99,7 +99,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     empty = %{users: length(user_ids), checked: 0, completed: 0, skipped: 0, errors: 0}
 
     Enum.reduce(user_ids, empty, fn user_id, acc ->
-      case run_for_user(user_id, opts) do
+      case run_for_user_safely(user_id, opts) do
         %{checked: checked, completed: completed} ->
           %{acc | checked: acc.checked + checked, completed: acc.completed + completed}
 
@@ -110,6 +110,28 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
           %{acc | errors: acc.errors + 1}
       end
     end)
+  end
+
+  # One user's crash must never abort the pass for every user after them
+  # (mirrors StalenessTriageSweep.run_for_user_safely/2).
+  defp run_for_user_safely(user_id, opts) do
+    run_for_user(user_id, opts)
+  rescue
+    error ->
+      Logger.warning("Cross-source completion crashed for user",
+        user_id: user_id,
+        reason: Exception.message(error)
+      )
+
+      {:error, error}
+  catch
+    kind, reason ->
+      Logger.warning("Cross-source completion crashed for user",
+        user_id: user_id,
+        reason: "#{kind}: #{inspect(reason)}"
+      )
+
+      {:error, {kind, reason}}
   end
 
   @doc """
@@ -142,9 +164,17 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
           evidence ->
             todos = select_candidates(user_id, open_todos, evidence)
-            result = evaluate(user_id, todos, evidence, now, opts)
-            stamp_completion_checked(user_id, todos, now)
-            result
+
+            # Stamp only on success: a failed evaluation checked nothing, so
+            # advancing the backstop rotation would skip these todos unchecked.
+            case evaluate(user_id, todos, evidence, now, opts) do
+              %{} = result ->
+                stamp_completion_checked(user_id, todos, now)
+                result
+
+              {:error, _reason} = error ->
+                error
+            end
         end
     end
   end
@@ -159,7 +189,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       statuses: @open_statuses,
       limit: @max_open_todo_scan,
       sort_by: "updated",
-      sort_dir: "asc"
+      sort_dir: "asc",
+      # Completion checking must see everything open — an unsurfaceable todo
+      # still deserves to be closed when the evidence proves it done.
+      exclude_unsurfaceable?: false
     )
     |> Enum.filter(fn todo ->
       DateTime.compare(todo.inserted_at, age_cutoff) == :lt
@@ -176,15 +209,22 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
     {active, backstop} = Enum.split_with(todos, &evidence_linked?(&1, identifiers))
 
-    if length(active) > @max_todos do
-      # The cap only throttles the backstop, never the delta-relevant set —
-      # log so eventual prompt-size counts can be watched.
-      Logger.info("Cross-source completion active candidates exceed the per-cycle cap",
-        user_id: user_id,
-        active: length(active),
-        cap: @max_todos
-      )
-    end
+    active =
+      if length(active) > @max_todos do
+        # The evidence-matched set must respect the prompt-size cap too — an
+        # unbounded active set blows the response token budget. `todos` arrive
+        # ordered by `updated` ascending, so truncation keeps the stalest
+        # items; the rest re-qualify next cycle.
+        Logger.info("Cross-source completion truncated active candidates to the per-cycle cap",
+          user_id: user_id,
+          active: length(active),
+          cap: @max_todos
+        )
+
+        Enum.take(active, @max_todos)
+      else
+        active
+      end
 
     backstop_fill =
       backstop
@@ -848,7 +888,12 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   # "acknowledged_only" keeps the item open but clears its nudge cadence,
   # "no_reply"/omitted leaves the item and its cadence untouched.
   defp apply_resolutions(user_id, todos_by_id, resolutions, opts) do
-    Enum.reduce(resolutions, 0, fn resolution, count ->
+    resolutions
+    |> Enum.filter(&is_map/1)
+    # The model can emit the same todo twice; only the first resolution per
+    # todo applies, so a duplicate can never double-close or double-notify.
+    |> Enum.uniq_by(& &1["todo_id"])
+    |> Enum.reduce(0, fn resolution, count ->
       with todo_id when is_binary(todo_id) <- resolution["todo_id"],
            %Todo{} = todo <- Map.get(todos_by_id, todo_id) do
         apply_resolution(user_id, todo, resolution, opts, count)

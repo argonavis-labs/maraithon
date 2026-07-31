@@ -82,6 +82,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     {:ok,
      %{
        running: %{},
+       monitors: %{},
        poll_interval_ms: poll_interval_ms,
        claim_timeout_ms: claim_timeout_ms,
        batch_size: batch_size,
@@ -106,12 +107,17 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
              fetch_pending_jobs(limit)
            end) do
         {:ok, jobs} ->
-          running =
-            Enum.reduce(jobs, state.running, fn job, acc ->
+          state =
+            Enum.reduce(jobs, state, fn job, acc ->
               case claim_job(job) do
                 {:ok, claimed} ->
-                  execute_job_async(claimed, state.handler)
-                  Map.put(acc, claimed.id, claimed)
+                  ref = execute_job_async(claimed, state.handler)
+
+                  %{
+                    acc
+                    | running: Map.put(acc.running, claimed.id, claimed),
+                      monitors: Map.put(acc.monitors, ref, claimed.id)
+                  }
 
                 :already_claimed ->
                   acc
@@ -122,7 +128,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
             end)
 
           schedule_poll(state.poll_interval_ms)
-          {:noreply, %{state | running: running, poll_retry_attempts: 0}}
+          {:noreply, %{state | poll_retry_attempts: 0}}
 
         {:error, _reason} ->
           retry_in_ms = DbResilience.backoff_ms(state.poll_interval_ms, state.poll_retry_attempts)
@@ -134,12 +140,57 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   @impl true
   def handle_info({:background_job_done, job_id, _result}, state) do
-    {:noreply, %{state | running: Map.delete(state.running, job_id)}}
+    monitors =
+      case Enum.find(state.monitors, fn {_ref, id} -> id == job_id end) do
+        {ref, _id} ->
+          Process.demonitor(ref, [:flush])
+          Map.delete(state.monitors, ref)
+
+        nil ->
+          state.monitors
+      end
+
+    {:noreply, %{state | running: Map.delete(state.running, job_id), monitors: monitors}}
+  end
+
+  # Task.Supervisor.async_nolink reply for a task whose :background_job_done
+  # message already cleaned up.
+  @impl true
+  def handle_info({ref, _result}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, %{state | monitors: Map.delete(state.monitors, ref)}}
+  end
+
+  # A job task died before reporting back (kill, OOM). Without this, the
+  # `running` entry leaked and permanently consumed a concurrency slot.
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    case Map.pop(state.monitors, ref) do
+      {nil, _monitors} ->
+        {:noreply, state}
+
+      {job_id, monitors} ->
+        {job, running} = Map.pop(state.running, job_id)
+
+        if job && reason != :normal do
+          Logger.error("Background job task crashed for job #{job_id}: #{inspect(reason)}")
+          release_crashed_job(job, reason)
+        end
+
+        {:noreply, %{state | running: running, monitors: monitors}}
+    end
+  end
+
+  @impl true
+  def handle_info(msg, state) do
+    Logger.debug("BackgroundJobRunner ignoring unexpected message: #{inspect(msg)}")
+    {:noreply, state}
   end
 
   @impl true
   def handle_call(:clear_running, _from, state) do
-    {:reply, :ok, %{state | running: %{}}}
+    Enum.each(state.monitors, fn {ref, _id} -> Process.demonitor(ref, [:flush]) end)
+    {:reply, :ok, %{state | running: %{}, monitors: %{}}}
   end
 
   @impl true
@@ -208,10 +259,25 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp execute_job_async(%BackgroundJob{} = job, handler) do
     parent = self()
 
-    Task.Supervisor.start_child(Maraithon.Runtime.BackgroundJobTaskSupervisor, fn ->
-      result = execute_job(job, handler)
-      send(parent, {:background_job_done, job.id, result})
-    end)
+    %Task{ref: ref} =
+      Task.Supervisor.async_nolink(Maraithon.Runtime.BackgroundJobTaskSupervisor, fn ->
+        result = execute_job(job, handler)
+        send(parent, {:background_job_done, job.id, result})
+        :ok
+      end)
+
+    ref
+  end
+
+  defp release_crashed_job(%BackgroundJob{} = job, reason) do
+    attempts = job.attempts + 1
+    error = {:job_task_crashed, reason}
+
+    if attempts < job.max_attempts do
+      mark_pending_retry(job, error, attempts)
+    else
+      mark_failed(job, error, attempts)
+    end
   end
 
   defp execute_job(%BackgroundJob{} = job, handler) do

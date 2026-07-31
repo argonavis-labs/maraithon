@@ -325,7 +325,15 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
         GenServer.call(target, message)
     end
   catch
-    :exit, _reason -> fallback
+    :exit, reason ->
+      # Failing open keeps LLM traffic flowing when the limiter itself is
+      # down, but it must never be silent — an overloaded limiter timing out
+      # here means backpressure is off exactly when it is most needed.
+      Logger.warning(
+        "LLMRateLimiter call #{inspect(message)} failed open: #{inspect(reason)}"
+      )
+
+      fallback
   end
 
   defp cast(server, message) do

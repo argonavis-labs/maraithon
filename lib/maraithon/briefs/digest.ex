@@ -32,7 +32,7 @@ defmodule Maraithon.Briefs.Digest do
 
     todos =
       user_id
-      |> Todos.list_for_user(statuses: @open_statuses, limit: @max_items)
+      |> Todos.list_for_user(statuses: @open_statuses, limit: @max_items, open_due_only: true)
       |> AttentionRanker.sort()
 
     entries =

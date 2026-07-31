@@ -32,7 +32,13 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/google/calendar
   """
   def google_calendar(conn, params) do
-    handle_connector(conn, params, GoogleCalendar)
+    # Google push notifications carry no verifiable signature; the connectors
+    # validate the claimed identity against server-side state (stored watch
+    # channel ids / connected accounts) and drop anything unknown. Respond
+    # 204-empty for both processed and dropped notifications so an
+    # unauthenticated caller cannot probe which users/channels exist, while
+    # Google still gets the 2xx it needs to stop retrying.
+    handle_connector(conn, params, GoogleCalendar, respond: :no_content)
   end
 
   @doc """
@@ -41,7 +47,10 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/google/gmail
   """
   def google_gmail(conn, params) do
-    handle_connector(conn, params, Gmail)
+    # See google_calendar/2 - same unauthenticated-push posture applies to
+    # the Pub/Sub Gmail notifications (mailbox claim validated in the
+    # connector against connected accounts).
+    handle_connector(conn, params, Gmail, respond: :no_content)
   end
 
   @doc """
@@ -139,7 +148,7 @@ defmodule MaraithonWeb.WebhookController do
   end
 
   # Generic handler for any connector
-  defp handle_connector(conn, params, connector_module, opts \\ []) do
+  defp handle_connector(conn, params, connector_module, opts) do
     result = connector_module.handle_webhook(conn, params)
     handle_connector_result(conn, result, opts)
   end
@@ -150,20 +159,28 @@ defmodule MaraithonWeb.WebhookController do
         maybe_handle_event(event, opts)
         Connector.publish(topic, event)
 
-        conn
-        |> put_status(:ok)
-        |> json(%{
-          status: "published",
-          topic: topic,
-          event_type: event.type
-        })
+        if no_content_response?(opts) do
+          send_resp(conn, :no_content, "")
+        else
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            status: "published",
+            topic: topic,
+            event_type: event.type
+          })
+        end
 
       {:ignore, reason} ->
         Logger.debug("Webhook ignored", reason: reason)
 
-        conn
-        |> put_status(:ok)
-        |> json(%{status: "ignored", reason: reason})
+        if no_content_response?(opts) do
+          send_resp(conn, :no_content, "")
+        else
+          conn
+          |> put_status(:ok)
+          |> json(%{status: "ignored", reason: reason})
+        end
 
       {:error, reason} ->
         failure_log = Keyword.get(opts, :failure_log, "Webhook processing failed")
@@ -172,6 +189,8 @@ defmodule MaraithonWeb.WebhookController do
         bad_request(conn, error_message)
     end
   end
+
+  defp no_content_response?(opts), do: Keyword.get(opts, :respond) == :no_content
 
   defp maybe_handle_event(event, opts) do
     case Keyword.get(opts, :on_event) do
@@ -250,8 +269,12 @@ defmodule MaraithonWeb.WebhookController do
   end
 
   defp slack_team_topic(topic) when is_binary(topic) do
+    # Channel topics are "slack:TEAM:CHANNEL" (3 parts); DM topics are
+    # "slack:TEAM:dm:USER" (4 parts — see Slack.build_topic/3). Both must
+    # republish to the bare "slack:TEAM" topic agents subscribe to.
     case String.split(topic, ":", parts: 4) do
       ["slack", team_id, _rest] when team_id != "" -> "slack:#{team_id}"
+      ["slack", team_id, _dm, _rest] when team_id != "" -> "slack:#{team_id}"
       ["slack", team_id] when team_id != "" -> "slack:#{team_id}"
       _ -> nil
     end

@@ -15,8 +15,15 @@ defmodule Maraithon.Runtime.Supervisor do
       # Registry for looking up agent processes by ID
       {Registry, keys: :unique, name: Maraithon.Runtime.AgentRegistry},
 
-      # Dynamic supervisor for agent processes
-      {DynamicSupervisor, strategy: :one_for_one, name: Maraithon.Runtime.AgentSupervisor},
+      # Dynamic supervisor for agent processes. Intensity is raised above the
+      # OTP default (3/5s) so one deterministically-crashing agent cannot take
+      # down every other agent on the node; AgentWatcher applies its own
+      # per-agent crash-loop cap on top.
+      {DynamicSupervisor,
+       strategy: :one_for_one,
+       name: Maraithon.Runtime.AgentSupervisor,
+       max_restarts: 20,
+       max_seconds: 60},
 
       # Task supervisor for effect worker tasks
       {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor},
@@ -61,6 +68,13 @@ defmodule Maraithon.Runtime.Supervisor do
         []
       end
 
-    Supervisor.init(base_children ++ background_workers, strategy: :one_for_one)
+    # ~26 children share this supervisor; with the OTP default intensity
+    # (3 restarts / 5s across the whole supervisor) a DB outage killing a few
+    # pollers at once would cascade into full-runtime shutdown.
+    Supervisor.init(base_children ++ background_workers,
+      strategy: :one_for_one,
+      max_restarts: 20,
+      max_seconds: 60
+    )
   end
 end

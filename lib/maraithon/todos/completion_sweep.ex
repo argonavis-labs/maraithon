@@ -56,7 +56,7 @@ defmodule Maraithon.Todos.CompletionSweep do
 
     results =
       Enum.map(user_ids, fn user_id ->
-        run_for_user(user_id, Keyword.put(opts, :now, now))
+        run_for_user_safely(user_id, Keyword.put(opts, :now, now))
       end)
 
     Enum.reduce(results, empty_all_summary(length(user_ids)), &merge_user_summary/2)
@@ -73,15 +73,30 @@ defmodule Maraithon.Todos.CompletionSweep do
   def run_for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
     limit = positive_integer(Keyword.get(opts, :limit), @default_limit)
-    self_emails = Keyword.get(opts, :self_emails) || self_emails_for_user(user_id)
-    opts = Keyword.put(opts, :self_emails, self_emails)
+
+    # Resolve connected Google providers once per user per run; resolving them
+    # inside the per-todo fetch path was two queries per Gmail todo.
+    connected_providers = connected_google_providers(user_id)
+
+    self_emails =
+      Keyword.get(opts, :self_emails) || self_emails_from_providers(user_id, connected_providers)
+
+    opts =
+      opts
+      |> Keyword.put(:self_emails, self_emails)
+      |> Keyword.put_new(:gmail_fetcher, fn fetch_user_id, todo ->
+        fetch_gmail_thread(fetch_user_id, todo, connected_providers)
+      end)
 
     todos =
       Todos.list_for_user(user_id,
         statuses: @open_statuses,
         limit: limit,
         sort_by: "updated",
-        sort_dir: "asc"
+        sort_dir: "asc",
+        # Completion checking must see everything open — an unsurfaceable
+        # todo still deserves to be closed when the source proves it done.
+        exclude_unsurfaceable?: false
       )
 
     Enum.reduce(todos, empty_user_summary(user_id, length(todos)), fn todo, summary ->
@@ -106,6 +121,28 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   def run_for_user(_user_id, _opts), do: empty_user_summary(nil, 0)
 
+  # One user's crash must never abort the sweep for every user after them
+  # (mirrors StalenessTriageSweep.run_for_user_safely/2).
+  defp run_for_user_safely(user_id, opts) do
+    run_for_user(user_id, opts)
+  rescue
+    error ->
+      Logger.warning("Todo completion sweep crashed for user",
+        user_id: user_id,
+        reason: Exception.message(error)
+      )
+
+      %{empty_user_summary(user_id, 0) | errors: 1}
+  catch
+    kind, reason ->
+      Logger.warning("Todo completion sweep crashed for user",
+        user_id: user_id,
+        reason: "#{kind}: #{inspect(reason)}"
+      )
+
+      %{empty_user_summary(user_id, 0) | errors: 1}
+  end
+
   defp completion_evidence(%Todo{source: "gmail"} = todo, _now, opts) do
     gmail_completion_evidence(todo, opts)
   end
@@ -122,29 +159,30 @@ defmodule Maraithon.Todos.CompletionSweep do
   defp completion_evidence(_todo, _now, _opts), do: :open
 
   defp gmail_completion_evidence(%Todo{} = todo, opts) do
-    if is_struct(todo.source_occurred_at, DateTime) do
+    source_at = source_anchor_datetime(todo)
+
+    if is_struct(source_at, DateTime) do
       gmail_fetcher = Keyword.get(opts, :gmail_fetcher, &fetch_gmail_thread/2)
       self_emails = Keyword.get(opts, :self_emails, [])
 
       case gmail_fetcher.(todo.user_id, todo) do
         {:ok, provider, thread_id, messages} when is_list(messages) ->
-          case later_self_message(messages, todo.source_occurred_at, self_emails) do
+          case later_self_message(messages, source_at, self_emails) do
             nil ->
               :open
 
             message ->
               {:done, :gmail_self_reply,
-               gmail_resolution_note(provider, thread_id, message, todo.source_occurred_at)}
+               gmail_resolution_note(provider, thread_id, message, source_at)}
           end
 
         {:ok, messages} when is_list(messages) ->
-          case later_self_message(messages, todo.source_occurred_at, self_emails) do
+          case later_self_message(messages, source_at, self_emails) do
             nil ->
               :open
 
             message ->
-              {:done, :gmail_self_reply,
-               gmail_resolution_note(nil, nil, message, todo.source_occurred_at)}
+              {:done, :gmail_self_reply, gmail_resolution_note(nil, nil, message, source_at)}
           end
 
         {:error, :not_found} ->
@@ -161,14 +199,15 @@ defmodule Maraithon.Todos.CompletionSweep do
   defp cold_thread_completion_evidence(%Todo{} = todo) do
     metadata = todo.metadata || %{}
     chat_key = first_present([metadata["chat_key"], todo.source_item_id])
+    source_at = source_anchor_datetime(todo)
 
-    if is_binary(chat_key) and is_struct(todo.source_occurred_at, DateTime) do
+    if is_binary(chat_key) and is_struct(source_at, DateTime) do
       latest =
         LocalMessage
         |> where([message], message.user_id == ^todo.user_id)
         |> where([message], message.chat_key == ^chat_key)
         |> where([message], message.is_from_me == true)
-        |> where([message], message.sent_at > ^todo.source_occurred_at)
+        |> where([message], message.sent_at > ^source_at)
         |> order_by([message], desc: message.sent_at)
         |> limit(1)
         |> Repo.one()
@@ -176,7 +215,7 @@ defmodule Maraithon.Todos.CompletionSweep do
       case latest do
         %LocalMessage{} = message ->
           {:done, :local_message_reply,
-           "Scheduled completion sweep: Newer outgoing local message in chat #{chat_key} at #{format_dt(message.sent_at)} after source #{format_dt(todo.source_occurred_at)}."}
+           "Scheduled completion sweep: Newer outgoing local message in chat #{chat_key} at #{format_dt(message.sent_at)} after source #{format_dt(source_at)}."}
 
         nil ->
           :open
@@ -185,6 +224,17 @@ defmodule Maraithon.Todos.CompletionSweep do
       :open
     end
   end
+
+  # `source_occurred_at` can be nil on some ingested todos; fall back to when
+  # the todo was captured so those items still get completion-checked instead
+  # of staying :open forever.
+  defp source_anchor_datetime(%Todo{source_occurred_at: %DateTime{} = source_at}), do: source_at
+  defp source_anchor_datetime(%Todo{inserted_at: %DateTime{} = inserted_at}), do: inserted_at
+
+  defp source_anchor_datetime(%Todo{inserted_at: %NaiveDateTime{} = inserted_at}),
+    do: DateTime.from_naive!(inserted_at, "Etc/UTC")
+
+  defp source_anchor_datetime(_todo), do: nil
 
   defp dropped_commitment_completion_evidence(%Todo{} = todo) do
     metadata = todo.metadata || %{}
@@ -274,7 +324,11 @@ defmodule Maraithon.Todos.CompletionSweep do
   end
 
   defp fetch_gmail_thread(user_id, %Todo{} = todo) do
-    providers = gmail_provider_candidates(user_id, todo)
+    fetch_gmail_thread(user_id, todo, connected_google_providers(user_id))
+  end
+
+  defp fetch_gmail_thread(user_id, %Todo{} = todo, connected_providers) do
+    providers = gmail_provider_candidates(todo, connected_providers)
 
     providers
     |> Enum.reduce_while({:error, :not_found}, fn provider, _acc ->
@@ -328,7 +382,7 @@ defmodule Maraithon.Todos.CompletionSweep do
     end
   end
 
-  defp gmail_provider_candidates(user_id, %Todo{} = todo) do
+  defp gmail_provider_candidates(%Todo{} = todo, connected_providers) do
     metadata = todo.metadata || %{}
 
     source_account_provider =
@@ -348,7 +402,7 @@ defmodule Maraithon.Todos.CompletionSweep do
       metadata_account_provider,
       source_account_provider
     ]
-    |> Enum.concat(connected_google_providers(user_id))
+    |> Enum.concat(connected_providers)
     |> Enum.filter(&(is_binary(&1) and &1 != ""))
     |> Enum.uniq()
     |> case do
@@ -379,8 +433,8 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   defp connected_google_providers(_user_id), do: []
 
-  defp self_emails_for_user(user_id) do
-    ([user_id] ++ Enum.map(connected_google_providers(user_id), &provider_email/1))
+  defp self_emails_from_providers(user_id, connected_providers) do
+    ([user_id] ++ Enum.map(connected_providers, &provider_email/1))
     |> Enum.filter(&is_binary/1)
     |> Enum.map(&String.downcase/1)
     |> Enum.uniq()
@@ -389,22 +443,17 @@ defmodule Maraithon.Todos.CompletionSweep do
   defp provider_email("google:" <> email), do: email
   defp provider_email(_provider), do: nil
 
-  defp candidate_user_ids(opts) do
-    limit = Keyword.get(opts, :user_limit)
-
+  # Every user with open todos is enumerated. A capped enumeration with no
+  # rotation would starve users past the cutoff forever; user counts are small,
+  # so `:user_limit` is deliberately ignored here.
+  defp candidate_user_ids(_opts) do
     Todo
     |> where([todo], todo.status in ^@open_statuses)
     |> select([todo], todo.user_id)
     |> distinct(true)
     |> order_by([todo], asc: todo.user_id)
-    |> maybe_limit_users(limit)
     |> Repo.all()
   end
-
-  defp maybe_limit_users(query, limit) when is_integer(limit) and limit > 0,
-    do: limit(query, ^limit)
-
-  defp maybe_limit_users(query, _limit), do: query
 
   defp mark_done(summary, %Todo{} = todo, reason, note) do
     case Todos.mark_done(todo.user_id, todo.id, note: note) do

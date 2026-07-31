@@ -1181,21 +1181,56 @@ defmodule Maraithon.Todos do
 
     case existing_todo_for_upsert(user_id, normalized_attrs) do
       {%Todo{} = todo, matched_attrs} ->
-        todo
-        |> Todo.changeset(merge_upsert_attrs(todo, matched_attrs, attrs))
-        |> Repo.update()
-        |> tap_refresh_embedding()
+        update_upserted_todo(todo, matched_attrs, attrs)
 
       nil ->
-        Repo.transaction(fn ->
-          with {:ok, inserted} <- %Todo{} |> Todo.changeset(normalized_attrs) |> Repo.insert(),
-               {:ok, _event} <- record_activity_event(inserted, "created", opts) do
-            inserted
-          else
-            {:error, reason} -> Repo.rollback(reason)
-          end
-        end)
-        |> tap_refresh_embedding()
+        case insert_upserted_todo(normalized_attrs, opts) do
+          {:error, %Ecto.Changeset{} = changeset} = error ->
+            # Read-then-write race: a concurrent writer inserted the same
+            # dedupe key between our lookup and insert, surfaced through the
+            # `todos_user_id_dedupe_key_index` unique constraint. The row
+            # exists now, so retry once through the update path.
+            if dedupe_key_conflict?(changeset) do
+              case existing_todo_for_upsert(user_id, normalized_attrs) do
+                {%Todo{} = todo, matched_attrs} ->
+                  update_upserted_todo(todo, matched_attrs, attrs)
+
+                nil ->
+                  error
+              end
+            else
+              error
+            end
+
+          other ->
+            other
+        end
+    end
+  end
+
+  defp update_upserted_todo(%Todo{} = todo, matched_attrs, attrs) do
+    todo
+    |> Todo.changeset(merge_upsert_attrs(todo, matched_attrs, attrs))
+    |> Repo.update()
+    |> tap_refresh_embedding()
+  end
+
+  defp insert_upserted_todo(normalized_attrs, opts) do
+    Repo.transaction(fn ->
+      with {:ok, inserted} <- %Todo{} |> Todo.changeset(normalized_attrs) |> Repo.insert(),
+           {:ok, _event} <- record_activity_event(inserted, "created", opts) do
+        inserted
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> tap_refresh_embedding()
+  end
+
+  defp dedupe_key_conflict?(%Ecto.Changeset{errors: errors}) do
+    case Keyword.get(errors, :dedupe_key) do
+      {_message, meta} -> Keyword.get(meta, :constraint) == :unique
+      _other -> false
     end
   end
 

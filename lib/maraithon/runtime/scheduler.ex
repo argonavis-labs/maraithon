@@ -328,6 +328,12 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   @impl true
+  def handle_info(msg, state) do
+    Logger.debug("Scheduler ignoring unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_call(:clear_in_flight, _from, state) do
     {:reply, :ok, %{state | in_flight: MapSet.new()}}
   end
@@ -362,10 +368,14 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   defp fetch_overdue_jobs do
+    # Bounded: after an outage the backlog can be large, and delivering it all
+    # in one handle_info floods agent mailboxes. The regular :poll drains the
+    # remainder at its own cadence.
     from(j in ScheduledJob,
       where: j.status == "pending",
       where: j.fire_at < ^DateTime.utc_now(),
-      order_by: [asc: j.fire_at]
+      order_by: [asc: j.fire_at],
+      limit: 200
     )
     |> Repo.all()
   end

@@ -131,6 +131,7 @@ defmodule Maraithon.Todos.Todo do
     |> foreign_key_constraint(:owner_user_id)
     |> foreign_key_constraint(:source_account_id)
     |> foreign_key_constraint(:counterparty_person_id)
+    |> unique_constraint(:dedupe_key, name: :todos_user_id_dedupe_key_index)
   end
 
   defp default_owner_to_user(changeset) do

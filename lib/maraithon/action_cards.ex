@@ -127,7 +127,7 @@ defmodule Maraithon.ActionCards do
       |> put_user_timezone(user_id)
 
     user_id
-    |> Todos.list_for_user(limit: limit, statuses: @open_statuses)
+    |> Todos.list_for_user(limit: limit, statuses: @open_statuses, open_due_only: true)
     |> AttentionRanker.sort()
     |> Enum.map(&for_todo(&1, opts))
   end
@@ -334,9 +334,13 @@ defmodule Maraithon.ActionCards do
   end
 
   def draft_preview(%Todo{} = todo) do
-    todo.action_draft
-    |> draft_preview_values()
-    |> Enum.find_value(&public_draft_preview/1)
+    if placeholder_draft?(todo.action_draft) do
+      nil
+    else
+      todo.action_draft
+      |> draft_preview_values()
+      |> Enum.find_value(&public_draft_preview/1)
+    end
   end
 
   def draft_preview(card_or_todo) do
@@ -793,7 +797,7 @@ defmodule Maraithon.ActionCards do
 
     base =
       cond do
-        action_draft_present?(todo.action_draft) ->
+        real_draft?(todo.action_draft) ->
           [%{"type" => "review_draft", "label" => "Draft material is ready for approval."}]
 
         source == "gmail" and String.contains?(next_action, ["reply", "email"]) ->
@@ -1822,6 +1826,20 @@ defmodule Maraithon.ActionCards do
     do: value |> Map.values() |> Enum.any?(&action_draft_present?/1)
 
   defp action_draft_present?(value), do: not is_nil(value)
+
+  # The todo write boundary guarantees every todo an action_draft by
+  # synthesizing a "next_step"/"todo_write_boundary" placeholder, which is
+  # not real reviewable draft material. Mirrors
+  # Maraithon.TelegramAssistant.TodoActions.real_draft_ready?/1.
+  defp real_draft?(draft),
+    do: action_draft_present?(draft) and not placeholder_draft?(draft)
+
+  defp placeholder_draft?(draft) when is_map(draft) do
+    read_field(draft, "kind") == "next_step" or
+      read_field(draft, "source") == "todo_write_boundary"
+  end
+
+  defp placeholder_draft?(_draft), do: false
 
   defp draft_preview_values(%{} = draft) do
     preferred =

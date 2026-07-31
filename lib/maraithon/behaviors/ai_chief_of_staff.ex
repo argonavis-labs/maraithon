@@ -243,6 +243,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     scan_schedule = {:relative, Map.get(state, :wakeup_interval_ms, @default_wakeup_interval_ms)}
 
     state.enabled_skill_ids
+    |> drop_unknown_skill_ids(:next_wakeup)
     |> Enum.reduce(scan_schedule, fn skill_id, schedule ->
       module = Skills.get!(skill_id)
       skill_state = Map.fetch!(state.skill_states, skill_id)
@@ -273,14 +274,22 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   @impl true
   def reconcile_restored_state(state, config) do
     live_ids = Skills.enabled_ids(config)
-    snapshot_ids = state.enabled_skill_ids || []
+
+    # A snapshot can carry skill ids a later release removed or renamed;
+    # Skills.get!/1 on such an id raises, and a raise here leaves the runtime
+    # holding the UNreconciled state, so every subsequent wakeup raises too —
+    # a deterministic crash loop. Drop unknown ids before anything looks them
+    # up in the registry.
+    snapshot_ids =
+      drop_unknown_skill_ids(state.enabled_skill_ids || [], :reconcile_restored_state)
+
     desired_ids = degenerate_config_guard(live_ids, snapshot_ids)
 
     # Never prune a skill_states entry referenced by an in-flight cycle —
     # run_from_index/handle_effect_result Map.fetch! those ids. An orphaned
     # entry for a since-disabled skill is pruned on a later restore, once the
     # cycle that referenced it has finished.
-    in_flight_ids = state.cycle_skill_ids || []
+    in_flight_ids = drop_unknown_skill_ids(state.cycle_skill_ids || [], :reconcile_in_flight)
     keep_ids = Enum.uniq(desired_ids ++ in_flight_ids)
     desired_configs = build_skill_configs(config, state.user_id, keep_ids)
 
@@ -301,7 +310,11 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       state
       | enabled_skill_ids: desired_ids,
         skill_configs: desired_configs,
-        skill_states: skill_states
+        skill_states: skill_states,
+        # Sanitized alongside skill_states: keep_ids no longer carries unknown
+        # ids, so an unsanitized cycle_skill_ids list would make run_from_index
+        # crash on Map.fetch!/Skills.get! for the pruned entry.
+        cycle_skill_ids: if(is_list(state.cycle_skill_ids), do: in_flight_ids)
     }
   end
 
@@ -483,7 +496,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
     case emit do
       nil ->
-        {:idle, state}
+        # pending_emit must be cleared here too — leaving it set would leak a
+        # stale emit into the next cycle's merge_emit/stash_emit path.
+        {:idle, %{state | pending_emit: nil}}
 
       finalized_emit ->
         {:emit, finalized_emit, %{state | pending_emit: nil}}
@@ -675,10 +690,33 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   defp ensure_cycle(state, _context), do: state
 
   defp selected_skill_ids(state, context) do
-    Enum.filter(state.enabled_skill_ids, fn skill_id ->
+    state.enabled_skill_ids
+    |> drop_unknown_skill_ids(:select_cycle_skills)
+    |> Enum.filter(fn skill_id ->
       Skills.interested_in?(skill_id, state.skill_configs, context)
     end)
   end
+
+  # Snapshots restored from older releases can reference skill ids the current
+  # registry no longer knows; Skills.get!/1 (and Skills.interested_in?/3, which
+  # calls it) raises on them, which turned into a deterministic crash loop in
+  # every wakeup. Drop them defensively wherever an enabled/cycle skill id list
+  # is consumed. reconcile_restored_state/2 sanitizes at restore time, so this
+  # only logs (once) in the unexpected case an unknown id survives.
+  defp drop_unknown_skill_ids(skill_ids, where) when is_list(skill_ids) do
+    {known, unknown} = Enum.split_with(skill_ids, &Skills.known?/1)
+
+    if unknown != [] do
+      Logger.warning("ChiefOfStaff dropping unknown skill ids",
+        skill_ids: inspect(unknown),
+        where: where
+      )
+    end
+
+    known
+  end
+
+  defp drop_unknown_skill_ids(_skill_ids, _where), do: []
 
   defp cycle_skill_ids(%{cycle_skill_ids: skill_ids}) when is_list(skill_ids), do: skill_ids
   defp cycle_skill_ids(state), do: state.enabled_skill_ids
@@ -1026,6 +1064,19 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   defp clamp_relative_scan_floor({:relative, ms}) when is_integer(ms) do
     {:relative, max(ms, @min_wakeup_interval_ms)}
+  end
+
+  # An absolute wakeup in the past (e.g. a DST-boundary miscomputation in a
+  # skill's daily occurrence math) would fire immediately as overdue on every
+  # cycle — a hot loop that pays a full acquisition each iteration. Floor it.
+  defp clamp_relative_scan_floor({:absolute, %DateTime{} = at}) do
+    floor_at = DateTime.add(DateTime.utc_now(), @min_wakeup_interval_ms, :millisecond)
+
+    if DateTime.compare(at, floor_at) == :lt do
+      {:absolute, floor_at}
+    else
+      {:absolute, at}
+    end
   end
 
   defp clamp_relative_scan_floor(other), do: other

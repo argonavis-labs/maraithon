@@ -489,8 +489,6 @@ config :maraithon, Maraithon.Runtime,
         Integer.to_string(todo_completion_sweep_interval_ms)
       )
     ),
-  todo_completion_sweep_user_limit:
-    String.to_integer(System.get_env("TODO_COMPLETION_SWEEP_USER_LIMIT", "100")),
   oauth_refresh_interval_ms:
     String.to_integer(System.get_env("OAUTH_REFRESH_INTERVAL_MS", "300000")),
   oauth_refresh_lookahead_seconds:

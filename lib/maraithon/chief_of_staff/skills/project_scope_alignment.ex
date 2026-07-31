@@ -12,6 +12,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
 
+  require Logger
+
   @default_timezone_offset_hours -5
   @default_max_projects 12
   @default_max_todos 40
@@ -135,7 +137,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
         |> DateTime.to_date()
         |> Date.to_iso8601()
 
-    with {:ok, decoded} <- decode_json_payload(response.content),
+    with {:ok, content} <- response_content(response),
+         {:ok, decoded} <- decode_json_payload(content),
          {:ok, persisted} <- persist_scope_updates(decoded, state, context) do
       next_state = clear_pending(%{state | last_review_key: review_key})
 
@@ -163,8 +166,33 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
   def handle_effect_result({:tool_call, _result}, state, _context),
     do: {:idle, clear_pending(state)}
 
+  # Without this callback the behavior's generic effect-error path skips the
+  # skill without clearing pending state, leaving full Ecto structs in
+  # pending_projects/pending_todos to be ETF-serialized into every snapshot.
+  @impl true
+  def handle_effect_error(:llm_call, reason, state, context) do
+    handle_effect_result(
+      {:llm_call,
+       %{
+         content: "",
+         error: inspect(reason),
+         finish_reason: "error"
+       }},
+      state,
+      context
+    )
+  end
+
+  def handle_effect_error(_effect_type, _reason, state, _context),
+    do: {:idle, clear_pending(state)}
+
   @impl true
   def next_wakeup(_state), do: :none
+
+  defp response_content(%{content: content}) when is_binary(content), do: {:ok, content}
+  defp response_content(%{"content" => content}) when is_binary(content), do: {:ok, content}
+  defp response_content(content) when is_binary(content), do: {:ok, content}
+  defp response_content(_response), do: {:error, :project_scope_alignment_missing_llm_content}
 
   defp persist_scope_updates(decoded, state, context) when is_map(decoded) do
     project_updates =
@@ -213,8 +241,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
             []
 
           items ->
-            {:ok, recorded} = Briefs.record_many(state.user_id, context.agent_id, items)
-            recorded
+            case Briefs.record_many(state.user_id, context.agent_id, items) do
+              {:ok, recorded} ->
+                recorded
+
+              {:error, reason} ->
+                Logger.warning("ProjectScopeAlignment failed to record scope briefs",
+                  user_id: state.user_id,
+                  reason: inspect(reason)
+                )
+
+                []
+            end
         end
       end)
 

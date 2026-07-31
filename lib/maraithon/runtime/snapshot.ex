@@ -49,16 +49,49 @@ defmodule Maraithon.Runtime.Snapshot do
   @spec persist(binary(), integer(), atom() | String.t(), term(), term(), non_neg_integer()) ::
           {:ok, %__MODULE__{}} | {:error, Ecto.Changeset.t()}
   def persist(agent_id, sequence_num, state_name, behavior_state, budget, schema_version) do
-    %__MODULE__{}
-    |> changeset(%{
-      agent_id: agent_id,
-      sequence_num: sequence_num,
-      state_name: to_string(state_name),
-      state_data: wrap_term(behavior_state),
-      budget: wrap_term(budget),
-      schema_version: schema_version
-    })
-    |> Repo.insert()
+    result =
+      %__MODULE__{}
+      |> changeset(%{
+        agent_id: agent_id,
+        sequence_num: sequence_num,
+        state_name: to_string(state_name),
+        state_data: wrap_term(behavior_state),
+        budget: wrap_term(budget),
+        schema_version: schema_version
+      })
+      |> Repo.insert()
+
+    case result do
+      {:ok, _snapshot} -> prune_old(agent_id)
+      _other -> :ok
+    end
+
+    result
+  end
+
+  # Only the latest snapshot is ever loaded; without pruning the table grows
+  # by one megabyte-scale row per agent every checkpoint interval, forever.
+  @keep_snapshots 10
+
+  defp prune_old(agent_id) do
+    keep_ids =
+      from(s in __MODULE__,
+        where: s.agent_id == ^agent_id,
+        order_by: [desc: s.sequence_num],
+        limit: @keep_snapshots,
+        select: s.id
+      )
+      |> Repo.all()
+
+    from(s in __MODULE__,
+      where: s.agent_id == ^agent_id,
+      where: s.id not in ^keep_ids
+    )
+    |> Repo.delete_all()
+
+    :ok
+  rescue
+    _exception -> :ok
   end
 
   @doc """

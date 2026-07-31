@@ -31,6 +31,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
   @behaviour Maraithon.Connectors.Connector
 
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
@@ -122,63 +123,112 @@ defmodule Maraithon.Connectors.GoogleCalendar do
     # Channel token contains user_id
     user_id = channel_token
 
-    if is_nil(user_id) or user_id == "" do
-      {:error, :missing_channel_token}
-    else
-      topic = "calendar:#{user_id}"
+    cond do
+      is_nil(user_id) or user_id == "" ->
+        {:error, :missing_channel_token}
 
-      case resource_state do
-        "sync" ->
-          # Initial sync confirmation - acknowledge but don't publish
-          {:ignore, "sync confirmation"}
+      resource_state == "sync" ->
+        # Initial sync confirmation - acknowledge but don't publish. Kept
+        # ahead of the channel-id check: the confirmation can race the watch
+        # cursor row being persisted right after setup_watch.
+        {:ignore, "sync confirmation"}
 
-        "exists" ->
-          # Calendar changed - enqueue a durable background job so the
-          # webhook request never makes an outbound Google API call. The
-          # actual event fetch happens in `Maraithon.Runtime.BackgroundJobHandler`.
-          dedupe_key = "calendar_webhook:#{channel_id}:#{resource_id}:#{message_number}"
+      not known_watch_channel?(user_id, channel_id) ->
+        # These pushes carry no verifiable signature; the channel token
+        # (user_id) and every header are attacker-controlled. Only act when
+        # the claimed channel id matches a watch we actually registered for
+        # one of this user's Google accounts (stored on the
+        # `calendar_sync_token` cursor row); otherwise ack-and-drop so
+        # unauthenticated POSTs cannot enqueue arbitrary-user sync jobs.
+        Logger.debug("Calendar webhook with unknown channel id ignored")
+        {:ignore, "unknown watch channel"}
 
-          case BackgroundJobs.enqueue("calendar_incremental_sync", %{
-                 "user_id" => user_id,
-                 "queue" => "connectors",
-                 "payload" => %{"channel_id" => channel_id, "resource_id" => resource_id},
-                 "dedupe_key" => dedupe_key
-               }) do
-            {:ok, _job} ->
-              event =
-                Connector.build_event("calendar_webhook_enqueued", "google_calendar", %{
-                  user_id: user_id,
-                  channel_id: channel_id,
-                  resource_id: resource_id
-                })
-
-              {:ok, topic, event}
-
-            {:error, reason} ->
-              Logger.warning("Failed to enqueue Calendar incremental sync",
-                user_id: user_id,
-                reason: inspect(reason)
-              )
-
-              {:error, reason}
-          end
-
-        "not_exists" ->
-          # Resource deleted
-          event =
-            Connector.build_event("calendar_deleted", "google_calendar", %{
-              user_id: user_id,
-              channel_id: channel_id,
-              resource_id: resource_id
-            })
-
-          {:ok, topic, event}
-
-        _ ->
-          {:ignore, "unknown resource state: #{resource_state}"}
-      end
+      true ->
+        handle_watch_notification(
+          user_id,
+          channel_id,
+          resource_id,
+          resource_state,
+          message_number
+        )
     end
   end
+
+  defp handle_watch_notification(user_id, channel_id, resource_id, resource_state, message_number) do
+    topic = "calendar:#{user_id}"
+
+    case resource_state do
+      "exists" ->
+        # Calendar changed - enqueue a durable background job so the
+        # webhook request never makes an outbound Google API call. The
+        # actual event fetch happens in `Maraithon.Runtime.BackgroundJobHandler`.
+        dedupe_key = "calendar_webhook:#{channel_id}:#{resource_id}:#{message_number}"
+
+        case BackgroundJobs.enqueue("calendar_incremental_sync", %{
+               "user_id" => user_id,
+               "queue" => "connectors",
+               "payload" => %{"channel_id" => channel_id, "resource_id" => resource_id},
+               "dedupe_key" => dedupe_key
+             }) do
+          {:ok, _job} ->
+            event =
+              Connector.build_event("calendar_webhook_enqueued", "google_calendar", %{
+                user_id: user_id,
+                channel_id: channel_id,
+                resource_id: resource_id
+              })
+
+            {:ok, topic, event}
+
+          {:error, reason} ->
+            Logger.warning("Failed to enqueue Calendar incremental sync",
+              user_id: user_id,
+              reason: inspect(reason)
+            )
+
+            {:error, reason}
+        end
+
+      "not_exists" ->
+        # Resource deleted
+        event =
+          Connector.build_event("calendar_deleted", "google_calendar", %{
+            user_id: user_id,
+            channel_id: channel_id,
+            resource_id: resource_id
+          })
+
+        {:ok, topic, event}
+
+      _ ->
+        {:ignore, "unknown resource state: #{resource_state}"}
+    end
+  end
+
+  # A notification is only actionable when its x-goog-channel-id matches the
+  # watch channel we registered (and persisted on the `calendar_sync_token`
+  # cursor row) for one of the claimed user's Google accounts.
+  defp known_watch_channel?(user_id, channel_id)
+       when is_binary(user_id) and is_binary(channel_id) and channel_id != "" do
+    user_id
+    |> ConnectedAccounts.list_for_user()
+    |> Enum.filter(&google_account?/1)
+    |> Enum.any?(fn account ->
+      case SourceCursors.get(account.id, @sync_token_cursor_kind) do
+        %{watch_channel_id: stored} when is_binary(stored) and stored != "" ->
+          Plug.Crypto.secure_compare(stored, channel_id)
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp known_watch_channel?(_user_id, _channel_id), do: false
+
+  defp google_account?(%{provider: "google"}), do: true
+  defp google_account?(%{provider: "google:" <> _rest}), do: true
+  defp google_account?(_account), do: false
 
   # ===========================================================================
   # Calendar API

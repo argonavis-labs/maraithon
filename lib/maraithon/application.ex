@@ -49,8 +49,10 @@ defmodule Maraithon.Application do
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
-    opts = [strategy: :one_for_one, name: Maraithon.Supervisor]
+    # for other strategies and supported options. Intensity is raised above
+    # the OTP default so a flapping child (e.g. during a DB outage) backs off
+    # via its own resilience machinery instead of shutting the node down.
+    opts = [strategy: :one_for_one, name: Maraithon.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)
   end
 

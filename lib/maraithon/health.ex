@@ -147,7 +147,18 @@ defmodule Maraithon.Health do
       })
     end
 
-    :persistent_term.put(@database_failure_cache_key, System.monotonic_time(:millisecond))
+    # Throttled: every :persistent_term.put to an existing key triggers a
+    # global GC scan, and this runs on every failed health check during an
+    # outage. A slightly stale failure timestamp is harmless.
+    now_ms = System.monotonic_time(:millisecond)
+
+    case :persistent_term.get(@database_failure_cache_key, nil) do
+      last_ms when is_integer(last_ms) and now_ms - last_ms < 10_000 ->
+        :ok
+
+      _other ->
+        :persistent_term.put(@database_failure_cache_key, now_ms)
+    end
   end
 
   defp clear_database_failure do

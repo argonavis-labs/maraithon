@@ -270,14 +270,17 @@ defmodule MaraithonWeb.MobileJSON do
     }
   end
 
+  # Only actions MobileTodoController.apply_todo_action accepts; anything
+  # else (e.g. more_context, open_dashboard) would 422 when tapped.
+  @supported_todo_actions ~w(done dismiss important helpful not_helpful snooze see_less)
+
   defp format_buttons(buttons) do
     buttons
     |> List.wrap()
     |> Enum.reject(&is_nil/1)
-    |> Enum.map(fn action ->
-      action = to_string(action)
-      %{action: action, label: button_label(action)}
-    end)
+    |> Enum.map(&to_string/1)
+    |> Enum.filter(&(&1 in @supported_todo_actions))
+    |> Enum.map(fn action -> %{action: action, label: button_label(action)} end)
   end
 
   defp button_label(action) do

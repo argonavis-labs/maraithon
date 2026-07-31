@@ -12,6 +12,8 @@ defmodule Maraithon.Todos.Intelligence do
   alias Maraithon.Todos.{SignalGate, SurfaceQuality, UserFacingCopy}
   alias Maraithon.Todos.Todo
 
+  require Logger
+
   @sentinel "TODO_INTELLIGENCE_JSON_V1"
   @persist_actions ~w(create update)
   @valid_actions ["create", "update", "skip"]
@@ -615,10 +617,16 @@ defmodule Maraithon.Todos.Intelligence do
     decisions = fetch_attr(decoded, "decisions")
     existing_by_id = Map.new(existing, &{&1.id, &1})
 
-    with true <- is_list(decisions),
-         true <- length(decisions) == length(candidates),
+    with true <- is_list(decisions) and decisions != [],
          {:ok, normalized} <-
            normalize_decisions(decisions, candidates, existing_by_id, summary, opts) do
+      if length(normalized) < length(candidates) do
+        Logger.warning(
+          "Todo intelligence returned #{length(normalized)} usable decisions for " <>
+            "#{length(candidates)} candidates; unmatched candidates skip this cycle"
+        )
+      end
+
       {:ok, normalized, summary}
     else
       _other -> {:error, :todo_intelligence_invalid_decisions}
@@ -629,17 +637,25 @@ defmodule Maraithon.Todos.Intelligence do
     {:error, :todo_intelligence_invalid_json}
   end
 
+  # Salvage the valid decisions instead of discarding the whole batch on the
+  # first malformed entry — an entire scan's work used to vanish over one bad
+  # candidate_index. Only an all-invalid response is treated as a failure.
   defp normalize_decisions(decisions, candidates, existing_by_id, summary, opts) do
-    decisions
-    |> Enum.reduce_while({:ok, []}, fn decision, {:ok, acc} ->
-      case normalize_decision(decision, candidates, existing_by_id, summary, opts) do
-        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-      {:error, reason} -> {:error, reason}
+    {normalized, invalid_count} =
+      Enum.reduce(decisions, {[], 0}, fn decision, {acc, invalid_count} ->
+        case normalize_decision(decision, candidates, existing_by_id, summary, opts) do
+          {:ok, normalized} -> {[normalized | acc], invalid_count}
+          {:error, _reason} -> {acc, invalid_count + 1}
+        end
+      end)
+
+    if invalid_count > 0 do
+      Logger.warning("Todo intelligence dropped #{invalid_count} invalid decisions")
+    end
+
+    case normalized |> Enum.reverse() |> Enum.uniq_by(& &1.candidate_index) do
+      [] -> {:error, :todo_intelligence_invalid_decisions}
+      salvaged -> {:ok, salvaged}
     end
   end
 

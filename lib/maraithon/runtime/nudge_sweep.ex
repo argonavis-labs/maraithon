@@ -40,7 +40,6 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   @name __MODULE__
   @default_interval_ms :timer.minutes(30)
-  @default_user_limit 100
   @default_todos_per_user 20
   @default_due_soon_horizon_hours 4
   @default_nudge_cap 4
@@ -88,15 +87,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
         Config.positive_integer(:nudge_sweep_initial_delay_ms, interval_ms)
       )
 
-    state = %{
-      interval_ms: interval_ms,
-      user_limit:
-        Keyword.get(
-          opts,
-          :user_limit,
-          Config.positive_integer(:nudge_sweep_user_limit, @default_user_limit)
-        )
-    }
+    state = %{interval_ms: interval_ms}
 
     schedule_tick(initial_delay_ms)
     {:ok, state}
@@ -104,7 +95,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   @impl true
   def handle_info(:tick, state) do
-    summary = run_once(user_limit: state.user_limit)
+    summary = run_once()
 
     if summary.proposed > 0 or summary.errors > 0 do
       Logger.info("Nudge sweep cycle",
@@ -134,13 +125,12 @@ defmodule Maraithon.Runtime.NudgeSweep do
   """
   def run_once(opts \\ []) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
-    user_limit = positive_integer(Keyword.get(opts, :user_limit), @default_user_limit)
     horizon_hours = due_soon_horizon_hours(opts)
 
     user_ids =
       case Keyword.get(opts, :user_ids) do
         user_ids when is_list(user_ids) -> user_ids
-        _other -> due_user_ids(now, horizon_hours, user_limit)
+        _other -> due_user_ids(now, horizon_hours)
       end
       |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
@@ -221,7 +211,10 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   # ── Selection ─────────────────────────────────────────────────────────────
 
-  defp due_user_ids(now, horizon_hours, user_limit) do
+  # Every user with a due todo is enumerated: a capped enumeration with no
+  # rotation would starve users past the cutoff forever, and user counts are
+  # small.
+  defp due_user_ids(now, horizon_hours) do
     horizon_end = DateTime.add(now, horizon_hours * 3600, :second)
 
     Repo.all(
@@ -232,10 +225,11 @@ defmodule Maraithon.Runtime.NudgeSweep do
              t.next_nudge_at <= ^now) or
             (t.status == "snoozed" and not is_nil(t.snoozed_until) and
                t.snoozed_until <= ^now) or
-            (not is_nil(t.due_at) and t.due_at <= ^horizon_end),
+            (not is_nil(t.due_at) and t.due_at <= ^horizon_end and
+               (t.status == "open" or
+                  (not is_nil(t.snoozed_until) and t.snoozed_until <= ^now))),
         distinct: true,
-        select: t.user_id,
-        limit: ^user_limit
+        select: t.user_id
       )
     )
   end
@@ -253,7 +247,11 @@ defmodule Maraithon.Runtime.NudgeSweep do
              t.next_nudge_at <= ^now) or
             (t.status == "snoozed" and not is_nil(t.snoozed_until) and
                t.snoozed_until <= ^now) or
-            (not is_nil(t.due_at) and t.due_at <= ^horizon_end),
+            # A due/overdue todo only fires while it is open or its snooze
+            # has elapsed — snoozing a past-due todo must actually silence it.
+            (not is_nil(t.due_at) and t.due_at <= ^horizon_end and
+               (t.status == "open" or
+                  (not is_nil(t.snoozed_until) and t.snoozed_until <= ^now))),
         order_by: [asc_nulls_last: t.due_at, asc: t.inserted_at],
         limit: ^todo_limit
       )

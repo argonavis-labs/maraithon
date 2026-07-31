@@ -3,6 +3,8 @@ defmodule Maraithon.ChiefOfStaff.AttentionArbiter do
   Assistant-layer emit and metadata arbitration for one Chief of Staff cycle.
   """
 
+  require Logger
+
   def finalize_emit(nil, _skill_emits, _cycle_id, _telemetry), do: nil
 
   def finalize_emit({event_type, payload}, skill_emits, cycle_id, telemetry)
@@ -22,6 +24,15 @@ defmodule Maraithon.ChiefOfStaff.AttentionArbiter do
         "digest_outputs" => Enum.count(ranked_skills, &(&1["interrupting"] == false))
       })
     }
+  end
+
+  # Defensive catch-all: emits are expected to be nil or {event_type, payload
+  # map}, but an unexpected shape must not crash finalize_cycle with a
+  # FunctionClauseError. Pass it through unchanged (skipping decoration) so the
+  # cycle still finalizes and the caller emits it as-is.
+  def finalize_emit(emit, _skill_emits, _cycle_id, _telemetry) do
+    Logger.warning("AttentionArbiter passing through unexpected emit shape: #{inspect(emit)}")
+    emit
   end
 
   def merge_artifact_metadata(metadata, context) when is_map(metadata) and is_map(context) do

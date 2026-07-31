@@ -4,6 +4,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   """
 
   alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.{Skills, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.SourceCursors
@@ -19,6 +20,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   alias Maraithon.OAuth
   alias Maraithon.Slack.UserDirectory
   alias Maraithon.SourceFreshness
+  alias Maraithon.Timezones
   alias Maraithon.Tools.SlackHelpers
 
   require Logger
@@ -110,7 +112,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       when is_binary(user_id) and is_list(skill_ids) and is_map(skill_configs) and is_map(context) do
     source_scope = resolve_source_scope(user_id, skill_ids, skill_configs)
     bundle = SourceBundle.empty(context, source_scope)
-    plan = build_plan(skill_ids, skill_configs, context)
+    plan = build_plan(user_id, skill_ids, skill_configs, context)
 
     {telemetry, bundle} =
       {%{"fetches" => [], "sources" => %{}, "plan" => plan, "proposed_watermarks" => []}, bundle}
@@ -1639,7 +1641,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
-  defp build_plan(skill_ids, skill_configs, context) do
+  defp build_plan(user_id, skill_ids, skill_configs, context) do
     requirements =
       skill_ids
       |> Skills.requirements()
@@ -1674,7 +1676,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
     news_config = news_config(skill_ids, skill_configs)
     weather_config = weather_config(skill_ids, skill_configs)
-    morning_brief? = morning_brief_trigger?(skill_ids, context)
+    morning_brief? = morning_brief_trigger?(user_id, skill_ids, skill_configs, context)
 
     # R2 (SPEC 04): scheduled scans cap the no-cursor fallback window to 48h
     # regardless of what any individual skill's own `lookback_hours` config
@@ -1699,11 +1701,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         service_required?(requirements, "google", "calendar") and
           event_allows_source?(event_source, "google_calendar"),
       slack: true,
-      news: morning_brief_trigger?(skill_ids, context) and news_enabled?(news_config),
+      news: morning_brief? and news_enabled?(news_config),
       news_config: news_config,
-      weather: morning_brief_trigger?(skill_ids, context) and weather_enabled?(weather_config),
+      weather: morning_brief? and weather_enabled?(weather_config),
       weather_config: weather_config,
-      web_context: morning_brief_trigger?(skill_ids, context),
+      web_context: morning_brief?,
       inbox_limit: max(max_email_scan_limit, 100),
       sent_limit: max(max_email_scan_limit * 2, 100),
       gmail_message_limit: max(max_email_scan_limit * 4, @default_gmail_message_limit),
@@ -2026,11 +2028,73 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     payload_source(get_in(context, [:event, :payload]))
   end
 
-  defp morning_brief_trigger?(skill_ids, context) do
+  # A morning-brief acquisition (deep lookback, news/weather, web context) is
+  # only warranted on the cycle where the morning briefing will actually
+  # generate. morning_briefing is default-enabled, so gating on skill
+  # membership alone made EVERY 10-minute scheduled wakeup refetch the full
+  # deep window (14 days of Gmail/Slack, cursor ignored) plus news/weather.
+  # The briefing cron's wakeup carries a distinct payload
+  # (Maraithon.Runtime.BriefingCron), and a plain scheduled wakeup only
+  # qualifies when the briefing is due-and-not-yet-generated for the local
+  # day — the same due check BriefingSchedules.list_due_morning_agents/1 and
+  # the skill's own due_now?/Briefs dedupe use.
+  defp morning_brief_trigger?(user_id, skill_ids, skill_configs, context) do
     ("briefing" in skill_ids or "morning_briefing" in skill_ids) and
       get_in(context, [:trigger, :type]) == :wakeup and
-      is_nil(get_in(context, [:event, :payload]))
+      is_nil(get_in(context, [:event, :payload])) and
+      (briefing_cron_wakeup?(context) or
+         morning_brief_due?(user_id, skill_ids, skill_configs, context))
   end
+
+  defp briefing_cron_wakeup?(context) do
+    case get_in(context, [:trigger, :payload]) do
+      %{} = payload ->
+        Map.get(payload, "source") == "briefing_cron" or
+          Map.get(payload, "cadence") == "morning"
+
+      _other ->
+        false
+    end
+  end
+
+  defp morning_brief_due?(user_id, skill_ids, skill_configs, context) when is_binary(user_id) do
+    now = context[:timestamp] || DateTime.utc_now()
+
+    offset_fallback =
+      first_skill_integer(
+        skill_ids,
+        skill_configs,
+        "timezone_offset_hours",
+        @default_timezone_offset_hours
+      )
+
+    timezone_name =
+      skill_ids
+      |> Enum.find_value(fn skill_id ->
+        config = Map.get(skill_configs, skill_id, %{})
+        normalize_string(Map.get(config, "timezone") || Map.get(config, "timezone_name"))
+      end)
+
+    hour =
+      skill_ids
+      |> first_skill_integer(skill_configs, "morning_brief_hour_local", 8)
+      |> then(fn value -> if value in 0..23, do: value, else: 8 end)
+
+    minute =
+      skill_ids
+      |> first_skill_integer(skill_configs, "morning_brief_minute_local", 0)
+      |> then(fn value -> if value in 0..59, do: value, else: 0 end)
+
+    local_now = DateTime.add(now, Timezones.offset_at(timezone_name, now, offset_fallback), :hour)
+
+    Time.compare(DateTime.to_time(local_now), Time.new!(hour, minute, 0)) != :lt and
+      not Briefs.exists?(
+        user_id,
+        "morning_briefing:" <> Date.to_iso8601(DateTime.to_date(local_now))
+      )
+  end
+
+  defp morning_brief_due?(_user_id, _skill_ids, _skill_configs, _context), do: false
 
   defp truthy?(true), do: true
   defp truthy?(_other), do: false

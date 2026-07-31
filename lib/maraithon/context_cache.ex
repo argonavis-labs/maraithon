@@ -111,7 +111,10 @@ defmodule Maraithon.ContextCache do
     case :ets.whereis(@table) do
       :undefined ->
         # Server hasn't started yet (e.g. unit tests bypassing the supervisor).
-        case start_link([]) do
+        # Start unlinked: linking the named server (and its ETS table) to an
+        # arbitrary caller process would tear the cache down when that caller
+        # exits.
+        case GenServer.start(__MODULE__, [], name: __MODULE__) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
           _other -> :error

@@ -34,6 +34,7 @@ defmodule Maraithon.Connectors.Gmail do
 
   @behaviour Maraithon.Connectors.Connector
 
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Crm.Ingest
   alias Maraithon.Crm.Observation
@@ -53,6 +54,12 @@ defmodule Maraithon.Connectors.Gmail do
   # legitimate delta should never come close to this; it exists so a
   # pathological/looping response can't wedge a background job forever.
   @max_history_pages 25
+  # Per-chunk cap on concurrent-ish full-content fetches during an
+  # incremental history sync. Every message id from the history delta is
+  # processed (in chunks of this size) — the old behavior of truncating to
+  # the first 20 while the caller still advanced the history cursor
+  # permanently dropped everything past the truncation point.
+  @history_message_fetch_chunk 100
 
   # ===========================================================================
   # Watch Management
@@ -129,37 +136,59 @@ defmodule Maraithon.Connectors.Gmail do
     # happen out-of-request in `Maraithon.Runtime.BackgroundJobHandler` so the
     # webhook can ack quickly and Pub/Sub never times out waiting on us.
     case decode_pubsub_message(params) do
-      {:ok, user_id, history_id, message_id} ->
-        topic = "email:#{user_id}"
+      {:ok, claimed_user_id, _history_id, _message_id}
+      when not is_binary(claimed_user_id) or claimed_user_id == "" ->
+        {:error, :invalid_pubsub_message}
 
-        dedupe_key = gmail_webhook_dedupe_key(message_id, user_id, history_id)
+      {:ok, claimed_user_id, history_id, message_id} ->
+        # The Pub/Sub push carries no verified identity (verify_signature/2 is
+        # a no-op), so the body's emailAddress is attacker-controlled. Only
+        # enqueue when it resolves to a known connected-account row — the same
+        # lookup the background job itself performs — and derive the job's
+        # user_id from the resolved row, never the raw claim. Unknown
+        # mailboxes are acked-and-dropped so unauthenticated POSTs cannot
+        # flood the job queue.
+        case ConnectedAccounts.get(claimed_user_id, "google") do
+          nil ->
+            Logger.debug("Gmail webhook for unknown mailbox ignored")
+            {:ignore, "unknown mailbox"}
 
-        case BackgroundJobs.enqueue("gmail_incremental_sync", %{
-               "user_id" => user_id,
-               "queue" => "connectors",
-               "payload" => %{"notification_history_id" => history_id},
-               "dedupe_key" => dedupe_key
-             }) do
-          {:ok, _job} ->
-            event =
-              Connector.build_event("email_webhook_enqueued", "gmail", %{
-                user_id: user_id,
-                history_id: history_id
-              })
-
-            {:ok, topic, event}
-
-          {:error, reason} ->
-            Logger.warning("Failed to enqueue Gmail incremental sync",
-              user_id: user_id,
-              history_id: history_id,
-              reason: inspect(reason)
-            )
-
-            {:error, reason}
+          account ->
+            enqueue_incremental_sync(account.user_id, history_id, message_id)
         end
 
       {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp enqueue_incremental_sync(user_id, history_id, message_id) do
+    topic = "email:#{user_id}"
+
+    dedupe_key = gmail_webhook_dedupe_key(message_id, user_id, history_id)
+
+    case BackgroundJobs.enqueue("gmail_incremental_sync", %{
+           "user_id" => user_id,
+           "queue" => "connectors",
+           "payload" => %{"notification_history_id" => history_id},
+           "dedupe_key" => dedupe_key
+         }) do
+      {:ok, _job} ->
+        event =
+          Connector.build_event("email_webhook_enqueued", "gmail", %{
+            user_id: user_id,
+            history_id: history_id
+          })
+
+        {:ok, topic, event}
+
+      {:error, reason} ->
+        Logger.warning("Failed to enqueue Gmail incremental sync",
+          user_id: user_id,
+          history_id: history_id,
+          reason: inspect(reason)
+        )
+
         {:error, reason}
     end
   end
@@ -601,19 +630,33 @@ defmodule Maraithon.Connectors.Gmail do
       |> Enum.map(fn ma -> ma["message"]["id"] end)
       |> Enum.uniq()
 
+    if length(message_ids) > @history_message_fetch_chunk do
+      Logger.warning("Gmail history sync processing large delta in chunks",
+        message_count: length(message_ids),
+        chunk_size: @history_message_fetch_chunk
+      )
+    end
+
     # Fetch full message details so downstream model triage can use body text.
+    # Process EVERY id from the delta — the caller advances the history
+    # cursor to latest_history_id afterwards, so any id skipped here would be
+    # silently lost forever. Chunking bounds each fetch burst; the total is
+    # already bounded by the history pagination safety cap.
     messages =
       message_ids
-      |> Enum.take(20)
-      |> Task.async_stream(
-        fn id -> fetch_message_content(access_token, id, access_token: true) end,
-        max_concurrency: 8,
-        ordered: true,
-        timeout: :infinity
-      )
-      |> Enum.flat_map(fn
-        {:ok, {:ok, message}} -> [message]
-        _ -> []
+      |> Enum.chunk_every(@history_message_fetch_chunk)
+      |> Enum.flat_map(fn chunk ->
+        chunk
+        |> Task.async_stream(
+          fn id -> fetch_message_content(access_token, id, access_token: true) end,
+          max_concurrency: 8,
+          ordered: true,
+          timeout: :infinity
+        )
+        |> Enum.flat_map(fn
+          {:ok, {:ok, message}} -> [message]
+          _ -> []
+        end)
       end)
 
     {:ok, messages, latest_history_id}

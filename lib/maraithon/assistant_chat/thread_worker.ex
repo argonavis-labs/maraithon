@@ -53,6 +53,17 @@ defmodule Maraithon.AssistantChat.ThreadWorker do
       )
 
       {:noreply, state}
+  catch
+    # `rescue` misses exits (e.g. a GenServer.call timeout deep in the tool
+    # stack); without this the :temporary worker dies and the queued run
+    # strands until RunRecovery's next sweep.
+    kind, reason ->
+      Logger.warning("Mobile assistant thread worker crashed",
+        conversation_id: state.conversation_id,
+        reason: "#{kind}: #{inspect(reason)}"
+      )
+
+      {:noreply, state}
   end
 
   defp ensure_worker(conversation_id) do

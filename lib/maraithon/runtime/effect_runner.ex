@@ -17,8 +17,10 @@ defmodule Maraithon.Runtime.EffectRunner do
   require Logger
 
   @default_poll_interval_ms 1_000
-  # 5 minutes
-  @default_claim_timeout_ms 300_000
+  # Must exceed the longest-running effect (LLM calls may take up to 20 minutes
+  # plus busy retries); crashed local tasks release their claim immediately via
+  # the :DOWN handler, so this only bounds recovery after a node death.
+  @default_claim_timeout_ms 1_500_000
   @default_batch_size 10
   @default_rate_limit_retry_ms 60_000
   @max_rate_limit_retry_ms 300_000
@@ -42,6 +44,7 @@ defmodule Maraithon.Runtime.EffectRunner do
     {:ok,
      %{
        running: %{},
+       monitors: %{},
        poll_interval_ms: poll_interval_ms,
        claim_timeout_ms: claim_timeout_ms,
        batch_size: batch_size,
@@ -56,12 +59,17 @@ defmodule Maraithon.Runtime.EffectRunner do
            fetch_pending_effects(state.batch_size, state.running)
          end) do
       {:ok, effects} ->
-        running =
-          Enum.reduce(effects, state.running, fn effect, acc ->
+        state =
+          Enum.reduce(effects, state, fn effect, acc ->
             case claim_effect(effect) do
               {:ok, claimed} ->
-                execute_effect_async(claimed)
-                Map.put(acc, effect.id, effect)
+                ref = execute_effect_async(claimed)
+
+                %{
+                  acc
+                  | running: Map.put(acc.running, effect.id, claimed),
+                    monitors: Map.put(acc.monitors, ref, effect.id)
+                }
 
               :already_claimed ->
                 acc
@@ -72,7 +80,7 @@ defmodule Maraithon.Runtime.EffectRunner do
           end)
 
         schedule_poll(state.poll_interval_ms)
-        {:noreply, %{state | running: running, poll_retry_attempts: 0}}
+        {:noreply, %{state | poll_retry_attempts: 0}}
 
       {:error, _reason} ->
         retry_in_ms = DbResilience.backoff_ms(state.poll_interval_ms, state.poll_retry_attempts)
@@ -83,13 +91,58 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   @impl true
   def handle_info({:effect_done, effect_id, _result}, state) do
-    running = Map.delete(state.running, effect_id)
-    {:noreply, %{state | running: running}}
+    monitors =
+      case Enum.find(state.monitors, fn {_ref, id} -> id == effect_id end) do
+        {ref, _id} ->
+          Process.demonitor(ref, [:flush])
+          Map.delete(state.monitors, ref)
+
+        nil ->
+          state.monitors
+      end
+
+    {:noreply, %{state | running: Map.delete(state.running, effect_id), monitors: monitors}}
+  end
+
+  # Task.Supervisor.async_nolink reply for a task whose :effect_done message
+  # already cleaned up — nothing left to do beyond dropping the monitor.
+  @impl true
+  def handle_info({ref, _result}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, %{state | monitors: Map.delete(state.monitors, ref)}}
+  end
+
+  # A task died before reporting back (raise the command didn't rescue, kill,
+  # OOM). Without this, the `running` entry leaked forever and blocked every
+  # future llm_call effect on this node.
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    case Map.pop(state.monitors, ref) do
+      {nil, _monitors} ->
+        {:noreply, state}
+
+      {effect_id, monitors} ->
+        {effect, running} = Map.pop(state.running, effect_id)
+
+        if effect && reason != :normal do
+          Logger.error("Effect task crashed for effect #{effect_id}: #{inspect(reason)}")
+          release_crashed_effect(effect, reason)
+        end
+
+        {:noreply, %{state | running: running, monitors: monitors}}
+    end
+  end
+
+  @impl true
+  def handle_info(msg, state) do
+    Logger.debug("EffectRunner ignoring unexpected message: #{inspect(msg)}")
+    {:noreply, state}
   end
 
   @impl true
   def handle_call(:clear_running, _from, state) do
-    {:reply, :ok, %{state | running: %{}}}
+    Enum.each(state.monitors, fn {ref, _id} -> Process.demonitor(ref, [:flush]) end)
+    {:reply, :ok, %{state | running: %{}, monitors: %{}}}
   end
 
   # Private functions
@@ -176,16 +229,43 @@ defmodule Maraithon.Runtime.EffectRunner do
   defp execute_effect_async(effect) do
     parent = self()
 
-    Task.Supervisor.start_child(Maraithon.Runtime.EffectSupervisor, fn ->
-      result = execute_effect(effect)
-      send(parent, {:effect_done, effect.id, result})
-    end)
+    %Task{ref: ref} =
+      Task.Supervisor.async_nolink(Maraithon.Runtime.EffectSupervisor, fn ->
+        result = execute_effect(effect)
+        send(parent, {:effect_done, effect.id, result})
+        :ok
+      end)
+
+    ref
+  end
+
+  defp release_crashed_effect(effect, reason) do
+    attempts = effect.attempts + 1
+    error = {:effect_task_crashed, reason}
+
+    if attempts < effect.max_attempts do
+      mark_pending_retry(effect, error, attempts)
+    else
+      case mark_failed(effect, error, attempts) do
+        :ok -> notify_agent(effect.agent_id, effect.id, {:error, error})
+        {:error, _reason} -> :ok
+      end
+    end
   end
 
   defp execute_effect(effect) do
     Logger.info("Executing effect #{effect.id}", effect_id: effect.id, type: effect.effect_type)
 
-    result = execute_with_command(effect)
+    result =
+      try do
+        execute_with_command(effect)
+      rescue
+        exception ->
+          {:error, {:effect_exception, Exception.message(exception)}}
+      catch
+        kind, value ->
+          {:error, {:effect_exception, "#{kind}: #{inspect(value)}"}}
+      end
 
     case result do
       {:ok, data} ->

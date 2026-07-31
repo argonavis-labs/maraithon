@@ -12,18 +12,15 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
   @name __MODULE__
   @default_interval_ms :timer.minutes(30)
-  @default_batch_size 100
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, @name))
   end
 
   def run_once(opts \\ []) do
-    cross_source_opts = Keyword.put_new(opts, :user_limit, @default_batch_size)
-
     opts
     |> CompletionSweep.run_for_all_users()
-    |> Map.put(:cross_source, run_cross_source_pass(cross_source_opts))
+    |> Map.put(:cross_source, run_cross_source_pass(opts))
   end
 
   @impl true
@@ -44,13 +41,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
     state = %{
       interval_ms: interval_ms,
-      initial_delay_ms: initial_delay_ms,
-      user_limit:
-        Keyword.get(
-          opts,
-          :user_limit,
-          Config.positive_integer(:todo_completion_sweep_user_limit, @default_batch_size)
-        )
+      initial_delay_ms: initial_delay_ms
     }
 
     schedule_tick(state.initial_delay_ms)
@@ -59,7 +50,9 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
   @impl true
   def handle_info(:tick, state) do
-    summary = run_once(user_limit: state.user_limit)
+    # All users are swept every cycle; the old user_limit cap silently starved
+    # everyone past the first page.
+    summary = run_once()
 
     if summary.completed > 0 or summary.errors > 0 or summary.fetch_errors > 0 do
       Logger.info("Todo completion sweep cycle",
@@ -88,7 +81,6 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
     summary =
       opts
       |> Keyword.take([
-        :user_limit,
         :user_ids,
         :now,
         :llm_complete,
