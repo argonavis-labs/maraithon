@@ -787,12 +787,12 @@ defmodule Maraithon.Runtime.Agent do
 
   defp schedule_heartbeat(data) do
     interval = get_config(:heartbeat_interval_ms, 900_000)
-    Scheduler.schedule_in(data.agent_id, "heartbeat", interval)
+    Scheduler.schedule_unique_in(data.agent_id, "heartbeat", interval)
   end
 
   defp schedule_checkpoint(data) do
     interval = get_config(:checkpoint_interval_ms, 600_000)
-    Scheduler.schedule_in(data.agent_id, "checkpoint", interval)
+    Scheduler.schedule_unique_in(data.agent_id, "checkpoint", interval)
   end
 
   defp schedule_next_wakeup(data) do
@@ -1448,9 +1448,22 @@ defmodule Maraithon.Runtime.Agent do
 
   defp acknowledge_wakeup(job_id) do
     case Scheduler.ack_delivered(job_id) do
-      {:ok, _status} -> :ok
-      {:error, :not_found} -> :ok
-      {:error, :invalid_state} -> :ok
+      {:ok, _status} ->
+        :ok
+
+      {:error, :not_found} ->
+        :ok
+
+      {:error, :invalid_state} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Scheduled wakeup acknowledgement deferred",
+          job_id: job_id,
+          error: inspect(reason)
+        )
+
+        :ok
     end
   end
 

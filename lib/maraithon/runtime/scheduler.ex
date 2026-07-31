@@ -35,6 +35,18 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   @doc """
+  Replace an agent's active job of a type with one that fires after a delay.
+
+  Recurring timers should use this instead of `schedule_in/4`. The advisory
+  lock and transaction ensure agent restarts or duplicate wakeups cannot
+  multiply heartbeat and checkpoint jobs.
+  """
+  def schedule_unique_in(agent_id, job_type, delay_ms, payload \\ %{}) do
+    fire_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
+    schedule_unique_at(agent_id, job_type, fire_at, payload)
+  end
+
+  @doc """
   Schedule a job to fire at a specific time.
   """
   def schedule_at(agent_id, job_type, fire_at, payload \\ %{}) do
@@ -55,6 +67,63 @@ defmodule Maraithon.Runtime.Scheduler do
 
       {:ok, {:error, reason}} ->
         Logger.error("Failed to schedule job: #{inspect(reason)}")
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Atomically replace all active jobs of a type for an agent.
+  """
+  def schedule_unique_at(agent_id, job_type, fire_at, payload \\ %{}) do
+    attrs = %{
+      agent_id: agent_id,
+      job_type: job_type,
+      fire_at: fire_at,
+      payload: payload,
+      status: "pending"
+    }
+
+    result =
+      DbResilience.with_database("scheduler replace unique job", fn ->
+        Repo.transaction(fn ->
+          lock_key = "scheduler:#{agent_id}:#{job_type}"
+
+          Repo.query!(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+            [lock_key]
+          )
+
+          {cancelled_count, _} =
+            from(j in ScheduledJob,
+              where: j.agent_id == ^agent_id,
+              where: j.job_type == ^job_type,
+              where: j.status in ["pending", "dispatched"]
+            )
+            |> Repo.update_all(
+              set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
+            )
+
+          case %ScheduledJob{} |> ScheduledJob.changeset(attrs) |> Repo.insert() do
+            {:ok, job} -> {job, cancelled_count}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+      end)
+
+    case result do
+      {:ok, {:ok, {job, cancelled_count}}} ->
+        Logger.debug(
+          "Scheduled unique #{job_type} for #{agent_id} at #{fire_at}",
+          cancelled_jobs: cancelled_count
+        )
+
+        {:ok, job.id}
+
+      {:ok, {:error, reason}} ->
+        Logger.error("Failed to schedule unique job: #{inspect(reason)}")
         {:error, reason}
 
       {:error, reason} ->
