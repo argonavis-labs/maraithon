@@ -6,7 +6,7 @@ enum AppFormatters {
     /// Foundation formatter construction is expensive and these run on every
     /// row render, so build each once. Formatters are safe to share for
     /// formatting as long as they are not mutated after setup.
-    private nonisolated(unsafe) static let currencyFormatter: NumberFormatter = {
+    private static let currencyFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
         formatter.currencyCode = Locale.current.currency?.identifier ?? "USD"

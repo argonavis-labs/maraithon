@@ -48,7 +48,7 @@ struct TodayView: View {
                     Section {
                         SyncIssueBanner(
                             message: refreshErrorMessage,
-                            retry: { Task { await refreshLatestData() } },
+                            retry: { Task { await refreshLatestData(force: true) } },
                             dismiss: { self.refreshErrorMessage = nil }
                         )
                         .listRowInsets(EdgeInsets())
@@ -185,12 +185,14 @@ struct TodayView: View {
                 self.snapshot = TodaySnapshot(todos: todos)
             }
             .refreshable {
-                await refreshLatestData()
+                // An explicit pull is a demand for fresh data; bypass the
+                // conditional (ETag) fast path.
+                await refreshLatestData(force: true)
             }
         }
     }
 
-    private func refreshLatestData() async {
+    private func refreshLatestData(force: Bool = false) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -204,7 +206,8 @@ struct TodayView: View {
             try await ProductionDataSync.refreshAll(
                 sessionStore: sessionStore,
                 modelContext: modelContext,
-                includeCards: true
+                includeCards: true,
+                force: force
             )
             refreshErrorMessage = nil
         } catch {

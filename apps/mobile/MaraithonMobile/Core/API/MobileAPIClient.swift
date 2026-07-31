@@ -4,6 +4,10 @@ enum MobileAPIError: LocalizedError, Equatable, Sendable {
     case invalidRequest
     case invalidResponse
     case unauthorized
+    /// Conditional GET signal: the server answered 304 because the stored
+    /// ETag still matches, so the caller's local copy is already current.
+    /// Not a user-facing failure; sync paths catch it and return early.
+    case notModified
     case server(String)
     case serverResponse(code: String, message: String)
 
@@ -15,6 +19,8 @@ enum MobileAPIError: LocalizedError, Equatable, Sendable {
             return "Maraithon returned an unexpected response."
         case .unauthorized:
             return "Sign-in expired. Sign in again."
+        case .notModified:
+            return "Content is already up to date."
         case .server(let message):
             return message
         case .serverResponse(_, let message):
@@ -88,6 +94,50 @@ struct MobileAPIClient: Sendable {
 
     struct TodosResponse: Decodable, Sendable {
         let todos: [RemoteTodo]
+        /// Optional so old servers without pagination support still decode;
+        /// its absence means the single response is the full collection.
+        let pagination: Pagination?
+
+        struct Pagination: Decodable, Sendable {
+            let limit: Int?
+            let offset: Int?
+            let count: Int?
+            let nextOffset: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case limit
+                case offset
+                case count
+                case nextOffset = "next_offset"
+            }
+        }
+    }
+
+    /// A fully accumulated todos listing. `isComplete` is false only when the
+    /// pagination hard cap was hit, meaning the server may hold more rows than
+    /// were fetched; callers must not delete-reconcile against a capped list.
+    struct TodoListing: Sendable {
+        let todos: [RemoteTodo]
+        let isComplete: Bool
+    }
+
+    /// Endpoint keys for the ETag store. Todos keys vary by `include_cards`
+    /// because the two variants return different payloads: a 304 earned by a
+    /// cards-off sync must not suppress the first cards-on sync.
+    enum ETagKey {
+        static let people = "people"
+        static let chatThreads = "chat-threads"
+
+        static func todos(includeCards: Bool) -> String {
+            includeCards ? "todos.cards" : "todos"
+        }
+    }
+
+    /// Clears every stored ETag. Called automatically when a request comes
+    /// back 401 (session expired -> forced sign-out) so the next account never
+    /// sees a false 304 minted for the previous one.
+    static func clearETags() {
+        ETagStore.shared.clearAll()
     }
 
     struct TodoActivityResponse: Decodable, Sendable {
@@ -923,12 +973,56 @@ struct MobileAPIClient: Sendable {
     }
 
     func listTodos(sessionToken: String, includeCards: Bool = true) async throws -> [RemoteTodo] {
-        let response: TodosResponse = try await send(
-            path: "/todos?limit=500&status=all&sort=updated&dir=desc&include_cards=\(includeCards)",
-            sessionToken: sessionToken,
-            responseType: TodosResponse.self
-        )
-        return response.todos
+        try await listTodos(sessionToken: sessionToken, includeCards: includeCards, conditional: false).todos
+    }
+
+    /// Fetches the full todos collection page by page.
+    ///
+    /// When `conditional` is true the first page carries `If-None-Match`; a 304
+    /// there means the whole collection is unchanged and
+    /// `MobileAPIError.notModified` is thrown. Follow-up pages are never
+    /// conditional. Old servers that lack pagination return no `pagination`
+    /// key; that single response is treated as the complete set.
+    func listTodos(
+        sessionToken: String,
+        includeCards: Bool,
+        conditional: Bool
+    ) async throws -> TodoListing {
+        let pageSize = 500
+        // Hard cap keeps a misbehaving endpoint (e.g. one that ignores offset)
+        // from looping forever; 10 pages x 500 is far beyond any real queue.
+        let maxPages = 10
+        var offset = 0
+        var todos: [RemoteTodo] = []
+
+        for page in 0..<maxPages {
+            try Task.checkCancellation()
+
+            // Keep the first-page URL identical to the pre-pagination request
+            // so old servers see exactly what they always saw.
+            let offsetQuery = offset > 0 ? "&offset=\(offset)" : ""
+            let response: TodosResponse = try await send(
+                path: "/todos?limit=\(pageSize)\(offsetQuery)&status=all&sort=updated&dir=desc&include_cards=\(includeCards)",
+                sessionToken: sessionToken,
+                etagKey: (conditional && page == 0) ? ETagKey.todos(includeCards: includeCards) : nil,
+                responseType: TodosResponse.self
+            )
+
+            todos.append(contentsOf: response.todos)
+
+            // No pagination object -> old server; the response is the full set.
+            guard response.pagination != nil else {
+                return TodoListing(todos: todos, isComplete: true)
+            }
+
+            if response.todos.count < pageSize {
+                return TodoListing(todos: todos, isComplete: true)
+            }
+
+            offset += pageSize
+        }
+
+        return TodoListing(todos: todos, isComplete: false)
     }
 
     func listGoals(
@@ -1064,7 +1158,10 @@ struct MobileAPIClient: Sendable {
         return response.todo
     }
 
-    func listPeople(sessionToken: String) async throws -> [RemotePerson] {
+    /// Fetches the full people collection page by page. When `conditional` is
+    /// true the first page carries `If-None-Match`; a 304 there means the whole
+    /// collection is unchanged and `MobileAPIError.notModified` is thrown.
+    func listPeople(sessionToken: String, conditional: Bool = false) async throws -> [RemotePerson] {
         let pageSize = 500
         // Hard cap keeps a misbehaving endpoint (e.g. one that ignores offset)
         // from looping forever; 20 pages x 500 is far beyond any real CRM here.
@@ -1072,12 +1169,13 @@ struct MobileAPIClient: Sendable {
         var offset = 0
         var people: [RemotePerson] = []
 
-        for _ in 0..<maxPages {
+        for page in 0..<maxPages {
             try Task.checkCancellation()
 
             let response: PeopleResponse = try await send(
                 path: "/people?limit=\(pageSize)&offset=\(offset)&status=all",
                 sessionToken: sessionToken,
+                etagKey: (conditional && page == 0) ? ETagKey.people : nil,
                 responseType: PeopleResponse.self
             )
 
@@ -1132,6 +1230,7 @@ struct MobileAPIClient: Sendable {
         method: String = "GET",
         sessionToken: String? = nil,
         body: RequestBody? = nil,
+        etagKey: String? = nil,
         responseType: Response.Type
     ) async throws -> Response {
         let baseString = baseURL.absoluteString.hasSuffix("/")
@@ -1152,6 +1251,13 @@ struct MobileAPIClient: Sendable {
             request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
         }
 
+        if let etagKey, let etag = ETagStore.shared.etag(for: etagKey) {
+            request.setValue(etag, forHTTPHeaderField: "If-None-Match")
+            // We do our own revalidation; URLCache must not answer the
+            // conditional request from a cached 200 behind our back.
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+        }
+
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try Self.encoder.encode(JSONValue.object(body))
@@ -1164,13 +1270,26 @@ struct MobileAPIClient: Sendable {
 
         switch httpResponse.statusCode {
         case 200..<300:
+            if let etagKey {
+                // Store the fresh validator; a 200 without one means the
+                // server stopped supporting ETags, so drop the stale value
+                // instead of replaying it forever.
+                ETagStore.shared.set(httpResponse.value(forHTTPHeaderField: "ETag"), for: etagKey)
+            }
             // 204-style responses carry no body; any all-optional/empty
             // Decodable should succeed rather than choking on zero bytes.
             if data.isEmpty, let empty = try? Self.decoder.decode(Response.self, from: Data("{}".utf8)) {
                 return empty
             }
             return try Self.decoder.decode(Response.self, from: data)
+        case 304:
+            throw MobileAPIError.notModified
         case 401:
+            // The session is gone; stored validators belong to it and must not
+            // survive into the next sign-in. Full sign-out clearing can
+            // piggyback on SessionStore later, but this covers the forced
+            // sign-out path today.
+            Self.clearETags()
             Task { @MainActor in
                 MobileAPIClient.unauthorizedHandler?()
             }

@@ -16,4 +16,15 @@ defmodule MaraithonWeb.MobileParams do
   end
 
   def sanitize(_params, _allowed_keys), do: %{}
+
+  def offset(params) when is_map(params) do
+    case Integer.parse(to_string(Map.get(params, "offset", "0"))) do
+      {value, ""} -> max(value, 0)
+      _ -> 0
+    end
+  end
+
+  def next_offset(items, limit, offset) when is_list(items) do
+    if length(items) == limit, do: offset + limit, else: nil
+  end
 end

@@ -5,12 +5,22 @@ defmodule MaraithonWeb.MobileChatController do
   alias Maraithon.TelegramAssistant.Run
   alias Maraithon.TelegramConversations.Conversation
   alias MaraithonWeb.MobileChatJSON
+  alias MaraithonWeb.MobileConditional
 
   def index(conn, params) do
     user_id = conn.assigns.current_user.id
 
-    {:ok, threads} = AssistantChat.list_threads(user_id, limit: limit(params))
-    json(conn, MobileChatJSON.thread_index(threads))
+    # Collection ETag over the user's mobile threads, computed before the
+    # expensive list query (with turns preloaded) so a 304 never runs it.
+    # New messages bump the thread's updated_at (see
+    # AssistantChat.collection_version/1), so this invalidates on new turns.
+    etag =
+      MobileConditional.collection_etag("chat-threads", AssistantChat.collection_version(user_id))
+
+    MobileConditional.with_collection_etag(conn, etag, fn conn ->
+      {:ok, threads} = AssistantChat.list_threads(user_id, limit: limit(params))
+      json(conn, MobileChatJSON.thread_index(threads))
+    end)
   end
 
   def create(conn, params) do

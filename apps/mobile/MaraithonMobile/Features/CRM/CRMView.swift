@@ -82,7 +82,7 @@ struct CRMView: View {
                     Section {
                         SyncIssueBanner(
                             message: refreshErrorMessage,
-                            retry: { Task { await refreshPriorityPeople() } },
+                            retry: { Task { await refreshPriorityPeople(force: true) } },
                             dismiss: { self.refreshErrorMessage = nil }
                         )
                         .listRowInsets(EdgeInsets())
@@ -197,7 +197,9 @@ struct CRMView: View {
                 await refreshPriorityPeople()
             }
             .refreshable {
-                await refreshPriorityPeople()
+                // An explicit pull is a demand for fresh data; bypass the
+                // conditional (ETag) fast path.
+                await refreshPriorityPeople(force: true)
             }
             .onChange(of: peopleSignature) { _, _ in
                 rebuildPeopleSnapshot()
@@ -243,7 +245,7 @@ struct CRMView: View {
         }
     }
 
-    private func refreshPriorityPeople() async {
+    private func refreshPriorityPeople(force: Bool = false) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -258,7 +260,8 @@ struct CRMView: View {
         do {
             try await ProductionDataSync.refreshPeople(
                 sessionStore: sessionStore,
-                modelContext: modelContext
+                modelContext: modelContext,
+                force: force
             )
             refreshErrorMessage = nil
         } catch {
@@ -271,7 +274,8 @@ struct CRMView: View {
         try? await ProductionDataSync.refreshTodos(
             sessionStore: sessionStore,
             modelContext: modelContext,
-            includeCards: false
+            includeCards: false,
+            force: force
         )
 
         goals = await fetchedGoals

@@ -36,7 +36,7 @@ final class ChatThread {
     @Transient private var workSummaryCache = DecodedWorkSummaryCache()
 
     /// `JSONDecoder` is stateless after configuration and safe to share.
-    private nonisolated(unsafe) static let workSummaryDecoder = JSONDecoder()
+    private static let workSummaryDecoder = JSONDecoder()
 
     var pendingWorkSummary: ChatWorkSummary? {
         guard let pendingRunWorkSummary else { return nil }

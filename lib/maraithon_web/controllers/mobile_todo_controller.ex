@@ -3,6 +3,7 @@ defmodule MaraithonWeb.MobileTodoController do
 
   alias Maraithon.{AssistantChat, Crm, SourceFreshness, Todos}
   alias MaraithonWeb.MobileChatJSON
+  alias MaraithonWeb.MobileConditional
   alias MaraithonWeb.MobileJSON
   alias MaraithonWeb.MobileParams
 
@@ -14,23 +15,43 @@ defmodule MaraithonWeb.MobileTodoController do
 
   def index(conn, params) do
     user_id = conn.assigns.current_user.id
-    json_opts = json_opts(params, user_id)
 
-    todos =
-      Todos.list_for_user(user_id,
-        limit: limit(params),
-        statuses: status_filter(params),
-        attention_mode: attention_filter(params),
-        source: source_filter(params),
-        due_nil?: due_nil_filter(params),
-        due_after: due_after_filter(params),
-        due_before: due_before_filter(params),
-        query: text_param(params, "q"),
-        sort_by: text_param(params, "sort") || "updated",
-        sort_dir: text_param(params, "dir") || "desc"
-      )
+    # Coarse collection ETag over ALL the user's todos (any todo change
+    # invalidates every filtered view; card projections may lag until a todo
+    # row changes — accepted). Computed before the expensive list query so a
+    # 304 never runs it.
+    etag = MobileConditional.collection_etag("todos", Todos.collection_version(user_id))
 
-    json(conn, %{todos: Enum.map(todos, &MobileJSON.todo(&1, json_opts))})
+    MobileConditional.with_collection_etag(conn, etag, fn conn ->
+      json_opts = json_opts(params, user_id)
+      limit = limit(params)
+      offset = MobileParams.offset(params)
+
+      todos =
+        Todos.list_for_user(user_id,
+          limit: limit,
+          offset: offset,
+          statuses: status_filter(params),
+          attention_mode: attention_filter(params),
+          source: source_filter(params),
+          due_nil?: due_nil_filter(params),
+          due_after: due_after_filter(params),
+          due_before: due_before_filter(params),
+          query: text_param(params, "q"),
+          sort_by: text_param(params, "sort") || "updated",
+          sort_dir: text_param(params, "dir") || "desc"
+        )
+
+      json(conn, %{
+        todos: Enum.map(todos, &MobileJSON.todo(&1, json_opts)),
+        pagination: %{
+          limit: limit,
+          offset: offset,
+          count: length(todos),
+          next_offset: MobileParams.next_offset(todos, limit, offset)
+        }
+      })
+    end)
   end
 
   def activity(conn, params) do

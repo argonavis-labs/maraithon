@@ -43,6 +43,19 @@ defmodule Maraithon.Crm do
   def list_people(_user_id, _opts), do: []
 
   @doc """
+  Cheap collection version for conditional GETs: one aggregate over ALL the
+  user's CRM people regardless of status or filters. Any person insert,
+  update, or delete invalidates every filtered mobile view — hard deletes
+  change the count; status archives bump updated_at.
+  """
+  def collection_version(user_id) when is_binary(user_id) do
+    Person
+    |> where([person], person.user_id == ^user_id)
+    |> select([person], {count(person.id), max(person.updated_at)})
+    |> Repo.one()
+  end
+
+  @doc """
   Ranked "who should I reconnect with" suggestions for the user, each with a
   concrete reason tied to open work, an overdue cadence, or a strong
   relationship going quiet. Delegates to

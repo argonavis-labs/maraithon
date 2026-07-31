@@ -3,6 +3,8 @@ defmodule Maraithon.AssistantChat do
   Surface-neutral assistant chat entrypoint for native mobile.
   """
 
+  import Ecto.Query
+
   alias Maraithon.Repo
   alias Maraithon.AssistantChat.{DirectIntent, SecretRequestGuard, ThreadNaming, TodoThreadPrimer}
   alias Maraithon.TelegramAssistant
@@ -18,6 +20,22 @@ defmodule Maraithon.AssistantChat do
 
   def list_threads(user_id, opts \\ []) when is_binary(user_id) do
     {:ok, TelegramConversations.list_mobile_threads(user_id, opts)}
+  end
+
+  @doc """
+  Cheap collection version for conditional GETs: one aggregate over the
+  user's mobile threads. Conversation `updated_at` is a reliable message
+  signal — every turn insert goes through
+  `TelegramConversations.append_turn/2`, which updates the conversation row
+  (last_turn_at/summary) inside the same transaction, and `delete_turn/2`
+  does the same — so new or deleted messages bump the thread's updated_at
+  without needing a join over turns.
+  """
+  def collection_version(user_id) when is_binary(user_id) do
+    Conversation
+    |> where([c], c.user_id == ^user_id and c.surface == "mobile")
+    |> select([c], {count(c.id), max(c.updated_at)})
+    |> Repo.one()
   end
 
   def create_thread(user_id, attrs \\ %{}) when is_binary(user_id) and is_map(attrs) do

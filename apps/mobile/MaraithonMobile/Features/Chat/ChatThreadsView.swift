@@ -72,7 +72,7 @@ struct ChatThreadsView: View {
             .navigationTitle("Chat")
             .searchable(text: $searchText, prompt: "Search chats")
             .refreshable {
-                await refreshThreads()
+                await refreshThreads(force: true)
             }
             .task {
                 await refreshThreads()
@@ -120,11 +120,12 @@ struct ChatThreadsView: View {
         }
     }
 
-    private func refreshThreads() async {
+    private func refreshThreads(force: Bool = false) async {
         do {
             try await chatSyncService.refreshThreads(
                 modelContext: modelContext,
-                sessionStore: sessionStore
+                sessionStore: sessionStore,
+                force: force
             )
             errorMessage = nil
         } catch ChatSyncError.missingSession {

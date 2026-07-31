@@ -50,7 +50,7 @@ final class ChatMessage {
     @Transient private var metadataCache = DecodedMetadataCache()
 
     /// `JSONDecoder` is stateless after configuration and safe to share.
-    private nonisolated(unsafe) static let metadataDecoder = JSONDecoder()
+    private static let metadataDecoder = JSONDecoder()
 
     var storedMetadata: ChatMessageStoredMetadata? {
         guard let structuredData else { return nil }

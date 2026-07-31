@@ -3,6 +3,7 @@ defmodule MaraithonWeb.MobilePeopleController do
 
   alias Maraithon.Crm
   alias Maraithon.Crm.Person
+  alias MaraithonWeb.MobileConditional
   alias MaraithonWeb.MobileJSON
   alias MaraithonWeb.MobileParams
 
@@ -14,26 +15,33 @@ defmodule MaraithonWeb.MobilePeopleController do
 
   def index(conn, params) do
     user_id = conn.assigns.current_user.id
-    limit = limit(params)
-    offset = offset(params)
 
-    people =
-      Crm.list_people(user_id,
-        limit: limit,
-        offset: offset,
-        query: text_param(params, "q"),
-        status: text_param(params, "status") || "active"
-      )
+    # Coarse collection ETag over ALL the user's CRM people, computed before
+    # the expensive list query so a 304 never runs it.
+    etag = MobileConditional.collection_etag("people", Crm.collection_version(user_id))
 
-    json(conn, %{
-      people: Enum.map(people, &MobileJSON.person/1),
-      pagination: %{
-        limit: limit,
-        offset: offset,
-        count: length(people),
-        next_offset: next_offset(people, limit, offset)
-      }
-    })
+    MobileConditional.with_collection_etag(conn, etag, fn conn ->
+      limit = limit(params)
+      offset = MobileParams.offset(params)
+
+      people =
+        Crm.list_people(user_id,
+          limit: limit,
+          offset: offset,
+          query: text_param(params, "q"),
+          status: text_param(params, "status") || "active"
+        )
+
+      json(conn, %{
+        people: Enum.map(people, &MobileJSON.person/1),
+        pagination: %{
+          limit: limit,
+          offset: offset,
+          count: length(people),
+          next_offset: MobileParams.next_offset(people, limit, offset)
+        }
+      })
+    end)
   end
 
   def reconnect(conn, params) do
@@ -197,22 +205,11 @@ defmodule MaraithonWeb.MobilePeopleController do
     end
   end
 
-  defp offset(params) do
-    case Integer.parse(to_string(Map.get(params, "offset", "0"))) do
-      {value, ""} -> max(value, 0)
-      _ -> 0
-    end
-  end
-
   defp reconnect_limit(params) do
     case Integer.parse(to_string(Map.get(params, "limit", "12"))) do
       {value, ""} -> value |> max(1) |> min(50)
       _ -> 12
     end
-  end
-
-  defp next_offset(people, limit, offset) do
-    if length(people) == limit, do: offset + limit, else: nil
   end
 
   defp text_param(params, key) do

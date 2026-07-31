@@ -51,9 +51,25 @@ struct ChatSyncService {
         self.maxPollAttempts = maxPollAttempts
     }
 
-    func refreshThreads(modelContext: ModelContext, sessionStore: SessionStore) async throws {
+    func refreshThreads(
+        modelContext: ModelContext,
+        sessionStore: SessionStore,
+        force: Bool = false
+    ) async throws {
         let sessionToken = try sessionToken(from: sessionStore)
-        let remoteThreads = try await api.listChatThreads(sessionToken: sessionToken)
+
+        let remoteThreads: [MobileAPIClient.RemoteChatThread]
+        do {
+            remoteThreads = try await api.listChatThreads(
+                sessionToken: sessionToken,
+                conditional: !force
+            )
+        } catch MobileAPIError.notModified {
+            // The thread collection is unchanged; skip the merge and the
+            // delete-reconcile entirely.
+            return
+        }
+
         let localThreads = try localThreadsByRemoteID(modelContext: modelContext)
 
         for remoteThread in remoteThreads {

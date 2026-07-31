@@ -3,34 +3,45 @@ import SwiftData
 
 @MainActor
 enum ProductionDataSync {
-    private static let todoPageSize = 500
-
     static func refreshAll(
         sessionStore: SessionStore,
         modelContext: ModelContext,
-        includeCards: Bool = true
+        includeCards: Bool = true,
+        force: Bool = false
     ) async throws {
         // People enrich todo rows, but Today's core freshness is the work queue.
         // Do not let a relationship refresh hiccup block the todo refresh and
         // surface a stale-data warning for the whole screen.
-        try? await refreshPeople(sessionStore: sessionStore, modelContext: modelContext)
+        try? await refreshPeople(sessionStore: sessionStore, modelContext: modelContext, force: force)
         try await refreshTodos(
             sessionStore: sessionStore,
             modelContext: modelContext,
-            includeCards: includeCards
+            includeCards: includeCards,
+            force: force
         )
     }
 
     static func refreshTodos(
         sessionStore: SessionStore,
         modelContext: ModelContext,
-        includeCards: Bool = true
+        includeCards: Bool = true,
+        force: Bool = false
     ) async throws {
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
-        let remoteTodos = try await MobileAPIClient().listTodos(
-            sessionToken: sessionToken,
-            includeCards: includeCards
-        )
+
+        let listing: MobileAPIClient.TodoListing
+        do {
+            listing = try await MobileAPIClient().listTodos(
+                sessionToken: sessionToken,
+                includeCards: includeCards,
+                conditional: !force
+            )
+        } catch MobileAPIError.notModified {
+            // The server vouched the collection is unchanged; skip the merge
+            // and the save entirely.
+            return
+        }
+        let remoteTodos = listing.todos
 
         // All regex-heavy string cleaning runs off the main actor; the loop
         // below only assigns precomputed values to @Model objects.
@@ -61,7 +72,9 @@ enum ProductionDataSync {
             }
         }
 
-        if remoteTodos.count < todoPageSize {
+        // Reconcile deletions only against a complete listing; a capped
+        // (truncated) listing may omit live remote rows.
+        if listing.isComplete {
             for todo in localTodos where !seenRemoteIDs.contains(todo.id) {
                 modelContext.delete(todo)
             }
@@ -70,9 +83,22 @@ enum ProductionDataSync {
         try modelContext.save()
     }
 
-    static func refreshPeople(sessionStore: SessionStore, modelContext: ModelContext) async throws {
+    static func refreshPeople(
+        sessionStore: SessionStore,
+        modelContext: ModelContext,
+        force: Bool = false
+    ) async throws {
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
-        let remotePeople = try await MobileAPIClient().listPeople(sessionToken: sessionToken)
+
+        let remotePeople: [MobileAPIClient.RemotePerson]
+        do {
+            remotePeople = try await MobileAPIClient().listPeople(
+                sessionToken: sessionToken,
+                conditional: !force
+            )
+        } catch MobileAPIError.notModified {
+            return
+        }
         let localContacts = try modelContext.fetch(FetchDescriptor<CRMContact>())
         let localByID = Dictionary(localContacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var seenRemoteIDs = Set<UUID>()

@@ -2,6 +2,14 @@ import Foundation
 
 protocol MobileChatAPI: Sendable {
     func listChatThreads(sessionToken: String) async throws -> [MobileAPIClient.RemoteChatThread]
+    /// Conditional variant: when `conditional` is true and a stored ETag
+    /// matches, throws `MobileAPIError.notModified` instead of returning the
+    /// unchanged list. A default implementation forwards to the plain fetch so
+    /// existing conformers (test doubles) keep compiling unchanged.
+    func listChatThreads(
+        sessionToken: String,
+        conditional: Bool
+    ) async throws -> [MobileAPIClient.RemoteChatThread]
     func createChatThread(
         sessionToken: String,
         title: String,
@@ -36,6 +44,15 @@ protocol MobileChatAPI: Sendable {
         clientMessageID: UUID,
         draftEdits: MobileAPIClient.RequestBody?
     ) async throws -> MobileAPIClient.ChatActionResultResponse
+}
+
+extension MobileChatAPI {
+    func listChatThreads(
+        sessionToken: String,
+        conditional: Bool
+    ) async throws -> [MobileAPIClient.RemoteChatThread] {
+        try await listChatThreads(sessionToken: sessionToken)
+    }
 }
 
 extension MobileAPIClient: MobileChatAPI {
@@ -294,9 +311,17 @@ extension MobileAPIClient: MobileChatAPI {
     static let chatThreadsPageLimit = 100
 
     func listChatThreads(sessionToken: String) async throws -> [RemoteChatThread] {
+        try await listChatThreads(sessionToken: sessionToken, conditional: false)
+    }
+
+    func listChatThreads(
+        sessionToken: String,
+        conditional: Bool
+    ) async throws -> [RemoteChatThread] {
         let response: ChatThreadsResponse = try await send(
             path: "/chat/threads?limit=\(Self.chatThreadsPageLimit)",
             sessionToken: sessionToken,
+            etagKey: conditional ? ETagKey.chatThreads : nil,
             responseType: ChatThreadsResponse.self
         )
         return response.threads

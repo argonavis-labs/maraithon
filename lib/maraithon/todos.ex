@@ -57,18 +57,37 @@ defmodule Maraithon.Todos do
 
   def list_for_user(user_id, opts \\ []) when is_binary(user_id) do
     limit = normalize_limit(Keyword.get(opts, :limit, 20), 20)
+    page_offset = normalize_offset(Keyword.get(opts, :offset, 0))
     sort_by = normalize_sort_by(Keyword.get(opts, :sort_by, "rank"))
     sort_dir = normalize_sort_dir(Keyword.get(opts, :sort_dir, "desc"))
     decision_only? = decision_only_option?(opts)
 
+    # Offset applies after order_by so pages are stable within one sort pass.
+    # The default "updated desc" sort shifts under concurrent writes — that's
+    # accepted; paging clients reconcile by id.
     user_id
     |> filtered_todo_query(opts)
     |> maybe_filter_decision_only(decision_only?)
     |> apply_todo_order(sort_by, sort_dir)
+    |> offset(^page_offset)
     |> limit(^limit)
     |> Repo.all()
     |> Enum.map(&polish_todo_copy/1)
     |> Enum.filter(&(not decision_only? or DecisionSignals.needs_decision?(&1)))
+  end
+
+  @doc """
+  Cheap collection version for conditional GETs: one aggregate over ALL the
+  user's todos regardless of status or filters. Coarse on purpose — any todo
+  insert, update, or delete invalidates every filtered mobile view. Card
+  projections derived from other tables may lag until some todo row changes;
+  that's accepted.
+  """
+  def collection_version(user_id) when is_binary(user_id) do
+    Todo
+    |> where([todo], todo.user_id == ^user_id)
+    |> select([todo], {count(todo.id), max(todo.updated_at)})
+    |> Repo.one()
   end
 
   def count_for_user(user_id, opts \\ []) when is_binary(user_id) do
@@ -2586,6 +2605,17 @@ defmodule Maraithon.Todos do
   end
 
   defp normalize_limit(_value, default), do: default
+
+  defp normalize_offset(value) when is_integer(value) and value >= 0, do: value
+
+  defp normalize_offset(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed >= 0 -> parsed
+      _ -> 0
+    end
+  end
+
+  defp normalize_offset(_value), do: 0
 
   defp normalize_query_text(value) when is_binary(value) do
     case String.trim(value) do

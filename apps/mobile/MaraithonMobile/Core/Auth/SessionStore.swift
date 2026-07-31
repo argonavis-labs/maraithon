@@ -189,5 +189,6 @@ final class SessionStore {
 
         UserDefaults.standard.removeObject(forKey: AuthSessionStorageKeys.aiConsentAccepted)
         URLCache.shared.removeAllCachedResponses()
+        MobileAPIClient.clearETags()
     }
 }

@@ -121,7 +121,7 @@ final class TodoItem {
     @Transient private var sourceContextCache = DecodedSourceContextCache()
 
     /// `JSONDecoder` is stateless after configuration and safe to share.
-    private nonisolated(unsafe) static let sourceContextDecoder = JSONDecoder()
+    private static let sourceContextDecoder = JSONDecoder()
 
     var storedSourceContext: TodoStoredSourceContext? {
         guard let sourceContextData else { return nil }

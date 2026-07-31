@@ -39,7 +39,7 @@ struct TodosView: View {
                 if let refreshErrorMessage {
                     SyncIssueBanner(
                         message: refreshErrorMessage,
-                        retry: { Task { await refreshLatestWork() } },
+                        retry: { Task { await refreshLatestWork(force: true) } },
                         dismiss: { self.refreshErrorMessage = nil }
                     )
                 }
@@ -140,7 +140,9 @@ struct TodosView: View {
                 rebuildWorkLists()
             }
             .refreshable {
-                await refreshLatestWork()
+                // An explicit pull is a demand for fresh data; bypass the
+                // conditional (ETag) fast path.
+                await refreshLatestWork(force: true)
             }
             .onAppear(perform: applyRequestedFilterIfNeeded)
             .onChange(of: appNavigation.requestedTodoFilter) { _, _ in
@@ -153,7 +155,7 @@ struct TodosView: View {
         workLists = TodoWorkLists(todos: todos, filter: filter, searchText: searchText)
     }
 
-    private func refreshLatestWork() async {
+    private func refreshLatestWork(force: Bool = false) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -162,7 +164,8 @@ struct TodosView: View {
             try await ProductionDataSync.refreshTodos(
                 sessionStore: sessionStore,
                 modelContext: modelContext,
-                includeCards: true
+                includeCards: true,
+                force: force
             )
             refreshErrorMessage = nil
         } catch {
