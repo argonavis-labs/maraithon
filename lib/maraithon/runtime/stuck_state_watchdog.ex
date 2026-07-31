@@ -81,6 +81,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ProactiveCandidate
   alias Maraithon.TelegramAssistant.ProactiveQueue
+  alias Maraithon.TelegramAssistant.PushBroker
 
   require Logger
 
@@ -277,11 +278,17 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
   # unreachable unless BriefNotifier/BriefingCron itself is not ticking.
   # scheduled_for is stored UTC and compared against UTC — never a local
   # wall clock (the exact bug behind the 2026-07-03 incident).
+  #
+  # Quiet hours: a brief whose user is inside their quiet-hours window is
+  # gated by the send-time budget, not stuck — the planner defers it until
+  # morning by design. Those rows are excluded while the window is open; a
+  # genuinely stuck brief still alarms on the first post-quiet-hours tick
+  # (a 30-minute cadence), when the operator is awake to read the email.
   defp check_briefs(now) do
     terminal_errors = DeliveryErrorCopy.terminal_storage_messages()
     cutoff = DateTime.add(now, -@briefs_max_late_minutes * 60, :second)
 
-    oldest_first(
+    rows =
       Brief
       |> where(
         [brief],
@@ -289,11 +296,27 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
           (brief.status == "failed" and
              (is_nil(brief.error_message) or brief.error_message not in ^terminal_errors))
       )
-      |> where([brief], brief.scheduled_for < ^cutoff),
-      :scheduled_for,
-      now,
-      reason: "briefs stuck past the 90-minute defensive SLA (notifier not ticking?)"
-    )
+      |> where([brief], brief.scheduled_for < ^cutoff)
+      |> select([brief], {brief.user_id, brief.scheduled_for})
+      |> Repo.all()
+
+    live =
+      rows
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+      |> Enum.reject(fn {user_id, _scheduled} -> PushBroker.quiet_hours_now_for_user?(user_id) end)
+      |> Enum.flat_map(&elem(&1, 1))
+
+    if live == [] do
+      nil
+    else
+      oldest = Enum.min_by(live, &DateTime.to_unix(&1, :second))
+
+      %{
+        count: length(live),
+        oldest_age_seconds: age_seconds(oldest, now),
+        reason: "briefs stuck past the 90-minute defensive SLA (notifier not ticking?)"
+      }
+    end
   end
 
   # Detect only: pending/planned expiry is routine, owned by

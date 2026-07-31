@@ -15,7 +15,6 @@ defmodule Maraithon.Briefs do
   alias Maraithon.Todos
   alias Maraithon.Todos.AttentionRanker
   alias Maraithon.Todos.UserFacingCopy
-  alias Maraithon.Travel
 
   require Logger
 
@@ -286,11 +285,14 @@ defmodule Maraithon.Briefs do
   def send_brief(%Brief{} = brief) do
     case TelegramAssistant.deliver_brief(brief) do
       :ok ->
-        Brief
-        |> Repo.get!(brief.id)
-        |> maybe_mark_travel_delivered()
-
         :ok
+
+      :queued ->
+        # Handed to the DeliveryPlanner as a proactive candidate; nothing
+        # reached the user yet, so this tick sent nothing. Travel marking
+        # happens at the confirmed-delivery points (PushBroker /
+        # DeliveryPlanner brief marking), not here.
+        :skip
 
       {:fallback, :disabled} ->
         # Unified push broker globally off: nothing to send (email already
@@ -695,11 +697,6 @@ defmodule Maraithon.Briefs do
       @brief_summary_default
     )
     |> String.replace(~r/\bCRM context\b/i, "relationship context")
-  end
-
-  defp maybe_mark_travel_delivered(%Brief{} = brief) do
-    _ = Travel.note_brief_delivered(brief)
-    :ok
   end
 
   defp safe(value) when is_binary(value),

@@ -387,7 +387,11 @@ defmodule Maraithon.BriefsTest do
              })
 
     result = Briefs.dispatch_pending_batch(batch_size: 10)
-    assert result.sent == 1
+
+    # Handing the brief to the DeliveryPlanner is not a send: the notifier
+    # counts it skipped until the planner confirms delivery.
+    assert result.sent == 0
+    assert result.skipped == 1
 
     candidate =
       Repo.get_by!(ProactiveCandidate, user_id: user_id, dedupe_key: "brief:#{brief.id}")
@@ -1484,7 +1488,8 @@ defmodule Maraithon.BriefsTest do
                  "dedupe_key" => "spec09-full-candidate"
                })
 
-      assert :ok = Briefs.send_brief(brief)
+      # Queued with the planner counts as :skip — nothing reached the user yet.
+      assert :skip = Briefs.send_brief(brief)
 
       candidate =
         Repo.get_by!(ProactiveCandidate, user_id: user_id, dedupe_key: "brief:#{brief.id}")

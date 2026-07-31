@@ -30,6 +30,19 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
     CapturingAPNS.enable(user_id)
 
+    # Pin quiet hours away from "now" so dispatch outcomes don't depend on
+    # what hour the suite runs at. The quiet-hours tests below override this.
+    local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user(user_id).hour
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(Application.get_env(:maraithon, :telegram_assistant, []),
+        quiet_hours_start_local: rem(local_hour + 2, 24),
+        quiet_hours_end_local: rem(local_hour + 3, 24)
+      )
+    )
+
     %{user_id: user_id}
   end
 
@@ -273,7 +286,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     assert planned.plan_reason =~ "forced to send"
   end
 
-  test "a fatigue-held brief still respects quiet hours instead of bypassing them", %{
+  test "quiet hours defer planning entirely: no model call, candidates stay pending", %{
     user_id: user_id
   } do
     {:ok, brief_candidate} =
@@ -286,17 +299,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
         })
       )
 
-    llm_complete =
-      plan_llm(%{
-        brief_candidate.id => {"hold", "Holding to prevent notification fatigue."}
-      })
-
     # Force quiet hours to cover "now" (whatever hour the suite happens to
-    # run at) so this assertion isn't time-of-day-dependent. The real
-    # send-time gate (PushBroker.interruption_hold_reason/1) reads wall-clock
-    # time directly, not the `context:` opt, so quiet hours can only be
-    # exercised deterministically through config, not through a synthetic
-    # context payload.
+    # run at) so this assertion isn't time-of-day-dependent.
     assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
     now_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user(user_id).hour
 
@@ -311,20 +315,61 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
 
     on_exit(fn -> Application.put_env(:maraithon, :telegram_assistant, assistant_config) end)
 
-    # Forcing the brief to `interrupt_now` must not also grant it the
-    # urgency-exempt bypass of quiet hours; it should be held by the runtime
-    # send-time gate instead.
+    # The send-time gate would hold anything the model plans, so planning
+    # during quiet hours only burns a model call per cycle all night (the
+    # 2026-07-30 churn). The model must not run at all.
+    llm_complete = fn _params ->
+      flunk("plan_delivery must not be called during quiet hours")
+    end
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    assert result.planned == 0
+    assert result.delivered == 0
+    assert apns_pushes() == []
+
+    deferred = Repo.get!(ProactiveCandidate, brief_candidate.id)
+    assert deferred.status == "pending"
+  end
+
+  test "an urgency-exempt candidate still plans and sends during quiet hours", %{
+    user_id: user_id
+  } do
+    {:ok, urgent} =
+      ProactiveQueue.enqueue(
+        candidate_attrs(user_id, %{
+          title: "Production is down",
+          body: "The API has been hard-down for ten minutes.",
+          urgency: 0.97,
+          dedupe_key: "insight:quiet-hours-exempt"
+        })
+      )
+
+    assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+    now_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user(user_id).hour
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(assistant_config,
+        quiet_hours_start_local: now_hour,
+        quiet_hours_end_local: rem(now_hour + 1, 24)
+      )
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :telegram_assistant, assistant_config) end)
+
+    llm_complete = plan_llm(%{urgent.id => {"interrupt_now", "Hard down; wake the operator."}})
+
     assert {:ok, result} =
              DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
 
     assert result.interrupt_now == 1
-    assert result.delivered == 0
-    assert result.held == 1
-    assert apns_pushes() == []
+    assert result.delivered == 1
 
-    planned = Repo.get!(ProactiveCandidate, brief_candidate.id)
-    assert planned.status == "held"
-    assert planned.disposition == "interrupt_now"
+    assert [_push] = apns_pushes()
+    assert Repo.get!(ProactiveCandidate, urgent.id).status == "delivered"
   end
 
   test "feedback verification holds stale backlog dumps even when model asks to interrupt", %{

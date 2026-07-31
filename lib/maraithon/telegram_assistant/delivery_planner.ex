@@ -74,6 +74,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
         [_ | _] ->
           with true <- deliverable?(user_id),
+               :plan <- quiet_hours_gate(user_id, candidates),
                payload <- build_payload(user_id, nil, candidates, opts),
                {:ok, raw_plan} <- AssistantHarness.plan_delivery(payload, opts) do
             plan =
@@ -109,13 +110,38 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
              }}
           else
             false -> {:error, :no_push_device}
+            :defer_quiet_hours -> {:ok, empty_user_summary(user_id)}
             {:error, reason} -> {:error, reason}
           end
       end
     end)
   end
 
+
   def run_for_user(_user_id, _opts), do: {:error, :invalid_user}
+
+  # Quiet hours: the send-time gate (PushBroker.interruption_hold_reason/1)
+  # would hold everything the model plans, so planning now only burns a
+  # plan_delivery model call per cycle all night while the source keeps
+  # re-minting candidates. Leave candidates "pending"; the first
+  # post-quiet-hours cycle plans them. A candidate that qualifies for the
+  # urgency exemption still plans — the gate would let it through.
+  defp quiet_hours_gate(user_id, candidates) do
+    budget = PushBroker.interruption_budget(user_id)
+    exempt_threshold = PushBroker.urgency_exempt_threshold()
+
+    if Map.get(budget, "quiet_hours") == true and
+         not Enum.any?(candidates, &((&1.urgency || 0.0) >= exempt_threshold)) do
+      Logger.debug("Delivery planning deferred for quiet hours",
+        user_id: user_id,
+        candidate_count: length(candidates)
+      )
+
+      :defer_quiet_hours
+    else
+      :plan
+    end
+  end
 
   defp build_payload(user_id, chat_id, candidates, opts) do
     context =
@@ -769,6 +795,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       # "delivered" here too, or they never leave "held" status when the
       # planner (not the legacy path) is the one confirming delivery.
       PushBroker.mark_held_interruptions_delivered(brief)
+      PushBroker.note_travel_brief_delivered(brief)
 
       result
     else

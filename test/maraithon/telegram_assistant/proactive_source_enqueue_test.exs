@@ -69,6 +69,9 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
         metadata: %{"username" => "source-enqueue"}
       })
 
+    # Post-cutover, every proactive path gates on a registered push device.
+    Maraithon.TestSupport.CapturingAPNS.enable(user_id)
+
     %{user_id: user_id, agent: agent}
   end
 
@@ -126,7 +129,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
                "dedupe_key" => "brief:planner:morning"
              })
 
-    assert :ok = Briefs.send_brief(brief)
+    assert :skip = Briefs.send_brief(brief)
     assert telegram_messages() == []
 
     assert Repo.get!(Brief, brief.id).status == "pending"
@@ -175,7 +178,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
                "metadata" => %{"linked_todo_ids" => [todo.id]}
              })
 
-    assert :ok = Briefs.send_brief(brief)
+    assert :skip = Briefs.send_brief(brief)
     assert telegram_messages() == []
 
     candidate =
@@ -231,7 +234,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
                "metadata" => %{"linked_todo_ids" => [todo.id]}
              })
 
-    assert :ok = Briefs.send_brief(brief)
+    assert :skip = Briefs.send_brief(brief)
 
     candidate =
       Repo.get_by!(ProactiveCandidate,
@@ -312,9 +315,9 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
 
     assert result["dedupe_key"] == "proactive:no_open_work_review:#{user_id}:2026-05-10"
 
-    [message] = telegram_messages()
-    assert message.text =~ "No open work is waiting for review right now."
-    assert message.text =~ "concrete next move"
+    # Post-cutover the all-clear is a phone push, not a Telegram message.
+    [%{payload: payload}] = Maraithon.TestSupport.CapturingAPNS.recorded()
+    assert payload["aps"]["alert"]["body"] =~ "No open work is waiting for review right now."
 
     receipt =
       Repo.get_by!(PushReceipt,
@@ -328,7 +331,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
     assert {:ok, %{"decision" => "suppressed"}} =
              TelegramAssistant.deliver_proactive_check_in(user_id, opts)
 
-    assert length(telegram_messages()) == 1
+    assert length(Maraithon.TestSupport.CapturingAPNS.recorded()) == 1
   end
 
   test "proactive check-ins do not send an all-clear when todo context failed", %{

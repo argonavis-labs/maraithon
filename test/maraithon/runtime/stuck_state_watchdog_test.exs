@@ -46,11 +46,72 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
         config: %{"name" => "watchdog"}
       })
 
+    # The briefs check treats quiet-hours-gated rows as "waiting", not
+    # "stuck" — pin quiet hours away from now so detection assertions don't
+    # depend on what hour the suite runs at. The quiet-hours test overrides.
+    assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+    local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user(operator_id).hour
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(assistant_config,
+        quiet_hours_start_local: rem(local_hour + 2, 24),
+        quiet_hours_end_local: rem(local_hour + 3, 24)
+      )
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :telegram_assistant, assistant_config) end)
+
     %{
       operator_id: operator_id,
       agent: agent,
       opts: [operator_id: operator_id, email_module: CapturingEmail]
     }
+  end
+
+  test "briefs gated by quiet hours wait for morning instead of alarming", %{
+    operator_id: operator_id,
+    agent: agent,
+    opts: opts
+  } do
+    # Quiet hours cover "now" for the operator: an old pending brief is
+    # deliberately deferred by the planner, not stuck.
+    local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user(operator_id).hour
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(Application.get_env(:maraithon, :telegram_assistant, []),
+        quiet_hours_start_local: local_hour,
+        quiet_hours_end_local: rem(local_hour + 1, 24)
+      )
+    )
+
+    two_hours_ago = DateTime.add(DateTime.utc_now(), -2 * 3600, :second)
+
+    {:ok, brief} =
+      Briefs.record(operator_id, agent.id, %{
+        "cadence" => "morning",
+        "scheduled_for" => DateTime.to_iso8601(two_hours_ago),
+        "dedupe_key" => "watchdog-quiet-hours-brief",
+        "status" => "pending",
+        "title" => "Overnight brief",
+        "summary" => "Waiting for quiet hours to end.",
+        "body" => "Overnight brief body."
+      })
+
+    assert brief.status == "pending"
+
+    _ = StuckStateWatchdog.run_cycle(opts)
+
+    briefs_incidents =
+      RuntimeIncident
+      |> where([incident], incident.kind == "stuck_state_detected")
+      |> where([incident], fragment("?->>'table' = ?", incident.metadata, "briefs"))
+      |> Repo.all()
+
+    assert briefs_incidents == []
   end
 
   test "stale detect-only rows alarm exactly once per table per day",

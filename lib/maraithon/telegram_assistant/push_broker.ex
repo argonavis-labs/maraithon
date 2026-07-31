@@ -23,6 +23,13 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   # under this threshold is subject to the hourly cap and quiet hours.
   @urgency_exempt_threshold 0.9
 
+  @doc """
+  Urgency at or above which an interrupt candidate bypasses quiet hours and
+  the hourly cap at send time. Public so the DeliveryPlanner's quiet-hours
+  planning deferral uses the same bar as the send-time gate.
+  """
+  def urgency_exempt_threshold, do: @urgency_exempt_threshold
+
   def deliver_insight(%Delivery{} = delivery) do
     cond do
       not TelegramAssistant.unified_push_enabled?() ->
@@ -370,6 +377,15 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   def local_now_for_user(_user_id), do: DateTime.utc_now()
 
+  @doc """
+  True while the user's local wall clock is inside the quiet-hours window.
+  Used by the stuck-state watchdog to tell "gated until morning" apart from
+  "stuck" when judging pending briefs.
+  """
+  def quiet_hours_now_for_user?(user_id) do
+    quiet_hours?(local_now_for_user(user_id))
+  end
+
   defp quiet_hours?(%DateTime{} = now) do
     local_hour = now.hour
     start_hour = quiet_hours_start_local()
@@ -516,6 +532,10 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     end
   end
 
+  # :queued, not :ok — the brief has been handed to the DeliveryPlanner as a
+  # candidate but nothing reached the user yet. Briefs.send_brief/1 counts
+  # this as skipped so the notifier's "sent" tally (and its per-tick log
+  # line) only reflects actual deliveries.
   defp enqueue_brief_candidate(%Brief{} = brief) do
     todos = todo_digest_delivery_todos(brief)
 
@@ -526,7 +546,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
     TelegramAssistant.enqueue_proactive_candidate(attrs)
     |> case do
-      {:ok, _candidate} -> :ok
+      {:ok, _candidate} -> :queued
       {:error, reason} -> {:error, reason}
     end
   end
@@ -696,6 +716,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       |> Repo.update()
 
     mark_held_interruptions_delivered(brief)
+    note_travel_brief_delivered(brief)
     result
   end
 
@@ -711,7 +732,19 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       |> Repo.update()
 
     mark_held_interruptions_delivered(brief)
+    note_travel_brief_delivered(brief)
     result
+  end
+
+  # Travel itineraries advance to "brief_sent" only once the brief is
+  # confirmed delivered — this used to (incorrectly) fire when the planner
+  # merely enqueued the brief's candidate.
+  @doc false
+  def note_travel_brief_delivered(%Brief{} = brief) do
+    _ = Maraithon.Travel.note_brief_delivered(brief)
+    :ok
+  rescue
+    _error -> :ok
   end
 
   defp mark_brief_failed(%Brief{} = brief, reason) do
