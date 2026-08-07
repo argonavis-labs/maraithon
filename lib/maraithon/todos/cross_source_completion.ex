@@ -139,7 +139,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   Returns `%{checked: n, completed: n}`, `{:skip, reason}` when there is
   nothing to evaluate, or `{:error, reason}` when the LLM call fails.
-  Tests may inject `:llm_complete` as a one-arity function.
+  Tests may inject `:llm_complete` as a prompt-level one-arity function or
+  `:llm_request` as a request-map one-arity function.
   """
   def run_for_user(user_id, opts \\ []) when is_binary(user_id) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
@@ -841,12 +842,16 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp default_llm_complete(prompt, opts) when is_binary(prompt) do
     config = Application.get_env(:maraithon, :todos, [])
+    llm_request = Keyword.get(opts, :llm_request, &LLM.complete/1)
 
-    LLM.complete(%{
+    llm_request.(%{
       "messages" => [%{"role" => "user", "content" => prompt}],
       "max_tokens" => Keyword.get(opts, :max_tokens, @default_max_tokens),
       "temperature" => 0.1,
-      "reasoning_effort" => Keyword.get(config, :reasoning_effort, LLM.intelligence()),
+      # The prompt already asks for explicit, evidence-backed reasoning in
+      # the JSON payload. Hidden chain-of-thought consumed the entire output
+      # budget on hybrid models and left no parseable response.
+      "reasoning_effort" => Keyword.get(config, :reasoning_effort, "none"),
       "timeout_ms" => Keyword.get(opts, :timeout_ms, @default_timeout_ms)
     })
   end

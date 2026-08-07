@@ -208,8 +208,40 @@ defmodule Maraithon.LLM.OpenRouterProvider do
          usage: usage
        }}
     else
-      {:error, {:invalid_response, response}}
+      {:error, {:invalid_response, invalid_response_summary(response, model, finish_reason)}}
     end
+  end
+
+  defp invalid_response_summary(response, model, finish_reason) do
+    usage =
+      response
+      |> Map.get("usage", %{})
+      |> case do
+        usage when is_map(usage) ->
+          usage
+          |> Map.take([
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "reasoning_tokens",
+            "cost"
+          ])
+          |> Map.put(
+            "reasoning_tokens",
+            usage["reasoning_tokens"] ||
+              get_in(usage, ["completion_tokens_details", "reasoning_tokens"])
+          )
+
+        _usage ->
+          %{}
+      end
+
+    %{
+      model: model,
+      finish_reason: finish_reason,
+      usage: usage,
+      choice_count: response |> Map.get("choices", []) |> List.wrap() |> length()
+    }
   end
 
   defp extract_message_content([%{"message" => %{"content" => content}} | _]) do
@@ -454,6 +486,7 @@ defmodule Maraithon.LLM.OpenRouterProvider do
       {"effort", effort}, acc ->
         case validate_reasoning_effort(effort) do
           nil -> acc
+          :disabled -> Map.put(acc, :enabled, false)
           value -> Map.put(acc, :effort, value)
         end
 
@@ -478,7 +511,11 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     end
   end
 
-  defp validate_reasoning_effort(effort) when effort in ["none", "off", false, nil], do: nil
+  # Hybrid-thinking models treat an omitted reasoning field as "enabled".
+  # Preserve nil/false as "use no override", but turn the explicit string
+  # opt-outs into the sentinel that emits `%{enabled: false}`.
+  defp validate_reasoning_effort(effort) when effort in ["none", "off"], do: :disabled
+  defp validate_reasoning_effort(effort) when effort in [false, nil], do: nil
 
   defp validate_reasoning_effort(effort) when is_binary(effort) do
     normalized = effort |> String.downcase() |> String.trim()

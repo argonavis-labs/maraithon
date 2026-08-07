@@ -94,7 +94,10 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
         ]
       })
 
-    llm_complete = fn prompt ->
+    llm_request = fn params ->
+      assert params["max_tokens"] == 2_048
+      assert params["reasoning_effort"] == "none"
+      assert [%{"role" => "user", "content" => prompt}] = params["messages"]
       assert prompt =~ "current source material from every connected"
       assert prompt =~ "later source material showing the same event exists"
       assert prompt =~ "Create Luma event for Real Estate Webinar"
@@ -125,7 +128,7 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
              CrossSourceCompletion.run_for_user(user_id,
                now: now,
                source_bundle: source_bundle,
-               llm_complete: llm_complete
+               llm_request: llm_request
              )
 
     updated = Todos.get_for_user(user_id, todo.id)

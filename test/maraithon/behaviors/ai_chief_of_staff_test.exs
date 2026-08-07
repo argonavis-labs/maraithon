@@ -555,9 +555,11 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
 
       assert is_nil(get_in(state.cycle_memory, ["memo"]))
 
-      assert {:effect, {:llm_call, _params}, waiting_state} =
+      assert {:effect, {:llm_call, params}, waiting_state} =
                AIChiefOfStaff.handle_wakeup(state, context)
 
+      assert params["max_tokens"] == 400
+      assert params["reasoning_effort"] == "none"
       assert waiting_state.pending_effect_skill_id == :cycle_memo
 
       assert {:emit, {:insights_recorded, payload}, next_state} =

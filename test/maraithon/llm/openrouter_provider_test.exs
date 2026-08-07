@@ -109,7 +109,7 @@ defmodule Maraithon.LLM.OpenRouterProviderTest do
       assert result.usage.output_rate_per_million == 7.5
     end
 
-    test "omits reasoning when disabled per request" do
+    test "explicitly disables reasoning when requested" do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime,
@@ -124,11 +124,11 @@ defmodule Maraithon.LLM.OpenRouterProviderTest do
         app_title: nil
       )
 
-      Bypass.expect_once(bypass, "POST", "/api/v1/chat/completions", fn conn ->
+      Bypass.expect(bypass, "POST", "/api/v1/chat/completions", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         params = Jason.decode!(body)
 
-        refute Map.has_key?(params, "reasoning")
+        assert params["reasoning"] == %{"enabled" => false}
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
@@ -148,6 +148,12 @@ defmodule Maraithon.LLM.OpenRouterProviderTest do
                OpenRouterProvider.complete(%{
                  "messages" => [%{"role" => "user", "content" => "Hello"}],
                  "reasoning_effort" => "none"
+               })
+
+      assert {:ok, _result} =
+               OpenRouterProvider.complete(%{
+                 "messages" => [%{"role" => "user", "content" => "Hello"}],
+                 "reasoning" => %{"effort" => "off"}
                })
     end
 
