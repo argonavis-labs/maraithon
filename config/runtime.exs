@@ -439,7 +439,8 @@ config :maraithon, Maraithon.Runtime,
   heartbeat_interval_ms: heartbeat_interval_ms,
   checkpoint_interval_ms: checkpoint_interval_ms,
   effect_poll_interval_ms: String.to_integer(System.get_env("EFFECT_POLL_INTERVAL_MS", "1000")),
-  effect_claim_timeout_ms: String.to_integer(System.get_env("EFFECT_CLAIM_TIMEOUT_MS", "300000")),
+  effect_claim_timeout_ms:
+    String.to_integer(System.get_env("EFFECT_CLAIM_TIMEOUT_MS", "1500000")),
   effect_batch_size: String.to_integer(System.get_env("EFFECT_BATCH_SIZE", "10")),
   scheduler_poll_interval_ms:
     String.to_integer(System.get_env("SCHEDULER_POLL_INTERVAL_MS", "5000")),

@@ -44,7 +44,9 @@ config :maraithon, Maraithon.Runtime,
   heartbeat_interval_ms: :timer.minutes(15),
   checkpoint_interval_ms: :timer.minutes(10),
   effect_poll_interval_ms: :timer.seconds(1),
-  effect_claim_timeout_ms: :timer.minutes(5),
+  # Must stay above the longest permitted LLM effect; otherwise a healthy
+  # request can be reclaimed and executed twice while its first claim runs.
+  effect_claim_timeout_ms: :timer.minutes(25),
   effect_batch_size: 10,
   scheduler_poll_interval_ms: :timer.seconds(5),
   scheduler_dispatch_timeout_ms: :timer.minutes(1),
