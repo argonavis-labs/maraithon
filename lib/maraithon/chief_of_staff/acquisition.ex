@@ -1472,45 +1472,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         provider_specs
         |> Enum.zip(provider_results)
         |> Enum.reduce({%{}, %{}, []}, fn
-          {{provider, account, _query, _quota},
-           {:ok, {:ok, messages, %{complete?: true} = fetch_metadata}}},
-          {message_acc, status_acc, watermark_acc} ->
-            SourceFreshness.mark_success(user_id, provider)
-
-            watermark_acc =
-              accumulate_watermark(
-                watermark_acc,
-                account,
-                "gmail_poll_watermark",
-                now_watermark,
-                watermark_mode
-              )
-
-            {
-              Map.put(message_acc, provider, messages),
-              Map.put(status_acc, provider, {:ok, 0, fetch_metadata}),
-              watermark_acc
-            }
-
           {{provider, account, _query, _quota}, {:ok, {:ok, messages, fetch_metadata}}},
           {message_acc, status_acc, watermark_acc} ->
-            backfill_needed? =
-              fetch_metadata.truncated? and fetch_metadata.detail_failure_count == 0
+            outcome = gmail_candidate_fetch_outcome(fetch_metadata)
 
-            Logger.warning("ChiefOfStaff Gmail candidate fetch was incomplete",
-              user_id: user_id,
-              provider: provider,
-              detail_failure_count: fetch_metadata.detail_failure_count,
-              truncated: fetch_metadata.truncated?,
-              backfill_needed: backfill_needed?
-            )
+            if outcome in [:complete, :bounded] do
+              SourceFreshness.mark_success(user_id, provider)
+            end
 
-            # Truncation means the newest bounded window was delivered intact.
-            # Advance the live watermark so every cycle does not refetch that
-            # same window forever; telemetry retains the explicit backfill
-            # signal. Detail failures never advance and are retried next cycle.
+            log_gmail_candidate_fetch(outcome, user_id, provider, fetch_metadata)
+
+            # A complete result or an intact newest-N window is safe to advance.
+            # Detail failures and malformed completeness metadata remain partial
+            # and retry from the prior watermark on the next cycle.
             watermark_acc =
-              if backfill_needed? do
+              if outcome in [:complete, :bounded] do
                 accumulate_watermark(
                   watermark_acc,
                   account,
@@ -1522,9 +1498,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 watermark_acc
               end
 
+            provider_status =
+              if outcome == :complete,
+                do: {:ok, 0, fetch_metadata},
+                else: {:partial, 0, fetch_metadata}
+
             {
               Map.put(message_acc, provider, messages),
-              Map.put(status_acc, provider, {:partial, 0, fetch_metadata}),
+              Map.put(status_acc, provider, provider_status),
               watermark_acc
             }
 
@@ -2008,6 +1989,42 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       complete?
     )
     |> Map.put(:requested_count, requested_count)
+  end
+
+  defp gmail_candidate_fetch_outcome(%{
+         complete?: true,
+         truncated?: false,
+         detail_failure_count: 0
+       }),
+       do: :complete
+
+  defp gmail_candidate_fetch_outcome(%{truncated?: true, detail_failure_count: 0}),
+    do: :bounded
+
+  defp gmail_candidate_fetch_outcome(_fetch_metadata), do: :partial
+
+  defp log_gmail_candidate_fetch(:complete, _user_id, _provider, _fetch_metadata), do: :ok
+
+  defp log_gmail_candidate_fetch(:bounded, user_id, provider, fetch_metadata) do
+    Logger.debug(
+      "ChiefOfStaff Gmail candidate fetch reached its configured quota",
+      user_id: user_id,
+      provider: provider,
+      listed_count: fetch_metadata.listed_count,
+      requested_count: fetch_metadata.requested_count
+    )
+  end
+
+  defp log_gmail_candidate_fetch(:partial, user_id, provider, fetch_metadata) do
+    Logger.warning(
+      "ChiefOfStaff Gmail candidate fetch was incomplete " <>
+        "(detail failures: #{fetch_metadata.detail_failure_count}, " <>
+        "truncated: #{fetch_metadata.truncated?})",
+      user_id: user_id,
+      provider: provider,
+      detail_failure_count: fetch_metadata.detail_failure_count,
+      truncated: fetch_metadata.truncated?
+    )
   end
 
   defp gmail_fetch_metadata(

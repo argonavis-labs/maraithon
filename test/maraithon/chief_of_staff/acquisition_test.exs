@@ -1,6 +1,8 @@
 defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
   use Maraithon.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle}
   alias Maraithon.OAuth
   alias Maraithon.TestSupport.{NewsStub, TravelCalendarStub, TravelGmailStub}
@@ -1034,6 +1036,23 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       %{user_id: user_id, provider: provider, account: account}
     end
 
+    defp mark_watermark_account_error(account) do
+      metadata =
+        (account.metadata || %{})
+        |> Map.put("last_error", %{
+          "reason" => "temporary_failure",
+          "at" => "2026-05-31T12:00:00Z"
+        })
+
+      account
+      |> Ecto.Changeset.change(%{
+        status: "error",
+        metadata: metadata,
+        last_refreshed_at: ~U[2026-05-31 12:00:00.000000Z]
+      })
+      |> Maraithon.Repo.update!()
+    end
+
     defp watermark_build_context(user_id, defer?) do
       base = %{
         agent_id: "chief-agent-watermark",
@@ -1127,6 +1146,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         contents: %{}
       )
 
+      mark_watermark_account_error(account)
+
       skill_configs = %{
         "followthrough" => %{
           "source_scope" => %{
@@ -1143,13 +1164,22 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         }
       }
 
-      {_bundle, telemetry, proposed_watermarks} =
-        Acquisition.build(
-          user_id,
-          ["followthrough"],
-          skill_configs,
-          watermark_build_context(user_id, true)
-        )
+      log =
+        capture_log(fn ->
+          result =
+            Acquisition.build(
+              user_id,
+              ["followthrough"],
+              skill_configs,
+              watermark_build_context(user_id, true)
+            )
+
+          send(self(), {:failed_detail_fetch_result, result})
+        end)
+
+      assert_receive {:failed_detail_fetch_result, {_bundle, telemetry, proposed_watermarks}}
+      assert log =~ "Gmail candidate fetch was incomplete"
+      assert log =~ "detail failures: 1, truncated: true"
 
       assert proposed_watermarks == []
       refute Maraithon.Connectors.SourceCursors.get(account.id, "gmail_poll_watermark")
@@ -1160,6 +1190,10 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
 
       assert [%{"status" => "partial", "detail_failure_count" => 1, "truncated" => true}] =
                Enum.filter(telemetry["fetches"], &(&1["provider"] == provider))
+
+      unchanged_account = Maraithon.Repo.get!(Maraithon.Accounts.ConnectedAccount, account.id)
+      assert unchanged_account.status == "error"
+      assert is_map(unchanged_account.metadata["last_error"])
     end
 
     test "advances the live watermark after an intact truncated window", %{
@@ -1188,6 +1222,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         contents: %{}
       )
 
+      mark_watermark_account_error(account)
+
       skill_configs = %{
         "followthrough" => %{
           "source_scope" => %{
@@ -1204,13 +1240,21 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         }
       }
 
-      {_bundle, telemetry, proposed_watermarks} =
-        Acquisition.build(
-          user_id,
-          ["followthrough"],
-          skill_configs,
-          watermark_build_context(user_id, true)
-        )
+      log =
+        capture_log(fn ->
+          result =
+            Acquisition.build(
+              user_id,
+              ["followthrough"],
+              skill_configs,
+              watermark_build_context(user_id, true)
+            )
+
+          send(self(), {:bounded_fetch_result, result})
+        end)
+
+      assert_receive {:bounded_fetch_result, {_bundle, telemetry, proposed_watermarks}}
+      refute log =~ "Gmail candidate fetch was incomplete"
 
       refute Maraithon.Connectors.SourceCursors.get(account.id, "gmail_poll_watermark")
 
@@ -1223,6 +1267,14 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       assert get_in(telemetry, ["sources", "gmail", "partial_providers"]) == [provider]
       assert get_in(telemetry, ["sources", "gmail", "failed_providers"]) == []
       assert get_in(telemetry, ["sources", "gmail", "backfill_needed_providers"]) == [provider]
+
+      assert [%{"status" => "partial", "detail_failure_count" => 0, "truncated" => true}] =
+               Enum.filter(telemetry["fetches"], &(&1["provider"] == provider))
+
+      healed_account = Maraithon.Repo.get!(Maraithon.Accounts.ConnectedAccount, account.id)
+      assert healed_account.status == "connected"
+      assert is_binary(healed_account.metadata["last_successful_sync_at"])
+      refute Map.has_key?(healed_account.metadata, "last_error")
     end
 
     # Regression test for the "non-agent callers advance the agent's poll
