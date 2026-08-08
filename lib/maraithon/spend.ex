@@ -112,84 +112,94 @@ defmodule Maraithon.Spend do
   Get total spend for an agent from their events.
   """
   def get_agent_spend(agent_id) do
-    events =
-      from(e in Event,
-        where: e.agent_id == ^agent_id,
-        where: e.event_type == "effect_completed",
-        select: e.payload
-      )
-      |> Repo.all()
-
-    Enum.reduce(events, initial_spend(), fn payload, acc ->
-      # Usage is nested under result from LLM calls
-      case get_in(payload, ["result", "usage"]) do
-        %{} = usage ->
-          %{
-            total_cost: acc.total_cost + (usage["total_cost"] || 0),
-            input_tokens: acc.input_tokens + (usage["input_tokens"] || 0),
-            output_tokens: acc.output_tokens + (usage["output_tokens"] || 0),
-            llm_calls: acc.llm_calls + 1
-          }
-
-        _ ->
-          acc
-      end
-    end)
+    Event
+    |> where([event], event.agent_id == ^agent_id)
+    |> where([event], event.event_type == "effect_completed")
+    |> aggregate_spend()
   end
 
   @doc """
   Get total spend across all agents.
   """
   def get_total_spend(opts \\ []) do
-    user_id = Keyword.get(opts, :user_id)
-
-    events =
-      total_spend_query(user_id)
-      |> Repo.all()
-
-    Enum.reduce(events, initial_spend(), fn payload, acc ->
-      # Usage is nested under result from LLM calls
-      case get_in(payload, ["result", "usage"]) do
-        %{} = usage ->
-          %{
-            total_cost: acc.total_cost + (usage["total_cost"] || 0),
-            input_tokens: acc.input_tokens + (usage["input_tokens"] || 0),
-            output_tokens: acc.output_tokens + (usage["output_tokens"] || 0),
-            llm_calls: acc.llm_calls + 1
-          }
-
-        _ ->
-          acc
-      end
-    end)
+    Event
+    |> where([event], event.event_type == "effect_completed")
+    |> maybe_filter_spend_user(Keyword.get(opts, :user_id))
+    |> aggregate_spend()
   end
 
-  defp initial_spend do
-    %{
-      total_cost: 0.0,
-      input_tokens: 0,
-      output_tokens: 0,
-      llm_calls: 0
-    }
+  # Aggregate inside Postgres instead of loading every historical effect payload
+  # into the BEAM. The admin dashboard calls this on every refresh, and the old
+  # approach transferred tens of thousands of JSON documents just to sum four
+  # numeric fields.
+  defp aggregate_spend(query) do
+    query
+    |> select([event], %{
+      total_cost:
+        fragment(
+          """
+          COALESCE(
+            SUM(
+              CASE
+                WHEN jsonb_typeof(? #> '{result,usage,total_cost}') = 'number'
+                  THEN (? #>> '{result,usage,total_cost}')::double precision
+                ELSE 0
+              END
+            ),
+            0
+          )::double precision
+          """,
+          event.payload,
+          event.payload
+        ),
+      input_tokens:
+        fragment(
+          """
+          COALESCE(
+            SUM(
+              CASE
+                WHEN jsonb_typeof(? #> '{result,usage,input_tokens}') = 'number'
+                  THEN (? #>> '{result,usage,input_tokens}')::bigint
+                ELSE 0
+              END
+            ),
+            0
+          )::bigint
+          """,
+          event.payload,
+          event.payload
+        ),
+      output_tokens:
+        fragment(
+          """
+          COALESCE(
+            SUM(
+              CASE
+                WHEN jsonb_typeof(? #> '{result,usage,output_tokens}') = 'number'
+                  THEN (? #>> '{result,usage,output_tokens}')::bigint
+                ELSE 0
+              END
+            ),
+            0
+          )::bigint
+          """,
+          event.payload,
+          event.payload
+        ),
+      llm_calls:
+        fragment(
+          "COUNT(*) FILTER (WHERE jsonb_typeof(? #> '{result,usage}') = 'object')::bigint",
+          event.payload
+        )
+    })
+    |> Repo.one!()
   end
 
-  defp total_spend_query(nil) do
-    from(e in Event,
-      where: e.event_type == "effect_completed",
-      select: e.payload
-    )
-  end
+  defp maybe_filter_spend_user(query, nil), do: query
+  defp maybe_filter_spend_user(query, ""), do: query
 
-  defp total_spend_query("") do
-    total_spend_query(nil)
-  end
-
-  defp total_spend_query(user_id) when is_binary(user_id) do
-    from(e in Event,
-      join: a in Agent,
-      on: a.id == e.agent_id,
-      where: e.event_type == "effect_completed" and a.user_id == ^user_id,
-      select: e.payload
-    )
+  defp maybe_filter_spend_user(query, user_id) when is_binary(user_id) do
+    agent_ids = from(agent in Agent, where: agent.user_id == ^user_id, select: agent.id)
+    where(query, [event], event.agent_id in subquery(agent_ids))
   end
 end

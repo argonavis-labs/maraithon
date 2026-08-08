@@ -3,9 +3,20 @@ defmodule Maraithon.LogFormatterTest do
 
   alias Maraithon.LogFormatter
 
+  test "production logger passes metadata through the formatter allowlist" do
+    formatter =
+      "config/prod.exs"
+      |> Config.Reader.read!(env: :prod)
+      |> Keyword.fetch!(:logger)
+      |> Keyword.fetch!(:default_formatter)
+
+    assert Keyword.fetch!(formatter, :metadata) == :all
+    assert Keyword.fetch!(formatter, :format) == {LogFormatter, :format}
+  end
+
   describe "format/4" do
     test "formats log entry as JSON" do
-      timestamp = {{2024, 1, 15}, {12, 30, 45, 123_456}}
+      timestamp = {{2024, 1, 15}, {12, 30, 45, 123}}
       metadata = []
 
       result = LogFormatter.format(:info, "Test message", timestamp, metadata)
@@ -15,7 +26,7 @@ defmodule Maraithon.LogFormatterTest do
 
       assert decoded["severity"] == "INFO"
       assert decoded["message"] == "Test message"
-      assert decoded["timestamp"] =~ "2024-01-15T12:30:45"
+      assert decoded["timestamp"] == "2024-01-15T12:30:45.123"
     end
 
     test "maps log levels to Cloud Logging severity" do
@@ -28,9 +39,18 @@ defmodule Maraithon.LogFormatterTest do
       assert get_severity(:error, timestamp) == "ERROR"
     end
 
-    test "includes optional metadata fields" do
+    test "includes allowlisted operational metadata fields" do
       timestamp = {{2024, 1, 15}, {12, 30, 45, 0}}
-      metadata = [request_id: "req-123", agent_id: "agent-456"]
+
+      metadata = [
+        request_id: "req-123",
+        agent_id: "agent-456",
+        model: "qwen/qwen3.6-flash",
+        detail_failure_count: 0,
+        truncated: true,
+        backfill_needed: true,
+        arbitrary_payload: "not-for-console"
+      ]
 
       result = LogFormatter.format(:info, "Test", timestamp, metadata)
 
@@ -39,11 +59,44 @@ defmodule Maraithon.LogFormatterTest do
 
       assert decoded["request_id"] == "req-123"
       assert decoded["agent_id"] == "agent-456"
+      assert decoded["model"] == "qwen/qwen3.6-flash"
+      assert decoded["detail_failure_count"] == 0
+      assert decoded["truncated"] == true
+      assert decoded["backfill_needed"] == true
+      refute Map.has_key?(decoded, "arbitrary_payload")
     end
 
-    test "includes module/function/line labels" do
+    test "redacts credentials and normalizes structured metadata" do
       timestamp = {{2024, 1, 15}, {12, 30, 45, 0}}
-      metadata = [module: MyModule, function: :test, line: 42]
+
+      metadata = [
+        reason:
+          {:request_failed,
+           %{
+             "authorization" => "Bearer secret-token-value",
+             "access_token" => "secret-access-token"
+           }}
+      ]
+
+      result =
+        LogFormatter.format(
+          :warning,
+          "request used Authorization: Bearer secret-token-value",
+          timestamp,
+          metadata
+        )
+
+      decoded = result |> IO.iodata_to_binary() |> String.trim() |> Jason.decode!()
+
+      assert decoded["message"] == "request used Authorization: <redacted-auth>"
+      assert decoded["reason"] =~ "<redacted>"
+      refute decoded["reason"] =~ "secret-token-value"
+      refute decoded["reason"] =~ "secret-access-token"
+    end
+
+    test "derives module/function/line labels from Logger source metadata" do
+      timestamp = {{2024, 1, 15}, {12, 30, 45, 0}}
+      metadata = [mfa: {MyModule, :test, 2}, line: 42]
 
       result = LogFormatter.format(:info, "Test", timestamp, metadata)
 
@@ -52,7 +105,7 @@ defmodule Maraithon.LogFormatterTest do
 
       labels = decoded["logging.googleapis.com/labels"]
       assert labels["module"] == "Elixir.MyModule"
-      assert labels["function"] == "test"
+      assert labels["function"] == "test/2"
       assert labels["line"] == "42"
     end
 

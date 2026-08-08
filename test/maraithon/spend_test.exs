@@ -1,9 +1,10 @@
 defmodule Maraithon.SpendTest do
   use Maraithon.DataCase, async: true
 
-  alias Maraithon.Spend
+  alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.Events
+  alias Maraithon.Spend
 
   describe "calculate_cost/3" do
     test "calculates cost for known model" do
@@ -190,6 +191,42 @@ defmodule Maraithon.SpendTest do
       assert spend.input_tokens == 3000
       assert spend.output_tokens == 1500
       assert spend.llm_calls == 2
+    end
+
+    test "scopes totals to agents owned by the requested user" do
+      {:ok, _user1} = Accounts.get_or_create_user_by_email("spend-one@example.com")
+      {:ok, _user2} = Accounts.get_or_create_user_by_email("spend-two@example.com")
+
+      {:ok, agent1} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          user_id: "spend-one@example.com"
+        })
+
+      {:ok, agent2} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          user_id: "spend-two@example.com"
+        })
+
+      Events.append(agent1.id, "effect_completed", %{
+        "result" => %{
+          "usage" => %{"total_cost" => 0.01, "input_tokens" => 1000, "output_tokens" => 500}
+        }
+      })
+
+      Events.append(agent2.id, "effect_completed", %{
+        "result" => %{
+          "usage" => %{"total_cost" => 0.02, "input_tokens" => 2000, "output_tokens" => 1000}
+        }
+      })
+
+      spend = Spend.get_total_spend(user_id: "spend-one@example.com")
+
+      assert spend == %{total_cost: 0.01, input_tokens: 1000, output_tokens: 500, llm_calls: 1}
+      assert Spend.get_total_spend(user_id: "").llm_calls == 2
     end
   end
 end

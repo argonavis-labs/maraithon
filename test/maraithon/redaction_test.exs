@@ -19,6 +19,18 @@ defmodule Maraithon.RedactionTest do
                %{access_token: "<redacted>", note: "ok"}
     end
 
+    test "recurses through tuples used by structured error reasons" do
+      input = {:request_failed, %{"access_token" => "real", "reason" => "network"}}
+
+      assert Redaction.redact(input) ==
+               {:request_failed, %{"access_token" => "<redacted>", "reason" => "network"}}
+    end
+
+    test "redacts sensitive key-value tuples and keyword lists" do
+      assert Redaction.redact(api_key: "plain-secret", detail: [password: "also-plain"]) ==
+               [api_key: "<redacted>", detail: [password: "<redacted>"]]
+    end
+
     test "recurses into nested maps" do
       input = %{
         "user" => %{"refresh_token" => "real", "name" => "kent"},

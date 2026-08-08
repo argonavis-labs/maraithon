@@ -203,8 +203,17 @@ openai_routing_model =
 
 openrouter_routing_model =
   case System.get_env("OPENROUTER_ROUTING_MODEL", "") |> String.trim() do
-    "" -> openrouter_model
-    value -> value
+    "" ->
+      # OpenRouter has no provider-wide routing default. When an explicit fast
+      # model is configured, use it for bounded `complete_routing/1` calls
+      # instead of silently sending classifiers through the primary model.
+      case System.get_env("OPENROUTER_FAST_MODEL", "") |> String.trim() do
+        "" -> openrouter_model
+        value -> value
+      end
+
+    value ->
+      value
   end
 
 anthropic_chat_model =

@@ -9,7 +9,10 @@ config :maraithon, MaraithonWeb.Endpoint, cache_static_manifest: "priv/static/ca
 # Production logging - JSON format for Cloud Logging
 config :logger, :default_formatter,
   format: {Maraithon.LogFormatter, :format},
-  metadata: [:request_id, :agent_id, :effect_id, :job_id]
+  # Pass complete Logger metadata to the custom formatter. LogFormatter keeps
+  # an explicit output allowlist, so operational fields are available without
+  # dumping arbitrary metadata into production logs.
+  metadata: :all
 
 config :logger,
   level: :info,

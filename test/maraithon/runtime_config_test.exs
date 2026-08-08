@@ -12,6 +12,7 @@ defmodule Maraithon.RuntimeConfigTest do
     OPENROUTER_MODEL
     OPENROUTER_CHAT_MODEL
     OPENROUTER_ROUTING_MODEL
+    OPENROUTER_FAST_MODEL
     ANTHROPIC_API_KEY
     ANTHROPIC_MODEL
     ANTHROPIC_CHAT_MODEL
@@ -47,6 +48,29 @@ defmodule Maraithon.RuntimeConfigTest do
     assert Keyword.fetch!(runtime, :llm_chat_model) == "qwen/qwen3.7-max"
     assert Keyword.fetch!(runtime, :llm_routing_model) == "qwen/qwen3.7-max"
     assert Keyword.fetch!(runtime, :llm_api_key) == "test-openrouter-key"
+  end
+
+  test "OpenRouter routing uses the configured fast model when no routing override exists" do
+    System.put_env("LLM_MODEL", "qwen/qwen3.7-max")
+    System.put_env("OPENROUTER_API_KEY", "test-openrouter-key")
+    System.put_env("OPENROUTER_FAST_MODEL", "qwen/qwen3.6-flash")
+
+    runtime = runtime_config()
+
+    assert Keyword.fetch!(runtime, :llm_model) == "qwen/qwen3.7-max"
+    assert Keyword.fetch!(runtime, :llm_fast_model) == "qwen/qwen3.6-flash"
+    assert Keyword.fetch!(runtime, :llm_routing_model) == "qwen/qwen3.6-flash"
+  end
+
+  test "explicit OpenRouter routing model overrides the fast model" do
+    System.put_env("LLM_MODEL", "qwen/qwen3.7-max")
+    System.put_env("OPENROUTER_API_KEY", "test-openrouter-key")
+    System.put_env("OPENROUTER_FAST_MODEL", "qwen/qwen3.6-flash")
+    System.put_env("OPENROUTER_ROUTING_MODEL", "qwen/qwen3.7-plus")
+
+    runtime = runtime_config()
+
+    assert Keyword.fetch!(runtime, :llm_routing_model) == "qwen/qwen3.7-plus"
   end
 
   test "LLM_MODEL=gpt-5.4 selects OpenAI even when LLM_PROVIDER is stale" do

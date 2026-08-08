@@ -102,7 +102,9 @@ defmodule Maraithon.Memory.Intelligence do
       "messages" => [%{"role" => "user", "content" => prompt}],
       "max_tokens" => 1_000,
       "temperature" => 0.1,
-      "reasoning_effort" => "low"
+      # Selection is a latency-bounded JSON classification step. Hidden
+      # reasoning consumed the 2.5s Telegram context budget before a response.
+      "reasoning_effort" => "none"
     }
 
     if mock_when_unconfigured?() and is_nil(LLM.provider()) do

@@ -79,6 +79,17 @@ defmodule Maraithon.Redaction do
 
   def redact(value) when is_list(value), do: Enum.map(value, &redact/1)
 
+  def redact({key, value}) when is_atom(key) or is_binary(key) do
+    if sensitive_key?(key), do: {key, @redacted}, else: {key, redact(value)}
+  end
+
+  def redact(value) when is_tuple(value) do
+    value
+    |> Tuple.to_list()
+    |> Enum.map(&redact/1)
+    |> List.to_tuple()
+  end
+
   def redact(%DateTime{} = value), do: value
   def redact(%NaiveDateTime{} = value), do: value
   def redact(%Date{} = value), do: value
