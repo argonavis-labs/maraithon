@@ -596,10 +596,16 @@ defmodule Maraithon.Runtime.Agent do
   defp process_effect_result(effect_id, result, data) do
     case Map.pop(data.pending_effects, effect_id) do
       {nil, _} ->
-        Logger.warning("Received result for unknown effect",
-          effect_reference: Maraithon.Redaction.fingerprint(effect_id),
-          failure_code: "unknown_effect"
-        )
+        if active_terminal_result_replay?(effect_id, data) do
+          Logger.debug("Received replay for active effect result",
+            effect_reference: Maraithon.Redaction.fingerprint(effect_id)
+          )
+        else
+          Logger.warning("Received result for unknown effect",
+            effect_reference: Maraithon.Redaction.fingerprint(effect_id),
+            failure_code: "unknown_effect"
+          )
+        end
 
         {:keep_state, data}
 
@@ -1026,6 +1032,23 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp close_terminated_run(_data), do: :ok
+
+  defp active_terminal_result_replay?(
+         effect_id,
+         %{agent_id: agent_id, current_run_id: run_id}
+       )
+       when is_binary(effect_id) and is_binary(agent_id) and is_binary(run_id) do
+    case Effects.get_terminal_result(effect_id, agent_id) do
+      %{agent_run_id: ^run_id} -> true
+      _other -> false
+    end
+  rescue
+    _error -> false
+  catch
+    :exit, _reason -> false
+  end
+
+  defp active_terminal_result_replay?(_effect_id, _data), do: false
 
   defp acknowledge_terminal_effect_result(effect_id, agent_id) do
     case Effects.acknowledge_terminal_result(effect_id, agent_id) do

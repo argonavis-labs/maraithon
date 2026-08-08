@@ -109,6 +109,8 @@
 defmodule Maraithon.Runtime.AgentTest do
   use Maraithon.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Maraithon.Accounts
   alias Maraithon.Runtime.Agent, as: RuntimeAgent
   alias Maraithon.Runtime.ScheduledJob
@@ -776,11 +778,14 @@ defmodule Maraithon.Runtime.AgentTest do
       Process.sleep(100)
 
       # Send effect result for unknown effect
-      send(pid, {:effect_result, Ecto.UUID.generate(), {:ok, %{result: "test"}}})
+      log =
+        capture_log(fn ->
+          send(pid, {:effect_result, Ecto.UUID.generate(), {:ok, %{result: "test"}}})
+          _state = :sys.get_state(pid)
+        end)
 
-      Process.sleep(100)
-      # Agent may or may not still be alive depending on effect processing
-      if Process.alive?(pid), do: GenServer.stop(pid, :normal)
+      assert log =~ "Received result for unknown effect"
+      GenServer.stop(pid, :normal)
     end
   end
 
@@ -1217,9 +1222,10 @@ defmodule Maraithon.Runtime.AgentTest do
       assert Repo.get!(Effect, effect_id).result_acknowledged_at != nil
     end
 
-    test "acknowledges a duplicate terminal result without cancelling the live chained run", %{
-      agent: agent
-    } do
+    test "keeps a duplicate terminal result replayable without warning or cancelling the live chained run",
+         %{
+           agent: agent
+         } do
       {:ok, pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
       assert {:idle, _data} = :sys.get_state(pid)
@@ -1257,15 +1263,20 @@ defmodule Maraithon.Runtime.AgentTest do
         ]
       )
 
-      send(
-        pid,
-        {:agent_dispatch,
-         {:effect_result, duplicate_effect_id, {:ok, %{content: "already handled"}}}}
-      )
+      log =
+        capture_log(fn ->
+          send(
+            pid,
+            {:agent_dispatch,
+             {:effect_result, duplicate_effect_id, {:ok, %{content: "already handled"}}}}
+          )
 
-      assert {:waiting_effect, after_duplicate} = :sys.get_state(pid)
-      assert after_duplicate.current_run_id == waiting_data.current_run_id
-      assert map_size(after_duplicate.pending_effects) == 1
+          assert {:waiting_effect, after_duplicate} = :sys.get_state(pid)
+          assert after_duplicate.current_run_id == waiting_data.current_run_id
+          assert map_size(after_duplicate.pending_effects) == 1
+        end)
+
+      refute log =~ "Received result for unknown effect"
 
       run = Repo.get!(Maraithon.Agents.AgentRun, waiting_data.current_run_id)
       assert run.status == "running"
