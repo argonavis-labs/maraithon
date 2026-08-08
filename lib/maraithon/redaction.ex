@@ -78,7 +78,7 @@ defmodule Maraithon.Redaction do
   @label_log_metadata_fields ~w(
     requestid agentid effectid jobid jobtype provider useridhash model
     reasoningeffort finishreason failurecode responseshape errorclass
-    transportclass callbackclass promptkind status
+    transportclass callbackclass promptkind
   )
 
   @scanners [
@@ -187,6 +187,7 @@ defmodule Maraithon.Redaction do
     cond do
       normalized_key in @identifier_log_metadata_fields -> identifier_fingerprint(value)
       normalized_key in @opaque_log_metadata_fields -> opaque_log_value(value)
+      normalized_key == "status" -> status_log_value(value)
       normalized_key in @numeric_log_metadata_fields -> numeric_log_value(value)
       normalized_key in @label_log_metadata_fields -> label_log_value(value)
       normalized_key == "failurecodes" -> failure_codes_log_value(value)
@@ -212,6 +213,9 @@ defmodule Maraithon.Redaction do
   end
 
   defp numeric_log_value(_value), do: "redacted_detail"
+
+  defp status_log_value(value) when is_number(value), do: numeric_log_value(value)
+  defp status_log_value(value), do: label_log_value(value)
 
   defp label_log_value(value) when is_atom(value), do: label_log_value(Atom.to_string(value))
 

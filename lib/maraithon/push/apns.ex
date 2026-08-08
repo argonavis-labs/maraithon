@@ -60,9 +60,10 @@ defmodule Maraithon.Push.APNS do
             {:ok, status, response_body} ->
               classify_failure(status, response_body)
 
-            {:error, :delivery_unknown} ->
+            {:error, {:delivery_unknown, transport_class}} ->
               Logger.warning("APNs delivery result is unknown",
-                failure_code: "delivery_unknown"
+                failure_code: "delivery_unknown",
+                transport_class: transport_class
               )
 
               {:error, :delivery_unknown}
@@ -97,11 +98,7 @@ defmodule Maraithon.Push.APNS do
   defp post_once(url, headers, body) do
     case safe_post(url, headers, body) do
       {:error, reason} ->
-        Logger.debug("APNs transport result is ambiguous",
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
-
-        {:error, :delivery_unknown}
+        {:error, {:delivery_unknown, Maraithon.Redaction.error_class(reason)}}
 
       result ->
         result

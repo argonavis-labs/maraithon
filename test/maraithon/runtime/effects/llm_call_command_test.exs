@@ -187,6 +187,33 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
     assert [%{"max_tokens" => 32_000}] = retry_stub_calls()
   end
 
+  test "request budget rejections log only a safe failure class" do
+    secret = "oversized-effect-prompt-secret"
+
+    effect = %Effect{
+      id: Ecto.UUID.generate(),
+      agent_id: Ecto.UUID.generate(),
+      params: %{
+        "messages" => [
+          %{"role" => "user", "content" => secret <> String.duplicate("x", 129_000)}
+        ]
+      }
+    }
+
+    LogBuffer.clear()
+
+    assert {:error, {:invalid_request, %{reason: "request_exceeds_budget"}}} =
+             LLMCallCommand.execute(effect)
+
+    Logger.flush()
+    _ = :sys.get_state(LogBuffer)
+
+    captured = LogBuffer.recent(20) |> inspect(printable_limit: :infinity)
+    assert captured =~ "LLM effect request rejected"
+    assert captured =~ "invalid_request"
+    refute captured =~ secret
+  end
+
   test "OpenRouter error bodies never reach effect-command logs" do
     bypass = Bypass.open()
     swap_provider(OpenRouterProvider)

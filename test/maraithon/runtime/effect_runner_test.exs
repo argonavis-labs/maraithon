@@ -821,6 +821,41 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       GenServer.stop(pid, :normal)
     end
 
+    test "fails invalid llm requests without scheduling retries", %{agent: agent} do
+      case Process.whereis(EffectRunner) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      :ok = Dispatch.subscribe(agent.id)
+
+      {:ok, effect_id} =
+        Effects.request(agent.id, "llm_call", nil, %{
+          "messages" => [
+            %{"role" => "user", "content" => String.duplicate("x", 129_000)}
+          ],
+          "max_tokens" => 100
+        })
+
+      pid = start_supervised!({EffectRunner, []})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      send(pid, :poll)
+
+      assert_receive {:agent_dispatch,
+                      {:effect_result, ^effect_id,
+                       {:error, {:invalid_request, %{reason: "request_exceeds_budget"}}}}},
+                     1_000
+
+      _ = :sys.get_state(pid)
+      updated_effect = Maraithon.Repo.get!(Effect, effect_id)
+
+      assert updated_effect.status == "failed"
+      assert updated_effect.attempts == 1
+      assert updated_effect.retry_after == nil
+      assert updated_effect.error == "invalid_request"
+    end
+
     test "does not claim llm effects while provider cooldown is active", %{agent: agent} do
       case Process.whereis(EffectRunner) do
         nil -> :ok

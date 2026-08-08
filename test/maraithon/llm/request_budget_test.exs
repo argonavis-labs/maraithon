@@ -2,6 +2,32 @@ defmodule Maraithon.LLM.RequestBudgetTest do
   use ExUnit.Case, async: true
 
   alias Maraithon.LLM.RequestBudget
+  alias Maraithon.TelegramAssistant.ProactiveCandidate
+
+  test "keeps the proactive queue binary cap unless a caller opts into a larger one" do
+    value = %{"content" => String.duplicate("x", 64_001)}
+
+    refute ProactiveCandidate.safe_json_shape?(value, 128_000)
+    assert ProactiveCandidate.safe_json_shape?(value, 128_000, 128_000)
+  end
+
+  test "accepts one large prompt when the complete request remains within budget" do
+    content = String.duplicate("x", 77_469)
+
+    assert {:ok, bounded} =
+             RequestBudget.validate(%{
+               "messages" => [
+                 %{"role" => "system", "content" => "system"},
+                 %{"role" => "user", "content" => content}
+               ],
+               "model" => "qwen/qwen3.7-plus",
+               "max_tokens" => 6_000,
+               "reasoning_effort" => "none"
+             })
+
+    assert get_in(bounded, ["messages", Access.at(1), "content"]) == content
+    assert :ok = RequestBudget.validate_body(bounded)
+  end
 
   test "rejects escape-expanded requests at the final encoded-byte boundary" do
     content = String.duplicate("\\\"", 30_000)

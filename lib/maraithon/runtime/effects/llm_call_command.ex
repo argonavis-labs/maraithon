@@ -46,8 +46,16 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
       |> RequestBudget.validate()
 
     case bounded do
-      {:ok, params} -> do_execute(effect, params)
-      {:error, _reason} = error -> error
+      {:ok, params} ->
+        do_execute(effect, params)
+
+      {:error, reason} = error ->
+        Logger.warning("LLM effect request rejected",
+          effect_id: effect.id,
+          failure_code: Redaction.error_class(reason)
+        )
+
+        error
     end
   end
 

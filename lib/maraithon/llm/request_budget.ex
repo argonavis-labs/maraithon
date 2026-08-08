@@ -13,7 +13,8 @@ defmodule Maraithon.LLM.RequestBudget do
   )
 
   def validate_body(body) when is_map(body) do
-    with true <- ProactiveCandidate.safe_json_shape?(body, @max_request_bytes),
+    with true <-
+           ProactiveCandidate.safe_json_shape?(body, @max_request_bytes, @max_request_bytes),
          {:ok, encoded} <- Jason.encode(body),
          true <- byte_size(encoded) <= @max_request_bytes do
       :ok
@@ -52,7 +53,8 @@ defmodule Maraithon.LLM.RequestBudget do
          :ok <- validate_reasoning_effort(bounded["reasoning_effort"]),
          :ok <- validate_reasoning(bounded["reasoning"]),
          :ok <- validate_stream(bounded["stream"]),
-         true <- ProactiveCandidate.safe_json_shape?(bounded, @max_request_bytes),
+         true <-
+           ProactiveCandidate.safe_json_shape?(bounded, @max_request_bytes, @max_request_bytes),
          {:ok, encoded} <- Jason.encode(bounded),
          true <- byte_size(encoded) <= @max_request_bytes do
       {:ok, maybe_put_reasoning_callback(bounded, params)}

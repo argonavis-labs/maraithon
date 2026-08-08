@@ -1,6 +1,8 @@
 defmodule Maraithon.Push.APNSTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Maraithon.Push.APNS
 
   defmodule OkHTTP do
@@ -143,8 +145,14 @@ defmodule Maraithon.Push.APNSTest do
       Keyword.put(Application.get_env(:maraithon, :apns), :http_module, DownHTTP)
     )
 
-    assert {:error, :delivery_unknown} = APNS.send("down", %{"aps" => %{}})
+    log =
+      capture_log([metadata: [:failure_code, :transport_class]], fn ->
+        assert {:error, :delivery_unknown} = APNS.send("down", %{"aps" => %{}})
+      end)
+
     assert Process.get(:down_http_calls) == 1
+    assert log =~ "failure_code=delivery_unknown"
+    assert log =~ "transport_class=Elixir.Mint.TransportError"
   end
 
   test "payload carries alert, thread id, and deeplink outside aps" do

@@ -65,17 +65,29 @@ defmodule Maraithon.Accounts.MagicLinkSender do
 
       {:ok, %Req.Response{status: status, body: response_body}} ->
         Logger.warning("Magic sign-in email failed",
-          status: status,
-          response: inspect(response_body)
+          response_status: status,
+          failure_code: provider_failure_code(response_body)
         )
 
         {:error, :email_delivery_failed}
 
       {:error, reason} ->
-        Logger.warning("Magic sign-in email transport error", reason: inspect(reason))
+        Logger.warning("Magic sign-in email transport error",
+          error_class: Maraithon.Redaction.error_class(reason)
+        )
+
         {:error, :email_delivery_failed}
     end
   end
+
+  @doc false
+  def provider_failure_code(%{"ErrorCode" => 406}), do: "inactive_recipient"
+
+  def provider_failure_code(%{"ErrorCode" => code})
+      when is_integer(code) and code >= 0 and code <= 9_999,
+      do: "postmark_error_#{code}"
+
+  def provider_failure_code(_response_body), do: "provider_rejected"
 
   defp log_only(email, kind, value) do
     Logger.info("Magic sign-in delivery fallback (log-only)",

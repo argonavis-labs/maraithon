@@ -120,6 +120,25 @@ defmodule Maraithon.LogFormatterTest do
       refute Map.has_key?(decoded, "arbitrary_payload")
     end
 
+    test "preserves numeric HTTP and string lifecycle status metadata" do
+      timestamp = {{2024, 1, 15}, {12, 30, 45, 0}}
+
+      http_entry =
+        LogFormatter.format(:warning, "HTTP request failed", timestamp, status: 422)
+        |> IO.iodata_to_binary()
+        |> String.trim()
+        |> Jason.decode!()
+
+      lifecycle_entry =
+        LogFormatter.format(:info, "Effect updated", timestamp, status: "failed")
+        |> IO.iodata_to_binary()
+        |> String.trim()
+        |> Jason.decode!()
+
+      assert http_entry["status"] == 422
+      assert lifecycle_entry["status"] == "failed"
+    end
+
     test "redacts credentials and normalizes structured metadata" do
       timestamp = {{2024, 1, 15}, {12, 30, 45, 0}}
 

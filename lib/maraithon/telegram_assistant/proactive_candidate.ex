@@ -127,38 +127,49 @@ defmodule Maraithon.TelegramAssistant.ProactiveCandidate do
 
   @doc false
   def safe_json_shape?(value, max_bytes \\ @max_structured_data_bytes)
-      when is_integer(max_bytes) and max_bytes > 0 do
-    match?({:ok, _nodes, _bytes}, preflight_json(value, 0, 0, 0, max_bytes))
+
+  def safe_json_shape?(value, max_bytes),
+    do: safe_json_shape?(value, max_bytes, @max_json_binary_bytes)
+
+  def safe_json_shape?(value, max_bytes, max_binary_bytes)
+      when is_integer(max_bytes) and max_bytes > 0 and is_integer(max_binary_bytes) and
+             max_binary_bytes > 0 do
+    match?(
+      {:ok, _nodes, _bytes},
+      preflight_json(value, 0, 0, 0, max_bytes, max_binary_bytes)
+    )
   end
 
-  defp preflight_json(_value, _depth, nodes, _bytes, _max_bytes)
+  defp preflight_json(_value, _depth, nodes, _bytes, _max_bytes, _max_binary_bytes)
        when nodes >= @max_json_nodes,
        do: :error
 
-  defp preflight_json(_value, depth, _nodes, _bytes, _max_bytes)
+  defp preflight_json(_value, depth, _nodes, _bytes, _max_bytes, _max_binary_bytes)
        when depth > @max_json_depth,
        do: :error
 
-  defp preflight_json(%module{}, _depth, nodes, bytes, max_bytes)
+  defp preflight_json(%module{}, _depth, nodes, bytes, max_bytes, _max_binary_bytes)
        when module in [DateTime, NaiveDateTime, Date, Time],
        do: add_json_cost(nodes, bytes, 64, max_bytes)
 
-  defp preflight_json(value, _depth, nodes, bytes, max_bytes) when is_binary(value) do
-    if byte_size(value) <= @max_json_binary_bytes,
+  defp preflight_json(value, _depth, nodes, bytes, max_bytes, max_binary_bytes)
+       when is_binary(value) do
+    if byte_size(value) <= max_binary_bytes,
       do: add_json_cost(nodes, bytes, byte_size(value) + 2, max_bytes),
       else: :error
   end
 
-  defp preflight_json(value, _depth, nodes, bytes, max_bytes)
+  defp preflight_json(value, _depth, nodes, bytes, max_bytes, _max_binary_bytes)
        when is_integer(value) and value >= -9_223_372_036_854_775_808 and
               value <= 9_223_372_036_854_775_807,
        do: add_json_cost(nodes, bytes, 32, max_bytes)
 
-  defp preflight_json(value, _depth, nodes, bytes, max_bytes)
+  defp preflight_json(value, _depth, nodes, bytes, max_bytes, _max_binary_bytes)
        when is_float(value) or is_boolean(value) or is_nil(value),
        do: add_json_cost(nodes, bytes, 32, max_bytes)
 
-  defp preflight_json(value, depth, nodes, bytes, max_bytes) when is_map(value) do
+  defp preflight_json(value, depth, nodes, bytes, max_bytes, max_binary_bytes)
+       when is_map(value) do
     if map_size(value) > @max_json_map_entries do
       :error
     else
@@ -168,7 +179,14 @@ defmodule Maraithon.TelegramAssistant.ProactiveCandidate do
           with {:ok, key_cost} <- json_key_cost(key),
                {:ok, key_nodes, key_bytes} <- add_json_cost(count, size, key_cost, max_bytes),
                {:ok, nested_nodes, nested_bytes} <-
-                 preflight_json(nested, depth + 1, key_nodes, key_bytes, max_bytes) do
+                 preflight_json(
+                   nested,
+                   depth + 1,
+                   key_nodes,
+                   key_bytes,
+                   max_bytes,
+                   max_binary_bytes
+                 ) do
             {:cont, {:ok, nested_nodes, nested_bytes}}
           else
             _error -> {:halt, :error}
@@ -178,32 +196,83 @@ defmodule Maraithon.TelegramAssistant.ProactiveCandidate do
     end
   end
 
-  defp preflight_json(value, depth, nodes, bytes, max_bytes) when is_list(value) do
+  defp preflight_json(value, depth, nodes, bytes, max_bytes, max_binary_bytes)
+       when is_list(value) do
     with {:ok, next_nodes, next_bytes} <- add_json_cost(nodes, bytes, 2, max_bytes) do
-      preflight_json_list(value, depth, next_nodes, next_bytes, 0, max_bytes)
+      preflight_json_list(
+        value,
+        depth,
+        next_nodes,
+        next_bytes,
+        0,
+        max_bytes,
+        max_binary_bytes
+      )
     end
   end
 
-  defp preflight_json(_value, _depth, _nodes, _bytes, _max_bytes), do: :error
+  defp preflight_json(_value, _depth, _nodes, _bytes, _max_bytes, _max_binary_bytes),
+    do: :error
 
-  defp preflight_json_list([], _depth, nodes, bytes, _items, _max_bytes),
-    do: {:ok, nodes, bytes}
+  defp preflight_json_list(
+         [],
+         _depth,
+         nodes,
+         bytes,
+         _items,
+         _max_bytes,
+         _max_binary_bytes
+       ),
+       do: {:ok, nodes, bytes}
 
-  defp preflight_json_list(_list, _depth, _nodes, _bytes, items, _max_bytes)
+  defp preflight_json_list(
+         _list,
+         _depth,
+         _nodes,
+         _bytes,
+         items,
+         _max_bytes,
+         _max_binary_bytes
+       )
        when items >= @max_json_list_items,
        do: :error
 
-  defp preflight_json_list([head | tail], depth, nodes, bytes, items, max_bytes) do
-    case preflight_json(head, depth + 1, nodes, bytes, max_bytes) do
+  defp preflight_json_list(
+         [head | tail],
+         depth,
+         nodes,
+         bytes,
+         items,
+         max_bytes,
+         max_binary_bytes
+       ) do
+    case preflight_json(head, depth + 1, nodes, bytes, max_bytes, max_binary_bytes) do
       {:ok, next_nodes, next_bytes} ->
-        preflight_json_list(tail, depth, next_nodes, next_bytes, items + 1, max_bytes)
+        preflight_json_list(
+          tail,
+          depth,
+          next_nodes,
+          next_bytes,
+          items + 1,
+          max_bytes,
+          max_binary_bytes
+        )
 
       :error ->
         :error
     end
   end
 
-  defp preflight_json_list(_improper, _depth, _nodes, _bytes, _items, _max_bytes), do: :error
+  defp preflight_json_list(
+         _improper,
+         _depth,
+         _nodes,
+         _bytes,
+         _items,
+         _max_bytes,
+         _max_binary_bytes
+       ),
+       do: :error
 
   defp add_json_cost(nodes, bytes, cost, max_bytes) do
     if nodes + 1 <= @max_json_nodes and bytes + cost <= max_bytes,

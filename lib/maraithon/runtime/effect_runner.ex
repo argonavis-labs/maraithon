@@ -409,6 +409,8 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp terminal_effect_error?({:insufficient_quota, _message}), do: true
   defp terminal_effect_error?(:insufficient_quota), do: true
+  defp terminal_effect_error?({:invalid_request, _detail}), do: true
+  defp terminal_effect_error?(:invalid_request), do: true
   defp terminal_effect_error?(_reason), do: false
 
   defp no_attempt_deferrable_effect_error?(
