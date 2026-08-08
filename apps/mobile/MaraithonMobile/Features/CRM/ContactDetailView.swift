@@ -361,25 +361,10 @@ struct ContactDetailView: View {
     }
 
     private func relatedWorkSort(_ lhs: TodoItem, _ rhs: TodoItem) -> Bool {
-        if lhs.isCompleted != rhs.isCompleted {
-            return !lhs.isCompleted
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt > rhs.updatedAt
         }
-
-        switch (lhs.dueDate, rhs.dueDate) {
-        case (.some(let lhsDate), .some(let rhsDate)) where lhsDate != rhsDate:
-            return lhsDate < rhsDate
-        case (.some, .none):
-            return true
-        case (.none, .some):
-            return false
-        default:
-            if lhs.priority != rhs.priority {
-                return ContactLinkedWorkRowCopy.priorityRank(lhs.priority) >
-                    ContactLinkedWorkRowCopy.priorityRank(rhs.priority)
-            }
-
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
+        return lhs.id.uuidString < rhs.id.uuidString
     }
 }
 

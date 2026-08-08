@@ -1698,12 +1698,14 @@ defmodule Maraithon.ActionCards do
   defp due_sentence(_todo, _metadata, _opts), do: nil
 
   defp due_timezone(metadata, opts, user_id) do
-    first_present_timezone([
-      Keyword.get(opts, :timezone_info),
-      explicit_timezone(opts),
-      metadata_timezone(metadata),
-      user_timezone(user_id)
-    ]) || default_timezone()
+    case first_present_timezone([
+           Keyword.get(opts, :timezone_info),
+           explicit_timezone(opts),
+           metadata_timezone(metadata)
+         ]) do
+      nil -> user_timezone(user_id)
+      timezone -> timezone
+    end
   end
 
   defp put_user_timezone(opts, user_id) when is_list(opts) and is_binary(user_id) do

@@ -419,6 +419,23 @@ defmodule MaraithonWeb.MobileApiControllerTest do
            } = json_response(conn, 200)
 
     assert Todos.get_for_user(user.id, todo.id).status == "done"
+
+    legacy_response =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> get(~p"/api/mobile/todos?status=all&include_cards=true&limit=5")
+      |> json_response(200)
+
+    assert [%{"action_card" => %{}}] = legacy_response["todos"]
+
+    scoped_response =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> get(~p"/api/mobile/todos?status=all&include_cards=true&open_cards_only=true&limit=5")
+      |> json_response(200)
+
+    assert [closed_todo] = scoped_response["todos"]
+    refute Map.has_key?(closed_todo, "action_card")
   end
 
   test "mobile todo not important action records feedback without dismissing", %{conn: conn} do

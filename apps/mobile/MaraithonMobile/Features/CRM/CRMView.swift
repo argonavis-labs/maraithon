@@ -6,7 +6,7 @@ struct CRMView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(SessionStore.self) private var sessionStore
     @Query(sort: \CRMContact.name) private var contacts: [CRMContact]
-    @Query(sort: \TodoItem.createdAt, order: .reverse) private var todos: [TodoItem]
+    @Query(sort: \TodoItem.updatedAt, order: .reverse) private var todos: [TodoItem]
     @State private var isAddingContact = false
     @State private var editingContact: CRMContact?
     @State private var searchText = ""
@@ -53,6 +53,7 @@ struct CRMView: View {
             hasher.combine(todo.isCompleted)
             hasher.combine(todo.dueDate)
             hasher.combine(todo.priorityRawValue)
+            hasher.combine(todo.updatedAt)
             hasher.combine(todo.contact?.id)
         }
 

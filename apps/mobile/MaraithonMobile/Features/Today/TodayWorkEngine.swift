@@ -40,6 +40,8 @@ struct TodayFocusItem: Equatable, Identifiable {
 
 private struct TodayFocusCandidate {
     let title: String
+    let sortTier: Int
+    let updatedAt: Date
     let priority: Int
     let item: () -> TodayFocusItem
 }
@@ -65,35 +67,10 @@ enum TodayWorkEngine {
     ) -> TodayBrief {
         let metrics = metrics(todos: todos, now: now, calendar: calendar)
         let overdueTodos = TodoFiltering.filter(todos, by: .overdue, now: now, calendar: calendar)
-        let decisionTodos = TodoFiltering.filter(todos, by: .decisions, now: now, calendar: calendar)
         let dueTodayTodos = TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar)
         let openTodos = TodoFiltering.filter(todos, by: .open, now: now, calendar: calendar)
-
-        if metrics.overdueTodos > 0 {
-            return TodayBrief(
-                title: "Resolve past-due work",
-                subtitle: overdueBriefSubtitle(
-                    count: metrics.overdueTodos,
-                    lead: topTodo(overdueTodos)
-                ),
-                actionTitle: "Review past-due work",
-                systemImage: "clock.badge.exclamationmark",
-                destination: .todos(.overdue)
-            )
-        }
-
-        if metrics.decisionTodos > 0 {
-            return TodayBrief(
-                title: "Make the calls waiting on you",
-                subtitle: decisionBriefSubtitle(
-                    count: metrics.decisionTodos,
-                    lead: topTodo(decisionTodos)
-                ),
-                actionTitle: "Review decisions",
-                systemImage: "checkmark.seal",
-                destination: .todos(.decisions)
-            )
-        }
+        let overdueIDs = Set(overdueTodos.map(\.id))
+        let currentOpenTodos = openTodos.filter { !overdueIDs.contains($0.id) }
 
         if metrics.dueTodayTodos > 0 {
             return TodayBrief(
@@ -108,16 +85,29 @@ enum TodayWorkEngine {
             )
         }
 
-        if metrics.openTodos > 0 {
+        if !currentOpenTodos.isEmpty {
             return TodayBrief(
-                title: "Triage open work",
+                title: "Review your latest work",
                 subtitle: openWorkBriefSubtitle(
-                    count: metrics.openTodos,
-                    lead: topTodo(openTodos)
+                    count: currentOpenTodos.count,
+                    lead: topTodo(currentOpenTodos)
                 ),
                 actionTitle: "Review open work",
                 systemImage: "tray.full",
                 destination: .todos(.open)
+            )
+        }
+
+        if metrics.overdueTodos > 0 {
+            return TodayBrief(
+                title: "Resolve past-due work",
+                subtitle: overdueBriefSubtitle(
+                    count: metrics.overdueTodos,
+                    lead: topTodo(overdueTodos)
+                ),
+                actionTitle: "Review past-due work",
+                systemImage: "clock.badge.exclamationmark",
+                destination: .todos(.overdue)
             )
         }
 
@@ -138,11 +128,20 @@ enum TodayWorkEngine {
         let todoItems = todos.compactMap { todo -> TodayFocusCandidate? in
             guard !todo.isCompleted else { return nil }
 
-            if let dueDate = todo.dueDate,
-               dueDate < now,
-               !calendar.isDate(dueDate, inSameDayAs: now) {
+            let dueToday = todo.dueDate.map { calendar.isDate($0, inSameDayAs: now) } ?? false
+            let overdue = todo.dueDate.map {
+                $0 < now && !calendar.isDate($0, inSameDayAs: now)
+            } ?? false
+            let sortTier = dueToday ? 3 : (overdue ? 1 : 2)
+
+            if let dueDate = todo.dueDate, overdue {
                 let priority = 100 + priorityWeight(for: todo.priority)
-                return TodayFocusCandidate(title: todo.title, priority: priority) {
+                return TodayFocusCandidate(
+                    title: todo.title,
+                    sortTier: sortTier,
+                    updatedAt: todo.updatedAt,
+                    priority: priority
+                ) {
                     TodayFocusItem(
                         kind: .todo,
                         referenceID: todo.id,
@@ -163,7 +162,12 @@ enum TodayWorkEngine {
 
             if TodoDecisionSignals.needsDecision(todo) {
                 let priority = 88 + priorityWeight(for: todo.priority)
-                return TodayFocusCandidate(title: todo.title, priority: priority) {
+                return TodayFocusCandidate(
+                    title: todo.title,
+                    sortTier: sortTier,
+                    updatedAt: todo.updatedAt,
+                    priority: priority
+                ) {
                     TodayFocusItem(
                         kind: .todo,
                         referenceID: todo.id,
@@ -182,10 +186,14 @@ enum TodayWorkEngine {
                 }
             }
 
-            if let dueDate = todo.dueDate,
-               calendar.isDate(dueDate, inSameDayAs: now) {
+            if todo.dueDate != nil, dueToday {
                 let priority = 80 + priorityWeight(for: todo.priority)
-                return TodayFocusCandidate(title: todo.title, priority: priority) {
+                return TodayFocusCandidate(
+                    title: todo.title,
+                    sortTier: sortTier,
+                    updatedAt: todo.updatedAt,
+                    priority: priority
+                ) {
                     TodayFocusItem(
                         kind: .todo,
                         referenceID: todo.id,
@@ -203,7 +211,12 @@ enum TodayWorkEngine {
 
             if todo.priority == .critical || todo.priority == .high {
                 let priority = todo.priority == .critical ? 85 : 65
-                return TodayFocusCandidate(title: todo.title, priority: priority) {
+                return TodayFocusCandidate(
+                    title: todo.title,
+                    sortTier: sortTier,
+                    updatedAt: todo.updatedAt,
+                    priority: priority
+                ) {
                     TodayFocusItem(
                         kind: .todo,
                         referenceID: todo.id,
@@ -220,7 +233,12 @@ enum TodayWorkEngine {
             }
 
             let priority = 40 + priorityWeight(for: todo.priority)
-            return TodayFocusCandidate(title: todo.title, priority: priority) {
+            return TodayFocusCandidate(
+                title: todo.title,
+                sortTier: sortTier,
+                updatedAt: todo.updatedAt,
+                priority: priority
+            ) {
                 TodayFocusItem(
                     kind: .todo,
                     referenceID: todo.id,
@@ -238,11 +256,16 @@ enum TodayWorkEngine {
 
         return todoItems
             .sorted {
-                if $0.priority == $1.priority {
-                    $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-                } else {
-                    $0.priority > $1.priority
+                if $0.sortTier != $1.sortTier {
+                    return $0.sortTier > $1.sortTier
                 }
+                if $0.updatedAt != $1.updatedAt {
+                    return $0.updatedAt > $1.updatedAt
+                }
+                if $0.priority != $1.priority {
+                    return $0.priority > $1.priority
+                }
+                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
             }
             .prefix(6)
             .map { $0.item() }
@@ -289,28 +312,20 @@ enum TodayWorkEngine {
         return "\(count) work items are due today. Start with \(title)."
     }
 
-    private static func decisionBriefSubtitle(count: Int, lead: TodoItem?) -> String {
-        guard let title = briefTitle(for: lead) else {
-            return "\(count) \(plural("decision", count)) \(needsVerb(count)) a call, approval, or keep-or-close choice."
-        }
-
-        if count == 1 {
-            return "Decision needed: \(title). \(briefMove(for: lead) ?? "Make the call, delegate it, or dismiss it.")"
-        }
-
-        if let move = briefMove(for: lead) {
-            return "\(count) decisions are waiting. Start with \(title): \(move)"
-        }
-
-        return "\(count) decisions are waiting. Start with \(title)."
-    }
-
     private static func openWorkBriefSubtitle(count: Int, lead: TodoItem?) -> String {
         guard let title = briefTitle(for: lead) else {
             return "\(count) open \(plural("work item", count)) \(needsVerb(count)) a date, next action, or close decision."
         }
 
         if count == 1 {
+            if let move = briefMove(for: lead) {
+                return "\(title): \(move)"
+            }
+
+            if lead?.dueDate != nil {
+                return "\(title) needs a next action or close decision."
+            }
+
             return "\(title) needs a date, next action, or close decision."
         }
 
@@ -323,20 +338,13 @@ enum TodayWorkEngine {
 
     private static func topTodo(_ todos: [TodoItem]) -> TodoItem? {
         todos.sorted {
+            if $0.updatedAt != $1.updatedAt {
+                return $0.updatedAt > $1.updatedAt
+            }
             if $0.priority != $1.priority {
                 return priorityWeight(for: $0.priority) > priorityWeight(for: $1.priority)
             }
-
-            switch ($0.dueDate, $1.dueDate) {
-            case (.some(let lhs), .some(let rhs)) where lhs != rhs:
-                return lhs < rhs
-            case (.some, .none):
-                return true
-            case (.none, .some):
-                return false
-            default:
-                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-            }
+            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }.first
     }
 

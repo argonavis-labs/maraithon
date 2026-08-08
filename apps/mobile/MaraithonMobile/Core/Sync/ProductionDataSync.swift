@@ -131,7 +131,10 @@ enum ProductionDataSync {
         let priority: TodoPriority
         let dueDate: Date?
         let isCompleted: Bool
+        let createdAt: Date?
+        let updatedAt: Date?
         let completedAt: Date?
+        let hasActionCardField: Bool
         let relatedPersonIDs: [UUID]
         let sourceSystem: String?
         let card: PreparedCard
@@ -176,7 +179,10 @@ enum ProductionDataSync {
             priority: priority(from: remoteTodo.priority),
             dueDate: remoteTodo.dueAt,
             isCompleted: remoteTodo.status == "done",
+            createdAt: remoteTodo.insertedAt,
+            updatedAt: remoteTodo.updatedAt,
             completedAt: remoteTodo.closedAt,
+            hasActionCardField: remoteTodo.hasActionCardField,
             relatedPersonIDs: remoteTodo.relatedPeople.compactMap { UUID(uuidString: $0.id) },
             sourceSystem: cleanedText(remoteTodo.source),
             card: preparedCard(from: remoteTodo.actionCard)
@@ -233,14 +239,21 @@ enum ProductionDataSync {
         todo.priority = prepared.priority
         todo.dueDate = prepared.dueDate
         todo.isCompleted = prepared.isCompleted
+        if let createdAt = prepared.createdAt {
+            todo.createdAt = createdAt
+        }
+        if let updatedAt = prepared.updatedAt {
+            todo.updatedAt = updatedAt
+        }
         todo.completedAt = prepared.completedAt
         if let contactsByID {
             todo.contact = relatedContact(personIDs: prepared.relatedPersonIDs, contactsByID: contactsByID)
         }
         todo.sourceSystem = prepared.sourceSystem
-        // A cards-omitted refresh must not wipe existing decision-card context; those
-        // fields are filled by the background card pass.
-        if includeCards {
+        // A cards-omitted refresh must not wipe existing decision-card context. The
+        // collection API also deliberately omits cards from closed rows, even when
+        // open-row cards were requested, so key presence is part of the contract.
+        if includeCards && prepared.hasActionCardField {
             apply(prepared.card, to: todo)
         }
     }
@@ -376,7 +389,11 @@ enum ProductionDataSync {
         from prepared: PreparedTodo,
         contactsByID: [UUID: CRMContact]? = nil
     ) -> TodoItem {
-        TodoItem(
+        // Unknown timestamps belong at the bottom rather than appearing fresh
+        // on every sync. Existing rows retain their local values in `apply`.
+        let createdAt = prepared.createdAt ?? prepared.updatedAt ?? .distantPast
+
+        return TodoItem(
             id: prepared.id,
             title: prepared.title,
             notes: prepared.notes,
@@ -384,6 +401,8 @@ enum ProductionDataSync {
             priority: prepared.priority,
             dueDate: prepared.dueDate,
             isCompleted: prepared.isCompleted,
+            createdAt: createdAt,
+            updatedAt: prepared.updatedAt ?? createdAt,
             completedAt: prepared.completedAt,
             decisionPrompt: prepared.card.decisionPrompt,
             decisionContextSummary: prepared.card.decisionContextSummary,

@@ -236,6 +236,7 @@ struct TodoEditorView: View {
                 todo.priority = priority
                 todo.dueDate = hasDueDate ? dueDate : nil
                 todo.contact = contact
+                todo.updatedAt = Date()
             } else {
                 let todo = TodoItem(
                     title: trimmedTitle,

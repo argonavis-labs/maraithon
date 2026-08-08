@@ -5,7 +5,7 @@ struct TodosView: View {
     @Environment(AppNavigation.self) private var appNavigation
     @Environment(\.modelContext) private var modelContext
     @Environment(SessionStore.self) private var sessionStore
-    @Query(sort: \TodoItem.createdAt, order: .reverse) private var todos: [TodoItem]
+    @Query(sort: \TodoItem.updatedAt, order: .reverse) private var todos: [TodoItem]
     @State private var filter: TodoFilter = .open
     @State private var searchText = ""
     @State private var isAddingTodo = false

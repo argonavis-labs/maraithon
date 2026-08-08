@@ -55,7 +55,7 @@ struct TodayWorkEngineTests {
     }
 
     @Test
-    func focusQueuePrioritizesOverdueTodosThenHighPriorityWork() {
+    func focusQueuePrioritizesTodayThenRecentWorkThenOverdue() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -63,25 +63,36 @@ struct TodayWorkEngineTests {
         let overdue = TodoItem(
             title: "Send overdue proposal",
             priority: .high,
-            dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60)
+            dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60),
+            updatedAt: now.addingTimeInterval(300)
         )
-        let highPriority = TodoItem(title: "Book prep call", priority: .high)
+        let highPriority = TodoItem(
+            title: "Book prep call",
+            priority: .high,
+            updatedAt: now.addingTimeInterval(100)
+        )
+        let today = TodoItem(
+            title: "Prepare today's agenda",
+            dueDate: now.addingTimeInterval(60),
+            updatedAt: now
+        )
 
         let queue = TodayWorkEngine.focusQueue(
-            todos: [highPriority, overdue],
+            todos: [highPriority, overdue, today],
             now: now,
             calendar: calendar
         )
 
-        #expect(queue.map(\.title) == ["Send overdue proposal", "Book prep call"])
+        #expect(queue.map(\.title) == ["Prepare today's agenda", "Book prep call", "Send overdue proposal"])
         #expect(queue.first?.kind == .todo)
     }
 
     @Test
     func focusQueueGivesDefaultNextMoveForHighPriorityWork() {
-        let critical = TodoItem(title: "Decide board response", priority: .critical)
-        let high = TodoItem(title: "Book prep call", priority: .high)
-        let normal = TodoItem(title: "Draft recap", priority: .medium)
+        let updatedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let critical = TodoItem(title: "Decide board response", priority: .critical, updatedAt: updatedAt)
+        let high = TodoItem(title: "Book prep call", priority: .high, updatedAt: updatedAt)
+        let normal = TodoItem(title: "Draft recap", priority: .medium, updatedAt: updatedAt)
 
         let queue = TodayWorkEngine.focusQueue(
             todos: [normal, high, critical]
@@ -130,13 +141,13 @@ struct TodayWorkEngineTests {
             calendar: calendar
         )
 
-        #expect(queue.map(\.title) == ["Investor reply", "Customer support plan", "Decide board response"])
-        #expect(queue[0].subtitle == "Next: Send the revised terms before the board packet closes.")
-        #expect(queue[0].detail?.hasPrefix("Due ") == true)
-        #expect(queue[1].subtitle == "Next: Reply with the support plan, owner, and next review date.")
-        #expect(queue[1].detail == "Due today.")
-        #expect(queue[2].subtitle == "Next: Choose the answer and send it to the board thread.")
-        #expect(queue[2].detail == "Critical priority.")
+        #expect(queue.map(\.title) == ["Customer support plan", "Decide board response", "Investor reply"])
+        #expect(queue[0].subtitle == "Next: Reply with the support plan, owner, and next review date.")
+        #expect(queue[0].detail == "Due today.")
+        #expect(queue[1].subtitle == "Next: Choose the answer and send it to the board thread.")
+        #expect(queue[1].detail == "Critical priority.")
+        #expect(queue[2].subtitle == "Next: Send the revised terms before the board packet closes.")
+        #expect(queue[2].detail?.hasPrefix("Due ") == true)
     }
 
     @Test
@@ -177,6 +188,7 @@ struct TodayWorkEngineTests {
             title: "Approve Michael follow-up",
             nextAction: "Send the follow-up.",
             dueDate: now.addingTimeInterval(60),
+            updatedAt: now.addingTimeInterval(60),
             decisionPrompt: "Approve the Michael follow-up.",
             whyNow: "Michael is waiting on your answer.",
             sourceContext: "Checked Gmail",
@@ -185,7 +197,8 @@ struct TodayWorkEngineTests {
         let dueToday = TodoItem(
             title: "Review vendor renewal",
             nextAction: "Move or reschedule the vendor renewal.",
-            dueDate: now.addingTimeInterval(120)
+            dueDate: now.addingTimeInterval(120),
+            updatedAt: now
         )
 
         let queue = TodayWorkEngine.focusQueue(
@@ -228,7 +241,7 @@ struct TodayWorkEngineTests {
     }
 
     @Test
-    func briefPrioritizesOverdueWorkThenDecisionsThenTodayThenOpenWorkThenChat() {
+    func briefPrioritizesTodayThenCurrentWorkThenOverdueThenChat() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -245,13 +258,13 @@ struct TodayWorkEngineTests {
             todos: [overdue, today],
             now: now,
             calendar: calendar
-        ).destination == .todos(.overdue))
+        ).destination == .todos(.today))
 
         #expect(TodayWorkEngine.brief(
             todos: [today, decision],
             now: now,
             calendar: calendar
-        ).destination == .todos(.decisions))
+        ).destination == .todos(.today))
 
         #expect(TodayWorkEngine.brief(
             todos: [today],
@@ -266,6 +279,12 @@ struct TodayWorkEngineTests {
         ).destination == .todos(.open))
 
         #expect(TodayWorkEngine.brief(
+            todos: [overdue],
+            now: now,
+            calendar: calendar
+        ).destination == .todos(.overdue))
+
+        #expect(TodayWorkEngine.brief(
             todos: [],
             now: now,
             calendar: calendar
@@ -273,7 +292,7 @@ struct TodayWorkEngineTests {
     }
 
     @Test
-    func decisionBriefNamesTheCallWaitingOnTheExecutive() {
+    func latestWorkBriefNamesTheMostRecentlyUpdatedDecision() {
         let decision = TodoItem(
             title: "Approve investor reply",
             nextAction: "Send the revised terms and confirm the review window",
@@ -283,14 +302,14 @@ struct TodayWorkEngineTests {
 
         let brief = TodayWorkEngine.brief(todos: [decision])
 
-        #expect(brief.title == "Make the calls waiting on you")
-        #expect(brief.subtitle == "Decision needed: Approve investor reply. Send the revised terms and confirm the review window.")
-        #expect(brief.actionTitle == "Review decisions")
-        #expect(brief.destination == .todos(.decisions))
+        #expect(brief.title == "Review your latest work")
+        #expect(brief.subtitle == "Approve investor reply: Send the revised terms and confirm the review window.")
+        #expect(brief.actionTitle == "Review open work")
+        #expect(brief.destination == .todos(.open))
     }
 
     @Test
-    func decisionBriefPrefersPreparedMoveFromActionCard() {
+    func latestWorkBriefPrefersPreparedMoveFromActionCard() {
         let decision = TodoItem(
             title: "Reply to Michael",
             nextAction: "Reply to Michael.",
@@ -301,7 +320,7 @@ struct TodayWorkEngineTests {
 
         let brief = TodayWorkEngine.brief(todos: [decision])
 
-        #expect(brief.subtitle == "Decision needed: Reply to Michael. Approve the short reply with campaign timing.")
+        #expect(brief.subtitle == "Reply to Michael: Approve the short reply with campaign timing.")
     }
 
     @Test
@@ -324,27 +343,42 @@ struct TodayWorkEngineTests {
 
         let brief = TodayWorkEngine.brief(todos: [completed, open])
 
-        #expect(brief.title == "Triage open work")
+        #expect(brief.title == "Review your latest work")
         #expect(brief.subtitle == "Send partner recap needs a date, next action, or close decision.")
         #expect(brief.actionTitle == "Review open work")
         #expect(brief.destination == .todos(.open))
     }
 
     @Test
-    func briefNamesTheHighestSignalWorkItem() {
+    func scheduledOpenWorkDoesNotClaimItNeedsADate() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let scheduled = TodoItem(
+            title: "Review vendor renewal",
+            dueDate: now.addingTimeInterval(3 * 24 * 60 * 60)
+        )
+
+        let brief = TodayWorkEngine.brief(todos: [scheduled], now: now)
+
+        #expect(brief.subtitle == "Review vendor renewal needs a next action or close decision.")
+    }
+
+    @Test
+    func briefNamesTheMostRecentlyUpdatedWorkItem() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let investorReply = TodoItem(
             title: "Investor reply",
             nextAction: "Send the revised terms before the board packet closes",
-            priority: .critical,
-            dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60)
+            priority: .medium,
+            dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60),
+            updatedAt: now
         )
         let vendorRenewal = TodoItem(
             title: "Vendor renewal",
-            priority: .medium,
-            dueDate: now.addingTimeInterval(-5 * 24 * 60 * 60)
+            priority: .critical,
+            dueDate: now.addingTimeInterval(-5 * 24 * 60 * 60),
+            updatedAt: now.addingTimeInterval(-60)
         )
 
         let brief = TodayWorkEngine.brief(

@@ -37,7 +37,6 @@ struct ChatSyncService {
     private let maxConsecutivePollFailures = 5
 
     private static let metadataEncoder = JSONEncoder()
-    private static let isoDateFormatter = ISO8601DateFormatter()
 
     init(
         api: any MobileChatAPI = MobileAPIClient(),
@@ -689,6 +688,7 @@ struct ChatSyncService {
         if todoData["status"]?.string == "dismissed" {
             todo.isCompleted = true
             todo.completedAt = date(from: todoData["closed_at"]) ?? now()
+            todo.updatedAt = date(from: todoData["updated_at"]) ?? now()
             return
         }
 
@@ -714,6 +714,7 @@ struct ChatSyncService {
             todo.isCompleted = status == "done"
             todo.completedAt = status == "done" ? (date(from: todoData["closed_at"]) ?? now()) : nil
         }
+        todo.updatedAt = date(from: todoData["updated_at"]) ?? now()
     }
 
     private func priority(from value: Int) -> TodoPriority {
@@ -727,7 +728,7 @@ struct ChatSyncService {
 
     private func date(from value: JSONValue?) -> Date? {
         guard let string = value?.string else { return nil }
-        return Self.isoDateFormatter.date(from: string)
+        return MobileAPIClient.date(from: string)
     }
 
     private func encodedWorkSummary(_ workSummary: ChatWorkSummary?) -> Data? {

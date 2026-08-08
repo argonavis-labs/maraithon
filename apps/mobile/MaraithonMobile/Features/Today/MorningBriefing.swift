@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Grouping of open work under the morning briefing, mirroring the web
-/// briefing page: decisions first, then the channel the work came from.
+/// Grouping of open work under the morning briefing. Today leads, current
+/// work follows in recency order, and past-due work remains visible last.
 enum BriefingGroups {
     struct Group: Identifiable {
         let key: String
@@ -19,19 +19,22 @@ enum BriefingGroups {
         calendar: Calendar = .current
     ) -> [Group] {
         let open = todos.filter { !$0.isCompleted }
-        let decisions = TodoFiltering.filter(open, by: .decisions, now: now, calendar: calendar)
-        let decisionIDs = Set(decisions.map(\.id))
-        let remaining = open.filter { !decisionIDs.contains($0.id) }
-
-        func bySource(_ sources: Set<String>) -> [TodoItem] {
-            remaining.filter { sources.contains($0.sourceSystem ?? "") }
-        }
+        let today = TodoFiltering.filter(open, by: .today, now: now, calendar: calendar)
+        let overdue = TodoFiltering.filter(open, by: .overdue, now: now, calendar: calendar)
+        let todayIDs = Set(today.map(\.id))
+        let overdueIDs = Set(overdue.map(\.id))
+        let current = open.filter { !todayIDs.contains($0.id) && !overdueIDs.contains($0.id) }
+        let recent = TodoFiltering.filter(
+            current,
+            by: .open,
+            now: now,
+            calendar: calendar
+        )
 
         let definitions: [(key: String, title: String, todos: [TodoItem])] = [
-            ("decisions", "Decisions to make", decisions),
-            ("gmail", "Gmail", bySource(["gmail", "gmail_triage"])),
-            ("slack", "Slack", bySource(["slack"])),
-            ("calendar", "Calendar", bySource(["calendar", "google_calendar", "calendar_local"]))
+            ("today", "Today", today),
+            ("recent", "Recently updated", recent),
+            ("overdue", "Past due", overdue)
         ]
 
         return definitions

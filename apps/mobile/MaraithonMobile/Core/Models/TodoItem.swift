@@ -11,6 +11,9 @@ final class TodoItem {
     var dueDate: Date?
     var isCompleted: Bool
     var createdAt: Date
+    /// Nonoptional default keeps the additive field eligible for SwiftData's
+    /// lightweight migration; the first v2 todo sync backfills server time.
+    var updatedAt: Date = Date()
     var completedAt: Date?
     var decisionPrompt: String?
     var decisionContextSummary: String?
@@ -46,6 +49,7 @@ final class TodoItem {
         dueDate: Date? = nil,
         isCompleted: Bool = false,
         createdAt: Date = Date(),
+        updatedAt: Date? = nil,
         completedAt: Date? = nil,
         decisionPrompt: String? = nil,
         decisionContextSummary: String? = nil,
@@ -75,6 +79,7 @@ final class TodoItem {
         self.dueDate = dueDate
         self.isCompleted = isCompleted
         self.createdAt = createdAt
+        self.updatedAt = updatedAt ?? createdAt
         self.completedAt = completedAt
         self.decisionPrompt = decisionPrompt
         self.decisionContextSummary = decisionContextSummary
@@ -167,6 +172,7 @@ final class TodoItem {
     func setCompleted(_ completed: Bool, at date: Date = Date()) {
         isCompleted = completed
         completedAt = completed ? date : nil
+        updatedAt = date
     }
 }
 

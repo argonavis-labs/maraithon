@@ -303,6 +303,62 @@ struct ProductionDataSyncTests {
     }
 
     @Test
+    func closedCardOmissionPreservesExistingDecisionContext() {
+        let card = MobileAPIClient.RemoteActionCard(
+            decisionPrompt: "Decide whether to send the campaign update.",
+            contextItems: [.init(label: "Person", value: "Michael")],
+            whyNow: "Michael is waiting.",
+            sourceContext: "Checked Gmail",
+            nextBestAction: "Approve a short reply.",
+            draftPreview: "Thanks Michael.",
+            evidenceExcerpt: "Can you send the update?"
+        )
+        let todo = ProductionDataSync.todo(from: remoteTodo(actionCard: card), id: UUID())
+
+        ProductionDataSync.apply(
+            remoteTodo(status: "done", hasActionCardField: false),
+            to: todo,
+            includeCards: true
+        )
+
+        #expect(todo.isCompleted)
+        #expect(todo.decisionPrompt == "Decide whether to send the campaign update.")
+        #expect(todo.nextBestAction == "Approve a short reply.")
+        #expect(todo.draftPreview == "Thanks Michael.")
+    }
+
+    @Test
+    func syncedTodoUsesAuthoritativeServerTimestamps() {
+        let insertedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let updatedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let todo = ProductionDataSync.todo(
+            from: remoteTodo(insertedAt: insertedAt, updatedAt: updatedAt),
+            id: UUID()
+        )
+
+        #expect(todo.createdAt == insertedAt)
+        #expect(todo.updatedAt == updatedAt)
+    }
+
+    @Test
+    func missingServerTimestampsDoNotMakeExistingWorkLookFresh() {
+        let createdAt = Date(timeIntervalSince1970: 1_600_000_000)
+        let updatedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let todo = TodoItem(
+            id: UUID(),
+            title: "Existing work",
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+
+        ProductionDataSync.apply(remoteTodo(), to: todo)
+
+        #expect(todo.createdAt == createdAt)
+        #expect(todo.updatedAt == updatedAt)
+    }
+
+    @Test
     func cardsIncludedRefreshUpdatesDecisionContext() {
         let todo = ProductionDataSync.todo(from: remoteTodo(), id: UUID())
         #expect(todo.decisionPrompt == nil)
@@ -395,7 +451,10 @@ struct ProductionDataSyncTests {
         priority: Int? = 55,
         summary: String? = nil,
         nextAction: String? = nil,
-        actionCard: MobileAPIClient.RemoteActionCard? = nil
+        insertedAt: Date? = nil,
+        updatedAt: Date? = nil,
+        actionCard: MobileAPIClient.RemoteActionCard? = nil,
+        hasActionCardField: Bool = true
     ) -> MobileAPIClient.RemoteTodo {
         MobileAPIClient.RemoteTodo(
             id: UUID().uuidString,
@@ -407,7 +466,10 @@ struct ProductionDataSyncTests {
             priority: priority,
             status: status,
             closedAt: nil,
-            actionCard: actionCard
+            insertedAt: insertedAt,
+            updatedAt: updatedAt,
+            actionCard: actionCard,
+            hasActionCardField: hasActionCardField
         )
     }
 }

@@ -5,7 +5,7 @@ struct TodayView: View {
     @Environment(AppNavigation.self) private var appNavigation
     @Environment(SessionStore.self) private var sessionStore
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \TodoItem.createdAt, order: .reverse) private var todos: [TodoItem]
+    @Query(sort: \TodoItem.updatedAt, order: .reverse) private var todos: [TodoItem]
     @Query(sort: \ChatThread.updatedAt, order: .reverse) private var threads: [ChatThread]
     @State private var editingTodo: TodoItem?
     @State private var refreshErrorMessage: String?

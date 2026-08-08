@@ -10,18 +10,31 @@ struct TodoFilteringTests {
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-        let overdue = TodoItem(title: "Overdue", dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60))
+        let overdue = TodoItem(
+            title: "Overdue",
+            dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60),
+            updatedAt: now.addingTimeInterval(-400)
+        )
         let decision = TodoItem(
             title: "Approve investor reply",
+            updatedAt: now.addingTimeInterval(-300),
             decisionPrompt: "Approve the investor reply with the revised terms.",
             whyNow: "The investor is waiting on your decision."
         )
-        let today = TodoItem(title: "Today", dueDate: now.addingTimeInterval(60))
-        let upcoming = TodoItem(title: "Upcoming", dueDate: now.addingTimeInterval(3 * 24 * 60 * 60))
-        let completed = TodoItem(title: "Completed", dueDate: now, isCompleted: true)
+        let today = TodoItem(
+            title: "Today",
+            dueDate: now.addingTimeInterval(60),
+            updatedAt: now.addingTimeInterval(-200)
+        )
+        let upcoming = TodoItem(
+            title: "Upcoming",
+            dueDate: now.addingTimeInterval(3 * 24 * 60 * 60),
+            updatedAt: now.addingTimeInterval(-100)
+        )
+        let completed = TodoItem(title: "Completed", dueDate: now, isCompleted: true, updatedAt: now)
 
         let todos = [overdue, decision, today, upcoming, completed]
-        #expect(TodoFiltering.filter(todos, by: .open, now: now, calendar: calendar).map(\.title) == ["Overdue", "Approve investor reply", "Today", "Upcoming"])
+        #expect(TodoFiltering.filter(todos, by: .open, now: now, calendar: calendar).map(\.title) == ["Upcoming", "Today", "Approve investor reply", "Overdue"])
         #expect(TodoFiltering.filter(todos, by: .decisions, now: now, calendar: calendar).map(\.title) == ["Approve investor reply"])
         #expect(TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar).map(\.title) == ["Today"])
         #expect(TodoFiltering.filter(todos, by: .overdue, now: now, calendar: calendar).map(\.title) == ["Overdue"])

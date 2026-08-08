@@ -5,6 +5,7 @@ defmodule MaraithonWeb.MobileTodoController do
   alias MaraithonWeb.MobileChatJSON
   alias MaraithonWeb.MobileConditional
   alias MaraithonWeb.MobileJSON
+  alias MaraithonWeb.LocalTime
   alias MaraithonWeb.MobileParams
 
   @todo_param_keys ~w(
@@ -41,6 +42,14 @@ defmodule MaraithonWeb.MobileTodoController do
           sort_by: text_param(params, "sort") || "updated",
           sort_dir: text_param(params, "dir") || "desc"
         )
+
+      related_people_by_todo_id =
+        Crm.people_for_resources(user_id, "todo", Enum.map(todos, & &1.id), limit: 5)
+
+      json_opts =
+        json_opts
+        |> Keyword.put(:open_cards_only, truthy?(Map.get(params, "open_cards_only")))
+        |> Keyword.put(:related_people_by_todo_id, related_people_by_todo_id)
 
       json(conn, %{
         todos: Enum.map(todos, &MobileJSON.todo(&1, json_opts)),
@@ -369,7 +378,11 @@ defmodule MaraithonWeb.MobileTodoController do
     include_card? = truthy?(Map.get(params, "include_cards") || Map.get(params, "include_card"))
 
     if include_card? do
-      [include_card: true, source_health_snapshots: SourceFreshness.compact_for_prompt(user_id)]
+      [
+        include_card: true,
+        source_health_snapshots: SourceFreshness.compact_for_prompt(user_id),
+        timezone_info: LocalTime.timezone_info_for_user(user_id)
+      ]
     else
       [include_card: false]
     end

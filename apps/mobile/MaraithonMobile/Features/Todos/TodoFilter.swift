@@ -239,7 +239,14 @@ enum TodoFiltering {
             case .completed:
                 return todo.isCompleted
             }
+        }.sorted(by: mostRecentlyUpdatedFirst)
+    }
+
+    private static func mostRecentlyUpdatedFirst(_ lhs: TodoItem, _ rhs: TodoItem) -> Bool {
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt > rhs.updatedAt
         }
+        return lhs.id.uuidString < rhs.id.uuidString
     }
 
     static func overdueCount(
@@ -288,6 +295,7 @@ enum TodoListSignature {
             hasher.combine(todo.isCompleted)
             hasher.combine(todo.dueDate)
             hasher.combine(todo.priorityRawValue)
+            hasher.combine(todo.updatedAt)
             hasher.combine(todo.decisionPrompt)
             hasher.combine(todo.decisionContextSummary)
             hasher.combine(todo.whyNow)

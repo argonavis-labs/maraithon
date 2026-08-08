@@ -123,13 +123,14 @@ struct MobileAPIClient: Sendable {
 
     /// Endpoint keys for the ETag store. Todos keys vary by `include_cards`
     /// because the two variants return different payloads: a 304 earned by a
-    /// cards-off sync must not suppress the first cards-on sync.
+    /// cards-off sync must not suppress the first cards-on sync. Bump the key
+    /// version whenever persisted rows need a mandatory one-time backfill.
     enum ETagKey {
         static let people = "people"
         static let chatThreads = "chat-threads"
 
         static func todos(includeCards: Bool) -> String {
-            includeCards ? "todos.cards" : "todos"
+            includeCards ? "todos.v2.cards" : "todos.v2"
         }
     }
 
@@ -254,7 +255,10 @@ struct MobileAPIClient: Sendable {
         let priority: Int?
         let status: String
         let closedAt: Date?
+        let insertedAt: Date?
+        let updatedAt: Date?
         let actionCard: RemoteActionCard?
+        let hasActionCardField: Bool
         let relatedPeople: [RemoteRelatedPerson]
 
         enum CodingKeys: String, CodingKey {
@@ -268,6 +272,8 @@ struct MobileAPIClient: Sendable {
             case priority
             case status
             case closedAt = "closed_at"
+            case insertedAt = "inserted_at"
+            case updatedAt = "updated_at"
             case actionCard = "action_card"
             case relatedPeople = "related_people"
         }
@@ -284,7 +290,10 @@ struct MobileAPIClient: Sendable {
             priority = try container.decodeIfPresent(Int.self, forKey: .priority)
             status = try container.decode(String.self, forKey: .status)
             closedAt = try container.decodeIfPresent(Date.self, forKey: .closedAt)
+            insertedAt = try container.decodeIfPresent(Date.self, forKey: .insertedAt)
+            updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
             actionCard = try container.decodeIfPresent(RemoteActionCard.self, forKey: .actionCard)
+            hasActionCardField = container.contains(.actionCard)
             relatedPeople = try container.decodeIfPresent([RemoteRelatedPerson].self, forKey: .relatedPeople) ?? []
         }
 
@@ -299,7 +308,10 @@ struct MobileAPIClient: Sendable {
             priority: Int?,
             status: String,
             closedAt: Date?,
+            insertedAt: Date? = nil,
+            updatedAt: Date? = nil,
             actionCard: RemoteActionCard? = nil,
+            hasActionCardField: Bool = true,
             relatedPeople: [RemoteRelatedPerson] = []
         ) {
             self.id = id
@@ -312,7 +324,10 @@ struct MobileAPIClient: Sendable {
             self.priority = priority
             self.status = status
             self.closedAt = closedAt
+            self.insertedAt = insertedAt
+            self.updatedAt = updatedAt
             self.actionCard = actionCard
+            self.hasActionCardField = hasActionCardField
             self.relatedPeople = relatedPeople
         }
     }
@@ -998,11 +1013,12 @@ struct MobileAPIClient: Sendable {
         for page in 0..<maxPages {
             try Task.checkCancellation()
 
-            // Keep the first-page URL identical to the pre-pagination request
-            // so old servers see exactly what they always saw.
+            // Keep pagination compatible with old servers. The card scope is
+            // opt-in so older app builds retain full closed-item context.
             let offsetQuery = offset > 0 ? "&offset=\(offset)" : ""
+            let cardScopeQuery = includeCards ? "&open_cards_only=true" : ""
             let response: TodosResponse = try await send(
-                path: "/todos?limit=\(pageSize)\(offsetQuery)&status=all&sort=updated&dir=desc&include_cards=\(includeCards)",
+                path: "/todos?limit=\(pageSize)\(offsetQuery)&status=all&sort=updated&dir=desc&include_cards=\(includeCards)\(cardScopeQuery)",
                 sessionToken: sessionToken,
                 etagKey: (conditional && page == 0) ? ETagKey.todos(includeCards: includeCards) : nil,
                 responseType: TodosResponse.self
@@ -1348,7 +1364,7 @@ struct MobileAPIClient: Sendable {
     private static let iso8601WithFractionalSeconds = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let iso8601 = Date.ISO8601FormatStyle(includingFractionalSeconds: false)
 
-    nonisolated private static func date(from value: String) -> Date? {
+    nonisolated static func date(from value: String) -> Date? {
         if let date = try? iso8601WithFractionalSeconds.parse(value) {
             return date
         }

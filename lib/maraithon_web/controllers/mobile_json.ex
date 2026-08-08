@@ -53,16 +53,21 @@ defmodule MaraithonWeb.MobileJSON do
       closed_at: json_value(todo.closed_at),
       source_occurred_at: json_value(todo.source_occurred_at),
       metadata: public_todo_metadata(todo.metadata || %{}),
-      related_people: related_people(todo),
+      related_people: related_people(todo, opts),
       inserted_at: json_value(todo.inserted_at),
       updated_at: json_value(todo.updated_at)
     }
 
-    if Keyword.get(opts, :include_card, false) do
+    if include_action_card?(todo, opts) do
       Map.put(base, :action_card, action_card(todo, opts))
     else
       base
     end
+  end
+
+  defp include_action_card?(%Todo{status: status}, opts) do
+    Keyword.get(opts, :include_card, false) and
+      (not Keyword.get(opts, :open_cards_only, false) or status in ["open", "snoozed"])
   end
 
   def brief(%Brief{} = brief) do
@@ -308,20 +313,30 @@ defmodule MaraithonWeb.MobileJSON do
 
   def public_todo_metadata(metadata), do: PublicMetadata.todo(metadata)
 
-  defp related_people(%Todo{user_id: user_id, id: todo_id})
+  defp related_people(%Todo{user_id: user_id, id: todo_id}, opts)
        when is_binary(user_id) and is_binary(todo_id) do
-    user_id
-    |> Crm.people_for_resource("todo", todo_id, limit: 5)
-    |> Enum.map(fn %Person{} = person ->
-      %{
-        id: person.id,
-        display_name: person.display_name,
-        relationship: person.relationship
-      }
-    end)
+    case Keyword.fetch(opts, :related_people_by_todo_id) do
+      {:ok, people_by_todo_id} when is_map(people_by_todo_id) ->
+        people_by_todo_id
+        |> Map.get(todo_id, [])
+        |> Enum.map(&related_person/1)
+
+      _other ->
+        user_id
+        |> Crm.people_for_resource("todo", todo_id, limit: 5)
+        |> Enum.map(&related_person/1)
+    end
   end
 
-  defp related_people(_todo), do: []
+  defp related_people(_todo, _opts), do: []
+
+  defp related_person(%Person{} = person) do
+    %{
+      id: person.id,
+      display_name: person.display_name,
+      relationship: person.relationship
+    }
+  end
 
   defp json_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
 

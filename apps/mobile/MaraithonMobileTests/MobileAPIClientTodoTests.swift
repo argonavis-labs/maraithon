@@ -6,6 +6,12 @@ import Testing
 @MainActor
 struct MobileAPIClientTodoTests {
     @Test
+    func todoETagKeysForceTheTimestampBackfill() {
+        #expect(MobileAPIClient.ETagKey.todos(includeCards: false) == "todos.v2")
+        #expect(MobileAPIClient.ETagKey.todos(includeCards: true) == "todos.v2.cards")
+    }
+
+    @Test
     func deleteTodoUsesRemoteDeleteEndpoint() async throws {
         let todoID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let recorder = HTTPRequestRecorder()
@@ -115,7 +121,8 @@ struct MobileAPIClientTodoTests {
         let card = try #require(todos.first?.actionCard)
 
         #expect(request.httpMethod == "GET")
-        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos?limit=500&status=all&sort=updated&dir=desc&include_cards=true")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos?limit=500&status=all&sort=updated&dir=desc&include_cards=true&open_cards_only=true")
+        #expect(todos.first?.hasActionCardField == true)
         #expect(card.decisionPrompt == "Decide whether to send the campaign owner and ETA.")
         #expect(card.contextItems.compactMap(\.value) == ["Michael", "UGC campaign"])
         #expect(card.whyNow == "Michael is waiting and no later reply was found.")
@@ -142,7 +149,7 @@ struct MobileAPIClientTodoTests {
     }
 
     @Test
-    func listTodosAcceptsServerTimestampsWithoutExplicitTimeZone() async throws {
+    func listTodosParsesServerTimestampsWithAndWithoutFractionalSeconds() async throws {
         let recorder = HTTPRequestRecorder()
         let client = MobileAPIClient(
             baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
@@ -162,6 +169,8 @@ struct MobileAPIClientTodoTests {
                       "priority": 55,
                       "status": "open",
                       "closed_at": null,
+                      "inserted_at": "2026-06-17T09:00:00.123456Z",
+                      "updated_at": "2026-06-17T09:15:00Z",
                       "related_people": []
                     }
                   ]
@@ -174,6 +183,9 @@ struct MobileAPIClientTodoTests {
         let todo = try #require(todos.first)
 
         #expect(todo.dueAt != nil)
+        #expect(todo.insertedAt == MobileAPIClient.date(from: "2026-06-17T09:00:00.123456Z"))
+        #expect(todo.updatedAt == MobileAPIClient.date(from: "2026-06-17T09:15:00Z"))
+        #expect(!todo.hasActionCardField)
     }
 
     @Test
