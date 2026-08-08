@@ -15,8 +15,11 @@ on:
           - staging
           - production
 
+# Xcode cloud signing creates an account-wide development certificate on each
+# ephemeral runner. Serialize every ref so cleanup can never revoke a certificate
+# belonging to another mobile release that is still archiving.
 concurrency:
-  group: mobile-release-${{ github.ref }}
+  group: mobile-release
   cancel-in-progress: false
 
 permissions:
@@ -85,12 +88,13 @@ jobs:
           BUILD_NUMBER="$(date -u +%Y%m%d%H%M%S)"
           echo "MARAITHON_MOBILE_BUILD_NUMBER=${BUILD_NUMBER}" >> "$GITHUB_ENV"
 
-      # Each ephemeral runner mints a fresh development certificate via
-      # cloud signing; without pruning, the account cert cap eventually
-      # blocks archiving (broke the 2026-06-10 release).
-      - name: Prune stale CI development certificates
+      # App Store Connect API-key signing still mints a short-lived runner
+      # development certificate before export. Keep only a small newest set so
+      # bursty main pushes cannot exhaust Apple's account-wide certificate cap.
+      - name: Prune ephemeral CI development certificates
         env:
           ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          CERT_RETAIN_COUNT: '2'
         run: node scripts/ci/cleanup-dev-certificates.mjs
 
       - name: Build and upload to TestFlight

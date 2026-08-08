@@ -1,13 +1,12 @@
 #!/usr/bin/env node
-// Prunes stale "Created via API" DEVELOPMENT certificates before a CI build.
+// Prunes ephemeral "Created via API" development certificates before CI.
 //
-// Each ephemeral CI runner lets Xcode cloud-signing mint a fresh development
-// certificate, and the account-wide cap eventually blocks archiving with
-// "maximum number of certificates" (which broke a release on 2026-06-10).
-// This deletes only auto-minted development certs older than a grace window;
-// named certificates (real machines) and distribution/Developer ID certs are
-// never touched. Failures warn and exit 0 — cleanup must never block a
-// release.
+// Each ephemeral runner lets Xcode API-key signing mint a fresh development
+// certificate. A burst of releases can reach Apple's account-wide cap before
+// the certificates become old enough for age-only cleanup. This keeps only a
+// small newest set and also removes old certificates. Named certificates (real
+// machines), distribution certificates, and Developer ID certificates are
+// never touched.
 //
 // Required env:
 //   ASC_KEY_ID       App Store Connect API key ID
@@ -15,9 +14,9 @@
 //   ASC_PRIVATE_KEY  The .p8 private key contents (PEM, multi-line)
 //
 // Optional env:
-//   CERT_MAX_AGE_HOURS  Grace window before an auto-minted cert is pruned
-//                       (default 48; the cert a concurrent run just minted
-//                       stays alive).
+//   CERT_RETAIN_COUNT     Number of newest auto-minted certificates to preserve
+//                         even during a burst (default 2).
+//   CERT_MAX_AGE_HOURS    Maximum age for preserved certificates (default 48).
 //   CERT_CLEANUP_DRY_RUN  "true" to log what would be deleted without deleting.
 
 import { createSign } from 'node:crypto';
@@ -26,19 +25,31 @@ const REQUIRED = ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_PRIVATE_KEY'];
 
 for (const key of REQUIRED) {
   if (!process.env[key]) {
-    console.warn(`Cert cleanup skipped: missing env ${key}`);
-    process.exit(0);
+    console.error(`Cert cleanup failed: missing env ${key}`);
+    process.exit(1);
   }
 }
 
 const KEY_ID = process.env.ASC_KEY_ID;
 const ISSUER_ID = process.env.ASC_ISSUER_ID;
 const PRIVATE_KEY = process.env.ASC_PRIVATE_KEY;
+const RETAIN_COUNT = Number(process.env.CERT_RETAIN_COUNT || 2);
 const MAX_AGE_HOURS = Number(process.env.CERT_MAX_AGE_HOURS || 48);
 const DRY_RUN = String(process.env.CERT_CLEANUP_DRY_RUN || '') === 'true';
 
 const AUTO_MINTED_NAME = 'Created via API';
+const AUTO_MINTED_TYPES = new Set(['DEVELOPMENT', 'IOS_DEVELOPMENT']);
 const CERT_LIFETIME_DAYS = 365;
+
+if (!Number.isInteger(RETAIN_COUNT) || RETAIN_COUNT < 0) {
+  console.error('CERT_RETAIN_COUNT must be a non-negative integer');
+  process.exit(1);
+}
+
+if (!Number.isFinite(MAX_AGE_HOURS) || MAX_AGE_HOURS < 0) {
+  console.error('CERT_MAX_AGE_HOURS must be a non-negative number');
+  process.exit(1);
+}
 
 function base64url(input) {
   return Buffer.from(input)
@@ -90,29 +101,48 @@ async function main() {
   const response = await api('/v1/certificates?limit=200');
 
   if (!response.ok) {
-    console.warn(`Cert cleanup skipped: list failed with ${response.status}`);
-    return;
+    throw new Error(`certificate list failed with ${response.status}`);
   }
 
   const body = await response.json();
   const cutoff = new Date(Date.now() - MAX_AGE_HOURS * 3600 * 1000);
-
-  const stale = (body.data || []).filter((cert) => {
-    const attrs = cert.attributes || {};
-    return (
-      attrs.certificateType === 'DEVELOPMENT' &&
-      attrs.displayName === AUTO_MINTED_NAME &&
-      attrs.expirationDate &&
-      approximateCreatedAt(attrs.expirationDate) < cutoff
+  const autoMinted = (body.data || [])
+    .filter((cert) => {
+      const attrs = cert.attributes || {};
+      return (
+        AUTO_MINTED_TYPES.has(attrs.certificateType) &&
+        attrs.displayName === AUTO_MINTED_NAME &&
+        attrs.expirationDate &&
+        Number.isFinite(new Date(attrs.expirationDate).getTime())
+      );
+    })
+    // These certificates share the same lifetime, so expiration order is also
+    // creation order even though Apple's API does not expose a created date.
+    .sort(
+      (left, right) =>
+        new Date(right.attributes.expirationDate) -
+        new Date(left.attributes.expirationDate)
     );
+
+  const prune = autoMinted.filter((cert, index) => {
+    const tooMany = index >= RETAIN_COUNT;
+    const tooOld = approximateCreatedAt(cert.attributes.expirationDate) < cutoff;
+    return tooMany || tooOld;
   });
 
-  if (stale.length === 0) {
+  console.log(
+    `Cert cleanup: found ${autoMinted.length} ephemeral development certificate(s); ` +
+      `retaining at most ${RETAIN_COUNT}.`
+  );
+
+  if (prune.length === 0) {
     console.log('Cert cleanup: nothing to prune.');
     return;
   }
 
-  for (const cert of stale) {
+  let failures = 0;
+
+  for (const cert of prune) {
     const label = `${cert.id} (expires ${cert.attributes.expirationDate})`;
 
     if (DRY_RUN) {
@@ -123,14 +153,21 @@ async function main() {
     const deletion = await api(`/v1/certificates/${cert.id}`, { method: 'DELETE' });
 
     if (deletion.status === 204) {
-      console.log(`Cert cleanup: revoked stale CI development cert ${label}`);
+      console.log(`Cert cleanup: revoked ephemeral CI development cert ${label}`);
+    } else if (deletion.status === 404) {
+      console.log(`Cert cleanup: ${label} was already revoked`);
     } else {
+      failures += 1;
       console.warn(`Cert cleanup: could not revoke ${label} (${deletion.status})`);
     }
+  }
+
+  if (failures > 0) {
+    throw new Error(`could not revoke ${failures} ephemeral certificate(s)`);
   }
 }
 
 main().catch((error) => {
-  console.warn(`Cert cleanup skipped: ${error.message}`);
-  process.exit(0);
+  console.error(`Cert cleanup failed: ${error.message}`);
+  process.exit(1);
 });
