@@ -24,6 +24,10 @@ defmodule Maraithon.AssistantHarness do
   @default_proactive_max_tokens 1_800
   @default_temperature 0.2
   @default_reasoning_effort "low"
+  # Proactive planning returns a small structured decision. Explicitly disable
+  # Qwen's hidden thinking phase so it cannot consume the full output budget
+  # before emitting that decision; normal chat keeps low reasoning.
+  @default_proactive_reasoning_effort "none"
   @max_tool_calls_per_step 3
   @default_tool_repeat_guard_window 3
   @default_tool_history_limit 12
@@ -120,8 +124,12 @@ defmodule Maraithon.AssistantHarness do
           policy_value(opts, :temperature, @default_temperature)
           |> bounded_float(@default_temperature),
         reasoning_effort:
-          policy_value(opts, :reasoning_effort, @default_reasoning_effort)
-          |> non_empty_string(@default_reasoning_effort)
+          policy_value(
+            opts,
+            :proactive_reasoning_effort,
+            policy_value(opts, :reasoning_effort, @default_proactive_reasoning_effort)
+          )
+          |> non_empty_string(@default_proactive_reasoning_effort)
       }
     }
   end

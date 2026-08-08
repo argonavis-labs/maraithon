@@ -79,7 +79,9 @@ defmodule Maraithon.AssistantHarnessTest do
     assert policy.tool_calls.repeat_guard.window_size == 3
     assert policy.tool_evidence.history_limit == 12
     assert policy.model_failover.enabled == false
+    assert policy.chat_request.reasoning_effort == "low"
     assert policy.proactive_request.max_tokens == 1_800
+    assert policy.proactive_request.reasoning_effort == "none"
     assert "invalid_json" in policy.model_failover.retryable_errors
     assert "invalid_response" in policy.model_failover.retryable_errors
     assert "tool_calls" in policy.model_decision_contract.statuses
@@ -219,12 +221,16 @@ defmodule Maraithon.AssistantHarnessTest do
     override_request =
       AssistantHarness.build_proactive_request(%{context: %{}},
         chat_model: "chat-tier",
-        proactive_model: "proactive-tier"
+        proactive_model: "proactive-tier",
+        proactive_reasoning_effort: "minimal"
       )
 
     assert proactive_request["model"] == "chat-tier"
+    assert proactive_request["reasoning_effort"] == "none"
     assert delivery_request["model"] == "chat-tier"
+    assert delivery_request["reasoning_effort"] == "none"
     assert override_request["model"] == "proactive-tier"
+    assert override_request["reasoning_effort"] == "minimal"
   end
 
   test "proactive prompts encode backlog, weekend, and attention-stack policy" do
