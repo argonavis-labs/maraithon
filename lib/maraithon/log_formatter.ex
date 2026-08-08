@@ -14,13 +14,18 @@ defmodule Maraithon.LogFormatter do
     :reason,
     :provider,
     :user_id,
+    :user_id_hash,
     :status,
     :duration_ms,
+    :retry_after_ms,
     :model,
     :reasoning_effort,
     :input_tokens,
     :output_tokens,
+    :reasoning_tokens,
+    :cost_usd,
     :finish_reason,
+    :choice_count,
     :detail_failure_count,
     :truncated,
     :backfill_needed,
@@ -29,12 +34,28 @@ defmodule Maraithon.LogFormatter do
     :suppressed,
     :failed,
     :disabled,
+    :failure_code,
+    :failure_codes,
+    :response_status,
+    :response_shape,
+    :error_class,
+    :transport_class,
+    :callback_class,
+    :prompt_kind,
+    :base_prompt_bytes,
+    :prompt_bytes,
+    :prompt_byte_cap,
+    :available_candidates,
+    :included_candidates,
+    :users,
     :user_count,
     :planned,
     :interrupt_now,
     :digest,
     :delivered,
-    :expired
+    :undeliverable,
+    :expired,
+    :recovered
   ]
 
   def format(level, message, timestamp, metadata) do
@@ -59,7 +80,7 @@ defmodule Maraithon.LogFormatter do
       metadata
       |> Keyword.take(@structured_metadata_fields)
       |> Enum.reduce(log_entry, fn {key, value}, acc ->
-        Map.put(acc, key, metadata_value(value))
+        Map.put(acc, key, metadata_value(key, value))
       end)
 
     [Jason.encode!(log_entry), "\n"]
@@ -95,17 +116,23 @@ defmodule Maraithon.LogFormatter do
     end
   end
 
-  defp metadata_value(value) when is_binary(value),
+  defp metadata_value(key, value) do
+    key
+    |> Maraithon.Redaction.log_metadata_value(value)
+    |> do_metadata_value()
+  end
+
+  defp do_metadata_value(value) when is_binary(value),
     do: Maraithon.Redaction.redact_string(value)
 
-  defp metadata_value(value) when is_number(value) or is_boolean(value) or is_nil(value),
+  defp do_metadata_value(value) when is_number(value) or is_boolean(value) or is_nil(value),
     do: value
 
-  defp metadata_value(value) when is_atom(value), do: Atom.to_string(value)
-  defp metadata_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
-  defp metadata_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp do_metadata_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp do_metadata_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp do_metadata_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
 
-  defp metadata_value(value) do
+  defp do_metadata_value(value) do
     value
     |> Maraithon.Redaction.redact()
     |> inspect(pretty: false, limit: 20, printable_limit: 500)

@@ -3,6 +3,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ActionLedger
+  alias Maraithon.Memory
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.DeliveryPlanner
   alias Maraithon.TelegramAssistant.ProactiveCandidate
@@ -246,7 +247,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     held = Repo.get!(ProactiveCandidate, candidate.id)
     assert held.status == "held"
     assert held.disposition == "hold"
-    assert held.plan_reason == "Not useful enough to interrupt."
+    assert held.plan_reason == "model_hold"
   end
 
   test "a cadence brief candidate cannot be fatigue-held by the model, unlike other sources", %{
@@ -283,7 +284,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     planned = Repo.get!(ProactiveCandidate, brief_candidate.id)
     assert planned.status == "delivered"
     assert planned.disposition == "interrupt_now"
-    assert planned.plan_reason =~ "forced to send"
+    assert is_nil(planned.plan_reason)
   end
 
   test "quiet hours defer planning entirely: no model call, candidates stay pending", %{
@@ -409,7 +410,437 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     held = Repo.get!(ProactiveCandidate, candidate.id)
     assert held.status == "held"
     assert held.disposition == "hold"
-    assert held.plan_reason =~ "Feedback verification"
+    assert held.plan_reason == "model_hold"
+  end
+
+  test "planner batches normal candidates within the response budget", %{user_id: user_id} do
+    candidates =
+      Enum.map(1..15, fn index ->
+        assert {:ok, candidate} =
+                 ProactiveQueue.enqueue(
+                   candidate_attrs(user_id, %{
+                     dedupe_key: "response-budget:#{index}",
+                     title: "Bounded candidate #{index}"
+                   })
+                 )
+
+        candidate
+      end)
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id,
+               context: %{},
+               dispatch: false,
+               llm_complete:
+                 plan_llm(Map.new(candidates, &{&1.id, {"hold", "Wait for more evidence."}}))
+             )
+
+    assert result.planned == 12
+    assert length(ProactiveQueue.list_pending_for_user(user_id)) == 3
+  end
+
+  test "old low-urgency family work survives an over-cap urgency backlog", %{user_id: user_id} do
+    family_todo = %{
+      "id" => "family-overflow-todo",
+      "title" => "Pick up the child for the family school appointment",
+      "priority" => 20,
+      "status" => "open",
+      "metadata" => %{"relationship_domain" => "family"}
+    }
+
+    assert {:ok, family_candidate} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{
+                 dedupe_key: "family-overflow-candidate",
+                 title: "Family school appointment",
+                 urgency: 0.01,
+                 structured_data: %{"todo_ids" => [family_todo["id"]]}
+               })
+             )
+
+    fillers =
+      Enum.map(1..55, fn index ->
+        assert {:ok, candidate} =
+                 ProactiveQueue.enqueue(
+                   candidate_attrs(user_id, %{
+                     dedupe_key: "family-overflow-filler:#{index}",
+                     urgency: 0.99
+                   })
+                 )
+
+        candidate
+      end)
+
+    all_candidates = [family_candidate | fillers]
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id,
+               context: %{todos: [family_todo]},
+               dispatch: false,
+               llm_complete:
+                 plan_llm(Map.new(all_candidates, &{&1.id, {"hold", "Model requested a hold."}}))
+             )
+
+    assert result.planned == 12
+
+    persisted_family = Repo.get!(ProactiveCandidate, family_candidate.id)
+    assert persisted_family.status == "planned"
+    assert persisted_family.disposition == "hold"
+  end
+
+  test "required briefs survive an over-cap urgency backlog", %{user_id: user_id} do
+    fillers =
+      Enum.map(1..55, fn index ->
+        assert {:ok, candidate} =
+                 ProactiveQueue.enqueue(
+                   candidate_attrs(user_id, %{
+                     dedupe_key: "required-overflow-filler:#{index}",
+                     urgency: 0.99
+                   })
+                 )
+
+        candidate
+      end)
+
+    assert {:ok, brief} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{
+                 source: "brief",
+                 dedupe_key: "required-overflow-brief",
+                 title: "Required cadence brief",
+                 urgency: 0.01
+               })
+             )
+
+    all_candidates = [brief | fillers]
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id,
+               context: %{},
+               dispatch: false,
+               llm_complete:
+                 plan_llm(Map.new(all_candidates, &{&1.id, {"hold", "Model requested a hold."}}))
+             )
+
+    assert result.planned == 12
+    assert result.interrupt_now == 1
+
+    persisted_brief = Repo.get!(ProactiveCandidate, brief.id)
+    assert persisted_brief.status == "planned"
+    assert persisted_brief.disposition == "interrupt_now"
+    assert length(ProactiveQueue.list_pending_for_user(user_id)) == 44
+  end
+
+  test "full escape-heavy brief lane still reserves oldest and urgent ordinary lanes", %{
+    user_id: user_id
+  } do
+    assert {:ok, oldest} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{
+                 dedupe_key: "tight-fairness-oldest",
+                 urgency: 0.01,
+                 body: String.duplicate("\\\"", 3_000)
+               })
+             )
+
+    briefs =
+      Enum.map(1..12, fn index ->
+        assert {:ok, brief} =
+                 ProactiveQueue.enqueue(
+                   candidate_attrs(user_id, %{
+                     source: "brief",
+                     dedupe_key: "tight-fairness-brief:#{index}",
+                     urgency: 0.5,
+                     body: String.duplicate("\\\"", 3_000)
+                   })
+                 )
+
+        brief
+      end)
+
+    assert {:ok, urgent} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{
+                 dedupe_key: "tight-fairness-urgent",
+                 urgency: 0.99,
+                 title: "Urgent customer escalation",
+                 body: String.duplicate("\\\"", 3_000)
+               })
+             )
+
+    all_candidates = [oldest, urgent | briefs]
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id,
+               context: %{},
+               dispatch: false,
+               llm_complete:
+                 plan_llm(Map.new(all_candidates, &{&1.id, {"hold", "Model requested a hold."}}))
+             )
+
+    assert result.planned == 12
+
+    planned_briefs =
+      Enum.count(briefs, fn brief ->
+        Repo.get!(ProactiveCandidate, brief.id).status == "planned"
+      end)
+
+    assert planned_briefs >= 1
+    assert Repo.get!(ProactiveCandidate, oldest.id).status == "planned"
+    assert Repo.get!(ProactiveCandidate, urgent.id).status == "planned"
+  end
+
+  test "successful attempts rotate remaining backlog so a user beyond the first 25 is reached" do
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "dispositions" => [],
+             "digest_intro" => "",
+             "summary" => "Hold this batch."
+           })
+       }}
+    end
+
+    backlogged_users =
+      Enum.map(1..25, fn index ->
+        user_id =
+          "planner-rotation-backlog-#{index}-#{System.unique_integer([:positive])}@example.com"
+
+        {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+        register_push_device(user_id)
+
+        candidates =
+          Enum.map(1..13, fn candidate_index ->
+            assert {:ok, candidate} =
+                     ProactiveQueue.enqueue(
+                       candidate_attrs(user_id, %{
+                         dedupe_key: "rotation:#{index}:#{candidate_index}",
+                         title: "Backlog #{index}-#{candidate_index}",
+                         urgency: 0.8
+                       })
+                     )
+
+            candidate
+          end)
+
+        {user_id, candidates}
+      end)
+
+    healthy_user =
+      "planner-rotation-healthy-#{System.unique_integer([:positive])}@example.com"
+
+    {:ok, _user} = Accounts.get_or_create_user_by_email(healthy_user)
+    register_push_device(healthy_user)
+
+    assert {:ok, healthy_candidate} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(healthy_user, %{
+                 dedupe_key: "rotation:healthy",
+                 title: "Healthy later user"
+               })
+             )
+
+    assert %{users: 25, planned: 300} =
+             DeliveryPlanner.run_for_due_users(
+               batch_size: 25,
+               context: %{},
+               dispatch: false,
+               llm_complete: llm_complete
+             )
+
+    assert Repo.get!(ProactiveCandidate, healthy_candidate.id).status == "pending"
+
+    {_first_user, first_candidates} = hd(backlogged_users)
+
+    remaining =
+      Enum.find(first_candidates, fn candidate ->
+        Repo.get!(ProactiveCandidate, candidate.id).status == "pending"
+      end)
+
+    rotated = Repo.get!(ProactiveCandidate, remaining.id)
+    assert rotated.inserted_at == remaining.inserted_at
+    assert DateTime.compare(rotated.updated_at, remaining.updated_at) in [:gt, :eq]
+
+    assert %{users: 25} =
+             DeliveryPlanner.run_for_due_users(
+               batch_size: 25,
+               context: %{},
+               dispatch: false,
+               llm_complete: llm_complete
+             )
+
+    assert Repo.get!(ProactiveCandidate, healthy_candidate.id).status == "planned"
+  end
+
+  test "quote-heavy recalled memory still fits the final whole-message cap", %{user_id: user_id} do
+    escape_heavy =
+      String.duplicate("\\", 500) <> String.duplicate("\"", 500) <> String.duplicate("\n", 500)
+
+    escaped_memory = "MEMORY-ESCAPE-SENTINEL " <> escape_heavy
+
+    Enum.each(1..6, fn index ->
+      assert {:ok, _memory} =
+               Memory.write(user_id, %{
+                 "kind" => "preference",
+                 "title" => "Memory bound candidate #{index}",
+                 "content" => escaped_memory,
+                 "importance" => 100 - index,
+                 "confidence" => 1.0
+               })
+    end)
+
+    candidates =
+      Enum.map(1..12, fn index ->
+        assert {:ok, candidate} =
+                 ProactiveQueue.enqueue(
+                   candidate_attrs(user_id, %{
+                     dedupe_key: "memory-bound:#{index}",
+                     title: "Memory bound candidate #{index}",
+                     body: String.duplicate(escape_heavy, 4),
+                     why_now: "Memory bound candidate #{index} is due."
+                   })
+                 )
+
+        candidate
+      end)
+
+    llm_complete = fn params ->
+      send(self(), {:memory_bounded_request, params})
+      plan_llm(Map.new(candidates, &{&1.id, {"hold", "Respect recalled preference."}})).(params)
+    end
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id,
+               context: %{},
+               dispatch: false,
+               llm_complete: llm_complete
+             )
+
+    assert result.planned > 0
+    assert_receive {:memory_bounded_request, params}
+
+    assert params["messages"]
+           |> Maraithon.AssistantHarness.PromptStability.encode!()
+           |> byte_size() <= Maraithon.AssistantHarness.delivery_plan_prompt_byte_cap()
+
+    assert get_in(params, ["messages", Access.at(1), "content"]) =~ "MEMORY-ESCAPE-SENTINEL"
+  end
+
+  test "whole planner prompt stays byte bounded for pathological candidates and context", %{
+    user_id: user_id
+  } do
+    escaped_unicode = String.duplicate("🙂\"\n", 1_000)
+    bounded_why_now = String.duplicate("🙂\"\n", 300)
+    todo_ids = Enum.map(1..10, &"todo-#{&1}")
+
+    candidates =
+      Enum.map(1..25, fn index ->
+        assert {:ok, candidate} =
+                 ProactiveQueue.enqueue(
+                   candidate_attrs(user_id, %{
+                     dedupe_key: "pathological:#{index}",
+                     title: "Candidate #{index}",
+                     body: escaped_unicode,
+                     why_now: bounded_why_now,
+                     structured_data: %{
+                       "linked_project" => %{
+                         "notes" => escaped_unicode,
+                         "history" => List.duplicate(escaped_unicode, 20)
+                       },
+                       "todo_ids" => todo_ids,
+                       "untrusted_blob" => "must-not-reach-the-planner-#{escaped_unicode}"
+                     }
+                   })
+                 )
+
+        candidate
+      end)
+
+    assert {:ok, small_late_candidate} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{
+                 dedupe_key: "pathological:small-late",
+                 title: "Small late candidate",
+                 body: "A compact candidate should still be considered.",
+                 why_now: "It remains due.",
+                 urgency: 0.01,
+                 structured_data: %{}
+               })
+             )
+
+    candidates = candidates ++ [small_late_candidate]
+
+    todos =
+      Enum.map(todo_ids, fn todo_id ->
+        %{
+          "id" => todo_id,
+          "title" => escaped_unicode,
+          "summary" => escaped_unicode,
+          "next_action" => escaped_unicode
+        }
+      end)
+
+    llm_complete = fn params ->
+      send(self(), {:planner_request, params})
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "dispositions" =>
+               candidates
+               |> Enum.filter(fn candidate ->
+                 prompt = get_in(params, ["messages", Access.at(1), "content"]) || ""
+                 String.contains?(prompt, ~s("id":"#{candidate.id}"))
+               end)
+               |> Enum.map(fn candidate ->
+                 %{
+                   "candidate_id" => candidate.id,
+                   "disposition" => "hold",
+                   "reason" => "Bounded planning test."
+                 }
+               end),
+             "digest_intro" => "",
+             "summary" => "Hold the bounded test batch."
+           })
+       }}
+    end
+
+    context = %{
+      user: %{"biography" => escaped_unicode},
+      preference_memory: List.duplicate(%{"text" => escaped_unicode}, 50),
+      calendar: List.duplicate(%{"description" => escaped_unicode}, 50),
+      todos: todos
+    }
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id,
+               context: context,
+               dispatch: false,
+               llm_complete: llm_complete
+             )
+
+    assert result.planned > 0
+    assert result.planned < length(candidates)
+    assert Repo.get!(ProactiveCandidate, small_late_candidate.id).status == "planned"
+
+    assert_receive {:planner_request, params}
+
+    prompt_bytes =
+      params["messages"]
+      |> Maraithon.AssistantHarness.PromptStability.encode!()
+      |> byte_size()
+
+    prompt = get_in(params, ["messages", Access.at(1), "content"])
+
+    assert prompt_bytes <= Maraithon.AssistantHarness.delivery_plan_prompt_byte_cap()
+    assert String.valid?(prompt)
+    refute prompt =~ "must-not-reach-the-planner"
+
+    assert length(ProactiveQueue.list_pending_for_user(user_id)) ==
+             length(candidates) - result.planned
   end
 
   test "run_for_due_users drains pending users", %{user_id: first_user_id} do
@@ -442,6 +873,72 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
   # InsightNotifications.Delivery off "pending" — otherwise InsightNotifier
   # re-selects it every tick, minting a fresh ProactiveCandidate (and a
   # plan_delivery model call) forever.
+  test "users without a push device remain pending without failure noise" do
+    user_id = "delivery-planner-no-device-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    assert {:ok, candidate} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        result =
+          DeliveryPlanner.run_for_due_users(
+            user_ids: [user_id],
+            context: %{},
+            llm_complete: fn _params -> flunk("the model must not run without a push device") end
+          )
+
+        assert result.failed == 0
+        assert result.undeliverable == 1
+        assert result.failure_codes == %{}
+      end)
+
+    assert log == ""
+    assert Repo.get!(ProactiveCandidate, candidate.id).status == "pending"
+  end
+
+  test "due-user failures emit warning telemetry without provider bodies", %{user_id: user_id} do
+    assert {:ok, _candidate} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        result =
+          DeliveryPlanner.run_for_due_users(
+            user_ids: [user_id],
+            context: %{},
+            llm_complete: fn _params ->
+              {:error, {:api_error, 500, %{"secret" => "provider-internal-body"}}}
+            end
+          )
+
+        assert result.failed == 1
+        assert result.failure_codes == %{"api_500" => 1}
+      end)
+
+    assert log =~ "Proactive delivery planning failed"
+    refute log =~ user_id
+    refute log =~ "provider-internal-body"
+  end
+
+  test "due-user exceptions are isolated and never log exception text", %{user_id: user_id} do
+    assert {:ok, _candidate} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        result =
+          DeliveryPlanner.run_for_due_users(
+            user_ids: [user_id],
+            context: %{},
+            llm_complete: fn _params -> raise "provider-internal-secret" end
+          )
+
+        assert result.failed == 1
+        assert result.failure_codes == %{"planner_exception" => 1}
+      end)
+
+    assert log =~ "Proactive delivery planning failed"
+    refute log =~ "provider-internal-secret"
+  end
+
   test "planner dispatch marks the insight delivery sent and stops re-minting candidates", %{
     user_id: user_id
   } do
@@ -741,9 +1238,15 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
   end
 
   defp plan_llm(dispositions_by_id) do
-    fn _params ->
+    fn params ->
+      prompt = get_in(params, ["messages", Access.at(1), "content"]) || ""
+
       dispositions =
-        Enum.map(dispositions_by_id, fn {candidate_id, {disposition, reason}} ->
+        dispositions_by_id
+        |> Enum.filter(fn {candidate_id, _decision} ->
+          String.contains?(prompt, ~s("id":"#{candidate_id}"))
+        end)
+        |> Enum.map(fn {candidate_id, {disposition, reason}} ->
           %{
             "candidate_id" => candidate_id,
             "disposition" => disposition,
@@ -765,6 +1268,13 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
 
   defp apns_pushes do
     CapturingAPNS.recorded()
+  end
+
+  defp register_push_device(user_id) do
+    {:ok, _device} =
+      Maraithon.Push.Devices.register(user_id, %{
+        device_token: :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
+      })
   end
 
   defp candidate_attrs(user_id, overrides \\ %{}) do

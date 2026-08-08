@@ -9,7 +9,16 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiterTest do
     limiter =
       start_supervised!(%{
         id: limiter_name,
-        start: {LLMRateLimiter, :start_link, [[name: limiter_name]]}
+        start:
+          {LLMRateLimiter, :start_link,
+           [
+             [
+               name: limiter_name,
+               max_concurrency: 1,
+               chat_max_concurrency: 1,
+               reasoning_max_concurrency: 1
+             ]
+           ]}
       })
 
     %{limiter: limiter}

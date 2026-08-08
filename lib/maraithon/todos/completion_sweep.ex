@@ -18,16 +18,23 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.Connectors.Gmail
+  alias Maraithon.LLM.BoundedResponse
   alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.LocalReminders.LocalReminder
+  alias Maraithon.PromptBudget
   alias Maraithon.Repo
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.UserBatch
 
   require Logger
 
   @open_statuses ~w(open snoozed)
-  @default_limit 500
+  @default_limit 20
+  @max_limit 20
+  @max_user_runtime_ms 120_000
+  @max_gmail_operation_ms 10_000
+  @max_gmail_messages 200
   @calendar_conflict_grace_hours 24
 
   @type summary :: %{
@@ -45,20 +52,21 @@ defmodule Maraithon.Todos.CompletionSweep do
   def run_for_all_users(opts \\ []) when is_list(opts) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
 
-    user_ids =
-      case Keyword.get(opts, :user_ids) do
-        user_ids when is_list(user_ids) -> user_ids
-        _other -> candidate_user_ids(opts)
-      end
-      |> Enum.filter(&is_binary/1)
-      |> Enum.uniq()
+    deadline = bounded_deadline(opts)
+    user_ids = UserBatch.open_todo_user_ids(opts)
 
     results =
-      Enum.map(user_ids, fn user_id ->
-        run_for_user_safely(user_id, Keyword.put(opts, :now, now))
+      Enum.reduce_while(user_ids, [], fn user_id, results ->
+        if deadline_reached?(deadline) do
+          {:halt, results}
+        else
+          user_opts = opts |> Keyword.put(:now, now) |> Keyword.put(:deadline_ms, deadline)
+          {:cont, [run_for_user_safely(user_id, user_opts) | results]}
+        end
       end)
+      |> Enum.reverse()
 
-    Enum.reduce(results, empty_all_summary(length(user_ids)), &merge_user_summary/2)
+    Enum.reduce(results, empty_all_summary(length(results)), &merge_user_summary/2)
   end
 
   @doc """
@@ -71,7 +79,14 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   def run_for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
-    limit = positive_integer(Keyword.get(opts, :limit), @default_limit)
+    deadline = bounded_deadline(opts)
+    opts = Keyword.put(opts, :deadline_ms, deadline)
+
+    limit =
+      opts
+      |> Keyword.get(:limit)
+      |> positive_integer(@default_limit)
+      |> min(@max_limit)
 
     # Resolve connected Google accounts once per user per run; retaining the
     # account email is required to scope legacy `google` tokens safely.
@@ -88,33 +103,40 @@ defmodule Maraithon.Todos.CompletionSweep do
       end)
 
     todos =
-      Todos.list_for_user(user_id,
-        statuses: @open_statuses,
-        limit: limit,
-        sort_by: "updated",
-        sort_dir: "asc",
-        # Completion checking must see everything open — an unsurfaceable
-        # todo still deserves to be closed when the source proves it done.
-        exclude_unsurfaceable?: false
-      )
+      Todo
+      |> where([todo], todo.user_id == ^user_id and todo.status in ^@open_statuses)
+      |> order_by([todo], asc_nulls_first: todo.last_completion_checked_at, asc: todo.id)
+      |> limit(^limit)
+      |> Repo.all()
 
     {summary, fetch_error_counts} =
-      Enum.reduce(
+      Enum.reduce_while(
         todos,
-        {empty_user_summary(user_id, length(todos)), %{}},
+        {empty_user_summary(user_id, 0), %{}},
         fn todo, {summary, fetch_error_counts} ->
-          case completion_evidence(todo, now, opts) do
-            {:done, reason, note} ->
-              {mark_done(summary, todo, reason, note), fetch_error_counts}
+          if deadline_reached?(deadline) do
+            {:halt, {summary, fetch_error_counts}}
+          else
+            summary = Map.update!(summary, :checked, &(&1 + 1))
+            result = completion_evidence(todo, now, opts)
+            stamp_completion_attempt(todo, now)
 
-            {:fetch_error, reason} ->
-              {
-                Map.update!(summary, :fetch_errors, &(&1 + 1)),
-                Map.update(fetch_error_counts, reason, 1, &(&1 + 1))
-              }
+            next =
+              case result do
+                {:done, reason, note} ->
+                  {mark_done(summary, todo, reason, note), fetch_error_counts}
 
-            :open ->
-              {summary, fetch_error_counts}
+                {:fetch_error, reason} ->
+                  {
+                    Map.update!(summary, :fetch_errors, &(&1 + 1)),
+                    Map.update(fetch_error_counts, reason, 1, &(&1 + 1))
+                  }
+
+                :open ->
+                  {summary, fetch_error_counts}
+              end
+
+            {:cont, next}
           end
         end
       )
@@ -122,9 +144,9 @@ defmodule Maraithon.Todos.CompletionSweep do
     Enum.each(fetch_error_counts, fn {reason, count} ->
       Logger.warning(
         "Todo completion sweep could not verify Gmail items (#{count} todos)",
-        user_id: user_id,
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
         affected_todo_count: count,
-        reason: inspect(reason)
+        failure_code: Maraithon.Redaction.error_class(reason)
       )
     end)
 
@@ -140,16 +162,16 @@ defmodule Maraithon.Todos.CompletionSweep do
   rescue
     error ->
       Logger.warning("Todo completion sweep crashed for user",
-        user_id: user_id,
-        reason: Exception.message(error)
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       %{empty_user_summary(user_id, 0) | errors: 1}
   catch
     kind, reason ->
       Logger.warning("Todo completion sweep crashed for user",
-        user_id: user_id,
-        reason: "#{kind}: #{inspect(reason)}"
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: Maraithon.Redaction.error_class({kind, reason})
       )
 
       %{empty_user_summary(user_id, 0) | errors: 1}
@@ -175,36 +197,62 @@ defmodule Maraithon.Todos.CompletionSweep do
 
     if is_struct(source_at, DateTime) do
       gmail_fetcher = Keyword.get(opts, :gmail_fetcher, &fetch_gmail_thread/2)
-      self_emails = Keyword.get(opts, :self_emails, [])
+      self_emails = Keyword.get(opts, :self_emails, []) |> Enum.take(20)
+      timeout_ms = remaining_operation_ms(opts)
 
-      case gmail_fetcher.(todo.user_id, todo) do
-        {:ok, provider, thread_id, messages} when is_list(messages) ->
-          case later_self_message(messages, source_at, self_emails) do
-            nil ->
-              :open
-
-            message ->
-              {:done, :gmail_self_reply,
-               gmail_resolution_note(provider, thread_id, message, source_at)}
-          end
-
-        {:ok, messages} when is_list(messages) ->
-          case later_self_message(messages, source_at, self_emails) do
-            nil ->
-              :open
-
-            message ->
-              {:done, :gmail_self_reply, gmail_resolution_note(nil, nil, message, source_at)}
-          end
-
-        {:error, reason} when reason in [:not_found, :invalid_gmail_id] ->
-          :open
-
-        {:error, reason} ->
-          {:fetch_error, reason}
+      if timeout_ms > 0 do
+        case BoundedResponse.run(
+               fn ->
+                 gmail_fetcher.(todo.user_id, todo)
+                 |> normalize_gmail_fetch_result(source_at, self_emails)
+               end,
+               timeout_ms
+             ) do
+          {:error, %{reason: :timeout}} -> {:fetch_error, :gmail_timeout}
+          {:error, %{reason: :request_failed}} -> {:fetch_error, :gmail_fetch_failed}
+          result -> result
+        end
+      else
+        {:fetch_error, :cycle_deadline}
       end
     else
       :open
+    end
+  end
+
+  defp normalize_gmail_fetch_result(
+         {:ok, provider, thread_id, messages},
+         source_at,
+         self_emails
+       )
+       when is_list(messages) do
+    gmail_message_result(messages, provider, thread_id, source_at, self_emails)
+  end
+
+  defp normalize_gmail_fetch_result({:ok, messages}, source_at, self_emails)
+       when is_list(messages) do
+    gmail_message_result(messages, nil, nil, source_at, self_emails)
+  end
+
+  defp normalize_gmail_fetch_result({:error, reason}, _source_at, _self_emails)
+       when reason in [:not_found, :invalid_gmail_id],
+       do: :open
+
+  defp normalize_gmail_fetch_result({:error, _reason}, _source_at, _self_emails),
+    do: {:fetch_error, :gmail_fetch_failed}
+
+  defp normalize_gmail_fetch_result(_invalid, _source_at, _self_emails),
+    do: {:fetch_error, :invalid_gmail_response}
+
+  defp gmail_message_result(messages, provider, thread_id, source_at, self_emails) do
+    case messages
+         |> Enum.take(@max_gmail_messages)
+         |> later_self_message(source_at, self_emails) do
+      nil ->
+        :open
+
+      message ->
+        {:done, :gmail_self_reply, gmail_resolution_note(provider, thread_id, message, source_at)}
     end
   end
 
@@ -322,7 +370,12 @@ defmodule Maraithon.Todos.CompletionSweep do
   end
 
   defp gmail_resolution_note(provider, thread_id, message, source_at) do
-    message_id = read_field(message, :message_id) || read_field(message, :id) || "unknown"
+    message_id =
+      bounded_note_field(read_field(message, :message_id) || read_field(message, :id), 256) ||
+        "unknown"
+
+    thread_id = bounded_note_field(thread_id, 256)
+    provider = bounded_note_field(provider, 160)
     sent_at = message_datetime(message)
 
     [
@@ -415,12 +468,20 @@ defmodule Maraithon.Todos.CompletionSweep do
   end
 
   defp first_valid_gmail_id(values) when is_list(values) do
-    Enum.find_value(values, &Gmail.normalize_id/1)
+    Enum.find_value(values, fn value ->
+      if bounded_valid_binary?(value, 256), do: Gmail.normalize_id(value)
+    end)
   end
 
-  defp valid_gmail_id?(value), do: is_binary(Gmail.normalize_id(value))
+  defp valid_gmail_id?(value) when is_binary(value) do
+    bounded_valid_binary?(value, 256) and is_binary(Gmail.normalize_id(value))
+  end
 
-  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp valid_gmail_id?(_value), do: false
+
+  defp present?(value) when is_binary(value),
+    do: bounded_valid_binary?(value, 1_024) and String.trim(value) != ""
+
   defp present?(_value), do: false
 
   defp fetch_gmail_reference_for_provider(user_id, {:thread, thread_id}, provider) do
@@ -543,8 +604,9 @@ defmodule Maraithon.Todos.CompletionSweep do
     end
   end
 
-  defp normalize_gmail_provider_hint(value) when is_binary(value) do
-    value = value |> String.trim() |> String.downcase()
+  defp normalize_gmail_provider_hint(value)
+       when is_binary(value) and byte_size(value) <= 320 do
+    value = if String.valid?(value), do: value |> String.trim() |> String.downcase(), else: ""
 
     cond do
       value == "google" -> "google"
@@ -556,10 +618,13 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   defp normalize_gmail_provider_hint(_value), do: nil
 
-  defp normalize_account_email(value) when is_binary(value) do
-    case value |> String.trim() |> String.downcase() do
-      "" -> nil
-      normalized -> normalized
+  defp normalize_account_email(value)
+       when is_binary(value) and byte_size(value) <= 320 do
+    if String.valid?(value) do
+      case value |> String.trim() |> String.downcase() do
+        "" -> nil
+        normalized -> normalized
+      end
     end
   end
 
@@ -569,9 +634,11 @@ defmodule Maraithon.Todos.CompletionSweep do
     user_id
     |> SourceScope.resolve()
     |> SourceScope.google_accounts_for_service("gmail")
+    |> Enum.take(20)
     |> Enum.sort_by(fn account ->
       {Map.get(account, "account_email") || "~", Map.get(account, "provider") || "~"}
     end)
+    |> Enum.take(8)
   end
 
   defp connected_gmail_accounts(_user_id), do: []
@@ -583,7 +650,8 @@ defmodule Maraithon.Todos.CompletionSweep do
       end)
 
     ([user_id] ++ account_emails)
-    |> Enum.filter(&is_binary/1)
+    |> Enum.take(20)
+    |> Enum.filter(&(is_binary(&1) and byte_size(&1) <= 320 and String.valid?(&1)))
     |> Enum.map(&String.downcase/1)
     |> Enum.uniq()
   end
@@ -591,16 +659,12 @@ defmodule Maraithon.Todos.CompletionSweep do
   defp provider_email("google:" <> email), do: email
   defp provider_email(_provider), do: nil
 
-  # Every user with open todos is enumerated. A capped enumeration with no
-  # rotation would starve users past the cutoff forever; user counts are small,
-  # so `:user_limit` is deliberately ignored here.
-  defp candidate_user_ids(_opts) do
+  defp stamp_completion_attempt(%Todo{id: id, user_id: user_id}, now) do
     Todo
-    |> where([todo], todo.status in ^@open_statuses)
-    |> select([todo], todo.user_id)
-    |> distinct(true)
-    |> order_by([todo], asc: todo.user_id)
-    |> Repo.all()
+    |> where([todo], todo.id == ^id and todo.user_id == ^user_id)
+    |> Repo.update_all(set: [last_completion_checked_at: DateTime.truncate(now, :second)])
+
+    :ok
   end
 
   defp mark_done(summary, %Todo{} = todo, reason, note) do
@@ -613,9 +677,9 @@ defmodule Maraithon.Todos.CompletionSweep do
 
       {:error, error} ->
         Logger.warning("Todo completion sweep failed to mark todo done",
-          user_id: todo.user_id,
-          todo_id: todo.id,
-          reason: inspect(error)
+          user_fingerprint: Maraithon.Redaction.fingerprint(todo.user_id),
+          todo_reference: Maraithon.Redaction.fingerprint(todo.id),
+          failure_code: Maraithon.Redaction.error_class(error)
         )
 
         Map.update!(summary, :errors, &(&1 + 1))
@@ -682,7 +746,8 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   defp parse_datetime(%DateTime{} = datetime), do: datetime
 
-  defp parse_datetime(value) when is_binary(value) do
+  defp parse_datetime(value)
+       when is_binary(value) and byte_size(value) <= 100 do
     case DateTime.from_iso8601(value) do
       {:ok, datetime, _offset} -> datetime
       _ -> nil
@@ -693,8 +758,8 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   defp extract_email(nil), do: nil
 
-  defp extract_email(raw) do
-    raw = to_string(raw)
+  defp extract_email(raw) when is_binary(raw) do
+    raw = PromptBudget.truncate_utf8(raw, 512)
 
     email =
       case Regex.run(~r/<([^>]+)>/, raw) do
@@ -707,15 +772,60 @@ defmodule Maraithon.Todos.CompletionSweep do
     |> String.downcase()
   end
 
+  defp extract_email(_raw), do: nil
+
   defp first_present(values) do
     Enum.find(values, fn
-      value when is_binary(value) -> String.trim(value) != ""
-      _ -> false
+      value when is_binary(value) ->
+        bounded_valid_binary?(value, 1_024) and String.trim(value) != ""
+
+      _ ->
+        false
     end)
   end
 
   defp format_dt(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
   defp format_dt(_datetime), do: "unknown time"
+
+  defp bounded_deadline(opts) do
+    now_ms = System.monotonic_time(:millisecond)
+
+    runtime_ms =
+      opts
+      |> Keyword.get(:max_runtime_ms)
+      |> positive_integer(@max_user_runtime_ms)
+      |> min(@max_user_runtime_ms)
+
+    max_deadline = now_ms + runtime_ms
+
+    case Keyword.get(opts, :deadline_ms) do
+      deadline when is_integer(deadline) -> min(deadline, max_deadline)
+      _invalid -> max_deadline
+    end
+  end
+
+  defp deadline_reached?(deadline),
+    do: System.monotonic_time(:millisecond) >= deadline
+
+  defp remaining_operation_ms(opts) do
+    remaining = Keyword.get(opts, :deadline_ms, 0) - System.monotonic_time(:millisecond)
+    remaining |> max(0) |> min(@max_gmail_operation_ms)
+  end
+
+  defp bounded_note_field(value, max_bytes) when is_binary(value) do
+    value
+    |> PromptBudget.truncate_utf8(max_bytes)
+    |> String.trim()
+    |> case do
+      "" -> nil
+      bounded -> bounded
+    end
+  end
+
+  defp bounded_note_field(_value, _max_bytes), do: nil
+
+  defp bounded_valid_binary?(value, max_bytes),
+    do: is_binary(value) and byte_size(value) <= max_bytes and String.valid?(value)
 
   defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
   defp positive_integer(_value, default), do: default

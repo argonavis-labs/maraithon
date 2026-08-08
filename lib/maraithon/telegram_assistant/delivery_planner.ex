@@ -13,6 +13,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   alias Maraithon.InsightFeedback
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.InsightNotifications.MemoryGate
+  alias Maraithon.PromptBudget
+  alias Maraithon.Redaction
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
 
@@ -36,15 +38,113 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   require Logger
 
   @default_batch_size 25
+  @max_batch_size 100
+  @max_explicit_user_scan 1_000
   @recent_push_limit 8
+  @candidate_acquisition_limit 50
+  @max_candidate_todo_ids 64
+  @max_context_todos_for_ranking 200
+  @max_ranking_todo_bytes 6_000
+  @max_ranking_metadata_bytes 3_000
+  @ranking_todo_fields [
+    {"id", 255},
+    {"title", 500},
+    {"summary", 700},
+    {"next_action", 500},
+    {"notes", 500},
+    {"action_plan", 500},
+    {"metadata", @max_ranking_metadata_bytes},
+    {"due_at", 100},
+    {"source_occurred_at", 100},
+    {"inserted_at", 100},
+    {"updated_at", 100},
+    {"priority", 30},
+    {"direction", 50},
+    {"owner_label", 200},
+    {"source_account_label", 200},
+    {"relationship_strength", 30},
+    {"status", 50}
+  ]
+  @context_todo_bucket_keys ~w(overdue today upcoming no_due_date monitor snoozed todos work)
+  @max_prompt_candidates 12
+  @max_required_prompt_candidates 8
+  @delivery_base_prompt_bytes 40_000
+  @candidate_prompt_body_bytes 2_000
+  @candidate_prompt_why_now_bytes 1_000
+  @candidate_prompt_related_todo_limit 5
+  @candidate_prompt_snapshot_bytes 3_000
+  @candidate_prompt_snapshot_fields [
+    {"id", 500},
+    {"source", 100},
+    {"source_id", 500},
+    {"dedupe_key", 500},
+    {"title", 500},
+    {"body", 2_000},
+    {"urgency", 100},
+    {"why_now", 1_000},
+    {"inserted_at", 100},
+    {"expires_at", 100},
+    {"planning_rank", 100},
+    {"attention_profile", 900},
+    {"related_todos", 3_000},
+    {"structured_data", 2_000}
+  ]
+  @delivery_prompt_context_bytes 20_000
+  @delivery_prompt_context_fields [
+    {"preference_memory", 2_500},
+    {"operator_memory", 1_500},
+    {"user_memory", 1_500},
+    {"user", 1_500},
+    {"current_time", 500},
+    {"todos", 3_000},
+    {"calendar", 2_500},
+    {"relationships", 2_500},
+    {"open_loops", 2_500},
+    {"goals", 1_500},
+    {"projects", 1_500},
+    {"briefing_schedule", 750},
+    {"source_freshness", 750},
+    {"defaults", 500},
+    {"context_fetch", 500}
+  ]
+  @operator_feedback_prompt_bytes 4_000
+  @interrupt_memory_prompt_bytes 8_000
+  @recent_pushes_prompt_bytes 4_000
+  @candidate_structured_data_bytes 4_000
+  @operator_feedback_fields [
+    {"preference_profile", 900},
+    {"user_memory_profile", 900},
+    {"bad_interruption_examples", 1_000},
+    {"good_interruption_examples", 1_000},
+    {"threshold_profile", 200}
+  ]
+  @interrupt_memory_fields [
+    {"memories", 6_500},
+    {"summary", 1_000},
+    {"count", 100}
+  ]
+  @prompt_structured_data_keys ~w(
+    brief_cadence brief_type linked_delivery_id linked_insight_id linked_project
+    message_class nudge_reason todo_count todo_ids travel_itinerary_id
+  )
 
   def run_for_due_users(opts \\ []) when is_list(opts) do
-    batch_size = opts |> Keyword.get(:batch_size, @default_batch_size) |> positive_integer()
-    user_ids = Keyword.get(opts, :user_ids) || ProactiveQueue.pending_user_ids(limit: batch_size)
+    batch_size =
+      opts
+      |> Keyword.get(:batch_size, @default_batch_size)
+      |> positive_integer()
+      |> min(@max_batch_size)
+
+    user_ids = due_user_ids(Keyword.get(opts, :user_ids), batch_size)
 
     Enum.reduce(user_ids, empty_due_summary(), fn user_id, acc ->
-      case run_for_user(user_id, opts) do
+      case safe_run_for_user(user_id, opts) do
         {:ok, result} ->
+          _ = ProactiveQueue.rotate_pending_user(user_id)
+
+          failure_codes =
+            increment_failure_code(acc.failure_codes, "dispatch_failed", result.failed)
+
           %{
             acc
             | users: acc.users + 1,
@@ -53,76 +153,200 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
               digest: acc.digest + result.digest,
               held: acc.held + result.held,
               delivered: acc.delivered + result.delivered,
-              failed: acc.failed + result.failed
+              failed: acc.failed + result.failed,
+              failure_codes: failure_codes
           }
 
+        {:error, :no_push_device} ->
+          _ = ProactiveQueue.rotate_pending_user(user_id)
+          %{acc | users: acc.users + 1, undeliverable: acc.undeliverable + 1}
+
         {:error, reason} ->
+          _ = ProactiveQueue.rotate_pending_user(user_id)
+          failure_code = planning_failure_code(reason)
+
           Logger.warning("Proactive delivery planning failed",
-            user_id: user_id,
-            reason: failure_reason_label(reason)
+            user_id_hash: Redaction.fingerprint(user_id),
+            failure_code: failure_code
           )
 
-          %{acc | users: acc.users + 1, failed: acc.failed + 1}
+          %{
+            acc
+            | users: acc.users + 1,
+              failed: acc.failed + 1,
+              failure_codes: increment_failure_code(acc.failure_codes, failure_code, 1)
+          }
       end
     end)
+  end
+
+  defp due_user_ids(nil, batch_size),
+    do: ProactiveQueue.pending_deliverable_user_ids(limit: batch_size)
+
+  defp due_user_ids(user_ids, batch_size) when is_list(user_ids) do
+    user_ids
+    |> Enum.take(@max_explicit_user_scan)
+    |> Stream.filter(&(is_binary(&1) and &1 != ""))
+    |> Stream.uniq()
+    |> Enum.take(batch_size)
+  end
+
+  defp due_user_ids(_user_ids, _batch_size), do: []
+
+  defp safe_run_for_user(user_id, opts) do
+    run_for_user(user_id, opts)
+  rescue
+    error -> {:error, {:planner_exception, error.__struct__}}
+  catch
+    kind, _reason -> {:error, {:planner_exit, kind}}
   end
 
   def run_for_user(user_id, opts \\ [])
 
   def run_for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
-    Tracing.with_span("telegram_assistant.delivery_planner", %{user_id: user_id}, fn ->
-      candidates = ProactiveQueue.list_pending_for_user(user_id, opts)
+    Tracing.with_span(
+      "telegram_assistant.delivery_planner",
+      %{user_id_hash: Redaction.fingerprint(user_id)},
+      fn ->
+        candidate_limit =
+          opts
+          |> Keyword.get(:candidate_limit, @candidate_acquisition_limit)
+          |> positive_integer()
+          |> min(@candidate_acquisition_limit)
 
-      case candidates do
-        [] ->
-          {:ok, empty_user_summary(user_id)}
+        candidates =
+          ProactiveQueue.list_pending_for_user(
+            user_id,
+            Keyword.put(opts, :candidate_limit, candidate_limit)
+          )
 
-        [_ | _] ->
-          with true <- deliverable?(user_id),
-               :plan <- quiet_hours_gate(user_id, candidates),
-               payload <- build_payload(user_id, nil, candidates, opts),
-               {:ok, raw_plan} <- AssistantHarness.plan_delivery(payload, opts) do
-            plan =
-              raw_plan
-              |> ProactiveQualityGate.verify_delivery_plan(payload, opts)
-              |> apply_interruption_budget_to_plan(payload)
+        case candidates do
+          [] ->
+            {:ok, empty_user_summary(user_id)}
 
-            planned = persist_plan(candidates, plan, payload)
-            counts = disposition_counts(planned)
+          [_ | _] ->
+            with true <- deliverable?(user_id),
+                 :plan <- quiet_hours_gate(user_id, candidates),
+                 {:ok, payload, planning_candidates} <-
+                   build_payload(user_id, nil, candidates, opts) do
+              claim_and_run_plan(user_id, payload, planning_candidates, opts)
+            else
+              false ->
+                {:error, :no_push_device}
 
-            dispatch? = Keyword.get(opts, :dispatch, true)
+              :defer_quiet_hours ->
+                {:ok, empty_user_summary(user_id)}
 
-            dispatch_counts =
-              if dispatch? do
-                dispatch(user_id, nil, planned, plan)
-              else
-                %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}
-              end
-
-            # Recorded after dispatch so this reflects the enforced outcome
-            # (post budget/quiet-hours gate), not just the model's plan.
-            record_planning_decision(user_id, candidates, plan, counts, payload, dispatch_counts)
-
-            {:ok,
-             %{
-               user_id: user_id,
-               planned: length(planned),
-               interrupt_now: counts.interrupt_now,
-               digest: counts.digest,
-               held: if(dispatch?, do: dispatch_counts.held, else: counts.hold),
-               delivered: dispatch_counts.delivered,
-               failed: dispatch_counts.failed
-             }}
-          else
-            false -> {:error, :no_push_device}
-            :defer_quiet_hours -> {:ok, empty_user_summary(user_id)}
-            {:error, reason} -> {:error, reason}
-          end
+              {:error, reason} ->
+                {:error, reason}
+            end
+        end
       end
-    end)
+    )
   end
 
   def run_for_user(_user_id, _opts), do: {:error, :invalid_user}
+
+  defp claim_and_run_plan(user_id, payload, planning_candidates, opts) do
+    with {:ok, claim} <- ProactiveQueue.claim_pending(planning_candidates) do
+      claimed_candidates =
+        Enum.filter(planning_candidates, &MapSet.member?(claim.ids, &1.id))
+
+      claimed_payload = %{
+        payload
+        | candidates:
+            Enum.filter(payload.candidates, fn candidate ->
+              MapSet.member?(claim.ids, read_field(candidate, "id"))
+            end)
+      }
+
+      try do
+        case claimed_candidates do
+          [] ->
+            {:ok, empty_user_summary(user_id)}
+
+          _rows ->
+            with {:ok, finalized_payload} <-
+                   finalize_claimed_payload(user_id, claimed_payload, claimed_candidates, opts) do
+              run_claimed_plan(
+                user_id,
+                finalized_payload,
+                claimed_candidates,
+                claim.token,
+                opts
+              )
+            end
+        end
+      after
+        _ = ProactiveQueue.release_claim(claim.token)
+      end
+    end
+  end
+
+  defp finalize_claimed_payload(user_id, reserved_payload, planning_candidates, opts) do
+    reservation = Map.get(reserved_payload, :interrupt_memory, %{})
+
+    interrupt_memory =
+      user_id
+      |> interrupt_memory_context(planning_candidates)
+      |> interrupt_memory_prompt()
+
+    payload = Map.put(reserved_payload, :interrupt_memory, interrupt_memory)
+    prompt_bytes = AssistantHarness.delivery_plan_prompt_bytes(payload, opts)
+    prompt_byte_cap = AssistantHarness.delivery_plan_prompt_byte_cap()
+
+    if PromptBudget.encoded_bytes(interrupt_memory) <= PromptBudget.encoded_bytes(reservation) and
+         prompt_bytes <= prompt_byte_cap do
+      {:ok, payload}
+    else
+      {:error, {:delivery_plan_prompt_exceeds_budget, prompt_bytes, prompt_byte_cap}}
+    end
+  end
+
+  defp run_claimed_plan(user_id, payload, planning_candidates, claim_token, opts) do
+    with {:ok, raw_plan} <- AssistantHarness.plan_delivery(payload, opts) do
+      plan =
+        raw_plan
+        |> ProactiveQualityGate.verify_delivery_plan(payload, opts)
+        |> apply_interruption_budget_to_plan(payload)
+
+      planned = persist_plan(planning_candidates, plan, payload, claim_token)
+      counts = disposition_counts(planned)
+      dispatch? = Keyword.get(opts, :dispatch, true)
+
+      {planned, dispatch_counts} =
+        if dispatch? do
+          {authorized, lost_count} = authorize_dispatches(planned, claim_token)
+          counts = dispatch(user_id, nil, authorized, plan, claim_token)
+          {authorized, %{counts | failed: counts.failed + lost_count}}
+        else
+          relinquished = relinquish_plans(planned, plan, payload, claim_token)
+          {relinquished, %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}}
+        end
+
+      # Recorded after dispatch so this reflects the enforced outcome
+      # (post budget/quiet-hours gate), not just the model's plan.
+      record_planning_decision(
+        user_id,
+        planning_candidates,
+        plan,
+        counts,
+        payload,
+        dispatch_counts
+      )
+
+      {:ok,
+       %{
+         user_id: user_id,
+         planned: length(planned),
+         interrupt_now: counts.interrupt_now,
+         digest: counts.digest,
+         held: if(dispatch?, do: dispatch_counts.held, else: counts.hold),
+         delivered: dispatch_counts.delivered,
+         failed: dispatch_counts.failed
+       }}
+    end
+  end
 
   # Quiet hours: the send-time gate (PushBroker.interruption_hold_reason/1)
   # would hold everything the model plans, so planning now only burns a
@@ -137,7 +361,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     if Map.get(budget, "quiet_hours") == true and
          not Enum.any?(candidates, &((&1.urgency || 0.0) >= exempt_threshold)) do
       Logger.debug("Delivery planning deferred for quiet hours",
-        user_id: user_id,
+        user_id_hash: Redaction.fingerprint(user_id),
         candidate_count: length(candidates)
       )
 
@@ -150,36 +374,185 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   defp build_payload(user_id, chat_id, candidates, opts) do
     context =
       Keyword.get(opts, :context) ||
-        Context.build(%{user_id: user_id, chat_id: chat_id || "unavailable"})
+        Context.build(%{
+          user_id: user_id,
+          chat_id: chat_id || "unavailable",
+          request_focus: :delivery_planner
+        })
 
-    recent_pushes =
-      recent_pushes(user_id, Keyword.get(opts, :recent_push_limit, @recent_push_limit))
+    ranking_todos = context_todos(context)
 
     ranked_candidates =
       candidates
-      |> rank_candidates(context)
+      |> rank_candidates(ranking_todos)
       |> Enum.with_index(1)
 
-    %{
-      user_id: user_id,
-      chat_id: chat_id,
-      candidates:
-        Enum.map(ranked_candidates, fn {candidate, rank} ->
-          candidate_snapshot(candidate, context, rank)
-        end),
-      context: context,
-      recent_pushes: recent_pushes,
+    recent_pushes =
+      user_id
+      |> recent_pushes(recent_push_limit(opts))
+      |> PromptBudget.bounded(@recent_pushes_prompt_bytes)
+
+    operator_feedback =
+      user_id
+      |> operator_feedback_examples()
+      |> operator_feedback_prompt()
+
+    memory_reservation = interrupt_memory_reservation()
+
+    base_payload = %{
+      user_id: provider_reference(user_id),
+      chat_id: provider_reference(chat_id),
+      candidates: [],
+      context: %{},
+      interrupt_memory: memory_reservation,
       interruption_budget:
-        PushBroker.interruption_budget(user_id, now: now_from_context(context, user_id)),
-      operator_feedback: operator_feedback_examples(user_id),
-      # SPEC 07 R4: preference/instruction/relationship memories recalled
-      # with this batch's candidate titles as the query, so a "never surface
-      # X" memory can inform the model's hold/interrupt_now/digest call for
-      # a matching candidate — same recall path `insight_notifications.ex`
-      # uses for the legacy gate, just folded into this batch decision
-      # instead of a second gatekeeping model call.
-      interrupt_memory: interrupt_memory_context(user_id, candidates)
+        PushBroker.interruption_budget(user_id, now: now_from_context(context, user_id))
     }
+
+    base_payload =
+      base_payload
+      |> put_optional_base_field(:operator_feedback, operator_feedback, opts)
+      |> put_context_base_fields(delivery_prompt_context(context), opts)
+      |> put_optional_base_field(:recent_pushes, recent_pushes, opts)
+
+    select_prompt_candidates(
+      ranked_candidates,
+      base_payload,
+      ranking_todos,
+      opts
+    )
+  end
+
+  # Selection reserves the maximum stable-encoded memory size first. We then
+  # recall only against the exact candidates that fit and replace this private
+  # placeholder with a no-larger semantic projection before the model call.
+  # This avoids both candidate-memory mismatch and a second unstable fit pass.
+  defp interrupt_memory_reservation do
+    # The payload JSON is itself embedded as a JSON message string. A leading
+    # ordinary byte makes the remaining parity exact, while backslashes reserve
+    # the worst outer-escaping cost of any valid inner JSON projection.
+    base = %{"reserved" => "x"}
+    slash_count = div(@interrupt_memory_prompt_bytes - PromptBudget.encoded_bytes(base), 2)
+    %{"reserved" => "x" <> String.duplicate("\\", slash_count)}
+  end
+
+  defp put_optional_base_field(payload, _key, nil, _opts), do: payload
+
+  defp put_optional_base_field(payload, key, value, opts) do
+    candidate = Map.put(payload, key, value)
+
+    if AssistantHarness.delivery_plan_prompt_bytes(candidate, opts) <= @delivery_base_prompt_bytes,
+      do: candidate,
+      else: payload
+  end
+
+  defp put_context_base_fields(payload, context, opts) when is_map(context) do
+    Enum.reduce(@delivery_prompt_context_fields, payload, fn {key, _field_bytes}, acc ->
+      case Map.fetch(context, key) do
+        {:ok, value} ->
+          candidate_context = Map.put(Map.get(acc, :context, %{}), key, value)
+          put_optional_base_field(acc, :context, candidate_context, opts)
+
+        :error ->
+          acc
+      end
+    end)
+  end
+
+  defp put_context_base_fields(payload, _context, _opts), do: payload
+
+  defp select_prompt_candidates(
+         ranked_candidates,
+         base_payload,
+         ranking_todos,
+         opts
+       ) do
+    prompt_byte_cap = AssistantHarness.delivery_plan_prompt_byte_cap()
+    ranked_candidates = reserve_compact_candidate_lane(ranked_candidates, ranking_todos)
+
+    {reserved_payload, planning_candidates} =
+      Enum.reduce_while(ranked_candidates, {base_payload, []}, fn {candidate, rank},
+                                                                  {payload, selected} ->
+        if length(selected) >= @max_prompt_candidates do
+          {:halt, {payload, selected}}
+        else
+          snapshot = candidate_snapshot(candidate, ranking_todos, rank)
+          candidate_payload = Map.update!(payload, :candidates, &(&1 ++ [snapshot]))
+
+          if AssistantHarness.delivery_plan_prompt_bytes(candidate_payload, opts) <=
+               prompt_byte_cap do
+            {:cont, {candidate_payload, selected ++ [candidate]}}
+          else
+            {:cont, {payload, selected}}
+          end
+        end
+      end)
+
+    if planning_candidates == [] do
+      prompt_bytes = AssistantHarness.delivery_plan_prompt_bytes(reserved_payload, opts)
+
+      log_prompt_selection(
+        ranked_candidates,
+        planning_candidates,
+        base_payload,
+        prompt_bytes,
+        opts
+      )
+
+      {:error, {:delivery_plan_prompt_exceeds_budget, prompt_bytes, prompt_byte_cap}}
+    else
+      prompt_bytes = AssistantHarness.delivery_plan_prompt_bytes(reserved_payload, opts)
+
+      log_prompt_selection(
+        ranked_candidates,
+        planning_candidates,
+        base_payload,
+        prompt_bytes,
+        opts
+      )
+
+      if prompt_bytes <= prompt_byte_cap do
+        {:ok, reserved_payload, planning_candidates}
+      else
+        {:error, {:delivery_plan_prompt_exceeds_budget, prompt_bytes, prompt_byte_cap}}
+      end
+    end
+  end
+
+  defp reserve_compact_candidate_lane(ranked_candidates, ranking_todos)
+       when is_list(ranked_candidates) do
+    {reserved, remainder} = Enum.split(ranked_candidates, 3)
+
+    case remainder do
+      [] ->
+        reserved
+
+      _entries ->
+        compact =
+          Enum.min_by(remainder, fn {candidate, rank} ->
+            candidate
+            |> candidate_snapshot(ranking_todos, rank)
+            |> PromptBudget.encoded_bytes()
+          end)
+
+        reserved ++ [compact] ++ List.delete(remainder, compact)
+    end
+  end
+
+  defp log_prompt_selection(
+         ranked_candidates,
+         planning_candidates,
+         base_payload,
+         prompt_bytes,
+         opts
+       ) do
+    Logger.info("Delivery planner bounded candidate prompt",
+      available_candidates: length(ranked_candidates),
+      included_candidates: length(planning_candidates),
+      base_prompt_bytes: AssistantHarness.delivery_plan_prompt_bytes(base_payload, opts),
+      prompt_bytes: prompt_bytes,
+      prompt_byte_cap: AssistantHarness.delivery_plan_prompt_byte_cap()
+    )
   end
 
   # Good/bad interruption examples for this specific operator, so the model
@@ -201,10 +574,18 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   defp interrupt_memory_context(user_id, candidates) do
     query =
       candidates
-      |> Enum.map(&candidate_title/1)
-      |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.take(12)
+      |> Enum.map(fn candidate ->
+        [
+          candidate_title(candidate) |> prompt_text(180),
+          candidate_why_now(candidate) |> prompt_text(220)
+        ]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join(": ")
+      end)
+      |> Enum.reject(&(&1 == ""))
       |> Enum.join(" | ")
+      |> PromptBudget.truncate_utf8(2_000)
 
     case query do
       "" -> %{summary: "No pending candidates to recall memory for.", memories: [], count: 0}
@@ -224,88 +605,231 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     }
   end
 
-  defp candidate_snapshot(%ProactiveCandidate{} = candidate, context, rank) do
-    related_todos = related_todos(candidate, context)
+  defp delivery_prompt_context(context) when is_map(context) do
+    context
+    |> Context.preproject_prompt_collections()
+    |> PromptBudget.project_fields(
+      @delivery_prompt_context_fields,
+      @delivery_prompt_context_bytes,
+      max_depth: 5,
+      list_items: 5
+    )
+  end
+
+  defp delivery_prompt_context(_context), do: %{}
+
+  defp operator_feedback_prompt(feedback) when is_map(feedback) do
+    PromptBudget.project_fields(
+      feedback,
+      @operator_feedback_fields,
+      @operator_feedback_prompt_bytes
+    )
+  end
+
+  defp operator_feedback_prompt(_feedback), do: %{}
+
+  defp interrupt_memory_prompt(memory_context) when is_map(memory_context) do
+    PromptBudget.project_fields(
+      memory_context,
+      @interrupt_memory_fields,
+      @interrupt_memory_prompt_bytes
+    )
+  end
+
+  defp interrupt_memory_prompt(_memory_context), do: %{}
+
+  defp prompt_text(value, max_bytes) when is_binary(value) do
+    PromptBudget.encoded_string(value, max_bytes)
+  end
+
+  defp prompt_text(_value, _max_bytes), do: nil
+
+  defp candidate_snapshot(%ProactiveCandidate{} = candidate, ranking_todos, rank) do
+    related_todos = related_todos(candidate, ranking_todos)
     profile = candidate_attention_profile(candidate, related_todos)
 
-    %{
+    snapshot = %{
       id: candidate.id,
       source: candidate.source,
-      source_id: candidate.source_id,
-      dedupe_key: candidate.dedupe_key,
-      title: candidate_title(candidate),
-      body: delivery_text(candidate.body),
+      source_id: provider_reference(candidate.source_id),
+      dedupe_key: provider_reference(candidate.dedupe_key),
+      title: candidate_title(candidate) |> prompt_text(500),
+      body: candidate.body |> delivery_text() |> prompt_text(@candidate_prompt_body_bytes),
       urgency: candidate.urgency,
-      why_now: candidate_why_now(candidate),
-      structured_data: candidate_structured_data(candidate),
+      why_now:
+        candidate
+        |> candidate_why_now()
+        |> prompt_text(@candidate_prompt_why_now_bytes),
+      structured_data:
+        candidate
+        |> candidate_prompt_structured_data()
+        |> PromptBudget.bounded(@candidate_structured_data_bytes),
       inserted_at: local_display(candidate.inserted_at, candidate.user_id),
       expires_at: local_display(candidate.expires_at, candidate.user_id),
       planning_rank: rank,
       attention_profile: profile,
-      related_todos: Enum.map(related_todos, &compact_related_todo/1)
+      related_todos:
+        related_todos
+        |> Enum.take(@candidate_prompt_related_todo_limit)
+        |> Enum.map(&compact_related_todo/1)
     }
+
+    PromptBudget.project_fields(
+      snapshot,
+      @candidate_prompt_snapshot_fields,
+      @candidate_prompt_snapshot_bytes
+    )
   end
 
-  defp rank_candidates(candidates, context) when is_list(candidates) do
-    Enum.sort_by(candidates, fn candidate ->
-      related_todos = related_todos(candidate, context)
-      profile = candidate_attention_profile(candidate, related_todos)
+  defp rank_candidates(candidates, ranking_todos) when is_list(candidates) do
+    {required, ordinary} = Enum.split_with(candidates, &(&1.source == "brief"))
 
-      {
-        profile["bucket_rank"],
-        -profile["score"],
-        -timestamp_sort_value(candidate.inserted_at)
-      }
-    end)
+    required =
+      Enum.sort_by(required, fn candidate ->
+        {timestamp_sort_value(candidate.inserted_at), candidate.id}
+      end)
+
+    semantic =
+      Enum.sort_by(ordinary, fn candidate ->
+        related_todos = related_todos(candidate, ranking_todos)
+        profile = candidate_attention_profile(candidate, related_todos)
+
+        {
+          profile["bucket_rank"],
+          -profile["score"],
+          -timestamp_sort_value(candidate.inserted_at),
+          candidate.id
+        }
+      end)
+
+    required_head = Enum.take(required, @max_required_prompt_candidates)
+    required_tail = Enum.drop(required, @max_required_prompt_candidates)
+    open_slots = max(@max_prompt_candidates - length(required_head), 0)
+    rotation_quota = if open_slots > 0, do: max(div(open_slots, 3), 1), else: 0
+    priority_quota = max(open_slots - rotation_quota, 0)
+
+    rotation =
+      ordinary
+      |> Enum.sort_by(fn candidate ->
+        {timestamp_sort_value(candidate.inserted_at), candidate.id}
+      end)
+      |> Enum.take(rotation_quota)
+
+    rotation_ids = MapSet.new(rotation, & &1.id)
+
+    priority =
+      semantic
+      |> Enum.reject(&MapSet.member?(rotation_ids, &1.id))
+      |> Enum.take(priority_quota)
+
+    reserved_ids = MapSet.new(required ++ rotation ++ priority, & &1.id)
+    remainder = Enum.reject(semantic, &MapSet.member?(reserved_ids, &1.id))
+
+    # Put one durable oldest-row lane ahead of the semantic fill. Count-only
+    # quotas do not guarantee fairness under a tight byte budget, while moving
+    # every rotation row forward could crowd out all urgent work.
+    Enum.take(required_head, 1) ++
+      Enum.take(rotation, 1) ++
+      Enum.take(priority, 1) ++
+      Enum.drop(required_head, 1) ++
+      Enum.drop(priority, 1) ++ required_tail ++ Enum.drop(rotation, 1) ++ remainder
   end
 
-  defp related_todos(%ProactiveCandidate{} = candidate, context) do
+  defp related_todos(%ProactiveCandidate{} = candidate, ranking_todos)
+       when is_list(ranking_todos) do
     structured_data = candidate.structured_data || %{}
 
     todo_ids =
       structured_data
       |> Map.get("todo_ids", [])
-      |> List.wrap()
-      |> Enum.filter(&is_binary/1)
+      |> case do
+        ids when is_list(ids) -> Enum.take(ids, @max_candidate_todo_ids)
+        _other -> []
+      end
+      |> Enum.filter(&(is_binary(&1) and byte_size(&1) <= 255))
       |> MapSet.new()
 
     if MapSet.size(todo_ids) == 0 do
       []
     else
-      context
-      |> context_todos()
+      ranking_todos
       |> Enum.filter(fn todo ->
         case read_field(todo, "id") do
           id when is_binary(id) -> MapSet.member?(todo_ids, id)
           _ -> false
         end
       end)
+      |> Enum.sort_by(&related_todo_sort_key/1)
     end
   end
 
+  defp related_todo_sort_key(todo) do
+    profile = AttentionRanker.profile(todo)
+
+    {
+      profile["bucket_rank"] || 99,
+      -1 * (profile["score"] || 0),
+      read_field(todo, "id") || ""
+    }
+  end
+
   defp context_todos(context) when is_map(context) do
-    direct_todos = read_field(context, "todos") || []
-    open_loops = read_field(context, "open_loops") || %{}
-    buckets = read_field(open_loops, "buckets") || %{}
+    direct_todos =
+      context
+      |> read_field("todos")
+      |> bounded_list(@max_context_todos_for_ranking)
+
+    buckets =
+      context
+      |> read_field("open_loops")
+      |> read_field("buckets")
 
     bucket_todos =
-      if is_map(buckets) do
-        buckets
-        |> Map.values()
-        |> Enum.flat_map(fn
-          list when is_list(list) -> list
-          _ -> []
-        end)
-      else
-        []
-      end
+      Enum.reduce(@context_todo_bucket_keys, [], fn key, acc ->
+        remaining = @max_context_todos_for_ranking - length(acc)
+
+        if remaining > 0 do
+          acc ++ (buckets |> read_field(key) |> bounded_list(remaining))
+        else
+          acc
+        end
+      end)
 
     (direct_todos ++ bucket_todos)
     |> Enum.filter(&is_map/1)
+    |> Enum.map(&ranking_todo/1)
     |> Enum.uniq_by(&read_field(&1, "id"))
+    |> Enum.sort_by(&related_todo_sort_key/1)
+    |> Enum.take(@max_context_todos_for_ranking)
   end
 
   defp context_todos(_context), do: []
+
+  defp ranking_todo(todo) do
+    metadata =
+      todo
+      |> read_field("metadata")
+      |> PromptBudget.bounded(@max_ranking_metadata_bytes,
+        string_bytes: 300,
+        list_items: 10,
+        map_entries: 30,
+        max_depth: 4,
+        key_bytes: 64
+      )
+
+    todo
+    |> Map.put("metadata", metadata || %{})
+    |> PromptBudget.project_fields(@ranking_todo_fields, @max_ranking_todo_bytes,
+      string_bytes: 700,
+      list_items: 10,
+      map_entries: 30,
+      max_depth: 5,
+      key_bytes: 64
+    )
+  end
+
+  defp bounded_list(value, limit) when is_list(value), do: Enum.take(value, limit)
+  defp bounded_list(_value, _limit), do: []
 
   defp candidate_attention_profile(%ProactiveCandidate{} = candidate, []) do
     urgency_score = round((candidate.urgency || 0.0) * 100)
@@ -336,15 +860,15 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   defp compact_related_todo(todo) when is_map(todo) do
     %{
-      "id" => read_field(todo, "id"),
-      "title" => read_field(todo, "title"),
-      "summary" => read_field(todo, "summary"),
-      "next_action" => read_field(todo, "next_action"),
-      "due_at" => read_field(todo, "due_at"),
-      "source_occurred_at" => read_field(todo, "source_occurred_at"),
-      "inserted_at" => read_field(todo, "inserted_at"),
-      "attention_profile" => AttentionRanker.profile(todo),
-      "surface_quality" => SurfaceQuality.assess(todo)
+      "id" => read_field(todo, "id") |> prompt_text(255),
+      "title" => read_field(todo, "title") |> prompt_text(255),
+      "summary" => read_field(todo, "summary") |> prompt_text(500),
+      "next_action" => read_field(todo, "next_action") |> prompt_text(500),
+      "due_at" => read_field(todo, "due_at") |> PromptBudget.compact(),
+      "source_occurred_at" => read_field(todo, "source_occurred_at") |> PromptBudget.compact(),
+      "inserted_at" => read_field(todo, "inserted_at") |> PromptBudget.compact(),
+      "attention_profile" => AttentionRanker.profile(todo) |> PromptBudget.compact(),
+      "surface_quality" => SurfaceQuality.assess(todo) |> PromptBudget.compact()
     }
   end
 
@@ -357,7 +881,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   defp age_days(_datetime), do: 0
 
-  defp persist_plan(candidates, plan, payload) do
+  defp persist_plan(candidates, plan, payload, claim_token) do
     disposition_by_id =
       plan
       |> Map.get("dispositions", [])
@@ -371,9 +895,49 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       disposition = Map.get(disposition_by_id, candidate.id)
       {value, reason} = resolve_disposition(candidate, disposition)
 
-      case ProactiveQueue.mark_planned(candidate, value, reason) do
+      _ = reason
+
+      case ProactiveQueue.finalize_claim(candidate, claim_token, value) do
         {:ok, planned} -> [planned]
         {:error, _reason} -> []
+      end
+    end)
+  end
+
+  defp authorize_dispatches(candidates, claim_token) do
+    Enum.reduce(candidates, {[], 0}, fn candidate, {authorized, lost} ->
+      case ProactiveQueue.authorize_dispatch(candidate, claim_token) do
+        {:ok, dispatching} -> {[dispatching | authorized], lost}
+        {:error, _reason} -> {authorized, lost + 1}
+      end
+    end)
+    |> then(fn {authorized, lost} -> {Enum.reverse(authorized), lost} end)
+  end
+
+  defp relinquish_plans(candidates, plan, payload, claim_token) do
+    dispositions =
+      plan
+      |> Map.get("dispositions", [])
+      |> Map.new(fn disposition -> {disposition["candidate_id"], disposition} end)
+
+    candidates_by_id = Map.new(candidates, &{&1.id, &1})
+
+    payload
+    |> candidate_order()
+    |> Enum.sort_by(&elem(&1, 1))
+    |> Enum.flat_map(fn {candidate_id, _index} ->
+      candidate = Map.get(candidates_by_id, candidate_id)
+      disposition = Map.get(dispositions, candidate_id)
+
+      if candidate do
+        {value, reason} = resolve_disposition(candidate, disposition)
+
+        case ProactiveQueue.relinquish_claim(candidate, claim_token, value, reason) do
+          {:ok, relinquished} -> [relinquished]
+          {:error, _reason} -> []
+        end
+      else
+        []
       end
     end)
   end
@@ -428,14 +992,14 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     |> Map.new(fn candidate -> {read_field(candidate, "id"), candidate} end)
   end
 
-  defp dispatch(user_id, chat_id, planned, plan) do
+  defp dispatch(user_id, chat_id, planned, plan, claim_token) do
     interrupt_now = Enum.filter(planned, &(&1.disposition == "interrupt_now"))
     digest = Enum.filter(planned, &(&1.disposition == "digest"))
     hold = Enum.filter(planned, &(&1.disposition == "hold"))
 
-    interrupt_counts = dispatch_interrupts(interrupt_now, chat_id)
-    digest_counts = dispatch_digest(user_id, chat_id, digest, plan)
-    held_count = mark_held(hold)
+    interrupt_counts = dispatch_interrupts(interrupt_now, chat_id, claim_token)
+    digest_counts = dispatch_digest(user_id, chat_id, digest, plan, claim_token)
+    held_count = mark_held(hold, claim_token)
 
     %{
       delivered: interrupt_counts.delivered + digest_counts.delivered,
@@ -524,7 +1088,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     end
   end
 
-  defp dispatch_interrupts(candidates, chat_id) do
+  defp dispatch_interrupts(candidates, chat_id, claim_token) do
     Enum.reduce(candidates, %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}, fn candidate,
                                                                                        acc ->
       # Model chose interrupt_now at planning time, but PushBroker.deliver/1
@@ -532,7 +1096,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       # genuinely high-urgency candidate skips the hourly cap/quiet hours.
       case PushBroker.deliver(push_candidate(candidate, chat_id, interrupt_now: true)) do
         {:ok, %{decision: "sent_now", conversation_id: conversation_id}} ->
-          {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+          {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
           maybe_mark_brief_delivered(candidate)
           maybe_mark_insight_delivery_sent(candidate)
           maybe_send_candidate_todo_cards(conversation_id, candidate)
@@ -544,7 +1108,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           %{acc | delivered: acc.delivered + 1}
 
         {:ok, %{decision: "sent_now"}} ->
-          {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+          {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
           maybe_mark_brief_delivered(candidate)
           maybe_mark_insight_delivery_sent(candidate)
 
@@ -556,7 +1120,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
         {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
           # Already delivered under this dedupe_key through another path.
-          {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+          {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
           maybe_mark_brief_delivered(candidate)
           maybe_mark_insight_delivery_sent(candidate)
 
@@ -568,7 +1132,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           %{acc | delivered: acc.delivered + 1}
 
         {:ok, %{decision: "held_rate_limit", reason: reason}} ->
-          {:ok, _candidate} = ProactiveQueue.mark_held(candidate)
+          {:ok, _candidate} =
+            ProactiveQueue.complete_claim(candidate, claim_token, "held", "held")
 
           record_dispatch_decision(candidate, "proactive.held", "held", %{
             "decision" => "held_rate_limit",
@@ -578,7 +1143,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           %{acc | held: acc.held + 1, hold_reasons: bump_reason(acc.hold_reasons, reason)}
 
         {:ok, _result} ->
-          {:ok, _candidate} = ProactiveQueue.mark_held(candidate)
+          {:ok, _candidate} =
+            ProactiveQueue.complete_claim(candidate, claim_token, "held", "held")
 
           record_dispatch_decision(candidate, "proactive.held", "held", %{
             "decision" => "unknown"
@@ -587,11 +1153,11 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           %{acc | held: acc.held + 1, hold_reasons: bump_reason(acc.hold_reasons, "unknown")}
 
         {:error, reason} ->
-          requeue_failed_dispatch(candidate, reason)
+          requeue_failed_dispatch(candidate, reason, claim_token)
           %{acc | failed: acc.failed + 1}
 
         {:fallback, reason} ->
-          requeue_failed_dispatch(candidate, reason)
+          requeue_failed_dispatch(candidate, reason, claim_token)
           %{acc | failed: acc.failed + 1}
       end
     end)
@@ -602,22 +1168,21 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   # so it would strand there (dedupe-blocking its source from re-enqueueing)
   # until the TTL sweep. Back to "pending": the next planner cycle retries,
   # bounded by expires_at.
-  defp requeue_failed_dispatch(%ProactiveCandidate{} = candidate, reason) do
-    case ProactiveQueue.mark_pending(candidate) do
+  defp requeue_failed_dispatch(%ProactiveCandidate{} = candidate, reason, claim_token) do
+    case ProactiveQueue.complete_claim(candidate, claim_token, "pending") do
       {:ok, _candidate} ->
         :ok
 
       {:error, requeue_error} ->
         Logger.warning("Failed to return candidate to pending after dispatch failure",
-          candidate_id: candidate.id,
-          reason: inspect(requeue_error)
+          candidate_reference: Redaction.fingerprint(candidate.id),
+          failure_code: Redaction.error_class(requeue_error)
         )
     end
 
     Logger.warning("Proactive dispatch failed; candidate returned to pending for retry",
-      candidate_id: candidate.id,
-      dedupe_key: candidate.dedupe_key,
-      reason: inspect(reason)
+      candidate_reference: Redaction.fingerprint(candidate.id),
+      failure_code: Redaction.error_class(reason)
     )
 
     :ok
@@ -629,10 +1194,10 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   defp bump_reason(reasons, _reason), do: reasons
 
-  defp dispatch_digest(_user_id, _chat_id, [], _plan),
+  defp dispatch_digest(_user_id, _chat_id, [], _plan, _claim_token),
     do: %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}
 
-  defp dispatch_digest(user_id, chat_id, candidates, plan) do
+  defp dispatch_digest(user_id, chat_id, candidates, plan, claim_token) do
     digest_intro = digest_intro(plan)
     digest_key = "delivery_digest:#{user_id}:#{Date.utc_today() |> Date.to_iso8601()}"
 
@@ -667,7 +1232,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       {:ok, %{decision: "sent_now", conversation_id: conversation_id}} ->
         case load_conversation(conversation_id) do
           %Conversation{} = conversation ->
-            send_digest_cards(conversation, candidates)
+            send_digest_cards(conversation, candidates, claim_token)
             |> Map.merge(%{held: 0, hold_reasons: %{}})
 
           nil ->
@@ -677,11 +1242,11 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
             # delivered (leaving them "planned" here stranded them while
             # the phone had already buzzed — the 2026-07-30 stuck-briefs
             # incident).
-            mark_digest_delivered(candidates)
+            mark_digest_delivered(candidates, claim_token)
         end
 
       {:ok, %{decision: "held_rate_limit", reason: reason}} ->
-        hold_digest_candidates(candidates, reason)
+        hold_digest_candidates(candidates, reason, claim_token)
 
         %{
           delivered: 0,
@@ -691,7 +1256,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         }
 
       {:ok, _result} ->
-        hold_digest_candidates(candidates, "unknown")
+        hold_digest_candidates(candidates, "unknown", claim_token)
 
         %{
           delivered: 0,
@@ -701,11 +1266,11 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         }
 
       {:error, reason} ->
-        Enum.each(candidates, &requeue_failed_dispatch(&1, reason))
+        Enum.each(candidates, &requeue_failed_dispatch(&1, reason, claim_token))
         %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
 
       {:fallback, reason} ->
-        Enum.each(candidates, &requeue_failed_dispatch(&1, reason))
+        Enum.each(candidates, &requeue_failed_dispatch(&1, reason, claim_token))
         %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
     end
   end
@@ -713,9 +1278,9 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   # The delivered contract of send_digest_cards/2 without the Telegram card
   # fan-out: candidate status, brief/insight source rows, merged receipts,
   # and the ledger trail all advance exactly as they do on the card path.
-  defp mark_digest_delivered(candidates) do
+  defp mark_digest_delivered(candidates, claim_token) do
     Enum.each(candidates, fn candidate ->
-      {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+      {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
       maybe_mark_brief_delivered(candidate)
       maybe_mark_insight_delivery_sent(candidate)
       record_merged_receipt(candidate, nil)
@@ -729,9 +1294,9 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   # bypassed for digests). The bundled candidates go through the same "held"
   # fate as a model-chosen hold: they surface in the next morning brief
   # instead of being silently dropped.
-  defp hold_digest_candidates(candidates, reason) do
+  defp hold_digest_candidates(candidates, reason, claim_token) do
     Enum.each(candidates, fn candidate ->
-      {:ok, _candidate} = ProactiveQueue.mark_held(candidate)
+      {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "held", reason)
 
       record_dispatch_decision(candidate, "proactive.held", "held", %{
         "decision" => "held_rate_limit",
@@ -740,7 +1305,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     end)
   end
 
-  defp send_digest_cards(%Conversation{} = conversation, candidates) do
+  defp send_digest_cards(%Conversation{} = conversation, candidates, claim_token) do
     Enum.reduce(candidates, %{delivered: 0, failed: 0}, fn candidate, acc ->
       case TelegramAssistant.send_turn(
              conversation,
@@ -758,7 +1323,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
              telegram_opts: telegram_opts_to_keyword(candidate.telegram_opts)
            ) do
         {:ok, _conversation, turn, _telegram_result} ->
-          {:ok, _candidate} = ProactiveQueue.mark_delivered(candidate)
+          {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
           maybe_mark_brief_delivered(candidate)
           maybe_mark_insight_delivery_sent(candidate)
           record_merged_receipt(candidate, turn.id)
@@ -842,15 +1407,15 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   defp maybe_mark_insight_delivery_sent(_candidate), do: :ok
 
-  defp mark_held(candidates) do
+  defp mark_held(candidates, claim_token) do
     Enum.reduce(candidates, 0, fn candidate, count ->
       record_dispatch_decision(candidate, "proactive.held", "held", %{
         "decision" => "model_hold",
         "hold_reason" => "model_hold",
-        "model_reason" => candidate.plan_reason
+        "model_reason" => "model_hold"
       })
 
-      case ProactiveQueue.mark_held(candidate) do
+      case ProactiveQueue.complete_claim(candidate, claim_token, "held", "model_hold") do
         {:ok, _candidate} -> count + 1
         {:error, _reason} -> count
       end
@@ -956,13 +1521,29 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     end
   end
 
+  defp candidate_prompt_structured_data(%ProactiveCandidate{} = candidate) do
+    structured_data =
+      case candidate.structured_data do
+        value when is_map(value) -> Map.take(value, @prompt_structured_data_keys)
+        _other -> %{}
+      end
+
+    Map.merge(structured_data, candidate_derived_structured_data(candidate))
+  end
+
   defp candidate_structured_data(%ProactiveCandidate{} = candidate) do
-    (candidate.structured_data || %{})
-    |> Map.merge(%{
+    structured_data =
+      if is_map(candidate.structured_data), do: candidate.structured_data, else: %{}
+
+    Map.merge(structured_data, candidate_derived_structured_data(candidate))
+  end
+
+  defp candidate_derived_structured_data(%ProactiveCandidate{} = candidate) do
+    %{
       "title" => candidate_title(candidate),
       "why_now" => candidate_why_now(candidate),
       "urgency" => candidate.urgency
-    })
+    }
   end
 
   defp candidate_title(%ProactiveCandidate{source: "brief", title: title}) do
@@ -1063,6 +1644,13 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     _error -> :ok
   end
 
+  defp recent_push_limit(opts) do
+    case Keyword.get(opts, :recent_push_limit, @recent_push_limit) do
+      limit when is_integer(limit) and limit > 0 -> min(limit, 50)
+      _other -> @recent_push_limit
+    end
+  end
+
   defp recent_pushes(user_id, limit) when is_binary(user_id) do
     PushReceipt
     |> where([receipt], receipt.user_id == ^user_id)
@@ -1072,14 +1660,23 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     |> Enum.map(fn receipt ->
       %{
         id: receipt.id,
-        dedupe_key: receipt.dedupe_key,
+        dedupe_key: provider_reference(receipt.dedupe_key),
         origin_type: receipt.origin_type,
-        origin_id: receipt.origin_id,
+        origin_id: provider_reference(receipt.origin_id),
         decision: receipt.decision,
         inserted_at: local_display(receipt.inserted_at, user_id)
       }
     end)
   end
+
+  defp provider_reference(value) when is_binary(value) do
+    "ref_" <> Base.encode16(:crypto.hash(:sha256, value), case: :lower)
+  end
+
+  defp provider_reference(value) when is_integer(value),
+    do: provider_reference(Integer.to_string(value))
+
+  defp provider_reference(_value), do: nil
 
   # Bug fix: recent push receipts and candidate timestamps were shown to the
   # planning model as bare UTC ISO-8601 (e.g. "2026-07-03T09:21:00Z"). In
@@ -1170,16 +1767,58 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   defp parse_datetime(%DateTime{} = datetime, _user_id), do: datetime
   defp parse_datetime(_value, user_id), do: PushBroker.local_now_for_user(user_id)
 
-  defp failure_reason_label({kind, status, _detail})
-       when is_atom(kind) and is_integer(status),
-       do: "#{kind}:#{status}"
+  defp planning_failure_code({:prompt_exceeds_budget, _kind, _bytes, _cap}),
+    do: "prompt_exceeds_budget"
 
-  defp failure_reason_label({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
-  defp failure_reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp failure_reason_label(_reason), do: "unclassified"
+  defp planning_failure_code({:delivery_plan_prompt_exceeds_budget, _bytes, _cap}),
+    do: "prompt_exceeds_budget"
+
+  defp planning_failure_code({:invalid_response, _summary}), do: "provider_invalid_response"
+  defp planning_failure_code({:http_status, status, _body}), do: api_failure_code(status)
+  defp planning_failure_code({:api_error, status, _body}), do: api_failure_code(status)
+  defp planning_failure_code({:network_error, _reason}), do: "network_error"
+  defp planning_failure_code({:planner_exception, _error_class}), do: "planner_exception"
+  defp planning_failure_code({:planner_exit, _kind}), do: "planner_exit"
+  defp planning_failure_code({:insufficient_quota, _message}), do: "insufficient_quota"
+  defp planning_failure_code({:rate_limited, _retry_after}), do: "rate_limited"
+  defp planning_failure_code({:llm_busy, _retry_after}), do: "provider_busy"
+  defp planning_failure_code({:error, reason}), do: planning_failure_code(reason)
+  defp planning_failure_code(:timeout), do: "timeout"
+
+  defp planning_failure_code(reason) when is_atom(reason) do
+    if reason |> Atom.to_string() |> String.starts_with?("assistant_harness_") do
+      "invalid_model_response"
+    else
+      "unknown"
+    end
+  end
+
+  defp planning_failure_code(_reason), do: "unknown"
+
+  defp api_failure_code(status) when is_integer(status) and status >= 400 and status <= 599,
+    do: "api_#{status}"
+
+  defp api_failure_code(_status), do: "api_error"
+
+  defp increment_failure_code(failure_codes, _failure_code, count) when count <= 0,
+    do: failure_codes
+
+  defp increment_failure_code(failure_codes, failure_code, count) do
+    Map.update(failure_codes, failure_code, count, &(&1 + count))
+  end
 
   defp empty_due_summary do
-    %{users: 0, planned: 0, interrupt_now: 0, digest: 0, held: 0, delivered: 0, failed: 0}
+    %{
+      users: 0,
+      planned: 0,
+      interrupt_now: 0,
+      digest: 0,
+      held: 0,
+      delivered: 0,
+      failed: 0,
+      undeliverable: 0,
+      failure_codes: %{}
+    }
   end
 
   defp empty_user_summary(user_id) do
@@ -1196,7 +1835,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   defp positive_integer(value) when is_integer(value) and value > 0, do: value
 
-  defp positive_integer(value) when is_binary(value) do
+  defp positive_integer(value) when is_binary(value) and byte_size(value) <= 16 do
     case Integer.parse(String.trim(value)) do
       {parsed, ""} when parsed > 0 -> parsed
       _other -> @default_batch_size
@@ -1208,17 +1847,22 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   defp read_field(%_{} = struct, key), do: read_field(Map.from_struct(struct), key)
 
   defp read_field(map, key) when is_map(map) and is_binary(key) do
-    Map.get(map, key) ||
-      Enum.find_value(map, fn
-        {map_key, value} when is_atom(map_key) ->
-          if Atom.to_string(map_key) == key, do: value
-
-        _ ->
-          nil
-      end)
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> fetch_existing_atom_key(map, key)
+    end
   end
 
   defp read_field(_map, _key), do: nil
+
+  defp fetch_existing_atom_key(map, key) do
+    case Map.fetch(map, String.to_existing_atom(key)) do
+      {:ok, value} -> value
+      :error -> nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
 
   defp read_integer(map, key, default) when is_map(map) do
     case read_field(map, key) do

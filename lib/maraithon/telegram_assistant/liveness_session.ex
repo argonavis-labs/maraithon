@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
   use GenServer
 
+  alias Maraithon.PromptBudget
   alias Maraithon.TelegramResponder
 
   require Logger
@@ -13,6 +14,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
   @default_timeout_text "Request saved. Finishing the lookup with available context; the answer will appear here when ready."
   @stream_flush_interval_ms 1_000
   @stream_placeholder "…"
+  @max_stream_preview_bytes 4_000
 
   def start_link(attrs) when is_map(attrs) do
     GenServer.start_link(__MODULE__, attrs, name: via(Map.fetch!(attrs, :run_id)))
@@ -140,7 +142,15 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
   def handle_cast({:stream_chunk, delta}, state) do
     state = ensure_stream_message(state)
-    state = %{state | stream_buffer: state.stream_buffer <> delta, stream_active?: true}
+    remaining = max(@max_stream_preview_bytes - byte_size(state.stream_buffer), 0)
+    fragment = PromptBudget.truncate_utf8(delta, remaining)
+
+    state = %{
+      state
+      | stream_buffer: state.stream_buffer <> fragment,
+        stream_active?: true
+    }
+
     {:noreply, schedule_stream_flush(state)}
   end
 
@@ -192,7 +202,9 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
            |> schedule_typing_refresh()}
 
         {:error, reason} ->
-          Logger.warning("Telegram assistant typing indicator failed", reason: inspect(reason))
+          Logger.warning("Telegram assistant typing indicator failed",
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
 
           {:noreply,
            %{state | typing_started: true, phase: "typing"} |> schedule_typing_refresh()}
@@ -210,7 +222,10 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
           {:noreply, schedule_typing_refresh(%{state | typing_started: true, phase: "typing"})}
 
         {:error, reason} ->
-          Logger.warning("Telegram assistant typing refresh failed", reason: inspect(reason))
+          Logger.warning("Telegram assistant typing refresh failed",
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
+
           {:noreply, schedule_typing_refresh(%{state | typing_started: true, phase: "typing"})}
       end
     end
@@ -255,7 +270,10 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
             {:noreply, next_state}
 
           {:error, reason} ->
-            Logger.warning("Telegram assistant progress note failed", reason: inspect(reason))
+            Logger.warning("Telegram assistant progress note failed",
+              failure_code: Maraithon.Redaction.error_class(reason)
+            )
+
             {:noreply, %{state | progress_timer_ref: nil}}
         end
     end
@@ -353,7 +371,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
           {:error, reason} ->
             Logger.warning("Telegram assistant timeout edit failed, falling back to send",
-              reason: inspect(reason)
+              failure_code: Maraithon.Redaction.error_class(reason)
             )
 
             send_timeout_reply(state, text)
@@ -376,7 +394,9 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
         }
 
       {:error, reason} ->
-        Logger.warning("Telegram assistant timeout notice failed", reason: inspect(reason))
+        Logger.warning("Telegram assistant timeout notice failed",
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
 
         %{
           state
@@ -557,7 +577,9 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
               emit(:progress_update, %{count: 1}, metadata)
 
             {:error, reason} ->
-              Logger.warning("Telegram assistant progress update failed", reason: inspect(reason))
+              Logger.warning("Telegram assistant progress update failed",
+                failure_code: Maraithon.Redaction.error_class(reason)
+              )
           end
         end)
 
@@ -587,7 +609,10 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
             }
 
           {:error, reason} ->
-            Logger.warning("Telegram stream placeholder failed", reason: inspect(reason))
+            Logger.warning("Telegram stream placeholder failed",
+              failure_code: Maraithon.Redaction.error_class(reason)
+            )
+
             st
         end
     end
@@ -627,7 +652,10 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
         {:noreply, %{state | stream_last_flushed_at_ms: System.monotonic_time(:millisecond)}}
 
       {:error, reason} ->
-        Logger.debug("Telegram stream flush failed", reason: inspect(reason))
+        Logger.debug("Telegram stream flush failed",
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
         {:noreply, %{state | stream_last_flushed_at_ms: System.monotonic_time(:millisecond)}}
     end
   end

@@ -244,6 +244,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
+            "type" => "message",
             "content" => [%{"type" => "text", "text" => "Response"}],
             "model" => "claude-3-opus-20240229",
             "stop_reason" => "end_turn",
@@ -263,7 +264,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       assert result.model == "claude-3-opus-20240229"
     end
 
-    test "handles empty content response" do
+    test "rejects empty content response" do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
@@ -278,6 +279,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
+            "type" => "message",
             "content" => [],
             "model" => "claude-3-haiku-20240307",
             "stop_reason" => "end_turn",
@@ -286,12 +288,10 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         )
       end)
 
-      {:ok, result} =
-        AnthropicProvider.complete(%{
-          "messages" => [%{"role" => "user", "content" => "Test"}]
-        })
-
-      assert result.content == ""
+      assert {:error, {:invalid_response, %{reason: "missing_content"}}} =
+               AnthropicProvider.complete(%{
+                 "messages" => [%{"role" => "user", "content" => "Test"}]
+               })
     end
 
     test "handles missing usage data" do
@@ -309,6 +309,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
+            "type" => "message",
             "content" => [%{"type" => "text", "text" => "Response"}],
             "model" => "claude-3-haiku-20240307",
             "stop_reason" => "end_turn"
@@ -364,6 +365,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
+            "type" => "message",
             "content" => [%{"type" => "text", "text" => "Response"}],
             "stop_reason" => "end_turn",
             "usage" => %{"input_tokens" => 5, "output_tokens" => 10}
@@ -394,6 +396,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
+            "type" => "message",
             "content" => [%{"type" => "text", "text" => "ok"}],
             "model" => "claude-sonnet-4-20250514",
             "stop_reason" => "end_turn",
@@ -445,6 +448,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
+            "type" => "message",
             "content" => [%{"type" => "text", "text" => "Hi back"}],
             "model" => "claude-sonnet-4-20250514",
             "stop_reason" => "end_turn",
@@ -484,6 +488,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
+            "type" => "message",
             "content" => [%{"type" => "text", "text" => "ok"}],
             "model" => "claude-sonnet-4-20250514",
             "stop_reason" => "end_turn",
@@ -501,7 +506,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         })
     end
 
-    test "handles missing stop_reason in response" do
+    test "rejects missing stop_reason in response" do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
@@ -516,6 +521,7 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
+            "type" => "message",
             "content" => [%{"type" => "text", "text" => "Response"}],
             "model" => "claude-3-haiku-20240307",
             "usage" => %{"input_tokens" => 5, "output_tokens" => 10}
@@ -523,12 +529,38 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         )
       end)
 
-      {:ok, result} =
-        AnthropicProvider.complete(%{
-          "messages" => [%{"role" => "user", "content" => "Test"}]
-        })
+      assert {:error, {:invalid_response, %{reason: "invalid_stop_reason"}}} =
+               AnthropicProvider.complete(%{
+                 "messages" => [%{"role" => "user", "content" => "Test"}]
+               })
+    end
 
-      assert result.finish_reason == "unknown"
+    test "rejects max_tokens responses as incomplete" do
+      bypass = Bypass.open()
+      Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
+        Plug.Conn.resp(
+          conn,
+          200,
+          Jason.encode!(%{
+            "type" => "message",
+            "content" => [%{"type" => "text", "text" => "partial"}],
+            "model" => "claude-3-haiku-20240307",
+            "stop_reason" => "max_tokens",
+            "usage" => %{"input_tokens" => 5, "output_tokens" => 10}
+          })
+        )
+      end)
+
+      assert {:error, {:incomplete_response, %{reason: "provider_incomplete"}}} =
+               AnthropicProvider.complete(%{
+                 "messages" => [%{"role" => "user", "content" => "Test"}]
+               })
     end
   end
 end

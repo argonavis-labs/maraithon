@@ -431,7 +431,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             people_count: 0,
             memory_count: 0,
             link_count: 0,
-            errors: [%{type: "llm_call", reason: inspect(reason)}]
+            errors: [%{type: "llm_call", reason: Maraithon.Redaction.error_summary(reason)}]
           })
 
         {:emit, {event_type, payload}, reset_pending_state(state)}
@@ -623,8 +623,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               ConnectedAccounts.report_access_issue(state.user_id, provider, reason)
 
               Logger.warning("InboxCalendarAdvisor failed to fetch inbox email",
-                provider: provider,
-                reason: inspect(reason)
+                provider_reference: Maraithon.Redaction.fingerprint(provider),
+                failure_code: Maraithon.Redaction.error_class(reason)
               )
 
               []
@@ -659,8 +659,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
             {:error, reason} ->
               Logger.warning("InboxCalendarAdvisor failed to fetch sent email",
-                provider: provider,
-                reason: inspect(reason)
+                provider_reference: Maraithon.Redaction.fingerprint(provider),
+                failure_code: Maraithon.Redaction.error_class(reason)
               )
 
               []
@@ -702,8 +702,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
             {:error, reason} ->
               Logger.warning("InboxCalendarAdvisor failed to fetch calendar",
-                provider: provider,
-                reason: inspect(reason)
+                provider_reference: Maraithon.Redaction.fingerprint(provider),
+                failure_code: Maraithon.Redaction.error_class(reason)
               )
 
               []
@@ -738,7 +738,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           default_owner: "user_owner"
         )
         |> Map.put("notification_posture", "insufficient_context")
-        |> Map.put("insufficient_context_reason", "gmail_thread_fetch_failed: #{inspect(reason)}")
+        |> Map.put(
+          "insufficient_context_reason",
+          "gmail_thread_fetch_failed: #{Maraithon.Redaction.error_summary(reason)}"
+        )
 
       _ ->
         ConversationContext.from_gmail([trigger_message], trigger_message,

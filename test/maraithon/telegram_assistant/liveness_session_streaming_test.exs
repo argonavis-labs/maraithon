@@ -84,6 +84,18 @@ defmodule Maraithon.TelegramAssistant.LivenessSessionStreamingTest do
     assert_receive {:telegram_edit, "c1", "9999", "Hello there", _opts}, 2_000
   end
 
+  test "caps a pathological live preview before repeated Telegram edits" do
+    run_id = "run-#{System.unique_integer([:positive])}"
+    start_session(run_id)
+
+    LivenessSession.stream_chunk(run_id, String.duplicate("🙂\"", 100_000))
+    assert_receive {:telegram_send, "c1", "…"}, 1_000
+    state = :sys.get_state(session_pid(run_id))
+
+    assert byte_size(state.stream_buffer) <= 4_000
+    assert String.valid?(state.stream_buffer)
+  end
+
   test "additional chunks after a flush wait for the next throttle window" do
     run_id = "run-#{System.unique_integer([:positive])}"
     start_session(run_id)

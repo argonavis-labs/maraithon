@@ -139,6 +139,25 @@ defmodule Maraithon.TelegramAssistant.RunnerTest do
     end
   end
 
+  test "bounds retained tool results while preserving required identifiers" do
+    huge = %{
+      "id" => "provider-result-123",
+      "status" => "completed",
+      "payload" => Map.new(1..3_000, &{"key-#{&1}", String.duplicate("x", 1_000)})
+    }
+
+    assert %{
+             "id" => "provider-result-123",
+             "status" => "completed",
+             "_truncated" => true
+           } = bounded = Runner.bounded_tool_result(huge)
+
+    assert Maraithon.PromptBudget.encoded_bytes(bounded) <= 32_000
+
+    deep = Enum.reduce(1..20, %{"leaf" => true}, fn _, acc -> %{"nested" => acc} end)
+    assert %{"_truncated" => true} = Runner.bounded_tool_result(deep)
+  end
+
   test "mints the run and starts liveness before context build begins (SPEC 09 R1)",
        ctx do
     put_engine(Engines.Crashing)

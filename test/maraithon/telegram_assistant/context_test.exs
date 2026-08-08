@@ -257,6 +257,23 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
              ]
     end
 
+    test "delivery planner skips intelligence-generation fetchers" do
+      assert Context.fetcher_keys_for_focus(:delivery_planner) == [
+               :preference_memory,
+               :operator_memory,
+               :user_memory,
+               :open_loops,
+               :goals,
+               :relationships,
+               :todos,
+               :calendar,
+               :briefing_schedule,
+               :source_freshness,
+               :projects,
+               :defaults
+             ]
+    end
+
     test "continuity uses a narrower recap fetcher set" do
       assert Context.fetcher_keys_for_focus(:continuity) == [
                :preference_memory,
@@ -269,12 +286,87 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
              ]
     end
 
+    test "proactive projection reserves high-signal fields within a hard byte cap" do
+      escaped = String.duplicate("🙂\"\n", 2_000)
+
+      context = %{
+        user: %{"bio" => escaped},
+        preference_memory: List.duplicate(%{"instruction" => escaped}, 20),
+        operator_memory: List.duplicate(%{"summary" => escaped}, 20),
+        user_memory: %{"summary" => escaped},
+        deep_memory: List.duplicate(%{"content" => escaped}, 20),
+        todos: List.duplicate(%{"id" => "todo", "title" => escaped}, 20),
+        open_loops: %{"buckets" => %{"due" => List.duplicate(escaped, 20)}},
+        calendar: List.duplicate(%{"title" => escaped}, 20),
+        relationships: List.duplicate(%{"name" => escaped}, 20),
+        goals: List.duplicate(%{"title" => escaped}, 20),
+        projects: List.duplicate(%{"name" => escaped}, 20)
+      }
+
+      projected = Context.for_proactive_prompt(context)
+
+      assert Maraithon.PromptBudget.encoded_bytes(projected) <= 24_000
+      assert projected["preference_memory"] != []
+      assert projected["todos"] != []
+      assert projected["calendar"] != []
+      assert String.valid?(Jason.encode!(projected))
+    end
+
+    test "proactive projection preserves semantic todo fields and nested open-loop items" do
+      noisy_todos =
+        Enum.map(1..20, fn index ->
+          %{
+            "id" => "todo-semantic-#{index}",
+            "title" => "Important title #{index} " <> String.duplicate("x", 300),
+            "next_action" => "Call the person #{index} " <> String.duplicate("y", 300),
+            "summary" => "Summary #{index} " <> String.duplicate("z", 300),
+            "status" => "open",
+            "priority" => 90 - index,
+            "source" => "gmail",
+            "aaa_noise" => Map.new(1..100, &{"noise-#{&1}", String.duplicate("n", 100)})
+          }
+        end)
+
+      bucket_todo = %{
+        "id" => "bucket-semantic-id",
+        "title" => "Bucket semantic title",
+        "next_action" => "Handle the bucket item",
+        "status" => "open",
+        "priority" => 95,
+        "source" => "calendar"
+      }
+
+      projected =
+        Context.for_proactive_prompt(%{
+          todos: noisy_todos,
+          open_loops: %{
+            buckets: %{overdue: [bucket_todo]},
+            totals: %{overdue: 1, open: 1}
+          }
+        })
+
+      [first_todo | _rest] = projected["todos"]
+      assert first_todo["id"] == "todo-semantic-1"
+      assert first_todo["title"] =~ "Important title 1"
+      assert first_todo["next_action"] =~ "Call the person 1"
+      refute Map.has_key?(first_todo, "aaa_noise")
+
+      [open_loop_item] = projected["open_loops"]["items"]
+      assert open_loop_item["id"] == "bucket-semantic-id"
+      assert open_loop_item["title"] == "Bucket semantic title"
+      assert open_loop_item["bucket"] == "overdue"
+      assert projected["open_loops"]["totals"]["overdue"] == 1
+    end
+
     test "string focus values normalize to the new atoms" do
       assert Context.fetcher_keys_for_focus("commitment_audit") ==
                Context.fetcher_keys_for_focus(:commitment_audit)
 
       assert Context.fetcher_keys_for_focus("continuity") ==
                Context.fetcher_keys_for_focus(:continuity)
+
+      assert Context.fetcher_keys_for_focus("delivery_planner") ==
+               Context.fetcher_keys_for_focus(:delivery_planner)
     end
   end
 

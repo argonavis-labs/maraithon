@@ -10,6 +10,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.PushReceipt
+  alias Maraithon.TestSupport.CapturingAPNS
   alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.Todos
 
@@ -45,6 +46,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
 
     user_id = "proactive-assistant-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    CapturingAPNS.enable(user_id)
 
     {:ok, _telegram} =
       ConnectedAccounts.upsert_manual(user_id, "telegram", %{
@@ -104,7 +106,59 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
              )
   end
 
-  test "model-backed proactive planner sends a Telegram check-in and records a receipt", %{
+  test "public proactive planning projects production-sized context before the model", %{
+    user_id: user_id
+  } do
+    escaped = String.duplicate("🙂\"\n", 3_000)
+
+    context = %{
+      preference_memory: List.duplicate(%{"instruction" => escaped}, 20),
+      todos: List.duplicate(%{"id" => "todo", "title" => escaped}, 20),
+      calendar: List.duplicate(%{"title" => escaped}, 20),
+      relationships: List.duplicate(%{"name" => escaped}, 20),
+      dropped_blob: escaped
+    }
+
+    llm_complete = fn params ->
+      prompt_bytes =
+        params["messages"]
+        |> Maraithon.AssistantHarness.PromptStability.encode!()
+        |> byte_size()
+
+      prompt = get_in(params, ["messages", Access.at(1), "content"])
+      assert prompt_bytes <= Maraithon.AssistantHarness.proactive_prompt_byte_cap()
+      assert prompt =~ "preference_memory"
+      assert prompt =~ "todos"
+      assert prompt =~ "ref_"
+      refute prompt =~ user_id
+      refute prompt =~ "private-chat-id"
+      refute prompt =~ "dropped_blob"
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "hold",
+             "assistant_message" => "",
+             "message_class" => "assistant_push",
+             "urgency" => 0.1,
+             "interrupt_now" => false,
+             "dedupe_key" => "proactive:bounded-context",
+             "todo_ids" => [],
+             "summary" => "No interruption is needed."
+           })
+       }}
+    end
+
+    assert {:ok, %{"decision" => "hold"}} =
+             TelegramAssistant.plan_proactive_check_in(user_id,
+               chat_id: "private-chat-id",
+               context: context,
+               llm_complete: llm_complete
+             )
+  end
+
+  test "model-backed proactive planner sends a mobile check-in and records a receipt", %{
     user_id: user_id
   } do
     {:ok, [todo]} =
@@ -142,17 +196,13 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
              )
 
     assert result["decision"] == "sent_now"
-    assert result["todo_items_sent"] == 1
+    assert result["todo_items_sent"] == 0
+    assert telegram_messages() == []
 
-    [intro, todo_card] = telegram_messages()
-    assert intro.text =~ "Rippling work item still needs"
-    refute intro.text =~ "todo"
-    assert todo_card.text =~ "Reply in-thread and send the follow-through."
-    assert todo_card.text =~ "This Gmail thread is waiting on your reply."
-    refute todo_card.text =~ "Reply to Rippling about employment eligibility"
-    refute todo_card.text =~ "user response"
-    refute todo_card.text =~ "Maraithon Todo"
-    refute todo_card.text =~ "About:"
+    [push] = CapturingAPNS.recorded()
+    assert get_in(push.payload, ["aps", "alert", "title"]) == "Maraithon check-in"
+    assert get_in(push.payload, ["aps", "alert", "body"]) =~ "Rippling"
+    assert push.payload["deeplink"] == "maraithon://todos"
 
     receipt =
       Repo.one!(
@@ -213,7 +263,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
     assert ledger_entry.source_evidence["dedupe_key"] == "proactive:hold"
   end
 
-  test "feedback verification rewrites stale backlog dumps before Telegram delivery", %{
+  test "feedback verification rewrites stale backlog dumps before interruption policy", %{
     user_id: user_id
   } do
     {:ok, [todo]} =
@@ -270,26 +320,14 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
                llm_complete: llm_complete
              )
 
-    assert result["decision"] == "sent_now"
-    assert result["todo_items_sent"] == 1
-
-    [intro, todo_card] = telegram_messages()
-    assert intro.text =~ "Older follow-up, not urgent"
-    assert intro.text =~ "Dan Bourke"
-    assert intro.text =~ "Keep it active"
-    refute intro.text =~ ".."
-    refute intro.text =~ "several overdue follow-ups"
-    refute intro.text =~ "I found"
-    refute intro.text =~ "not treating it as urgent"
-    refute intro.text =~ "look stale"
-    refute intro.text =~ "Emma's Soccer Practice"
-    assert todo_card.text =~ "Dan Bourke (A-Team; video project contact)"
-    assert todo_card.text =~ "Decision: Keep it active if it still matters"
-    assert todo_card.text =~ "Why now: This item is"
-    assert todo_card.text =~ "Keep it active if it still matters"
-    assert todo_card.text =~ "Keep it active only if it still matters"
-    refute todo_card.text =~ "not treat it as urgent"
-    refute todo_card.text =~ "stale follow-up"
+    assert result["decision"] == "held_rate_limit"
+    assert result["assistant_message"] =~ "Older follow-up, not urgent"
+    assert result["assistant_message"] =~ "Dan Bourke"
+    assert result["assistant_message"] =~ "Keep it active"
+    refute result["assistant_message"] =~ "several overdue follow-ups"
+    refute result["assistant_message"] =~ "Emma's Soccer Practice"
+    assert telegram_messages() == []
+    assert CapturingAPNS.recorded() == []
   end
 
   defp telegram_messages do

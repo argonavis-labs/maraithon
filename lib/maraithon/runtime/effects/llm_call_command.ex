@@ -12,9 +12,11 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   @behaviour Maraithon.Runtime.Effects.Command
 
   alias Maraithon.LLM
+  alias Maraithon.LLM.RequestBudget
   alias Maraithon.Effects.Effect
   alias Maraithon.Spend
   alias Maraithon.Tracing
+  alias Maraithon.Redaction
   alias Maraithon.Runtime.Effects.LLMRateLimiter
 
   require Logger
@@ -37,8 +39,21 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
   @impl true
   def execute(%Effect{} = effect) do
-    params = effect.params |> cap_primary_tokens()
-    _timeout = params["timeout_ms"] || 120_000
+    bounded =
+      effect.params
+      |> cap_primary_tokens()
+      |> cap_primary_model()
+      |> RequestBudget.validate()
+
+    case bounded do
+      {:ok, params} -> do_execute(effect, params)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp do_execute(effect, params) do
+    timeout = request_timeout(params["timeout_ms"])
+    deadline = System.monotonic_time(:millisecond) + timeout
 
     Logger.info("Starting LLM call for effect #{effect.id}",
       agent_id: effect.agent_id,
@@ -46,7 +61,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     )
 
     try do
-      case run_with_retry(params, effect, 1) do
+      case run_with_retry(params, effect, 1, deadline) do
         {:ok, data} ->
           data = ensure_usage(data)
 
@@ -60,7 +75,11 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
           {:ok, data}
 
         {:error, reason} = error ->
-          Logger.warning("LLM call failed", effect_id: effect.id, reason: inspect(reason))
+          Logger.warning("LLM call failed",
+            effect_id: effect.id,
+            failure_code: Redaction.error_class(reason)
+          )
+
           error
       end
     catch
@@ -70,35 +89,43 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     end
   end
 
-  defp run_with_retry(params, effect, attempt) do
-    case LLM.complete(params) do
-      {:ok, _data} = ok ->
-        ok
+  defp run_with_retry(params, effect, attempt, deadline) do
+    with remaining when remaining > 0 <- remaining_ms(deadline) do
+      params = Map.put(params, "timeout_ms", remaining)
 
-      {:error, reason} ->
-        record_provider_limit(reason)
+      case LLM.complete(params) do
+        {:ok, _data} = ok ->
+          ok
 
-        case retry_backoff_ms(reason, attempt) do
-          nil ->
-            # Same-model retries are spent. For transient errors that look
-            # like model-scoped capacity issues, try configured fallback
-            # models with a lighter request before failing the effect.
-            maybe_try_model_fallbacks(params, effect, reason)
+        {:error, reason} ->
+          record_provider_limit(reason)
 
-          sleep_ms ->
-            Logger.info(
-              "LLM call retry #{attempt}/#{@max_retry_attempts - 1} after #{sleep_ms}ms",
-              effect_id: effect.id,
-              reason: inspect(reason)
-            )
+          case retry_backoff_ms(reason, attempt) do
+            nil ->
+              # Same-model retries are spent. For transient errors that look
+              # like model-scoped capacity issues, try configured fallback
+              # models with a lighter request before failing the effect.
+              maybe_try_model_fallbacks(params, effect, reason, deadline)
 
-            Process.sleep(sleep_ms)
-            run_with_retry(params, effect, attempt + 1)
-        end
+            sleep_ms ->
+              Logger.info(
+                "LLM call retry #{attempt}/#{@max_retry_attempts - 1} after #{sleep_ms}ms",
+                effect_id: effect.id,
+                failure_code: Redaction.error_class(reason)
+              )
+
+              case sleep_with_deadline(sleep_ms, deadline) do
+                :ok -> run_with_retry(params, effect, attempt + 1, deadline)
+                :timeout -> {:error, :timeout}
+              end
+          end
+      end
+    else
+      _expired -> {:error, :timeout}
     end
   end
 
-  defp maybe_try_model_fallbacks(params, effect, original_reason) do
+  defp maybe_try_model_fallbacks(params, effect, original_reason, deadline) do
     fallback_models = fallback_models(params)
 
     cond do
@@ -112,25 +139,68 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
         {:error, original_reason}
 
       true ->
-        try_fallback_models(params, effect, original_reason, fallback_models, [])
+        try_fallback_models(params, effect, original_reason, fallback_models, [], deadline)
     end
   end
 
-  defp try_fallback_models(_params, _effect, original_reason, [], fallback_errors) do
-    Tracing.record_error({:llm_fallbacks_failed, original_reason, Enum.reverse(fallback_errors)})
+  defp try_fallback_models(
+         _params,
+         _effect,
+         original_reason,
+         [],
+         fallback_errors,
+         _deadline
+       ) do
+    Tracing.record_error(
+      {:llm_fallbacks_failed, Redaction.error_class(original_reason),
+       Enum.reverse(fallback_errors)}
+    )
 
     {:error, {:llm_fallbacks_failed, original_reason, Enum.reverse(fallback_errors)}}
   end
 
-  defp try_fallback_models(params, effect, original_reason, [fallback_model | rest], errors) do
+  defp try_fallback_models(
+         params,
+         effect,
+         original_reason,
+         [fallback_model | rest],
+         errors,
+         deadline
+       ) do
     Logger.info(
       "LLM primary exhausted; falling back to alternate model",
       effect_id: effect.id,
-      original_reason: inspect(original_reason),
+      original_reason: Redaction.error_summary(original_reason),
       fallback_model: fallback_model
     )
 
-    case LLM.complete(fallback_params(params, fallback_model)) do
+    remaining = remaining_ms(deadline)
+
+    case remaining do
+      value when value <= 0 ->
+        {:error, :timeout}
+
+      value ->
+        fallback_params =
+          params
+          |> fallback_params(fallback_model)
+          |> Map.put("timeout_ms", value)
+
+        run_fallback_model(fallback_params, effect, original_reason, rest, errors, deadline)
+    end
+  end
+
+  defp run_fallback_model(
+         fallback_params,
+         effect,
+         original_reason,
+         rest,
+         errors,
+         deadline
+       ) do
+    fallback_model = fallback_params["model"]
+
+    case LLM.complete(fallback_params) do
       {:ok, _data} = ok ->
         ok
 
@@ -141,12 +211,19 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
           "LLM fallback model failed",
           effect_id: effect.id,
           fallback_model: fallback_model,
-          fallback_reason: inspect(fallback_reason)
+          fallback_reason: Redaction.error_summary(fallback_reason)
         )
 
-        try_fallback_models(params, effect, original_reason, rest, [
-          %{model: fallback_model, reason: inspect(fallback_reason)} | errors
-        ])
+        try_fallback_models(
+          fallback_params,
+          effect,
+          original_reason,
+          rest,
+          [
+            %{model: fallback_model, reason: Redaction.error_summary(fallback_reason)} | errors
+          ],
+          deadline
+        )
     end
   end
 
@@ -158,6 +235,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     |> Enum.reject(&is_nil/1)
     |> Enum.reject(&(&1 == current_model))
     |> Enum.uniq()
+    |> Enum.take(8)
   end
 
   defp fallback_params(params, fallback_model) do
@@ -166,6 +244,23 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     |> cap_fallback_tokens()
     |> Map.put("reasoning_effort", @fallback_reasoning_effort)
   end
+
+  defp cap_primary_model(params) when is_map(params) do
+    case Map.get(params, "model") do
+      nil ->
+        params
+
+      model when is_binary(model) and byte_size(model) <= 255 ->
+        if String.valid?(model),
+          do: Map.put(params, "model", String.trim(model)),
+          else: Map.delete(params, "model")
+
+      _invalid ->
+        Map.delete(params, "model")
+    end
+  end
+
+  defp cap_primary_model(params), do: params
 
   defp cap_primary_tokens(params) when is_map(params) do
     cap = primary_max_tokens()
@@ -184,32 +279,50 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   end
 
   defp cap_token_key(params, key, cap) do
-    case Map.get(params, key) do
-      value when is_integer(value) and value > cap ->
+    case Map.fetch(params, key) do
+      :error ->
+        params
+
+      {:ok, value} when is_integer(value) and value > cap ->
         params
         |> Map.put(key, cap)
-        |> note_token_cap(key, value, cap)
+        |> note_token_cap(key, :above_cap, cap)
 
-      value when is_binary(value) ->
-        case Integer.parse(value) do
-          {parsed, ""} when parsed > cap ->
-            params
-            |> Map.put(key, cap)
-            |> note_token_cap(key, parsed, cap)
+      {:ok, value} when is_integer(value) and value > 0 ->
+        params
 
-          _other ->
-            params
+      {:ok, value} when is_binary(value) and byte_size(value) > 16 ->
+        params
+        |> Map.put(key, cap)
+        |> note_token_cap(key, :oversized_binary, cap)
+
+      {:ok, value} when is_binary(value) ->
+        if not String.valid?(value) do
+          Map.delete(params, key)
+        else
+          case Integer.parse(String.trim(value)) do
+            {parsed, ""} when parsed > cap ->
+              params
+              |> Map.put(key, cap)
+              |> note_token_cap(key, :above_cap, cap)
+
+            {parsed, ""} when parsed > 0 ->
+              Map.put(params, key, parsed)
+
+            _other ->
+              Map.delete(params, key)
+          end
         end
 
-      _other ->
-        params
+      {:ok, _invalid} ->
+        Map.delete(params, key)
     end
   end
 
-  defp note_token_cap(params, key, original, cap) do
+  defp note_token_cap(params, key, reason, cap) do
     Logger.info("Capped oversized LLM effect request",
       token_key: key,
-      original: original,
+      failure_code: to_string(reason),
       cap: cap
     )
 
@@ -221,18 +334,26 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     |> Application.get_env(Maraithon.Runtime, [])
     |> Keyword.get(:llm_primary_max_tokens, @default_primary_max_tokens)
     |> positive_integer(@default_primary_max_tokens)
+    |> min(@default_primary_max_tokens)
   end
 
   defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
 
-  defp positive_integer(value, default) when is_binary(value) do
-    case Integer.parse(String.trim(value)) do
-      {parsed, ""} when parsed > 0 -> parsed
-      _other -> default
+  defp positive_integer(value, default) when is_binary(value) and byte_size(value) <= 16 do
+    if String.valid?(value) do
+      case Integer.parse(String.trim(value)) do
+        {parsed, ""} when parsed > 0 -> parsed
+        _other -> default
+      end
+    else
+      default
     end
   end
 
   defp positive_integer(_value, default), do: default
+
+  @doc false
+  def normalize_model_fallbacks(value), do: normalize_string_list(value)
 
   defp configured_model_fallbacks do
     :maraithon
@@ -243,22 +364,29 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
   defp normalize_string_list(values) when is_list(values) do
     values
+    |> Enum.take(16)
     |> Enum.map(&normalize_model/1)
     |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.take(8)
   end
 
   defp normalize_string_list(value) when is_binary(value) do
     value
+    |> Maraithon.PromptBudget.truncate_utf8(8_192)
     |> String.split(",", trim: true)
+    |> Enum.take(16)
     |> normalize_string_list()
   end
 
   defp normalize_string_list(_value), do: []
 
-  defp normalize_model(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      model -> model
+  defp normalize_model(value) when is_binary(value) and byte_size(value) <= 255 do
+    if String.valid?(value) do
+      case String.trim(value) do
+        "" -> nil
+        model -> model
+      end
     end
   end
 
@@ -326,6 +454,23 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   end
 
   defp inline_rate_limit_backoff_ms(_retry_after_ms), do: nil
+
+  defp request_timeout(value) when is_integer(value) and value > 0, do: min(value, 300_000)
+  defp request_timeout(_value), do: 120_000
+
+  defp remaining_ms(deadline),
+    do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  defp sleep_with_deadline(sleep_ms, deadline) do
+    remaining = remaining_ms(deadline)
+
+    if sleep_ms > 0 and sleep_ms < remaining do
+      Process.sleep(sleep_ms)
+      :ok
+    else
+      :timeout
+    end
+  end
 
   defp ensure_usage(%{usage: %{} = usage} = data) do
     model = Map.get(data, :model, "unknown")

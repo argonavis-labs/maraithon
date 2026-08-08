@@ -95,16 +95,8 @@ defmodule Maraithon.LogBufferBackend do
   defp to_iso8601(_), do: DateTime.utc_now() |> DateTime.to_iso8601()
 
   defp stringify_metadata(metadata) do
-    Map.new(metadata, fn {key, value} ->
-      {to_string(key), metadata_value(value)}
-    end)
+    Map.new(metadata, fn {key, value} -> {to_string(key), value} end)
   end
-
-  defp metadata_value(value) when is_binary(value), do: value
-  defp metadata_value(value) when is_number(value), do: value
-  defp metadata_value(value) when is_boolean(value), do: value
-  defp metadata_value(nil), do: nil
-  defp metadata_value(value), do: inspect(value, pretty: false, limit: 20)
 
   defp normalize_level(:warn), do: :warning
   defp normalize_level(level), do: level

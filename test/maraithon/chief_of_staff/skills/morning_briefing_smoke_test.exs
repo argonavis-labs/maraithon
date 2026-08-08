@@ -221,11 +221,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
              )
 
     assert brief["body"] =~ "Dawn Nguyen"
-    assert diagnostics.todo_persistence.todo_count == 1
-
-    [todo] = Todos.list_for_user(user_id, source: "calendar", limit: 5)
-    assert todo.title == "Prep for Dawn Nguyen"
-    assert todo.metadata["origin_skill_id"] == "morning_briefing"
+    assert diagnostics.todo_persistence.todo_count == 0
+    assert diagnostics.todo_persistence.todo_skipped_count == 1
+    assert Todos.list_for_user(user_id, source: "calendar", limit: 5) == []
 
     [message | _] = messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
 
@@ -240,7 +238,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     assert Enum.any?(messages, &String.contains?(&1.text, "Review Dawn and Kiln Studio context"))
 
     keyboard = get_in(List.last(messages).opts, [:reply_markup, "inline_keyboard"]) || []
-    assert keyboard |> List.flatten() |> Enum.any?(&(&1["text"] == "Review open work"))
-    assert diagnostics.telegram_delivery.todo_review_brief_id
+    refute keyboard |> List.flatten() |> Enum.any?(&(&1["text"] == "Review open work"))
+    refute Map.get(diagnostics.telegram_delivery, :todo_review_brief_id)
   end
 end

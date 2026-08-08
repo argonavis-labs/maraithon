@@ -96,7 +96,7 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
             "failed",
             "Open work rebuild did not start.",
             %{
-              "error" => inspect(reason)
+              "error" => Maraithon.Redaction.error_summary(reason)
             }
           )
 
@@ -212,7 +212,7 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
       {:error, reason} ->
         _ =
           record_job_event(user_id, nil, job_id, "failed", "Open work rebuild failed.", %{
-            "error" => inspect(reason)
+            "error" => Maraithon.Redaction.error_summary(reason)
           })
 
         {:error, reason}
@@ -235,8 +235,8 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
     run_and_record(user_id, opts)
   rescue
     exception ->
-      stacktrace = __STACKTRACE__
       job_id = Keyword.fetch!(opts, :job_id)
+      failure_code = Maraithon.Redaction.error_class(exception)
 
       _ =
         record_job_event(
@@ -245,14 +245,10 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
           job_id,
           "failed",
           "Open work rebuild crashed.",
-          %{
-            "exception" => inspect(exception),
-            "message" => Exception.message(exception),
-            "stacktrace" => Exception.format_stacktrace(stacktrace) |> String.slice(0, 4_000)
-          }
+          %{"failure_code" => failure_code}
         )
 
-      {:error, exception}
+      {:error, {:exception, failure_code}}
   catch
     kind, reason ->
       job_id = Keyword.fetch!(opts, :job_id)
@@ -265,12 +261,12 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
           "failed",
           "Open work rebuild crashed.",
           %{
-            "kind" => inspect(kind),
-            "reason" => inspect(reason)
+            "kind" => to_string(kind),
+            "failure_code" => Maraithon.Redaction.error_class(reason)
           }
         )
 
-      {:error, {kind, reason}}
+      {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
 
   defp chief_of_staff_agent(user_id) do
@@ -325,7 +321,8 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
             {[dismissed_todo_summary(todo, updated) | dismissed], failed}
 
           {:error, reason} ->
-            {dismissed, [%{"id" => todo.id, "reason" => inspect(reason)} | failed]}
+            {dismissed,
+             [%{"id" => todo.id, "reason" => Maraithon.Redaction.error_summary(reason)} | failed]}
         end
       end)
 
@@ -401,7 +398,8 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
             {[todo_summary(updated) | restored], failed}
 
           {:error, reason} ->
-            {restored, [%{"id" => todo_id, "reason" => inspect(reason)} | failed]}
+            {restored,
+             [%{"id" => todo_id, "reason" => Maraithon.Redaction.error_summary(reason)} | failed]}
         end
       end)
 
@@ -428,7 +426,8 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
             {[todo_summary(updated) | restored], failed}
 
           {:error, reason} ->
-            {restored, [%{"id" => todo.id, "reason" => inspect(reason)} | failed]}
+            {restored,
+             [%{"id" => todo.id, "reason" => Maraithon.Redaction.error_summary(reason)} | failed]}
         end
       end)
 

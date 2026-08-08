@@ -8,13 +8,22 @@ defmodule Maraithon.Push.NotifierTest do
 
   defmodule OkHTTP do
     def post(url, _headers, body) do
-      send(self(), {:apns_sent, url, Jason.decode!(body)})
+      recipient = Application.fetch_env!(:maraithon, :apns) |> Keyword.fetch!(:test_pid)
+      send(recipient, {:apns_sent, url, Jason.decode!(body)})
       {:ok, 200, ""}
     end
   end
 
   defmodule GoneHTTP do
     def post(_url, _headers, _body), do: {:ok, 410, ~s({"reason":"Unregistered"})}
+  end
+
+  defmodule RejectedHTTP do
+    def post(_url, _headers, _body), do: {:ok, 429, ~s({"reason":"TooManyRequests"})}
+  end
+
+  defmodule UnknownHTTP do
+    def post(_url, _headers, _body), do: {:error, :closed}
   end
 
   setup do
@@ -27,7 +36,8 @@ defmodule Maraithon.Push.NotifierTest do
       team_id: "TEAM123456",
       key_id: "KEY1234567",
       private_key: pem,
-      http_module: OkHTTP
+      http_module: OkHTTP,
+      test_pid: self()
     )
 
     APNS.reset_jwt_cache()
@@ -74,9 +84,33 @@ defmodule Maraithon.Push.NotifierTest do
       Keyword.put(Application.get_env(:maraithon, :apns), :http_module, GoneHTTP)
     )
 
-    assert {:error, :undelivered} = Notifier.notify(user_id, %{title: "x", body: "y"})
+    assert {:error, :no_devices} = Notifier.notify(user_id, %{title: "x", body: "y"})
     assert Devices.active_for_user(user_id) == []
     refute Notifier.enabled_for_user?(user_id)
+  end
+
+  test "notify distinguishes definitive rejection from ambiguous transport loss", %{
+    user_id: user_id
+  } do
+    {:ok, _} = Devices.register(user_id, %{device_token: String.duplicate("7", 64)})
+    original = Application.get_env(:maraithon, :apns)
+
+    Application.put_env(
+      :maraithon,
+      :apns,
+      Keyword.put(original, :http_module, RejectedHTTP)
+    )
+
+    assert {:error, :undelivered} = Notifier.notify(user_id, %{title: "x", body: "y"})
+
+    Application.put_env(
+      :maraithon,
+      :apns,
+      Keyword.put(original, :http_module, UnknownHTTP)
+    )
+
+    assert {:error, :delivery_unknown} =
+             Notifier.notify(user_id, %{title: "x", body: "y"})
   end
 
   test "re-registering a disabled token reactivates it", %{user_id: user_id} do

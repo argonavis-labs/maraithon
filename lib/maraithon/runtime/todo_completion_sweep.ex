@@ -6,21 +6,25 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   use GenServer
 
   alias Maraithon.Runtime.Config
-  alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion}
+  alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion, UserBatch}
 
   require Logger
 
   @name __MODULE__
   @default_interval_ms :timer.minutes(30)
+  @cursor_key "todo_completion_sweep"
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, @name))
   end
 
   def run_once(opts \\ []) do
-    opts
+    user_ids = UserBatch.open_todo_user_ids(opts)
+    bounded_opts = Keyword.put(opts, :user_ids, user_ids)
+
+    bounded_opts
     |> CompletionSweep.run_for_all_users()
-    |> Map.put(:cross_source, run_cross_source_pass(opts))
+    |> Map.put(:cross_source, run_cross_source_pass(bounded_opts))
   end
 
   @impl true
@@ -41,7 +45,9 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
     state = %{
       interval_ms: interval_ms,
-      initial_delay_ms: initial_delay_ms
+      initial_delay_ms: initial_delay_ms,
+      user_limit: Config.positive_integer(:todo_completion_sweep_user_limit, 10),
+      user_cursor: UserBatch.load_cursor(@cursor_key)
     }
 
     schedule_tick(state.initial_delay_ms)
@@ -50,9 +56,8 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
   @impl true
   def handle_info(:tick, state) do
-    # All users are swept every cycle; the old user_limit cap silently starved
-    # everyone past the first page.
-    summary = run_once()
+    user_ids = UserBatch.open_todo_user_ids(after_user_id: state.user_cursor)
+    summary = run_once(user_ids: user_ids)
 
     if summary.completed > 0 or summary.errors > 0 or summary.fetch_errors > 0 do
       Logger.info("Todo completion sweep cycle",
@@ -66,11 +71,17 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
       )
     end
 
+    next_cursor = List.last(user_ids) || state.user_cursor
+    if is_binary(next_cursor), do: UserBatch.record_cursor(@cursor_key, next_cursor)
+
     schedule_tick(state.interval_ms)
-    {:noreply, state}
+    {:noreply, %{state | user_cursor: next_cursor}}
   rescue
     error ->
-      Logger.warning("Todo completion sweep cycle failed", reason: Exception.message(error))
+      Logger.warning("Todo completion sweep cycle failed",
+        failure_code: Maraithon.Redaction.error_class(error)
+      )
+
       schedule_tick(state.interval_ms)
       {:noreply, state}
   end
@@ -106,7 +117,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   rescue
     error ->
       Logger.warning("Cross-source completion cycle failed",
-        reason: Exception.message(error)
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       %{users: 0, checked: 0, completed: 0, skipped: 0, errors: 1}

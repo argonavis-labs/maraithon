@@ -33,36 +33,124 @@ defmodule Maraithon.Push.Notifier do
   along the way; transient failures surface so the broker's cycle retries).
   """
   def notify(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
-    case Devices.active_for_user(user_id) do
-      [] ->
+    with {:ok, prepared} <- prepare(user_id, attrs) do
+      deliver_prepared(prepared)
+    end
+  end
+
+  @doc false
+  def prepare(user_id, attrs)
+      when is_binary(user_id) and byte_size(user_id) <= 1_280 and is_map(attrs) do
+    try do
+      case Devices.active_for_user(user_id) do
+        [] ->
+          {:error, :no_devices}
+
+        devices ->
+          case Process.whereis(Maraithon.Runtime.ToolCallSupervisor) do
+            pid when is_pid(pid) ->
+              {:ok,
+               {:prepared_notification, user_id, Enum.take(devices, 5), APNS.payload(attrs),
+                attrs[:collapse_id]}}
+
+            _missing ->
+              {:error, :preparation_failed}
+          end
+      end
+    rescue
+      _exception -> {:error, :preparation_failed}
+    catch
+      _kind, _reason -> {:error, :preparation_failed}
+    end
+  end
+
+  def prepare(_user_id, _attrs), do: {:error, :preparation_failed}
+
+  @doc false
+  def deliver_prepared({:prepared_notification, user_id, devices, payload, collapse_id})
+      when is_binary(user_id) and byte_size(user_id) <= 1_280 and is_list(devices) and
+             is_map(payload) do
+    devices = Enum.take(devices, 5)
+
+    outcomes =
+      Task.Supervisor.async_stream_nolink(
+        Maraithon.Runtime.ToolCallSupervisor,
+        devices,
+        fn device ->
+          result =
+            try do
+              APNS.send(device.device_token, payload, collapse_id: collapse_id)
+            rescue
+              _exception -> {:error, :delivery_unknown}
+            catch
+              _kind, _reason -> {:error, :delivery_unknown}
+            end
+
+          {device, result}
+        end,
+        max_concurrency: 5,
+        timeout: 12_000,
+        on_timeout: :kill_task,
+        ordered: false
+      )
+      |> Enum.reduce(%{delivered: 0, unknown: 0, unregistered: 0, rejected: 0}, fn
+        {:ok, {_device, :ok}}, counts ->
+          Map.update!(counts, :delivered, &(&1 + 1))
+
+        {:ok, {device, {:error, :unregistered}}}, counts ->
+          _ = disable_safely(device)
+          Map.update!(counts, :unregistered, &(&1 + 1))
+
+        {:ok, {device, {:error, :delivery_unknown}}}, counts ->
+          Logger.warning("Push notification delivery result is unknown",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            device_reference: Maraithon.Redaction.fingerprint(device.id),
+            failure_code: "delivery_unknown"
+          )
+
+          Map.update!(counts, :unknown, &(&1 + 1))
+
+        {:ok, {device, {:error, reason}}}, counts ->
+          Logger.warning("Push notification send was rejected",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            device_reference: Maraithon.Redaction.fingerprint(device.id),
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
+
+          Map.update!(counts, :rejected, &(&1 + 1))
+
+        {:exit, reason}, counts ->
+          Logger.warning("Push notification send task ended without a result",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
+
+          Map.update!(counts, :unknown, &(&1 + 1))
+      end)
+
+    cond do
+      outcomes.delivered > 0 ->
+        {:ok, outcomes.delivered}
+
+      outcomes.unknown > 0 ->
+        {:error, :delivery_unknown}
+
+      outcomes.unregistered == length(devices) ->
         {:error, :no_devices}
 
-      devices ->
-        payload = APNS.payload(attrs)
-
-        delivered =
-          Enum.count(devices, fn device ->
-            case APNS.send(device.device_token, payload, collapse_id: attrs[:collapse_id]) do
-              :ok ->
-                true
-
-              {:error, :unregistered} ->
-                _ = Devices.disable(device)
-                false
-
-              {:error, reason} ->
-                Logger.warning("Push notification send failed",
-                  user_id: user_id,
-                  device_id: device.id,
-                  reason: inspect(reason)
-                )
-
-                false
-            end
-          end)
-
-        if delivered > 0, do: {:ok, delivered}, else: {:error, :undelivered}
+      true ->
+        {:error, :undelivered}
     end
+  end
+
+  def deliver_prepared(_prepared), do: {:error, :preparation_failed}
+
+  defp disable_safely(device) do
+    Devices.disable(device)
+  rescue
+    _exception -> {:error, :disable_failed}
+  catch
+    _kind, _reason -> {:error, :disable_failed}
   end
 
   def enabled? do

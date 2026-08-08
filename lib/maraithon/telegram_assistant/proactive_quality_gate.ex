@@ -615,7 +615,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
   end
 
   defp todo_context(todo) do
-    profile = AttentionRanker.profile(todo)
+    profile = todo_attention_profile(todo)
     context = read_field(profile, "context") || %{}
     person = read_field(context, "person")
 
@@ -702,9 +702,9 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
       id = todo_id(todo)
 
       (MapSet.size(plan_ids) == 0 or MapSet.member?(plan_ids, id)) and
-        read_field(AttentionRanker.profile(todo), "stale_confirmation_candidate") == true
+        read_field(todo_attention_profile(todo), "stale_confirmation_candidate") == true
     end)
-    |> AttentionRanker.sort()
+    |> sort_todos_by_attention()
   end
 
   defp plan_todos(payload, plan) do
@@ -720,7 +720,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
     |> Enum.filter(fn todo ->
       MapSet.size(plan_ids) > 0 and MapSet.member?(plan_ids, todo_id(todo))
     end)
-    |> AttentionRanker.sort()
+    |> sort_todos_by_attention()
   end
 
   defp too_many_stale_confirmations?(payload, plan) do
@@ -751,7 +751,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
     payload
     |> context_todos()
     |> Enum.filter(&MapSet.member?(plan_ids, todo_id(&1)))
-    |> AttentionRanker.sort()
+    |> sort_todos_by_attention()
     |> Enum.map(&todo_id/1)
   end
 
@@ -948,7 +948,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
 
   defp todo_context_signals(todo) when is_map(todo) do
     metadata = todo_metadata(todo)
-    profile = AttentionRanker.profile(todo)
+    profile = todo_attention_profile(todo)
     context = read_field(profile, "context") || %{}
 
     [
@@ -1143,7 +1143,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
   defp familiar_todo_person?(todo, payload, name) do
     metadata = todo_metadata(todo)
 
-    familiar_profile?(AttentionRanker.profile(todo)) or
+    familiar_profile?(todo_attention_profile(todo)) or
       familiar_person?(payload, name) or
       read_integer(metadata, "interaction_count", 0) >= @familiar_interaction_count or
       frequent_communication?(read_metadata(metadata, "communication_frequency")) or
@@ -1252,6 +1252,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
     direct_todos = read_field(context, "todos") || []
     open_loops = read_field(context, "open_loops") || %{}
     buckets = read_field(open_loops, "buckets") || %{}
+    projected_items = read_field(open_loops, "items") || []
 
     bucket_todos =
       if is_map(buckets) do
@@ -1265,7 +1266,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
         []
       end
 
-    (direct_todos ++ bucket_todos)
+    (direct_todos ++ List.wrap(projected_items) ++ bucket_todos)
     |> Enum.filter(&is_map/1)
     |> Enum.uniq_by(&todo_id/1)
   end
@@ -1328,11 +1329,47 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
 
   defp contains_any?(_text, _terms), do: false
 
+  @attention_bucket_order %{
+    "personal_family" => 0,
+    "strong_relationship_waiting" => 1,
+    "business_project_waiting" => 2,
+    "intro_request" => 3,
+    "meeting_request" => 4,
+    "other" => 5
+  }
+
+  defp todo_attention_profile(todo) when is_map(todo) do
+    case read_field(todo, "attention_profile") do
+      profile when is_map(profile) and map_size(profile) > 0 -> profile
+      _other -> AttentionRanker.profile(todo)
+    end
+  end
+
+  defp todo_attention_profile(_todo), do: %{}
+
+  defp sort_todos_by_attention(todos) when is_list(todos) do
+    Enum.sort_by(todos, fn todo ->
+      profile = todo_attention_profile(todo)
+
+      fallback_rank = Map.get(@attention_bucket_order, read_field(profile, "bucket"), 99)
+
+      {
+        read_integer(profile, "bucket_rank", fallback_rank),
+        -numeric_score(read_field(profile, "score")),
+        to_string(todo_id(todo) || "")
+      }
+    end)
+  end
+
+  defp numeric_score(value) when is_integer(value) or is_float(value), do: value
+  defp numeric_score(_value), do: 0
+
   defp todo_person(todo) when is_map(todo) do
-    profile = AttentionRanker.profile(todo)
+    profile = todo_attention_profile(todo)
     context = read_field(profile, "context") || %{}
 
     read_field(context, "person") ||
+      read_field(todo, "counterparty_label") ||
       read_metadata(todo_metadata(todo), "person") ||
       todo_metadata(todo) |> read_metadata("record") |> read_metadata("person")
   end

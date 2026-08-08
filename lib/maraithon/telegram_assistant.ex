@@ -454,10 +454,10 @@ defmodule Maraithon.TelegramAssistant do
 
   def latest_prepared_action(_conversation), do: nil
 
-  # Only these decisions represent a message that actually reached (or will
-  # reach via another channel) the operator. `held_rate_limit` is a
-  # deliberate exception: quiet hours and interruption-budget holds must not
-  # permanently block a later retry of the same dedupe_key.
+  # Terminal delivery proofs and in-flight serialization states all block an
+  # older or concurrent sender. `held_rate_limit` is deliberately excluded:
+  # quiet-hours and interruption-budget holds must not permanently block a
+  # later retry of the same dedupe_key.
   @blocking_push_decisions [
     "reserved",
     "sending",
@@ -520,6 +520,19 @@ defmodule Maraithon.TelegramAssistant do
               ^blocking,
               ^blocking,
               receipt.conversation_turn_id
+            ),
+          # `inserted_at` is also the decision/lease timestamp for this
+          # immutable receipt row. Refresh it when a non-blocking hold becomes
+          # a reservation; otherwise an old hold creates an instantly stale
+          # in-flight lease. Do not rewrite a blocking proof with a later
+          # non-blocking decision.
+          inserted_at:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.inserted_at END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.inserted_at
             )
         ]
       ]

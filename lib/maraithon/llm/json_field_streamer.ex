@@ -69,67 +69,85 @@ defmodule Maraithon.LLM.JsonFieldStreamer do
     consume_value(state, chunk)
   end
 
-  defp consume_value(state, ""), do: {"", state}
-
-  defp consume_value(%__MODULE__{escape: true} = state, <<char::utf8, rest::binary>>) do
-    case char do
-      ?\\ -> emit_after(state, "\\", rest)
-      ?" -> emit_after(state, "\"", rest)
-      ?/ -> emit_after(state, "/", rest)
-      ?n -> emit_after(state, "\n", rest)
-      ?t -> emit_after(state, "\t", rest)
-      ?r -> emit_after(state, "\r", rest)
-      ?b -> emit_after(state, "\b", rest)
-      ?f -> emit_after(state, "\f", rest)
-      ?u -> begin_unicode(state, rest)
-      _ -> emit_after(state, <<char::utf8>>, rest)
-    end
+  defp consume_value(state, chunk) do
+    {reversed_emit, next_state} = do_consume_value(state, chunk, [])
+    {reversed_emit |> Enum.reverse() |> IO.iodata_to_binary(), next_state}
   end
 
-  defp consume_value(%__MODULE__{unicode: {needed, acc}} = state, <<char::utf8, rest::binary>>)
+  defp do_consume_value(state, "", emitted), do: {emitted, state}
+
+  defp do_consume_value(
+         %__MODULE__{unicode: {needed, acc}} = state,
+         <<char::utf8, rest::binary>>,
+         emitted
+       )
        when needed > 0 do
     next_acc = [acc, <<char::utf8>>]
 
     if needed == 1 do
-      hex = IO.iodata_to_binary(next_acc)
+      decoded =
+        next_acc
+        |> IO.iodata_to_binary()
+        |> decode_unicode_escape()
 
-      case Integer.parse(hex, 16) do
-        {codepoint, ""} ->
-          emit_after(
-            %{state | unicode: nil, escape: false},
-            <<codepoint::utf8>>,
-            rest
-          )
-
-        _ ->
-          emit_after(%{state | unicode: nil, escape: false}, "?", rest)
-      end
+      do_consume_value(
+        %{state | unicode: nil, escape: false},
+        rest,
+        [decoded | emitted]
+      )
     else
-      consume_value(%{state | unicode: {needed - 1, next_acc}}, rest)
+      do_consume_value(%{state | unicode: {needed - 1, next_acc}}, rest, emitted)
     end
   end
 
-  defp consume_value(state, <<?\\, rest::binary>>) do
-    consume_value(%{state | escape: true}, rest)
+  defp do_consume_value(
+         %__MODULE__{escape: true} = state,
+         <<char::utf8, rest::binary>>,
+         emitted
+       ) do
+    case char do
+      ?u ->
+        do_consume_value(%{state | escape: false, unicode: {4, []}}, rest, emitted)
+
+      _other ->
+        decoded =
+          case char do
+            ?\\ -> "\\"
+            ?" -> "\""
+            ?/ -> "/"
+            ?n -> "\n"
+            ?t -> "\t"
+            ?r -> "\r"
+            ?b -> "\b"
+            ?f -> "\f"
+            _unknown -> <<char::utf8>>
+          end
+
+        do_consume_value(
+          %{state | escape: false, unicode: nil},
+          rest,
+          [decoded | emitted]
+        )
+    end
   end
 
-  defp consume_value(state, <<?", rest::binary>>) do
-    {"", %{state | phase: :done, buffer: rest}}
+  defp do_consume_value(state, <<?\\, rest::binary>>, emitted) do
+    do_consume_value(%{state | escape: true}, rest, emitted)
   end
 
-  defp consume_value(state, <<char::utf8, rest::binary>>) do
-    {emitted, next_state} = consume_value(state, rest)
-    {<<char::utf8>> <> emitted, next_state}
+  defp do_consume_value(state, <<?", rest::binary>>, emitted) do
+    {emitted, %{state | phase: :done, buffer: rest}}
   end
 
-  defp emit_after(state, emitted, rest) do
-    next_state = %{state | escape: false, unicode: nil}
-    {tail_emit, final_state} = consume_value(next_state, rest)
-    {emitted <> tail_emit, final_state}
+  defp do_consume_value(state, <<char::utf8, rest::binary>>, emitted) do
+    do_consume_value(state, rest, [<<char::utf8>> | emitted])
   end
 
-  defp begin_unicode(state, rest) do
-    consume_value(%{state | escape: false, unicode: {4, []}}, rest)
+  defp decode_unicode_escape(hex) do
+    case Integer.parse(hex, 16) do
+      {codepoint, ""} when codepoint < 0xD800 or codepoint > 0xDFFF -> <<codepoint::utf8>>
+      _invalid -> "?"
+    end
   end
 
   defp keep_tail(buffer, tail_size) when byte_size(buffer) <= tail_size, do: buffer

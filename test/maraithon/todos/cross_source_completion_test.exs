@@ -66,7 +66,7 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
           "Create Luma event for Real Estate Webinar and invite Benji",
           source_at,
           %{
-            "source_item_id" => "C-growth:1781808966.732249",
+            "source_item_id" => "C-growth:4085845393.717109",
             "summary" =>
               "You committed to create the real estate webinar event and invite Benji to Luma.",
             "next_action" =>
@@ -548,19 +548,27 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
       {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
     end
 
-    assert {:error, {:prompt_base_exceeds_budget, prompt_bytes, 96_000}} =
+    assert %{checked: checked, completed: 0} =
              CrossSourceCompletion.run_for_user(user_id,
                now: now,
                source_bundle: source_bundle,
                llm_complete: llm_complete
              )
 
-    assert prompt_bytes > 96_000
-    refute_received {:pathological_prompt, _prompt}
+    assert checked in 1..40
+    assert_receive {:pathological_prompt, prompt}
 
-    for todo <- todos do
-      assert is_nil(Todos.get_for_user(user_id, todo.id).last_completion_checked_at)
-    end
+    assert prompt
+           |> then(&[%{"role" => "user", "content" => &1}])
+           |> Maraithon.AssistantHarness.PromptStability.encode!()
+           |> byte_size() <= 96_000
+
+    stamped =
+      Enum.count(todos, fn todo ->
+        not is_nil(Todos.get_for_user(user_id, todo.id).last_completion_checked_at)
+      end)
+
+    assert stamped == checked
   end
 
   defp bulk_todo_attrs(title, source_at, index) do
@@ -832,7 +840,7 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
       {:ok, %{decision: "sent_now", message_id: "1"}}
     end
 
-    assert %{checked: 2, completed: 2} =
+    assert %{checked: 2, completed: 1} =
              CrossSourceCompletion.run_for_user(user_id,
                now: now,
                source_bundle: source_bundle,
@@ -848,11 +856,11 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
 
     refute closed_waiting.metadata["resolution_note"] =~ "Handled already"
 
-    closed_owed_by_me = Todos.get_for_user(user_id, owed_by_me.id)
-    assert closed_owed_by_me.status == "done"
-    assert closed_owed_by_me.metadata["resolution_note"] =~ "Handled already"
+    untouched_owed_by_me = Todos.get_for_user(user_id, owed_by_me.id)
+    assert untouched_owed_by_me.status == "open"
+    refute Map.has_key?(untouched_owed_by_me.metadata, "resolution_note")
 
-    # Exactly one push: the owed_to_me answered close. owed_by_me stays silent.
+    # Exactly one push: only the source-authorized owed_to_me close is delivered.
     assert_receive {:push, candidate}
     refute_receive {:push, _another}
 
@@ -1011,14 +1019,16 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
       ])
 
     source_bundle_fetcher = fn _user_id, _todos, _now, _opts ->
-      Process.sleep(:infinity)
+      receive do
+        :finish -> :ok
+      end
     end
 
     llm_complete = fn prompt ->
       health = recent_activity(prompt) |> Enum.find(&(&1["channel"] == "source_health"))
       health_map = Jason.decode!(health["text"])
       assert health_map["live_sources"]["status"] == "unavailable"
-      assert health_map["live_sources"]["reason"] =~ "live source acquisition timed out"
+      assert health_map["live_sources"]["reason"] == "Elixir.RuntimeError"
 
       {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
     end
@@ -1030,5 +1040,109 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
                source_bundle_fetcher: source_bundle_fetcher,
                llm_complete: llm_complete
              )
+  end
+
+  test "fabricated evidence quote cannot close linked work" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-25 12:00:00Z]
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Wait for the signed proposal", source_at, %{
+          "source" => "gmail",
+          "source_item_id" => "thread-proposal"
+        })
+      ])
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "resolutions" => [
+               %{
+                 "todo_id" => todo.id,
+                 "completed" => true,
+                 "evidence_channel" => "gmail",
+                 "evidence_quote" => "The proposal is signed and complete.",
+                 "reasoning" => "Claimed completion.",
+                 "confidence" => 0.99
+               }
+             ]
+           })
+       }}
+    end
+
+    assert %{checked: 1, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: gmail_reply_bundle(now, "thread-proposal", "Still working on it."),
+               llm_complete: llm_complete
+             )
+
+    assert Todos.get_for_user(user_id, todo.id).status == "open"
+  end
+
+  test "the user's outbound message cannot clear an owed-to-me chase" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-25 12:00:00Z]
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Waiting for Maya to confirm", source_at, %{
+          "source" => "imessage",
+          "source_item_id" => "thread-maya",
+          "direction" => "owed_to_me",
+          "next_nudge_at" => DateTime.to_iso8601(DateTime.add(now, 86_400, :second))
+        })
+      ])
+
+    source_bundle =
+      %{timestamp: now, trigger: %{type: :wakeup}}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_imessage(%{
+        "status" => "ready",
+        "messages" => [
+          %{
+            "guid" => "thread-maya",
+            "is_from_me" => true,
+            "text" => "Thanks, I will wait for your confirmation.",
+            "sent_at" => now
+          }
+        ]
+      })
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "resolutions" => [
+               %{
+                 "todo_id" => todo.id,
+                 "completed" => false,
+                 "reply_outcome" => "acknowledged_only",
+                 "evidence_channel" => "imessage",
+                 "evidence_quote" => "Thanks, I will wait for your confirmation.",
+                 "reasoning" => "A message acknowledged the chase.",
+                 "confidence" => 0.99
+               }
+             ]
+           })
+       }}
+    end
+
+    assert %{checked: 1, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_complete: llm_complete
+             )
+
+    updated = Todos.get_for_user(user_id, todo.id)
+    assert updated.status == "open"
+    assert %DateTime{} = updated.next_nudge_at
   end
 end

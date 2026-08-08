@@ -13,8 +13,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.Memory
   alias Maraithon.OperatorEvents
   alias Maraithon.Projects
+  alias Maraithon.PromptBudget
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.ProactiveCandidate
 
   alias Maraithon.TelegramAssistant.{
     ConnectedContextPreflight,
@@ -35,6 +37,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.UserMemory
 
   require Logger
+
+  @max_retained_tool_result_bytes 32_000
 
   def run_inbound(attrs) when is_map(attrs) do
     Tracing.with_span(
@@ -95,8 +99,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
     {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
 
     Logger.warning("Telegram assistant context build failed after run start",
-      run_id: run.id,
-      reason: inspect(reason)
+      run_reference: Maraithon.Redaction.fingerprint(run.id),
+      reason: Maraithon.Redaction.error_summary(reason)
     )
 
     {:error, reason}
@@ -123,8 +127,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
       {:error, reason} ->
         Logger.warning("Telegram assistant prompt snapshot backfill failed",
-          run_id: run.id,
-          reason: inspect(reason)
+          run_reference: Maraithon.Redaction.fingerprint(run.id),
+          reason: Maraithon.Redaction.error_summary(reason)
         )
 
         run
@@ -163,7 +167,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
         {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
 
         Logger.warning("Telegram assistant falling back to legacy interpreter",
-          reason: inspect(reason)
+          reason: Maraithon.Redaction.error_summary(reason)
         )
 
         {:fallback, reason}
@@ -203,7 +207,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
       Logger.info("Escalating Telegram assistant turn to reasoning model",
         run_id: original_run.id,
-        reason: inspect(reason),
+        reason: Maraithon.Redaction.error_summary(reason),
         model: Map.get(escalated_profile, :model)
       )
 
@@ -416,7 +420,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
           |> AssistantHarness.build_loop_request_payload(state, policy_opts)
           |> maybe_offer_deeper_analysis(runtime_context)
           |> Map.put(:_stream_target, runtime_context.run_id)
-          |> Map.put(:_llm_opts, Map.get(runtime_context, :llm_opts, []))
+          |> Map.put(
+            :_llm_opts,
+            loop_llm_opts(runtime_context, started_monotonic_ms, policy_opts)
+          )
 
         now = DateTime.utc_now()
 
@@ -443,6 +450,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
           end
         )
     end
+  end
+
+  defp loop_llm_opts(runtime_context, started_monotonic_ms, policy_opts) do
+    deadline =
+      started_monotonic_ms + AssistantHarness.runtime_policy(policy_opts).loop.max_wall_clock_ms
+
+    llm_opts = Map.get(runtime_context, :llm_opts, [])
+    llm_opts = if is_list(llm_opts), do: llm_opts, else: []
+    Keyword.put(llm_opts, :deadline_monotonic_ms, deadline)
   end
 
   defp do_run_loop_step(run, runtime_context, state, started_monotonic_ms, request_payload, now) do
@@ -481,15 +497,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
              ) do
           {:ok, item} ->
             Logger.info("Recorded deterministic correction memory",
-              run_id: run.id,
+              run_reference: Maraithon.Redaction.fingerprint(run.id),
               memory_id: item.id,
               kind: Map.get(correction, "kind")
             )
 
           {:error, reason} ->
             Logger.warning("Failed to record correction memory",
-              run_id: run.id,
-              reason: inspect(reason)
+              run_reference: Maraithon.Redaction.fingerprint(run.id),
+              reason: Maraithon.Redaction.error_summary(reason)
             )
         end
 
@@ -500,7 +516,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
     :ok
   rescue
     error ->
-      Logger.warning("Correction memory recording crashed", reason: Exception.message(error))
+      Logger.warning("Correction memory recording crashed",
+        failure_code: Maraithon.Redaction.error_class(error)
+      )
+
       :ok
   end
 
@@ -594,14 +613,27 @@ defmodule Maraithon.TelegramAssistant.Runner do
       |> Enum.with_index()
       |> Enum.map(fn {call, index} -> {call, base_sequence + 1 + index} end)
 
+    policy = AssistantHarness.runtime_policy(runner_policy_opts(runtime_context))
+    deadline = started_monotonic_ms + policy.loop.max_wall_clock_ms
+    remaining_ms = max(deadline - System.monotonic_time(:millisecond), 1)
+
     results =
-      indexed_calls
-      |> Task.async_stream(
+      Task.Supervisor.async_stream_nolink(
+        Maraithon.Runtime.ToolCallSupervisor,
+        indexed_calls,
         fn {tool_call, sequence} ->
-          run_single_tool_call(run, runtime_context, tool_call, sequence)
+          try do
+            run_single_tool_call(run, runtime_context, tool_call, sequence)
+          rescue
+            exception ->
+              {:error, {:tool_task_failed, Maraithon.Redaction.error_class(exception)}}
+          catch
+            kind, _reason -> {:error, {:tool_task_failed, to_string(kind)}}
+          end
         end,
         ordered: true,
-        timeout: :infinity,
+        timeout: remaining_ms,
+        on_timeout: :kill_task,
         max_concurrency: max(length(tool_calls), 1)
       )
       |> Enum.to_list()
@@ -662,9 +694,11 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
       case Toolbox.execute(tool_name, arguments, runtime_context) do
         {:ok, result} ->
+          bounded_result = bounded_tool_result(result)
+
           {:ok, _completed_tool_step} =
             TelegramAssistant.complete_step(tool_step, %{
-              response_payload: stringify_map(result),
+              response_payload: bounded_result,
               finished_at: DateTime.utc_now()
             })
 
@@ -672,7 +706,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
            %{
              "tool" => tool_name,
              "arguments" => arguments,
-             "result" => stringify_map(result)
+             "result" => bounded_result
            }}
 
         {:error, reason} ->
@@ -693,6 +727,71 @@ defmodule Maraithon.TelegramAssistant.Runner do
       end
     end
   end
+
+  @doc false
+  def bounded_tool_result(result) do
+    required = required_tool_result_fields(result)
+
+    if ProactiveCandidate.safe_json_shape?(result, @max_retained_tool_result_bytes) do
+      compacted =
+        PromptBudget.bounded(result, 24_000,
+          string_bytes: 4_000,
+          list_items: 50,
+          map_entries: 100,
+          max_depth: 6,
+          key_bytes: 255
+        ) || %{}
+
+      compacted
+      |> ensure_result_map()
+      |> Map.merge(required)
+    else
+      Map.put(required, "_truncated", true)
+    end
+  end
+
+  defp required_tool_result_fields(result) when is_map(result) do
+    [
+      {"id", :id},
+      {"status", :status},
+      {"success", :success},
+      {"ok", :ok},
+      {"message_id", :message_id},
+      {"thread_id", :thread_id},
+      {"todo_id", :todo_id},
+      {"event_id", :event_id},
+      {"draft_id", :draft_id},
+      {"task_id", :task_id},
+      {"project_id", :project_id},
+      {"source_id", :source_id},
+      {"provider_id", :provider_id},
+      {"external_id", :external_id}
+    ]
+    |> Enum.reduce(%{}, fn {key, atom_key}, acc ->
+      value = Map.get(result, key, Map.get(result, atom_key))
+
+      case bounded_required_result_value(value) do
+        nil -> acc
+        bounded -> Map.put(acc, key, bounded)
+      end
+    end)
+  end
+
+  defp required_tool_result_fields(_result), do: %{}
+
+  defp bounded_required_result_value(value) when is_binary(value),
+    do: PromptBudget.truncate_utf8(value, 255)
+
+  defp bounded_required_result_value(value)
+       when is_integer(value) and value >= -9_223_372_036_854_775_808 and
+              value <= 9_223_372_036_854_775_807,
+       do: value
+
+  defp bounded_required_result_value(value) when is_boolean(value), do: value
+  defp bounded_required_result_value(_value), do: nil
+
+  defp ensure_result_map(value) when is_map(value), do: value
+  defp ensure_result_map(value), do: %{"value" => value}
 
   defp collect_tool_results(results) do
     Enum.reduce_while(results, {:ok, []}, fn
@@ -821,8 +920,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
     Logger.warning(
       "[telegram_fallback] Liveness timeout suppression overridden to guarantee delivery",
-      run_id: run.id,
-      chat_id: chat_id,
+      run_reference: Maraithon.Redaction.fingerprint(run.id),
+      chat_reference: Maraithon.Redaction.fingerprint(chat_id),
       timeout_notice_delivered: notice_delivered?,
       resolved_mode: effective_delivery.mode
     )
@@ -858,8 +957,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
     error ->
       Logger.warning(
         "[telegram_fallback] failed to record timeout suppression operator event",
-        run_id: run.id,
-        reason: Exception.message(error)
+        run_reference: Maraithon.Redaction.fingerprint(run.id),
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       :ok
@@ -961,8 +1060,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
         {:error, reason} ->
           Logger.warning("Telegram assistant liveness session failed to start",
-            run_id: run.id,
-            reason: inspect(reason)
+            run_reference: Maraithon.Redaction.fingerprint(run.id),
+            reason: Maraithon.Redaction.error_summary(reason)
           )
 
           :ok
@@ -1742,7 +1841,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
           error ->
             Logger.warning("Telegram conversation compaction failed",
               conversation_id: conversation.id,
-              reason: Exception.message(error)
+              failure_code: Maraithon.Redaction.error_class(error)
             )
         end
       end)
@@ -1773,8 +1872,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
             rescue
               error ->
                 Logger.warning("Telegram assistant user-memory refresh failed",
-                  user_id: user_id,
-                  reason: Exception.message(error)
+                  user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+                  failure_code: Maraithon.Redaction.error_class(error)
                 )
             end
           end)
@@ -1790,8 +1889,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
   rescue
     error ->
       Logger.warning("Telegram assistant user-memory refresh failed",
-        user_id: inspect(Map.get(attrs, :user_id)),
-        reason: Exception.message(error)
+        user_fingerprint: Maraithon.Redaction.fingerprint(Map.get(attrs, :user_id)),
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       :ok
@@ -2091,6 +2190,5 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   defp existing_atom_key(key), do: key
 
-  defp normalize_error(error) when is_binary(error), do: error
-  defp normalize_error(error), do: inspect(error)
+  defp normalize_error(error), do: Maraithon.Redaction.error_summary(error)
 end

@@ -13,18 +13,16 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
 
   use GenServer
 
-  import Ecto.Query
-
-  alias Maraithon.Repo
   alias Maraithon.Runtime.Config
   alias Maraithon.Todos.StalenessTriage
-  alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.UserBatch
 
   require Logger
 
   @name __MODULE__
   @default_interval_ms :timer.hours(24)
-  @open_statuses ~w(open snoozed)
+  @max_interval_ms :timer.hours(24)
+  @cursor_key "staleness_triage_sweep"
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, @name))
@@ -34,30 +32,12 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
   Runs one full sweep synchronously (directly callable in tests, no timer).
   """
   def run_once(opts \\ []) do
-    user_ids =
-      case Keyword.get(opts, :user_ids) do
-        user_ids when is_list(user_ids) ->
-          user_ids
-
-        _other ->
-          # Same user-enumeration pattern as CrossSourceCompletion.run_for_all_users/1:
-          # every user with open todos, no cap — a capped enumeration with no
-          # rotation would starve users past the cutoff forever, and user
-          # counts are small.
-          Repo.all(
-            from(t in Todo,
-              where: t.status in @open_statuses,
-              distinct: true,
-              select: t.user_id
-            )
-          )
-      end
-      |> Enum.filter(&is_binary/1)
-      |> Enum.uniq()
+    user_ids = UserBatch.open_todo_user_ids(opts)
 
     empty = %{users: length(user_ids), proposed: 0, skipped: 0, errors: 0}
 
-    Enum.reduce(user_ids, empty, fn user_id, acc ->
+    user_ids
+    |> Enum.reduce(empty, fn user_id, acc ->
       case run_for_user_safely(user_id, opts) do
         {:ok, %{sent: true}} -> %{acc | proposed: acc.proposed + 1}
         {:ok, _held} -> %{acc | skipped: acc.skipped + 1}
@@ -75,8 +55,8 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
     case StalenessTriage.run_for_user(user_id, triage_opts) do
       {:error, reason} = error ->
         Logger.info("Staleness triage failed for user",
-          user_id: user_id,
-          reason: inspect(reason)
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         error
@@ -86,12 +66,14 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
     end
   rescue
     error ->
+      failure_code = Maraithon.Redaction.error_class(error)
+
       Logger.info("Staleness triage crashed for user",
-        user_id: user_id,
-        reason: Exception.message(error)
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: failure_code
       )
 
-      {:error, error}
+      {:error, failure_code}
   end
 
   @impl true
@@ -110,7 +92,9 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
         Config.positive_integer(:staleness_triage_sweep_initial_delay_ms, interval_ms)
       )
 
-    state = %{interval_ms: interval_ms}
+    interval_ms = min(positive_integer(interval_ms, @default_interval_ms), @max_interval_ms)
+    initial_delay_ms = min(positive_integer(initial_delay_ms, interval_ms), @max_interval_ms)
+    state = %{interval_ms: interval_ms, user_cursor: UserBatch.load_cursor(@cursor_key)}
 
     schedule_tick(initial_delay_ms)
     {:ok, state}
@@ -118,7 +102,8 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
 
   @impl true
   def handle_info(:tick, state) do
-    summary = run_once()
+    user_ids = UserBatch.open_todo_user_ids(after_user_id: state.user_cursor)
+    summary = run_once(user_ids: user_ids)
 
     if summary.proposed > 0 or summary.errors > 0 do
       Logger.info("Staleness triage sweep cycle",
@@ -129,16 +114,25 @@ defmodule Maraithon.Runtime.StalenessTriageSweep do
       )
     end
 
+    next_cursor = List.last(user_ids) || state.user_cursor
+    if is_binary(next_cursor), do: UserBatch.record_cursor(@cursor_key, next_cursor)
+
     schedule_tick(state.interval_ms)
-    {:noreply, state}
+    {:noreply, %{state | user_cursor: next_cursor}}
   rescue
     error ->
-      Logger.warning("Staleness triage sweep cycle failed", reason: Exception.message(error))
+      Logger.warning("Staleness triage sweep cycle failed",
+        failure_code: Maraithon.Redaction.error_class(error)
+      )
+
       schedule_tick(state.interval_ms)
       {:noreply, state}
   end
 
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
-    Process.send_after(self(), :tick, delay_ms)
+    Process.send_after(self(), :tick, min(delay_ms, @max_interval_ms))
   end
+
+  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
+  defp positive_integer(_value, default), do: default
 end

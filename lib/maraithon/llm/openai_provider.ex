@@ -5,6 +5,8 @@ defmodule Maraithon.LLM.OpenAIProvider do
 
   @behaviour Maraithon.LLM.Adapter
 
+  alias Maraithon.LLM.BoundedResponse
+  alias Maraithon.LLM.RequestBudget
   alias Maraithon.Spend
   alias Maraithon.Tracing
 
@@ -12,32 +14,35 @@ defmodule Maraithon.LLM.OpenAIProvider do
 
   @default_base_url "https://api.openai.com/v1/responses"
   @default_retry_after_ms 60_000
+  @max_retry_after_ms 86_400_000
+  @max_response_body_bytes 512_000
   @reasoning_efforts ~w(minimal low medium high xhigh)
 
   @impl true
   def complete(params) do
-    api_key = Maraithon.LLM.openai_api_key()
+    with {:ok, bounded_params} <- RequestBudget.validate(params) do
+      api_key = Maraithon.LLM.openai_api_key()
 
-    unless api_key do
-      {:error, "OPENAI_API_KEY not configured"}
-    else
-      do_complete(params, api_key)
+      unless valid_api_key?(api_key) do
+        {:error, "OPENAI_API_KEY not configured"}
+      else
+        do_complete(bounded_params, api_key)
+      end
     end
   end
 
   @impl true
   def stream_complete(params, on_chunk) when is_function(on_chunk, 1) do
-    api_key = Maraithon.LLM.openai_api_key()
+    _ = on_chunk
 
-    unless api_key do
-      {:error, "OPENAI_API_KEY not configured"}
-    else
-      do_stream_complete(params, api_key, on_chunk)
-    end
+    # The legacy direct OpenAI SSE parser did not provide the bounded, strict
+    # termination guarantees required by the streaming contract. Use the
+    # bounded non-stream request until that adapter has an equivalent parser.
+    complete(params)
   end
 
   defp do_complete(params, api_key) do
-    model = params["model"] || Maraithon.LLM.openai_model()
+    model = configured_model(params["model"] || Maraithon.LLM.openai_model(), "gpt-5.4")
 
     Tracing.with_span("llm.request", request_span_attributes(params, model), fn ->
       do_complete_request(params, api_key, model)
@@ -45,7 +50,7 @@ defmodule Maraithon.LLM.OpenAIProvider do
   end
 
   defp do_complete_request(params, api_key, model) do
-    timeout = params["timeout_ms"] || 120_000
+    timeout = request_timeout(params["timeout_ms"])
 
     base_body = %{
       model: model,
@@ -59,48 +64,48 @@ defmodule Maraithon.LLM.OpenAIProvider do
         effort -> Map.put(base_body, :reasoning, %{effort: effort})
       end
 
-    Logger.info("Calling OpenAI Responses API",
-      model: model,
-      message_count: length(params["messages"] || []),
-      reasoning_effort: Map.get(body, :reasoning, %{}) |> Map.get(:effort, "none")
-    )
+    with :ok <- RequestBudget.validate_body(body) do
+      Logger.info("Calling OpenAI Responses API",
+        model: model,
+        message_count: length(params["messages"] || []),
+        reasoning_effort: Map.get(body, :reasoning, %{}) |> Map.get(:effort, "none")
+      )
 
-    case Req.post(base_url(),
-           json: body,
-           headers: [
-             {"authorization", "Bearer #{api_key}"},
-             {"content-type", "application/json"}
-           ],
-           receive_timeout: timeout
-         ) do
-      {:ok, %{status: 200, body: response}} ->
-        parse_response(response)
+      request = fn ->
+        Req.post(base_url(),
+          json: body,
+          headers: [
+            {"authorization", "Bearer #{api_key}"},
+            {"content-type", "application/json"}
+          ],
+          receive_timeout: timeout,
+          decode_body: false,
+          compressed: false,
+          into: BoundedResponse.collector(@max_response_body_bytes)
+        )
+      end
 
-      {:ok, %{status: 429, headers: headers, body: body}} ->
-        handle_429(headers, body, "OpenAI API")
+      case BoundedResponse.run(request, timeout) do
+        {:ok, %{status: 200} = response} ->
+          parse_bounded_response(response)
 
-      {:ok, %{status: status, body: body}} ->
-        Logger.error("OpenAI API error", status: status, body: inspect(body))
-        {:error, {:api_error, status, body}}
+        {:ok, %{status: 429, headers: headers} = response} ->
+          handle_429(headers, decode_bounded_error_body(response), "OpenAI API")
 
-      {:error, %{reason: :timeout}} ->
-        Logger.warning("OpenAI API timeout")
-        {:error, :timeout}
+        {:ok, %{status: status}} ->
+          Logger.error("OpenAI API error", status: status, failure_code: "api_error")
+          {:error, {:api_error, status, :redacted}}
 
-      {:error, reason} ->
-        Logger.error("OpenAI API network error", reason: inspect(reason))
-        {:error, {:network_error, reason}}
+        {:error, %{reason: :timeout}} ->
+          Logger.warning("OpenAI API timeout")
+          {:error, :timeout}
+
+        {:error, reason} ->
+          failure_code = Maraithon.Redaction.error_class(reason)
+          Logger.error("OpenAI API network error", failure_code: failure_code)
+          {:error, {:network_error, failure_code}}
+      end
     end
-  end
-
-  defp do_stream_complete(params, api_key, on_chunk) do
-    model = params["model"] || Maraithon.LLM.openai_model()
-
-    Tracing.with_span(
-      "llm.request",
-      request_span_attributes(params, model, true),
-      fn -> do_stream_request(params, api_key, on_chunk, model) end
-    )
   end
 
   defp request_span_attributes(params, model, streaming \\ false) do
@@ -114,184 +119,52 @@ defmodule Maraithon.LLM.OpenAIProvider do
     }
   end
 
-  defp do_stream_request(params, api_key, on_chunk, model) do
-    timeout = params["timeout_ms"] || 120_000
-
-    base_body = %{
-      model: model,
-      input: build_input(params["messages"] || []),
-      max_output_tokens: params["max_tokens"] || params["max_output_tokens"] || 2048,
-      stream: true
-    }
-
-    body =
-      case effective_reasoning_effort(params, model) do
-        nil -> base_body
-        effort -> Map.put(base_body, :reasoning, %{effort: effort})
-      end
-
-    Logger.info("Calling OpenAI Responses API (streaming)",
-      model: model,
-      message_count: length(params["messages"] || []),
-      reasoning_effort: Map.get(body, :reasoning, %{}) |> Map.get(:effort, "none")
-    )
-
-    request =
-      Req.post(base_url(),
-        json: body,
-        headers: [
-          {"authorization", "Bearer #{api_key}"},
-          {"content-type", "application/json"},
-          {"accept", "text/event-stream"}
-        ],
-        receive_timeout: timeout,
-        into: stream_collector(on_chunk)
-      )
-
-    case request do
-      {:ok, %{status: 200, private: %{stream_acc: acc}}} ->
-        finalize_stream(acc, model)
-
-      {:ok, %{status: 429, headers: headers, body: body}} ->
-        handle_429(headers, body, "OpenAI API stream")
-
-      {:ok, %{status: status, body: body}} ->
-        Logger.error("OpenAI API stream error", status: status, body: inspect(body))
-        {:error, {:api_error, status, body}}
-
-      {:error, %{reason: :timeout}} ->
-        Logger.warning("OpenAI API stream timeout")
-        {:error, :timeout}
-
-      {:error, reason} ->
-        Logger.error("OpenAI API stream network error", reason: inspect(reason))
-        {:error, {:network_error, reason}}
+  defp parse_bounded_response(response) do
+    case BoundedResponse.decode_json(response) do
+      {:ok, decoded} -> parse_response(decoded)
+      {:error, reason} -> {:error, {:invalid_response, %{reason: to_string(reason)}}}
     end
   end
 
-  defp stream_collector(on_chunk) do
-    fn {:data, data}, {req, resp} ->
-      acc =
-        Map.get(resp.private, :stream_acc, %{
-          buffer: "",
-          text: "",
-          response: nil
-        })
-
-      next_acc =
-        acc
-        |> Map.update!(:buffer, &(&1 <> data))
-        |> drain_events(on_chunk)
-
-      {:cont, {req, Req.Response.put_private(resp, :stream_acc, next_acc)}}
+  defp decode_bounded_error_body(response) do
+    case BoundedResponse.decode_json(response) do
+      {:ok, decoded} when is_map(decoded) -> decoded
+      _other -> %{}
     end
   end
 
-  defp drain_events(%{buffer: buffer} = acc, on_chunk) do
-    case :binary.split(buffer, "\n\n") do
-      [event_block, rest] ->
-        next_acc =
-          acc
-          |> Map.put(:buffer, rest)
-          |> apply_event(event_block, on_chunk)
-
-        drain_events(next_acc, on_chunk)
-
-      [_partial] ->
-        acc
-    end
-  end
-
-  defp apply_event(acc, event_block, on_chunk) do
-    data_lines =
-      event_block
-      |> String.split("\n", trim: true)
-      |> Enum.flat_map(fn
-        "data: " <> rest -> [rest]
-        "data:" <> rest -> [String.trim_leading(rest)]
-        _ -> []
-      end)
-
-    case data_lines do
-      [] ->
-        acc
-
-      lines ->
-        payload = Enum.join(lines, "\n")
-
-        cond do
-          payload == "[DONE]" ->
-            acc
-
-          true ->
-            case Jason.decode(payload) do
-              {:ok, json} -> apply_decoded_event(acc, json, on_chunk)
-              {:error, _} -> acc
-            end
-        end
-    end
-  end
-
-  defp apply_decoded_event(acc, %{"type" => "response.output_text.delta"} = event, on_chunk) do
-    delta = event["delta"] || ""
-
-    if delta != "" do
-      try do
-        on_chunk.(delta)
-      rescue
-        error ->
-          Logger.warning("Stream chunk callback raised", reason: Exception.message(error))
-      end
-    end
-
-    Map.update!(acc, :text, &(&1 <> delta))
-  end
-
-  defp apply_decoded_event(
-         acc,
-         %{"type" => "response.completed", "response" => response},
-         _on_chunk
-       ) do
-    Map.put(acc, :response, response)
-  end
-
-  defp apply_decoded_event(acc, _event, _on_chunk), do: acc
-
-  defp finalize_stream(%{response: nil} = acc, model) do
-    Logger.warning("Stream ended without response.completed event")
-
-    if acc.text != "" do
-      synth_response = %{
-        "model" => model,
-        "status" => "completed",
-        "output" => [
-          %{"type" => "message", "content" => [%{"type" => "output_text", "text" => acc.text}]}
-        ],
-        "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
-      }
-
-      parse_response(synth_response)
-    else
-      {:error, {:invalid_response, %{reason: "stream_incomplete"}}}
-    end
-  end
-
-  defp finalize_stream(%{response: response}, _model), do: parse_response(response)
-
-  defp parse_response(response) do
-    model = response["model"] || "unknown"
-    content = extract_output_text(response["output"] || [])
-    finish_reason = response["status"] || "unknown"
-    input_tokens = get_in(response, ["usage", "input_tokens"]) || 0
-    output_tokens = get_in(response, ["usage", "output_tokens"]) || 0
-    usage = Spend.calculate_cost(model, input_tokens, output_tokens)
+  defp parse_response(response) when is_map(response) do
+    model = safe_model(response["model"])
+    output = response["output"] || []
+    output_shape_valid? = bounded_output_shape?(output)
+    content = if output_shape_valid?, do: extract_output_text(output), else: ""
+    refusal? = output_shape_valid? and provider_refusal?(output)
+    finish_reason = safe_finish_reason(response["status"])
+    input_tokens = safe_token_count(get_in(response, ["usage", "input_tokens"]))
+    output_tokens = safe_token_count(get_in(response, ["usage", "output_tokens"]))
 
     cond do
-      finish_reason == "incomplete" ->
-        {:error,
-         {:incomplete_response, response["incomplete_details"] || %{status: "incomplete"}}}
+      not output_shape_valid? ->
+        {:error, {:invalid_response, %{reason: "invalid_output_shape"}}}
 
-      content != "" ->
+      refusal? ->
+        {:error, {:provider_refusal, :redacted}}
+
+      finish_reason == "incomplete" ->
+        {:error, {:incomplete_response, %{reason: "provider_incomplete"}}}
+
+      finish_reason != "completed" ->
+        {:error, {:invalid_response, %{reason: "invalid_response_status"}}}
+
+      content == "" ->
+        {:error, {:invalid_response, %{reason: "missing_output_text"}}}
+
+      byte_size(content) > 128_000 ->
+        {:error, {:invalid_response, %{reason: "response_content_too_large"}}}
+
+      true ->
+        usage = Spend.calculate_cost(model, input_tokens, output_tokens)
+
         Logger.info("LLM call completed",
           model: model,
           input_tokens: input_tokens,
@@ -308,11 +181,11 @@ defmodule Maraithon.LLM.OpenAIProvider do
            finish_reason: finish_reason,
            usage: usage
          }}
-
-      true ->
-        {:error, {:invalid_response, response}}
     end
   end
+
+  defp parse_response(_response),
+    do: {:error, {:invalid_response, %{reason: "invalid_response_shape"}}}
 
   defp extract_output_text(output) when is_list(output) do
     output
@@ -327,6 +200,62 @@ defmodule Maraithon.LLM.OpenAIProvider do
     |> Enum.reject(&is_nil/1)
     |> Enum.join("")
   end
+
+  defp bounded_output_shape?(output) when is_list(output) do
+    prefix = Enum.take(output, 101)
+
+    length(prefix) <= 100 and
+      Enum.all?(prefix, fn
+        %{"type" => "message", "content" => content} when is_list(content) ->
+          length(Enum.take(content, 101)) <= 100
+
+        %{} ->
+          true
+
+        _item ->
+          false
+      end)
+  rescue
+    _error -> false
+  end
+
+  defp bounded_output_shape?(_output), do: false
+
+  defp provider_refusal?(output) when is_list(output) do
+    Enum.any?(Enum.take(output, 100), fn
+      %{"type" => "message", "content" => content} when is_list(content) ->
+        Enum.any?(Enum.take(content, 100), fn
+          %{"type" => "refusal"} -> true
+          _block -> false
+        end)
+
+      %{"type" => "refusal"} ->
+        true
+
+      _item ->
+        false
+    end)
+  end
+
+  defp provider_refusal?(_output), do: false
+
+  defp safe_model(value) when is_binary(value) and byte_size(value) <= 160 do
+    value = String.trim(value)
+    if Regex.match?(~r/\A[A-Za-z0-9._:\/-]{1,160}\z/, value), do: value, else: "unknown"
+  end
+
+  defp safe_model(_value), do: "unknown"
+
+  defp safe_finish_reason(value) when value in ["completed", "incomplete", "failed"], do: value
+  defp safe_finish_reason(_value), do: "unknown"
+
+  defp safe_token_count(value) when is_integer(value) and value >= 0,
+    do: min(value, 100_000_000)
+
+  defp safe_token_count(value) when is_float(value) and value >= 0,
+    do: value |> trunc() |> safe_token_count()
+
+  defp safe_token_count(_value), do: 0
 
   defp build_input(messages) when is_list(messages) do
     Enum.map(messages, &normalize_message/1)
@@ -372,11 +301,11 @@ defmodule Maraithon.LLM.OpenAIProvider do
       %{"text" => text} when is_binary(text) -> text
       %{text: text} when is_binary(text) -> text
       text when is_binary(text) -> text
-      other -> inspect(other)
+      _other -> ""
     end)
   end
 
-  defp normalize_content(content), do: inspect(content)
+  defp normalize_content(_content), do: ""
 
   defp effective_reasoning_effort(params, model) do
     cond do
@@ -415,7 +344,7 @@ defmodule Maraithon.LLM.OpenAIProvider do
   defp reasoning_effort(_params),
     do: validate_reasoning_effort(Maraithon.LLM.openai_reasoning_effort())
 
-  defp validate_reasoning_effort(effort) when is_binary(effort) do
+  defp validate_reasoning_effort(effort) when is_binary(effort) and byte_size(effort) <= 32 do
     normalized = String.downcase(String.trim(effort))
 
     if normalized in @reasoning_efforts do
@@ -427,13 +356,33 @@ defmodule Maraithon.LLM.OpenAIProvider do
 
   defp validate_reasoning_effort(_effort), do: "high"
 
-  defp extract_retry_after(headers, body) do
-    case header_value(headers, "retry-after-ms") || header_value(headers, "retry-after") do
-      nil ->
-        extract_retry_after_from_body(body)
+  defp configured_model(value, default)
+       when is_binary(value) and byte_size(value) <= 160 do
+    if String.valid?(value) do
+      model = String.trim(value)
+      if Regex.match?(~r/\A[A-Za-z0-9._:\/-]{1,160}\z/, model), do: model, else: default
+    else
+      default
+    end
+  end
 
-      value ->
-        parse_retry_after(value)
+  defp configured_model(_value, default), do: default
+
+  defp valid_api_key?(value),
+    do:
+      is_binary(value) and byte_size(value) in 1..4_096 and String.valid?(value) and
+        not String.contains?(value, ["\r", "\n"])
+
+  defp request_timeout(value) when is_integer(value) and value > 0,
+    do: min(value, 300_000)
+
+  defp request_timeout(_value), do: 120_000
+
+  defp extract_retry_after(headers, body) do
+    cond do
+      value = header_value(headers, "retry-after-ms") -> parse_retry_after(value, :milliseconds)
+      value = header_value(headers, "retry-after") -> parse_retry_after(value, :seconds)
+      true -> extract_retry_after_from_body(body)
     end
   end
 
@@ -459,20 +408,21 @@ defmodule Maraithon.LLM.OpenAIProvider do
     end
   end
 
-  defp parse_retry_after(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, ""} when parsed >= 1_000 -> parsed
-      {parsed, ""} when parsed > 0 -> parsed * 1_000
+  defp parse_retry_after(value, unit) when is_binary(value) and byte_size(value) <= 32 do
+    multiplier = if(unit == :milliseconds, do: 1, else: 1_000)
+
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> min(parsed * multiplier, @max_retry_after_ms)
       _ -> @default_retry_after_ms
     end
   end
 
-  defp parse_retry_after(_value), do: @default_retry_after_ms
+  defp parse_retry_after(_value, _unit), do: @default_retry_after_ms
 
   defp extract_retry_after_from_body(%{"error" => %{"message" => message}})
-       when is_binary(message) do
-    case Regex.run(~r/retry after (\d+)/i, message) do
-      [_, seconds] -> String.to_integer(seconds) * 1_000
+       when is_binary(message) and byte_size(message) <= 4_096 do
+    case Regex.run(~r/retry after ([0-9]{1,8})/i, message) do
+      [_, seconds] -> min(String.to_integer(seconds) * 1_000, @max_retry_after_ms)
       _ -> @default_retry_after_ms
     end
   end
@@ -481,14 +431,9 @@ defmodule Maraithon.LLM.OpenAIProvider do
 
   defp handle_429(headers, body, log_context) do
     case quota_error(body) do
-      {:insufficient_quota, message} ->
-        Logger.error("#{log_context} quota exceeded",
-          error_code: error_field(body, "code"),
-          error_type: error_field(body, "type"),
-          message: message
-        )
-
-        {:error, {:insufficient_quota, message}}
+      {:insufficient_quota, _detail} ->
+        Logger.error("#{log_context} quota exceeded", failure_code: "insufficient_quota")
+        {:error, {:insufficient_quota, "Provider quota exceeded"}}
 
       nil ->
         retry_after = extract_retry_after(headers, body)
@@ -502,14 +447,11 @@ defmodule Maraithon.LLM.OpenAIProvider do
     type = normalize_error_field(Map.get(error, "type"))
 
     if "insufficient_quota" in [code, type] do
-      {:insufficient_quota, error_message(error)}
+      {:insufficient_quota, :redacted}
     end
   end
 
   defp quota_error(_body), do: nil
-
-  defp error_field(%{"error" => %{} = error}, field), do: Map.get(error, field)
-  defp error_field(_body, _field), do: nil
 
   defp normalize_error_field(value) when is_binary(value) do
     value
@@ -519,16 +461,31 @@ defmodule Maraithon.LLM.OpenAIProvider do
 
   defp normalize_error_field(_value), do: nil
 
-  defp error_message(%{"message" => message}) when is_binary(message) do
-    message
-    |> String.trim()
-    |> String.slice(0, 500)
-  end
-
-  defp error_message(_error), do: "OpenAI quota exceeded"
-
   defp base_url do
-    Application.get_env(:maraithon, :openai, [])
-    |> Keyword.get(:base_url, @default_base_url)
+    value =
+      Application.get_env(:maraithon, :openai, [])
+      |> Keyword.get(:base_url, @default_base_url)
+
+    if valid_base_url?(value), do: value, else: @default_base_url
   end
+
+  defp valid_base_url?(value)
+       when is_binary(value) and byte_size(value) <= 2_048 do
+    if String.valid?(value) do
+      case URI.parse(value) do
+        %URI{scheme: scheme, host: host, userinfo: nil}
+        when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+          true
+
+        _other ->
+          false
+      end
+    else
+      false
+    end
+  rescue
+    _error -> false
+  end
+
+  defp valid_base_url?(_value), do: false
 end

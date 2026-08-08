@@ -250,9 +250,14 @@ openrouter_chat_model =
 
 llm_model_fallbacks =
   System.get_env("LLM_MODEL_FALLBACKS", "")
+  |> then(&binary_part(&1, 0, min(byte_size(&1), 8_192)))
   |> String.split(",", trim: true)
+  |> Enum.take(16)
   |> Enum.map(&String.trim/1)
+  |> Enum.filter(&(byte_size(&1) <= 255))
   |> Enum.reject(&(&1 == ""))
+  |> Enum.uniq()
+  |> Enum.take(8)
 
 configured_llm_provider = System.get_env("LLM_PROVIDER", "") |> String.trim() |> String.downcase()
 

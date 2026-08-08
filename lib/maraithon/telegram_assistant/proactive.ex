@@ -49,17 +49,22 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   def plan_check_in(user_id, opts) when is_binary(user_id) do
     chat_id = Keyword.get(opts, :chat_id)
 
+    context =
+      Keyword.get(opts, :context) ||
+        Context.build(%{user_id: user_id, chat_id: chat_id || "unavailable"})
+
     payload = %{
       trigger: proactive_trigger(user_id, chat_id, opts),
-      context:
-        Keyword.get(opts, :context) ||
-          Context.build(%{user_id: user_id, chat_id: chat_id || "unavailable"}),
-      recent_pushes:
-        recent_pushes(user_id, Keyword.get(opts, :recent_push_limit, @recent_push_limit))
+      context: context,
+      recent_pushes: recent_pushes(user_id, recent_push_limit(opts))
     }
 
-    with {:ok, plan} <- AssistantHarness.proactive_plan(payload, opts) do
-      {:ok, ProactiveQualityGate.verify_proactive_plan(plan, payload, opts)}
+    bounded_payload = provider_payload(payload, Context.for_proactive_prompt(context))
+
+    with {:ok, plan} <- AssistantHarness.proactive_plan(bounded_payload, opts),
+         verified <- ProactiveQualityGate.verify_proactive_plan(plan, bounded_payload, opts),
+         {:ok, bounded_plan} <- AssistantHarness.normalize_proactive_plan(verified) do
+      {:ok, bounded_plan}
     end
   end
 
@@ -71,9 +76,6 @@ defmodule Maraithon.TelegramAssistant.Proactive do
     cond do
       not Keyword.get(opts, :force, false) and not enabled?() ->
         {:ok, %{decision: "disabled"}}
-
-      not Maraithon.Push.Notifier.enabled_for_user?(user_id) ->
-        {:error, :no_push_device}
 
       true ->
         do_deliver_check_in(user_id, opts)
@@ -290,6 +292,8 @@ defmodule Maraithon.TelegramAssistant.Proactive do
     end
   end
 
+  defp send_todo_cards(nil, _user_id, _plan), do: 0
+
   defp send_todo_cards(conversation_id, user_id, plan) do
     with %Conversation{} = conversation <- Repo.get(Conversation, conversation_id),
          todo_ids when todo_ids != [] <- Map.get(plan, "todo_ids", []) do
@@ -367,6 +371,50 @@ defmodule Maraithon.TelegramAssistant.Proactive do
     |> Enum.join(" ")
   end
 
+  defp recent_push_limit(opts) do
+    case Keyword.get(opts, :recent_push_limit, @recent_push_limit) do
+      limit when is_integer(limit) and limit > 0 -> min(limit, 50)
+      _other -> @recent_push_limit
+    end
+  end
+
+  defp provider_payload(payload, bounded_context) do
+    %{
+      payload
+      | context: bounded_context,
+        trigger: provider_trigger(payload.trigger),
+        recent_pushes: Enum.map(payload.recent_pushes, &provider_recent_push/1)
+    }
+  end
+
+  defp provider_trigger(trigger) when is_map(trigger) do
+    %{
+      "id" => opaque_identifier(read_field(trigger, "id")),
+      "type" => read_field(trigger, "type"),
+      "now" => read_field(trigger, "now"),
+      "local_time" => read_field(trigger, "local_time")
+    }
+  end
+
+  defp provider_recent_push(push) when is_map(push) do
+    %{
+      id: opaque_identifier(read_field(push, "id")),
+      dedupe_key: opaque_identifier(read_field(push, "dedupe_key")),
+      origin_id: opaque_identifier(read_field(push, "origin_id")),
+      decision: read_field(push, "decision"),
+      inserted_at: read_field(push, "inserted_at")
+    }
+  end
+
+  defp opaque_identifier(value) when is_binary(value) do
+    "ref_" <> Base.encode16(:crypto.hash(:sha256, value), case: :lower)
+  end
+
+  defp opaque_identifier(value) when is_integer(value),
+    do: opaque_identifier(Integer.to_string(value))
+
+  defp opaque_identifier(_value), do: nil
+
   defp recent_pushes(user_id, limit) when is_binary(user_id) do
     PushReceipt
     |> where([receipt], receipt.user_id == ^user_id)
@@ -387,14 +435,17 @@ defmodule Maraithon.TelegramAssistant.Proactive do
 
   defp proactive_trigger(user_id, chat_id, opts) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
-    trigger_type = Keyword.get(opts, :trigger_type, "scheduled_check_in")
+    trigger_type = bounded_option_identifier(opts, :trigger_type, "scheduled_check_in", 64)
 
+    generated_id =
+      "#{trigger_type}:#{user_id}:#{Date.to_iso8601(DateTime.to_date(now))}"
+      |> bounded_identifier(255)
+
+    trigger_id = bounded_option_identifier(opts, :trigger_id, generated_id, 255)
     timezone = proactive_timezone_context(user_id, opts, now)
 
     %{
-      "id" =>
-        Keyword.get(opts, :trigger_id) ||
-          "#{trigger_type}:#{user_id}:#{Date.to_iso8601(DateTime.to_date(now))}",
+      "id" => trigger_id,
       "type" => trigger_type,
       "user_id" => user_id,
       "chat_id" => chat_id,
@@ -524,12 +575,35 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   defp atom_field_key(_key), do: :unknown
 
   defp plan_dedupe_key(_user_id, %{"dedupe_key" => key}, _trigger)
-       when is_binary(key) and key != "" do
+       when is_binary(key) and byte_size(key) >= 3 and byte_size(key) <= 255 do
     key
   end
 
   defp plan_dedupe_key(user_id, _plan, %{"id" => trigger_id}) do
     "assistant_digest:#{user_id}:#{trigger_id}"
+    |> bounded_identifier(255)
+  end
+
+  defp bounded_option_identifier(opts, key, fallback, max_bytes) do
+    case Keyword.get(opts, key) do
+      value when is_binary(value) and value != "" -> bounded_identifier(value, max_bytes)
+      _other -> fallback
+    end
+  end
+
+  defp bounded_identifier(value, max_bytes) when is_binary(value) and is_integer(max_bytes) do
+    if byte_size(value) <= max_bytes do
+      value
+    else
+      digest = Base.encode16(:crypto.hash(:sha256, value), case: :lower)
+
+      if max_bytes <= byte_size(digest) do
+        binary_part(digest, 0, max_bytes)
+      else
+        prefix = Maraithon.PromptBudget.truncate_utf8(value, max_bytes - byte_size(digest) - 1)
+        prefix <> ":" <> digest
+      end
+    end
   end
 
   defp stringify_result(result) when is_map(result) do

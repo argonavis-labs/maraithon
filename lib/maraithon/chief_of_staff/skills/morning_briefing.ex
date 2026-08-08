@@ -25,6 +25,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.LocalVoiceMemos
   alias Maraithon.Memory
   alias Maraithon.OperatorEvents
+  alias Maraithon.AssistantHarness.PromptStability
+  alias Maraithon.PromptBudget
   alias Maraithon.Spend
   alias Maraithon.OpenLoops
   alias Maraithon.SourceFreshness
@@ -55,7 +57,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @prompt_string_limit 12_000
   @prompt_default_list_limit 500
-  @prompt_gmail_list_limit 50
+  @prompt_gmail_list_limit 12
   @prompt_gmail_body_limit 1_500
   # Hard caps on list sections embedded in the briefing prompt. Fetch limits
   # bound the database reads; these bound the context window — without them
@@ -70,6 +72,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @prompt_web_page_context_limit 3
   @prompt_relationship_limit 80
   @prompt_section_build_timeout_ms 30_000
+  @max_prompt_section_bytes 64_000
+  # This JSON is embedded inside a JSON message string. Keeping its stable
+  # encoding at 32 KB reserves worst-case outer escaping plus skill text.
+  @max_compact_brief_input_bytes 32_000
+  @max_morning_request_bytes 128_000
   @commercial_thread_terms [
     "availability",
     "connect",
@@ -363,7 +370,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
           {:error, reason} ->
             handle_effect_result(
-              {:llm_call, %{content: "", error: inspect(reason), finish_reason: "error"}},
+              {:llm_call,
+               %{
+                 content: "",
+                 error: Maraithon.Redaction.error_summary(reason),
+                 finish_reason: "error"
+               }},
               pending_state,
               context
             )
@@ -390,12 +402,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   # minutes and a blocked day must not turn into a log/event flood.
   defp record_generation_blocked(user_id, dedupe_key) do
     Logger.warning("Morning briefing generation blocked: no deliverable channel",
-      user_id: user_id,
-      dedupe_key: dedupe_key
+      user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+      dedupe_reference: Maraithon.Redaction.fingerprint(dedupe_key)
     )
 
     _ =
       OperatorEvents.record_once(%{
+        # Operator events are user-scoped business records; the raw identifier
+        # is required only for the foreign key/routing column and never enters
+        # the event payload, telemetry, or logs.
         user_id: user_id,
         source: "chief_of_staff",
         event_type: "morning_briefing.generation_blocked",
@@ -526,13 +541,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             # Never fail this silently again: a lost record means a lost
             # briefing day.
             Tracing.record_error(
-              "morning_briefing record failed: " <> inspect(reason, printable_limit: 500)
+              "morning_briefing record failed: " <> Maraithon.Redaction.error_summary(reason)
             )
 
             Logger.warning("Morning briefing record failed",
-              user_id: context[:user_id] || state.user_id,
-              dedupe_key: state.pending_dedupe_key,
-              reason: inspect(reason, printable_limit: 500)
+              user_fingerprint:
+                Maraithon.Redaction.fingerprint(context[:user_id] || state.user_id),
+              dedupe_reference: Maraithon.Redaction.fingerprint(state.pending_dedupe_key),
+              failure_code: Maraithon.Redaction.error_class(reason)
             )
 
             {:idle, %{state | pending_brief_input: nil, pending_dedupe_key: nil}}
@@ -549,7 +565,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       {:llm_call,
        %{
          content: "",
-         error: inspect(reason),
+         error: Maraithon.Redaction.error_summary(reason),
          finish_reason: "error"
        }},
       state,
@@ -999,15 +1015,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             {:error, reason} ->
               elapsed_ms = System.monotonic_time(:millisecond) - started_ms
 
+              error_summary = "llm_call_failed: #{Maraithon.Redaction.error_summary(reason)}"
+
               response = %{
                 content: "",
-                error: "llm_call_failed: #{inspect(reason)}",
+                error: error_summary,
                 finish_reason: "error"
               }
 
               {brief, generation_mode, error_message} =
                 brief_or_error_notice(
-                  {:error, "llm_call_failed: #{inspect(reason)}"},
+                  {:error, error_summary},
                   response,
                   brief_input
                 )
@@ -1326,162 +1344,174 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp morning_prompt(brief_input) do
     with {:ok, skill} <- MarkdownSkill.load_file(@skill_path),
          {:ok, input_json} <- Jason.encode(compact_brief_input_for_prompt(brief_input)) do
-      {:ok,
-       """
-       Execute the loaded Markdown skill against the supplied connector context.
+      prompt =
+        """
+        Execute the loaded Markdown skill against the supplied connector context.
 
-       Skill: #{skill.name}
-       Skill path: #{@skill_path}
+        Skill: #{skill.name}
+        Skill path: #{@skill_path}
 
-       Skill instructions:
-       #{skill.instructions}
+        Skill instructions:
+        #{skill.instructions}
 
-       Email review rule:
-       Every Gmail item includes body_available, body_status, and body. Use body for relevance
-       and obligation judgments. Do not classify an email from sender, subject, or snippet alone.
-       If body_status is available_truncated, treat body as the selected bounded source excerpt
-       for that message and keep uncertainty visible when the excerpt is insufficient. If
-       body_available is false, treat that email as unreviewable source degradation and do not
-       surface it as finance, school, marketing, urgent, or actionable unless another message-backed
-       source supports that conclusion.
+        Email review rule:
+        Every Gmail item includes body_available, body_status, and body. Use body for relevance
+        and obligation judgments. Do not classify an email from sender, subject, or snippet alone.
+        If body_status is available_truncated, treat body as the selected bounded source excerpt
+        for that message and keep uncertainty visible when the excerpt is insufficient. If
+        body_available is false, treat that email as unreviewable source degradation and do not
+        surface it as finance, school, marketing, urgent, or actionable unless another message-backed
+        source supports that conclusion.
 
-       Local source rule:
-       When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
+        Local source rule:
+        When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
 
-       Held interruptions rule:
-       open_work.held_interruptions lists proactive Telegram pushes that were held instead of
-       interrupting (quiet hours, the hourly interruption budget, or a model hold decision) and
-       are now due for review in this brief. Do not silently drop them: fold any that still need
-       a decision into Needs Your Attention, Open Commitments, or another appropriate section
-       using hold_reason and why_now for context, and skip any that are already fully covered by
-       another item in this brief.
+        Held interruptions rule:
+        open_work.held_interruptions lists proactive Telegram pushes that were held instead of
+        interrupting (quiet hours, the hourly interruption budget, or a model hold decision) and
+        are now due for review in this brief. Do not silently drop them: fold any that still need
+        a decision into Needs Your Attention, Open Commitments, or another appropriate section
+        using hold_reason and why_now for context, and skip any that are already fully covered by
+        another item in this brief.
 
-       System notices rule:
-       open_work.system_notices lists things the agent itself noticed were stuck and fixed since
-       the last brief (self-heals). Mention one only if it is genuinely noteworthy — a real gap
-       the operator would want to know was closed, not routine bookkeeping. When you do, keep it
-       to one brief, matter-of-fact line without alarm. Otherwise say nothing about it; an empty
-       or unremarkable list should leave no trace in the brief.
+        System notices rule:
+        open_work.system_notices lists things the agent itself noticed were stuck and fixed since
+        the last brief (self-heals). Mention one only if it is genuinely noteworthy — a real gap
+        the operator would want to know was closed, not routine bookkeeping. When you do, keep it
+        to one brief, matter-of-fact line without alarm. Otherwise say nothing about it; an empty
+        or unremarkable list should leave no trace in the brief.
 
-       Source digest rule:
-       The morning briefing payload is assembled from independently bounded source digests for
-       Gmail, Slack, calendar, People records, open work, memory, and local sources. Treat
-       included rows as the selected high-signal evidence set, not a full raw export. Review all
-       included rows before deciding what belongs in the executive brief, and use
-       source_health/counts to call out connector gaps or truncation risk when it affects
-       confidence.
+        Source digest rule:
+        The morning briefing payload is assembled from independently bounded source digests for
+        Gmail, Slack, calendar, People records, open work, memory, and local sources. Treat
+        included rows as the selected high-signal evidence set, not a full raw export. Review all
+        included rows before deciding what belongs in the executive brief, and use
+        source_health/counts to call out connector gaps or truncation risk when it affects
+        confidence.
 
-       Connector health rule:
-       connector_health lists connected sources with an active reconnect issue (stale, never
-       synced, an error, or needing reauth) - fresh sources are omitted, so any entry there is a
-       real coverage gap. If a source in that list is one this brief draws on (Gmail, Calendar,
-       Slack), add one short line near the top noting the gap, e.g. "This run only covers Gmail;
-       Calendar needs reconnect." Do not invent detail beyond account_label/status/stale_reason,
-       and do not repeat the note for every section - state it once.
+        Connector health rule:
+        connector_health lists connected sources with an active reconnect issue (stale, never
+        synced, an error, or needing reauth) - fresh sources are omitted, so any entry there is a
+        real coverage gap. If a source in that list is one this brief draws on (Gmail, Calendar,
+        Slack), add one short line near the top noting the gap, e.g. "This run only covers Gmail;
+        Calendar needs reconnect." Do not invent detail beyond account_label/status/stale_reason,
+        and do not repeat the note for every section - state it once.
 
-       Inbox and Slack triage contract:
-       If gmail.recent_inbox, gmail.recent_unread, slack.key_threads, or slack.mentions contain
-       body/text-backed items that change action, include scoped Inbox Triage and/or Slack Triage
-       sections. Do not list promotional email, sender-only guesses, or email with missing body
-       evidence. Name account or channel counts only when those counts change what the operator
-       should do.
+        Inbox and Slack triage contract:
+        If gmail.recent_inbox, gmail.recent_unread, slack.key_threads, or slack.mentions contain
+        body/text-backed items that change action, include scoped Inbox Triage and/or Slack Triage
+        sections. Do not list promotional email, sender-only guesses, or email with missing body
+        evidence. Name account or channel counts only when those counts change what the operator
+        should do.
 
-       Meeting enrichment rule:
-       The brief input includes meeting_prep, which is prepared relationship-first. Use saved
-       relationship context before public web context. Use web snippets only as fallback evidence
-       for attendees or companies missing from People records, and keep uncertainty visible when
-       the evidence is thin.
-       When meeting_prep.web_context includes page_contexts, treat those source pages as the
-       meeting dossier. For each required external meeting, synthesize the executive read:
-       who the person is, what the company or practice does, why the meeting likely matters
-       to the operator's work, what fit or risk they should test, and the concrete pre/post-call
-       next step. Do not collapse a verified external meeting into a generic "creative
-       vendor" or "intro chat" label when the page context supports a richer prep note.
-       When a source page gives concrete facts such as services, pricing, operating model,
-       work history, background, customer profile, or partnership angle, include the most
-       decision-useful specifics in the meeting note. If an internal teammate owns or hosts
-       the meeting, state what the operator should ask that teammate before or after the call.
-       A busy executive should be able to read the schedule item and know the dossier,
-       fit hypothesis, and next move without asking for a second briefing.
+        Meeting enrichment rule:
+        The brief input includes meeting_prep, which is prepared relationship-first. Use saved
+        relationship context before public web context. Use web snippets only as fallback evidence
+        for attendees or companies missing from People records, and keep uncertainty visible when
+        the evidence is thin.
+        When meeting_prep.web_context includes page_contexts, treat those source pages as the
+        meeting dossier. For each required external meeting, synthesize the executive read:
+        who the person is, what the company or practice does, why the meeting likely matters
+        to the operator's work, what fit or risk they should test, and the concrete pre/post-call
+        next step. Do not collapse a verified external meeting into a generic "creative
+        vendor" or "intro chat" label when the page context supports a richer prep note.
+        When a source page gives concrete facts such as services, pricing, operating model,
+        work history, background, customer profile, or partnership angle, include the most
+        decision-useful specifics in the meeting note. If an internal teammate owns or hosts
+        the meeting, state what the operator should ask that teammate before or after the call.
+        A busy executive should be able to read the schedule item and know the dossier,
+        fit hypothesis, and next move without asking for a second briefing.
 
-       Commercial thread rule:
-       Fresh external commercial threads from close teammates are not inbox noise. Use model
-       judgment to scan gmail.commercial_threads, gmail.recent_inbox, commitments, open work, and
-       relationship context for teammate-led customer, prospect, intro, plan, pricing, discount,
-       availability, or launch-video threads.
-       Treat gmail.commercial_threads as a coverage list: include every live non-duplicative
-       external commercial thread from that list that a busy executive would want to know about,
-       especially teammate-led prospect/customer threads such as Enterprise/Team plan, discount,
-       intro, or availability discussions. If a close teammate has looped the operator
-       into an external commercial thread, include a concise readiness note even when no immediate
-       decision is forced. Say who or which organization is involved, the live ask, and what
-       guidance the operator should have ready.
+        Commercial thread rule:
+        Fresh external commercial threads from close teammates are not inbox noise. Use model
+        judgment to scan gmail.commercial_threads, gmail.recent_inbox, commitments, open work, and
+        relationship context for teammate-led customer, prospect, intro, plan, pricing, discount,
+        availability, or launch-video threads.
+        Treat gmail.commercial_threads as a coverage list: include every live non-duplicative
+        external commercial thread from that list that a busy executive would want to know about,
+        especially teammate-led prospect/customer threads such as Enterprise/Team plan, discount,
+        intro, or availability discussions. If a close teammate has looped the operator
+        into an external commercial thread, include a concise readiness note even when no immediate
+        decision is forced. Say who or which organization is involved, the live ask, and what
+        guidance the operator should have ready.
 
-       Commercial coverage contract:
-       commercial_coverage.required_threads is a hard coverage contract, not a ranking hint.
-       If required_threads is non-empty, Decisions / Follow-ups or Today's Schedule must include
-       every item in that list unless it is clearly duplicated by another named item. Use model
-       judgment for the executive read, but do not drop a teammate-led customer, prospect, intro,
-       Enterprise/Team plan, pricing, discount, or availability thread just because there are
-       other risk items. Before returning JSON, verify that each required commercial thread appears
-       by organization or counterparty name with the live ask and the guidance the operator should have ready.
+        Commercial coverage contract:
+        commercial_coverage.required_threads is a hard coverage contract, not a ranking hint.
+        If required_threads is non-empty, Decisions / Follow-ups or Today's Schedule must include
+        every item in that list unless it is clearly duplicated by another named item. Use model
+        judgment for the executive read, but do not drop a teammate-led customer, prospect, intro,
+        Enterprise/Team plan, pricing, discount, or availability thread just because there are
+        other risk items. Before returning JSON, verify that each required commercial thread appears
+        by organization or counterparty name with the live ask and the guidance the operator should have ready.
 
-       Schedule coverage contract:
-       Required external meetings are a hard coverage contract, not a ranking hint. If
-       schedule_coverage.required_meetings is non-empty, Today's Schedule must include
-       every item in that list. Use model judgment for what the meeting means and how the operator
-       should prepare; do not write a heuristic digest. Do not say the calendar is open
-       when calendar.today_events or schedule_coverage.required_meetings is non-empty.
-       Use display_start and display_end exactly when present for schedule times; do not
-       recompute local clock times from UTC fields. If a display time is absent, cite UTC
-       rather than guessing a local time.
-       Before returning JSON, perform a final model review that the body includes every
-       required external meeting with time, attendee or organization, why it matters, and
-       the prep point, decision, or risk the operator should carry into it.
+        Schedule coverage contract:
+        Required external meetings are a hard coverage contract, not a ranking hint. If
+        schedule_coverage.required_meetings is non-empty, Today's Schedule must include
+        every item in that list. Use model judgment for what the meeting means and how the operator
+        should prepare; do not write a heuristic digest. Do not say the calendar is open
+        when calendar.today_events or schedule_coverage.required_meetings is non-empty.
+        Use display_start and display_end exactly when present for schedule times; do not
+        recompute local clock times from UTC fields. If a display time is absent, cite UTC
+        rather than guessing a local time.
+        Before returning JSON, perform a final model review that the body includes every
+        required external meeting with time, attendee or organization, why it matters, and
+        the prep point, decision, or risk the operator should carry into it.
 
-       Reference briefing eval:
-       Treat this as the acceptance shape for a packed day, not a loose style hint:
-       a specific weekday/date headline; Needs Your Attention with the top 4-6 ranked moves;
-       Today's Schedule with every material meeting, explicit conflicts, and what to move,
-       leave early, decline, or choose; scoped Inbox and Slack triage with account/channel
-       counts only when they change action; Open Commitments with active/overdue/due-today/
-       coming-up buckets; draft IDs, action-card IDs, OmniFocus IDs, Gmail thread IDs, and
-       Slack channel/ts handles kept in metadata or source references, not the user-facing body;
-       a separate Manual Decisions / Admin line for dashboard, payment, review, signature,
-       investigation, or judgment work;
-       and a Look Ahead that names tomorrow/week risks plus one final Today's move directive.
-       Before returning JSON, privately score the draft against this reference contract and
-       revise until packed-day operational coverage is complete without turning into inventory.
+        Reference briefing eval:
+        Treat this as the acceptance shape for a packed day, not a loose style hint:
+        a specific weekday/date headline; Needs Your Attention with the top 4-6 ranked moves;
+        Today's Schedule with every material meeting, explicit conflicts, and what to move,
+        leave early, decline, or choose; scoped Inbox and Slack triage with account/channel
+        counts only when they change action; Open Commitments with active/overdue/due-today/
+        coming-up buckets; draft IDs, action-card IDs, OmniFocus IDs, Gmail thread IDs, and
+        Slack channel/ts handles kept in metadata or source references, not the user-facing body;
+        a separate Manual Decisions / Admin line for dashboard, payment, review, signature,
+        investigation, or judgment work;
+        and a Look Ahead that names tomorrow/week risks plus one final Today's move directive.
+        Before returning JSON, privately score the draft against this reference contract and
+        revise until packed-day operational coverage is complete without turning into inventory.
 
-       Response budget rule:
-       Return compact executive JSON that can finish well under the token budget. The body should
-       be concise and scannable: quiet days can be short, while packed days can run up to roughly
-       2,200 words when conflicts, commitments, and pending actions justify it. Include every
-       required meeting and required commercial thread, but compress lower-priority context instead
-       of expanding it. Emit todos only for durable work worth a separate Done/Dismiss decision.
-       Each todo must be one concrete action with source_item_id or dedupe_key when available,
-       person/company/why-now/evidence context in metadata, and work_type when it is draftable,
-       dashboard, payment, review, decision, prep, or personal_logistic work.
+        Response budget rule:
+        Return compact executive JSON that can finish well under the token budget. The body should
+        be concise and scannable: quiet days can be short, while packed days can run up to roughly
+        2,200 words when conflicts, commitments, and pending actions justify it. Include every
+        required meeting and required commercial thread, but compress lower-priority context instead
+        of expanding it. Emit todos only for durable work worth a separate Done/Dismiss decision.
+        Each todo must be one concrete action with source_item_id or dedupe_key when available,
+        person/company/why-now/evidence context in metadata, and work_type when it is draftable,
+        dashboard, payment, review, decision, prep, or personal_logistic work.
 
-       Source honesty / anti-hallucination rule:
-       Never invent facts that are not present in the brief input JSON. In particular:
-       - Do not invent dollar amounts, wire totals, account numbers, passwords, security answers,
-         PINs, form filenames, email addresses, phone numbers, or people who are not in the input.
-       - Do not invent schedule conflicts. Only call out overlaps that exist between
-         calendar.today_events, meeting_prep.meetings, or schedule_coverage.required_meetings
-         using their display_start/display_end or start/end times.
-       - For Next Actions and todos, copy amounts, filenames, addresses, and credentials only when
-         they appear verbatim in source evidence. Otherwise describe the action without fabricated
-         specifics (prefer "confirm the pending Mercury wire amount" over inventing "$38,200").
-       - Prefer visible uncertainty over confident invention. If a source body is truncated or
-         missing, say so instead of filling gaps.
-       - Do not recycle stale open_work as if it were confirmed live evidence for today unless the
-         same fact also appears in today's calendar, Gmail, Slack, or local source rows.
+        Source honesty / anti-hallucination rule:
+        Never invent facts that are not present in the brief input JSON. In particular:
+        - Do not invent dollar amounts, wire totals, account numbers, passwords, security answers,
+          PINs, form filenames, email addresses, phone numbers, or people who are not in the input.
+        - Do not invent schedule conflicts. Only call out overlaps that exist between
+          calendar.today_events, meeting_prep.meetings, or schedule_coverage.required_meetings
+          using their display_start/display_end or start/end times.
+        - For Next Actions and todos, copy amounts, filenames, addresses, and credentials only when
+          they appear verbatim in source evidence. Otherwise describe the action without fabricated
+          specifics (prefer "confirm the pending Mercury wire amount" over inventing "$38,200").
+        - Prefer visible uncertainty over confident invention. If a source body is truncated or
+          missing, say so instead of filling gaps.
+        - Do not recycle stale open_work as if it were confirmed live evidence for today unless the
+          same fact also appears in today's calendar, Gmail, Slack, or local source rows.
 
-       Brief input JSON:
-       #{input_json}
-       """}
+        Brief input JSON:
+        #{input_json}
+        """
+
+      if prompt_request_bytes(prompt) <= @max_morning_request_bytes do
+        {:ok, prompt}
+      else
+        {:error, :morning_prompt_exceeds_budget}
+      end
     end
+  end
+
+  defp prompt_request_bytes(prompt) when is_binary(prompt) do
+    [%{"role" => "user", "content" => prompt}]
+    |> PromptStability.encode!()
+    |> byte_size()
   end
 
   defp parse_llm_brief(response) do
@@ -4812,7 +4842,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {updated_brief, todos_or_ids |> Enum.map(&todo_id/1) |> Enum.reject(&blank?/1), nil}
 
       {:error, reason} ->
-        {brief_record, [], inspect(reason)}
+        {brief_record, [], Maraithon.Redaction.error_summary(reason)}
     end
   end
 
@@ -4874,7 +4904,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       {:error, {:llm_busy, _retry_after_ms} = reason} when remaining != [] ->
         Logger.warning("morning_briefing todo persistence busy; retrying",
           attempt: attempt,
-          reason: inspect(reason),
+          failure_code: Maraithon.Redaction.error_class(reason),
           next_delay_ms: hd(remaining)
         )
 
@@ -4894,7 +4924,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp fallback_persist_todos(user_id, candidates, reason) do
     Logger.warning(
       "morning_briefing todo LLM persistence failed; using direct checked upsert",
-      reason: inspect(reason),
+      failure_code: Maraithon.Redaction.error_class(reason),
       candidate_count: length(candidates)
     )
 
@@ -4910,7 +4940,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
              direct_upsert_decisions(todos) ++ signal_gate_skip_decisions(skipped_candidates),
            skipped_count: length(skipped_candidates),
            usage: %{},
-           fallback_reason: inspect(reason)
+           fallback_reason: Maraithon.Redaction.error_summary(reason)
          }}
 
       {:error, direct_reason} ->
@@ -4970,7 +5000,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     %{
       todo_count: 0,
       todo_skipped_count: 0,
-      todo_error: inspect(reason)
+      todo_error: Maraithon.Redaction.error_summary(reason)
     }
   end
 
@@ -4986,7 +5016,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp delivery_event_payload({:ok, :not_sent}), do: %{status: "not_sent"}
 
   defp delivery_event_payload({:error, reason}) do
-    %{status: "error", error: inspect(reason)}
+    %{status: "error", error: Maraithon.Redaction.error_summary(reason)}
   end
 
   defp briefing_cost_summary(response, brief_input) do
@@ -5338,7 +5368,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       {items, nil}
     rescue
       exception ->
-        error = Exception.message(exception)
+        error = Maraithon.Redaction.error_summary(exception)
 
         Logger.warning("morning_briefing local source fetch failed",
           source: to_string(source),
@@ -5349,7 +5379,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {[], error}
     catch
       kind, reason ->
-        error = "#{kind}: #{inspect(reason)}"
+        error = "#{kind}: #{Maraithon.Redaction.error_summary(reason)}"
 
         Logger.warning("morning_briefing local source fetch failed",
           source: to_string(source),
@@ -5800,9 +5830,44 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp compact_brief_input_for_prompt(input) when is_map(input) do
-    input
-    |> compact_prompt_sections()
-    |> compact_prompt_value()
+    compacted = compact_prompt_sections(input)
+
+    PromptBudget.project_fields(
+      compacted,
+      [
+        {"date", 300},
+        {"generated_at", 300},
+        {"timezone_offset_hours", 100},
+        {"timezone", 300},
+        {"schedule_coverage", 5_500},
+        {"meeting_prep", 5_500},
+        {"commercial_coverage", 5_500},
+        {"open_work", 4_000},
+        {"calendar", 3_500},
+        {"commitments", 2_500},
+        {"gmail", 8_000},
+        {"slack", 4_000},
+        {"relationships", 3_000},
+        {"source_health", 2_000},
+        {"connector_health", 1_500},
+        {"deep_memory", 2_000},
+        {"imessage", 2_000},
+        {"reminders", 1_500},
+        {"notes", 1_500},
+        {"voice_memos", 1_500},
+        {"files", 1_500},
+        {"browser_history", 1_500},
+        {"news", 1_500},
+        {"weather", 1_000},
+        {"user_identity", 500}
+      ],
+      @max_compact_brief_input_bytes,
+      string_bytes: 6_000,
+      list_items: 100,
+      map_entries: 100,
+      max_depth: 6,
+      key_bytes: 255
+    ) || %{}
   end
 
   defp compact_brief_input_for_prompt(input), do: input
@@ -5813,18 +5878,45 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       |> Map.take(["date", "generated_at", "timezone_offset_hours", "timezone"])
       |> compact_prompt_value()
 
-    prompt_section_compactors()
-    |> Task.async_stream(&compact_prompt_section(&1, input),
+    section_inputs =
+      Enum.map(prompt_section_compactors(), fn {key, default, compact_fun} ->
+        value = Map.get(input, key, default)
+
+        bounded_value =
+          PromptBudget.bounded(value, @max_prompt_section_bytes,
+            string_bytes: 6_000,
+            list_items: 100,
+            map_entries: 100,
+            max_depth: 6,
+            key_bytes: 255
+          ) || default
+
+        {key, compact_fun, bounded_value}
+      end)
+
+    Task.Supervisor.async_stream_nolink(
+      Maraithon.Runtime.ToolCallSupervisor,
+      section_inputs,
+      fn section_input ->
+        try do
+          {:ok, compact_prompt_section(section_input)}
+        rescue
+          exception -> {:error, Maraithon.Redaction.error_class(exception)}
+        catch
+          kind, _reason -> {:error, to_string(kind)}
+        end
+      end,
       max_concurrency: prompt_section_concurrency(),
-      timeout: @prompt_section_build_timeout_ms
+      timeout: @prompt_section_build_timeout_ms,
+      on_timeout: :kill_task
     )
     |> Enum.reduce(base, fn
-      {:ok, {key, value}}, acc ->
+      {:ok, {:ok, {key, value}}}, acc ->
         Map.put(acc, key, value)
 
-      {:exit, reason}, acc ->
+      _failed, acc ->
         Logger.warning("morning_briefing prompt section compaction task failed",
-          reason: inspect(reason)
+          failure_code: "section_compaction_failed"
         )
 
         acc
@@ -5857,30 +5949,35 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     ]
   end
 
-  defp compact_prompt_section({key, default, compact_fun}, input) do
-    value =
-      input
-      |> Map.get(key, default)
-      |> compact_fun.()
+  defp compact_prompt_section({key, compact_fun, value}) do
+    compacted = compact_fun.(value)
 
-    {key, value}
+    bounded =
+      PromptBudget.bounded(compacted, @max_prompt_section_bytes,
+        string_bytes: 6_000,
+        list_items: 100,
+        map_entries: 100,
+        max_depth: 6,
+        key_bytes: 255
+      )
+
+    {key, bounded}
   rescue
     exception ->
       Logger.warning("morning_briefing prompt section compaction failed",
         section: key,
-        error: Exception.message(exception),
-        exception: inspect(exception.__struct__)
+        failure_code: Maraithon.Redaction.error_class(exception)
       )
 
-      {key, compact_prompt_value(Map.get(input, key, default), 25, 2_000)}
+      {key, nil}
   catch
-    kind, reason ->
+    kind, _reason ->
       Logger.warning("morning_briefing prompt section compaction failed",
         section: key,
-        error: "#{kind}: #{inspect(reason)}"
+        failure_code: to_string(kind)
       )
 
-      {key, compact_prompt_value(Map.get(input, key, default), 25, 2_000)}
+      {key, nil}
   end
 
   defp prompt_section_concurrency do
@@ -5996,18 +6093,29 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp compact_gmail_for_prompt(gmail), do: compact_prompt_value(gmail)
 
   defp compact_gmail_message_for_prompt(message) when is_map(message) do
-    message
-    |> Map.update(
-      "body",
-      "",
-      &(to_string(&1) |> truncate_prompt_string(@prompt_gmail_body_limit))
-    )
-    |> Map.update(
-      "snippet",
-      "",
-      &(to_string(&1) |> truncate_prompt_string(@prompt_gmail_snippet_limit))
-    )
-    |> compact_prompt_value()
+    message =
+      message
+      |> Map.update(
+        "snippet",
+        "",
+        &(to_string(&1) |> truncate_prompt_string(@prompt_gmail_snippet_limit))
+      )
+      |> Map.update(
+        "body",
+        "",
+        &(to_string(&1) |> truncate_prompt_string(@prompt_gmail_body_limit))
+      )
+
+    PromptBudget.project_fields(
+      message,
+      ~w(message_id thread_id from subject snippet internal_date body),
+      600,
+      string_bytes: 240,
+      list_items: 4,
+      map_entries: 8,
+      max_depth: 2,
+      key_bytes: 64
+    ) || %{}
   end
 
   defp compact_gmail_message_for_prompt(message), do: compact_prompt_value(message)

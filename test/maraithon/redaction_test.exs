@@ -121,4 +121,30 @@ defmodule Maraithon.RedactionTest do
       assert hd(result["messages"])["content"] =~ "<redacted-openai-key>"
     end
   end
+
+  test "logger metadata uses a closed content-free boundary" do
+    assert Redaction.log_metadata_value(:description, "private user text") == "redacted_detail"
+    assert Redaction.log_metadata_value(:query, "private search terms") == "redacted_detail"
+    assert Redaction.log_metadata_value(:failure_code, "api_500") == "api_500"
+
+    fingerprint = Redaction.log_metadata_value(:user_id, "person@example.com")
+    assert byte_size(fingerprint) == 16
+    refute fingerprint =~ "person"
+  end
+
+  test "error summaries retain only bounded retry delay semantics" do
+    assert Redaction.error_summary({:rate_limited, 1_234}) == "rate_limited:1234"
+    assert Redaction.error_summary({:api_error, 500, "private body"}) == "api_error:500"
+  end
+
+  test "fingerprint returns a stable opaque telemetry reference" do
+    value = "person@example.com"
+
+    assert Maraithon.Redaction.fingerprint(value) ==
+             Maraithon.Redaction.fingerprint(value)
+
+    assert byte_size(Maraithon.Redaction.fingerprint(value)) == 16
+    refute Maraithon.Redaction.fingerprint(value) =~ "person"
+    assert Maraithon.Redaction.fingerprint(nil) == nil
+  end
 end

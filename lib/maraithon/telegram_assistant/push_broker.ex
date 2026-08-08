@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   import Ecto.Query
 
+  alias Maraithon.Accounts.User
   alias Maraithon.BriefingSchedules
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
@@ -15,6 +16,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ProactiveQueue
+  alias Maraithon.TelegramAssistant.PushReceipt
 
   @default_push_limit_per_hour 3
 
@@ -154,29 +156,163 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     if TelegramAssistant.unified_push_enabled?() do
       candidate = normalize_candidate(candidate)
 
-      cond do
-        TelegramAssistant.push_receipt_for(candidate.user_id, candidate.dedupe_key) ->
+      case reserve_delivery(candidate) do
+        {:ok, {:duplicate, _receipt}} ->
           {:ok, %{decision: "suppressed", reason: "duplicate"}}
 
-        hold_reason = interruption_hold_reason(candidate) ->
-          {:ok, _receipt} =
-            TelegramAssistant.record_push_receipt(%{
-              user_id: candidate.user_id,
-              dedupe_key: candidate.dedupe_key,
-              origin_type: candidate.origin_type,
-              origin_id: candidate.origin_id,
-              decision: "held_rate_limit"
-            })
-
+        {:ok, {:held, hold_reason}} ->
           {:ok, %{decision: "held_rate_limit", reason: hold_reason}}
 
-        true ->
-          send_candidate(candidate)
+        {:ok, {:reserved, receipt}} ->
+          send_candidate(candidate, receipt)
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       {:fallback, :disabled}
     end
   end
+
+  defp reserve_delivery(candidate) do
+    stale_cutoff = DateTime.add(DateTime.utc_now(), -15 * 60, :second)
+
+    Repo.transaction(fn ->
+      _locked_user =
+        User
+        |> where([user], user.id == ^candidate.user_id)
+        |> lock("FOR UPDATE")
+        |> select([user], user.id)
+        |> Repo.one()
+
+      stale_reservation_ids =
+        PushReceipt
+        |> where([receipt], receipt.user_id == ^candidate.user_id)
+        |> where([receipt], receipt.decision == "reserved")
+        |> where([receipt], receipt.inserted_at < ^stale_cutoff)
+        |> order_by([receipt], asc: receipt.inserted_at, asc: receipt.id)
+        |> limit(100)
+        |> select([receipt], receipt.id)
+        |> Repo.all()
+
+      if stale_reservation_ids != [] do
+        # `reserved` has not crossed the external-send boundary, so an
+        # abandoned lease is safe to release.
+        PushReceipt
+        |> where([receipt], receipt.id in ^stale_reservation_ids)
+        |> where([receipt], receipt.decision == "reserved")
+        |> where([receipt], receipt.inserted_at < ^stale_cutoff)
+        |> Repo.delete_all()
+      end
+
+      stale_sending_ids =
+        PushReceipt
+        |> where([receipt], receipt.user_id == ^candidate.user_id)
+        |> where([receipt], receipt.decision == "sending")
+        |> where([receipt], receipt.inserted_at < ^stale_cutoff)
+        |> order_by([receipt], asc: receipt.inserted_at, asc: receipt.id)
+        |> limit(100)
+        |> select([receipt], receipt.id)
+        |> Repo.all()
+
+      if stale_sending_ids != [] do
+        # Once transport starts, a crash or lost APNS response is ambiguous.
+        # Fail at-most-once: preserve a durable blocking proof rather than
+        # retrying a notification that may already have reached the phone.
+        PushReceipt
+        |> where([receipt], receipt.id in ^stale_sending_ids)
+        |> where([receipt], receipt.decision == "sending")
+        |> Repo.update_all(set: [decision: "delivery_unknown"])
+      end
+
+      existing =
+        Repo.get_by(PushReceipt,
+          user_id: candidate.user_id,
+          dedupe_key: candidate.dedupe_key
+        )
+
+      cond do
+        match?(
+          %PushReceipt{decision: decision} when decision in ["reserved", "sending"],
+          existing
+        ) ->
+          Repo.rollback(:delivery_in_progress)
+
+        match?(
+          %PushReceipt{decision: decision}
+          when decision in ["delivery_unknown", "sent_now", "merged", "queued_digest"],
+          existing
+        ) ->
+          {:duplicate, existing}
+
+        hold_reason = interruption_hold_reason(candidate) ->
+          case TelegramAssistant.record_push_receipt(%{
+                 user_id: candidate.user_id,
+                 dedupe_key: candidate.dedupe_key,
+                 origin_type: candidate.origin_type,
+                 origin_id: candidate.origin_id,
+                 decision: "held_rate_limit"
+               }) do
+            {:ok, _receipt} -> {:held, hold_reason}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        true ->
+          case TelegramAssistant.record_push_receipt(%{
+                 user_id: candidate.user_id,
+                 dedupe_key: candidate.dedupe_key,
+                 origin_type: candidate.origin_type,
+                 origin_id: candidate.origin_id,
+                 decision: "reserved"
+               }) do
+            {:ok, receipt} -> {:reserved, receipt}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+  end
+
+  defp begin_delivery(%PushReceipt{id: id}) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {count, _rows} =
+      PushReceipt
+      |> where([receipt], receipt.id == ^id and receipt.decision == "reserved")
+      |> Repo.update_all(set: [decision: "sending", inserted_at: now])
+
+    if count == 1,
+      do: {:ok, Repo.get!(PushReceipt, id)},
+      else: {:error, :reservation_lost}
+  end
+
+  defp finalize_reservation(%PushReceipt{id: id}) do
+    {count, _rows} =
+      PushReceipt
+      |> where([receipt], receipt.id == ^id and receipt.decision == "sending")
+      |> Repo.update_all(set: [decision: "sent_now"])
+
+    if count == 1,
+      do: {:ok, Repo.get!(PushReceipt, id)},
+      else: {:error, :reservation_lost}
+  end
+
+  defp mark_delivery_unknown(%PushReceipt{id: id}) do
+    PushReceipt
+    |> where([receipt], receipt.id == ^id and receipt.decision == "sending")
+    |> Repo.update_all(set: [decision: "delivery_unknown"])
+
+    :ok
+  end
+
+  defp release_reservation(%PushReceipt{id: id}) do
+    PushReceipt
+    |> where([receipt], receipt.id == ^id and receipt.decision in ["reserved", "sending"])
+    |> Repo.delete_all()
+
+    :ok
+  end
+
+  defp release_reservation(_receipt), do: :ok
 
   def interruption_budget(user_id, opts \\ [])
 
@@ -219,15 +355,16 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   # without a registered device gets a clean error — the candidate stays
   # pending and the producer's cycle retries once a device registers (briefs
   # additionally reach the inbox by email regardless).
-  defp send_candidate(candidate) do
+  defp send_candidate(candidate, receipt) do
     if MobilePush.enabled_for_user?(candidate.user_id) do
-      send_candidate_mobile(candidate)
+      send_candidate_mobile(candidate, receipt)
     else
+      release_reservation(receipt)
       {:error, :no_push_device}
     end
   end
 
-  defp send_candidate_mobile(candidate) do
+  defp send_candidate_mobile(candidate, receipt) do
     attrs = %{
       title: candidate.title || push_fallback_title(candidate.origin_type),
       body: push_body(candidate),
@@ -236,29 +373,58 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       collapse_id: candidate.dedupe_key
     }
 
-    case MobilePush.notify(candidate.user_id, attrs) do
-      {:ok, _delivered} ->
-        case TelegramAssistant.record_push_receipt(%{
-               user_id: candidate.user_id,
-               dedupe_key: candidate.dedupe_key,
-               origin_type: candidate.origin_type,
-               origin_id: candidate.origin_id,
-               decision: "sent_now"
-             }) do
-          {:ok, _receipt} ->
-            {:ok, %{decision: "sent_now", message_id: nil, turn_id: nil, conversation_id: nil}}
+    case MobilePush.prepare(candidate.user_id, attrs) do
+      {:ok, prepared} ->
+        case begin_delivery(receipt) do
+          {:ok, sending_receipt} ->
+            finish_mobile_delivery(MobilePush.deliver_prepared(prepared), sending_receipt)
 
           {:error, reason} ->
             {:error, reason}
         end
 
       {:error, :no_devices} ->
-        # The last device unregistered between the gate and the send.
+        release_reservation(receipt)
         {:error, :no_push_device}
 
       {:error, reason} ->
+        # Preparation failed before crossing the external-send boundary.
+        release_reservation(receipt)
         {:error, reason}
     end
+  end
+
+  defp finish_mobile_delivery({:ok, _delivered}, sending_receipt) do
+    case finalize_reservation(sending_receipt) do
+      {:ok, _receipt} ->
+        {:ok, %{decision: "sent_now", message_id: nil, turn_id: nil, conversation_id: nil}}
+
+      {:error, reason} ->
+        # The durable row remains `sending`. Stale recovery converts it to a
+        # blocking `delivery_unknown` proof, preventing a duplicate after APNS
+        # accepted the notification but finalization failed.
+        {:error, reason}
+    end
+  end
+
+  defp finish_mobile_delivery({:error, :no_devices}, sending_receipt) do
+    # Every prepared device was definitively rejected as unregistered.
+    release_reservation(sending_receipt)
+    {:error, :no_push_device}
+  end
+
+  defp finish_mobile_delivery({:error, :delivery_unknown} = error, sending_receipt) do
+    # Response loss after crossing the transport boundary is ambiguous.
+    # Preserve an at-most-once proof rather than retrying it.
+    mark_delivery_unknown(sending_receipt)
+    error
+  end
+
+  defp finish_mobile_delivery({:error, reason}, sending_receipt) do
+    # APNS returned a definitive rejection, so no device accepted this attempt
+    # and the durable reservation is safe to release/retry.
+    release_reservation(sending_receipt)
+    {:error, reason}
   end
 
   # A brief's full rendered text belongs on the Today tab, not in a lock
@@ -404,7 +570,11 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     threshold = DateTime.add(DateTime.utc_now(), -3600, :second)
 
     Maraithon.TelegramAssistant.PushReceipt
-    |> where([receipt], receipt.user_id == ^user_id and receipt.decision == "sent_now")
+    |> where(
+      [receipt],
+      receipt.user_id == ^user_id and
+        receipt.decision in ["reserved", "sending", "delivery_unknown", "sent_now"]
+    )
     |> where([receipt], receipt.inserted_at >= ^threshold)
     |> select([receipt], count(receipt.id))
     |> Repo.one()
@@ -421,7 +591,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
 
-  defp positive_integer(value, default) when is_binary(value) do
+  defp positive_integer(value, default) when is_binary(value) and byte_size(value) <= 16 do
     case Integer.parse(String.trim(value)) do
       {parsed, ""} when parsed > 0 -> parsed
       _other -> default
@@ -445,10 +615,14 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   defp normalize_hour(value, _default) when is_integer(value) and value >= 0 and value <= 23,
     do: value
 
-  defp normalize_hour(value, default) when is_binary(value) do
-    case Integer.parse(String.trim(value)) do
-      {parsed, ""} when parsed >= 0 and parsed <= 23 -> parsed
-      _other -> default
+  defp normalize_hour(value, default) when is_binary(value) and byte_size(value) <= 16 do
+    if String.valid?(value) do
+      case Integer.parse(String.trim(value)) do
+        {parsed, ""} when parsed >= 0 and parsed <= 23 -> parsed
+        _other -> default
+      end
+    else
+      default
     end
   end
 

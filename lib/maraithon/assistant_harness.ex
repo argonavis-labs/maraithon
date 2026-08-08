@@ -11,23 +11,33 @@ defmodule Maraithon.AssistantHarness do
 
   alias Maraithon.AssistantHarness.{PromptStability, ToolLoopClassifier}
   alias Maraithon.LLM
+  alias Maraithon.PromptBudget
+
+  require Logger
 
   @contract_version 2
   @default_max_llm_turns 6
   @default_max_tool_steps 10
   @default_max_wall_clock_ms 25_000
+  @max_llm_turns 16
+  @max_tool_steps 24
+  @max_wall_clock_ms 120_000
   @default_chat_max_tokens 1_800
   # Qwen's hidden reasoning tokens count against this budget. Production
-  # proactive calls were regularly landing at 1,085-1,172 tokens and
-  # intermittently exhausting the former 1,200-token ceiling before emitting
-  # assistant content.
+  # proactive calls were regularly exhausting the former 1,200-token ceiling.
   @default_proactive_max_tokens 1_800
+  @max_chat_max_tokens 8_000
+  @max_proactive_max_tokens 4_000
   @default_temperature 0.2
   @default_reasoning_effort "low"
-  # Proactive planning returns a small structured decision. Explicitly disable
-  # Qwen's hidden thinking phase so it cannot consume the full output budget
-  # before emitting that decision; normal chat keeps low reasoning.
+  # Structured proactive decisions do not need a hidden thinking phase.
   @default_proactive_reasoning_effort "none"
+  @max_proactive_prompt_bytes 64_000
+  @max_delivery_plan_prompt_bytes 64_000
+  @max_delivery_dispositions 12
+  @max_normalized_message_bytes 4_000
+  @max_plan_reason_bytes 1_900
+
   @max_tool_calls_per_step 3
   @default_tool_repeat_guard_window 3
   @default_tool_history_limit 12
@@ -36,8 +46,14 @@ defmodule Maraithon.AssistantHarness do
   @default_tool_result_map_entries 40
   @default_model_failover_max_attempts 3
   @default_model_busy_max_retries 25
+  @max_model_failover_attempts 8
+  @max_model_busy_retries 25
+  @max_model_fallback_config_bytes 8_192
+  @max_model_fallbacks 100
   @default_model_retry_base_delay_ms 250
   @default_model_retry_max_delay_ms 5_000
+  @max_model_retry_delay_ms 30_000
+
   @retryable_model_errors ~w(timeout llm_busy rate_limited network_error api_408 api_425 api_429 api_500 api_502 api_503 api_504 invalid_json missing_content invalid_response)
   @valid_statuses ~w(tool_calls final)
   @valid_message_classes ~w(assistant_reply approval_prompt action_result system_notice todo_digest)
@@ -53,13 +69,16 @@ defmodule Maraithon.AssistantHarness do
       loop: %{
         max_llm_turns:
           policy_value(opts, :max_llm_turns, @default_max_llm_turns)
-          |> positive_integer(@default_max_llm_turns),
+          |> positive_integer(@default_max_llm_turns)
+          |> min(@max_llm_turns),
         max_tool_steps:
           policy_value(opts, :max_tool_steps, @default_max_tool_steps)
-          |> positive_integer(@default_max_tool_steps),
+          |> positive_integer(@default_max_tool_steps)
+          |> min(@max_tool_steps),
         max_wall_clock_ms:
           policy_value(opts, :max_wall_clock_ms, @default_max_wall_clock_ms)
           |> positive_integer(@default_max_wall_clock_ms)
+          |> min(@max_wall_clock_ms)
       },
       tool_calls: %{
         max_per_step: @max_tool_calls_per_step,
@@ -68,21 +87,26 @@ defmodule Maraithon.AssistantHarness do
           window_size:
             policy_value(opts, :tool_repeat_guard_window, @default_tool_repeat_guard_window)
             |> positive_integer(@default_tool_repeat_guard_window)
+            |> min(@default_tool_history_limit)
         }
       },
       tool_evidence: %{
         history_limit:
           policy_value(opts, :tool_history_limit, @default_tool_history_limit)
-          |> positive_integer(@default_tool_history_limit),
+          |> positive_integer(@default_tool_history_limit)
+          |> min(@default_tool_history_limit),
         max_string_chars:
           policy_value(opts, :tool_result_string_chars, @default_tool_result_string_chars)
-          |> positive_integer(@default_tool_result_string_chars),
+          |> positive_integer(@default_tool_result_string_chars)
+          |> min(@default_tool_result_string_chars),
         max_list_items:
           policy_value(opts, :tool_result_list_items, @default_tool_result_list_items)
-          |> positive_integer(@default_tool_result_list_items),
+          |> positive_integer(@default_tool_result_list_items)
+          |> min(@default_tool_result_list_items),
         max_map_entries:
           policy_value(opts, :tool_result_map_entries, @default_tool_result_map_entries)
           |> positive_integer(@default_tool_result_map_entries)
+          |> min(@default_tool_result_map_entries)
       },
       model_failover: %{
         enabled: model_fallbacks != [],
@@ -104,7 +128,8 @@ defmodule Maraithon.AssistantHarness do
       chat_request: %{
         max_tokens:
           policy_value(opts, :max_tokens, @default_chat_max_tokens)
-          |> positive_integer(@default_chat_max_tokens),
+          |> positive_integer(@default_chat_max_tokens)
+          |> min(@max_chat_max_tokens),
         temperature:
           policy_value(opts, :temperature, @default_temperature)
           |> bounded_float(@default_temperature),
@@ -119,7 +144,8 @@ defmodule Maraithon.AssistantHarness do
             :proactive_max_tokens,
             policy_value(opts, :max_tokens, @default_proactive_max_tokens)
           )
-          |> positive_integer(@default_proactive_max_tokens),
+          |> positive_integer(@default_proactive_max_tokens)
+          |> min(@max_proactive_max_tokens),
         temperature:
           policy_value(opts, :temperature, @default_temperature)
           |> bounded_float(@default_temperature),
@@ -299,13 +325,37 @@ defmodule Maraithon.AssistantHarness do
     |> maybe_put_request_model(proactive_model(opts))
   end
 
+  @doc false
+  def proactive_prompt_byte_cap, do: @max_proactive_prompt_bytes
+
+  @doc false
+  def delivery_plan_prompt_byte_cap, do: @max_delivery_plan_prompt_bytes
+
+  @doc false
+  def delivery_plan_prompt_bytes(payload, opts \\ [])
+      when is_map(payload) and is_list(opts) do
+    payload
+    |> build_delivery_plan_request(opts)
+    |> request_prompt_bytes()
+  end
+
   defp proactive_model(opts) do
     Keyword.get(opts, :proactive_model, Keyword.get(opts, :chat_model, LLM.chat_model()))
   end
 
-  defp maybe_put_request_model(params, nil), do: params
-  defp maybe_put_request_model(params, ""), do: params
-  defp maybe_put_request_model(params, model), do: Map.put(params, "model", model)
+  defp maybe_put_request_model(params, model)
+       when is_binary(model) and byte_size(model) <= 255 do
+    if String.valid?(model) do
+      case String.trim(model) do
+        "" -> params
+        bounded_model -> Map.put(params, "model", bounded_model)
+      end
+    else
+      params
+    end
+  end
+
+  defp maybe_put_request_model(params, _model), do: params
 
   def next_step(payload, opts \\ []) when is_map(payload) do
     params = build_step_request(payload, opts)
@@ -314,12 +364,26 @@ defmodule Maraithon.AssistantHarness do
 
   def proactive_plan(payload, opts \\ []) when is_map(payload) do
     params = build_proactive_request(payload, opts)
-    complete_json(params, opts, &normalize_proactive/1)
+
+    complete_bounded_json(
+      params,
+      :proactive,
+      @max_proactive_prompt_bytes,
+      opts,
+      &normalize_proactive/1
+    )
   end
 
   def plan_delivery(payload, opts \\ []) when is_map(payload) do
     params = build_delivery_plan_request(payload, opts)
-    complete_json(params, opts, &normalize_delivery_plan/1)
+
+    complete_bounded_json(
+      params,
+      :delivery_plan,
+      @max_delivery_plan_prompt_bytes,
+      opts,
+      &normalize_delivery_plan/1
+    )
   end
 
   def build_prompt(payload) do
@@ -705,10 +769,14 @@ defmodule Maraithon.AssistantHarness do
 
   defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
 
-  defp positive_integer(value, default) when is_binary(value) do
-    case Integer.parse(String.trim(value)) do
-      {parsed, ""} when parsed > 0 -> parsed
-      _other -> default
+  defp positive_integer(value, default) when is_binary(value) and byte_size(value) <= 32 do
+    if String.valid?(value) do
+      case Integer.parse(String.trim(value)) do
+        {parsed, ""} when parsed > 0 -> parsed
+        _other -> default
+      end
+    else
+      default
     end
   end
 
@@ -720,26 +788,60 @@ defmodule Maraithon.AssistantHarness do
   defp bounded_float(value, _default) when is_integer(value) and value >= 0 and value <= 2,
     do: value / 1
 
-  defp bounded_float(value, default) when is_binary(value) do
-    case Float.parse(String.trim(value)) do
-      {parsed, ""} when parsed >= 0.0 and parsed <= 2.0 -> parsed
-      _other -> default
+  defp bounded_float(value, default) when is_binary(value) and byte_size(value) <= 32 do
+    if String.valid?(value) do
+      case Float.parse(String.trim(value)) do
+        {parsed, ""} when parsed >= 0.0 and parsed <= 2.0 -> parsed
+        _other -> default
+      end
+    else
+      default
     end
   end
 
   defp bounded_float(_value, default), do: default
 
-  defp non_empty_string(value, default) when is_binary(value) do
-    value = String.trim(value)
-    if value == "", do: default, else: value
+  defp non_empty_string(value, default) when is_binary(value) and byte_size(value) <= 255 do
+    if String.valid?(value) do
+      value = String.trim(value)
+      if value == "", do: default, else: value
+    else
+      default
+    end
   end
 
   defp non_empty_string(_value, default), do: default
+
+  defp complete_bounded_json(params, prompt_kind, prompt_byte_cap, opts, normalize_fn) do
+    prompt_bytes = request_prompt_bytes(params)
+
+    metadata = [
+      prompt_kind: prompt_kind,
+      prompt_bytes: prompt_bytes,
+      prompt_byte_cap: prompt_byte_cap
+    ]
+
+    if prompt_bytes <= prompt_byte_cap do
+      Logger.info("Assistant model prompt bounded", metadata)
+      complete_json(params, opts, normalize_fn)
+    else
+      Logger.warning("Assistant model prompt exceeds byte budget", metadata)
+      {:error, {:prompt_exceeds_budget, prompt_kind, prompt_bytes, prompt_byte_cap}}
+    end
+  end
+
+  defp request_prompt_bytes(params) when is_map(params) do
+    params
+    |> Map.get("messages", [])
+    |> PromptStability.encode!()
+    |> byte_size()
+  end
 
   defp complete_json(params, opts, normalize_fn) do
     attempts = model_attempts(params, opts)
     llm_complete = llm_complete(opts)
     final_attempt_index = length(attempts) - 1
+    deadline = model_deadline(opts)
 
     attempts
     |> Enum.with_index()
@@ -748,18 +850,22 @@ defmodule Maraithon.AssistantHarness do
                                                                                 _last_error ->
       last_attempt? = index >= final_attempt_index
 
-      result = run_model_attempt(attempt_params, llm_complete, normalize_fn, opts)
+      result = run_model_attempt(attempt_params, llm_complete, normalize_fn, opts, deadline)
 
       case result do
         {:ok, _value} = ok ->
           {:halt, ok}
 
         {:error, reason} = error ->
-          if retryable_model_error?(reason) and not last_attempt? do
-            maybe_sleep_before_retry(reason, index, opts)
-            {:cont, error}
-          else
-            {:halt, error}
+          cond do
+            not retryable_model_error?(reason) or last_attempt? ->
+              {:halt, error}
+
+            sleep_before_retry(reason, index, opts, deadline) == :timeout ->
+              {:halt, {:error, :timeout}}
+
+            true ->
+              {:cont, error}
           end
       end
     end)
@@ -771,27 +877,50 @@ defmodule Maraithon.AssistantHarness do
     end
   end
 
-  defp run_model_attempt(params, llm_complete, normalize_fn, opts) do
+  defp run_model_attempt(params, llm_complete, normalize_fn, opts, deadline) do
     do_run_model_attempt(
       params,
       llm_complete,
       normalize_fn,
       opts,
-      model_busy_max_retries(opts)
+      model_busy_max_retries(opts),
+      deadline
     )
   end
 
-  defp do_run_model_attempt(params, llm_complete, normalize_fn, opts, busy_retries_left) do
-    case llm_complete.(params) do
-      {:ok, response} ->
-        decode_and_normalize(response, normalize_fn)
+  defp do_run_model_attempt(params, llm_complete, normalize_fn, opts, busy_retries_left, deadline) do
+    case remaining_model_ms(deadline) do
+      remaining when remaining <= 0 ->
+        {:error, :timeout}
 
-      {:error, {:llm_busy, _retry_after} = reason} when busy_retries_left > 0 ->
-        maybe_sleep_before_retry(reason, model_busy_max_retries(opts) - busy_retries_left, opts)
-        do_run_model_attempt(params, llm_complete, normalize_fn, opts, busy_retries_left - 1)
+      remaining ->
+        params = Map.put(params, "timeout_ms", remaining)
 
-      {:error, _reason} = error ->
-        error
+        case llm_complete.(params) do
+          {:ok, response} ->
+            decode_and_normalize(response, normalize_fn)
+
+          {:error, {:llm_busy, _retry_after} = reason} when busy_retries_left > 0 ->
+            attempt_index = model_busy_max_retries(opts) - busy_retries_left
+
+            case sleep_before_retry(reason, attempt_index, opts, deadline) do
+              :ok ->
+                do_run_model_attempt(
+                  params,
+                  llm_complete,
+                  normalize_fn,
+                  opts,
+                  busy_retries_left - 1,
+                  deadline
+                )
+
+              :timeout ->
+                {:error, :timeout}
+            end
+
+          {:error, _reason} = error ->
+            error
+        end
     end
   end
 
@@ -836,11 +965,13 @@ defmodule Maraithon.AssistantHarness do
   defp model_failover_max_attempts(opts, _fallbacks) do
     policy_value(opts, :model_failover_max_attempts, @default_model_failover_max_attempts)
     |> positive_integer(@default_model_failover_max_attempts)
+    |> min(@max_model_failover_attempts)
   end
 
   defp model_busy_max_retries(opts) do
     policy_value(opts, :model_busy_max_retries, @default_model_busy_max_retries)
     |> positive_integer(@default_model_busy_max_retries)
+    |> min(@max_model_busy_retries)
   end
 
   defp model_fallbacks(opts) do
@@ -859,9 +990,12 @@ defmodule Maraithon.AssistantHarness do
 
   defp normalize_model_fallbacks(value) when is_binary(value) do
     value
+    |> Maraithon.PromptBudget.truncate_utf8(@max_model_fallback_config_bytes)
     |> String.split(",", trim: true)
+    |> Enum.take(@max_model_fallbacks)
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&normalize_message(&1, 255))
     |> Enum.uniq()
   end
 
@@ -869,9 +1003,9 @@ defmodule Maraithon.AssistantHarness do
 
   defp retryable_model_error?(:timeout), do: true
   defp retryable_model_error?({:llm_busy, _retry_after}), do: true
+  defp retryable_model_error?({:invalid_response, _summary}), do: true
   defp retryable_model_error?(:assistant_harness_invalid_json), do: true
   defp retryable_model_error?(:assistant_harness_missing_content), do: true
-  defp retryable_model_error?({:invalid_response, _summary}), do: true
   # Malformed decisions — the model returned a transient JSON-shape slip
   # (e.g. status:"tool_calls" with an empty tool_calls array, an unknown
   # status, or a malformed tool call). A retry / fallback-model attempt
@@ -895,10 +1029,30 @@ defmodule Maraithon.AssistantHarness do
 
   defp retryable_model_error?(_reason), do: false
 
-  defp maybe_sleep_before_retry(reason, attempt_index, opts) do
-    delay_ms = retry_delay_ms(reason, attempt_index, opts)
-    if delay_ms > 0, do: Process.sleep(delay_ms)
+  defp sleep_before_retry(reason, attempt_index, opts, deadline) do
+    remaining = remaining_model_ms(deadline)
+    delay_ms = min(retry_delay_ms(reason, attempt_index, opts), max(remaining, 0))
+
+    cond do
+      remaining <= 0 -> :timeout
+      delay_ms >= remaining -> :timeout
+      delay_ms > 0 -> Process.sleep(delay_ms)
+      true -> :ok
+    end
   end
+
+  defp model_deadline(opts) do
+    now = System.monotonic_time(:millisecond)
+    max_deadline = now + runtime_policy(opts).loop.max_wall_clock_ms
+
+    case Keyword.get(opts, :deadline_monotonic_ms) do
+      deadline when is_integer(deadline) -> min(deadline, max_deadline)
+      _other -> max_deadline
+    end
+  end
+
+  defp remaining_model_ms(deadline),
+    do: max(deadline - System.monotonic_time(:millisecond), 0)
 
   defp retry_delay_ms({:llm_busy, retry_after}, _attempt_index, opts) do
     retry_after
@@ -921,11 +1075,13 @@ defmodule Maraithon.AssistantHarness do
   defp default_retry_base_delay_ms(opts) do
     policy_value(opts, :model_retry_base_delay_ms, @default_model_retry_base_delay_ms)
     |> positive_integer(@default_model_retry_base_delay_ms)
+    |> min(@max_model_retry_delay_ms)
   end
 
   defp default_retry_max_delay_ms(opts) do
     policy_value(opts, :model_retry_max_delay_ms, @default_model_retry_max_delay_ms)
     |> positive_integer(@default_model_retry_max_delay_ms)
+    |> min(@max_model_retry_delay_ms)
   end
 
   defp configured_llm_complete do
@@ -985,7 +1141,7 @@ defmodule Maraithon.AssistantHarness do
 
   defp normalize_correction(%{} = correction) do
     if truthy?(Map.get(correction, "detected")) do
-      case normalize_optional_string(Map.get(correction, "corrected_value")) do
+      case normalize_optional_string(Map.get(correction, "corrected_value"), 4_000) do
         nil ->
           nil
 
@@ -993,11 +1149,13 @@ defmodule Maraithon.AssistantHarness do
           %{
             "detected" => true,
             "kind" => normalize_correction_kind(Map.get(correction, "kind")),
-            "subject" => normalize_optional_string(Map.get(correction, "subject")),
-            "original_value" => normalize_optional_string(Map.get(correction, "original_value")),
+            "subject" => normalize_optional_string(Map.get(correction, "subject"), 255),
+            "original_value" =>
+              normalize_optional_string(Map.get(correction, "original_value"), 4_000),
             "corrected_value" => corrected_value,
-            "resource_type" => normalize_optional_string(Map.get(correction, "resource_type")),
-            "resource_id" => normalize_optional_string(Map.get(correction, "resource_id"))
+            "resource_type" =>
+              normalize_optional_string(Map.get(correction, "resource_type"), 100),
+            "resource_id" => normalize_optional_string(Map.get(correction, "resource_id"), 255)
           }
       end
     else
@@ -1010,14 +1168,17 @@ defmodule Maraithon.AssistantHarness do
   defp normalize_correction_kind(value) when value in @valid_correction_kinds, do: value
   defp normalize_correction_kind(_value), do: "other"
 
-  defp normalize_optional_string(value) when is_binary(value) do
-    case String.trim(value) do
+  defp normalize_optional_string(value, max_bytes) when is_binary(value) do
+    value
+    |> Maraithon.PromptBudget.truncate_utf8(max_bytes)
+    |> String.trim()
+    |> case do
       "" -> nil
       trimmed -> trimmed
     end
   end
 
-  defp normalize_optional_string(_value), do: nil
+  defp normalize_optional_string(_value, _max_bytes), do: nil
 
   defp truthy?(value), do: value in [true, "true", "TRUE", "1", 1]
 
@@ -1051,8 +1212,11 @@ defmodule Maraithon.AssistantHarness do
     arguments = Map.get(tool_call, "arguments") || Map.get(tool_call, "input") || %{}
 
     with true <- is_binary(tool),
+         tool <- String.trim(tool),
+         true <- tool != "" and byte_size(tool) <= 255,
+         true <- length(String.split(tool, ".", trim: true)) <= 16,
          {:ok, arguments} <- normalize_tool_arguments(arguments) do
-      {:ok, %{"tool" => String.trim(tool), "arguments" => arguments}}
+      {:ok, %{"tool" => tool, "arguments" => arguments}}
     else
       _other -> {:error, :invalid_tool_call}
     end
@@ -1206,15 +1370,19 @@ defmodule Maraithon.AssistantHarness do
     |> String.downcase()
   end
 
+  @doc false
+  def normalize_proactive_plan(%{} = plan), do: normalize_proactive(plan)
+  def normalize_proactive_plan(_plan), do: {:error, :assistant_harness_invalid_response}
+
   defp normalize_proactive(%{} = parsed) do
     decision = normalize_proactive_decision(Map.get(parsed, "decision"))
     message_class = normalize_proactive_message_class(Map.get(parsed, "message_class"))
     assistant_message = normalize_message(Map.get(parsed, "assistant_message"))
     urgency = normalize_score(Map.get(parsed, "urgency"))
     interrupt_now = Map.get(parsed, "interrupt_now") in [true, "true", "TRUE", "1", 1]
-    dedupe_key = normalize_message(Map.get(parsed, "dedupe_key"))
-    todo_ids = normalize_string_list(Map.get(parsed, "todo_ids"))
-    summary = normalize_message(Map.get(parsed, "summary"))
+    dedupe_key = normalize_message(Map.get(parsed, "dedupe_key"), 255)
+    todo_ids = normalize_string_list(Map.get(parsed, "todo_ids"), 64, 255)
+    summary = normalize_message(Map.get(parsed, "summary"), @max_plan_reason_bytes)
 
     with {:ok, decision} <- decision,
          :ok <- validate_proactive_message(decision, assistant_message) do
@@ -1246,8 +1414,10 @@ defmodule Maraithon.AssistantHarness do
   defp validate_proactive_message(_decision, _assistant_message), do: :ok
 
   defp normalize_delivery_plan(%{} = parsed) do
-    digest_intro = normalize_message(Map.get(parsed, "digest_intro"))
-    summary = normalize_message(Map.get(parsed, "summary"))
+    digest_intro =
+      normalize_message(Map.get(parsed, "digest_intro"), @max_normalized_message_bytes)
+
+    summary = normalize_message(Map.get(parsed, "summary"), @max_plan_reason_bytes)
 
     with {:ok, dispositions} <- normalize_delivery_dispositions(Map.get(parsed, "dispositions")) do
       {:ok,
@@ -1260,16 +1430,22 @@ defmodule Maraithon.AssistantHarness do
   end
 
   defp normalize_delivery_dispositions(dispositions) when is_list(dispositions) do
-    dispositions
-    |> Enum.reduce_while({:ok, []}, fn disposition, {:ok, acc} ->
-      case normalize_delivery_disposition(disposition) do
-        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
+    bounded = Enum.take(dispositions, @max_delivery_dispositions + 1)
+
+    if length(bounded) > @max_delivery_dispositions do
+      {:error, :assistant_harness_invalid_dispositions}
+    else
+      bounded
+      |> Enum.reduce_while({:ok, []}, fn disposition, {:ok, acc} ->
+        case normalize_delivery_disposition(disposition) do
+          {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+        {:error, reason} -> {:error, reason}
       end
-    end)
-    |> case do
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -1278,10 +1454,13 @@ defmodule Maraithon.AssistantHarness do
 
   defp normalize_delivery_disposition(%{} = disposition) do
     candidate_id =
-      normalize_message(Map.get(disposition, "candidate_id") || Map.get(disposition, "id"))
+      normalize_message(
+        Map.get(disposition, "candidate_id") || Map.get(disposition, "id"),
+        255
+      )
 
-    disposition_value = normalize_message(Map.get(disposition, "disposition"))
-    reason = normalize_message(Map.get(disposition, "reason"))
+    disposition_value = normalize_message(Map.get(disposition, "disposition"), 32)
+    reason = normalize_message(Map.get(disposition, "reason"), @max_plan_reason_bytes)
 
     cond do
       candidate_id == "" ->
@@ -1304,11 +1483,19 @@ defmodule Maraithon.AssistantHarness do
     do: {:error, :assistant_harness_invalid_dispositions}
 
   defp compact_tool_history(tool_history, policy) when is_list(tool_history) do
-    tool_history
-    |> Enum.reverse()
-    |> Enum.take(policy.tool_evidence.history_limit)
-    |> Enum.reverse()
-    |> Enum.map(&compact_tool_history_entry(&1, policy))
+    bounded_history = Enum.take(tool_history, @max_tool_steps + 1)
+
+    selected =
+      if length(bounded_history) > @max_tool_steps do
+        Enum.take(bounded_history, policy.tool_evidence.history_limit)
+      else
+        bounded_history
+        |> Enum.reverse()
+        |> Enum.take(policy.tool_evidence.history_limit)
+        |> Enum.reverse()
+      end
+
+    Enum.map(selected, &compact_tool_history_entry(&1, policy))
   end
 
   defp compact_tool_history(_tool_history, _policy), do: []
@@ -1316,55 +1503,61 @@ defmodule Maraithon.AssistantHarness do
   defp compact_tool_history_entry(entry, policy) when is_map(entry) do
     entry
     |> Map.take(["tool", "arguments", "result", "error"])
-    |> Map.new(fn {key, value} -> {key, compact_tool_value(value, policy)} end)
+    |> Map.new(fn {key, value} -> {key, compact_safe_tool_value(value, policy)} end)
   end
 
   defp compact_tool_history_entry(entry, policy) do
-    compact_tool_value(entry, policy)
+    compact_safe_tool_value(entry, policy)
+  end
+
+  defp compact_safe_tool_value(value, policy) do
+    if Maraithon.TelegramAssistant.ProactiveCandidate.safe_json_shape?(value, 32_000) do
+      compact_tool_value(value, policy)
+    else
+      %{"_truncated" => true}
+    end
   end
 
   defp compact_tool_value(value, policy) when is_binary(value) do
-    max_chars = policy.tool_evidence.max_string_chars
+    max_bytes = policy.tool_evidence.max_string_chars
+    suffix = "...[truncated]"
 
-    if String.length(value) > max_chars do
-      String.slice(value, 0, max_chars) <> "...[truncated]"
+    if byte_size(value) > max_bytes and byte_size(suffix) <= max_bytes do
+      prefix_bytes = max_bytes - byte_size(suffix)
+      Maraithon.PromptBudget.truncate_utf8(value, prefix_bytes) <> suffix
     else
-      value
+      Maraithon.PromptBudget.truncate_utf8(value, max_bytes)
     end
   end
 
   defp compact_tool_value(value, policy) when is_list(value) do
     max_items = policy.tool_evidence.max_list_items
-    total = length(value)
+    prefix = Enum.take(value, max_items + 1)
+    truncated? = length(prefix) > max_items
 
     compacted =
-      value
+      prefix
       |> Enum.take(max_items)
       |> Enum.map(&compact_tool_value(&1, policy))
 
-    if total > max_items do
-      compacted ++ [%{"_truncated_items" => total - max_items}]
-    else
-      compacted
-    end
+    if truncated?, do: compacted ++ [%{"_truncated_items" => true}], else: compacted
   end
 
-  defp compact_tool_value(value, policy) when is_map(value) do
+  defp compact_tool_value(value, policy) when is_map(value) and not is_struct(value) do
     max_entries = policy.tool_evidence.max_map_entries
-    entries = value |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    prefix = Enum.take(value, max_entries + 1)
+    truncated? = length(prefix) > max_entries
 
     compacted =
-      entries
+      prefix
       |> Enum.take(max_entries)
-      |> Map.new(fn {key, nested_value} ->
-        {to_string(key), compact_tool_value(nested_value, policy)}
+      |> Enum.map(fn {key, nested_value} ->
+        {compact_tool_key(key), compact_tool_value(nested_value, policy)}
       end)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Map.new()
 
-    if length(entries) > max_entries do
-      Map.put(compacted, "_truncated_keys", length(entries) - max_entries)
-    else
-      compacted
-    end
+    if truncated?, do: Map.put(compacted, "_truncated_keys", true), else: compacted
   end
 
   defp compact_tool_value(%DateTime{} = value, _policy), do: DateTime.to_iso8601(value)
@@ -1376,11 +1569,23 @@ defmodule Maraithon.AssistantHarness do
     value |> Map.from_struct() |> compact_tool_value(policy)
   end
 
-  defp compact_tool_value(value, _policy) when is_tuple(value), do: inspect(value)
-  defp compact_tool_value(value, _policy) when is_pid(value), do: inspect(value)
-  defp compact_tool_value(value, _policy) when is_reference(value), do: inspect(value)
-  defp compact_tool_value(value, _policy) when is_function(value), do: inspect(value)
+  defp compact_tool_value(value, _policy)
+       when is_tuple(value) or is_pid(value) or is_reference(value) or is_function(value),
+       do: "redacted_detail"
+
   defp compact_tool_value(value, _policy), do: value
+
+  defp compact_tool_key(key) when is_binary(key),
+    do: Maraithon.PromptBudget.truncate_utf8(key, 255)
+
+  defp compact_tool_key(key) when is_atom(key), do: Atom.to_string(key)
+
+  defp compact_tool_key(key)
+       when is_integer(key) and key >= -9_223_372_036_854_775_808 and
+              key <= 9_223_372_036_854_775_807,
+       do: Integer.to_string(key)
+
+  defp compact_tool_key(_key), do: "redacted_key"
 
   defp current_user_request(context) when is_map(context) do
     context
@@ -1997,14 +2202,20 @@ defmodule Maraithon.AssistantHarness do
 
   defp normalize_score(_value), do: 0.0
 
-  defp normalize_string_list(values) when is_list(values) do
+  defp normalize_string_list(values) when is_list(values),
+    do: normalize_string_list(values, 100, @max_normalized_message_bytes)
+
+  defp normalize_string_list(_values), do: []
+
+  defp normalize_string_list(values, max_items, max_bytes) when is_list(values) do
     values
-    |> Enum.map(&normalize_message/1)
+    |> Enum.take(max_items)
+    |> Enum.map(&normalize_message(&1, max_bytes))
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
   end
 
-  defp normalize_string_list(_values), do: []
+  defp normalize_string_list(_values, _max_items, _max_bytes), do: []
 
   defp max_tool_calls_per_step(payload) do
     payload
@@ -2026,8 +2237,18 @@ defmodule Maraithon.AssistantHarness do
     end)
   end
 
-  defp normalize_message(value) when is_binary(value), do: String.trim(value)
+  defp normalize_message(value) when is_binary(value),
+    do: normalize_message(value, @max_normalized_message_bytes)
+
   defp normalize_message(_value), do: ""
+
+  defp normalize_message(value, max_bytes) when is_binary(value) do
+    value
+    |> String.trim()
+    |> PromptBudget.truncate_utf8(max_bytes)
+  end
+
+  defp normalize_message(_value, _max_bytes), do: ""
 
   defp human_tool_name(tool)
        when tool in [

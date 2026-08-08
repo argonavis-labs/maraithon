@@ -306,7 +306,9 @@ defmodule Maraithon.Crm.PersonMergeSuggestions do
       end)
     else
       {:error, reason} ->
-        Logger.warning("person_merge_suggestions model judgment failed reason=#{inspect(reason)}")
+        Logger.warning("person_merge_suggestions model judgment failed",
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
 
         []
     end

@@ -14,7 +14,10 @@ defmodule Maraithon.TelegramAssistant.PushReceipt do
 
   # "nudge" (SPEC 01 R4): NudgeSweep follow-up candidates keep their own
   # origin so receipt telemetry and duplicate suppression stay legible.
-  @origin_types ~w(insight brief agent_push assistant_digest connector_health dogfood_digest nudge)
+  @origin_types ~w(
+    insight brief agent_push assistant_digest connector_health dogfood_digest nudge
+    staleness_triage todo_completion_confirm
+  )
   # `held_rate_limit` covers both interruption-budget and quiet-hours holds.
   # Unlike the other decisions, it must never dedupe-block a future retry —
   # see Maraithon.TelegramAssistant.push_receipt_for/2.

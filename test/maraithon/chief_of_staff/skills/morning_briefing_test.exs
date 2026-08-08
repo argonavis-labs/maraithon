@@ -1626,13 +1626,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert payload.generation_mode == "source_fallback"
     assert payload.error_message =~ "available-context fallback"
-    assert payload.error_message =~ "max_output_tokens"
+    refute payload.error_message =~ "max_output_tokens"
     refute payload.error_message =~ "model synthesis"
 
     brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
     assert brief.title == "Thursday, May 7 - Verify the day before committing it"
     assert brief.error_message =~ "available-context fallback"
-    assert brief.error_message =~ "max_output_tokens"
+    refute brief.error_message =~ "max_output_tokens"
     refute brief.error_message =~ "model synthesis"
     assert brief.metadata["llm_finish_reason"] == "error"
     assert brief.metadata["max_tokens_used"] == 16_000
@@ -1753,8 +1753,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert String.length(pending_json) < 500_000
     assert String.length(prompt) < 500_000
-    assert length(get_in(input, ["gmail", "recent_inbox"])) == 50
-    assert length(get_in(input, ["gmail", "recent_unread"])) == 50
+    assert length(get_in(input, ["gmail", "recent_inbox"])) == 12
+    assert length(get_in(input, ["gmail", "recent_unread"])) == 12
 
     pending_body =
       get_in(state.pending_brief_input, ["gmail", "recent_inbox", Access.at(0), "body"])
@@ -1768,10 +1768,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert String.length(pending_body) < 1_600
     assert pending_body =~ "[truncated"
     assert pending_status == "available_truncated"
-    assert String.length(first_body) < 1_600
+    # The final 32 KB projection may omit redundant body/snippet fields while
+    # retaining the message identity and subject; it must never leak the
+    # oversized connector field.
+    assert is_nil(first_body) or String.length(first_body) < 1_600
     assert String.length(first_snippet) < 500
-    assert first_body =~ "[truncated"
-    assert first_snippet =~ "[truncated"
+    assert String.ends_with?(first_snippet, "…")
+    assert get_in(input, ["gmail", "recent_inbox", Access.at(0), "subject"])
   end
 
   test "adds explicit local display times for a configured named timezone", %{user_id: user_id} do

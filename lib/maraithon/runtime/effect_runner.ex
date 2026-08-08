@@ -125,7 +125,11 @@ defmodule Maraithon.Runtime.EffectRunner do
         {effect, running} = Map.pop(state.running, effect_id)
 
         if effect && reason != :normal do
-          Logger.error("Effect task crashed for effect #{effect_id}: #{inspect(reason)}")
+          Logger.error("Effect task crashed",
+            effect_id: effect_id,
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
+
           release_crashed_effect(effect, reason)
         end
 
@@ -134,8 +138,11 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   @impl true
-  def handle_info(msg, state) do
-    Logger.debug("EffectRunner ignoring unexpected message: #{inspect(msg)}")
+  def handle_info(_msg, state) do
+    Logger.debug("EffectRunner ignoring unexpected message",
+      failure_code: "unexpected_message"
+    )
+
     {:noreply, state}
   end
 
@@ -245,7 +252,7 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp release_crashed_effect(effect, reason) do
     attempts = effect.attempts + 1
-    error = {:effect_task_crashed, reason}
+    error = {:effect_task_crashed, Maraithon.Redaction.error_class(reason)}
 
     if attempts < effect.max_attempts do
       mark_pending_retry(effect, error, attempts)
@@ -266,10 +273,10 @@ defmodule Maraithon.Runtime.EffectRunner do
         execute_with_command(effect)
       rescue
         exception ->
-          {:error, {:effect_exception, Exception.message(exception)}}
+          {:error, {:effect_exception, Maraithon.Redaction.error_class(exception)}}
       catch
-        kind, value ->
-          {:error, {:effect_exception, "#{kind}: #{inspect(value)}"}}
+        kind, _value ->
+          {:error, {:effect_exception, to_string(kind)}}
       end
 
     case result do
@@ -325,14 +332,14 @@ defmodule Maraithon.Runtime.EffectRunner do
       claimed_at: nil,
       attempts: attempts,
       retry_after: retry_after,
-      error: inspect(reason)
+      error: Maraithon.Redaction.error_summary(reason)
     )
   end
 
   defp mark_failed(effect, reason, attempts) do
     update_claimed_effect(effect, "mark failed",
       status: "failed",
-      error: inspect(reason),
+      error: Maraithon.Redaction.error_summary(reason),
       attempts: attempts,
       claimed_by: nil,
       claimed_at: nil
@@ -469,7 +476,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   defp fallback_retry_after_ms(_reason), do: nil
 
   defp retry_after_text_ms(reason) when is_binary(reason) do
-    case Regex.run(~r/rate_limited,\s*(\d+)/, reason) do
+    case Regex.run(~r/rate_limited[:,]\s*(\d{1,9})/, reason) do
       [_, retry_after] -> normalize_retry_after_ms(retry_after)
       _other -> nil
     end
@@ -481,7 +488,7 @@ defmodule Maraithon.Runtime.EffectRunner do
     min(value, @max_rate_limit_retry_ms)
   end
 
-  defp normalize_retry_after_ms(value) when is_binary(value) do
+  defp normalize_retry_after_ms(value) when is_binary(value) and byte_size(value) <= 9 do
     case Integer.parse(value) do
       {parsed, ""} when parsed > 0 -> normalize_retry_after_ms(parsed)
       _other -> @default_rate_limit_retry_ms

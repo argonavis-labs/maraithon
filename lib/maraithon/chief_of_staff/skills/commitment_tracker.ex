@@ -287,7 +287,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
           {:error, reason} ->
             handle_effect_result(
-              {:llm_call, %{content: "", error: inspect(reason), finish_reason: "error"}},
+              {:llm_call,
+               %{
+                 content: "",
+                 error: Maraithon.Redaction.error_summary(reason),
+                 finish_reason: "error"
+               }},
               pending_state,
               context
             )
@@ -452,7 +457,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       {:llm_call,
        %{
          content: "",
-         error: inspect(reason),
+         error: Maraithon.Redaction.error_summary(reason),
          finish_reason: "error"
        }},
       state,
@@ -1394,7 +1399,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         {updated_brief, todos_or_ids |> Enum.map(&todo_id/1) |> Enum.reject(&blank?/1), nil}
 
       {:error, reason} ->
-        {brief_record, [], inspect(reason)}
+        {brief_record, [], Maraithon.Redaction.error_summary(reason)}
     end
   end
 
@@ -1418,7 +1423,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp fallback_persist_todos(user_id, candidates, reason) do
     Logger.warning(
       "commitment_tracker todo intelligence failed; using direct checked upsert",
-      reason: inspect(reason),
+      reason: Maraithon.Redaction.error_summary(reason),
       candidate_count: length(candidates)
     )
 
@@ -1434,7 +1439,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
              direct_upsert_decisions(todos) ++ signal_gate_skip_decisions(skipped_candidates),
            skipped_count: length(skipped_candidates),
            usage: %{},
-           fallback_reason: inspect(reason)
+           fallback_reason: Maraithon.Redaction.error_summary(reason)
          }}
 
       {:error, direct_reason} ->
@@ -1719,7 +1724,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     %{
       todo_count: 0,
       todo_skipped_count: 0,
-      todo_error: inspect(reason)
+      todo_error: Maraithon.Redaction.error_summary(reason)
     }
   end
 
@@ -1736,7 +1741,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp summarize_todo_result({:error, reason}) do
-    %{"todo_count" => 0, "skipped_count" => 0, "error" => inspect(reason)}
+    %{
+      "todo_count" => 0,
+      "skipped_count" => 0,
+      "error" => Maraithon.Redaction.error_summary(reason)
+    }
   end
 
   defp gmail_message_for_prompt(message) when is_map(message) do

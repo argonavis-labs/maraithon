@@ -318,8 +318,8 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
-  def idle(:info, msg, data) do
-    Logger.debug("Idle received unknown message: #{inspect(msg)}")
+  def idle(:info, _msg, data) do
+    Logger.debug("Idle received an unhandled message")
     {:keep_state, data}
   end
 
@@ -382,8 +382,8 @@ defmodule Maraithon.Runtime.Agent do
     stop_agent(reason, data)
   end
 
-  def working(:info, msg, data) do
-    Logger.debug("Working received message: #{inspect(msg)}")
+  def working(:info, _msg, data) do
+    Logger.debug("Working received an unhandled message")
     {:keep_state, data}
   end
 
@@ -462,7 +462,7 @@ defmodule Maraithon.Runtime.Agent do
             data =
               emit_event(data, "effect_failed", %{
                 effect_id: effect_id,
-                error: inspect(reason)
+                error: Maraithon.Redaction.error_summary(reason)
               })
 
             context = build_context(data)
@@ -534,7 +534,7 @@ defmodule Maraithon.Runtime.Agent do
     # Timeouts never decrement budget — unchanged by this spec. If
     # pending_effects was unexpectedly empty, fall back to today's behavior.
     if effect_info != nil and function_exported?(data.behavior_module, :handle_effect_error, 4) do
-      update_current_run_error(data.current_run_id, effect_info, "effect_timeout")
+      update_current_run_error(data.current_run_id, effect_info, :effect_timeout)
 
       data =
         emit_event(data, "effect_failed", %{
@@ -546,7 +546,7 @@ defmodule Maraithon.Runtime.Agent do
 
       case data.behavior_module.handle_effect_error(
              effect_info.type,
-             "effect_timeout",
+             :effect_timeout,
              data.behavior_state,
              context
            ) do
@@ -597,8 +597,8 @@ defmodule Maraithon.Runtime.Agent do
     stop_agent(reason, data)
   end
 
-  def waiting_effect(:info, msg, data) do
-    Logger.debug("Waiting effect received message: #{inspect(msg)}")
+  def waiting_effect(:info, _msg, data) do
+    Logger.debug("Waiting effect received an unhandled message")
     {:keep_state, data}
   end
 
@@ -643,7 +643,7 @@ defmodule Maraithon.Runtime.Agent do
       {:error, reason} ->
         Logger.warning("Agent checkpoint snapshot failed",
           agent_id: data.agent_id,
-          reason: inspect(reason)
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         :ok
@@ -652,7 +652,7 @@ defmodule Maraithon.Runtime.Agent do
     error ->
       Logger.warning("Agent checkpoint snapshot crashed",
         agent_id: data.agent_id,
-        reason: Exception.message(error)
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       :ok
@@ -666,7 +666,7 @@ defmodule Maraithon.Runtime.Agent do
     error ->
       Logger.warning("Agent snapshot load failed, starting fresh",
         agent_id: agent_id,
-        reason: Exception.message(error)
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       nil
@@ -693,7 +693,7 @@ defmodule Maraithon.Runtime.Agent do
       Logger.error("Agent snapshot restore failed, starting with fresh behavior state",
         agent_id: agent_id,
         behavior: inspect(behavior_module),
-        reason: Exception.message(error)
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       {behavior_module.init(agent_config), init_budget(agent_config["budget"])}
@@ -730,7 +730,7 @@ defmodule Maraithon.Runtime.Agent do
             behavior: inspect(behavior_module),
             stored_version: stored_version,
             current_version: current_version,
-            reason: Exception.message(error)
+            failure_code: Maraithon.Redaction.error_class(error)
           )
 
           state
@@ -767,7 +767,7 @@ defmodule Maraithon.Runtime.Agent do
         error ->
           Logger.warning("Behavior reconcile_restored_state failed, keeping merged state",
             behavior: inspect(behavior_module),
-            reason: Exception.message(error)
+            failure_code: Maraithon.Redaction.error_class(error)
           )
 
           state
@@ -884,7 +884,7 @@ defmodule Maraithon.Runtime.Agent do
           idempotency_key: idempotency_key
         })
       rescue
-        exception -> {:error, {:effect_write_failed, Exception.message(exception)}}
+        exception -> {:error, {:effect_write_failed, Maraithon.Redaction.error_class(exception)}}
       end
 
     data =
@@ -907,7 +907,10 @@ defmodule Maraithon.Runtime.Agent do
         {:next_state, :waiting_effect, data, actions}
 
       {:error, reason} ->
-        Logger.error("Effect outbox write failed for agent #{data.agent_id}: #{inspect(reason)}")
+        Logger.error("Effect outbox write failed",
+          agent_id: data.agent_id,
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
 
         failure = {:error, {:effect_write_failed, reason}}
 
@@ -990,7 +993,7 @@ defmodule Maraithon.Runtime.Agent do
       {:error, reason} ->
         Logger.error("Failed to record agent run",
           agent_id: data.agent_id,
-          reason: inspect(reason)
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         data
@@ -1019,7 +1022,7 @@ defmodule Maraithon.Runtime.Agent do
         Logger.error("Failed to record agent run step",
           agent_id: data.agent_id,
           run_id: data.current_run_id,
-          reason: inspect(reason)
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         nil
@@ -1044,8 +1047,8 @@ defmodule Maraithon.Runtime.Agent do
   defp record_effect_step_result(effect_info, {:error, reason}) do
     update_run_step(effect_info.run_step_id, %{
       status: "failed",
-      error: inspect(reason),
-      response_payload: %{"error" => inspect(reason)}
+      error: Maraithon.Redaction.error_summary(reason),
+      response_payload: %{"error" => Maraithon.Redaction.error_summary(reason)}
     })
   end
 
@@ -1072,7 +1075,7 @@ defmodule Maraithon.Runtime.Agent do
       intelligence: intelligence_from_params(effect_info.params),
       finish_reason: "error",
       generation_mode: "error",
-      error: inspect(reason)
+      error: Maraithon.Redaction.error_summary(reason)
     })
 
     :ok
@@ -1100,7 +1103,7 @@ defmodule Maraithon.Runtime.Agent do
         Logger.error("Failed to complete agent run",
           agent_id: data.agent_id,
           run_id: data.current_run_id,
-          reason: inspect(reason)
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         %{data | current_run_id: nil}
@@ -1114,7 +1117,7 @@ defmodule Maraithon.Runtime.Agent do
       Agents.fail_agent_run(data.current_run_id, %{
         finish_reason: "error",
         generation_mode: "error",
-        error: inspect(reason)
+        error: Maraithon.Redaction.error_summary(reason)
       })
 
     %{data | current_run_id: nil}
@@ -1124,8 +1127,13 @@ defmodule Maraithon.Runtime.Agent do
 
   defp update_run_step(step_id, attrs) do
     case Agents.update_agent_run_step(step_id, attrs) do
-      {:ok, _step} -> :ok
-      {:error, reason} -> Logger.error("Failed to update run step", reason: inspect(reason))
+      {:ok, _step} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Failed to update run step",
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
     end
   end
 
@@ -1371,9 +1379,8 @@ defmodule Maraithon.Runtime.Agent do
 
   defp maybe_put_error(attrs, payload) when is_map(payload) do
     case payload["error"] || payload[:error] do
-      error when is_binary(error) -> Map.put(attrs, :error, error)
       nil -> attrs
-      error -> Map.put(attrs, :error, inspect(error))
+      error -> Map.put(attrs, :error, Maraithon.Redaction.error_summary(error))
     end
   end
 
@@ -1535,7 +1542,7 @@ defmodule Maraithon.Runtime.Agent do
       {:error, reason} ->
         Logger.warning("Scheduled wakeup acknowledgement deferred",
           job_id: job_id,
-          error: inspect(reason)
+          error: Maraithon.Redaction.error_summary(reason)
         )
 
         :ok

@@ -1478,19 +1478,11 @@ defmodule Maraithon.Goals do
       [:maraithon, :goals, kind],
       %{count: 1},
       Map.merge(metadata, %{
-        user_id_hash: user_id_hash(goal.user_id),
+        user_id_hash: Maraithon.Redaction.fingerprint(goal.user_id),
         category: goal.category,
         sensitivity: goal.sensitivity,
         status: goal.status
       })
     )
   end
-
-  defp user_id_hash(user_id) when is_binary(user_id) do
-    :crypto.hash(:sha256, user_id)
-    |> Base.encode16(case: :lower)
-    |> binary_part(0, 16)
-  end
-
-  defp user_id_hash(_user_id), do: nil
 end

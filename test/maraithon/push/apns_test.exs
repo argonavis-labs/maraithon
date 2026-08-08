@@ -19,8 +19,8 @@ defmodule Maraithon.Push.APNSTest do
   end
 
   defmodule StaleConnectionHTTP do
-    # First request fails at the transport layer (idle HTTP/2 connection was
-    # closed under us); the retry lands on a fresh connection and succeeds.
+    # A closed idle HTTP/2 connection is still ambiguous once the POST was
+    # attempted, so the client must not issue a second request.
     def post(url, _headers, _body) do
       case Process.get(:stale_connection_http_calls, 0) do
         0 ->
@@ -83,7 +83,12 @@ defmodule Maraithon.Push.APNSTest do
     headers = Map.new(headers)
     assert headers["apns-topic"] == "com.bliss.maraithonmobile"
     assert headers["apns-push-type"] == "alert"
-    assert headers["apns-collapse-id"] == "dedupe:1"
+
+    expected_collapse_id =
+      Base.encode16(:crypto.hash(:sha256, "dedupe:1"), case: :lower)
+
+    assert headers["apns-collapse-id"] == expected_collapse_id
+    assert byte_size(headers["apns-collapse-id"]) == 64
 
     assert "bearer " <> jwt = headers["authorization"]
     assert [header, claims, signature] = String.split(jwt, ".")
@@ -119,27 +124,27 @@ defmodule Maraithon.Push.APNSTest do
     assert {:error, :retryable} = APNS.send("busy", %{"aps" => %{}})
   end
 
-  test "a transport failure is retried once on a fresh connection" do
+  test "a transport failure is not retried after the external-send boundary" do
     Application.put_env(
       :maraithon,
       :apns,
       Keyword.put(Application.get_env(:maraithon, :apns), :http_module, StaleConnectionHTTP)
     )
 
-    assert :ok = APNS.send("stale-conn", %{"aps" => %{}})
-    assert Process.get(:stale_connection_http_calls) == 2
-    assert_receive {:apns_retry_request, _url}
+    assert {:error, :delivery_unknown} = APNS.send("stale-conn", %{"aps" => %{}})
+    assert Process.get(:stale_connection_http_calls) == 1
+    refute_received {:apns_retry_request, _url}
   end
 
-  test "a persistent transport failure classifies as :retryable after one retry" do
+  test "a transport failure remains delivery-ambiguous after one attempt" do
     Application.put_env(
       :maraithon,
       :apns,
       Keyword.put(Application.get_env(:maraithon, :apns), :http_module, DownHTTP)
     )
 
-    assert {:error, :retryable} = APNS.send("down", %{"aps" => %{}})
-    assert Process.get(:down_http_calls) == 2
+    assert {:error, :delivery_unknown} = APNS.send("down", %{"aps" => %{}})
+    assert Process.get(:down_http_calls) == 1
   end
 
   test "payload carries alert, thread id, and deeplink outside aps" do
@@ -161,5 +166,21 @@ defmodule Maraithon.Push.APNSTest do
   test "payload clamps oversized bodies" do
     payload = APNS.payload(%{title: "t", body: String.duplicate("x", 5_000)})
     assert String.length(payload["aps"]["alert"]["body"]) <= 900
+  end
+
+  test "escape-heavy payloads remain within the APNs JSON byte limit" do
+    hostile = String.duplicate(<<1, ?", ?\\, 10>>, 2_000)
+
+    payload =
+      APNS.payload(%{
+        title: hostile,
+        body: hostile,
+        deeplink: hostile,
+        thread_id: hostile
+      })
+
+    encoded = Jason.encode!(payload)
+    assert byte_size(encoded) <= 4_096
+    assert String.valid?(encoded)
   end
 end

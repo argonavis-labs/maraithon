@@ -168,8 +168,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
       :cycle_memo ->
         Logger.warning("ChiefOfStaff cycle memo generation failed",
-          effect_type: inspect(effect_type),
-          reason: inspect(reason)
+          failure_code: Maraithon.Redaction.error_class(reason),
+          error_class: Maraithon.Redaction.error_class({effect_type, reason})
         )
 
         finalize_cycle(mark_cycle_memo_done(state))
@@ -221,8 +221,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
           # result unmodified: all four callback shapes are legal here.
           Logger.warning("ChiefOfStaff skill effect failed; continuing cycle at next skill",
             skill_id: skill_id,
-            effect_type: inspect(effect_type),
-            reason: inspect(reason),
+            effect_type: effect_type_label(effect_type),
+            failure_code: Maraithon.Redaction.error_class(reason),
             assistant_cycle_id: state.assistant_cycle_id
           )
 
@@ -244,13 +244,16 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         dedupe_key: "cos_skill_effect_error:#{state.assistant_cycle_id}:#{skill_id}",
         payload: %{
           "effect_type" => to_string(effect_type),
-          "reason" => inspect(reason),
+          "reason" => Maraithon.Redaction.error_summary(reason),
           "resume_index" => state.resume_index
         }
       })
 
     :ok
   end
+
+  defp effect_type_label(effect_type) when is_atom(effect_type), do: Atom.to_string(effect_type)
+  defp effect_type_label(_effect_type), do: "unknown"
 
   @impl true
   def next_wakeup(state) do
@@ -560,9 +563,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
       {:error, reason} ->
         Logger.warning("ChiefOfStaff failed to advance source watermark",
-          provider: account.provider,
+          provider_reference: Maraithon.Redaction.fingerprint(account.provider),
           kind: kind,
-          reason: inspect(reason)
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
     end
   end
@@ -575,7 +578,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     Logger.info(
       "ChiefOfStaff cycle source deltas: " <> safe_json(sources),
       assistant_cycle_id: state.assistant_cycle_id,
-      user_id: state.user_id
+      user_fingerprint: Maraithon.Redaction.fingerprint(state.user_id)
     )
   end
 
@@ -866,7 +869,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
           :error ->
             # Malformed entries must never crash a cycle — drop and move on.
-            Logger.debug("ChiefOfStaff dropped malformed ledger entry: #{inspect(entry)}")
+            Logger.debug("ChiefOfStaff dropped malformed ledger entry",
+              failure_code: "malformed_ledger_entry"
+            )
+
             acc
         end
       end)

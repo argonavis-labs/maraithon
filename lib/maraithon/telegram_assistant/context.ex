@@ -22,6 +22,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
+  alias Maraithon.PromptBudget
   alias Maraithon.Redaction
   alias Maraithon.Repo
   alias Maraithon.SourceErrorCopy
@@ -53,6 +54,41 @@ defmodule Maraithon.TelegramAssistant.Context do
     kid kids medical mom parent personal practice rsvp school soccer son spouse wife husband
   )
   @person_focus_modes [:person_context, :linked_item_context]
+  @proactive_prompt_context_bytes 24_000
+  @prompt_todo_limit 12
+  @prompt_todo_item_bytes 1_000
+  @prompt_todo_fields [
+    {"id", 100},
+    {"title", 220},
+    {"next_action", 180},
+    {"attention_profile", 400},
+    {"status", 50},
+    {"priority", 30},
+    {"source", 60},
+    {"due_at", 80},
+    {"counterparty_label", 100},
+    {"summary", 180}
+  ]
+  @prompt_open_loop_bucket_keys ~w(overdue today upcoming no_due_date monitor snoozed todos work)
+  @proactive_prompt_context_fields [
+    {"preference_memory", 2_000},
+    {"operator_memory", 1_500},
+    {"user_memory", 1_500},
+    {"deep_memory", 2_000},
+    {"todos", 5_000},
+    {"open_loops", 3_000},
+    {"calendar", 3_000},
+    {"relationships", 2_000},
+    {"goals", 1_500},
+    {"projects", 1_500},
+    {"open_insights", 1_500},
+    {"user", 1_000},
+    {"current_time", 500},
+    {"briefing_schedule", 500},
+    {"source_freshness", 500},
+    {"defaults", 500},
+    {"context_fetch", 500}
+  ]
 
   def build(attrs) when is_map(attrs) do
     user_id = fetch_string!(attrs, :user_id)
@@ -104,6 +140,140 @@ defmodule Maraithon.TelegramAssistant.Context do
       today_digest: today_digest
     }
   end
+
+  @doc false
+  def preproject_prompt_collections(context) when is_map(context) do
+    context
+    |> maybe_project_context_field("todos", &project_prompt_todos/1)
+    |> maybe_project_context_field("open_loops", &project_prompt_open_loops/1)
+  end
+
+  def preproject_prompt_collections(_context), do: %{}
+
+  @doc false
+  def for_proactive_prompt(context, opts \\ [])
+
+  def for_proactive_prompt(context, opts) when is_map(context) and is_list(opts) do
+    max_bytes =
+      opts
+      |> Keyword.get(:max_bytes, @proactive_prompt_context_bytes)
+      |> case do
+        value when is_integer(value) and value > 0 -> min(value, @proactive_prompt_context_bytes)
+        _other -> @proactive_prompt_context_bytes
+      end
+
+    context
+    |> preproject_prompt_collections()
+    |> PromptBudget.project_fields(
+      @proactive_prompt_context_fields,
+      max_bytes,
+      max_depth: 5,
+      list_items: 5
+    )
+  end
+
+  def for_proactive_prompt(_context, _opts), do: %{}
+
+  defp maybe_project_context_field(context, key, projector) do
+    case read_field(context, key) do
+      nil ->
+        context
+
+      value ->
+        context
+        |> Map.delete(key)
+        |> Map.delete(existing_atom_key(key))
+        |> Map.put(key, projector.(value))
+    end
+  end
+
+  defp project_prompt_todos(value) when is_list(value) do
+    value
+    |> Enum.take(@prompt_todo_limit)
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(&project_prompt_todo/1)
+  end
+
+  defp project_prompt_todos(_value), do: []
+
+  defp project_prompt_todo(todo) do
+    todo =
+      case read_field(todo, "attention_profile") do
+        profile when is_map(profile) ->
+          Map.put(todo, "attention_profile", project_prompt_attention_profile(profile))
+
+        _other ->
+          todo
+      end
+
+    PromptBudget.project_fields(todo, @prompt_todo_fields, @prompt_todo_item_bytes)
+  end
+
+  defp project_prompt_attention_profile(profile) do
+    context =
+      profile
+      |> read_field("context")
+      |> case do
+        value when is_map(value) ->
+          PromptBudget.project_fields(
+            value,
+            [{"person", 25}, {"company", 30}, {"relationship", 25}, {"why", 45}],
+            180
+          )
+
+        _other ->
+          %{}
+      end
+
+    profile
+    |> Map.put("context", context)
+    |> PromptBudget.project_fields(
+      [
+        {"bucket", 40},
+        {"bucket_rank", 20},
+        {"relationship_strength", 20},
+        {"personal_family", 10},
+        {"actively_waiting", 10},
+        {"stale_confirmation_candidate", 10},
+        {"context", 180},
+        {"score", 20}
+      ],
+      400
+    )
+  end
+
+  defp project_prompt_open_loops(open_loops) when is_map(open_loops) do
+    buckets = read_field(open_loops, "buckets") || %{}
+
+    items =
+      Enum.reduce_while(@prompt_open_loop_bucket_keys, [], fn bucket, acc ->
+        remaining = @prompt_todo_limit - length(acc)
+
+        if remaining <= 0 do
+          {:halt, acc}
+        else
+          projected =
+            buckets
+            |> read_field(bucket)
+            |> project_prompt_todos()
+            |> Enum.take(remaining)
+            |> Enum.map(&Map.put(&1, "bucket", bucket))
+
+          {:cont, acc ++ projected}
+        end
+      end)
+
+    %{
+      "totals" =>
+        PromptBudget.bounded(
+          read_field(open_loops, "totals") || read_field(open_loops, "counts") || %{},
+          500
+        ),
+      "items" => items
+    }
+  end
+
+  defp project_prompt_open_loops(_value), do: %{"totals" => %{}, "items" => []}
 
   @doc false
   def fetcher_keys_for_focus(request_focus) do
@@ -175,6 +345,23 @@ defmodule Maraithon.TelegramAssistant.Context do
     take_fetchers(fetchers, [
       :briefing_schedule,
       :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :delivery_planner) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :open_loops,
+      :goals,
+      :relationships,
+      :todos,
+      :calendar,
+      :briefing_schedule,
+      :projects,
       :source_freshness,
       :defaults
     ])
@@ -301,6 +488,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       "person_context" -> :person_context
       "commitment_audit" -> :commitment_audit
       "continuity" -> :continuity
+      "delivery_planner" -> :delivery_planner
       _other -> nil
     end
   end
@@ -321,10 +509,12 @@ defmodule Maraithon.TelegramAssistant.Context do
     defaults = Keyword.get(opts, :defaults, %{})
     started_monotonic_ms = System.monotonic_time(:millisecond)
 
+    indexed_fetchers = Enum.with_index(fetchers)
+
     {values, failures} =
-      fetchers
-      |> Enum.with_index()
-      |> Task.async_stream(
+      Task.Supervisor.async_stream_nolink(
+        Maraithon.Runtime.ToolCallSupervisor,
+        indexed_fetchers,
         fn {{key, fun}, _index} ->
           run_context_fetcher(key, fun)
         end,
@@ -450,8 +640,8 @@ defmodule Maraithon.TelegramAssistant.Context do
 
       _other ->
         Logger.info("Telegram deep memory recall degraded to unselected candidates",
-          user_id: user_id,
-          focus: inspect(focus)
+          user_id_hash: Redaction.fingerprint(user_id),
+          failure_code: "deep_memory_recall_degraded"
         )
 
         user_id
@@ -480,20 +670,30 @@ defmodule Maraithon.TelegramAssistant.Context do
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   @doc false
-  # Shared bounding primitive (Task.async + Task.yield + brutal-kill
+  # Shared bounding primitive (supervised non-linked task + yield + brutal-kill
   # shutdown). Also used by `ModelRouting.classify_via_model/1` (SPEC 09 R6)
   # so there is exactly one bounding shape, not two.
   def bounded_task(fun, timeout_ms) when is_function(fun, 0) do
     parent = self()
 
+    timeout_ms =
+      if(is_integer(timeout_ms) and timeout_ms > 0, do: min(timeout_ms, 30_000), else: 4_000)
+
     task =
-      Task.async(fn ->
+      Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
         allow_sandbox_access(parent)
-        fun.()
+
+        try do
+          {:ok, fun.()}
+        rescue
+          _exception -> :bounded_failure
+        catch
+          _kind, _reason -> :bounded_failure
+        end
       end)
 
     case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> {:ok, result}
+      {:ok, {:ok, result}} -> {:ok, result}
       _other -> :bounded_timeout
     end
   rescue
@@ -1354,17 +1554,19 @@ defmodule Maraithon.TelegramAssistant.Context do
   defp read_field(%_{} = struct, key), do: read_field(Map.from_struct(struct), key)
 
   defp read_field(map, key) when is_map(map) and is_binary(key) do
-    Map.get(map, key) ||
-      Enum.find_value(map, fn
-        {map_key, value} when is_atom(map_key) ->
-          if Atom.to_string(map_key) == key, do: value
-
-        _other ->
-          nil
-      end)
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, existing_atom_key(key))
+    end
   end
 
   defp read_field(_map, _key), do: nil
+
+  defp existing_atom_key(key) when is_binary(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
 
   defp contains_any?(text, terms) when is_binary(text) and is_list(terms) do
     normalized = String.downcase(text)

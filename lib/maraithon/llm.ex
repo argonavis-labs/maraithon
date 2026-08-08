@@ -3,6 +3,7 @@ defmodule Maraithon.LLM do
   LLM provider interface and configuration.
   """
 
+  alias Maraithon.LLM.RequestBudget
   alias Maraithon.Runtime.Effects.LLMRateLimiter
 
   defp runtime_config do
@@ -157,7 +158,9 @@ defmodule Maraithon.LLM do
           "No LLM provider is configured. Set LLM_PROVIDER=openai with OPENAI_API_KEY, LLM_PROVIDER=openrouter with OPENROUTER_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY."}}
 
       module ->
-        run_provider_request(module, params, fn -> module.complete(params) end)
+        with {:ok, bounded_params} <- RequestBudget.validate(params) do
+          run_provider_request(module, bounded_params, &module.complete/1)
+        end
     end
   end
 
@@ -208,9 +211,10 @@ defmodule Maraithon.LLM do
         complete(params)
 
       function_exported?(provider(), :stream_complete, 2) ->
-        run_provider_request(provider(), params, fn ->
-          provider().stream_complete(params, on_chunk)
-        end)
+        with {:ok, bounded_params} <- RequestBudget.validate(params) do
+          module = provider()
+          run_provider_request(module, bounded_params, &module.stream_complete(&1, on_chunk))
+        end
 
       true ->
         complete(params)
@@ -234,13 +238,21 @@ defmodule Maraithon.LLM do
     |> Keyword.get(:openai_stream_replies, true)
   end
 
-  defp run_provider_request(module, params, fun) when is_function(fun, 0) do
+  defp run_provider_request(module, params, fun) when is_function(fun, 1) do
+    timeout_ms =
+      case params["timeout_ms"] do
+        value when is_integer(value) and value > 0 -> min(value, 300_000)
+        _value -> 120_000
+      end
+
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
     if provider_backpressure_enabled?(module) do
       params
       |> rate_limit_bucket()
-      |> with_provider_slot(fun)
+      |> with_provider_slot(deadline, params, fun)
     else
-      fun.()
+      fun.(params)
     end
   end
 
@@ -252,17 +264,30 @@ defmodule Maraithon.LLM do
     provider_name() in ["openai", "anthropic", "openrouter"]
   end
 
-  defp with_provider_slot(bucket, fun) when is_function(fun, 0) do
-    case LLMRateLimiter.checkout(bucket) do
+  defp with_provider_slot(bucket, deadline, params, fun) when is_function(fun, 1) do
+    checkout_timeout = max(deadline - System.monotonic_time(:millisecond), 1)
+
+    case LLMRateLimiter.checkout_with_timeout(bucket, checkout_timeout) do
       :ok ->
         try do
-          fun.()
-          |> tap(&record_provider_rate_limit/1)
+          remaining = deadline - System.monotonic_time(:millisecond)
+
+          if remaining > 0 do
+            params
+            |> Map.put("timeout_ms", remaining)
+            |> fun.()
+            |> tap(&record_provider_rate_limit/1)
+          else
+            {:error, :timeout}
+          end
         after
           LLMRateLimiter.checkin(bucket)
         end
 
       {:error, _reason} = error ->
+        # A timed-out GenServer.call is still queued. Sender ordering ensures
+        # this compensating checkin runs after any late checkout.
+        LLMRateLimiter.checkin(bucket)
         error
     end
   end
@@ -289,17 +314,19 @@ defmodule Maraithon.LLM do
     end
   end
 
-  defp non_empty(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
+  defp non_empty(value) when is_binary(value) and byte_size(value) <= 255 do
+    if String.valid?(value) do
+      case String.trim(value) do
+        "" -> nil
+        trimmed -> trimmed
+      end
     end
   end
 
   defp non_empty(_value), do: nil
 
   defp record_provider_rate_limit({:error, {:rate_limited, retry_after_ms}}) do
-    LLMRateLimiter.record_rate_limit(retry_after_ms)
+    LLMRateLimiter.record_rate_limit_async(retry_after_ms)
   end
 
   defp record_provider_rate_limit(_result), do: :ok

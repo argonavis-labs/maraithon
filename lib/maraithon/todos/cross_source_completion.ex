@@ -16,15 +16,18 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   import Ecto.Query
 
+  alias Maraithon.AssistantHarness.PromptStability
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle}
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm.Observation
   alias Maraithon.LLM
   alias Maraithon.LocalMessages.LocalMessage
+  alias Maraithon.PromptBudget
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.PushBroker
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.UserBatch
 
   require Logger
 
@@ -88,25 +91,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   Runs the cross-source pass for every user with open todos.
   """
   def run_for_all_users(opts \\ []) do
-    user_ids =
-      case Keyword.get(opts, :user_ids) do
-        user_ids when is_list(user_ids) ->
-          user_ids
-
-        _other ->
-          # Every user with open todos: a capped enumeration with no rotation
-          # would starve users past the cutoff forever, and user counts are
-          # small, so `:user_limit` is deliberately ignored here.
-          Repo.all(
-            from(t in Todo,
-              where: t.status in @open_statuses,
-              distinct: true,
-              select: t.user_id
-            )
-          )
-      end
-      |> Enum.filter(&is_binary/1)
-      |> Enum.uniq()
+    user_ids = UserBatch.open_todo_user_ids(opts)
 
     empty = %{users: length(user_ids), checked: 0, completed: 0, skipped: 0, errors: 0}
 
@@ -130,20 +115,24 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     run_for_user(user_id, opts)
   rescue
     error ->
+      failure_code = Maraithon.Redaction.error_class(error)
+
       Logger.warning("Cross-source completion crashed for user",
-        user_id: user_id,
-        reason: Exception.message(error)
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: failure_code
       )
 
-      {:error, error}
+      {:error, {:exception, failure_code}}
   catch
     kind, reason ->
+      failure_code = Maraithon.Redaction.error_class(reason)
+
       Logger.warning("Cross-source completion crashed for user",
-        user_id: user_id,
-        reason: "#{kind}: #{inspect(reason)}"
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: to_string(kind)
       )
 
-      {:error, {kind, reason}}
+      {:error, {kind, failure_code}}
   end
 
   @doc """
@@ -180,9 +169,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
             # Stamp only on success: a failed evaluation checked nothing, so
             # advancing the backstop rotation would skip these todos unchecked.
-            case evaluate(user_id, todos, evidence, now, opts) do
-              %{} = result ->
-                stamp_completion_checked(user_id, todos, now)
+            case evaluate_fitting(user_id, todos, evidence, now, opts) do
+              {:ok, result, evaluated_todos} ->
+                stamp_completion_checked(user_id, evaluated_todos, now)
                 result
 
               {:error, _reason} = error ->
@@ -230,7 +219,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         # them by the durable completion-check stamp instead of repeatedly
         # taking the same updated-at prefix forever.
         Logger.info("Cross-source completion truncated active candidates to the per-cycle cap",
-          user_id: user_id,
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
           active: length(active),
           cap: @max_todos
         )
@@ -410,48 +399,70 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         |> source_bundle_evidence(now)
 
       Keyword.get(opts, :live_sources, true) ->
-        user_id
-        |> fetch_live_source_bundle(todos, now, opts)
-        |> source_bundle_evidence(now)
+        fetch_live_source_bundle(user_id, todos, now, opts)
 
       true ->
         []
     end
   rescue
     exception ->
+      failure_code = Maraithon.Redaction.error_class(exception)
+
       Logger.warning("Cross-source completion could not collect live source evidence",
-        user_id: user_id,
-        reason: Exception.message(exception)
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: failure_code
       )
 
-      live_source_unavailable_evidence(now, Exception.message(exception))
+      live_source_unavailable_evidence(now, failure_code)
   catch
     kind, reason ->
+      failure_code = Maraithon.Redaction.error_class(reason)
+
       Logger.warning("Cross-source completion could not collect live source evidence",
-        user_id: user_id,
-        reason: "#{kind}: #{inspect(reason)}"
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: to_string(kind)
       )
 
-      live_source_unavailable_evidence(now, "#{kind}: #{inspect(reason)}")
+      live_source_unavailable_evidence(now, failure_code)
   end
 
   defp fetch_live_source_bundle(user_id, todos, now, opts) do
     timeout_ms =
-      positive_integer(Keyword.get(opts, :source_timeout_ms), @source_acquisition_timeout_ms)
+      opts
+      |> Keyword.get(:source_timeout_ms)
+      |> positive_integer(@source_acquisition_timeout_ms)
+      |> min(@source_acquisition_timeout_ms)
 
     fetcher = Keyword.get(opts, :source_bundle_fetcher) || (&build_live_source_bundle/4)
 
-    task = Task.async(fn -> fetcher.(user_id, todos, now, opts) end)
+    task =
+      Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
+        try do
+          evidence =
+            user_id
+            |> fetcher.(todos, now, opts)
+            |> source_bundle_evidence(now)
+
+          {:ok, evidence}
+        rescue
+          exception -> {:error, Maraithon.Redaction.error_class(exception)}
+        catch
+          kind, _reason -> {:error, to_string(kind)}
+        end
+      end)
 
     case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, bundle} ->
+      {:ok, {:ok, bundle}} ->
         bundle
 
-      {:exit, reason} ->
-        raise "live source acquisition failed: #{inspect(reason)}"
+      {:ok, {:error, _failure_code}} ->
+        raise "live source acquisition failed"
+
+      {:exit, _reason} ->
+        raise "live source acquisition failed"
 
       nil ->
-        raise "live source acquisition timed out after #{timeout_ms}ms"
+        raise "live source acquisition timed out"
     end
   end
 
@@ -540,7 +551,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp compact_source_health_json(freshness) when is_map(freshness) do
     entries =
       freshness
-      |> Enum.sort_by(fn {source, _details} -> to_string(source) end)
+      |> Enum.take(@max_prompt_health_sources * 4)
+      |> Enum.sort_by(fn {source, _details} -> bounded_prompt_string(to_string(source), 64) end)
       |> Enum.take(@max_prompt_health_sources)
 
     detailed =
@@ -622,6 +634,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp evidence_bucket(items, mapper) when is_list(items) and is_function(mapper, 1) do
     items
+    |> Enum.take(@max_live_evidence_per_source * 4)
     |> Enum.map(mapper)
     |> Enum.reject(&is_nil/1)
     |> Enum.sort_by(&evidence_sort_key/1, :desc)
@@ -822,19 +835,56 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   # ── Evaluation ────────────────────────────────────────────────────────────
 
+  defp evaluate_fitting(_user_id, [], _evidence, _now, _opts),
+    do: {:error, :no_prompt_candidates_fit}
+
+  defp evaluate_fitting(user_id, todos, evidence, now, opts) do
+    case evaluate(user_id, todos, evidence, now, opts) do
+      %{} = result ->
+        {:ok, result, todos}
+
+      {:error, reason} = error ->
+        if prompt_budget_error?(reason) and length(todos) > 1 do
+          evaluate_fitting(user_id, Enum.drop(todos, -1), evidence, now, opts)
+        else
+          error
+        end
+    end
+  end
+
+  defp prompt_budget_error?({reason, _actual, _limit})
+       when reason in [
+              :prompt_base_exceeds_budget,
+              :required_evidence_exceeds_budget,
+              :prompt_exceeds_budget
+            ],
+       do: true
+
+  defp prompt_budget_error?({:required_evidence_items_exceed_limit, _actual, _limit}), do: true
+  defp prompt_budget_error?({:evidence_budget_too_small, _limit}), do: true
+  defp prompt_budget_error?(_reason), do: false
+
   defp evaluate(user_id, todos, evidence, now, opts) do
     llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, opts))
 
-    with {:ok, prompt} <- build_prompt(user_id, todos, evidence, now),
+    with {:ok, {prompt, authorized_evidence}} <- build_prompt(user_id, todos, evidence, now),
          {:ok, response} <- llm_complete.(prompt),
          {:ok, resolutions} <- decode_response(response) do
-      completed = apply_resolutions(user_id, Map.new(todos, &{&1.id, &1}), resolutions, opts)
+      completed =
+        apply_resolutions(
+          user_id,
+          Map.new(todos, &{&1.id, &1}),
+          resolutions,
+          authorized_evidence,
+          opts
+        )
+
       %{checked: length(todos), completed: completed}
     else
       {:error, reason} ->
         Logger.warning("Cross-source completion pass failed",
-          user_id: user_id,
-          reason: inspect(reason)
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         {:error, reason}
@@ -847,23 +897,25 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp build_prompt(user_id, todos, evidence, now) do
     todos_json = todos |> Enum.map(&prompt_todo/1) |> Jason.encode!()
     empty_prompt = render_prompt(todos_json, "[]", now)
-    base_bytes = byte_size(empty_prompt)
+    base_bytes = prompt_request_bytes(empty_prompt)
 
     if base_bytes > @max_prompt_bytes do
       {:error, {:prompt_base_exceeds_budget, base_bytes, @max_prompt_bytes}}
     else
-      evidence_budget = @max_prompt_bytes - base_bytes + byte_size("[]")
+      # The prompt is itself a JSON message string, so reserve worst-case
+      # outer escaping instead of treating raw prompt bytes as request bytes.
+      evidence_budget = div(max(@max_prompt_bytes - base_bytes + byte_size("[]"), 0), 2)
 
       with {:ok, {required, optional}} <- select_prompt_evidence(todos, evidence),
            {:ok, {evidence_json, included_evidence}} <-
              encode_prompt_evidence(required, optional, evidence_budget) do
         prompt = render_prompt(todos_json, evidence_json, now)
-        prompt_bytes = byte_size(prompt)
+        prompt_bytes = prompt_request_bytes(prompt)
 
         if prompt_bytes <= @max_prompt_bytes do
           if included_evidence < length(evidence) do
             Logger.info("Cross-source completion bounded LLM prompt evidence",
-              user_id: user_id,
+              user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
               available_evidence: length(evidence),
               included_evidence: included_evidence,
               prompt_bytes: prompt_bytes,
@@ -871,12 +923,18 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
             )
           end
 
-          {:ok, prompt}
+          {:ok, {prompt, Jason.decode!(evidence_json)}}
         else
           {:error, {:prompt_exceeds_budget, prompt_bytes, @max_prompt_bytes}}
         end
       end
     end
+  end
+
+  defp prompt_request_bytes(prompt) when is_binary(prompt) do
+    [%{"role" => "user", "content" => prompt}]
+    |> PromptStability.encode!()
+    |> byte_size()
   end
 
   defp prompt_todo(todo) do
@@ -895,6 +953,15 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "source_account_label" => bounded_prompt_string(todo.source_account_label, 200)
     }
     |> compact_map()
+    |> PromptBudget.project_fields(
+      ~w(todo_id source_channel title summary next_action captured_at direction counterparty_label source_item_id source_account_label),
+      900,
+      string_bytes: 480,
+      list_items: 5,
+      map_entries: 12,
+      max_depth: 2,
+      key_bytes: 64
+    )
   end
 
   defp select_prompt_evidence(todos, evidence) do
@@ -1091,33 +1158,22 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "permalink" => bounded_prompt_string(read_string(item, "permalink", nil), 500)
     }
     |> compact_map()
+    |> PromptBudget.project_fields(
+      ~w(channel kind subject text at source_item_id thread_id account permalink),
+      if(channel == "source_health", do: 13_000, else: 1_200),
+      string_bytes: text_limit,
+      list_items: 4,
+      map_entries: 10,
+      max_depth: 2,
+      key_bytes: 64
+    )
   end
 
   defp bounded_prompt_string(value, max_bytes) when is_binary(value) do
-    truncate_utf8_bytes(value, max_bytes)
+    PromptBudget.truncate_utf8(value, max_bytes)
   end
 
   defp bounded_prompt_string(_value, _max_bytes), do: nil
-
-  defp truncate_utf8_bytes(value, max_bytes) when byte_size(value) <= max_bytes, do: value
-
-  defp truncate_utf8_bytes(value, max_bytes) do
-    suffix = "…"
-    prefix_bytes = max(max_bytes - byte_size(suffix), 0)
-    take_utf8_prefix(value, prefix_bytes, []) <> suffix
-  end
-
-  defp take_utf8_prefix(_value, 0, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
-
-  defp take_utf8_prefix(value, remaining, acc) do
-    case String.next_codepoint(value) do
-      {codepoint, rest} when byte_size(codepoint) <= remaining ->
-        take_utf8_prefix(rest, remaining - byte_size(codepoint), [codepoint | acc])
-
-      _done_or_over_budget ->
-        acc |> Enum.reverse() |> IO.iodata_to_binary()
-    end
-  end
 
   defp render_prompt(todos_json, evidence_json, now) do
     """
@@ -1218,11 +1274,12 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         _other -> nil
       end
 
-    with content when is_binary(content) <- content,
+    with content when is_binary(content) and byte_size(content) <= 128_000 <- content,
          json when is_binary(json) <- extract_json(content),
-         {:ok, %{"resolutions" => resolutions}} when is_list(resolutions) <-
-           Jason.decode(json) do
-      {:ok, resolutions}
+         {:ok, %{"resolutions" => resolutions}} when is_list(resolutions) <- Jason.decode(json),
+         prefix = Enum.take(resolutions, @max_todos + 1),
+         true <- length(prefix) <= @max_todos do
+      {:ok, prefix}
     else
       _other -> {:error, :cross_source_completion_invalid_response}
     end
@@ -1245,7 +1302,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   # "answered" closes (identical in effect to the user doing the work),
   # "acknowledged_only" keeps the item open but clears its nudge cadence,
   # "no_reply"/omitted leaves the item and its cadence untouched.
-  defp apply_resolutions(user_id, todos_by_id, resolutions, opts) do
+  defp apply_resolutions(user_id, todos_by_id, resolutions, evidence, opts) do
     resolutions
     |> Enum.filter(&is_map/1)
     # The model can emit the same todo twice; only the first resolution per
@@ -1254,7 +1311,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     |> Enum.reduce(0, fn resolution, count ->
       with todo_id when is_binary(todo_id) <- resolution["todo_id"],
            %Todo{} = todo <- Map.get(todos_by_id, todo_id) do
-        apply_resolution(user_id, todo, resolution, opts, count)
+        apply_resolution(user_id, todo, resolution, evidence, opts, count)
       else
         _other -> count
       end
@@ -1268,41 +1325,47 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp apply_resolution(
          user_id,
          %Todo{direction: "owed_to_me"} = todo,
-         %{"reply_outcome" => "acknowledged_only"},
+         %{"reply_outcome" => "acknowledged_only"} = resolution,
+         evidence,
          _opts,
          count
        ) do
-    case Todos.clear_nudge_cadence(user_id, todo.id) do
-      {:ok, _todo} ->
-        Logger.info("Cross-source completion cleared nudge cadence (acknowledged-only reply)",
-          user_id: user_id,
-          todo_id: todo.id
-        )
+    if authorized_acknowledgement_evidence?(todo, resolution, evidence) do
+      case Todos.clear_nudge_cadence(user_id, todo.id) do
+        {:ok, _todo} ->
+          Logger.info("Cross-source completion cleared nudge cadence (acknowledged-only reply)",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            todo_reference: Maraithon.Redaction.fingerprint(todo.id)
+          )
 
-      {:error, reason} ->
-        Logger.warning("Cross-source completion could not clear nudge cadence",
-          user_id: user_id,
-          todo_id: todo.id,
-          reason: inspect(reason)
-        )
+        {:error, reason} ->
+          Logger.warning("Cross-source completion could not clear nudge cadence",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            todo_reference: Maraithon.Redaction.fingerprint(todo.id),
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
+      end
+
+      count
+    else
+      count
     end
-
-    count
   end
 
-  defp apply_resolution(user_id, %Todo{} = todo, resolution, opts, count) do
+  defp apply_resolution(user_id, %Todo{} = todo, resolution, evidence, opts, count) do
     with true <- resolution["completed"] == true,
          confidence when is_number(confidence) and confidence >= @min_confidence <-
            resolution["confidence"],
          quote_text when is_binary(quote_text) and quote_text != "" <-
-           resolution["evidence_quote"] do
+           resolution["evidence_quote"],
+         true <- authorized_resolution_evidence?(todo, resolution, evidence) do
       note = resolution_note(todo, resolution, quote_text)
 
       case Todos.mark_done(user_id, todo.id, note: note) do
         {:ok, _todo} ->
           Logger.info("Cross-source completion closed todo",
-            user_id: user_id,
-            todo_id: todo.id,
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            todo_reference: Maraithon.Redaction.fingerprint(todo.id),
             todo_source: todo.source,
             evidence_channel: resolution["evidence_channel"]
           )
@@ -1312,9 +1375,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
         {:error, reason} ->
           Logger.warning("Cross-source completion could not close todo",
-            user_id: user_id,
-            todo_id: todo.id,
-            reason: inspect(reason)
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            todo_reference: Maraithon.Redaction.fingerprint(todo.id),
+            failure_code: Maraithon.Redaction.error_class(reason)
           )
 
           count
@@ -1323,6 +1386,63 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       _other -> count
     end
   end
+
+  defp authorized_resolution_evidence?(todo, resolution, evidence),
+    do: authorized_evidence?(todo, resolution, evidence, fn _item -> true end)
+
+  defp authorized_acknowledgement_evidence?(todo, resolution, evidence),
+    do: authorized_evidence?(todo, resolution, evidence, &inbound_reply_evidence?/1)
+
+  defp authorized_evidence?(todo, resolution, evidence, kind_authorized?) do
+    quote = bounded_prompt_string(resolution["evidence_quote"], 500)
+    channel = bounded_prompt_string(resolution["evidence_channel"], 64)
+    todo_at = todo.source_occurred_at || todo.inserted_at
+    confidence = resolution["confidence"]
+
+    is_number(confidence) and confidence >= @min_confidence and is_binary(quote) and
+      byte_size(quote) >= 4 and allowed_evidence_channel?(channel) and
+      Enum.any?(evidence, fn item ->
+        evidence_channel = read_string(item, "channel", nil)
+        evidence_at = item |> read_string("at", nil) |> parse_datetime()
+        text = read_string(item, "text", "")
+        subject = read_string(item, "subject", "")
+
+        kind_authorized?.(item) and evidence_channel == channel and
+          evidence_channel != "source_health" and evidence_linked_to_todo?(todo, item) and
+          match?(%DateTime{}, evidence_at) and DateTime.compare(evidence_at, todo_at) == :gt and
+          evidence_quote_matches?(quote, text, subject)
+      end)
+  end
+
+  defp inbound_reply_evidence?(item) do
+    read_string(item, "kind", nil) in ["email received", "message received", "slack mention"]
+  end
+
+  defp allowed_evidence_channel?(channel) do
+    channel in ~w(
+      slack gmail google_calendar local_calendar imessage reminders notes files browser_history
+      voice_memos crm
+    )
+  end
+
+  defp evidence_quote_matches?(quote, text, subject) do
+    quote = normalize_evidence_quote(quote)
+
+    byte_size(quote) >= 4 and
+      Enum.any?([text, subject], fn candidate ->
+        candidate = normalize_evidence_quote(candidate)
+        candidate != "" and String.contains?(candidate, quote)
+      end)
+  end
+
+  defp normalize_evidence_quote(value) when is_binary(value) and byte_size(value) <= 2_000 do
+    value
+    |> String.downcase()
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
+
+  defp normalize_evidence_quote(_value), do: ""
 
   # Distinct confirmation copy for the counterparty-answered close (SPEC 05
   # R7); everything else keeps the pre-existing generic note.
@@ -1357,8 +1477,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       nil ->
         Logger.info(
           "Cross-source completion skipped closing-loop push: no Telegram destination",
-          user_id: user_id,
-          todo_id: todo.id
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          todo_reference: Maraithon.Redaction.fingerprint(todo.id)
         )
 
         :ok
@@ -1391,9 +1511,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
           {:error, reason} ->
             Logger.warning("Cross-source completion closing-loop push failed",
-              user_id: user_id,
-              todo_id: todo.id,
-              reason: inspect(reason)
+              user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+              todo_reference: Maraithon.Redaction.fingerprint(todo.id),
+              failure_code: Maraithon.Redaction.error_class(reason)
             )
 
             :ok
@@ -1422,7 +1542,6 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp evidence_channel_label("files"), do: "your files"
   defp evidence_channel_label("browser_history"), do: "your browser history"
   defp evidence_channel_label("voice_memos"), do: "your voice memos"
-  defp evidence_channel_label(other) when is_binary(other), do: "your #{other} activity"
   defp evidence_channel_label(_other), do: "your recent activity"
 
   defp evidence_item(attrs) when is_map(attrs) do
@@ -1480,30 +1599,33 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp normalize_evidence_time(%NaiveDateTime{} = datetime),
     do: datetime |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
 
-  defp normalize_evidence_time(%{date: date}) when is_binary(date), do: date
-  defp normalize_evidence_time(%{"date" => date}) when is_binary(date), do: date
+  defp normalize_evidence_time(%{date: date}), do: normalize_evidence_time(date)
+  defp normalize_evidence_time(%{"date" => date}), do: normalize_evidence_time(date)
 
-  defp normalize_evidence_time(value) when is_binary(value) do
-    cond do
-      match?({:ok, _, _}, DateTime.from_iso8601(value)) ->
-        {:ok, datetime, _offset} = DateTime.from_iso8601(value)
+  defp normalize_evidence_time(value)
+       when is_binary(value) and byte_size(value) <= 100 do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} ->
         DateTime.to_iso8601(datetime)
 
-      Regex.match?(~r/^\d+(?:\.\d+)?$/, value) ->
-        {seconds, _rest} = Float.parse(value)
-
-        seconds
-        |> Kernel.*(1_000_000)
-        |> round()
-        |> DateTime.from_unix!(:microsecond)
-        |> DateTime.to_iso8601()
-
-      true ->
-        value
+      _invalid_iso8601 ->
+        normalize_unix_evidence_time(value)
     end
   end
 
   defp normalize_evidence_time(_value), do: nil
+
+  defp normalize_unix_evidence_time(value) do
+    with true <- Regex.match?(~r/^\d{1,12}(?:\.\d{1,6})?$/, value),
+         {seconds, ""} <- Float.parse(value),
+         true <- seconds >= 0 and seconds <= 253_402_300_799,
+         microseconds <- round(seconds * 1_000_000),
+         {:ok, datetime} <- DateTime.from_unix(microseconds, :microsecond) do
+      DateTime.to_iso8601(datetime)
+    else
+      _invalid -> nil
+    end
+  end
 
   defp parse_datetime(nil), do: nil
   defp parse_datetime(%DateTime{} = datetime), do: datetime
@@ -1563,6 +1685,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     case read_value(map, key) do
       value when is_binary(value) ->
         value
+        |> PromptBudget.truncate_utf8(64_000)
         |> String.trim()
         |> case do
           "" -> default
@@ -1598,9 +1721,17 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp first_present(values) when is_list(values) do
     Enum.find(values, fn
-      value when is_binary(value) -> String.trim(value) != ""
-      nil -> false
-      _value -> true
+      value when is_binary(value) and byte_size(value) <= 64_000 ->
+        String.valid?(value) and String.trim(value) != ""
+
+      value when is_binary(value) ->
+        false
+
+      nil ->
+        false
+
+      _value ->
+        true
     end)
   end
 
@@ -1608,7 +1739,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp truthy?(value) when value in [true, 1], do: true
 
-  defp truthy?(value) when is_binary(value) do
+  defp truthy?(value) when is_binary(value) and byte_size(value) <= 16 do
     value
     |> String.downcase()
     |> String.trim()

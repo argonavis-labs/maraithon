@@ -18,6 +18,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   alias Maraithon.LocalVoiceMemos
   alias Maraithon.News
   alias Maraithon.OAuth
+  alias Maraithon.Redaction
   alias Maraithon.Slack.UserDirectory
   alias Maraithon.SourceFreshness
   alias Maraithon.Timezones
@@ -204,7 +205,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
     fetchers
     |> Enum.map(fn fetcher ->
-      Map.put(fetcher, :task, Task.async(fn -> safe_fetch(fetcher.fun, state) end))
+      Map.put(
+        fetcher,
+        :task,
+        Task.Supervisor.async_nolink(
+          Maraithon.Runtime.ToolCallSupervisor,
+          fn -> safe_fetch(fetcher.fun, state) end
+        )
+      )
     end)
     |> Enum.sort_by(& &1.timeout_ms)
     |> Enum.reduce({telemetry, bundle}, fn fetcher, acc ->
@@ -221,13 +229,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           mark_source_fetch_failed(acc, fetcher.source, reason)
 
         {:exit, reason} ->
-          mark_source_fetch_failed(acc, fetcher.source, "exited: #{inspect(reason)}")
+          mark_source_fetch_failed(acc, fetcher.source, Redaction.error_class(reason))
 
         nil ->
           mark_source_fetch_timeout(acc, fetcher.source, fetcher.timeout_ms)
 
         other ->
-          mark_source_fetch_failed(acc, fetcher.source, "unexpected result: #{inspect(other)}")
+          mark_source_fetch_failed(acc, fetcher.source, Redaction.error_class(other))
       end
     end)
   end
@@ -236,10 +244,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     {:ok, fun.(state)}
   rescue
     exception ->
-      {:error, Exception.message(exception)}
+      {:error, Redaction.error_class(exception)}
   catch
     kind, reason ->
-      {:error, "#{kind}: #{inspect(reason)}"}
+      {:error, to_string(kind) <> ":" <> Redaction.error_class(reason)}
   end
 
   defp merge_source_result({telemetry, bundle}, source_telemetry, source_bundle) do
@@ -328,7 +336,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp call_with_timeout(fun, timeout_ms) when is_function(fun, 0) do
-    task = Task.async(fn -> safe_call(fun) end)
+    task =
+      Task.Supervisor.async_nolink(
+        Maraithon.Runtime.ToolCallSupervisor,
+        fn -> safe_call(fun) end
+      )
 
     case Task.yield(task, max(timeout_ms, 1)) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:ok, result}} -> result
@@ -342,7 +354,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     {:ok, fun.()}
   rescue
     exception ->
-      {:error, Exception.message(exception)}
+      {:error, Redaction.error_class(exception)}
   catch
     kind, reason ->
       {:error, {kind, reason}}
@@ -470,9 +482,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               ConnectedAccounts.report_access_issue(user_id, "slack:#{team_id}", reason)
 
               Logger.warning("ChiefOfStaff acquisition failed to fetch Slack",
-                user_id: user_id,
-                team_id: team_id,
-                reason: inspect(reason)
+                user_fingerprint: Redaction.fingerprint(user_id),
+                workspace_reference: Redaction.fingerprint(team_id),
+                failure_code: Redaction.error_class(reason)
               )
 
               {workspace_acc,
@@ -482,7 +494,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                    "team_id" => team_id,
                    "mode" => "connector",
                    "status" => "error",
-                   "reason" => inspect(reason)
+                   "reason" => Redaction.error_class(reason)
                  }
                  | workspace_fetches ++ fetch_acc
                ], watermark_acc}
@@ -601,9 +613,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       {:error, reason} ->
         Logger.warning("Failed to advance source watermark",
-          provider: account.provider,
+          provider_reference: Redaction.fingerprint(account.provider),
           kind: kind,
-          reason: inspect(reason)
+          failure_code: Redaction.error_class(reason)
         )
     end
 
@@ -778,14 +790,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   rescue
     exception ->
-      companion_source_error({telemetry, bundle}, source, Exception.message(exception))
+      companion_source_error({telemetry, bundle}, source, Redaction.error_class(exception))
   catch
     kind, reason ->
-      companion_source_error({telemetry, bundle}, source, "#{kind}: #{inspect(reason)}")
+      companion_source_error(
+        {telemetry, bundle},
+        source,
+        to_string(kind) <> ":" <> Redaction.error_class(reason)
+      )
   end
 
   defp companion_source_error({telemetry, bundle}, source, reason) do
-    bundle = SourceBundle.mark_unavailable(bundle, source, inspect(reason))
+    bundle = SourceBundle.mark_unavailable(bundle, source, Redaction.error_class(reason))
 
     telemetry =
       telemetry
@@ -795,7 +811,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             "source" => source,
             "mode" => "companion",
             "status" => "error",
-            "reason" => inspect(reason)
+            "reason" => Redaction.error_class(reason)
           }
           | fetches
         ]
@@ -803,7 +819,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> put_source_summary(source, %{
         "mode" => "companion",
         "status" => "error",
-        "reason" => inspect(reason)
+        "reason" => Redaction.error_class(reason)
       })
 
     {telemetry, bundle}
@@ -842,13 +858,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         {telemetry, bundle}
 
       {:error, reason} ->
-        bundle = SourceBundle.mark_unavailable(bundle, "news", inspect(reason))
+        bundle = SourceBundle.mark_unavailable(bundle, "news", Redaction.error_class(reason))
 
         telemetry =
           put_source_summary(telemetry, "news", %{
             "mode" => "rss",
             "status" => "error",
-            "reason" => inspect(reason)
+            "reason" => Redaction.error_class(reason)
           })
 
         {telemetry, bundle}
@@ -881,13 +897,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         {telemetry, bundle}
 
       {:error, reason} ->
-        bundle = SourceBundle.mark_unavailable(bundle, "weather", inspect(reason))
+        bundle = SourceBundle.mark_unavailable(bundle, "weather", Redaction.error_class(reason))
 
         telemetry =
           put_source_summary(telemetry, "weather", %{
             "mode" => "open_meteo",
             "status" => "error",
-            "reason" => inspect(reason)
+            "reason" => Redaction.error_class(reason)
           })
 
         {telemetry, bundle}
@@ -982,7 +998,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     "conversation_kind" => slack_conversation_kind(channel),
                     "mode" => "connector",
                     "status" => "error",
-                    "reason" => inspect(reason)
+                    "reason" => Redaction.error_class(reason)
                   }
                   | fetch_acc
                 ],
@@ -1075,7 +1091,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                "mode" => "mention_search",
                "status" => "error",
                "slack_user_id" => slack_user_id,
-               "reason" => inspect(reason)
+               "reason" => Redaction.error_class(reason)
              }
              | fetch_acc
            ]}
@@ -1123,7 +1139,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                "mode" => "self_authored_search",
                "status" => "error",
                "slack_user_id" => slack_user_id,
-               "reason" => inspect(reason)
+               "reason" => Redaction.error_class(reason)
              }
              | fetch_acc
            ]}
@@ -1191,7 +1207,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             "status" => "error",
             "slack_user_id" => slack_user_id,
             "query" => query,
-            "reason" => inspect(reason)
+            "reason" => Redaction.error_class(reason)
           }
 
           {message_acc, [fetch | fetch_acc]}
@@ -1286,7 +1302,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             "thread_ts" => thread_ts,
             "mode" => "thread_replies",
             "status" => "error",
-            "reason" => inspect(reason)
+            "reason" => Redaction.error_class(reason)
           }
 
           {message_acc, [fetch | fetch_acc]}
@@ -1514,9 +1530,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             ConnectedAccounts.report_access_issue(user_id, provider, reason)
 
             Logger.warning("ChiefOfStaff acquisition failed to fetch Gmail",
-              user_id: user_id,
-              provider: provider,
-              reason: inspect(reason)
+              user_fingerprint: Redaction.fingerprint(user_id),
+              provider_reference: Redaction.fingerprint(provider),
+              failure_code: Redaction.error_class(reason)
             )
 
             {
@@ -1528,9 +1544,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           {{provider, _account, _query, _quota}, {:ok, {:task_failure, reason}}},
           {message_acc, status_acc, watermark_acc} ->
             Logger.warning("ChiefOfStaff Gmail provider task failed",
-              user_id: user_id,
-              provider: provider,
-              reason: inspect(reason)
+              user_fingerprint: Redaction.fingerprint(user_id),
+              provider_reference: Redaction.fingerprint(provider),
+              failure_code: Redaction.error_class(reason)
             )
 
             {
@@ -1544,9 +1560,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             # A bounded task timeout is a cycle-budget failure, not evidence
             # that the account needs OAuth repair.
             Logger.warning("ChiefOfStaff Gmail provider phase did not finish",
-              user_id: user_id,
-              provider: provider,
-              reason: inspect(reason)
+              user_fingerprint: Redaction.fingerprint(user_id),
+              provider_reference: Redaction.fingerprint(provider),
+              failure_code: Redaction.error_class(reason)
             )
 
             {
@@ -1609,7 +1625,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 "provider" => provider,
                 "mode" => "connector",
                 "status" => "error",
-                "reason" => inspect(reason)
+                "reason" => Redaction.error_class(reason)
               }
 
             {:task_error, reason} ->
@@ -1618,7 +1634,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 "provider" => provider,
                 "mode" => "connector",
                 "status" => "timeout",
-                "reason" => inspect(reason)
+                "reason" => Redaction.error_class(reason)
               }
           end
         end)
@@ -1848,18 +1864,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       {provider, {:ok, {:task_failure, reason}}}, {message_acc, status_acc} ->
         Logger.debug("ChiefOfStaff optional commercial Gmail search failed",
-          user_id: user_id,
-          provider: provider,
-          reason: inspect(reason)
+          user_fingerprint: Redaction.fingerprint(user_id),
+          provider_reference: Redaction.fingerprint(provider),
+          failure_code: Redaction.error_class(reason)
         )
 
         {message_acc, status_acc}
 
       {provider, {:exit, reason}}, {message_acc, status_acc} ->
         Logger.debug("ChiefOfStaff optional commercial Gmail search did not finish",
-          user_id: user_id,
-          provider: provider,
-          reason: inspect(reason)
+          user_fingerprint: Redaction.fingerprint(user_id),
+          provider_reference: Redaction.fingerprint(provider),
+          failure_code: Redaction.error_class(reason)
         )
 
         {message_acc, status_acc}
@@ -2008,8 +2024,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp log_gmail_candidate_fetch(:bounded, user_id, provider, fetch_metadata) do
     Logger.debug(
       "ChiefOfStaff Gmail candidate fetch reached its configured quota",
-      user_id: user_id,
-      provider: provider,
+      user_fingerprint: Redaction.fingerprint(user_id),
+      provider_reference: Redaction.fingerprint(provider),
       listed_count: fetch_metadata.listed_count,
       requested_count: fetch_metadata.requested_count
     )
@@ -2020,8 +2036,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "ChiefOfStaff Gmail candidate fetch was incomplete " <>
         "(detail failures: #{fetch_metadata.detail_failure_count}, " <>
         "truncated: #{fetch_metadata.truncated?})",
-      user_id: user_id,
-      provider: provider,
+      user_fingerprint: Redaction.fingerprint(user_id),
+      provider_reference: Redaction.fingerprint(provider),
       detail_failure_count: fetch_metadata.detail_failure_count,
       truncated: fetch_metadata.truncated?
     )
@@ -2195,9 +2211,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               ConnectedAccounts.report_access_issue(user_id, provider, reason)
 
               Logger.warning("ChiefOfStaff acquisition failed to fetch calendar",
-                user_id: user_id,
-                provider: provider,
-                reason: inspect(reason)
+                user_fingerprint: Redaction.fingerprint(user_id),
+                provider_reference: Redaction.fingerprint(provider),
+                failure_code: Redaction.error_class(reason)
               )
 
               {
@@ -2208,7 +2224,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     "provider" => provider,
                     "mode" => "connector",
                     "status" => "error",
-                    "reason" => inspect(reason)
+                    "reason" => Redaction.error_class(reason)
                   }
                   | fetch_acc
                 ]
@@ -3143,28 +3159,28 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       {:ok, {query, {:error, reason}}} ->
         Logger.debug("ChiefOfStaff commercial Gmail search failed",
-          user_id: user_id,
-          provider: provider,
-          query: query,
-          reason: inspect(reason)
+          user_fingerprint: Redaction.fingerprint(user_id),
+          provider_reference: Redaction.fingerprint(provider),
+          query_reference: Redaction.fingerprint(query),
+          failure_code: Redaction.error_class(reason)
         )
 
         []
 
       {:ok, {:task_failure, reason}} ->
         Logger.debug("ChiefOfStaff commercial Gmail task failed",
-          user_id: user_id,
-          provider: provider,
-          reason: inspect(reason)
+          user_fingerprint: Redaction.fingerprint(user_id),
+          provider_reference: Redaction.fingerprint(provider),
+          failure_code: Redaction.error_class(reason)
         )
 
         []
 
       {:exit, reason} ->
         Logger.debug("ChiefOfStaff commercial Gmail search timed out",
-          user_id: user_id,
-          provider: provider,
-          reason: inspect(reason)
+          user_fingerprint: Redaction.fingerprint(user_id),
+          provider_reference: Redaction.fingerprint(provider),
+          failure_code: Redaction.error_class(reason)
         )
 
         []
@@ -3209,7 +3225,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             metadata
             |> Map.put("body_available", false)
             |> Map.put("body_status", "fetch_error")
-            |> Map.put("body_error", inspect(reason))
+            |> Map.put("body_error", Redaction.error_class(reason))
         end
 
       true ->

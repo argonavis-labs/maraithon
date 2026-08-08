@@ -120,7 +120,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
 
             {:error, reason} ->
               handle_effect_result(
-                {:llm_call, %{content: "", error: inspect(reason), finish_reason: "error"}},
+                {:llm_call,
+                 %{
+                   content: "",
+                   error: Maraithon.Redaction.error_summary(reason),
+                   finish_reason: "error"
+                 }},
                 pending_state,
                 context
               )
@@ -144,7 +149,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
   @impl true
   def handle_effect_error(:llm_call, reason, state, context) do
     handle_effect_result(
-      {:llm_call, %{content: "", error: inspect(reason), finish_reason: "error"}},
+      {:llm_call,
+       %{content: "", error: Maraithon.Redaction.error_summary(reason), finish_reason: "error"}},
       state,
       context
     )

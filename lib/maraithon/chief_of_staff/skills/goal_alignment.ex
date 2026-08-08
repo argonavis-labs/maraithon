@@ -498,7 +498,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
       Goals.complete_review_run(user_id, review_run_id, %{
         "status" => "failed",
         "finished_at" => DateTime.utc_now(),
-        "error" => %{"reason" => inspect(reason)}
+        "error" => %{"reason" => Maraithon.Redaction.error_summary(reason)}
       })
 
     {:emit,
@@ -506,7 +506,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
       %{
         user_id: user_id,
         review_run_id: review_run_id,
-        reason: inspect(reason)
+        reason: Maraithon.Redaction.error_summary(reason)
       }}, clear_pending(state)}
   end
 

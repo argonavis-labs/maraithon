@@ -1,9 +1,10 @@
 defmodule Maraithon.Runtime.ProactiveCheckIn do
   @moduledoc """
-  Cloud worker that periodically asks the model whether Telegram needs a check-in.
+  Cloud worker that expires queued proactive candidates and runs the bounded
+  Telegram delivery planner on a fixed cadence.
 
-  The worker only supplies cadence and batching. The proactive assistant harness
-  decides whether to send or hold each candidate check-in.
+  Candidate generation belongs to the supervised Chief-of-Staff cycle. This
+  worker only decides how already-generated candidates should be delivered.
 
   SPEC 04 R6: this worker is delivery-side plumbing only (dispatching
   already-decided check-ins and running the budget-enforced delivery
@@ -19,7 +20,6 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
   alias Maraithon.Runtime.Config
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.DeliveryPlanner
-  alias Maraithon.TelegramAssistant.Proactive
   alias Maraithon.TelegramAssistant.ProactiveQueue
 
   require Logger
@@ -33,7 +33,13 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
   end
 
   def run_once(opts \\ []) do
-    Proactive.deliver_due_check_ins(opts)
+    recovered = ProactiveQueue.recover_stale_planned()
+    expired = maybe_expire_stale_candidates()
+    planner = run_delivery_planner(opts)
+
+    planner
+    |> compatibility_summary()
+    |> Map.merge(%{expired: expired, recovered: recovered, planner: planner})
   end
 
   def run_delivery_planner(opts \\ []) do
@@ -46,6 +52,20 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
 
   def expire_stale_candidates(now \\ DateTime.utc_now()) do
     ProactiveQueue.expire_stale(now)
+  end
+
+  defp compatibility_summary(%{} = planner) do
+    %{
+      sent: Map.get(planner, :delivered, 0),
+      held: Map.get(planner, :held, 0),
+      suppressed: 0,
+      failed: Map.get(planner, :failed, 0),
+      disabled: 0
+    }
+  end
+
+  defp compatibility_summary(_planner) do
+    %{sent: 0, held: 0, suppressed: 0, failed: 0, disabled: 0}
   end
 
   @impl true
@@ -66,63 +86,54 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
   @impl true
   def handle_info(:tick, state) do
     result = run_once(batch_size: state.batch_size)
-
-    if result.sent > 0 or result.held > 0 or result.suppressed > 0 or result.failed > 0 or
-         result.disabled > 0 do
-      Logger.log(cycle_log_level(result), "Proactive Telegram check-in cycle",
-        sent: result.sent,
-        held: result.held,
-        suppressed: result.suppressed,
-        failed: result.failed,
-        disabled: result.disabled
-      )
-    end
-
-    expired = maybe_expire_stale_candidates()
-    planner_result = run_delivery_planner(batch_size: state.batch_size)
-    log_delivery_planner_cycle(planner_result, expired)
+    log_delivery_planner_cycle(result.planner, result.expired, result.recovered)
 
     schedule_tick(state.interval_ms)
     {:noreply, state}
   rescue
     error ->
-      Logger.warning("Proactive Telegram check-in cycle failed", reason: Exception.message(error))
+      Logger.warning("Proactive delivery planner worker cycle failed",
+        failure_code: "worker_exception",
+        error: error.__struct__
+      )
+
       schedule_tick(state.interval_ms)
       {:noreply, state}
   end
 
-  defp maybe_expire_stale_candidates do
-    if TelegramAssistant.proactive_delivery_planner_enabled?() do
-      expire_stale_candidates()
-    else
-      0
-    end
+  defp maybe_expire_stale_candidates, do: expire_stale_candidates()
+
+  defp log_delivery_planner_cycle(:disabled, expired, recovered)
+       when expired > 0 or recovered > 0 do
+    Logger.info("Proactive queue hygiene cycle", expired: expired, recovered: recovered)
   end
 
-  defp log_delivery_planner_cycle(:disabled, _expired), do: :ok
+  defp log_delivery_planner_cycle(:disabled, _expired, _recovered), do: :ok
 
-  defp log_delivery_planner_cycle(%{} = result, expired) do
+  defp log_delivery_planner_cycle(%{} = result, expired, recovered) do
     if result.planned > 0 or result.delivered > 0 or result.held > 0 or result.failed > 0 or
-         expired > 0 do
-      Logger.log(cycle_log_level(result), "Proactive delivery planner cycle",
-        user_count: result.users,
+         result.undeliverable > 0 or expired > 0 or recovered > 0 do
+      level = if result.failed > 0, do: :warning, else: :info
+
+      Logger.log(level, "Proactive delivery planner cycle",
+        users: result.users,
         planned: result.planned,
         interrupt_now: result.interrupt_now,
         digest: result.digest,
         held: result.held,
         delivered: result.delivered,
         failed: result.failed,
-        expired: expired
+        undeliverable: result.undeliverable,
+        failure_codes: result.failure_codes,
+        expired: expired,
+        recovered: recovered
       )
     end
 
     :ok
   end
 
-  defp log_delivery_planner_cycle(_result, _expired), do: :ok
-
-  defp cycle_log_level(%{failed: failed}) when is_integer(failed) and failed > 0, do: :warning
-  defp cycle_log_level(_result), do: :info
+  defp log_delivery_planner_cycle(_result, _expired, _recovered), do: :ok
 
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
     Process.send_after(self(), :tick, delay_ms)

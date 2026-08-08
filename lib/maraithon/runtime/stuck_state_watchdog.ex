@@ -155,7 +155,10 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
     {:noreply, state}
   rescue
     error ->
-      Logger.warning("Stuck-state watchdog cycle failed", reason: Exception.message(error))
+      Logger.warning("Stuck-state watchdog cycle failed",
+        failure_code: Maraithon.Redaction.error_class(error)
+      )
+
       schedule_tick(state.interval_ms)
       {:noreply, state}
   end
@@ -216,7 +219,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
     error ->
       Logger.warning("Stuck-state check failed",
         table: table,
-        reason: Exception.message(error)
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       nil
@@ -303,7 +306,9 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
     live =
       rows
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-      |> Enum.reject(fn {user_id, _scheduled} -> PushBroker.quiet_hours_now_for_user?(user_id) end)
+      |> Enum.reject(fn {user_id, _scheduled} ->
+        PushBroker.quiet_hours_now_for_user?(user_id)
+      end)
       |> Enum.flat_map(&elem(&1, 1))
 
     if live == [] do
@@ -380,7 +385,10 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
     fun.()
   rescue
     error ->
-      Logger.warning("Stuck-state sweep failed", reason: Exception.message(error))
+      Logger.warning("Stuck-state sweep failed",
+        failure_code: Maraithon.Redaction.error_class(error)
+      )
+
       %{swept: 0, alarms: []}
   end
 
@@ -430,8 +438,8 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
   rescue
     error ->
       Logger.warning("Failed to record self-heal ledger entry",
-        user_id: user_id,
-        reason: Exception.message(error)
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       :ok
@@ -577,7 +585,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
       {:error, reason} ->
         Logger.warning("Stuck-state alert dedupe failed",
           table: alarm.table,
-          reason: inspect(reason)
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         :deduped
@@ -586,7 +594,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
     error ->
       Logger.warning("Stuck-state operator alert failed",
         table: alarm.table,
-        reason: Exception.message(error)
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       :deduped
@@ -673,7 +681,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
     error ->
       Logger.warning("Stuck-state alert email failed",
         table: alarm.table,
-        reason: Exception.message(error)
+        failure_code: Maraithon.Redaction.error_class(error)
       )
 
       :ok

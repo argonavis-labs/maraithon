@@ -1016,6 +1016,11 @@ defmodule Maraithon.Runtime.AgentTest do
       [effect_id] = Map.keys(waiting_data.pending_effects)
       send(pid, {:effect_result, effect_id, {:ok, %{content: "continue"}}})
 
+      {:waiting_effect, memo_data} = :sys.get_state(pid)
+      assert memo_data.behavior_state.pending_effect_skill_id == :cycle_memo
+      [memo_effect_id] = Map.keys(memo_data.pending_effects)
+      send(pid, {:effect_result, memo_effect_id, {:ok, %{content: "Cycle completed."}}})
+
       {:idle, idle_data} = :sys.get_state(pid)
       assert idle_data.current_run_id == nil
 

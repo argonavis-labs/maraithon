@@ -10,8 +10,14 @@ defmodule Maraithon.Todos.StalenessTriage do
   `dispatch_action/4` clauses every other todo card uses.
   """
 
+  import Ecto.Query
+
+  alias Maraithon.AssistantHarness.PromptStability
   alias Maraithon.ConnectedAccounts
   alias Maraithon.LLM
+  alias Maraithon.PromptBudget
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.ToolCallSupervisor
   alias Maraithon.TelegramAssistant.PushBroker
   alias Maraithon.Todos
   alias Maraithon.Todos.{AttentionRanker, StalenessBatch, Todo}
@@ -25,6 +31,9 @@ defmodule Maraithon.Todos.StalenessTriage do
   @reproposal_guard_days 6
   @default_llm_timeout_ms 30_000
   @default_max_tokens 1_024
+  @max_llm_timeout_ms 30_000
+  @max_prompt_bytes 32_000
+  @max_response_bytes 128_000
   @fallback_rationale "No recent activity and nothing shows it was handled."
 
   @doc """
@@ -42,6 +51,12 @@ defmodule Maraithon.Todos.StalenessTriage do
       DateTime.add(now, -@reproposal_guard_days * 24 * 3600, :second)
 
     cond do
+      not Keyword.has_key?(opts, :push_deliver) ->
+        # The production delivery path is mobile-push-only and does not yet
+        # support this card's inline Keep/Done/Dismiss actions. Do not send a
+        # non-actionable notification or create a batch that cannot resolve.
+        {:skip, :interactive_delivery_unavailable}
+
       StalenessBatch.exists_since?(user_id, recent_batch_cutoff) ->
         {:skip, :recent_batch}
 
@@ -56,7 +71,7 @@ defmodule Maraithon.Todos.StalenessTriage do
             case ConnectedAccounts.telegram_destination(user_id) do
               nil ->
                 Logger.info("Staleness triage skipped: no Telegram destination",
-                  user_id: user_id
+                  user_fingerprint: Maraithon.Redaction.fingerprint(user_id)
                 )
 
                 {:skip, :no_telegram_destination}
@@ -74,8 +89,21 @@ defmodule Maraithon.Todos.StalenessTriage do
     nudge_cutoff = DateTime.add(now, -@recent_nudge_days * 24 * 3600, :second)
     proposal_cutoff = DateTime.add(now, -@reproposal_guard_days * 24 * 3600, :second)
 
-    user_id
-    |> Todos.list_for_user(statuses: @open_statuses, limit: @candidate_scan_limit)
+    scanned =
+      Todo
+      |> where([todo], todo.user_id == ^user_id and todo.status in ^@open_statuses)
+      |> order_by(
+        [todo],
+        asc_nulls_first: todo.last_staleness_triage_checked_at,
+        asc: todo.source_occurred_at,
+        asc: todo.id
+      )
+      |> limit(^@candidate_scan_limit)
+      |> Repo.all()
+
+    stamp_triage_scan(scanned, now)
+
+    scanned
     |> Enum.filter(fn todo ->
       # Reuses the exact flag and its family/strong-relationship/priority
       # carve-outs from AttentionRanker — never reimplemented here.
@@ -83,13 +111,21 @@ defmodule Maraithon.Todos.StalenessTriage do
         not recently_nudged?(todo, nudge_cutoff) and
         not recently_proposed?(todo, proposal_cutoff)
     end)
-    |> Enum.sort_by(fn todo ->
-      case todo.source_occurred_at || todo.inserted_at do
-        %DateTime{} = at -> DateTime.to_unix(at, :second)
-        _other -> 0
-      end
-    end)
+    # Preserve the durable scan order: never-scanned rows come first, then
+    # the least-recently scanned rows in stable source/id order.
     |> Enum.take(@max_batch_items)
+  end
+
+  defp stamp_triage_scan([], _now), do: :ok
+
+  defp stamp_triage_scan(todos, now) do
+    ids = Enum.map(todos, & &1.id)
+
+    Todo
+    |> where([todo], todo.id in ^ids)
+    |> Repo.update_all(set: [last_staleness_triage_checked_at: DateTime.truncate(now, :second)])
+
+    :ok
   end
 
   # Recently-nudged is "actively being chased," not stale.
@@ -122,8 +158,8 @@ defmodule Maraithon.Todos.StalenessTriage do
       {:error, reason} ->
         # Degrade to "skip this cycle, no card" — never crash the sweep.
         Logger.info("Staleness triage model pass failed; skipping this cycle",
-          user_id: user_id,
-          reason: inspect(reason)
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         {:skip, :llm_unavailable}
@@ -131,20 +167,25 @@ defmodule Maraithon.Todos.StalenessTriage do
   end
 
   defp triage_rationales(user_id, candidates, now, opts) do
-    prompt = build_prompt(candidates, now, Todos.user_timezone_context(user_id))
-    llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, opts))
-    timeout_ms = positive_integer(Keyword.get(opts, :llm_timeout_ms), @default_llm_timeout_ms)
+    timeout_ms =
+      opts
+      |> Keyword.get(:llm_timeout_ms)
+      |> positive_integer(@default_llm_timeout_ms)
+      |> min(@max_llm_timeout_ms)
 
-    # Bounded model call (mirrors CrossSourceCompletion's Task.yield /
-    # brutal_kill pattern) — a slow call must never block the daily sweep.
-    task = Task.async(fn -> llm_complete.(prompt) end)
+    bounded_opts = Keyword.put(opts, :llm_timeout_ms, timeout_ms)
+    llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, bounded_opts))
 
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {:ok, response}} -> decode_response(response, candidates)
-      {:ok, {:error, reason}} -> {:error, reason}
-      {:ok, other} -> {:error, {:unexpected_llm_result, other}}
-      {:exit, reason} -> {:error, {:llm_task_exit, reason}}
-      nil -> {:error, {:llm_timeout, timeout_ms}}
+    with {:ok, prompt} <- build_prompt(candidates, now, Todos.user_timezone_context(user_id)) do
+      task = Task.Supervisor.async_nolink(ToolCallSupervisor, fn -> llm_complete.(prompt) end)
+
+      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, {:ok, response}} -> decode_response(response, candidates)
+        {:ok, {:error, reason}} -> {:error, reason}
+        {:ok, other} -> {:error, {:unexpected_llm_result, other}}
+        {:exit, reason} -> {:error, {:llm_task_exit, Maraithon.Redaction.error_class(reason)}}
+        nil -> {:error, {:llm_timeout, timeout_ms}}
+      end
     end
   end
 
@@ -152,40 +193,52 @@ defmodule Maraithon.Todos.StalenessTriage do
     items =
       Enum.map(candidates, fn todo ->
         %{
-          "todo_id" => todo.id,
-          "title" => todo.title,
-          "summary" => truncate(todo.summary, 300),
-          "next_action" => truncate(todo.next_action, 200),
-          "source" => todo.source,
+          "todo_id" => bounded_binary(todo.id, 64),
+          "title" => bounded_binary(todo.title, 240),
+          "summary" => bounded_binary(todo.summary, 480),
+          "next_action" => bounded_binary(todo.next_action, 320),
+          "source" => bounded_binary(todo.source, 64),
           "age_days" => age_days(todo, now),
           "direction" => todo.direction
         }
         |> compact_map()
       end)
 
-    """
-    You are the staleness reviewer for a chief-of-staff product. Each open
-    work item below has been quiet for a while: no completion evidence and no
-    recent activity. For each item write one short sentence on why it looks
-    stale / what is still unresolved, and suggest whether the operator should
-    keep it active or dismiss it. Your suggestion is advisory copy only — the
-    operator decides with explicit buttons; nothing is ever closed
-    automatically.
+    prompt =
+      """
+      You are the staleness reviewer for a chief-of-staff product. Each open
+      work item below has been quiet for a while: no completion evidence and no
+      recent activity. For each item write one short sentence on why it looks
+      stale / what is still unresolved, and suggest whether the operator should
+      keep it active or dismiss it. Your suggestion is advisory copy only — the
+      operator decides with explicit buttons; nothing is ever closed
+      automatically.
 
-    CURRENT_LOCAL_TIME: #{local_label(now, timezone_context)}
+      CURRENT_LOCAL_TIME: #{local_label(now, timezone_context)}
 
-    STALE_CANDIDATES_JSON:
-    #{Jason.encode!(items)}
+      STALE_CANDIDATES_JSON:
+      #{Jason.encode!(items)}
 
-    Respond with only a JSON array, no prose:
-    [
+      Respond with only a JSON array, no prose:
+      [
       {
         "todo_id": "uuid",
         "rationale": "one short sentence on why it looks stale / what's still unresolved",
         "suggested_action": "keep" or "dismiss"
       }
-    ]
-    """
+      ]
+      """
+
+    request_bytes =
+      [%{"role" => "user", "content" => prompt}]
+      |> PromptStability.encode!()
+      |> byte_size()
+
+    if request_bytes <= @max_prompt_bytes do
+      {:ok, prompt}
+    else
+      {:error, {:staleness_prompt_exceeds_budget, request_bytes}}
+    end
   end
 
   defp default_llm_complete(prompt, opts) when is_binary(prompt) do
@@ -209,9 +262,10 @@ defmodule Maraithon.Todos.StalenessTriage do
         _other -> nil
       end
 
-    with content when is_binary(content) <- content,
+    with content when is_binary(content) and byte_size(content) <= @max_response_bytes <- content,
          json when is_binary(json) <- extract_json_array(content),
-         {:ok, items} when is_list(items) <- Jason.decode(json) do
+         {:ok, items} when is_list(items) <- Jason.decode(json),
+         true <- length(Enum.take(items, @max_batch_items + 1)) <= @max_batch_items do
       known = MapSet.new(candidates, & &1.id)
 
       rationales =
@@ -251,7 +305,7 @@ defmodule Maraithon.Todos.StalenessTriage do
   end
 
   defp format_rationale(rationale, suggested_action) do
-    rationale = presence(rationale) || @fallback_rationale
+    rationale = rationale |> bounded_binary(600) |> presence() || @fallback_rationale
 
     case suggested_action do
       action when action in ["keep", "dismiss"] -> "Suggested: #{action} — #{rationale}"
@@ -300,8 +354,8 @@ defmodule Maraithon.Todos.StalenessTriage do
 
       {:error, reason} ->
         Logger.warning("Staleness triage card send failed",
-          user_id: user_id,
-          reason: inspect(reason)
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         {:error, reason}
@@ -330,8 +384,8 @@ defmodule Maraithon.Todos.StalenessTriage do
 
       {:error, reason} ->
         Logger.warning("Staleness triage could not persist batch state",
-          user_id: user_id,
-          reason: inspect(reason)
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         {:error, reason}
@@ -355,9 +409,9 @@ defmodule Maraithon.Todos.StalenessTriage do
 
       {:error, reason} ->
         Logger.warning("Staleness triage could not stamp proposal metadata",
-          user_id: user_id,
-          todo_id: todo.id,
-          reason: inspect(reason)
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          todo_reference: Maraithon.Redaction.fingerprint(todo.id),
+          failure_code: Maraithon.Redaction.error_class(reason)
         )
 
         :ok
@@ -490,17 +544,10 @@ defmodule Maraithon.Todos.StalenessTriage do
 
   defp presence(_value), do: nil
 
-  defp truncate(nil, _max), do: nil
+  defp bounded_binary(value, max_bytes) when is_binary(value),
+    do: PromptBudget.truncate_utf8(value, max_bytes)
 
-  defp truncate(text, max) when is_binary(text) do
-    text = String.trim(text)
-
-    if String.length(text) <= max do
-      text
-    else
-      String.slice(text, 0, max - 1) <> "…"
-    end
-  end
+  defp bounded_binary(_value, _max_bytes), do: nil
 
   defp compact_map(map) when is_map(map) do
     map

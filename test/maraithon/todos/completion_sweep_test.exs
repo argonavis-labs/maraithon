@@ -465,6 +465,67 @@ defmodule Maraithon.Todos.CompletionSweepTest do
     assert Todos.get_for_user(user_id, recent.id).status == "open"
   end
 
+  test "completion attempts rotate past a backlog larger than twenty rows" do
+    user_id = unique_user!()
+    now = ~U[2026-06-02 12:00:00Z]
+
+    attrs =
+      Enum.map(1..25, fn index ->
+        todo_attrs(
+          "local_patterns",
+          "rotation-#{index}",
+          "Rotation item #{index}",
+          DateTime.add(now, -index, :second),
+          metadata: %{"detector" => "unsupported"}
+        )
+      end)
+
+    {:ok, todos} = Todos.upsert_many(user_id, attrs)
+
+    assert %{checked: 20} = CompletionSweep.run_for_user(user_id, now: now)
+    assert %{checked: 20} = CompletionSweep.run_for_user(user_id, now: now)
+
+    assert Enum.all?(todos, fn todo ->
+             Todos.get_for_user(user_id, todo.id).last_completion_checked_at ==
+               DateTime.truncate(now, :second)
+           end)
+  end
+
+  test "a blocked Gmail fetch is killed by the user deadline and the row rotates" do
+    user_id = unique_user!()
+    now = ~U[2026-06-02 12:00:00Z]
+    source_at = DateTime.add(now, -3_600, :second)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("gmail", "thread-timeout", "Reply owed: timeout", source_at,
+          metadata: %{"thread_id" => "thread-timeout"}
+        )
+      ])
+
+    blocked_fetcher = fn _user_id, _todo ->
+      receive do
+        :never_sent -> {:error, :unexpected}
+      end
+    end
+
+    summary =
+      CompletionSweep.run_for_user(user_id,
+        now: now,
+        gmail_fetcher: blocked_fetcher,
+        self_emails: [user_id],
+        max_runtime_ms: 100
+      )
+
+    assert summary.checked == 1
+    assert summary.completed == 0
+    assert summary.fetch_errors == 1
+
+    rotated = Todos.get_for_user(user_id, todo.id)
+    assert rotated.status == "open"
+    assert rotated.last_completion_checked_at == DateTime.truncate(now, :second)
+  end
+
   test "run_for_all_users sweeps every requested user and returns a rollup" do
     user_a = unique_user!()
     user_b = unique_user!()

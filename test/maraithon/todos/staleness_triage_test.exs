@@ -59,6 +59,19 @@ defmodule Maraithon.Todos.StalenessTriageTest do
     end
   end
 
+  test "default mobile-only delivery path safely skips until native interactive actions exist" do
+    user_id = unique_user!()
+    [todo] = create_todos!(user_id, [stale_todo_attrs("Review the old pricing thread", 30)])
+
+    assert %{users: 1, proposed: 0, skipped: 1, errors: 0} =
+             Maraithon.Runtime.StalenessTriageSweep.run_once(user_ids: [user_id])
+
+    assert {:skip, :interactive_delivery_unavailable} = StalenessTriage.run_for_user(user_id)
+    assert Repo.all(from(batch in StalenessBatch, where: batch.user_id == ^user_id)) == []
+    reloaded = Todos.get_for_user(user_id, todo.id)
+    refute get_in(reloaded.metadata, ["staleness_triage", "last_proposed_at"])
+  end
+
   test "builds a card capped at 6 oldest candidates and honors the reused exclusions" do
     user_id = unique_user!()
     chat_id = connect_telegram!(user_id, "778899")
@@ -176,6 +189,45 @@ defmodule Maraithon.Todos.StalenessTriageTest do
                llm_complete: empty_array_llm(test_pid),
                push_deliver: accepting_deliver(test_pid, "9002")
              )
+  end
+
+  test "durable scan rotation reaches a stale row beyond the 200-row prefix" do
+    user_id = unique_user!()
+    _chat_id = connect_telegram!(user_id, "rotation-chat")
+
+    attrs =
+      Enum.map(1..201, fn index ->
+        stale_todo_attrs("Rotation candidate #{index}", 30)
+      end)
+
+    todos = create_todos!(user_id, attrs)
+    tail = Enum.max_by(todos, & &1.id)
+    test_pid = self()
+
+    deliver = fn candidate ->
+      send(test_pid, {:held_card, candidate.body})
+      {:ok, %{decision: "held_rate_limit", reason: "budget"}}
+    end
+
+    llm_complete = fn _prompt -> {:ok, %{content: "[]"}} end
+
+    assert {:ok, %{sent: false}} =
+             StalenessTriage.run_for_user(user_id,
+               llm_complete: llm_complete,
+               push_deliver: deliver
+             )
+
+    assert_receive {:held_card, first_body}
+    refute first_body =~ tail.title
+
+    assert {:ok, %{sent: false}} =
+             StalenessTriage.run_for_user(user_id,
+               llm_complete: llm_complete,
+               push_deliver: deliver
+             )
+
+    assert_receive {:held_card, second_body}
+    assert second_body =~ tail.title
   end
 
   test "held or suppressed deliveries create no batch row and stamp nothing" do

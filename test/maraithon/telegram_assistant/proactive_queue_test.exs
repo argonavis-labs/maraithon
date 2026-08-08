@@ -2,6 +2,8 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueueTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.Accounts
+  alias Maraithon.Push.Devices
+  alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.ProactiveCandidate
   alias Maraithon.TelegramAssistant.ProactiveQueue
 
@@ -61,6 +63,32 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueueTest do
     assert second.body == "fresh body"
   end
 
+  test "recovers stale planned rows without changing evidence age", %{user_id: user_id} do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, candidate} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{dedupe_key: "stale-planned-recovery"})
+             )
+
+    assert {:ok, planned} = ProactiveQueue.mark_planned(candidate, "hold", "Temporary plan")
+    inserted_at = planned.inserted_at
+    stale_at = DateTime.add(now, -16 * 60, :second)
+
+    planned
+    |> Ecto.Changeset.change(planned_at: stale_at, updated_at: stale_at)
+    |> Repo.update!()
+
+    assert ProactiveQueue.recover_stale_planned(now, 15) == 1
+
+    recovered = Repo.get!(ProactiveCandidate, planned.id)
+    assert recovered.status == "pending"
+    assert recovered.disposition == nil
+    assert recovered.plan_reason == nil
+    assert recovered.planned_at == nil
+    assert recovered.inserted_at == inserted_at
+  end
+
   test "list_pending_for_user orders by urgency descending", %{user_id: user_id} do
     assert {:ok, low} = ProactiveQueue.enqueue(candidate_attrs(user_id, %{urgency: 0.2}))
     assert {:ok, high} = ProactiveQueue.enqueue(candidate_attrs(user_id, %{urgency: 0.9}))
@@ -71,6 +99,172 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueueTest do
              middle.id,
              low.id
            ]
+  end
+
+  test "list_pending_for_user bounds each planning batch", %{user_id: user_id} do
+    for index <- 1..30 do
+      assert {:ok, _candidate} =
+               ProactiveQueue.enqueue(
+                 candidate_attrs(user_id, %{
+                   urgency: index / 100,
+                   dedupe_key: "bounded-candidate:#{index}"
+                 })
+               )
+    end
+
+    assert length(ProactiveQueue.list_pending_for_user(user_id)) == 30
+    assert length(ProactiveQueue.list_pending_for_user(user_id, candidate_limit: 25)) == 25
+    assert length(ProactiveQueue.list_pending_for_user(user_id, candidate_limit: 3)) == 3
+  end
+
+  test "required-brief share cannot crowd urgent ordinary work out of acquisition", %{
+    user_id: user_id
+  } do
+    Enum.each(1..60, fn index ->
+      assert {:ok, _brief} =
+               ProactiveQueue.enqueue(
+                 candidate_attrs(user_id, %{
+                   source: "brief",
+                   dedupe_key: "brief-share:#{index}",
+                   urgency: 0.99
+                 })
+               )
+    end)
+
+    assert {:ok, urgent} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{
+                 dedupe_key: "brief-share:urgent-ordinary",
+                 urgency: 1.0
+               })
+             )
+
+    bounded = ProactiveQueue.list_pending_for_user(user_id, candidate_limit: 50)
+
+    assert Enum.count(bounded, &(&1.source == "brief")) == 12
+    assert Enum.any?(bounded, &(&1.id == urgent.id))
+  end
+
+  test "bounded pending windows reserve required rows and rotate old low-urgency work", %{
+    user_id: user_id
+  } do
+    assert {:ok, old_low} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{
+                 dedupe_key: "fair-old-low",
+                 urgency: 0.01
+               })
+             )
+
+    high =
+      Enum.map(1..30, fn index ->
+        assert {:ok, candidate} =
+                 ProactiveQueue.enqueue(
+                   candidate_attrs(user_id, %{
+                     dedupe_key: "fair-high:#{index}",
+                     urgency: 0.69 + index / 100
+                   })
+                 )
+
+        candidate
+      end)
+
+    assert {:ok, required_brief} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{
+                 source: "brief",
+                 dedupe_key: "fair-required-brief",
+                 urgency: 0.0
+               })
+             )
+
+    bounded = ProactiveQueue.list_pending_for_user(user_id, candidate_limit: 25)
+    bounded_ids = MapSet.new(bounded, & &1.id)
+
+    assert length(bounded) == 25
+    assert MapSet.member?(bounded_ids, old_low.id)
+    assert MapSet.member?(bounded_ids, required_brief.id)
+    assert MapSet.member?(bounded_ids, List.last(high).id)
+  end
+
+  test "bounded windows use ids to resolve exact priority timestamp ties", %{user_id: user_id} do
+    tied_at = ~U[2026-08-08 00:00:00.000000Z]
+
+    candidates =
+      Enum.map(1..30, fn index ->
+        assert {:ok, candidate} =
+                 ProactiveQueue.enqueue(
+                   candidate_attrs(user_id, %{
+                     dedupe_key: "tied-window:#{index}",
+                     urgency: 0.5
+                   })
+                 )
+
+        candidate
+        |> Ecto.Changeset.change(inserted_at: tied_at)
+        |> Repo.update!()
+      end)
+
+    expected_ids = candidates |> Enum.map(& &1.id) |> Enum.sort() |> Enum.take(25)
+
+    actual_ids =
+      user_id
+      |> ProactiveQueue.list_pending_for_user(candidate_limit: 25)
+      |> Enum.map(& &1.id)
+
+    assert actual_ids == expected_ids
+  end
+
+  test "device-less users cannot consume the deliverable due-user batch", %{user_id: user_id} do
+    Enum.each(1..30, fn index ->
+      other_user_id =
+        "device-less-queue-#{index}-#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, _user} = Accounts.get_or_create_user_by_email(other_user_id)
+
+      assert {:ok, _candidate} =
+               ProactiveQueue.enqueue(
+                 candidate_attrs(other_user_id, %{dedupe_key: "device-less:#{index}"})
+               )
+    end)
+
+    assert {:ok, _candidate} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{dedupe_key: "deliverable-after-backlog"})
+             )
+
+    assert {:ok, _device} =
+             Devices.register(user_id, %{
+               "device_token" => String.duplicate("a", 64),
+               "environment" => "sandbox"
+             })
+
+    assert ProactiveQueue.pending_deliverable_user_ids(limit: 25) == [user_id]
+  end
+
+  test "planner rotation advances a constant-size cursor without rewriting pending rows", %{
+    user_id: user_id
+  } do
+    assert {:ok, candidate} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{dedupe_key: "cursor-without-row-rewrite"})
+             )
+
+    original_updated_at = candidate.updated_at
+    attempted_at = DateTime.utc_now() |> DateTime.add(60, :second)
+
+    assert {:ok, 1} = ProactiveQueue.rotate_pending_user(user_id, attempted_at)
+    assert Repo.reload!(candidate).updated_at == original_updated_at
+
+    assert %{last_attempted_at: persisted_at} =
+             Repo.one!(
+               from(cursor in "proactive_planner_user_cursors",
+                 where: field(cursor, :user_id) == ^user_id,
+                 select: %{last_attempted_at: field(cursor, :last_attempted_at)}
+               )
+             )
+
+    assert NaiveDateTime.compare(persisted_at, DateTime.to_naive(attempted_at)) == :eq
   end
 
   test "pending_user_ids returns distinct pending users", %{user_id: first_user_id} do
@@ -223,6 +417,73 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueueTest do
     assert Repo.get!(ProactiveCandidate, first.id).status == "delivered"
     assert Repo.get!(ProactiveCandidate, second.id).status == "delivered"
     assert ProactiveQueue.list_held_for_user(user_id) == []
+  end
+
+  test "one user-scoped planner lease blocks even a disjoint row claim", %{user_id: user_id} do
+    {:ok, first} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+    {:ok, second} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+
+    assert {:ok, claim} = ProactiveQueue.claim_pending([first])
+    assert claim.ids == MapSet.new([first.id])
+
+    assert {:error, :user_claim_busy} = ProactiveQueue.claim_pending([second])
+
+    assert ProactiveQueue.release_claim(claim.token) == 1
+    assert Repo.get!(ProactiveCandidate, first.id).status == "pending"
+    assert Repo.get!(ProactiveCandidate, second.id).status == "pending"
+  end
+
+  test "dispatch authorization remains rollback-compatible planned state", %{user_id: user_id} do
+    {:ok, candidate} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+    assert {:ok, claim} = ProactiveQueue.claim_pending([candidate])
+
+    assert {:ok, planned} =
+             ProactiveQueue.finalize_claim(candidate, claim.token, "interrupt_now")
+
+    assert planned.status == "planned"
+    assert {:ok, authorized} = ProactiveQueue.authorize_dispatch(candidate, claim.token)
+    assert authorized.status == "planned"
+
+    assert {:ok, delivered} =
+             ProactiveQueue.complete_claim(candidate, claim.token, "delivered")
+
+    assert delivered.status == "delivered"
+
+    assert {:error, :claim_lost} =
+             ProactiveQueue.complete_claim(candidate, claim.token, "delivered")
+  end
+
+  test "rejects wide, deep, cumulative-large, and improper JSON before normalization", %{
+    user_id: user_id
+  } do
+    wide = Map.new(1..3_000, &{"key-#{&1}", "value"})
+    deep = Enum.reduce(1..20, %{"leaf" => true}, fn _, acc -> %{"nested" => acc} end)
+    cumulative = Map.new(1..100, &{"key-#{&1}", String.duplicate("x", 4_000)})
+    improper = [{"ok", true} | :improper]
+    duplicate_pairs = List.duplicate({"same", String.duplicate("x", 4_000)}, 100)
+
+    for value <- [wide, deep, cumulative] do
+      assert {:error, :invalid_proactive_candidate} =
+               ProactiveQueue.enqueue(candidate_attrs(user_id, %{structured_data: value}))
+    end
+
+    for value <- [improper, duplicate_pairs] do
+      assert {:error, :invalid_proactive_candidate} =
+               ProactiveQueue.enqueue(candidate_attrs(user_id, %{telegram_opts: value}))
+    end
+
+    assert {:ok, _candidate} =
+             ProactiveQueue.enqueue(candidate_attrs(user_id, %{ignored_remote_blob: wide}))
+
+    assert {:error, :invalid_proactive_candidate} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{source_id: String.duplicate("x", 1_000_000)})
+             )
+
+    assert {:error, :invalid_proactive_candidate} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{urgency: Integer.pow(10, 100_000)})
+             )
   end
 
   defp candidate_attrs(user_id, overrides \\ %{}) do

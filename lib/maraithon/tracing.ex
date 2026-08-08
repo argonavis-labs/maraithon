@@ -24,8 +24,9 @@ defmodule Maraithon.Tracing do
         fun.()
       rescue
         exception ->
-          Tracer.record_exception(exception, __STACKTRACE__)
-          Tracer.set_status(OpenTelemetry.status(:error, Exception.message(exception)))
+          error_class = Maraithon.Redaction.error_class(exception)
+          Tracer.add_event("exception", %{"error_class" => error_class})
+          Tracer.set_status(OpenTelemetry.status(:error, error_class))
           reraise exception, __STACKTRACE__
       end
     end
@@ -38,7 +39,7 @@ defmodule Maraithon.Tracing do
   """
   @spec record_error(term()) :: :ok
   def record_error(reason) do
-    description = inspect(reason)
+    description = Maraithon.Redaction.error_summary(reason)
     Tracer.add_event("error", %{"reason" => description})
     Tracer.set_status(OpenTelemetry.status(:error, description))
     :ok
@@ -46,16 +47,53 @@ defmodule Maraithon.Tracing do
     _ -> :ok
   end
 
-  # OTel attribute values must be primitives (or lists of primitives); coerce
-  # anything else to an inspected string.
+  @identifier_attribute_keys ~w(user_id chat_id telegram_chat_id account_id owner_user_id)
+  @label_attribute_keys ~w(
+    provider model reasoning_effort finish_reason status source kind stage operation
+    task_class route_reason model_tier prompt_kind failure_code error_class request_focus
+    job_type calendar_source streaming
+  )
+
+  # Span attributes are an exported trust boundary. Numeric telemetry is safe;
+  # identifiers are pseudonymized; only closed label fields may retain strings.
   defp normalize_attributes(attributes) do
-    Map.new(attributes, fn {key, value} -> {key, normalize_value(value)} end)
+    Map.new(attributes, fn {key, value} -> {key, normalize_attribute(key, value)} end)
   end
 
-  defp normalize_value(value)
-       when is_binary(value) or is_integer(value) or is_float(value) or is_boolean(value),
-       do: value
+  defp normalize_attribute(key, value) do
+    normalized_key = if is_atom(key) or is_binary(key), do: to_string(key), else: ""
 
-  defp normalize_value(value) when is_atom(value), do: to_string(value)
-  defp normalize_value(value), do: inspect(value)
+    cond do
+      normalized_key in @identifier_attribute_keys ->
+        identifier_fingerprint(value)
+
+      is_integer(value) or is_float(value) or is_boolean(value) ->
+        value
+
+      normalized_key in @label_attribute_keys ->
+        normalize_label(value)
+
+      true ->
+        "redacted_detail"
+    end
+  end
+
+  defp identifier_fingerprint(value) when is_binary(value),
+    do: Maraithon.Redaction.fingerprint(value)
+
+  defp identifier_fingerprint(value) when is_integer(value),
+    do: value |> Integer.to_string() |> Maraithon.Redaction.fingerprint()
+
+  defp identifier_fingerprint(_value), do: "redacted_detail"
+
+  defp normalize_label(value) when is_atom(value), do: normalize_label(Atom.to_string(value))
+
+  defp normalize_label(value) when is_binary(value) do
+    if byte_size(value) <= 128 and String.valid?(value) and
+         Regex.match?(~r/^[A-Za-z0-9._:\/-]+$/, value),
+       do: value,
+       else: "redacted_detail"
+  end
+
+  defp normalize_label(_value), do: "redacted_detail"
 end

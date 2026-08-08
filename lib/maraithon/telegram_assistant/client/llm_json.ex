@@ -21,6 +21,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
     :model_busy_max_retries,
     :model_retry_base_delay_ms,
     :model_retry_max_delay_ms,
+    :deadline_monotonic_ms,
     :llm_complete
   ]
 

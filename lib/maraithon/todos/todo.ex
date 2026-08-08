@@ -57,6 +57,7 @@ defmodule Maraithon.Todos.Todo do
     # backstop candidate rotation advances (never-checked items sort first).
     # Purely DB-backed; never part of any agent snapshot.
     field :last_completion_checked_at, :utc_datetime
+    field :last_staleness_triage_checked_at, :utc_datetime_usec
 
     timestamps(type: :utc_datetime_usec)
   end

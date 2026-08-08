@@ -46,6 +46,41 @@ defmodule Maraithon.Redaction do
     tooloutput
   )
 
+  @opaque_log_metadata_fields ~w(
+    body
+    callbackerror
+    content
+    context
+    error
+    fallbackreason
+    messages
+    originalreason
+    prompt
+    providerbody
+    rawbody
+    reason
+    requestbody
+    responsebody
+  )
+
+  @identifier_log_metadata_fields ~w(
+    userid chatid telegramchatid accountid owneruserid
+  )
+
+  @numeric_log_metadata_fields ~w(
+    durationms retryafterms inputtokens outputtokens reasoningtokens costusd
+    choicecount detailfailurecount promptbytes promptbytecap basepromptbytes
+    availablecandidates includedcandidates users usercount planned interruptnow
+    digest held delivered failed undeliverable expired recovered sent suppressed disabled
+    responsestatus truncated backfillneeded
+  )
+
+  @label_log_metadata_fields ~w(
+    requestid agentid effectid jobid jobtype provider useridhash model
+    reasoningeffort finishreason failurecode responseshape errorclass
+    transportclass callbackclass promptkind status
+  )
+
   @scanners [
     # Bearer / Basic auth headers
     {~r/\b(?:Bearer|Basic)\s+[A-Za-z0-9._\-+\/=]+/i, "<redacted-auth>"},
@@ -115,12 +150,128 @@ defmodule Maraithon.Redaction do
   blob you want to scrub without restructuring it.
   """
   def redact_string(value) when is_binary(value) do
-    Enum.reduce(@scanners, value, fn {regex, replacement}, acc ->
-      Regex.replace(regex, acc, replacement)
+    value
+    |> Maraithon.PromptBudget.truncate_utf8(16_000)
+    |> then(fn sanitized ->
+      Enum.reduce(@scanners, sanitized, fn {regex, replacement}, acc ->
+        Regex.replace(regex, acc, replacement)
+      end)
     end)
   end
 
   def redact_string(value), do: value
+
+  @doc """
+  Return a stable pseudonymous short reference for an opaque identifier.
+
+  This is intended for correlating per-user or per-account telemetry without
+  writing the raw identifier to logs.
+  """
+  def fingerprint(value) when is_binary(value) do
+    :crypto.hash(:sha256, value)
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 16)
+  end
+
+  def fingerprint(_value), do: nil
+
+  @doc """
+  Sanitize one Logger metadata value before a formatter or in-memory backend
+  serializes it. Error/body-like fields are reduced to closed classifications
+  rather than regex-redacted because provider bodies may contain arbitrary
+  prompt or user text with no recognizable secret pattern.
+  """
+  def log_metadata_value(key, value) do
+    normalized_key = normalize_key(key)
+
+    cond do
+      normalized_key in @identifier_log_metadata_fields -> identifier_fingerprint(value)
+      normalized_key in @opaque_log_metadata_fields -> opaque_log_value(value)
+      normalized_key in @numeric_log_metadata_fields -> numeric_log_value(value)
+      normalized_key in @label_log_metadata_fields -> label_log_value(value)
+      normalized_key == "failurecodes" -> failure_codes_log_value(value)
+      true -> "redacted_detail"
+    end
+  end
+
+  defp identifier_fingerprint(value) when is_binary(value), do: fingerprint(value)
+
+  defp identifier_fingerprint(value) when is_integer(value),
+    do: fingerprint(Integer.to_string(value))
+
+  defp identifier_fingerprint(_value), do: nil
+
+  defp numeric_log_value(value)
+       when is_integer(value) or is_float(value) or is_boolean(value) or is_nil(value),
+       do: value
+
+  defp numeric_log_value(value) when is_binary(value) do
+    if byte_size(value) <= 32 and Regex.match?(~r/^-?[0-9]+(?:\.[0-9]+)?$/, value),
+      do: value,
+      else: "redacted_detail"
+  end
+
+  defp numeric_log_value(_value), do: "redacted_detail"
+
+  defp label_log_value(value) when is_atom(value), do: label_log_value(Atom.to_string(value))
+
+  defp label_log_value(value) when is_binary(value) do
+    if byte_size(value) <= 128 and String.valid?(value) and
+         Regex.match?(~r/^[A-Za-z0-9._:\/-]+$/, value),
+       do: value,
+       else: "redacted_detail"
+  end
+
+  defp label_log_value(_value), do: "redacted_detail"
+
+  defp failure_codes_log_value(value) when is_map(value) do
+    value
+    |> Enum.take(32)
+    |> Map.new(fn {key, count} -> {label_log_value(key), numeric_log_value(count)} end)
+  end
+
+  defp failure_codes_log_value(value) when is_list(value) do
+    value |> Enum.take(32) |> Enum.map(&label_log_value/1)
+  end
+
+  defp failure_codes_log_value(_value), do: "redacted_detail"
+
+  @doc """
+  Return a bounded, closed error summary suitable for durable error fields.
+  Provider-controlled detail is never inspected.
+  """
+  def error_summary(value) do
+    case opaque_log_value(value) do
+      summary when is_binary(summary) -> summary
+      summary -> inspect(summary, pretty: false, limit: 5, printable_limit: 80)
+    end
+  end
+
+  @doc """
+  Return a closed error class without inspecting provider-controlled detail.
+  """
+  def error_class({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  def error_class({kind, _status, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  def error_class(%module{}) when is_atom(module), do: Atom.to_string(module)
+  def error_class(value) when is_atom(value), do: Atom.to_string(value)
+  def error_class(_value), do: "unknown_error"
+
+  defp opaque_log_value({kind, delay_ms})
+       when kind in [:rate_limited, :llm_busy] and is_integer(delay_ms) and delay_ms > 0,
+       do: "#{kind}:#{min(delay_ms, 86_400_000)}"
+
+  defp opaque_log_value({kind, status, _detail}) when is_atom(kind) and is_integer(status),
+    do: "#{kind}:#{status}"
+
+  defp opaque_log_value({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  defp opaque_log_value({kind, _status, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  defp opaque_log_value(%module{}) when is_atom(module), do: Atom.to_string(module)
+  defp opaque_log_value(value) when is_atom(value), do: Atom.to_string(value)
+
+  defp opaque_log_value(value) when is_integer(value) or is_boolean(value) or is_nil(value),
+    do: value
+
+  defp opaque_log_value(_value), do: "redacted_detail"
 
   @doc false
   def sensitive_key?(key) do

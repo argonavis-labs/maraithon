@@ -42,6 +42,20 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
     call(server, {:checkout, normalize_bucket(bucket)}, :ok)
   end
 
+  def checkout_with_timeout(bucket, timeout_ms) do
+    checkout_with_timeout(__MODULE__, bucket, timeout_ms)
+  end
+
+  def checkout_with_timeout(server, bucket, timeout_ms)
+      when is_integer(timeout_ms) and timeout_ms > 0 do
+    call(
+      server,
+      {:checkout, normalize_bucket(bucket)},
+      {:error, {:llm_busy, timeout_ms}},
+      timeout_ms
+    )
+  end
+
   @doc """
   Release one LLM execution slot for the calling process.
   """
@@ -62,6 +76,10 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
 
   def record_rate_limit(server, retry_after_ms) do
     call(server, {:record_rate_limit, retry_after_ms}, :ok)
+  end
+
+  def record_rate_limit_async(retry_after_ms) do
+    cast(__MODULE__, {:record_rate_limit, retry_after_ms})
   end
 
   def reset do
@@ -159,21 +177,14 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
   end
 
   def handle_call({:record_rate_limit, retry_after_ms}, _from, state) do
-    retry_after_ms = normalize_retry_after_ms(retry_after_ms)
-    blocked_until_ms = now_ms() + retry_after_ms
-
-    next_blocked_until_ms =
-      case state.blocked_until_ms do
-        nil -> blocked_until_ms
-        existing -> max(existing, blocked_until_ms)
-      end
-
-    Logger.warning("LLM provider cooldown active", retry_after_ms: retry_after_ms)
-
-    {:reply, :ok, %{state | blocked_until_ms: next_blocked_until_ms}}
+    {:reply, :ok, apply_rate_limit(state, retry_after_ms)}
   end
 
   @impl true
+  def handle_cast({:record_rate_limit, retry_after_ms}, state) do
+    {:noreply, apply_rate_limit(state, retry_after_ms)}
+  end
+
   def handle_cast({:checkin, pid, bucket}, state) do
     {:noreply, remove_holder(state, pid, bucket)}
   end
@@ -282,7 +293,7 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
 
   defp normalize_bucket(bucket) when bucket in [:default, :chat, :reasoning], do: bucket
 
-  defp normalize_bucket(bucket) when is_binary(bucket) do
+  defp normalize_bucket(bucket) when is_binary(bucket) and byte_size(bucket) <= 32 do
     case String.trim(bucket) do
       "chat" -> :chat
       "reasoning" -> :reasoning
@@ -295,6 +306,20 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
   defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
   defp positive_integer(_value, default), do: default
 
+  defp apply_rate_limit(state, retry_after_ms) do
+    retry_after_ms = normalize_retry_after_ms(retry_after_ms)
+    blocked_until_ms = now_ms() + retry_after_ms
+
+    next_blocked_until_ms =
+      case state.blocked_until_ms do
+        nil -> blocked_until_ms
+        existing -> max(existing, blocked_until_ms)
+      end
+
+    Logger.warning("LLM provider cooldown active", retry_after_ms: retry_after_ms)
+    %{state | blocked_until_ms: next_blocked_until_ms}
+  end
+
   defp blocked_for_ms(%{blocked_until_ms: nil}, _now_ms), do: 0
 
   defp blocked_for_ms(%{blocked_until_ms: blocked_until_ms}, now_ms) do
@@ -305,8 +330,8 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
     min(value, @max_cooldown_ms)
   end
 
-  defp normalize_retry_after_ms(value) when is_binary(value) do
-    case Integer.parse(value) do
+  defp normalize_retry_after_ms(value) when is_binary(value) and byte_size(value) <= 32 do
+    case Integer.parse(String.trim(value)) do
       {parsed, ""} when parsed > 0 -> normalize_retry_after_ms(parsed)
       _other -> @default_rate_limit_ms
     end
@@ -316,21 +341,23 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
-  defp call(server, message, fallback) do
+  defp call(server, message, fallback), do: call(server, message, fallback, 5_000)
+
+  defp call(server, message, fallback, timeout_ms) do
     case resolve_server(server) do
       nil ->
         fallback
 
       target ->
-        GenServer.call(target, message)
+        GenServer.call(target, message, timeout_ms)
     end
   catch
     :exit, reason ->
       # Failing open keeps LLM traffic flowing when the limiter itself is
       # down, but it must never be silent — an overloaded limiter timing out
       # here means backpressure is off exactly when it is most needed.
-      Logger.warning(
-        "LLMRateLimiter call #{inspect(message)} failed open: #{inspect(reason)}"
+      Logger.warning("LLMRateLimiter call failed open",
+        failure_code: Maraithon.Redaction.error_class(reason)
       )
 
       fallback

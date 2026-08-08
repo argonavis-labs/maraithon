@@ -28,6 +28,26 @@ defmodule Maraithon.LogBufferTest do
     assert older.message =~ "first buffer entry"
   end
 
+  test "logger-path metadata never retains opaque provider or prompt detail" do
+    Logger.error("fixed failure",
+      reason: "prompt-echo-secret",
+      body: %{"message" => "provider-body-secret"},
+      arbitrary_payload: "private-user-payload"
+    )
+
+    Logger.flush()
+    _ = :sys.get_state(Maraithon.LogBuffer)
+    [entry] = Maraithon.LogBuffer.recent(1)
+    serialized = inspect(entry, printable_limit: :infinity)
+
+    refute serialized =~ "prompt-echo-secret"
+    refute serialized =~ "provider-body-secret"
+    refute serialized =~ "private-user-payload"
+    assert entry.metadata["reason"] == "redacted_detail"
+    assert entry.metadata["body"] == "redacted_detail"
+    assert entry.metadata["arbitrary_payload"] == "redacted_detail"
+  end
+
   test "keeps only the configured maximum number of entries" do
     prefix = "log-buffer-trim-test"
 
@@ -42,5 +62,38 @@ defmodule Maraithon.LogBufferTest do
     assert length(recent) == 500
     assert Enum.any?(recent, &(&1.message == "#{prefix}-520"))
     refute Enum.any?(recent, &(&1.message == "#{prefix}-1"))
+  end
+
+  test "normalizes direct-record timestamp, level, keys, and opaque metadata" do
+    Maraithon.LogBuffer.record(%{
+      timestamp: <<255>>,
+      level: <<255>>,
+      message: "ok",
+      metadata: %{
+        {:unsupported, "key"} => "private tuple value",
+        "description" => "private user text",
+        "user_id" => "person@example.com"
+      }
+    })
+
+    _ = :sys.get_state(Maraithon.LogBuffer)
+    [entry] = Maraithon.LogBuffer.recent(1)
+
+    assert entry.level == :info
+    assert {:ok, _timestamp, _offset} = DateTime.from_iso8601(entry.timestamp)
+    refute Map.has_key?(entry.metadata, "unsupported")
+    assert entry.metadata["description"] == "redacted_detail"
+    assert byte_size(entry.metadata["user_id"]) == 16
+    refute inspect(entry) =~ "person@example.com"
+    assert String.valid?(Jason.encode!(entry))
+  end
+
+  test "sanitizes invalid UTF-8 in direct records" do
+    Maraithon.LogBuffer.record(%{level: :warning, message: <<"invalid ", 255>>})
+    _ = :sys.get_state(Maraithon.LogBuffer)
+
+    [entry] = Maraithon.LogBuffer.recent(1)
+    assert entry.message == "invalid �"
+    assert String.valid?(entry.message)
   end
 end

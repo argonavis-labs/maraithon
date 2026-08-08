@@ -89,15 +89,16 @@ defmodule Maraithon.LLMTest do
       params = %{"messages" => [%{"role" => "user", "content" => "hi"}]}
 
       assert {:error, {:rate_limited, 60_000}} = LLM.complete(params)
-      assert_received {:rate_limited_provider_called, ^params}
+      expected_params = Map.put(params, "timeout_ms", 120_000)
+      assert_received {:rate_limited_provider_called, ^expected_params}
       assert LLMRateLimiter.status().blocked_for_ms > 0
 
       assert {:error, {:rate_limited, retry_after_ms}} = LLM.complete(params)
       assert retry_after_ms > 0
-      refute_received {:rate_limited_provider_called, ^params}
+      refute_received {:rate_limited_provider_called, _params}
     end
 
-    test "does not block chat model calls behind an active reasoning call" do
+    test "does not block chat model calls behind a saturated reasoning lane" do
       Application.put_env(:maraithon, Maraithon.Runtime,
         llm_provider: Maraithon.LLMTest.CapturingProvider,
         llm_provider_name: "openai",
@@ -106,21 +107,28 @@ defmodule Maraithon.LLMTest do
       )
 
       test_pid = self()
+      reasoning_limit = LLMRateLimiter.status().buckets.reasoning.max_concurrency
 
-      holder =
-        start_supervised!(
-          {Task,
-           fn ->
-             assert :ok = LLMRateLimiter.checkout(:reasoning)
-             send(test_pid, :reasoning_slot_held)
+      holders =
+        Enum.map(1..reasoning_limit, fn index ->
+          start_supervised!(%{
+            id: {:reasoning_slot_holder, index},
+            start:
+              {Task, :start_link,
+               [
+                 fn ->
+                   assert :ok = LLMRateLimiter.checkout(:reasoning)
+                   send(test_pid, {:reasoning_slot_held, self()})
 
-             receive do
-               :release_reasoning_slot -> LLMRateLimiter.checkin(:reasoning)
-             end
-           end}
-        )
+                   receive do
+                     :release_reasoning_slot -> LLMRateLimiter.checkin(:reasoning)
+                   end
+                 end
+               ]}
+          })
+        end)
 
-      assert_receive :reasoning_slot_held
+      Enum.each(holders, fn holder -> assert_receive {:reasoning_slot_held, ^holder} end)
 
       chat_params = %{
         "model" => "gpt-4.1-mini",
@@ -128,7 +136,8 @@ defmodule Maraithon.LLMTest do
       }
 
       assert {:ok, %{model: "gpt-4.1-mini"}} = LLM.complete(chat_params)
-      assert_received {:complete, ^chat_params}
+      expected_chat_params = Map.put(chat_params, "timeout_ms", 120_000)
+      assert_received {:complete, ^expected_chat_params}
 
       reasoning_params = %{
         "model" => "gpt-5.4",
@@ -137,9 +146,9 @@ defmodule Maraithon.LLMTest do
 
       assert {:error, {:llm_busy, retry_after_ms}} = LLM.complete(reasoning_params)
       assert retry_after_ms > 0
-      refute_received {:complete, ^reasoning_params}
+      refute_received {:complete, _params}
 
-      send(holder, :release_reasoning_slot)
+      Enum.each(holders, &send(&1, :release_reasoning_slot))
     end
   end
 

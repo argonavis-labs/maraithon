@@ -28,13 +28,16 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   import Ecto.Query
 
+  alias Maraithon.AssistantHarness.PromptStability
   alias Maraithon.LLM
+  alias Maraithon.PromptBudget
   alias Maraithon.Repo
   alias Maraithon.Runtime.Config
   alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Todos
   alias Maraithon.Todos.ActionDrafts
   alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.UserBatch
 
   require Logger
 
@@ -45,6 +48,21 @@ defmodule Maraithon.Runtime.NudgeSweep do
   @default_nudge_cap 4
   @default_llm_timeout_ms 60_000
   @default_max_tokens 2_048
+  @max_interval_ms :timer.hours(24)
+  @cursor_key "nudge_sweep"
+  @max_users_per_cycle 10
+  @max_explicit_user_ids 1_000
+  @max_todos_per_user 20
+  @max_due_soon_horizon_hours 168
+  @max_nudge_cap 20
+  @max_cycle_ms 120_000
+  @max_prompt_bytes 32_000
+  @max_prompt_items_bytes 12_000
+  @max_response_bytes 128_000
+  @max_decisions_scan 100
+  @max_decisions 20
+  @max_draft_text_bytes 2_000
+  @max_next_nudge_at_bytes 100
 
   @open_statuses ~w(open snoozed)
 
@@ -87,7 +105,9 @@ defmodule Maraithon.Runtime.NudgeSweep do
         Config.positive_integer(:nudge_sweep_initial_delay_ms, interval_ms)
       )
 
-    state = %{interval_ms: interval_ms}
+    interval_ms = min(positive_integer(interval_ms, @default_interval_ms), @max_interval_ms)
+    initial_delay_ms = min(positive_integer(initial_delay_ms, interval_ms), @max_interval_ms)
+    state = %{interval_ms: interval_ms, user_cursor: UserBatch.load_cursor(@cursor_key)}
 
     schedule_tick(initial_delay_ms)
     {:ok, state}
@@ -95,7 +115,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   @impl true
   def handle_info(:tick, state) do
-    summary = run_once()
+    {summary, next_cursor} = do_run_once(after_user_id: state.user_cursor)
 
     if summary.proposed > 0 or summary.errors > 0 do
       Logger.info("Nudge sweep cycle",
@@ -111,11 +131,17 @@ defmodule Maraithon.Runtime.NudgeSweep do
     # `schedule_tick` deliberately runs after the cycle's work completes
     # (mirroring TokenRefresher), so overlapping ticks can never stack when a
     # run takes longer than the interval.
+    next_cursor = next_cursor || state.user_cursor
+    if is_binary(next_cursor), do: UserBatch.record_cursor(@cursor_key, next_cursor)
+
     schedule_tick(state.interval_ms)
-    {:noreply, state}
+    {:noreply, %{state | user_cursor: next_cursor}}
   rescue
     error ->
-      Logger.warning("Nudge sweep cycle failed", reason: Exception.message(error))
+      Logger.warning("Nudge sweep cycle failed",
+        failure_code: Maraithon.Redaction.error_class(error)
+      )
+
       schedule_tick(state.interval_ms)
       {:noreply, state}
   end
@@ -124,16 +150,27 @@ defmodule Maraithon.Runtime.NudgeSweep do
   Runs one full sweep synchronously (directly callable in tests, no timer).
   """
   def run_once(opts \\ []) do
+    {summary, _next_cursor} = do_run_once(opts)
+    summary
+  end
+
+  defp do_run_once(opts) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
     horizon_hours = due_soon_horizon_hours(opts)
+    deadline = System.monotonic_time(:millisecond) + @max_cycle_ms
 
     user_ids =
       case Keyword.get(opts, :user_ids) do
-        user_ids when is_list(user_ids) -> user_ids
-        _other -> due_user_ids(now, horizon_hours)
+        user_ids when is_list(user_ids) ->
+          user_ids
+          |> Enum.take(@max_explicit_user_ids)
+          |> Enum.filter(&(is_binary(&1) and byte_size(&1) <= 1_280))
+          |> Enum.uniq()
+          |> Enum.take(@max_users_per_cycle)
+
+        _other ->
+          due_user_ids(now, horizon_hours, Keyword.get(opts, :after_user_id))
       end
-      |> Enum.filter(&is_binary/1)
-      |> Enum.uniq()
 
     empty = %{
       users: length(user_ids),
@@ -145,24 +182,39 @@ defmodule Maraithon.Runtime.NudgeSweep do
       errors: 0
     }
 
-    Enum.reduce(user_ids, empty, fn user_id, acc ->
-      case run_for_user(user_id, opts) do
-        %{} = result ->
-          %{
-            acc
-            | checked: acc.checked + result.checked,
-              proposed: acc.proposed + result.proposed,
-              held: acc.held + result.held,
-              cadence_updates: acc.cadence_updates + result.cadence_updates
-          }
+    bounded_opts = Keyword.put(opts, :deadline_monotonic_ms, deadline)
 
-        {:skip, _reason} ->
-          %{acc | skipped: acc.skipped + 1}
+    {summary, last_attempted} =
+      user_ids
+      |> Enum.with_index()
+      |> Enum.reduce_while({empty, nil}, fn {user_id, index}, {acc, last} ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          unattempted = length(user_ids) - index
+          {:halt, {%{acc | skipped: acc.skipped + unattempted}, last}}
+        else
+          next =
+            case run_for_user(user_id, bounded_opts) do
+              %{} = result ->
+                %{
+                  acc
+                  | checked: acc.checked + result.checked,
+                    proposed: acc.proposed + result.proposed,
+                    held: acc.held + result.held,
+                    cadence_updates: acc.cadence_updates + result.cadence_updates
+                }
 
-        {:error, _reason} ->
-          %{acc | errors: acc.errors + 1}
-      end
-    end)
+              {:skip, _reason} ->
+                %{acc | skipped: acc.skipped + 1}
+
+              {:error, _reason} ->
+                %{acc | errors: acc.errors + 1}
+            end
+
+          {:cont, {next, user_id}}
+        end
+      end)
+
+    {summary, last_attempted}
   end
 
   @doc """
@@ -173,7 +225,12 @@ defmodule Maraithon.Runtime.NudgeSweep do
   def run_for_user(user_id, opts \\ []) when is_binary(user_id) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
     horizon_hours = due_soon_horizon_hours(opts)
-    nudge_cap = positive_integer(Keyword.get(opts, :nudge_cap), @default_nudge_cap)
+
+    nudge_cap =
+      opts
+      |> Keyword.get(:nudge_cap)
+      |> positive_integer(@default_nudge_cap)
+      |> min(@max_nudge_cap)
 
     todos = due_todos(user_id, now, horizon_hours, opts)
 
@@ -191,9 +248,9 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
           {:error, reason} ->
             Logger.warning("Nudge sweep decision pass failed",
-              user_id: user_id,
+              user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
               checked: length(todos),
-              reason: inspect(reason)
+              failure_code: Maraithon.Redaction.error_class(reason)
             )
 
             {:error, reason}
@@ -201,54 +258,91 @@ defmodule Maraithon.Runtime.NudgeSweep do
     end
   rescue
     error ->
+      failure_code = Maraithon.Redaction.error_class(error)
+
       Logger.warning("Nudge sweep user pass crashed",
-        user_id: user_id,
-        reason: Exception.message(error)
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: failure_code
       )
 
-      {:error, error}
+      {:error, failure_code}
   end
 
   # ── Selection ─────────────────────────────────────────────────────────────
 
-  # Every user with a due todo is enumerated: a capped enumeration with no
-  # rotation would starve users past the cutoff forever, and user counts are
-  # small.
-  defp due_user_ids(now, horizon_hours) do
-    horizon_end = DateTime.add(now, horizon_hours * 3600, :second)
+  # A bounded lexical cursor rotates due users across cycles without scanning
+  # the full tenant set or permanently starving IDs beyond the first page.
+  defp due_user_ids(now, horizon_hours, after_user_id) do
+    horizon_end = DateTime.add(now, horizon_hours * 3_600, :second)
+    query = due_user_query(now, horizon_end)
 
-    Repo.all(
-      from(t in Todo,
-        where: t.status in @open_statuses,
-        where:
-          (t.direction == "owed_to_me" and not is_nil(t.next_nudge_at) and
-             t.next_nudge_at <= ^now) or
-            (t.status == "snoozed" and not is_nil(t.snoozed_until) and
-               t.snoozed_until <= ^now) or
-            (not is_nil(t.due_at) and t.due_at <= ^horizon_end and
-               (t.status == "open" or
-                  (not is_nil(t.snoozed_until) and t.snoozed_until <= ^now))),
-        distinct: true,
-        select: t.user_id
-      )
+    cursor =
+      if is_binary(after_user_id) and byte_size(after_user_id) <= 1_280,
+        do: after_user_id,
+        else: nil
+
+    first_page =
+      query
+      |> maybe_after_user(cursor)
+      |> order_by([todo], asc: todo.user_id)
+      |> limit(^@max_users_per_cycle)
+      |> Repo.all()
+
+    remaining = @max_users_per_cycle - length(first_page)
+
+    if remaining > 0 and is_binary(cursor) do
+      wrap_page =
+        query
+        |> where([todo], todo.user_id <= ^cursor)
+        |> order_by([todo], asc: todo.user_id)
+        |> limit(^remaining)
+        |> Repo.all()
+
+      first_page ++ wrap_page
+    else
+      first_page
+    end
+  end
+
+  defp due_user_query(now, horizon_end) do
+    from(t in Todo,
+      where: t.status in @open_statuses,
+      where:
+        (t.direction == "owed_to_me" and not is_nil(t.next_nudge_at) and
+           t.next_nudge_at <= ^now) or
+          (t.status == "snoozed" and not is_nil(t.snoozed_until) and
+             t.snoozed_until <= ^now) or
+          (not is_nil(t.due_at) and t.due_at <= ^horizon_end and
+             (t.status == "open" or
+                (not is_nil(t.snoozed_until) and t.snoozed_until <= ^now))),
+      distinct: true,
+      select: t.user_id
     )
   end
 
+  defp maybe_after_user(query, nil), do: query
+  defp maybe_after_user(query, cursor), do: where(query, [todo], todo.user_id > ^cursor)
+
   defp due_todos(user_id, now, horizon_hours, opts) do
     horizon_end = DateTime.add(now, horizon_hours * 3600, :second)
-    todo_limit = positive_integer(Keyword.get(opts, :todos_per_user), @default_todos_per_user)
+
+    todo_limit =
+      opts
+      |> Keyword.get(:todos_per_user)
+      |> positive_integer(@default_todos_per_user)
+      |> min(@max_todos_per_user)
 
     Repo.all(
       from(t in Todo,
         where: t.user_id == ^user_id,
         where: t.status in @open_statuses,
+        # A due/overdue todo only fires while it is open or its snooze
+        # has elapsed — snoozing a past-due todo must actually silence it.
         where:
           (t.direction == "owed_to_me" and not is_nil(t.next_nudge_at) and
              t.next_nudge_at <= ^now) or
             (t.status == "snoozed" and not is_nil(t.snoozed_until) and
                t.snoozed_until <= ^now) or
-            # A due/overdue todo only fires while it is open or its snooze
-            # has elapsed — snoozing a past-due todo must actually silence it.
             (not is_nil(t.due_at) and t.due_at <= ^horizon_end and
                (t.status == "open" or
                   (not is_nil(t.snoozed_until) and t.snoozed_until <= ^now))),
@@ -291,39 +385,69 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   # ── Decision (bounded, best-effort LLM pass) ──────────────────────────────
 
-  defp decide(user_id, todos, reasons, now, timezone_context, opts) do
-    prompt = build_prompt(user_id, todos, reasons, now, timezone_context)
+  defp decide(_user_id, todos, reasons, now, timezone_context, opts) do
+    prompt = build_prompt(todos, reasons, now, timezone_context)
     llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, opts))
-    timeout_ms = positive_integer(Keyword.get(opts, :llm_timeout_ms), @default_llm_timeout_ms)
 
-    # Bounded per-user model call: a slow or rate-limited call for one user
-    # must never block the sweep for every other user in the same tick
-    # (mirrors CrossSourceCompletion's Task.yield/brutal_kill pattern).
-    task = Task.async(fn -> llm_complete.(prompt) end)
+    configured_timeout =
+      opts
+      |> Keyword.get(:llm_timeout_ms)
+      |> positive_integer(@default_llm_timeout_ms)
+      |> min(@default_llm_timeout_ms)
 
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {:ok, response}} -> decode_response(response)
-      {:ok, {:error, reason}} -> {:error, reason}
-      {:ok, other} -> {:error, {:unexpected_llm_result, other}}
-      {:exit, reason} -> {:error, {:llm_task_exit, reason}}
-      nil -> {:error, {:llm_timeout, timeout_ms}}
+    deadline =
+      case Keyword.get(opts, :deadline_monotonic_ms) do
+        value when is_integer(value) -> value
+        _other -> System.monotonic_time(:millisecond) + @max_cycle_ms
+      end
+
+    timeout_ms = min(configured_timeout, max(deadline - System.monotonic_time(:millisecond), 0))
+    allowed_ids = MapSet.new(todos, & &1.id)
+
+    cond do
+      timeout_ms <= 0 ->
+        {:error, :nudge_sweep_deadline}
+
+      prompt_message_bytes(prompt) > @max_prompt_bytes ->
+        {:error, :nudge_sweep_prompt_too_large}
+
+      true ->
+        task =
+          Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
+            try do
+              {:ok, llm_complete.(prompt)}
+            rescue
+              exception -> {:error, Maraithon.Redaction.error_class(exception)}
+            catch
+              kind, _reason -> {:error, to_string(kind)}
+            end
+          end)
+
+        case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+          {:ok, {:ok, {:ok, response}}} -> decode_response(response, allowed_ids)
+          {:ok, {:ok, {:error, reason}}} -> {:error, Maraithon.Redaction.error_summary(reason)}
+          {:ok, {:ok, _other}} -> {:error, :unexpected_llm_result}
+          {:ok, {:error, failure_code}} -> {:error, {:llm_task_failed, failure_code}}
+          {:exit, _reason} -> {:error, :llm_task_exit}
+          nil -> {:error, {:llm_timeout, timeout_ms}}
+        end
     end
   end
 
-  defp build_prompt(_user_id, todos, reasons, now, timezone_context) do
+  defp build_prompt(todos, reasons, now, timezone_context) do
     items =
       Enum.map(todos, fn todo ->
         reason = Map.fetch!(reasons, todo.id)
 
         %{
-          "todo_id" => todo.id,
+          "todo_id" => bounded_text(todo.id, 255),
           "reason" => reason_label(reason),
-          "direction" => todo.direction,
-          "status" => todo.status,
-          "title" => todo.title,
-          "summary" => truncate(todo.summary, 300),
-          "next_action" => truncate(todo.next_action, 200),
-          "counterparty" => todo.counterparty_label,
+          "direction" => bounded_text(todo.direction, 50),
+          "status" => bounded_text(todo.status, 50),
+          "title" => bounded_text(todo.title, 500),
+          "summary" => bounded_text(todo.summary, 1_200),
+          "next_action" => bounded_text(todo.next_action, 800),
+          "counterparty" => bounded_text(todo.counterparty_label, 255),
           "nudge_count" => todo.nudge_count || 0,
           "due_at_local" => local_label(todo.due_at, timezone_context),
           "snoozed_until_local" => local_label(todo.snoozed_until, timezone_context),
@@ -336,6 +460,17 @@ defmodule Maraithon.Runtime.NudgeSweep do
         }
         |> compact_map()
       end)
+      |> PromptBudget.bounded(@max_prompt_items_bytes,
+        string_bytes: 1_200,
+        list_items: @max_todos_per_user,
+        map_entries: 20,
+        max_depth: 3,
+        key_bytes: 64
+      )
+      |> case do
+        list when is_list(list) -> list
+        _other -> []
+      end
 
     """
     You are the follow-up timing decider for a chief-of-staff product. Each
@@ -386,6 +521,12 @@ defmodule Maraithon.Runtime.NudgeSweep do
     """
   end
 
+  defp prompt_message_bytes(prompt) when is_binary(prompt) do
+    [%{"role" => "user", "content" => prompt}]
+    |> PromptStability.encode!()
+    |> byte_size()
+  end
+
   defp reason_label(:nudge_due), do: "follow_up_due"
   defp reason_label(:nudge_limit), do: "follow_up_limit_reached"
   defp reason_label(:overdue), do: "overdue"
@@ -397,14 +538,25 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
     LLM.complete(%{
       "messages" => [%{"role" => "user", "content" => prompt}],
-      "max_tokens" => Keyword.get(opts, :max_tokens, @default_max_tokens),
+      "max_tokens" =>
+        opts
+        |> Keyword.get(:max_tokens)
+        |> positive_integer(@default_max_tokens)
+        |> min(4_096),
       "temperature" => 0.1,
-      "reasoning_effort" => Keyword.get(config, :reasoning_effort, LLM.intelligence()),
-      "timeout_ms" => Keyword.get(opts, :llm_timeout_ms, @default_llm_timeout_ms)
+      "reasoning_effort" =>
+        config
+        |> Keyword.get(:reasoning_effort, LLM.intelligence())
+        |> bounded_reasoning_effort(),
+      "timeout_ms" =>
+        opts
+        |> Keyword.get(:llm_timeout_ms)
+        |> positive_integer(@default_llm_timeout_ms)
+        |> min(@default_llm_timeout_ms)
     })
   end
 
-  defp decode_response(response) do
+  defp decode_response(response, allowed_ids) when is_struct(allowed_ids, MapSet) do
     content =
       case response do
         %{"content" => content} when is_binary(content) -> content
@@ -413,14 +565,56 @@ defmodule Maraithon.Runtime.NudgeSweep do
         _other -> nil
       end
 
-    with content when is_binary(content) <- content,
+    with content when is_binary(content) and byte_size(content) <= @max_response_bytes <- content,
          json when is_binary(json) <- extract_json(content),
          {:ok, %{"decisions" => decisions}} when is_list(decisions) <- Jason.decode(json) do
-      {:ok, Enum.filter(decisions, &is_map/1)}
+      decisions =
+        decisions
+        |> Enum.take(@max_decisions_scan)
+        |> Enum.reduce({[], MapSet.new()}, fn decision, {selected, seen} ->
+          todo_id = if is_map(decision), do: decision["todo_id"]
+
+          cond do
+            length(selected) >= @max_decisions ->
+              {selected, seen}
+
+            not is_binary(todo_id) or byte_size(todo_id) > 255 ->
+              {selected, seen}
+
+            not MapSet.member?(allowed_ids, todo_id) or MapSet.member?(seen, todo_id) ->
+              {selected, seen}
+
+            true ->
+              {[normalize_decision(decision) | selected], MapSet.put(seen, todo_id)}
+          end
+        end)
+        |> elem(0)
+        |> Enum.reverse()
+
+      {:ok, decisions}
     else
       _other -> {:error, :nudge_sweep_invalid_response}
     end
   end
+
+  defp normalize_decision(decision) do
+    %{
+      "todo_id" => decision["todo_id"],
+      "surface" => decision["surface"] == true,
+      "title" => bounded_text(decision["title"], 800),
+      "body" => bounded_text(decision["body"], 4_000),
+      "why_now" => bounded_text(decision["why_now"], 1_000),
+      "draft_text" => bounded_text(decision["draft_text"], @max_draft_text_bytes),
+      "next_nudge_at" => bounded_text(decision["next_nudge_at"], @max_next_nudge_at_bytes),
+      "urgency" => bounded_urgency_value(decision["urgency"])
+    }
+  end
+
+  defp bounded_urgency_value(value) when is_float(value) and value >= 0.0 and value <= 1.0,
+    do: value
+
+  defp bounded_urgency_value(value) when is_integer(value) and value in 0..1, do: value
+  defp bounded_urgency_value(_value), do: nil
 
   defp extract_json(content) do
     with {start, _length} <- :binary.match(content, "{"),
@@ -555,24 +749,24 @@ defmodule Maraithon.Runtime.NudgeSweep do
   # person in one tick become one proposed candidate, not one card each.
   defp bundle_by_counterparty(surfaced) do
     surfaced
-    |> Enum.group_by(fn %{todo: todo} ->
-      cond do
-        is_binary(todo.counterparty_person_id) ->
-          {:person, todo.counterparty_person_id}
-
-        is_binary(todo.counterparty_label) and String.trim(todo.counterparty_label) != "" ->
-          {:label, todo.counterparty_label |> String.trim() |> String.downcase()}
-
-        true ->
-          {:todo, todo.id}
-      end
-    end)
+    |> Enum.group_by(fn %{todo: todo} -> counterparty_group_key(todo) end)
     |> Map.values()
     |> Enum.map(fn members ->
       Enum.sort_by(members, fn %{todo: todo, reason: reason} ->
         {Map.fetch!(@reason_priority, reason), due_sort_value(todo)}
       end)
     end)
+  end
+
+  defp counterparty_group_key(%Todo{} = todo) do
+    person_id = bounded_text(todo.counterparty_person_id, 255)
+    label = bounded_text(todo.counterparty_label, 255)
+
+    cond do
+      is_binary(person_id) and person_id != "" -> {:person, person_id}
+      is_binary(label) and label != "" -> {:label, String.downcase(label)}
+      true -> {:todo, todo.id}
+    end
   end
 
   defp due_sort_value(%Todo{due_at: %DateTime{} = due_at}), do: DateTime.to_unix(due_at, :second)
@@ -619,10 +813,10 @@ defmodule Maraithon.Runtime.NudgeSweep do
         # Ids/field-names only — never inspect a full changeset here, its
         # `changes` would put todo summary/body content into the logs.
         Logger.warning("Nudge sweep could not enqueue candidate",
-          user_id: user_id,
-          todo_id: todo.id,
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          todo_reference: Maraithon.Redaction.fingerprint(todo.id),
           nudge_reason: reason_label(reason),
-          reason: enqueue_error_summary(reason_error)
+          failure_code: enqueue_error_summary(reason_error)
         )
 
         false
@@ -633,14 +827,14 @@ defmodule Maraithon.Runtime.NudgeSweep do
     "invalid_candidate:#{errors |> Keyword.keys() |> Enum.map_join(",", &to_string/1)}"
   end
 
-  defp enqueue_error_summary(other), do: inspect(other)
+  defp enqueue_error_summary(other), do: Maraithon.Redaction.error_class(other)
 
   defp append_bundle_note(body, []), do: body
 
   defp append_bundle_note(body, rest) do
     titles =
       rest
-      |> Enum.map(fn %{todo: todo} -> "- #{todo.title}" end)
+      |> Enum.map(fn %{todo: todo} -> "- #{bounded_text(todo.title, 255) || "Untitled"}" end)
       |> Enum.join("\n")
 
     body <> "\n\nAlso due with the same person:\n" <> titles
@@ -715,6 +909,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
       ),
       @default_due_soon_horizon_hours
     )
+    |> min(@max_due_soon_horizon_hours)
   end
 
   defp clamp_urgency(value, _default) when is_float(value), do: value |> max(0.0) |> min(1.0)
@@ -724,26 +919,29 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   defp clamp_urgency(_value, default), do: default
 
-  defp presence(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
+  defp presence(value) when is_binary(value), do: bounded_text(value, 4_000)
   defp presence(_value), do: nil
 
-  defp truncate(nil, _max), do: nil
+  defp truncate(nil, _max_bytes), do: nil
+  defp truncate(text, max_bytes), do: bounded_text(text, max_bytes)
 
-  defp truncate(text, max) when is_binary(text) do
-    text = String.trim(text)
-
-    if String.length(text) <= max do
-      text
-    else
-      String.slice(text, 0, max - 1) <> "…"
+  defp bounded_text(text, max_bytes)
+       when is_binary(text) and is_integer(max_bytes) and max_bytes >= 0 do
+    text
+    |> PromptBudget.truncate_utf8(max_bytes)
+    |> String.trim()
+    |> case do
+      "" -> nil
+      bounded -> bounded
     end
   end
+
+  defp bounded_text(_text, _max_bytes), do: nil
+
+  defp bounded_reasoning_effort(value) when value in ["none", "minimal", "low", "medium", "high"],
+    do: value
+
+  defp bounded_reasoning_effort(_value), do: "none"
 
   defp compact_map(map) when is_map(map) do
     map
@@ -755,6 +953,6 @@ defmodule Maraithon.Runtime.NudgeSweep do
   defp positive_integer(_value, default), do: default
 
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
-    Process.send_after(self(), :tick, delay_ms)
+    Process.send_after(self(), :tick, min(delay_ms, @max_interval_ms))
   end
 end

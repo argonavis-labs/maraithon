@@ -3,6 +3,8 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
 
   alias Maraithon.Effects.Effect
   alias Maraithon.LLM.MockProvider
+  alias Maraithon.LLM.OpenRouterProvider
+  alias Maraithon.LogBuffer
   alias Maraithon.Runtime.Effects.LLMCallCommand
   alias Maraithon.Runtime.Effects.LLMRateLimiter
 
@@ -139,6 +141,105 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
     }
   end
 
+  test "caps pathological token strings and configured primary ceilings before provider work" do
+    original = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      Keyword.merge(original,
+        llm_provider: RetryStub,
+        llm_primary_max_tokens: :erlang.bsl(1, 100_000)
+      )
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, Maraithon.Runtime, original) end)
+
+    start_retry_stub_with_calls([
+      {:ok,
+       %{
+         content: "bounded",
+         model: "stub",
+         tokens_in: 1,
+         tokens_out: 1,
+         finish_reason: "stop"
+       }}
+    ])
+
+    fallbacks =
+      LLMCallCommand.normalize_model_fallbacks(
+        String.duplicate("valid-model,", 10_000) <> String.duplicate("x", 10_000)
+      )
+
+    assert length(fallbacks) <= 8
+    assert Enum.all?(fallbacks, &(byte_size(&1) <= 255))
+
+    effect = %Effect{
+      id: Ecto.UUID.generate(),
+      agent_id: Ecto.UUID.generate(),
+      params: %{
+        "messages" => [%{"role" => "user", "content" => "go"}],
+        "max_tokens" => String.duplicate("9", 1_000_000)
+      }
+    }
+
+    assert {:ok, _result} = LLMCallCommand.execute(effect)
+    assert [%{"max_tokens" => 32_000}] = retry_stub_calls()
+  end
+
+  test "OpenRouter error bodies never reach effect-command logs" do
+    bypass = Bypass.open()
+    swap_provider(OpenRouterProvider)
+
+    original_openrouter = Application.get_env(:maraithon, :openrouter)
+
+    runtime =
+      Application.get_env(:maraithon, Maraithon.Runtime, [])
+      |> Keyword.merge(
+        llm_provider: OpenRouterProvider,
+        llm_provider_name: "openrouter",
+        llm_model: "qwen/qwen3.7-max",
+        openrouter_model: "qwen/qwen3.7-max",
+        openrouter_api_key: "test_api_key",
+        llm_model_fallbacks: []
+      )
+
+    Application.put_env(:maraithon, Maraithon.Runtime, runtime)
+
+    Application.put_env(:maraithon, :openrouter,
+      base_url: "http://localhost:#{bypass.port}/api/v1/chat/completions"
+    )
+
+    on_exit(fn ->
+      if original_openrouter do
+        Application.put_env(:maraithon, :openrouter, original_openrouter)
+      else
+        Application.delete_env(:maraithon, :openrouter)
+      end
+    end)
+
+    Bypass.expect_once(bypass, "POST", "/api/v1/chat/completions", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        400,
+        Jason.encode!(%{"error" => %{"message" => "effect-prompt-echo-secret"}})
+      )
+    end)
+
+    LogBuffer.clear()
+
+    assert {:error, {:api_error, 400, body}} = LLMCallCommand.execute(effect_for())
+    assert body == :redacted
+
+    Logger.flush()
+    _ = :sys.get_state(LogBuffer)
+
+    captured = LogBuffer.recent(100) |> inspect(printable_limit: :infinity)
+    refute captured =~ "effect-prompt-echo-secret"
+    assert captured =~ "api_error"
+  end
+
   describe "retry policy" do
     test "retries on :rate_limited with the provider-supplied backoff and recovers" do
       swap_provider(RetryStub)
@@ -156,6 +257,19 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
       ])
 
       assert {:ok, %{content: "ok"}} = LLMCallCommand.execute(effect_for())
+    end
+
+    test "uses one total deadline across local-busy retries" do
+      swap_provider(RetryStub)
+      start_retry_stub_with_calls([{:error, {:llm_busy, 5_000}}])
+
+      effect = effect_for()
+      effect = %{effect | params: Map.put(effect.params, "timeout_ms", 100)}
+
+      assert {:error, :timeout} = LLMCallCommand.execute(effect)
+      [call] = retry_stub_calls()
+      assert call["timeout_ms"] <= 100
+      assert call["timeout_ms"] > 0
     end
 
     test "non-retryable errors are returned without retrying" do

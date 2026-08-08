@@ -233,6 +233,38 @@ defmodule Maraithon.AssistantHarnessTest do
     assert override_request["reasoning_effort"] == "minimal"
   end
 
+  test "rejects oversized proactive prompts before calling the model" do
+    giant = String.duplicate("🙂\"\n", 30_000)
+
+    llm_complete = fn _params ->
+      flunk("the model must not run for an oversized proactive prompt")
+    end
+
+    assert {:error, {:prompt_exceeds_budget, :proactive, prompt_bytes, prompt_byte_cap}} =
+             AssistantHarness.proactive_plan(%{context: %{giant: giant}},
+               llm_complete: llm_complete
+             )
+
+    assert prompt_bytes > prompt_byte_cap
+    assert prompt_byte_cap == AssistantHarness.proactive_prompt_byte_cap()
+  end
+
+  test "rejects oversized delivery prompts before calling the model" do
+    giant = String.duplicate("🙂\"\n", 30_000)
+
+    llm_complete = fn _params ->
+      flunk("the model must not run for an oversized delivery prompt")
+    end
+
+    assert {:error, {:prompt_exceeds_budget, :delivery_plan, prompt_bytes, prompt_byte_cap}} =
+             AssistantHarness.plan_delivery(%{context: %{giant: giant}, candidates: []},
+               llm_complete: llm_complete
+             )
+
+    assert prompt_bytes > prompt_byte_cap
+    assert prompt_byte_cap == AssistantHarness.delivery_plan_prompt_byte_cap()
+  end
+
   test "proactive prompts encode backlog, weekend, and attention-stack policy" do
     proactive_request =
       AssistantHarness.build_proactive_request(%{
@@ -497,6 +529,45 @@ defmodule Maraithon.AssistantHarnessTest do
     assert String.length(body) < 60
   end
 
+  test "tool evidence rejects adversarial depth and width with bounded policy" do
+    deep = Enum.reduce(1..20, %{"leaf" => true}, fn _, acc -> %{"nested" => acc} end)
+    wide = Map.new(1..3_000, &{"key-#{&1}", &1})
+
+    evidence =
+      AssistantHarness.execution_evidence(
+        [
+          %{"tool" => "deep", "result" => deep},
+          %{"tool" => "wide", "result" => wide},
+          %{"tool" => "long", "result" => String.duplicate("x", 1_000_000)}
+        ],
+        tool_result_string_chars: 1_000_000_000,
+        tool_result_list_items: 1_000_000_000,
+        tool_result_map_entries: 1_000_000_000
+      )
+
+    assert Maraithon.PromptBudget.encoded_bytes(evidence) < 2_000
+    assert Enum.all?(evidence, fn entry -> entry["result"] == %{"_truncated" => true} end)
+
+    policy =
+      AssistantHarness.runtime_policy(
+        tool_result_string_chars: 1_000_000_000,
+        tool_result_list_items: 1_000_000_000,
+        tool_result_map_entries: 1_000_000_000,
+        max_tokens: String.duplicate("9", 1_000_000),
+        proactive_max_tokens: 1_000_000_000,
+        temperature: String.duplicate("1", 1_000_000),
+        reasoning_effort: String.duplicate("x", 1_000_000)
+      )
+
+    assert policy.tool_evidence.max_string_chars == 4_000
+    assert policy.tool_evidence.max_list_items == 20
+    assert policy.tool_evidence.max_map_entries == 40
+    assert policy.chat_request.max_tokens == 1_800
+    assert policy.proactive_request.max_tokens == 4_000
+    assert policy.chat_request.temperature == 0.2
+    assert policy.chat_request.reasoning_effort == "low"
+  end
+
   test "uses the model response to choose tools instead of local keyword routing" do
     llm_complete = fn params ->
       prompt = get_in(params, ["messages", Access.at(1), "content"])
@@ -569,6 +640,114 @@ defmodule Maraithon.AssistantHarnessTest do
                "arguments" => %{"query" => "Charlie", "newer_than" => "30d"}
              }
            ]
+  end
+
+  test "rejects a provider-controlled oversized segmented tool name with bounded work" do
+    tool = Enum.join(List.duplicate("segment", 10_000), ".")
+
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [%{"tool" => tool, "arguments" => %{}}],
+             "summary" => "Malformed tool name."
+           })
+       }}
+    end
+
+    assert {:error, :assistant_harness_invalid_tool_call} =
+             AssistantHarness.next_step(payload("Check this"),
+               llm_complete: llm_complete,
+               model_failover_max_attempts: 1
+             )
+  end
+
+  test "bounds correction fields before returning model output" do
+    oversized = String.duplicate("🙂\"", 20_000)
+
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "status" => "final",
+             "assistant_message" => "Updated.",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [],
+             "summary" => "Correction recorded.",
+             "correction" => %{
+               "detected" => true,
+               "kind" => "value_correction",
+               "subject" => oversized,
+               "original_value" => oversized,
+               "corrected_value" => oversized,
+               "resource_type" => oversized,
+               "resource_id" => oversized
+             }
+           })
+       }}
+    end
+
+    assert {:ok, %{"correction" => correction}} =
+             AssistantHarness.next_step(payload("Correct it"), llm_complete: llm_complete)
+
+    assert byte_size(correction["subject"]) <= 255
+    assert byte_size(correction["original_value"]) <= 4_000
+    assert byte_size(correction["corrected_value"]) <= 4_000
+    assert byte_size(correction["resource_type"]) <= 100
+    assert byte_size(correction["resource_id"]) <= 255
+    assert Enum.all?(Map.values(correction), &(not is_binary(&1) or String.valid?(&1)))
+  end
+
+  test "clamps adversarial retry and fallback configuration before allocation" do
+    parent = self()
+
+    llm_complete = fn _params ->
+      send(parent, :attempt)
+      {:ok, %{content: "not json"}}
+    end
+
+    assert {:error, :assistant_harness_invalid_json} =
+             AssistantHarness.next_step(payload("Check this"),
+               llm_complete: llm_complete,
+               model_failover_max_attempts: 1_000_000_000,
+               model_retry_base_delay_ms: 1,
+               model_retry_max_delay_ms: 1
+             )
+
+    assert_receive :attempt
+    attempts = 1 + drain_attempts(0)
+    assert attempts == 8
+
+    policy =
+      AssistantHarness.runtime_policy(
+        model_fallbacks: String.duplicate("fallback-model,", 1_000_000)
+      )
+
+    assert policy.model_failover.fallback_count <= 100
+
+    oversized_model = String.duplicate("model", 1_000_000)
+    parent = self()
+
+    assert {:error, :timeout} =
+             AssistantHarness.next_step(payload("Check bounded policy"),
+               llm_complete: fn params ->
+                 send(parent, {:bounded_policy_params, params})
+                 {:ok, %{content: "not json"}}
+               end,
+               chat_model: oversized_model,
+               model_failover_max_attempts: 2,
+               model_retry_base_delay_ms: 1_000_000_000_000_000_000_000_000,
+               model_retry_max_delay_ms: 1_000_000_000_000_000_000_000_000,
+               deadline_monotonic_ms: System.monotonic_time(:millisecond) + 50
+             )
+
+    assert_receive {:bounded_policy_params, params}
+    refute Map.has_key?(params, "model")
   end
 
   test "rejects invalid model output instead of using a semantic fallback" do
@@ -790,6 +969,53 @@ defmodule Maraithon.AssistantHarnessTest do
              AssistantHarness.proactive_plan(%{context: %{}}, llm_complete: llm_complete)
   end
 
+  test "carries one wall-clock deadline through provider retries" do
+    test_pid = self()
+
+    llm_complete = fn params ->
+      send(test_pid, {:deadline_attempt, params["timeout_ms"]})
+      {:error, {:llm_busy, 5_000}}
+    end
+
+    assert {:error, :timeout} =
+             AssistantHarness.proactive_plan(%{context: %{}},
+               llm_complete: llm_complete,
+               max_wall_clock_ms: 20,
+               model_busy_max_retries: 20
+             )
+
+    assert_received {:deadline_attempt, timeout_ms}
+    assert timeout_ms > 0 and timeout_ms <= 20
+    refute_received {:deadline_attempt, _another_timeout}
+  end
+
+  test "rejects delivery plans above the disposition contract limit" do
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "dispositions" =>
+               Enum.map(1..13, fn index ->
+                 %{
+                   "candidate_id" => "candidate-#{index}",
+                   "disposition" => "hold",
+                   "reason" => "Hold."
+                 }
+               end),
+             "digest_intro" => "",
+             "summary" => "Too many."
+           })
+       }}
+    end
+
+    assert {:error, :assistant_harness_invalid_dispositions} =
+             AssistantHarness.plan_delivery(%{candidates: []},
+               llm_complete: llm_complete,
+               model_failover_max_attempts: 1
+             )
+  end
+
   test "plan_delivery normalizes model dispositions" do
     llm_complete = fn params ->
       prompt = get_in(params, ["messages", Access.at(1), "content"])
@@ -930,5 +1156,13 @@ defmodule Maraithon.AssistantHarnessTest do
       tools: [%{"name" => "get_open_work_summary"}, %{"name" => "list_todos"}],
       tool_history: []
     }
+  end
+
+  defp drain_attempts(count) do
+    receive do
+      :attempt -> drain_attempts(count + 1)
+    after
+      0 -> count
+    end
   end
 end

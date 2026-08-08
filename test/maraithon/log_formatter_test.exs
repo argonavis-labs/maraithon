@@ -61,6 +61,21 @@ defmodule Maraithon.LogFormatterTest do
         digest: 7,
         delivered: 8,
         expired: 9,
+        user_id_hash: "abc123",
+        failure_code: "api_500",
+        failure_codes: %{"api_500" => 1},
+        cost_usd: 0.123,
+        reasoning_tokens: 321,
+        response_status: 500,
+        response_shape: "list",
+        error_class: "server_error",
+        choice_count: 1,
+        prompt_kind: :delivery_plan,
+        prompt_bytes: 12_345,
+        prompt_byte_cap: 64_000,
+        available_candidates: 25,
+        included_candidates: 8,
+        undeliverable: 2,
         arbitrary_payload: "not-for-console"
       ]
 
@@ -86,6 +101,22 @@ defmodule Maraithon.LogFormatterTest do
       assert decoded["digest"] == 7
       assert decoded["delivered"] == 8
       assert decoded["expired"] == 9
+      assert decoded["user_id_hash"] == "abc123"
+      assert decoded["failure_code"] == "api_500"
+      assert decoded["failure_codes"] =~ "api_500"
+      assert decoded["cost_usd"] == 0.123
+      assert decoded["reasoning_tokens"] == 321
+      assert decoded["response_status"] == 500
+      assert decoded["response_shape"] == "list"
+      assert decoded["error_class"] == "server_error"
+      assert decoded["choice_count"] == 1
+      assert decoded["prompt_kind"] == "delivery_plan"
+      assert decoded["prompt_bytes"] == 12_345
+      assert decoded["prompt_byte_cap"] == 64_000
+      assert decoded["available_candidates"] == 25
+      assert decoded["included_candidates"] == 8
+      assert decoded["failed"] == 1
+      assert decoded["undeliverable"] == 2
       refute Map.has_key?(decoded, "arbitrary_payload")
     end
 
@@ -112,7 +143,7 @@ defmodule Maraithon.LogFormatterTest do
       decoded = result |> IO.iodata_to_binary() |> String.trim() |> Jason.decode!()
 
       assert decoded["message"] == "request used Authorization: <redacted-auth>"
-      assert decoded["reason"] =~ "<redacted>"
+      assert decoded["reason"] == "request_failed"
       refute decoded["reason"] =~ "secret-token-value"
       refute decoded["reason"] =~ "secret-access-token"
     end
@@ -130,6 +161,15 @@ defmodule Maraithon.LogFormatterTest do
       assert labels["module"] == "Elixir.MyModule"
       assert labels["function"] == "test/2"
       assert labels["line"] == "42"
+    end
+
+    test "sanitizes invalid UTF-8 while preserving structured JSON" do
+      timestamp = {{2024, 1, 15}, {12, 30, 45, 0}}
+      result = LogFormatter.format(:warning, <<"invalid ", 255>>, timestamp, [])
+      json = result |> IO.iodata_to_binary() |> String.trim()
+
+      assert String.valid?(json)
+      assert Jason.decode!(json)["message"] == "invalid �"
     end
 
     test "handles iodata messages" do

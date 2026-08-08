@@ -231,7 +231,10 @@ defmodule Maraithon.Todos.CounterpartyBackfill do
       {:ok, picks}
     else
       {:error, reason} ->
-        Logger.warning("counterparty_backfill model pass failed reason=#{inspect(reason)}")
+        Logger.warning("counterparty_backfill model pass failed",
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
         {:error, reason}
     end
   end

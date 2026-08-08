@@ -81,4 +81,13 @@ defmodule Maraithon.LLM.JsonFieldStreamerTest do
     {emit, _state} = drive(JsonFieldStreamer.new(), chunks)
     assert emit == "a\nb"
   end
+
+  test "handles a large single delta in linear stack-safe form" do
+    message = String.duplicate("x", 200_000)
+    json = ~s({"assistant_message":"#{message}"})
+
+    {emit, state} = JsonFieldStreamer.feed(JsonFieldStreamer.new(), json)
+    assert emit == message
+    assert JsonFieldStreamer.done?(state)
+  end
 end

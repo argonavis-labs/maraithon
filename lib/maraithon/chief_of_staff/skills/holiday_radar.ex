@@ -213,7 +213,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
       {:llm_call,
        %{
          content: "",
-         error: inspect(reason),
+         error: Maraithon.Redaction.error_summary(reason),
          finish_reason: "error"
        }},
       state,
