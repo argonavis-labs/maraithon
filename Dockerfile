@@ -45,8 +45,9 @@ RUN mix compile
 COPY assets assets
 RUN mix assets.deploy
 
-# Copy runtime config
+# Copy runtime config and release templates
 COPY config/runtime.exs config/
+COPY rel rel
 
 # Build release
 RUN mix release
