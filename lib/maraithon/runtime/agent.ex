@@ -13,6 +13,7 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.Agents
   alias Maraithon.Behaviors
   alias Maraithon.Insights.Refresh, as: InsightRefresh
+  alias Maraithon.LLM.RequestBudget
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
   alias Maraithon.OperatorEvents
@@ -1144,13 +1145,12 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp request_effect(data, {effect_type, tool_name, raw_params}) do
-    raw_params =
-      data
-      |> maybe_inject_memory_into_effect(effect_type, raw_params)
-      |> durable_effect_params(effect_type, tool_name)
+    raw_params = durable_effect_params(raw_params, effect_type, tool_name)
 
     {params, validation_error} =
-      with {:ok, bounded} <- validate_effect_params(effect_type, raw_params),
+      with {:ok, base} <- validate_effect_params(effect_type, raw_params),
+           enriched <- maybe_inject_memory_into_effect(data, effect_type, base),
+           {:ok, bounded} <- validate_effect_params(effect_type, enriched),
            {:ok, persistable} <- Effects.prepare_params(tool_name, bounded) do
         {persistable, nil}
       else
@@ -1628,12 +1628,16 @@ defmodule Maraithon.Runtime.Agent do
     query = effect_query(data)
 
     params
-    |> Memory.inject_llm_params(data.user_id, query: query, limit: 8)
-    |> OpenLoops.inject_llm_params(data.user_id,
-      query: query,
-      limit: 8,
-      include_memory?: false
-    )
+    |> RequestBudget.put_optional_context(fn candidate ->
+      Memory.inject_llm_params(candidate, data.user_id, query: query, limit: 8)
+    end)
+    |> RequestBudget.put_optional_context(fn candidate ->
+      OpenLoops.inject_llm_params(candidate, data.user_id,
+        query: query,
+        limit: 8,
+        include_memory?: false
+      )
+    end)
   end
 
   defp maybe_inject_memory_into_effect(_data, _effect_type, params), do: params

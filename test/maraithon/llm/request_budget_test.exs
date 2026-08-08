@@ -115,4 +115,86 @@ defmodule Maraithon.LLM.RequestBudgetTest do
              "exclude" => true
            }
   end
+
+  test "keeps valid base requests when optional context would overflow" do
+    base = %{
+      "messages" => [%{"role" => "user", "content" => String.duplicate("x", 120_000)}]
+    }
+
+    assert {:ok, _bounded} = RequestBudget.validate(base)
+
+    assert RequestBudget.put_optional_context(base, fn params ->
+             Map.update!(params, "messages", fn messages ->
+               [%{"role" => "system", "content" => String.duplicate("y", 20_000)} | messages]
+             end)
+           end) == base
+  end
+
+  test "admits fitting optional context and fails safely when an injector raises" do
+    base = %{"messages" => [%{"role" => "user", "content" => "hello"}]}
+    context = %{"role" => "system", "content" => "bounded context"}
+
+    assert %{"messages" => [^context, %{"content" => "hello"}]} =
+             RequestBudget.put_optional_context(base, fn params ->
+               Map.update!(params, "messages", &[context | &1])
+             end)
+
+    assert RequestBudget.put_optional_context(base, fn _params -> raise "unavailable" end) == base
+  end
+
+  test "canonicalizes valid bases before optional injection" do
+    params = %{
+      messages: [%{role: "user", content: "hello"}],
+      max_tokens: 100_000,
+      unknown: "drop me"
+    }
+
+    assert %{
+             "messages" => [
+               %{"role" => "system", "content" => "context"},
+               %{role: "user", content: "hello"}
+             ],
+             "max_tokens" => 32_000
+           } =
+             RequestBudget.put_optional_context(params, fn base ->
+               refute Map.has_key?(base, :messages)
+               refute Map.has_key?(base, :unknown)
+
+               Map.update!(base, "messages", fn messages ->
+                 [%{"role" => "system", "content" => "context"} | messages]
+               end)
+             end)
+  end
+
+  test "does not invoke optional context for an invalid base" do
+    invalid = %{
+      "messages" => List.duplicate(%{"role" => "user", "content" => "too many"}, 65)
+    }
+
+    assert RequestBudget.put_optional_context(invalid, fn _base ->
+             send(self(), :injector_invoked)
+             %{}
+           end) == invalid
+
+    refute_received :injector_invoked
+  end
+
+  test "retains earlier accepted context when later optional context overflows" do
+    base = %{"messages" => [%{"role" => "user", "content" => "request"}]}
+
+    with_memory =
+      RequestBudget.put_optional_context(base, fn params ->
+        Map.update!(params, "messages", fn messages ->
+          [%{"role" => "system", "content" => String.duplicate("m", 60_000)} | messages]
+        end)
+      end)
+
+    assert with_memory != base
+
+    assert RequestBudget.put_optional_context(with_memory, fn params ->
+             Map.update!(params, "messages", fn messages ->
+               [%{"role" => "system", "content" => String.duplicate("o", 80_000)} | messages]
+             end)
+           end) == with_memory
+  end
 end

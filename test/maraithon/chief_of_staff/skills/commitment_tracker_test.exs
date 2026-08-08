@@ -8,6 +8,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
   alias Maraithon.ChiefOfStaff.Skills.CommitmentTracker
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.Crm
+  alias Maraithon.LLM.RequestBudget
   alias Maraithon.Todos
 
   setup do
@@ -52,6 +53,84 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert input["date"] == "2026-05-09"
     assert input["timezone"] == "ET"
     assert input["timezone_offset_hours"] == -4
+  end
+
+  test "bounds the complete LLM request for oversized multi-source evidence", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-09 15:00:00Z]
+    large_body = String.duplicate("Source-backed commitment evidence. ", 300)
+
+    messages =
+      Enum.map(1..40, fn index ->
+        %{
+          "message_id" => "large-message-#{index}",
+          "thread_id" => "large-thread-#{index}",
+          "labels" => ["INBOX"],
+          "from" => "Counterparty #{index} <counterparty#{index}@example.com>",
+          "to" => "Operator <operator@example.com>",
+          "subject" => "Commitment evidence #{index}",
+          "text_body" => large_body,
+          "internal_date" => DateTime.add(now, -index, :minute),
+          "account" => "operator@example.com"
+        }
+      end)
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "inbox_messages" => messages,
+        "sent_messages" =>
+          Enum.map(messages, fn message ->
+            message
+            |> Map.put("labels", ["SENT"])
+            |> Map.put("from", "Operator <operator@example.com>")
+          end),
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    state =
+      CommitmentTracker.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "commitment_review_hour_local" => 7
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: source_bundle,
+      assistant_cycle_id: "cycle-large-commitments"
+    }
+
+    assert {:effect, {:llm_call, params}, _state} =
+             CommitmentTracker.handle_wakeup(state, context)
+
+    assert {:ok, bounded} = RequestBudget.validate(params)
+    assert byte_size(Jason.encode!(bounded)) <= 128_000
+
+    prompt = get_in(params, ["messages", Access.at(0), "content"])
+
+    [_instructions, input_json] =
+      String.split(prompt, "Commitment tracker input JSON:\n", parts: 2)
+
+    input = Jason.decode!(String.trim(input_json))
+
+    assert byte_size(Jason.encode!(input)) <= 72_000
+    assert length(get_in(input, ["gmail", "recent_inbox"])) == 8
+    assert length(get_in(input, ["gmail", "recent_sent"])) == 8
+    assert get_in(input, ["gmail", "counts", "recent_inbox"]) == 40
+    assert get_in(input, ["gmail", "counts", "recent_sent"]) == 40
+
+    [first_inbox | _rest] = get_in(input, ["gmail", "recent_inbox"])
+    assert first_inbox["subject"] == "Commitment evidence 1"
+    assert first_inbox["from"] =~ "Counterparty 1"
+    assert first_inbox["body"] =~ "Source-backed commitment evidence"
   end
 
   test "tracker input resolves iMessage sender phone numbers from People", %{user_id: user_id} do

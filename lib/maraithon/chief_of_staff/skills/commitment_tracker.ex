@@ -12,8 +12,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   alias Maraithon.ChiefOfStaff.{SourceBundle, SourceScope}
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Crm
+  alias Maraithon.LLM.RequestBudget
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
+  alias Maraithon.PromptBudget
   alias Maraithon.SourceLabels
   alias Maraithon.Timezones
   alias Maraithon.Todos
@@ -51,6 +53,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     "eod"
   ]
   @skill_path "priv/agents/skills/chief_of_staff/commitment_tracker.md"
+  @max_compact_tracker_input_bytes 72_000
+  @max_previous_cycle_memo_bytes 4_000
 
   @impl true
   def id, do: "commitment_tracker"
@@ -708,13 +712,116 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         }
         |> maybe_put("model", state.llm_model)
 
-      {:ok, params}
+      RequestBudget.validate(params)
     end
   end
 
+  defp compact_tracker_input_for_prompt(tracker_input) when is_map(tracker_input) do
+    tracker_input = compact_tracker_sections_for_prompt(tracker_input)
+
+    PromptBudget.project_fields(
+      tracker_input,
+      [
+        {"date", 300},
+        {"generated_at", 300},
+        {"timezone", 300},
+        {"timezone_offset_hours", 100},
+        {"lookback_hours", 100},
+        {"calendar_forward_days", 100},
+        {"source_access", 3_000},
+        {"source_health", 3_000},
+        {"open_work", 7_000},
+        {"gmail", 18_000},
+        {"slack", 12_000},
+        {"calendar", 5_000},
+        {"local_calendar", 5_000},
+        {"imessage", 8_000},
+        {"relationships", 3_000},
+        {"deep_memory", 3_000},
+        {"user_identity", 1_000},
+        {"reminders", 2_000},
+        {"notes", 2_000},
+        {"voice_memos", 2_000},
+        {"files", 2_000},
+        {"browser_history", 2_000}
+      ],
+      @max_compact_tracker_input_bytes,
+      string_bytes: 6_000,
+      list_items: 32,
+      map_entries: 100,
+      max_depth: 6,
+      key_bytes: 255
+    ) || %{}
+  end
+
+  defp compact_tracker_input_for_prompt(_tracker_input), do: %{}
+
+  defp compact_tracker_sections_for_prompt(tracker_input) do
+    tracker_input
+    |> compact_tracker_section("gmail", [
+      {"recent_inbox", 8, 1_400},
+      {"recent_sent", 8, 1_400}
+    ])
+    |> compact_tracker_section("slack", [
+      {"self_authored_recent", 6, 1_200},
+      {"mentions", 4, 1_200},
+      {"recent_messages", 4, 1_200}
+    ])
+    |> compact_tracker_section("calendar", [{"upcoming_events", 12, 900}])
+    |> compact_tracker_section("local_calendar", [{"upcoming_events", 12, 900}])
+    |> compact_tracker_section("imessage", [
+      {"recent_messages", 8, 1_000},
+      {"chats", 4, 800}
+    ])
+    |> compact_tracker_section("open_work", [{"todos", 12, 1_400}])
+    |> compact_tracker_section("voice_memos", [{"items", 8, 1_000}])
+    |> compact_tracker_section("notes", [{"items", 8, 1_000}])
+    |> compact_tracker_section("reminders", [{"due_soon", 8, 1_000}])
+    |> compact_tracker_section("files", [{"recent", 8, 1_000}])
+    |> compact_tracker_section("browser_history", [{"recent", 8, 800}])
+  end
+
+  defp compact_tracker_section(tracker_input, section_key, list_specs) do
+    case Map.get(tracker_input, section_key) do
+      section when is_map(section) ->
+        compacted =
+          Enum.reduce(list_specs, Map.drop(section, Enum.map(list_specs, &elem(&1, 0))), fn
+            {list_key, limit, item_bytes}, acc ->
+              items =
+                section
+                |> Map.get(list_key, [])
+                |> compact_tracker_items(limit, item_bytes)
+
+              Map.put(acc, list_key, items)
+          end)
+
+        Map.put(tracker_input, section_key, compacted)
+
+      _other ->
+        tracker_input
+    end
+  end
+
+  defp compact_tracker_items(items, limit, item_bytes) when is_list(items) do
+    items
+    |> Enum.take(limit)
+    |> Enum.map(
+      &PromptBudget.bounded(&1, item_bytes,
+        string_bytes: item_bytes,
+        list_items: 16,
+        map_entries: 32,
+        max_depth: 5,
+        key_bytes: 255
+      )
+    )
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp compact_tracker_items(_items, _limit, _item_bytes), do: []
+
   defp commitment_prompt(tracker_input, context) do
     with {:ok, skill} <- MarkdownSkill.load_file(@skill_path),
-         {:ok, input_json} <- Jason.encode(tracker_input) do
+         {:ok, input_json} <- Jason.encode(compact_tracker_input_for_prompt(tracker_input)) do
       {:ok,
        """
        Execute the loaded Markdown skill against the supplied connector context.
@@ -897,7 +1004,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     if is_binary(memo) and String.trim(memo) != "" do
       """
       PREVIOUS CYCLE MEMO#{memo_meta_suffix(context)}:
-      #{String.trim(memo)}
+      #{memo |> String.trim() |> PromptBudget.truncate_utf8(@max_previous_cycle_memo_bytes)}
 
       """
     else

@@ -65,6 +65,37 @@ defmodule Maraithon.LLM.RequestBudget do
 
   def validate(_params), do: {:error, {:invalid_request, %{reason: "invalid_request_shape"}}}
 
+  @doc """
+  Apply optional request context only when both the base and expanded requests
+  satisfy the complete provider request budget.
+
+  Optional recall must never turn an otherwise valid model request into a
+  terminal validation failure. Invalid base requests remain unchanged so the
+  caller's normal validation path can report them.
+  """
+  def put_optional_context(params, injector)
+      when is_map(params) and is_function(injector, 1) do
+    case validate(params) do
+      {:ok, base} -> put_valid_optional_context(base, injector)
+      {:error, _reason} -> params
+    end
+  end
+
+  def put_optional_context(params, _injector), do: params
+
+  defp put_valid_optional_context(base, injector) do
+    with candidate when is_map(candidate) <- injector.(base),
+         {:ok, bounded_candidate} <- validate(candidate) do
+      bounded_candidate
+    else
+      _invalid_or_oversized -> base
+    end
+  rescue
+    _error -> base
+  catch
+    _kind, _reason -> base
+  end
+
   defp cap_positive_integer(params, key, cap) do
     case Map.get(params, key) do
       nil -> params
