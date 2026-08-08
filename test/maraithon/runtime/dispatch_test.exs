@@ -43,8 +43,7 @@ defmodule Maraithon.Runtime.DispatchTest do
   end
 
   test "does not count a stale dead subscriber entry as delivery" do
-    dead_subscriber = spawn(fn -> :ok end)
-    ref = Process.monitor(dead_subscriber)
+    {dead_subscriber, ref} = spawn_monitor(fn -> :ok end)
     assert_receive {:DOWN, ^ref, :process, ^dead_subscriber, :normal}
 
     assert :ok =

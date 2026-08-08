@@ -124,6 +124,7 @@
 defmodule Maraithon.Runtime.SchedulerTest do
   use Maraithon.DataCase, async: false
 
+  alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Scheduler
   alias Maraithon.Runtime.ScheduledJob
   alias Maraithon.Repo
@@ -401,6 +402,66 @@ defmodule Maraithon.Runtime.SchedulerTest do
       GenServer.stop(pid, :normal)
     end
 
+    test "acknowledges dispatch when a busy subscriber mailbox accepts it", %{agent: agent} do
+      case Process.whereis(Scheduler) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      parent = self()
+
+      subscriber =
+        start_supervised!(
+          {Task,
+           fn ->
+             :ok = Dispatch.subscribe(agent.id)
+             send(parent, {:dispatch_subscribed, self()})
+
+             receive do
+               :release_dispatch ->
+                 receive do
+                   {:agent_dispatch, {:wakeup, "mailbox_receipt", job_id, %{}}} ->
+                     send(parent, {:dispatch_processed, job_id})
+                 end
+             end
+           end}
+        )
+
+      assert_receive {:dispatch_subscribed, ^subscriber}
+
+      {:ok, pid} = Scheduler.start_link([])
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      {:ok, job_id} =
+        Scheduler.schedule_at(
+          agent.id,
+          "mailbox_receipt",
+          DateTime.add(DateTime.utc_now(), 3600, :second)
+        )
+
+      send(pid, {:fire, job_id})
+
+      # The first call is ordered after :fire. The second is ordered after the
+      # receipt that dispatch sent to the Scheduler during that callback.
+      :ok = GenServer.call(pid, :clear_in_flight)
+      :ok = GenServer.call(pid, :clear_in_flight)
+
+      job = Repo.get!(ScheduledJob, job_id)
+      assert job.status == "delivered"
+      assert job.attempts == 1
+      assert job.delivered_at
+      refute_received {:dispatch_processed, ^job_id}
+
+      send(pid, :poll)
+      :ok = GenServer.call(pid, :clear_in_flight)
+      assert Repo.get!(ScheduledJob, job_id).attempts == 1
+
+      send(subscriber, :release_dispatch)
+      assert_receive {:dispatch_processed, ^job_id}
+
+      GenServer.stop(pid, :normal)
+    end
+
     @doc """
     Verifies the Scheduler gracefully handles firing non-existent jobs.
     This can happen if a job is deleted between scheduling and firing.
@@ -566,15 +627,15 @@ defmodule Maraithon.Runtime.SchedulerTest do
   # ============================================================================
   #
   # These tests verify scheduler behavior when the target agent isn't running.
-  # The scheduler should mark jobs as delivered even if the agent can't receive them.
+  # Jobs stay dispatched so the scheduler can retry after an agent returns.
   # ============================================================================
 
   describe "job delivery to non-running agent" do
     @doc """
-    Verifies that jobs remain dispatched until an agent acknowledges receipt.
-    This prevents marking jobs as delivered when no agent handled them.
+    Verifies that jobs remain dispatched until an agent subscriber mailbox
+    accepts them. This prevents marking jobs as delivered with no live agent.
     """
-    test "logs warning when agent is not running", %{agent: agent} do
+    test "keeps the job dispatched when the agent is not running", %{agent: agent} do
       # Stop existing scheduler if running
       case Process.whereis(Scheduler) do
         nil -> :ok
@@ -584,16 +645,14 @@ defmodule Maraithon.Runtime.SchedulerTest do
       {:ok, pid} = Scheduler.start_link([])
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
 
-      # Create job for agent that exists but isn't running (no RuntimeAgent started for it)
-      # The agent from setup has an entry in agents table but isn't registered in AgentRegistry
-      fire_at = DateTime.utc_now()
+      # The database agent exists, but no runtime process subscribes to its topic.
+      fire_at = DateTime.add(DateTime.utc_now(), 3600, :second)
       {:ok, job_id} = Scheduler.schedule_at(agent.id, "orphan_job", fire_at)
 
-      # Fire the job - agent won't be found in AgentRegistry
       send(pid, {:fire, job_id})
-      Process.sleep(100)
+      _ = :sys.get_state(pid)
 
-      # Job should remain dispatched until ack
+      # Job should remain dispatched until a subscriber accepts it.
       job = Repo.get(ScheduledJob, job_id)
       assert job.status == "dispatched"
 

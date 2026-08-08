@@ -18,8 +18,8 @@ defmodule Maraithon.Runtime.Scheduler do
   @default_dispatch_timeout_ms 60_000
   # After this many dispatch attempts that were never acknowledged, a job is
   # dead-lettered instead of being reclaimed and re-dispatched forever. With
-  # agents acking wakeups on receipt, a job that keeps going stale is almost
-  # always bound for an agent process that no longer exists.
+  # PubSub acknowledging mailbox delivery, a job that keeps going stale is
+  # almost always bound for an agent process that no longer exists.
   @max_dispatch_attempts 5
 
   def start_link(opts) do
@@ -186,7 +186,7 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   @doc """
-  Mark a dispatched job as delivered after an agent acknowledges receipt.
+  Mark a dispatched job as delivered after PubSub confirms mailbox enqueue.
   """
   def ack_delivered(job_id) do
     now = DateTime.utc_now()
@@ -328,6 +328,11 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   @impl true
+  def handle_info({:scheduled_job_enqueued, job_id}, state) when is_binary(job_id) do
+    _ = ack_delivered(job_id)
+    {:noreply, state}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("Scheduler ignoring unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -341,7 +346,8 @@ defmodule Maraithon.Runtime.Scheduler do
   # Private functions
 
   defp deliver_job(job) do
-    # Atomically claim for dispatch. Delivery is acknowledged by the agent.
+    # Atomically claim for dispatch. PubSub acknowledges only after at least
+    # one subscriber mailbox accepts the message.
     case Repo.update_all(
            from(j in ScheduledJob,
              where: j.id == ^job.id,
@@ -356,15 +362,20 @@ defmodule Maraithon.Runtime.Scheduler do
            inc: [attempts: 1]
          ) do
       {1, _} ->
-        send_to_agent(job.agent_id, {:wakeup, job.job_type, job.id, job.payload})
+        send_to_agent(
+          job.agent_id,
+          {:wakeup, job.job_type, job.id, job.payload},
+          job.id
+        )
 
       {0, _} ->
         :ok
     end
   end
 
-  defp send_to_agent(agent_id, message) do
-    :ok = Dispatch.dispatch(agent_id, message)
+  defp send_to_agent(agent_id, message, job_id) do
+    :ok =
+      Dispatch.dispatch(agent_id, message, receipt: {self(), {:scheduled_job_enqueued, job_id}})
   end
 
   defp fetch_overdue_jobs do
