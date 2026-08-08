@@ -18,7 +18,7 @@ defmodule Maraithon.TelegramAssistant.PushReceipt do
   # `held_rate_limit` covers both interruption-budget and quiet-hours holds.
   # Unlike the other decisions, it must never dedupe-block a future retry —
   # see Maraithon.TelegramAssistant.push_receipt_for/2.
-  @decisions ~w(sent_now queued_digest suppressed merged held_rate_limit)
+  @decisions ~w(reserved sending delivery_unknown sent_now queued_digest suppressed merged held_rate_limit)
 
   schema "telegram_push_receipts" do
     field :dedupe_key, :string

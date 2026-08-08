@@ -458,7 +458,14 @@ defmodule Maraithon.TelegramAssistant do
   # reach via another channel) the operator. `held_rate_limit` is a
   # deliberate exception: quiet hours and interruption-budget holds must not
   # permanently block a later retry of the same dedupe_key.
-  @blocking_push_decisions ["sent_now", "merged", "queued_digest"]
+  @blocking_push_decisions [
+    "reserved",
+    "sending",
+    "delivery_unknown",
+    "sent_now",
+    "merged",
+    "queued_digest"
+  ]
 
   def record_push_receipt(attrs) when is_map(attrs) do
     %PushReceipt{}
