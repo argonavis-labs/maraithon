@@ -70,7 +70,9 @@ defmodule Maraithon.Runtime.Dispatch do
     Enum.reduce(entries, false, fn {pid, _metadata}, delivered? ->
       if from == :none or pid != from do
         send(pid, message)
-        true
+        # Registry cleanup can briefly lag process exit. Only a still-live local
+        # subscriber proves that a mailbox accepted the dispatch.
+        delivered? or Process.alive?(pid)
       else
         delivered?
       end

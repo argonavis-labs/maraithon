@@ -41,4 +41,20 @@ defmodule Maraithon.Runtime.DispatchTest do
 
     refute_received :unexpected_receipt
   end
+
+  test "does not count a stale dead subscriber entry as delivery" do
+    dead_subscriber = spawn(fn -> :ok end)
+    ref = Process.monitor(dead_subscriber)
+    assert_receive {:DOWN, ^ref, :process, ^dead_subscriber, :normal}
+
+    assert :ok =
+             Dispatch.dispatch(
+               [{dead_subscriber, nil}],
+               :none,
+               {:maraithon_dispatch_with_receipt, {:agent_dispatch, :work}, self(),
+                :unexpected_receipt}
+             )
+
+    refute_received :unexpected_receipt
+  end
 end
