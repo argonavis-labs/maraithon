@@ -30,11 +30,12 @@ defmodule Maraithon.LogFormatter do
     {date, {hour, minute, second, millisecond}} = timestamp
 
     iso_timestamp =
-      NaiveDateTime.new!(
+      DateTime.new!(
         Date.from_erl!(date),
-        Time.new!(hour, minute, second, {millisecond * 1_000, 3})
+        Time.new!(hour, minute, second, {millisecond * 1_000, 3}),
+        "Etc/UTC"
       )
-      |> NaiveDateTime.to_iso8601()
+      |> DateTime.to_iso8601()
 
     log_entry = %{
       severity: severity(level),

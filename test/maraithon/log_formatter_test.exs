@@ -12,6 +12,7 @@ defmodule Maraithon.LogFormatterTest do
 
     assert Keyword.fetch!(formatter, :metadata) == :all
     assert Keyword.fetch!(formatter, :format) == {LogFormatter, :format}
+    assert Keyword.fetch!(formatter, :utc_log)
   end
 
   describe "format/4" do
@@ -26,7 +27,7 @@ defmodule Maraithon.LogFormatterTest do
 
       assert decoded["severity"] == "INFO"
       assert decoded["message"] == "Test message"
-      assert decoded["timestamp"] == "2024-01-15T12:30:45.123"
+      assert decoded["timestamp"] == "2024-01-15T12:30:45.123Z"
     end
 
     test "maps log levels to Cloud Logging severity" do
