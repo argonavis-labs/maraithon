@@ -31,6 +31,8 @@ defmodule Maraithon.Runtime.Agent do
   @global_register_retry_ms 25
   @global_register_retries 80
   @max_deferred_messages 200
+  @periodic_wakeup_scope {"_schedule_key", "agent_periodic_wakeup"}
+  @periodic_wakeup_opts [include_legacy_empty_payload: true]
 
   defstruct [
     :agent_id,
@@ -155,19 +157,10 @@ defmodule Maraithon.Runtime.Agent do
           {behavior_module.init(agent_config), init_budget(agent_config["budget"])}
       end
 
-    # Subscribe to internal runtime dispatch topic (cluster-safe routing)
-    :ok = Dispatch.subscribe(agent.id)
-
-    # Subscribe to PubSub topics from config
     subscriptions =
       (agent.config["subscribe"] || [])
       |> Kernel.++(AgentSubscriptions.list_topics_for_agent(agent.id))
       |> Enum.uniq()
-
-    Enum.each(subscriptions, fn topic ->
-      Phoenix.PubSub.subscribe(Maraithon.PubSub, topic)
-      Logger.info("Subscribed to topic", topic: topic)
-    end)
 
     data = %{
       data
@@ -190,19 +183,27 @@ defmodule Maraithon.Runtime.Agent do
         current_run_id: nil
     }
 
+    # Replace legacy recurring timers before exposing this process to durable
+    # dispatch. Otherwise Scheduler recovery can enqueue every overdue legacy
+    # wakeup before the scoped replacement has a chance to cancel them.
+    schedule_heartbeat(data)
+    schedule_checkpoint(data)
+    schedule_next_wakeup(data)
+
+    # Subscribe only after recurring timers have converged to one active row.
+    :ok = Dispatch.subscribe(agent.id)
+
+    Enum.each(subscriptions, fn topic ->
+      Phoenix.PubSub.subscribe(Maraithon.PubSub, topic)
+      Logger.info("Subscribed to topic", topic: topic)
+    end)
+
     # Emit started event (capture updated data with new sequence_num)
     data =
       emit_event(data, "agent_started", %{
         behavior: agent.behavior,
         config: redact_runtime_config(agent_config)
       })
-
-    # Schedule initial heartbeat and checkpoint
-    schedule_heartbeat(data)
-    schedule_checkpoint(data)
-
-    # Schedule first wakeup based on behavior
-    schedule_next_wakeup(data)
 
     # Messages that arrived during recovery are drained in idle(:enter).
     Logger.info("Agent recovered, transitioning to idle")
@@ -259,6 +260,7 @@ defmodule Maraithon.Runtime.Agent do
             {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
           else
             Logger.warning("No budget, staying idle")
+            schedule_next_wakeup(data)
             {:keep_state, data}
           end
       end
@@ -811,13 +813,32 @@ defmodule Maraithon.Runtime.Agent do
   defp schedule_next_wakeup(data) do
     case data.behavior_module.next_wakeup(data.behavior_state) do
       {:relative, ms} ->
-        Scheduler.schedule_in(data.agent_id, "wakeup", ms)
+        Scheduler.schedule_scoped_unique_in(
+          data.agent_id,
+          "wakeup",
+          ms,
+          @periodic_wakeup_scope,
+          %{},
+          @periodic_wakeup_opts
+        )
 
       {:absolute, datetime} ->
-        Scheduler.schedule_at(data.agent_id, "wakeup", datetime)
+        Scheduler.schedule_scoped_unique_at(
+          data.agent_id,
+          "wakeup",
+          datetime,
+          @periodic_wakeup_scope,
+          %{},
+          @periodic_wakeup_opts
+        )
 
       :none ->
-        :ok
+        Scheduler.cancel_scoped(
+          data.agent_id,
+          "wakeup",
+          @periodic_wakeup_scope,
+          @periodic_wakeup_opts
+        )
     end
   end
 

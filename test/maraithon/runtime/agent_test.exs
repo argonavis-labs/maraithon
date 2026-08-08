@@ -111,6 +111,7 @@ defmodule Maraithon.Runtime.AgentTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Runtime.Agent, as: RuntimeAgent
+  alias Maraithon.Runtime.ScheduledJob
   alias Maraithon.Agents
   alias Maraithon.Effects
   alias Maraithon.Effects.Effect
@@ -181,6 +182,63 @@ defmodule Maraithon.Runtime.AgentTest do
 
       # Clean up
       GenServer.stop(pid, :normal)
+    end
+
+    test "recovery converges legacy wakeup chains without cancelling briefing wakeups", %{
+      agent: agent
+    } do
+      fire_at = DateTime.add(DateTime.utc_now(), 3_600_000, :millisecond)
+
+      legacy_jobs =
+        for _index <- 1..3 do
+          %ScheduledJob{}
+          |> ScheduledJob.changeset(%{
+            agent_id: agent.id,
+            job_type: "wakeup",
+            fire_at: fire_at,
+            payload: %{},
+            status: "pending"
+          })
+          |> Repo.insert!()
+        end
+
+      briefing_job =
+        %ScheduledJob{}
+        |> ScheduledJob.changeset(%{
+          agent_id: agent.id,
+          job_type: "wakeup",
+          fire_at: fire_at,
+          payload: %{
+            "source" => "briefing_cron",
+            "dedupe_key" => "morning-brief"
+          },
+          status: "pending"
+        })
+        |> Repo.insert!()
+
+      {:ok, first_pid} = RuntimeAgent.start_link(agent)
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), first_pid)
+      assert {:idle, _data} = :sys.get_state(first_pid)
+
+      for job <- legacy_jobs do
+        assert Repo.get!(ScheduledJob, job.id).status == "cancelled"
+      end
+
+      assert Repo.get!(ScheduledJob, briefing_job.id).status == "pending"
+      [first_periodic] = active_periodic_wakeups(agent.id)
+      assert first_periodic.payload["_schedule_key"] == "agent_periodic_wakeup"
+
+      GenServer.stop(first_pid, :normal)
+
+      {:ok, recovered_pid} = RuntimeAgent.start_link(agent)
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), recovered_pid)
+      assert {:idle, _data} = :sys.get_state(recovered_pid)
+
+      assert Repo.get!(ScheduledJob, first_periodic.id).status == "cancelled"
+      assert Repo.get!(ScheduledJob, briefing_job.id).status == "pending"
+      assert [_replacement] = active_periodic_wakeups(agent.id)
+
+      GenServer.stop(recovered_pid, :normal)
     end
 
     test "cancels active effects from the previous process incarnation", %{agent: agent} do
@@ -629,14 +687,23 @@ defmodule Maraithon.Runtime.AgentTest do
       {:ok, pid} = RuntimeAgent.start_link(agent)
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
 
-      Process.sleep(150)
+      assert {:idle, _data} = :sys.get_state(pid)
 
-      # Send message - should stay idle due to zero budget
+      # A direct message cannot consume budget and leaves the existing periodic
+      # timer untouched.
       message_id = Ecto.UUID.generate()
       send(pid, {:message, "Hello!", %{}, message_id})
+      assert {:idle, _data} = :sys.get_state(pid)
 
-      Process.sleep(100)
-      assert Process.alive?(pid)
+      [periodic] = active_periodic_wakeups(agent.id)
+      send(pid, {:wakeup, "wakeup", periodic.id, periodic.payload})
+      assert {:idle, _data} = :sys.get_state(pid)
+
+      # Consuming the only wakeup must schedule its successor even though the
+      # budget is empty, or the daily refill boundary can never be reached.
+      assert Repo.get!(ScheduledJob, periodic.id).status == "delivered"
+      [replacement] = active_periodic_wakeups(agent.id)
+      refute replacement.id == periodic.id
 
       GenServer.stop(pid, :normal)
     end
@@ -1050,5 +1117,17 @@ defmodule Maraithon.Runtime.AgentTest do
       assert event.payload["effect_type"] == "llm_call"
       assert event.payload["reason"] =~ "effect_timeout"
     end
+  end
+
+  defp active_periodic_wakeups(agent_id) do
+    Repo.all(
+      from(j in ScheduledJob,
+        where: j.agent_id == ^agent_id,
+        where: j.job_type == "wakeup",
+        where: j.status in ["pending", "dispatched"],
+        where: fragment("?->>? = ?", j.payload, "_schedule_key", "agent_periodic_wakeup"),
+        order_by: [asc: j.inserted_at]
+      )
+    )
   end
 end

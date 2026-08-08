@@ -47,6 +47,27 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   @doc """
+  Replace active jobs within one payload scope after a delay.
+
+  Unlike `schedule_unique_in/4`, this preserves active jobs of the same type
+  whose payloads belong to another scope. The scope marker is injected into
+  the new payload so callers cannot accidentally create an unreplaceable job.
+  """
+  def schedule_scoped_unique_in(
+        agent_id,
+        job_type,
+        delay_ms,
+        {scope_key, scope_value} = scope,
+        payload \\ %{},
+        opts \\ []
+      )
+      when is_binary(scope_key) and is_binary(scope_value) and is_map(payload) and
+             is_list(opts) do
+    fire_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
+    schedule_scoped_unique_at(agent_id, job_type, fire_at, scope, payload, opts)
+  end
+
+  @doc """
   Schedule a job to fire at a specific time.
   """
   def schedule_at(agent_id, job_type, fire_at, payload \\ %{}) do
@@ -78,56 +99,57 @@ defmodule Maraithon.Runtime.Scheduler do
   Atomically replace all active jobs of a type for an agent.
   """
   def schedule_unique_at(agent_id, job_type, fire_at, payload \\ %{}) do
-    attrs = %{
-      agent_id: agent_id,
-      job_type: job_type,
-      fire_at: fire_at,
-      payload: payload,
-      status: "pending"
-    }
+    replace_unique_job(agent_id, job_type, fire_at, payload, :all, [])
+  end
 
+  @doc """
+  Atomically replace active jobs within one payload scope at a specific time.
+
+  Set `:include_legacy_empty_payload` while migrating an older unscoped timer;
+  empty active payloads of the same job type are then cancelled in the same
+  transaction. Jobs in other non-empty scopes are preserved.
+  """
+  def schedule_scoped_unique_at(
+        agent_id,
+        job_type,
+        fire_at,
+        {scope_key, scope_value} = scope,
+        payload \\ %{},
+        opts \\ []
+      )
+      when is_binary(scope_key) and is_binary(scope_value) and is_map(payload) and
+             is_list(opts) do
+    payload = Map.put(payload, scope_key, scope_value)
+    replace_unique_job(agent_id, job_type, fire_at, payload, scope, opts)
+  end
+
+  @doc """
+  Cancel active jobs within one payload scope without touching sibling scopes.
+  """
+  def cancel_scoped(
+        agent_id,
+        job_type,
+        {scope_key, scope_value} = scope,
+        opts \\ []
+      )
+      when is_binary(scope_key) and is_binary(scope_value) and is_list(opts) do
     result =
-      DbResilience.with_database("scheduler replace unique job", fn ->
+      DbResilience.with_database("scheduler cancel scoped jobs", fn ->
         Repo.transaction(fn ->
-          lock_key = "scheduler:#{agent_id}:#{job_type}"
+          lock_unique_jobs(agent_id, job_type)
 
-          Repo.query!(
-            "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
-            [lock_key]
+          agent_id
+          |> active_jobs_query(job_type, scope, opts)
+          |> Repo.update_all(
+            set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
           )
-
-          {cancelled_count, _} =
-            from(j in ScheduledJob,
-              where: j.agent_id == ^agent_id,
-              where: j.job_type == ^job_type,
-              where: j.status in ["pending", "dispatched"]
-            )
-            |> Repo.update_all(
-              set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
-            )
-
-          case %ScheduledJob{} |> ScheduledJob.changeset(attrs) |> Repo.insert() do
-            {:ok, job} -> {job, cancelled_count}
-            {:error, reason} -> Repo.rollback(reason)
-          end
         end)
       end)
 
     case result do
-      {:ok, {:ok, {job, cancelled_count}}} ->
-        Logger.debug(
-          "Scheduled unique #{job_type} for #{agent_id} at #{fire_at}",
-          cancelled_jobs: cancelled_count
-        )
-
-        {:ok, job.id}
-
-      {:ok, {:error, reason}} ->
-        Logger.error("Failed to schedule unique job: #{inspect(reason)}")
-        {:error, reason}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, {:ok, update_result}} -> update_result
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -344,6 +366,95 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   # Private functions
+
+  defp replace_unique_job(agent_id, job_type, fire_at, payload, scope, opts) do
+    attrs = %{
+      agent_id: agent_id,
+      job_type: job_type,
+      fire_at: fire_at,
+      payload: payload,
+      status: "pending"
+    }
+
+    result =
+      DbResilience.with_database("scheduler replace unique job", fn ->
+        Repo.transaction(fn ->
+          lock_unique_jobs(agent_id, job_type)
+
+          {cancelled_count, _} =
+            agent_id
+            |> active_jobs_query(job_type, scope, opts)
+            |> Repo.update_all(
+              set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
+            )
+
+          case %ScheduledJob{} |> ScheduledJob.changeset(attrs) |> Repo.insert() do
+            {:ok, job} -> {job, cancelled_count}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+      end)
+
+    case result do
+      {:ok, {:ok, {job, cancelled_count}}} ->
+        Logger.debug(
+          "Scheduled unique #{job_type} for #{agent_id} at #{fire_at}",
+          cancelled_jobs: cancelled_count
+        )
+
+        {:ok, job.id}
+
+      {:ok, {:error, reason}} ->
+        Logger.error("Failed to schedule unique job: #{inspect(reason)}")
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp lock_unique_jobs(agent_id, job_type) do
+    lock_key = "scheduler:#{agent_id}:#{job_type}"
+
+    Repo.query!(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [lock_key]
+    )
+
+    :ok
+  end
+
+  defp active_jobs_query(agent_id, job_type, :all, _opts) do
+    from(j in ScheduledJob,
+      where: j.agent_id == ^agent_id,
+      where: j.job_type == ^job_type,
+      where: j.status in ["pending", "dispatched"]
+    )
+  end
+
+  defp active_jobs_query(agent_id, job_type, {scope_key, scope_value}, opts) do
+    include_legacy_empty_payload? =
+      Keyword.get(opts, :include_legacy_empty_payload, false) == true
+
+    base_query =
+      from(j in ScheduledJob,
+        where: j.agent_id == ^agent_id,
+        where: j.job_type == ^job_type,
+        where: j.status in ["pending", "dispatched"]
+      )
+
+    if include_legacy_empty_payload? do
+      from(j in base_query,
+        where:
+          fragment("?->>? = ?", j.payload, ^scope_key, ^scope_value) or
+            fragment("? = '{}'::jsonb", j.payload)
+      )
+    else
+      from(j in base_query,
+        where: fragment("?->>? = ?", j.payload, ^scope_key, ^scope_value)
+      )
+    end
+  end
 
   defp deliver_job(job) do
     # Atomically claim for dispatch. PubSub acknowledges only after at least

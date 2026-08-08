@@ -228,6 +228,145 @@ defmodule Maraithon.Runtime.SchedulerTest do
     end
   end
 
+  describe "scoped unique scheduling" do
+    test "replaces its scope and legacy empty timers without cancelling one-shot wakeups", %{
+      agent: agent
+    } do
+      fire_at = DateTime.add(DateTime.utc_now(), 3_600_000, :millisecond)
+      scope = {"_schedule_key", "agent_periodic_wakeup"}
+
+      legacy_pending =
+        %ScheduledJob{}
+        |> ScheduledJob.changeset(%{
+          agent_id: agent.id,
+          job_type: "wakeup",
+          fire_at: fire_at,
+          payload: %{},
+          status: "pending"
+        })
+        |> Repo.insert!()
+
+      legacy_dispatched =
+        %ScheduledJob{}
+        |> ScheduledJob.changeset(%{
+          agent_id: agent.id,
+          job_type: "wakeup",
+          fire_at: fire_at,
+          payload: %{},
+          status: "dispatched",
+          claimed_by: "old@node",
+          claimed_at: DateTime.utc_now(),
+          dispatched_at: DateTime.utc_now()
+        })
+        |> Repo.insert!()
+
+      {:ok, old_scoped_id} =
+        Scheduler.schedule_at(agent.id, "wakeup", fire_at, %{
+          "_schedule_key" => "agent_periodic_wakeup"
+        })
+
+      {:ok, briefing_id} =
+        Scheduler.schedule_at(agent.id, "wakeup", fire_at, %{
+          "source" => "briefing_cron",
+          "dedupe_key" => "morning-brief"
+        })
+
+      {:ok, other_one_shot_id} =
+        Scheduler.schedule_at(agent.id, "wakeup", fire_at, %{"source" => "manual"})
+
+      {:ok, delivered_id} =
+        Scheduler.schedule_at(agent.id, "wakeup", fire_at, %{
+          "_schedule_key" => "agent_periodic_wakeup"
+        })
+
+      ScheduledJob
+      |> Repo.get!(delivered_id)
+      |> ScheduledJob.changeset(%{status: "delivered"})
+      |> Repo.update!()
+
+      {:ok, replacement_id} =
+        Scheduler.schedule_scoped_unique_at(
+          agent.id,
+          "wakeup",
+          fire_at,
+          scope,
+          %{"generation" => 2},
+          include_legacy_empty_payload: true
+        )
+
+      for id <- [legacy_pending.id, legacy_dispatched.id, old_scoped_id] do
+        job = Repo.get!(ScheduledJob, id)
+        assert job.status == "cancelled"
+        assert job.claimed_by == nil
+        assert job.claimed_at == nil
+        assert job.dispatched_at == nil
+        assert Scheduler.ack_delivered(id) == {:error, :invalid_state}
+        assert Repo.get!(ScheduledJob, id).status == "cancelled"
+      end
+
+      assert Repo.get!(ScheduledJob, briefing_id).status == "pending"
+      assert Repo.get!(ScheduledJob, other_one_shot_id).status == "pending"
+      assert Repo.get!(ScheduledJob, delivered_id).status == "delivered"
+
+      replacement = Repo.get!(ScheduledJob, replacement_id)
+      assert replacement.status == "pending"
+
+      assert replacement.payload == %{
+               "_schedule_key" => "agent_periodic_wakeup",
+               "generation" => 2
+             }
+
+      assert Repo.aggregate(
+               from(j in ScheduledJob,
+                 where: j.agent_id == ^agent.id,
+                 where: j.job_type == "wakeup",
+                 where: j.status in ["pending", "dispatched"],
+                 where: fragment("?->>? = ?", j.payload, "_schedule_key", "agent_periodic_wakeup")
+               ),
+               :count
+             ) == 1
+    end
+
+    test "rolls back scoped cancellation when the replacement is invalid", %{agent: agent} do
+      scope = {"_schedule_key", "agent_periodic_wakeup"}
+      fire_at = DateTime.add(DateTime.utc_now(), 3_600_000, :millisecond)
+
+      {:ok, existing_id} =
+        Scheduler.schedule_scoped_unique_at(agent.id, "wakeup", fire_at, scope)
+
+      assert {:error, %Ecto.Changeset{}} =
+               Scheduler.schedule_scoped_unique_at(agent.id, "wakeup", nil, scope)
+
+      assert Repo.get!(ScheduledJob, existing_id).status == "pending"
+    end
+
+    test "scoped cancellation removes periodic and legacy timers but preserves one-shots", %{
+      agent: agent
+    } do
+      scope = {"_schedule_key", "agent_periodic_wakeup"}
+      fire_at = DateTime.add(DateTime.utc_now(), 3_600_000, :millisecond)
+
+      {:ok, scoped_id} =
+        Scheduler.schedule_at(agent.id, "wakeup", fire_at, %{
+          "_schedule_key" => "agent_periodic_wakeup"
+        })
+
+      {:ok, legacy_id} = Scheduler.schedule_at(agent.id, "wakeup", fire_at)
+
+      {:ok, briefing_id} =
+        Scheduler.schedule_at(agent.id, "wakeup", fire_at, %{"source" => "briefing_cron"})
+
+      assert {2, nil} =
+               Scheduler.cancel_scoped(agent.id, "wakeup", scope,
+                 include_legacy_empty_payload: true
+               )
+
+      assert Repo.get!(ScheduledJob, scoped_id).status == "cancelled"
+      assert Repo.get!(ScheduledJob, legacy_id).status == "cancelled"
+      assert Repo.get!(ScheduledJob, briefing_id).status == "pending"
+    end
+  end
+
   # ============================================================================
   # JOB CANCELLATION TESTS
   # ============================================================================
