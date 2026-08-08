@@ -138,6 +138,67 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
       refute calendar_status_text(context) =~ "error:"
     end
 
+    test "keeps Google all-day events in context without crashing deduplication" do
+      original_google_calendar = Application.get_env(:maraithon, :google_calendar, [])
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google_calendar,
+        api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
+      )
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, :google_calendar, original_google_calendar)
+      end)
+
+      user_id = "context-calendar-all-day-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "calendar-token",
+          scopes: ["calendar.readonly"]
+        })
+
+      event_date = Date.utc_today() |> Date.add(1)
+      end_date = Date.add(event_date, 1)
+      {:ok, timed_start} = DateTime.new(event_date, ~T[12:00:00], "Etc/UTC")
+      timed_end = DateTime.add(timed_start, 3_600, :second)
+
+      Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "items" => [
+              %{
+                "id" => "timed-event",
+                "summary" => "Lunch",
+                "start" => %{"dateTime" => DateTime.to_iso8601(timed_start)},
+                "end" => %{"dateTime" => DateTime.to_iso8601(timed_end)}
+              },
+              %{
+                "id" => "all-day-event",
+                "summary" => "Family day",
+                "start" => %{"date" => Date.to_iso8601(event_date)},
+                "end" => %{"date" => Date.to_iso8601(end_date)}
+              }
+            ]
+          })
+        )
+      end)
+
+      context = Context.build(%{user_id: user_id, chat_id: "12345", request_focus: :today_mode})
+
+      assert Enum.map(context.calendar.upcoming_events, & &1.id) |> Enum.take(2) == [
+               "all-day-event",
+               "timed-event"
+             ]
+
+      assert context.calendar.source_status.google == "ready"
+      refute Enum.any?(context.context_fetch.failures, &(&1.key == "calendar"))
+    end
+
     test "does not expose Google API response bodies in prompt-facing status" do
       original_google_calendar = Application.get_env(:maraithon, :google_calendar, [])
       bypass = Bypass.open()

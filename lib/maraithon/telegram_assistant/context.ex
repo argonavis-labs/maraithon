@@ -941,9 +941,11 @@ defmodule Maraithon.TelegramAssistant.Context do
   defp calendar_time_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime)
 
   defp calendar_time_sort_value(%{date: date}) when is_binary(date) do
-    case Date.from_iso8601(date) do
-      {:ok, parsed} -> Date.to_gregorian_days(parsed) * 86_400
-      _ -> 9_999_999_999
+    with {:ok, parsed} <- Date.from_iso8601(date),
+         {:ok, datetime} <- DateTime.new(parsed, ~T[00:00:00], "Etc/UTC") do
+      DateTime.to_unix(datetime)
+    else
+      _error -> 9_999_999_999
     end
   end
 
@@ -962,7 +964,12 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp stable_time_value(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
   defp stable_time_value(%NaiveDateTime{} = datetime), do: NaiveDateTime.to_iso8601(datetime)
-  defp stable_time_value(value), do: value
+  defp stable_time_value(%Date{} = date), do: Date.to_iso8601(date)
+  defp stable_time_value(%{date: date}) when is_binary(date), do: date
+  defp stable_time_value(%{"date" => date}) when is_binary(date), do: date
+  defp stable_time_value(value) when is_binary(value), do: value
+  defp stable_time_value(nil), do: ""
+  defp stable_time_value(value), do: inspect(value, pretty: false, limit: 20)
 
   defp serialize_agents(user_id) do
     Agents.list_agents(user_id: user_id, preload: [:project])

@@ -235,9 +235,11 @@ defmodule Maraithon.Tools.GoogleCalendarHelpers do
   defp event_sort_value(%{start: %DateTime{} = start}), do: DateTime.to_unix(start, :microsecond)
 
   defp event_sort_value(%{start: %{date: date}}) when is_binary(date) do
-    case Date.from_iso8601(date) do
-      {:ok, parsed} -> Date.to_gregorian_days(parsed) * 86_400_000_000
-      {:error, _reason} -> @future_sort_value
+    with {:ok, parsed} <- Date.from_iso8601(date),
+         {:ok, datetime} <- DateTime.new(parsed, ~T[00:00:00], "Etc/UTC") do
+      DateTime.to_unix(datetime, :microsecond)
+    else
+      _error -> @future_sort_value
     end
   end
 
