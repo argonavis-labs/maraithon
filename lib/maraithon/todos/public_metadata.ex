@@ -184,12 +184,14 @@ defmodule Maraithon.Todos.PublicMetadata do
   @internal_value_terms ~w(llm stacktrace source_backed source_health dedupe_key tracking_key)
 
   @internal_label_pattern ~r/\b(?:confidence|score|reasoning|rationale|model|prompt|metadata|threshold|heuristic)\s*[:=]\s*\S/iu
+  @internal_model_confidence_pattern ~r/\b(?:the\s+model|model\s+score)\b.*\b\d+\s*%/iu
 
   defp internal_value?(value) do
     normalized = String.downcase(value)
 
     Regex.match?(~r/^\s*[\{\[]\s*"/u, normalized) or
       Regex.match?(@internal_label_pattern, value) or
+      Regex.match?(@internal_model_confidence_pattern, value) or
       Enum.any?(@internal_value_terms, &value_term_present?(normalized, &1))
   end
 

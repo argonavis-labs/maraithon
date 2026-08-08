@@ -115,3 +115,9 @@ Today's move: use the first desk block to clear the oldest overdue commitment be
 ```
 
 If source data is insufficient, name the source gaps and keep uncertainty visible. Do not invent a clear-day summary or fill missing context with heuristics.
+
+Source honesty:
+- Never invent dollar amounts, wire totals, passwords, security answers, form filenames, email addresses, or people that are not present in the source payload.
+- Only call out schedule conflicts that exist as real overlaps in the supplied calendar/meeting times.
+- Prefer "confirm in Mercury / the source thread" over fabricated precision.
+- Do not put passwords, PINs, or security answers in the user-facing body or todos.

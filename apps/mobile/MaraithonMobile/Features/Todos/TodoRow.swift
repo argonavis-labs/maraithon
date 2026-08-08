@@ -83,6 +83,9 @@ struct TodoRow: View {
 
     private func dueSystemImage(for dueDate: Date) -> String {
         guard !todo.isCompleted else { return "calendar" }
+        if TodoRowCopy.isStaleKeepClose(todo) {
+            return "questionmark.circle"
+        }
         let calendar = Calendar.current
         if dueDate < Date(), !calendar.isDateInToday(dueDate) {
             return "clock.badge.exclamationmark"
@@ -95,6 +98,9 @@ struct TodoRow: View {
 
     private func dueTint(for dueDate: Date) -> Color {
         guard !todo.isCompleted else { return .secondary }
+        if TodoRowCopy.isStaleKeepClose(todo) {
+            return .secondary
+        }
         let calendar = Calendar.current
         if dueDate < Date(), !calendar.isDateInToday(dueDate) {
             return .orange
@@ -211,6 +217,13 @@ enum TodoRowCopy {
             return dueDate.formatted(AppFormatters.shortDate)
         }
 
+        // Stale keep/close cards should not scream "Past due" urgency — the
+        // product ask is keep-or-dismiss, and due dates on those rows are often
+        // older than the saved open-work age.
+        if isStaleKeepClose(todo) {
+            return "Needs keep/close"
+        }
+
         if dueDate < now, !calendar.isDate(dueDate, inSameDayAs: now) {
             return "Past due \(AppFormatters.relativeString(for: dueDate, relativeTo: now))"
         }
@@ -220,5 +233,15 @@ enum TodoRowCopy {
         }
 
         return dueDate.formatted(AppFormatters.shortDate)
+    }
+
+    static func isStaleKeepClose(_ todo: TodoItem) -> Bool {
+        guard let prompt = ChiefOfStaffCopy.clean(todo.decisionPrompt)?.lowercased() else {
+            return false
+        }
+
+        return prompt.contains("keep it active if it still matters")
+            || prompt.contains("dismiss it so it stops resurfacing")
+            || prompt.contains("should this older")
     }
 }

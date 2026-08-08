@@ -56,13 +56,15 @@ defmodule Maraithon.Todos.DecisionSignals do
 
   # SPEC 05 review (Finding 1): reads the `direction` column first, since
   # todos created via the general assistant path only carry `direction`,
-  # not the legacy metadata vocabulary. `owed_by_me`/`owed_to_me` are
-  # decision-direction; `fyi` explicitly is not. Only falls back to the
-  # legacy metadata vocabulary when `direction` is nil/absent/invalid
-  # (pre-backfill rows or edge imports) so we don't regress older data.
+  # not the legacy metadata vocabulary. `owed_to_me` is always a
+  # follow-through decision. `owed_by_me` is the default for ordinary open
+  # work, so it alone must not flood the Decisions surface — only fall
+  # through to legacy waiting metadata / decision text / stale keep-close.
+  # `fyi` explicitly is not a decision.
   defp explicit_direction?(%Todo{} = todo) do
     case todo.direction do
-      direction when direction in ["owed_by_me", "owed_to_me"] -> true
+      "owed_to_me" -> true
+      "owed_by_me" -> explicit_direction_from_metadata?(todo.metadata || %{})
       "fyi" -> false
       _ -> explicit_direction_from_metadata?(todo.metadata || %{})
     end
@@ -70,7 +72,8 @@ defmodule Maraithon.Todos.DecisionSignals do
 
   defp explicit_direction?(%{} = todo) do
     case read_value(todo, "direction") || read_value(todo, :direction) do
-      direction when direction in ["owed_by_me", "owed_to_me"] -> true
+      "owed_to_me" -> true
+      "owed_by_me" -> explicit_direction_from_metadata?(read_metadata(todo))
       "fyi" -> false
       _ -> explicit_direction_from_metadata?(read_metadata(todo))
     end

@@ -434,6 +434,41 @@ defmodule Maraithon.ActionCardsTest do
     refute rendered =~ "Unclear"
   end
 
+  test "does not invent Waiting on you from broad business keywords", %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Review customer project pricing artifact",
+      summary: "A customer project pricing artifact needs a look when you have time.",
+      next_action: "Open the pricing artifact and decide whether to reply.",
+      direction: "owed_by_me",
+      source_item_id: "gmail-thread-no-waiting-state",
+      dedupe_key: "action-card:no-false-waiting",
+      priority: 70,
+      status: "open",
+      metadata: %{
+        "record" => %{
+          "person" => "Benji",
+          "company" => "GrowthCrew",
+          "relationship_context" =>
+            "Marketing agency partners managing Runner's ad campaigns and webinars."
+        }
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    items = ActionCards.context_items(card)
+
+    refute Enum.any?(items, &(&1.value == "Waiting on you"))
+    assert %{label: "Person", value: "Benji (GrowthCrew)"} in items
+    refute Enum.any?(items, &(&1.label == "Relationship"))
+  end
+
   test "source health copy humanizes local source names" do
     card = %{
       "source_health" => %{
@@ -914,7 +949,12 @@ defmodule Maraithon.ActionCardsTest do
     assert card["headline"] == "Follow up with Alex Müller about Starteryou UGC Campaigns"
     assert get_in(card, ["context_pack", "summary"]) =~ "Alex Müller"
     assert get_in(card, ["context_pack", "summary"]) =~ "Starteryou"
-    assert get_in(card, ["context_pack", "summary"]) =~ "UGC campaign contact"
+    # Short relationship roles stay on the Relationship context item, not
+    # jammed into the person/company identity string.
+    assert %{label: "Relationship", value: "Starteryou UGC campaign contact"} in ActionCards.context_items(
+             card
+           )
+
     assert card["next_best_action"] =~ "Reply to Alex Müller about Starteryou UGC Campaigns"
     assert rendered =~ "You committed to follow up"
     refute rendered =~ "User committed"

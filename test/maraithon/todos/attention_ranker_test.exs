@@ -126,6 +126,20 @@ defmodule Maraithon.Todos.AttentionRankerTest do
     refute profile["actively_waiting"]
   end
 
+  test "broad business nouns alone do not mark a self-owned todo as waiting" do
+    projectish = %{
+      "title" => "Review customer project delivery",
+      "summary" => "A customer project delivery artifact is due for a decision.",
+      "next_action" => "Review the project pricing and delivery ETA.",
+      "priority" => 60,
+      "direction" => "owed_by_me"
+    }
+
+    profile = AttentionRanker.profile(projectish, now: @now)
+
+    refute profile["actively_waiting"]
+  end
+
   test "falls back to legacy commitment_direction metadata when direction is absent" do
     legacy_waiting = %{
       "title" => "Vendor contract",

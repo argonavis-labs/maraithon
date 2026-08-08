@@ -55,6 +55,28 @@ struct TodoRowCopyTests {
     }
 
     @Test
+    func staleKeepCloseDueLabelAvoidsPastDueUrgency() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let todo = TodoItem(
+            title: "Send GrowthCrew visual assets",
+            dueDate: now.addingTimeInterval(-14 * 24 * 60 * 60),
+            decisionPrompt: "Keep it active if it still matters, or dismiss it so it stops resurfacing."
+        )
+
+        let copy = TodoRowCopy.dueText(
+            for: todo,
+            dueDate: todo.dueDate!,
+            now: now,
+            calendar: calendar
+        )
+
+        #expect(copy == "Needs keep/close")
+        #expect(!copy.localizedCaseInsensitiveContains("Past due"))
+    }
+
+    @Test
     func dueTodayLabelStaysCompact() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

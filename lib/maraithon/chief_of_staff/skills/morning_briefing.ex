@@ -1463,6 +1463,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        person/company/why-now/evidence context in metadata, and work_type when it is draftable,
        dashboard, payment, review, decision, prep, or personal_logistic work.
 
+       Source honesty / anti-hallucination rule:
+       Never invent facts that are not present in the brief input JSON. In particular:
+       - Do not invent dollar amounts, wire totals, account numbers, passwords, security answers,
+         PINs, form filenames, email addresses, phone numbers, or people who are not in the input.
+       - Do not invent schedule conflicts. Only call out overlaps that exist between
+         calendar.today_events, meeting_prep.meetings, or schedule_coverage.required_meetings
+         using their display_start/display_end or start/end times.
+       - For Next Actions and todos, copy amounts, filenames, addresses, and credentials only when
+         they appear verbatim in source evidence. Otherwise describe the action without fabricated
+         specifics (prefer "confirm the pending Mercury wire amount" over inventing "$38,200").
+       - Prefer visible uncertainty over confident invention. If a source body is truncated or
+         missing, say so instead of filling gaps.
+       - Do not recycle stale open_work as if it were confirmed live evidence for today unless the
+         same fact also appears in today's calendar, Gmail, Slack, or local source rows.
+
        Brief input JSON:
        #{input_json}
        """}
@@ -4151,7 +4166,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp action_handle_from_text(_text), do: nil
 
   defp scrub_morning_brief_internal_handles(brief) when is_map(brief) do
-    Map.update(brief, "body", "", &scrub_internal_action_handles/1)
+    brief
+    |> Map.update("body", "", &scrub_internal_action_handles/1)
+    |> Map.update("body", "", &scrub_sensitive_brief_secrets/1)
+    |> Map.update("summary", "", &scrub_sensitive_brief_secrets/1)
+    |> Map.update("todos", [], &scrub_sensitive_brief_todos/1)
   end
 
   defp scrub_morning_brief_internal_handles(brief), do: brief
@@ -4168,6 +4187,49 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp scrub_internal_action_handles(value), do: value
+
+  # Never leave passwords / security answers / PINs in a user-facing brief,
+  # even when the model copied them from source evidence.
+  defp scrub_sensitive_brief_secrets(value) when is_binary(value) do
+    value
+    |> String.replace(
+      ~r/\b(?:security\s+answer|password|passcode|pin)\s*(?:is|=|:)?\s*[`'\"]?[^`'\",.\n]+[`'\"]?/iu,
+      "[credential removed — confirm in the source system]"
+    )
+    |> String.replace(
+      ~r/\be-?transfer with the security answer\b[^.?\n]*/iu,
+      "e-transfer (confirm security answer in the source system)"
+    )
+    |> String.replace(~r/[ \t]{2,}/, " ")
+    |> String.trim()
+  end
+
+  defp scrub_sensitive_brief_secrets(value), do: value
+
+  defp scrub_sensitive_brief_todos(todos) when is_list(todos) do
+    Enum.map(todos, fn
+      todo when is_map(todo) ->
+        todo
+        |> Map.new(fn {key, value} -> {key, value} end)
+        |> then(fn map ->
+          Enum.reduce(["summary", "next_action", "notes", "action_plan", "title"], map, fn key,
+                                                                                           acc ->
+            case Map.get(acc, key) do
+              value when is_binary(value) ->
+                Map.put(acc, key, scrub_sensitive_brief_secrets(value))
+
+              _ ->
+                acc
+            end
+          end)
+        end)
+
+      other ->
+        other
+    end)
+  end
+
+  defp scrub_sensitive_brief_todos(todos), do: todos
 
   defp non_draft_job_items(brief_input) when is_map(brief_input) do
     brief_input
