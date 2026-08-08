@@ -446,15 +446,16 @@ defmodule Maraithon.ActionCards do
       ])
 
     relationship =
-      first_public_context_string([
-        read_string(record, "relationship_context"),
-        read_string(metadata, "relationship_context"),
-        read_string(person_context, "relationship_context"),
+      [
         read_string(record, "relationship"),
         read_string(metadata, "relationship"),
         read_string(person_context, "relationship"),
+        read_string(record, "relationship_context"),
+        read_string(metadata, "relationship_context"),
+        read_string(person_context, "relationship_context"),
         read_string(metadata, "context_brief")
-      ])
+      ]
+      |> Enum.find_value(&compact_relationship_label/1)
 
     project =
       first_public_context_string([
@@ -474,7 +475,7 @@ defmodule Maraithon.ActionCards do
       "project_or_topic" => project,
       "relationship_context" => relationship,
       "thread_state" => thread_state(metadata, profile),
-      "owed_direction" => owed_direction(metadata, profile),
+      "owed_direction" => owed_direction(todo, metadata, profile),
       "source_evidence" => source_evidence(todo, metadata, record),
       "related_open_loops" => [],
       "last_interaction" => last_interaction(todo, metadata),
@@ -630,13 +631,18 @@ defmodule Maraithon.ActionCards do
 
   defp useful_source_decision_label?(_source), do: false
 
-  defp why_now(_todo, _metadata, profile, "stale_check", _opts, _context) do
+  defp why_now(todo, _metadata, profile, "stale_check", _opts, _context) do
     age_days = read_field(profile, "age_days")
 
-    if is_integer(age_days) do
-      "This item is #{age_days} days old with no handled evidence. It is not urgent, but it needs a keep-or-close decision."
-    else
-      "This has been open long enough to need a keep-or-close decision."
+    cond do
+      match?(%DateTime{}, todo.due_at) and due_in_past?(todo.due_at) ->
+        "This passed its due date with no handled evidence. It is not urgent — keep it only if it still matters, otherwise dismiss it."
+
+      is_integer(age_days) ->
+        "This item is #{age_days} days old with no handled evidence. It is not urgent, but it needs a keep-or-close decision."
+
+      true ->
+        "This has been open long enough to need a keep-or-close decision."
     end
   end
 
@@ -654,6 +660,9 @@ defmodule Maraithon.ActionCards do
       fallback_why_now()
     ])
   end
+
+  defp due_in_past?(%DateTime{} = due_at), do: DateTime.compare(due_at, DateTime.utc_now()) == :lt
+  defp due_in_past?(_due_at), do: false
 
   # SPEC 05 R4: surfaces nudge state ("waiting 9 days, never nudged" vs
   # "nudged Tuesday") as a low-priority why_now candidate — it only fires
@@ -1168,13 +1177,102 @@ defmodule Maraithon.ActionCards do
     ])
   end
 
-  defp owed_direction(metadata, profile) do
-    first_present([
-      read_string(metadata, "commitment_direction"),
-      read_string(read_map(metadata, "record"), "commitment_direction"),
-      if(read_field(profile, "actively_waiting") == true, do: "user_owes")
-    ])
+  # Responsibility labels must come from durable direction / thread state, or
+  # unmistakable waiting copy — never from broad "actively_waiting" keyword
+  # hints that used to mark ordinary open work as "Waiting on you".
+  defp owed_direction(todo, metadata, profile) do
+    if read_field(profile, "stale_confirmation_candidate") == true do
+      nil
+    else
+      case read_field(todo, "direction") do
+        "owed_to_me" ->
+          "they_owe"
+
+        "fyi" ->
+          nil
+
+        "owed_by_me" ->
+          explicit_owed_direction(metadata) || inferred_user_owes_from_copy(todo, metadata)
+
+        _other ->
+          explicit_owed_direction(metadata) || inferred_user_owes_from_copy(todo, metadata)
+      end
+    end
   end
+
+  @user_owes_directions ~w(
+    waiting_on_kent waiting_on_user waiting_on_me user_owes i_owe asked_of_me pending_reply
+  )
+  @they_owe_directions ~w(waiting_on_them they_owe)
+
+  defp explicit_owed_direction(metadata) when is_map(metadata) do
+    candidates =
+      [
+        read_string(metadata, "commitment_direction"),
+        read_string(read_map(metadata, "record"), "commitment_direction"),
+        read_string(metadata, "thread_state"),
+        read_string(read_map(metadata, "conversation_context"), "momentum_state"),
+        read_string(read_map(metadata, "conversation_context"), "notification_posture")
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.map(&normalize_direction_token/1)
+
+    cond do
+      Enum.any?(candidates, &(&1 in @user_owes_directions)) -> "user_owes"
+      Enum.any?(candidates, &(&1 in @they_owe_directions)) -> "they_owe"
+      true -> nil
+    end
+  end
+
+  defp explicit_owed_direction(_metadata), do: nil
+
+  defp inferred_user_owes_from_copy(todo, metadata) do
+    text =
+      [
+        todo.summary,
+        todo.title,
+        todo.next_action,
+        read_string(metadata, "why_now"),
+        read_string(metadata, "why_it_matters"),
+        read_string(read_map(metadata, "record"), "ask"),
+        read_string(read_map(metadata, "record"), "commitment")
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    if strong_waiting_on_user_copy?(text), do: "user_owes"
+  end
+
+  defp strong_waiting_on_user_copy?(text) when is_binary(text) do
+    Enum.any?(
+      [
+        "is waiting",
+        "are waiting",
+        "waiting on you",
+        "waiting on your",
+        "needs your reply",
+        "needs your decision",
+        "needs your approval",
+        "awaiting your",
+        "you owe",
+        "no later reply",
+        "no later sent reply"
+      ],
+      &String.contains?(text, &1)
+    )
+  end
+
+  defp strong_waiting_on_user_copy?(_text), do: false
+
+  defp normalize_direction_token(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/, "_")
+    |> String.trim("_")
+  end
+
+  defp normalize_direction_token(_value), do: ""
 
   defp last_interaction(todo, metadata) do
     first_present([
@@ -1609,24 +1707,62 @@ defmodule Maraithon.ActionCards do
   end
 
   defp people_label([%{"name" => name} = person | _]) do
-    details =
-      [read_field(person, "company"), read_field(person, "relationship")]
-      |> Enum.reject(&blank?/1)
-
-    if details == [], do: name, else: "#{name} (#{Enum.join(details, "; ")})"
+    # Keep the person chip scannable: name + company only. Long CRM bios in
+    # relationship_context used to dump into every Decision row subtitle.
+    case compact_company_label(read_field(person, "company")) do
+      company when is_binary(company) -> "#{name} (#{company})"
+      _ -> name
+    end
   end
 
   defp people_label(_people), do: nil
 
-  defp identity_label(person, company, relationship) do
-    details = [company, relationship] |> Enum.reject(&blank?/1)
-
+  defp identity_label(person, company, _relationship) do
     cond do
-      blank?(person) -> nil
-      details == [] -> person
-      true -> "#{person} (#{Enum.join(details, "; ")})"
+      blank?(person) ->
+        nil
+
+      true ->
+        case compact_company_label(company) do
+          company_label when is_binary(company_label) -> "#{person} (#{company_label})"
+          _ -> person
+        end
     end
   end
+
+  defp compact_company_label(value) when is_binary(value) do
+    value
+    |> single_line()
+    |> String.trim()
+    |> case do
+      "" -> nil
+      company when byte_size(company) <= 48 -> company
+      _long -> nil
+    end
+  end
+
+  defp compact_company_label(_value), do: nil
+
+  # Short role labels ("Investor", "Agency partner") are useful. Full CRM
+  # dossier sentences are not — they duplicate People records and make
+  # Decision rows look invented.
+  defp compact_relationship_label(value) when is_binary(value) do
+    cleaned =
+      value
+      |> externalize_copy()
+      |> single_line()
+      |> String.trim()
+
+    cond do
+      blank?(cleaned) -> nil
+      not public_card_text?(cleaned) -> nil
+      String.length(cleaned) > 48 -> nil
+      String.contains?(cleaned, ". ") -> nil
+      true -> cleaned
+    end
+  end
+
+  defp compact_relationship_label(_value), do: nil
 
   defp profile_why_now(profile, todo, context) do
     cond do

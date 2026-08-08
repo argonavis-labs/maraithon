@@ -24,7 +24,7 @@ defmodule Maraithon.Todos.DecisionSignalsTest do
     assert DecisionSignals.needs_decision?(todo)
   end
 
-  test "an owed_by_me direction alone marks a todo as needing a decision" do
+  test "an owed_by_me direction alone does not flood Decisions without waiting evidence" do
     todo = %Todo{
       status: "open",
       direction: "owed_by_me",
@@ -34,6 +34,21 @@ defmodule Maraithon.Todos.DecisionSignalsTest do
       notes: nil,
       action_plan: nil,
       metadata: %{}
+    }
+
+    refute DecisionSignals.needs_decision?(todo)
+  end
+
+  test "owed_by_me with explicit waiting metadata still needs a decision" do
+    todo = %Todo{
+      status: "open",
+      direction: "owed_by_me",
+      title: "Vendor contract",
+      summary: "This is a reference note with plain background context.",
+      next_action: "Check back later.",
+      notes: nil,
+      action_plan: nil,
+      metadata: %{"commitment_direction" => "pending_reply"}
     }
 
     assert DecisionSignals.needs_decision?(todo)

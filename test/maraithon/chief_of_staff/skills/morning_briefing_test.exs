@@ -358,7 +358,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute prompt =~ "Vanta enterprise security discount"
     assert prompt =~ "runner-general"
     assert prompt =~ "OpenAI ships briefing-relevant updates"
-    assert prompt =~ "Include news only when it affects the operator's company"
+    assert prompt =~ "mention news only when it affects the operator's company"
     assert prompt =~ "relationships"
     assert prompt =~ "Charlie Jones"
     assert prompt =~ "Runner teammate"
@@ -435,12 +435,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             %{
               "source" => "slack",
               "title" => "Review Runner launch note",
-              "summary" => "The GTM channel needs Kent to review the Runner launch note.",
-              "next_action" => "Open the launch note and leave approval or edits.",
+              "summary" =>
+                "Charlie is waiting on you to review the Runner launch note before GTM can ship.",
+              "next_action" => "Approve or edit the Runner launch note in #runner-gtm today.",
               "notes" => "Mentioned in #runner-gtm.",
               "action_plan" => "Scan claims, check launch timing, then approve or comment.",
               "dedupe_key" => "morning:slack:runner-launch-note",
-              "metadata" => %{"channel_name" => "runner-gtm"}
+              "metadata" => %{
+                "channel_name" => "runner-gtm",
+                "commitment_direction" => "pending_reply",
+                "why_it_matters" => "GTM is blocked until the launch note is approved."
+              }
             }
           ]
         })
@@ -1207,6 +1212,38 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute revised["body"] =~ "Brief shape needs attention"
     refute revised["body"] =~ "original model"
     refute revised["body"] =~ "model output"
+  end
+
+  test "quality verifier scrubs passwords and security answers from the brief body" do
+    brief = %{
+      "title" => "Thursday, August 7 - Family logistics",
+      "summary" => "Submit Jack's form with security answer mapleleaf.",
+      "body" => """
+      ## Next Actions
+      - Submit Jack's Brown Belt grading form and email gojueastwest@hotmail.com with the security answer `mapleleaf`.
+      - Approve the Mercury wires after confirming the amount.
+      """,
+      "todos" => [
+        %{
+          "title" => "Submit grading form",
+          "next_action" => "Send the e-transfer with the security answer mapleleaf today.",
+          "summary" => "Password: hunter2 should never appear."
+        }
+      ]
+    }
+
+    {revised, _verification} =
+      MorningBriefing.verify_quality(brief, %{"date" => "2026-08-07"}, "llm")
+
+    refute revised["body"] =~ "mapleleaf"
+    refute revised["body"] =~ "hunter2"
+    refute revised["summary"] =~ "mapleleaf"
+    refute hd(revised["todos"])["next_action"] =~ "mapleleaf"
+    refute hd(revised["todos"])["summary"] =~ "hunter2"
+    assert revised["body"] =~ "gojueastwest@hotmail.com"
+
+    assert String.contains?(revised["body"], "credential removed") or
+             String.contains?(revised["body"], "confirm security answer")
   end
 
   test "quality verifier puts model todo next actions into the primary brief" do

@@ -325,7 +325,19 @@ enum TodoDecisionSignals {
             return true
         }
 
-        if hasSignalText(todo.nextBestAction), hasSignalText(todo.evidenceExcerpt) {
+        // Action-card presence alone is not a decision. Require a real call
+        // (waiting language or a concrete decision prompt). Stale keep/close
+        // cards still qualify via their keep-or-dismiss prompt once cleaned
+        // of the generic template, or via waitingSignal/whyNow below.
+        if hasSignalText(todo.nextBestAction),
+           hasSignalText(todo.evidenceExcerpt),
+           waitingSignal(in: todo.whyNow) || waitingSignal(in: todo.notes) {
+            return true
+        }
+
+        // Keep/close confirmation is an intentional Decision even when the
+        // prompt template is otherwise treated as generic elsewhere.
+        if TodoRowCopy.isStaleKeepClose(todo) {
             return true
         }
 

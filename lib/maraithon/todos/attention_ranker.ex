@@ -32,10 +32,12 @@ defmodule Maraithon.Todos.AttentionRanker do
   @family_terms_weak ~w(
     personal home school teacher camp health doctor parent anniversary
   )
+  # Strong waiting language only. Broad business nouns (project, customer, due,
+  # decision, delivery) used to mark almost every open work item as
+  # "actively waiting", which then leaked into false "Waiting on you" copy.
   @waiting_terms ~w(
     waiting blocked unblock owe owes owed committed promise promised follow-up followup
-    reply respond response delivery deliver eta deadline due customer client project
-    objective decision approve approval pricing artifact
+    reply respond response approve approval
   )
   @intro_terms ~w(intro introduction introduce)
   @meeting_terms ~w(meeting meet call schedule scheduling calendar availability)
@@ -216,8 +218,16 @@ defmodule Maraithon.Todos.AttentionRanker do
   # (pre-backfill rows or edge imports).
   defp waiting?(todo, text, metadata) do
     case read_field(todo, "direction") do
-      direction when direction in ["owed_by_me", "owed_to_me", "fyi"] ->
-        direction == "owed_to_me" or contains_any?(text, @waiting_terms)
+      "owed_to_me" ->
+        true
+
+      "owed_by_me" ->
+        # Default direction on open work; require explicit waiting language so
+        # routine self-owned tasks are not ranked as active waiting loops.
+        contains_any?(text, @waiting_terms)
+
+      "fyi" ->
+        false
 
       _ ->
         legacy_direction = read_metadata(metadata, "commitment_direction")
