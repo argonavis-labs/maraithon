@@ -10,6 +10,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   alias Maraithon.AgentHarness.MarkdownSkill
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.{SourceBundle, SourceScope}
+  alias Maraithon.Connectors.Gmail
   alias Maraithon.Crm
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
@@ -526,6 +527,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       |> SourceBundle.imessage_chats()
       |> Enum.sort_by(&local_chat_sort_key/1, :desc)
 
+    imessage_people_by_handle =
+      user_id
+      |> Crm.people_by_contact_values(
+        imessage_sender_handles(
+          Enum.take(imessage_messages, state.local_message_scan_limit),
+          Enum.take(imessage_chats, state.local_chat_scan_limit)
+        )
+      )
+
     voice_memos =
       source_bundle
       |> SourceBundle.voice_memos()
@@ -613,12 +623,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       "imessage" => %{
         "recent_messages" =>
           imessage_messages
-          |> Enum.map(&imessage_message_for_prompt(user_id, &1))
-          |> Enum.take(state.local_message_scan_limit),
+          |> Enum.take(state.local_message_scan_limit)
+          |> Enum.map(&imessage_message_for_prompt(&1, imessage_people_by_handle)),
         "chats" =>
           imessage_chats
-          |> Enum.map(&imessage_chat_for_prompt(user_id, &1))
-          |> Enum.take(state.local_chat_scan_limit),
+          |> Enum.take(state.local_chat_scan_limit)
+          |> Enum.map(&imessage_chat_for_prompt(&1, imessage_people_by_handle)),
         "counts" => %{
           "recent_messages" => length(imessage_messages),
           "chats" => length(imessage_chats)
@@ -733,7 +743,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
              "owner_user_id": null,
              "owner_label": "null for the main user, or named non-user owner",
              "source_account_label": "email/calendar account when known",
-             "source_item_id": "message/thread/event id when known",
+             "source_item_id": "canonical thread/event/message id when known (Gmail uses thread id)",
              "source_occurred_at": "ISO-8601 datetime when known",
              "dedupe_key": "stable semantic key",
              "direction": "owed_by_me | owed_to_me | fyi",
@@ -751,6 +761,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
                  "later_evidence": []
                },
                "source_ref": "...",
+               "gmail_message_id": "raw Gmail message id when the source is Gmail",
+               "gmail_thread_id": "raw Gmail thread id when the source is Gmail",
+               "google_provider": "google:<account email> when the source is Gmail",
+               "google_account_email": "account email when the source is Gmail",
                "source_tags": ["project","gmail"],
                "quote": "...",
                "company": "company or organization when known",
@@ -1462,8 +1476,60 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     |> Map.put_new("source", "chief_of_staff_commitment_tracker")
     |> Map.put_new("kind", "general")
     |> Map.put_new("source_occurred_at", read_string(tracker_input, "generated_at", nil))
+    |> attach_gmail_provenance(tracker_input)
     |> enforce_vague_self_commitment_snooze_floor(tracker_input)
   end
+
+  defp attach_gmail_provenance(attrs, tracker_input)
+       when is_map(attrs) and is_map(tracker_input) do
+    if read_string(attrs, "source", nil) == "gmail" do
+      source_item_id = read_string(attrs, "source_item_id", nil)
+
+      message =
+        if is_binary(source_item_id) do
+          tracker_input
+          |> read_map("gmail")
+          |> then(fn gmail ->
+            read_list(gmail, "recent_inbox") ++ read_list(gmail, "recent_sent")
+          end)
+          |> Enum.find(fn item ->
+            source_item_id in [
+              read_string(item, "message_id", nil),
+              read_string(item, "thread_id", nil),
+              read_string(item, "source_item_id", nil)
+            ]
+          end)
+        end
+
+      attach_gmail_message_provenance(attrs, message)
+    else
+      attrs
+    end
+  end
+
+  defp attach_gmail_provenance(attrs, _tracker_input), do: attrs
+
+  defp attach_gmail_message_provenance(attrs, message) when is_map(message) do
+    message_id = message |> read_string("message_id", nil) |> Gmail.normalize_id()
+    thread_id = message |> read_string("thread_id", nil) |> Gmail.normalize_id()
+    provider = read_string(message, "google_provider", nil)
+    account = read_string(message, "account", nil)
+
+    metadata =
+      attrs
+      |> read_map("metadata")
+      |> maybe_put("gmail_message_id", message_id)
+      |> maybe_put("gmail_thread_id", thread_id)
+      |> maybe_put("google_provider", provider)
+      |> maybe_put("google_account_email", account)
+
+    attrs
+    |> Map.put("metadata", metadata)
+    |> maybe_put("source_item_id", thread_id || message_id)
+    |> maybe_put("source_account_label", account)
+  end
+
+  defp attach_gmail_message_provenance(attrs, _message), do: attrs
 
   defp enforce_vague_self_commitment_snooze_floor(attrs, tracker_input) when is_map(attrs) do
     metadata = read_map(attrs, "metadata")
@@ -1680,6 +1746,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     %{
       "message_id" => read_string(message, "message_id", nil),
       "thread_id" => read_string(message, "thread_id", nil),
+      "source_item_id" =>
+        read_string(message, "thread_id", read_string(message, "message_id", nil)),
+      "google_provider" => read_string(message, "google_provider", nil),
       "account" =>
         read_string(message, "account", read_string(message, "google_account_email", nil)),
       "from" => read_string(message, "from", nil),
@@ -1752,14 +1821,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     }
   end
 
-  defp imessage_message_for_prompt(user_id, message)
-       when is_binary(user_id) and is_map(message) do
-    message
-    |> imessage_message_for_prompt()
-    |> add_resolved_imessage_sender(user_id, read_string(message, "sender_handle", nil))
+  defp imessage_sender_handles(messages, chats) when is_list(messages) and is_list(chats) do
+    message_handles = Enum.map(messages, &read_string(&1, "sender_handle", nil))
+    chat_handles = Enum.map(chats, &read_string(&1, "latest_sender", nil))
+
+    (message_handles ++ chat_handles)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
   end
 
-  defp imessage_message_for_prompt(_user_id, message), do: imessage_message_for_prompt(message)
+  defp imessage_sender_handles(_messages, _chats), do: []
+
+  defp imessage_message_for_prompt(message, people_by_handle)
+       when is_map(message) and is_map(people_by_handle) do
+    message
+    |> imessage_message_for_prompt()
+    |> add_resolved_imessage_sender(
+      Map.get(people_by_handle, read_string(message, "sender_handle", nil))
+    )
+  end
+
+  defp imessage_message_for_prompt(message, _people_by_handle),
+    do: imessage_message_for_prompt(message)
 
   defp imessage_message_for_prompt(message) when is_map(message) do
     %{
@@ -1781,13 +1864,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     }
   end
 
-  defp imessage_chat_for_prompt(user_id, chat) when is_binary(user_id) and is_map(chat) do
+  defp imessage_chat_for_prompt(chat, people_by_handle)
+       when is_map(chat) and is_map(people_by_handle) do
     chat
     |> imessage_chat_for_prompt()
-    |> add_resolved_imessage_latest_sender(user_id, read_string(chat, "latest_sender", nil))
+    |> add_resolved_imessage_latest_sender(
+      Map.get(people_by_handle, read_string(chat, "latest_sender", nil))
+    )
   end
 
-  defp imessage_chat_for_prompt(_user_id, chat), do: imessage_chat_for_prompt(chat)
+  defp imessage_chat_for_prompt(chat, _people_by_handle), do: imessage_chat_for_prompt(chat)
 
   defp imessage_chat_for_prompt(chat) when is_map(chat) do
     %{
@@ -1803,34 +1889,22 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     }
   end
 
-  defp add_resolved_imessage_sender(message, user_id, handle) when is_binary(handle) do
-    case Crm.find_person_by_contact(user_id, handle) do
-      %Maraithon.Crm.Person{} = person ->
-        message
-        |> Map.put("sender_display_name", person.display_name)
-        |> Map.put("sender_person_id", person.id)
-        |> maybe_put("sender_relationship", person.relationship)
-
-      nil ->
-        message
-    end
+  defp add_resolved_imessage_sender(message, %Maraithon.Crm.Person{} = person) do
+    message
+    |> Map.put("sender_display_name", person.display_name)
+    |> Map.put("sender_person_id", person.id)
+    |> maybe_put("sender_relationship", person.relationship)
   end
 
-  defp add_resolved_imessage_sender(message, _user_id, _handle), do: message
+  defp add_resolved_imessage_sender(message, _person), do: message
 
-  defp add_resolved_imessage_latest_sender(chat, user_id, handle) when is_binary(handle) do
-    case Crm.find_person_by_contact(user_id, handle) do
-      %Maraithon.Crm.Person{} = person ->
-        chat
-        |> Map.put("latest_sender_display_name", person.display_name)
-        |> Map.put("latest_sender_person_id", person.id)
-
-      nil ->
-        chat
-    end
+  defp add_resolved_imessage_latest_sender(chat, %Maraithon.Crm.Person{} = person) do
+    chat
+    |> Map.put("latest_sender_display_name", person.display_name)
+    |> Map.put("latest_sender_person_id", person.id)
   end
 
-  defp add_resolved_imessage_latest_sender(chat, _user_id, _handle), do: chat
+  defp add_resolved_imessage_latest_sender(chat, _person), do: chat
 
   defp voice_memo_for_prompt(memo) when is_map(memo) do
     %{

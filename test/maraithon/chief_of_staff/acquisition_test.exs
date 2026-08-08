@@ -553,9 +553,106 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert length(SourceBundle.gmail_sent_messages(bundle)) == 1
     assert length(SourceBundle.calendar_events(bundle)) == 1
     assert get_in(telemetry, ["sources", "gmail", "status"]) == "ready"
+    assert get_in(telemetry, ["sources", "gmail", "candidate_limit"]) == 100
+    assert get_in(telemetry, ["sources", "gmail", "per_provider_candidate_limit"]) == 100
+    assert Keyword.get(TravelGmailStub.last_fetch_opts(), :message_format) == :metadata
     assert get_in(telemetry, ["sources", "gmail", "full_body_count"]) == 2
     assert get_in(telemetry, ["sources", "gmail", "body_missing_count"]) == 0
     assert get_in(telemetry, ["sources", "calendar", "status"]) == "ready"
+  end
+
+  test "shares one global body budget fairly across Gmail accounts" do
+    now = ~U[2026-04-02 13:00:00Z]
+    providers = ["google:alpha@example.com", "google:beta@example.com"]
+
+    messages_by_provider =
+      Map.new(providers, fn provider ->
+        prefix = if provider =~ "alpha", do: "a", else: "b"
+
+        messages =
+          Enum.map(1..30, fn index ->
+            %{
+              message_id: "#{prefix}#{index}",
+              thread_id: "#{prefix}f#{index}",
+              subject: "#{provider} message #{index}",
+              labels: ["INBOX"],
+              internal_date: DateTime.add(now, -index, :minute)
+            }
+          end)
+
+        {provider, messages}
+      end)
+
+    contents =
+      messages_by_provider
+      |> Map.values()
+      |> List.flatten()
+      |> Map.new(fn message ->
+        {message.message_id,
+         Map.put(message, :text_body, "Fetched body for #{message.message_id}")}
+      end)
+
+    TravelGmailStub.configure(
+      messages_by_provider: messages_by_provider,
+      contents: contents
+    )
+
+    source_scope = %{
+      "google_accounts" =>
+        Enum.map(providers, fn provider ->
+          %{
+            "provider" => provider,
+            "account_email" => String.replace_prefix(provider, "google:", ""),
+            "services" => ["gmail"]
+          }
+        end)
+    }
+
+    skill_configs = %{
+      "followthrough" => %{
+        "source_scope" => source_scope,
+        "email_scan_limit" => 100,
+        "lookback_hours" => 48
+      }
+    }
+
+    context = %{
+      agent_id: "chief-agent-fair-gmail",
+      user_id: "chief@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry, _watermarks} =
+      Acquisition.build("chief@example.com", ["followthrough"], skill_configs, context)
+
+    assert length(SourceBundle.gmail_messages(bundle)) == 60
+
+    full_body_counts =
+      bundle
+      |> SourceBundle.gmail_messages()
+      |> Enum.group_by(& &1["google_provider"])
+      |> Map.new(fn {provider, messages} ->
+        {provider, Enum.count(messages, &(&1["body_available"] == true))}
+      end)
+
+    assert full_body_counts == %{
+             "google:alpha@example.com" => 20,
+             "google:beta@example.com" => 20
+           }
+
+    assert get_in(telemetry, ["sources", "gmail", "candidate_limit"]) == 250
+
+    assert get_in(telemetry, ["sources", "gmail", "provider_candidate_limits"]) == %{
+             "google:alpha@example.com" => 125,
+             "google:beta@example.com" => 125
+           }
+
+    assert get_in(telemetry, ["sources", "gmail", "full_body_count"]) == 40
+    assert get_in(telemetry, ["sources", "gmail", "body_missing_count"]) == 20
   end
 
   test "keeps other source evidence when one provider times out" do
@@ -589,8 +686,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         "source_scope" => source_scope,
         "email_scan_limit" => 10,
         "event_scan_limit" => 10,
-        "gmail_fetch_timeout_ms" => 5,
-        "calendar_fetch_timeout_ms" => 100,
+        "gmail_fetch_timeout_ms" => 100,
+        "calendar_fetch_timeout_ms" => 200,
         "companion_fetch_timeout_ms" => 5,
         "slack_fetch_timeout_ms" => 5
       }
@@ -613,10 +710,56 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert event["summary"] == "Current customer webinar"
     assert SourceBundle.gmail_messages(bundle) == []
 
-    assert get_in(SourceBundle.freshness(bundle), ["gmail", "status"]) == "unavailable"
-    assert get_in(SourceBundle.freshness(bundle), ["gmail", "reason"]) =~ "timed out"
-    assert get_in(telemetry, ["sources", "gmail", "status"]) == "timeout"
+    assert get_in(SourceBundle.freshness(bundle), ["gmail", "status"]) == "partial"
+    assert get_in(telemetry, ["sources", "gmail", "status"]) == "partial"
+
+    assert get_in(telemetry, ["sources", "gmail", "failed_providers"]) == [
+             "google:shared@example.com"
+           ]
+
     assert get_in(telemetry, ["sources", "calendar", "status"]) == "ready"
+  end
+
+  test "skips commercial Gmail work when every base provider fails" do
+    now = ~U[2026-04-02 13:00:00Z]
+    provider = "google:failed@example.com"
+
+    TravelGmailStub.configure(fetch_errors_by_provider: %{provider => :reauth_required})
+
+    source_scope = %{
+      "google_accounts" => [
+        %{
+          "provider" => provider,
+          "account_email" => "failed@example.com",
+          "services" => ["gmail"]
+        }
+      ]
+    }
+
+    skill_configs = %{
+      "followthrough" => %{
+        "source_scope" => source_scope,
+        "email_scan_limit" => 10,
+        "commercial_gmail_queries" => ["invoice OR receipt"]
+      }
+    }
+
+    context = %{
+      agent_id: "chief-agent-gmail-all-failed",
+      user_id: "chief@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry, _watermarks} =
+      Acquisition.build("chief@example.com", ["followthrough"], skill_configs, context)
+
+    assert SourceBundle.gmail_messages(bundle) == []
+    assert get_in(telemetry, ["sources", "gmail", "status"]) == "partial"
+    assert get_in(telemetry, ["sources", "gmail", "failed_providers"]) == [provider]
   end
 
   test "marks Gmail bodies unavailable when body enrichment times out" do
@@ -697,6 +840,79 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert fast["body_text"] == "This body was fetched."
     assert get_in(telemetry, ["sources", "gmail", "full_body_count"]) == 1
     assert get_in(telemetry, ["sources", "gmail", "body_missing_count"]) == 1
+  end
+
+  test "existing Gmail bodies do not consume hydration slots" do
+    now = ~U[2026-04-02 13:00:00Z]
+
+    existing =
+      Enum.map(1..5, fn index ->
+        %{
+          message_id: "existing-#{index}",
+          thread_id: "existing-thread-#{index}",
+          subject: "Existing body #{index}",
+          labels: ["INBOX"],
+          internal_date: DateTime.add(now, -index, :minute),
+          text_body: "Already hydrated #{index}",
+          body_status: "available_truncated"
+        }
+      end)
+
+    missing =
+      Enum.map(1..45, fn index ->
+        %{
+          message_id: "missing-#{index}",
+          thread_id: "missing-thread-#{index}",
+          subject: "Missing body #{index}",
+          labels: ["INBOX"],
+          internal_date: DateTime.add(now, -(index + 5), :minute)
+        }
+      end)
+
+    contents =
+      Map.new(missing, fn message ->
+        {message.message_id, Map.put(message, :text_body, "Fetched #{message.message_id}")}
+      end)
+
+    TravelGmailStub.configure(messages: existing ++ missing, contents: contents)
+
+    source_scope = %{
+      "google_accounts" => [
+        %{
+          "provider" => "google:shared@example.com",
+          "account_email" => "shared@example.com",
+          "services" => ["gmail"]
+        }
+      ]
+    }
+
+    skill_configs = %{
+      "followthrough" => %{"source_scope" => source_scope, "email_scan_limit" => 20}
+    }
+
+    context = %{
+      agent_id: "chief-agent-gmail-existing-bodies",
+      user_id: "chief@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry, _watermarks} =
+      Acquisition.build("chief@example.com", ["followthrough"], skill_configs, context)
+
+    messages = SourceBundle.gmail_messages(bundle)
+    assert Enum.count(messages, &(&1["body_available"] == true)) == 45
+    assert Enum.count(messages, &(&1["body_available"] == false)) == 5
+
+    assert messages
+           |> Enum.filter(&String.starts_with?(&1["message_id"], "existing-"))
+           |> Enum.all?(&(&1["body_status"] == "available_truncated"))
+
+    assert get_in(telemetry, ["sources", "gmail", "full_body_count"]) == 45
+    assert get_in(telemetry, ["sources", "gmail", "body_missing_count"]) == 5
   end
 
   test "enriches event Gmail payloads with full bodies before model synthesis" do
@@ -883,6 +1099,130 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
 
       assert proposed_account.id == account.id
       assert is_binary(value)
+    end
+
+    test "does not advance a watermark after failed candidate details", %{
+      user_id: user_id,
+      provider: provider,
+      account: account
+    } do
+      TravelGmailStub.configure(
+        messages: [
+          %{
+            message_id: "aa11",
+            thread_id: "bb22",
+            subject: "Partial fetch",
+            labels: ["INBOX"],
+            internal_date: ~U[2026-06-01 11:00:00Z]
+          }
+        ],
+        fetch_metadata: %{
+          listed_count: 40,
+          requested_count: 35,
+          detail_success_count: 34,
+          detail_failure_count: 1,
+          truncated?: true,
+          complete?: false
+        },
+        contents: %{}
+      )
+
+      skill_configs = %{
+        "followthrough" => %{
+          "source_scope" => %{
+            "google_accounts" => [
+              %{
+                "provider" => provider,
+                "account_email" => "watermark@example.com",
+                "services" => ["gmail"]
+              }
+            ]
+          },
+          "email_scan_limit" => 10,
+          "lookback_hours" => 48
+        }
+      }
+
+      {_bundle, telemetry, proposed_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          skill_configs,
+          watermark_build_context(user_id, true)
+        )
+
+      assert proposed_watermarks == []
+      refute Maraithon.Connectors.SourceCursors.get(account.id, "gmail_poll_watermark")
+      assert get_in(telemetry, ["sources", "gmail", "status"]) == "partial"
+      assert get_in(telemetry, ["sources", "gmail", "partial_providers"]) == [provider]
+      assert get_in(telemetry, ["sources", "gmail", "failed_providers"]) == []
+      assert get_in(telemetry, ["sources", "gmail", "backfill_needed_providers"]) == []
+
+      assert [%{"status" => "partial", "detail_failure_count" => 1, "truncated" => true}] =
+               Enum.filter(telemetry["fetches"], &(&1["provider"] == provider))
+    end
+
+    test "advances the live watermark after an intact truncated window", %{
+      user_id: user_id,
+      provider: provider,
+      account: account
+    } do
+      TravelGmailStub.configure(
+        messages: [
+          %{
+            message_id: "aa11",
+            thread_id: "bb22",
+            subject: "Newest bounded result",
+            labels: ["INBOX"],
+            internal_date: ~U[2026-06-01 11:00:00Z]
+          }
+        ],
+        fetch_metadata: %{
+          listed_count: 250,
+          requested_count: 250,
+          detail_success_count: 250,
+          detail_failure_count: 0,
+          truncated?: true,
+          complete?: false
+        },
+        contents: %{}
+      )
+
+      skill_configs = %{
+        "followthrough" => %{
+          "source_scope" => %{
+            "google_accounts" => [
+              %{
+                "provider" => provider,
+                "account_email" => "watermark@example.com",
+                "services" => ["gmail"]
+              }
+            ]
+          },
+          "email_scan_limit" => 10,
+          "lookback_hours" => 48
+        }
+      }
+
+      {_bundle, telemetry, proposed_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          skill_configs,
+          watermark_build_context(user_id, true)
+        )
+
+      refute Maraithon.Connectors.SourceCursors.get(account.id, "gmail_poll_watermark")
+
+      assert [%{account: proposed_account, kind: "gmail_poll_watermark", value: value}] =
+               proposed_watermarks
+
+      assert proposed_account.id == account.id
+      assert is_binary(value)
+      assert get_in(telemetry, ["sources", "gmail", "status"]) == "partial"
+      assert get_in(telemetry, ["sources", "gmail", "partial_providers"]) == [provider]
+      assert get_in(telemetry, ["sources", "gmail", "failed_providers"]) == []
+      assert get_in(telemetry, ["sources", "gmail", "backfill_needed_providers"]) == [provider]
     end
 
     # Regression test for the "non-agent callers advance the agent's poll

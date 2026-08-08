@@ -310,38 +310,49 @@ defmodule Maraithon.LocalMessages do
 
     latest_per_chat_query =
       from msg in LocalMessage,
-        where: msg.user_id == ^user_id and not is_nil(msg.chat_key),
+        where: msg.user_id == ^user_id and not is_nil(msg.chat_key) and not is_nil(msg.sent_at),
         group_by: msg.chat_key,
         select: %{chat_key: msg.chat_key, latest_sent_at: max(msg.sent_at)},
         order_by: [desc: max(msg.sent_at)],
         limit: ^limit
 
     latest_rows = Repo.all(latest_per_chat_query)
+    chat_keys = Enum.map(latest_rows, & &1.chat_key)
 
-    Enum.map(latest_rows, fn %{chat_key: chat_key, latest_sent_at: latest_sent_at} ->
-      latest_message =
-        Repo.one(
-          from msg in LocalMessage,
-            where:
-              msg.user_id == ^user_id and msg.chat_key == ^chat_key and
-                msg.sent_at == ^latest_sent_at,
-            limit: 1
-        )
+    latest_by_chat =
+      LocalMessage
+      |> where([msg], msg.user_id == ^user_id and msg.chat_key in ^chat_keys)
+      |> distinct([msg], msg.chat_key)
+      |> order_by(
+        [msg],
+        asc: msg.chat_key,
+        desc_nulls_last: msg.sent_at,
+        desc: msg.inserted_at,
+        desc: msg.id
+      )
+      |> Repo.all()
+      |> Map.new(&{&1.chat_key, &1})
 
-      count_7d =
-        Repo.one(
-          from msg in LocalMessage,
-            where:
-              msg.user_id == ^user_id and msg.chat_key == ^chat_key and
-                msg.sent_at >= ^seven_days_ago,
-            select: count(msg.id)
-        ) || 0
+    counts_by_chat =
+      LocalMessage
+      |> where(
+        [msg],
+        msg.user_id == ^user_id and msg.chat_key in ^chat_keys and
+          msg.sent_at >= ^seven_days_ago
+      )
+      |> group_by([msg], msg.chat_key)
+      |> select([msg], {msg.chat_key, count(msg.id)})
+      |> Repo.all()
+      |> Map.new()
+
+    Enum.map(latest_rows, fn %{chat_key: chat_key} ->
+      latest_message = Map.get(latest_by_chat, chat_key)
 
       %{
         chat_key: chat_key,
         chat_display_name: latest_message && latest_message.chat_display_name,
         latest_message: latest_message,
-        message_count_last_7d: count_7d
+        message_count_last_7d: Map.get(counts_by_chat, chat_key, 0)
       }
     end)
   end

@@ -137,6 +137,16 @@ defmodule Maraithon.CrmTest do
              Crm.find_person_by_contact(user_id, "4165261454", contact_kind: :phone)
 
     assert id == person.id
+
+    assert %{
+             "14165261454" => %Crm.Person{id: ^id},
+             "4165261454" => %Crm.Person{id: ^id}
+           } =
+             Crm.people_by_contact_values(
+               user_id,
+               ["14165261454", "4165261454", "unknown@example.com"],
+               contact_kind: :phone
+             )
   end
 
   test "lists family context and preserves family metadata in prompt summaries" do

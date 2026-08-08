@@ -76,7 +76,6 @@ defmodule Maraithon.Todos.CompletionSweep do
     # Resolve connected Google accounts once per user per run; retaining the
     # account email is required to scope legacy `google` tokens safely.
     connected_accounts = connected_gmail_accounts(user_id)
-    connected_providers = Enum.map(connected_accounts, &Map.fetch!(&1, "provider"))
 
     self_emails =
       Keyword.get(opts, :self_emails) || self_emails_from_accounts(user_id, connected_accounts)

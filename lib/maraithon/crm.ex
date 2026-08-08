@@ -122,6 +122,52 @@ defmodule Maraithon.Crm do
 
   def people_for_resource(_user_id, _resource_type, _resource_id, _opts), do: []
 
+  @doc """
+  Loads people for many resources in one query, keyed by resource id.
+
+  Collection serializers should use this instead of calling
+  `people_for_resource/4` once per row. The result preserves the same ordering
+  and per-resource limit as the single-resource lookup.
+  """
+  def people_for_resources(user_id, resource_type, resource_ids, opts \\ [])
+
+  def people_for_resources(user_id, resource_type, resource_ids, opts)
+      when is_binary(user_id) and is_binary(resource_type) and is_list(resource_ids) do
+    limit = opts |> Keyword.get(:limit, @default_people_limit) |> clamp_limit(1, 25)
+
+    resource_ids =
+      resource_ids
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    if resource_ids == [] do
+      %{}
+    else
+      Person
+      |> join(:inner, [person], link in PersonLink,
+        on:
+          link.user_id == ^user_id and link.person_id == person.id and
+            link.resource_type == ^resource_type and link.resource_id in ^resource_ids
+      )
+      |> where([person, _link], person.user_id == ^user_id and person.status == "active")
+      |> order_by([person, link],
+        asc: link.resource_id,
+        asc: link.role,
+        desc: link.updated_at,
+        desc: link.inserted_at,
+        asc: fragment("lower(?)", person.display_name)
+      )
+      |> select([person, link], {link.resource_id, person})
+      |> Repo.all()
+      |> Enum.group_by(fn {resource_id, _person} -> resource_id end, fn {_resource_id, person} ->
+        person
+      end)
+      |> Map.new(fn {resource_id, people} -> {resource_id, Enum.take(people, limit)} end)
+    end
+  end
+
+  def people_for_resources(_user_id, _resource_type, _resource_ids, _opts), do: %{}
+
   def list_family_context(user_id, opts \\ [])
 
   def list_family_context(user_id, opts) when is_binary(user_id) do
@@ -333,11 +379,53 @@ defmodule Maraithon.Crm do
 
       user_id
       |> people_for_contact_scan()
-      |> Enum.find(&person_contact_matches?(&1, kind, value))
+      |> find_person_in_people(kind, value)
     end
   end
 
   def find_person_by_contact(_user_id, _contact_value, _opts), do: nil
+
+  @doc """
+  Resolves many contact values with one people query.
+
+  The returned map is keyed by the original contact value and contains only
+  matches. This preserves `find_person_by_contact/3` semantics while avoiding a
+  full CRM reload for every message in collection serializers.
+  """
+  def people_by_contact_values(user_id, contact_values, opts \\ [])
+
+  def people_by_contact_values(user_id, contact_values, opts)
+      when is_binary(user_id) and is_list(contact_values) and is_list(opts) do
+    kind = opts |> Keyword.get(:contact_kind) |> normalize_contact_lookup_kind()
+
+    contacts =
+      contact_values
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+      |> Enum.flat_map(fn original ->
+        case normalize_string(original) do
+          value when is_binary(value) -> [{original, value}]
+          nil -> []
+        end
+      end)
+
+    case contacts do
+      [] ->
+        %{}
+
+      contacts ->
+        people = people_for_contact_scan(user_id)
+
+        Enum.reduce(contacts, %{}, fn {original, value}, matches ->
+          case find_person_in_people(people, kind, value) do
+            %Person{} = person -> Map.put(matches, original, person)
+            nil -> matches
+          end
+        end)
+    end
+  end
+
+  def people_by_contact_values(_user_id, _contact_values, _opts), do: %{}
 
   @doc """
   Atomically increment `interaction_count` and advance `last_interaction_at`
@@ -1555,6 +1643,10 @@ defmodule Maraithon.Crm do
   end
 
   defp normalize_contact_lookup_kind(_kind), do: nil
+
+  defp find_person_in_people(people, kind, value) when is_list(people) do
+    Enum.find(people, &person_contact_matches?(&1, kind, value))
+  end
 
   defp people_for_contact_scan(user_id) do
     Person

@@ -6,7 +6,7 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
   end
 
   def fetch_messages(_user_id, opts \\ []) do
-    Application.put_env(:maraithon, {__MODULE__, :last_fetch_opts}, opts)
+    Application.put_env(:maraithon, :travel_gmail_stub_last_fetch_opts, opts)
 
     if config(:fetch_messages_hang, false) do
       receive do
@@ -14,11 +14,33 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
       end
     end
 
-    {:ok, config(:messages, [])}
+    provider = Keyword.get(opts, :provider)
+
+    error =
+      config(:fetch_errors_by_provider, %{})
+      |> Map.get(provider, config(:fetch_error, nil))
+
+    if error do
+      {:error, error}
+    else
+      messages =
+        config(:messages_by_provider, %{})
+        |> Map.get(provider, config(:messages, []))
+
+      metadata =
+        config(:fetch_metadata_by_provider, %{})
+        |> Map.get(provider, config(:fetch_metadata, nil))
+
+      if is_map(metadata) and Keyword.get(opts, :include_fetch_metadata, false) do
+        {:ok, messages, metadata}
+      else
+        {:ok, messages}
+      end
+    end
   end
 
   def last_fetch_opts do
-    Application.get_env(:maraithon, {__MODULE__, :last_fetch_opts}, [])
+    Application.get_env(:maraithon, :travel_gmail_stub_last_fetch_opts, [])
   end
 
   def fetch_message_content(_user_id, message_id) when is_binary(message_id) do

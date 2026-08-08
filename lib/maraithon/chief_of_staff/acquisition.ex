@@ -25,10 +25,17 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   require Logger
 
-  @default_gmail_message_limit 250
+  @max_gmail_message_limit 250
   @default_gmail_body_fetch_limit 40
   @default_gmail_body_fetch_timeout_ms 5_000
   @default_gmail_fetch_timeout_ms 20_000
+  @gmail_candidate_fetch_concurrency 12
+  @gmail_provider_fetch_concurrency 3
+  @gmail_provider_phase_timeout_ms 9_000
+  @gmail_commercial_phase_timeout_ms 1_000
+  @gmail_candidate_detail_timeout_ms 5_000
+  @gmail_body_fetch_concurrency 8
+  @gmail_body_phase_timeout_ms 8_000
   @default_calendar_limit 250
   @default_calendar_fetch_timeout_ms 15_000
   @default_slack_channel_limit 12
@@ -633,15 +640,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       end),
       source_fetcher("imessage", timeout_ms, fn state ->
         fetch_companion_source(state, "imessage", fn ->
-          messages =
+          source_messages =
+            LocalMessages.recent_for_user(user_id, limit: plan.local_message_limit)
+
+          source_chats =
+            LocalMessages.chats_recent(user_id, limit: plan.local_chat_limit, now: now)
+
+          people_by_handle =
             user_id
-            |> LocalMessages.recent_for_user(limit: plan.local_message_limit)
-            |> Enum.map(&local_message_for_bundle(user_id, &1))
+            |> Crm.people_by_contact_values(message_sender_handles(source_messages, source_chats))
+
+          messages =
+            Enum.map(source_messages, &local_message_for_bundle(&1, people_by_handle))
 
           chats =
-            user_id
-            |> LocalMessages.chats_recent(limit: plan.local_chat_limit, now: now)
-            |> Enum.map(&local_chat_for_bundle(user_id, &1))
+            Enum.map(source_chats, &local_chat_for_bundle(&1, people_by_handle))
 
           {:ok,
            &SourceBundle.put_imessage(&1, %{
@@ -1397,28 +1410,107 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       watermark_mode = watermark_advance_mode(context, plan)
       deep_lookback? = deep_lookback_fetch?(plan)
+      provider_count = length(providers)
+      provider_concurrency = min(@gmail_provider_fetch_concurrency, provider_count)
+      phase_budgets = gmail_phase_budgets(plan)
+      provider_waves = ceil_div(provider_count, provider_concurrency)
+      provider_task_timeout = max(div(phase_budgets.provider, provider_waves), 1)
 
-      {messages_by_provider, fetches, proposed_watermarks} =
-        Enum.reduce(providers, {%{}, telemetry["fetches"], []}, fn provider,
-                                                                   {message_acc, fetch_acc,
-                                                                    watermark_acc} ->
+      detail_concurrency =
+        max(div(@gmail_candidate_fetch_concurrency, provider_concurrency), 1)
+
+      detail_timeout =
+        @gmail_candidate_detail_timeout_ms
+        |> min(max(provider_task_timeout - 250, 1))
+
+      provider_quotas =
+        gmail_provider_candidate_quotas(
+          providers,
+          plan.gmail_message_limit,
+          plan.commercial_gmail_queries
+        )
+
+      provider_candidate_limits =
+        Map.new(provider_quotas, fn {provider, quota} -> {provider, quota.total} end)
+
+      per_provider_candidate_limit =
+        provider_candidate_limits
+        |> Map.values()
+        |> Enum.max(fn -> 0 end)
+
+      provider_specs =
+        Enum.map(providers, fn provider ->
           account = ConnectedAccounts.get(user_id, provider)
           query = gmail_poll_query(account, fallback_query, deep_lookback?)
+          quota = Map.fetch!(provider_quotas, provider)
+          {provider, account, query, quota}
+        end)
 
-          case gmail_module().fetch_messages(user_id,
-                 max_results: plan.gmail_message_limit,
-                 label_ids: [],
-                 query: query,
-                 provider: provider
-               ) do
-            {:ok, messages} ->
-              # R4: a successful poll is the recovery signal for gmail
-              # sources flagged stale/watch_expired by the freshness sweep
-              # (or reauth-recovered since the last cycle) - confirms once
-              # and re-arms future notifications.
-              SourceFreshness.mark_success(user_id, provider)
+      provider_results =
+        Task.async_stream(
+          provider_specs,
+          fn {provider, _account, query, quota} ->
+            safe_gmail_task(fn ->
+              fetch_gmail_provider_candidates(
+                user_id,
+                source_scope,
+                provider,
+                query,
+                quota.base,
+                detail_concurrency,
+                detail_timeout
+              )
+            end)
+          end,
+          max_concurrency: provider_concurrency,
+          ordered: true,
+          timeout: provider_task_timeout,
+          on_timeout: :kill_task
+        )
 
-              watermark_acc =
+      {raw_messages_by_provider, provider_statuses, proposed_watermarks} =
+        provider_specs
+        |> Enum.zip(provider_results)
+        |> Enum.reduce({%{}, %{}, []}, fn
+          {{provider, account, _query, _quota},
+           {:ok, {:ok, messages, %{complete?: true} = fetch_metadata}}},
+          {message_acc, status_acc, watermark_acc} ->
+            SourceFreshness.mark_success(user_id, provider)
+
+            watermark_acc =
+              accumulate_watermark(
+                watermark_acc,
+                account,
+                "gmail_poll_watermark",
+                now_watermark,
+                watermark_mode
+              )
+
+            {
+              Map.put(message_acc, provider, messages),
+              Map.put(status_acc, provider, {:ok, 0, fetch_metadata}),
+              watermark_acc
+            }
+
+          {{provider, account, _query, _quota}, {:ok, {:ok, messages, fetch_metadata}}},
+          {message_acc, status_acc, watermark_acc} ->
+            backfill_needed? =
+              fetch_metadata.truncated? and fetch_metadata.detail_failure_count == 0
+
+            Logger.warning("ChiefOfStaff Gmail candidate fetch was incomplete",
+              user_id: user_id,
+              provider: provider,
+              detail_failure_count: fetch_metadata.detail_failure_count,
+              truncated: fetch_metadata.truncated?,
+              backfill_needed: backfill_needed?
+            )
+
+            # Truncation means the newest bounded window was delivered intact.
+            # Advance the live watermark so every cycle does not refetch that
+            # same window forever; telemetry retains the explicit backfill
+            # signal. Detail failures never advance and are retried next cycle.
+            watermark_acc =
+              if backfill_needed? do
                 accumulate_watermark(
                   watermark_acc,
                   account,
@@ -1426,68 +1518,151 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                   now_watermark,
                   watermark_mode
                 )
-
-              commercial_messages =
-                fetch_commercial_gmail_messages(user_id, provider, plan.commercial_gmail_queries)
-
-              annotated =
-                (messages ++ commercial_messages)
-                |> dedupe_messages()
-                |> annotate_google_items(source_scope, provider)
-                |> enrich_gmail_messages(user_id, provider, plan)
-
-              {
-                Map.put(message_acc, provider, annotated),
-                [
-                  %{
-                    "source" => "gmail",
-                    "provider" => provider,
-                    "mode" => "connector",
-                    "status" => "ok",
-                    "count" => length(annotated),
-                    "commercial_search_count" => length(commercial_messages),
-                    "full_body_count" => count_full_body_messages(annotated),
-                    "body_missing_count" => count_body_missing_messages(annotated)
-                  }
-                  | fetch_acc
-                ],
+              else
                 watermark_acc
-              }
+              end
 
-            {:error, reason} ->
-              ConnectedAccounts.report_access_issue(user_id, provider, reason)
+            {
+              Map.put(message_acc, provider, messages),
+              Map.put(status_acc, provider, {:partial, 0, fetch_metadata}),
+              watermark_acc
+            }
 
-              Logger.warning("ChiefOfStaff acquisition failed to fetch Gmail",
-                user_id: user_id,
-                provider: provider,
-                reason: inspect(reason)
+          {{provider, _account, _query, _quota}, {:ok, {:error, reason}}},
+          {message_acc, status_acc, watermark_acc} ->
+            ConnectedAccounts.report_access_issue(user_id, provider, reason)
+
+            Logger.warning("ChiefOfStaff acquisition failed to fetch Gmail",
+              user_id: user_id,
+              provider: provider,
+              reason: inspect(reason)
+            )
+
+            {
+              message_acc,
+              Map.put(status_acc, provider, {:error, reason}),
+              watermark_acc
+            }
+
+          {{provider, _account, _query, _quota}, {:ok, {:task_failure, reason}}},
+          {message_acc, status_acc, watermark_acc} ->
+            Logger.warning("ChiefOfStaff Gmail provider task failed",
+              user_id: user_id,
+              provider: provider,
+              reason: inspect(reason)
+            )
+
+            {
+              message_acc,
+              Map.put(status_acc, provider, {:task_error, reason}),
+              watermark_acc
+            }
+
+          {{provider, _account, _query, _quota}, {:exit, reason}},
+          {message_acc, status_acc, watermark_acc} ->
+            # A bounded task timeout is a cycle-budget failure, not evidence
+            # that the account needs OAuth repair.
+            Logger.warning("ChiefOfStaff Gmail provider phase did not finish",
+              user_id: user_id,
+              provider: provider,
+              reason: inspect(reason)
+            )
+
+            {
+              message_acc,
+              Map.put(status_acc, provider, {:task_error, reason}),
+              watermark_acc
+            }
+        end)
+
+      {raw_messages_by_provider, provider_statuses} =
+        append_commercial_gmail_candidates(
+          raw_messages_by_provider,
+          provider_statuses,
+          user_id,
+          source_scope,
+          providers,
+          provider_quotas,
+          detail_concurrency,
+          detail_timeout,
+          plan.commercial_gmail_queries,
+          phase_budgets.commercial
+        )
+
+      messages =
+        providers
+        |> interleave_gmail_provider_messages(raw_messages_by_provider)
+        |> dedupe_messages()
+        |> Enum.take(plan.gmail_message_limit)
+        |> enrich_gmail_messages(user_id, nil, plan)
+        |> sort_messages()
+
+      messages_by_provider = group_messages_by_provider(messages)
+
+      provider_fetches =
+        Enum.map(providers, fn provider ->
+          provider_messages = Map.get(messages_by_provider, provider, [])
+
+          case Map.get(provider_statuses, provider) do
+            {:ok, commercial_count, fetch_metadata} ->
+              gmail_provider_fetch_telemetry(
+                provider,
+                "ok",
+                commercial_count,
+                provider_messages,
+                fetch_metadata
               )
 
-              {
-                message_acc,
-                [
-                  %{
-                    "source" => "gmail",
-                    "provider" => provider,
-                    "mode" => "connector",
-                    "status" => "error",
-                    "reason" => inspect(reason)
-                  }
-                  | fetch_acc
-                ],
-                watermark_acc
+            {:partial, commercial_count, fetch_metadata} ->
+              gmail_provider_fetch_telemetry(
+                provider,
+                "partial",
+                commercial_count,
+                provider_messages,
+                fetch_metadata
+              )
+
+            {:error, reason} ->
+              %{
+                "source" => "gmail",
+                "provider" => provider,
+                "mode" => "connector",
+                "status" => "error",
+                "reason" => inspect(reason)
+              }
+
+            {:task_error, reason} ->
+              %{
+                "source" => "gmail",
+                "provider" => provider,
+                "mode" => "connector",
+                "status" => "timeout",
+                "reason" => inspect(reason)
               }
           end
         end)
 
-      messages =
-        messages_by_provider
-        |> Map.values()
-        |> List.flatten()
-        |> dedupe_messages()
-        |> sort_messages()
+      complete_providers =
+        Enum.filter(providers, fn provider ->
+          match?({:ok, _commercial_count, _metadata}, Map.get(provider_statuses, provider))
+        end)
 
-      status = if messages == [], do: "partial", else: "ready"
+      partial_providers =
+        Enum.filter(providers, fn provider ->
+          match?({:partial, _commercial_count, _metadata}, Map.get(provider_statuses, provider))
+        end)
+
+      backfill_needed_providers =
+        Enum.filter(partial_providers, fn provider ->
+          case Map.get(provider_statuses, provider) do
+            {:partial, _commercial_count, %{truncated?: true, detail_failure_count: 0}} -> true
+            _other -> false
+          end
+        end)
+
+      failed_providers = providers -- (complete_providers ++ partial_providers)
+      successful_provider_count = length(complete_providers) + length(partial_providers)
+      status = if length(complete_providers) == provider_count, do: "ready", else: "partial"
 
       bundle =
         SourceBundle.put_gmail(bundle, %{
@@ -1496,25 +1671,440 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           "sent_messages" => filter_messages_by_label(messages, "SENT", plan.sent_limit),
           "messages_by_provider" => messages_by_provider,
           "providers" => providers,
-          "metadata" => %{"mode" => "connector", "query" => fallback_query},
+          "metadata" => %{
+            "mode" => "connector",
+            "query" => fallback_query,
+            "candidate_limit" => plan.gmail_message_limit,
+            "complete_providers" => complete_providers,
+            "partial_providers" => partial_providers,
+            "failed_providers" => failed_providers,
+            "backfill_needed_providers" => backfill_needed_providers
+          },
           "status" => status,
           "fetched_at" => context[:timestamp] || DateTime.utc_now()
         })
 
       telemetry =
         telemetry
-        |> Map.put("fetches", fetches)
+        |> Map.update("fetches", provider_fetches, &(provider_fetches ++ &1))
         |> Map.update("proposed_watermarks", proposed_watermarks, &(proposed_watermarks ++ &1))
         |> put_source_summary("gmail", %{
           "mode" => "connector",
           "status" => status,
           "providers" => providers,
+          "complete_providers" => complete_providers,
+          "partial_providers" => partial_providers,
+          "failed_providers" => failed_providers,
+          "backfill_needed_providers" => backfill_needed_providers,
+          "successful_provider_count" => successful_provider_count,
+          "complete_provider_count" => length(complete_providers),
+          "candidate_limit" => plan.gmail_message_limit,
+          "per_provider_candidate_limit" => per_provider_candidate_limit,
+          "provider_candidate_limits" => provider_candidate_limits,
           "message_count" => length(messages),
           "full_body_count" => count_full_body_messages(messages),
-          "body_missing_count" => count_body_missing_messages(messages)
+          "body_missing_count" => count_body_missing_messages(messages),
+          "phase_budgets_ms" => phase_budgets
         })
 
       {telemetry, bundle}
+    end
+  end
+
+  defp fetch_gmail_provider_candidates(
+         _user_id,
+         _source_scope,
+         _provider,
+         _query,
+         message_limit,
+         _detail_concurrency,
+         _detail_timeout
+       )
+       when not is_integer(message_limit) or message_limit <= 0 do
+    {:ok, [], gmail_fetch_metadata(0, 0, 0, false, false)}
+  end
+
+  defp fetch_gmail_provider_candidates(
+         user_id,
+         source_scope,
+         provider,
+         query,
+         message_limit,
+         detail_concurrency,
+         detail_timeout
+       ) do
+    fetch_opts = gmail_candidate_fetch_opts(detail_concurrency, detail_timeout)
+
+    case gmail_module().fetch_messages(
+           user_id,
+           fetch_opts ++
+             [
+               max_results: message_limit,
+               label_ids: [],
+               query: query,
+               provider: provider
+             ]
+         ) do
+      {:ok, messages, metadata} when is_list(messages) and is_map(metadata) ->
+        annotated = annotate_google_items(messages, source_scope, provider)
+
+        {:ok, annotated,
+         normalize_gmail_fetch_metadata(metadata, message_limit, length(messages))}
+
+      {:ok, messages} when is_list(messages) ->
+        # Test doubles and older connector implementations do not expose
+        # completeness metadata. Their explicit success remains complete.
+        annotated = annotate_google_items(messages, source_scope, provider)
+        metadata = gmail_fetch_metadata(length(messages), length(messages), 0, false, true)
+        {:ok, annotated, metadata}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        {:error, {:unexpected_gmail_fetch_result, summarize_task_value(other)}}
+    end
+  end
+
+  defp append_commercial_gmail_candidates(
+         messages_by_provider,
+         provider_statuses,
+         _user_id,
+         _source_scope,
+         _providers,
+         _provider_quotas,
+         _detail_concurrency,
+         _detail_timeout,
+         [],
+         _phase_timeout
+       ),
+       do: {messages_by_provider, provider_statuses}
+
+  defp append_commercial_gmail_candidates(
+         messages_by_provider,
+         provider_statuses,
+         user_id,
+         source_scope,
+         providers,
+         provider_quotas,
+         detail_concurrency,
+         detail_timeout,
+         queries,
+         phase_timeout
+       )
+       when is_map(messages_by_provider) and is_map(provider_statuses) and is_list(queries) and
+              is_integer(phase_timeout) and phase_timeout > 0 do
+    successful_providers =
+      Enum.filter(providers, fn provider ->
+        case Map.get(provider_statuses, provider) do
+          {:ok, _commercial_count, _metadata} -> true
+          {:partial, _commercial_count, _metadata} -> true
+          _other -> false
+        end
+      end)
+
+    provider_concurrency =
+      max(min(@gmail_provider_fetch_concurrency, length(successful_providers)), 1)
+
+    provider_waves = max(ceil_div(length(successful_providers), provider_concurrency), 1)
+    provider_timeout = max(div(phase_timeout, provider_waves), 1)
+    query_timeout = max(provider_timeout - 100, 1)
+
+    query_concurrency =
+      max(
+        min(detail_concurrency, div(@gmail_candidate_fetch_concurrency, provider_concurrency)),
+        1
+      )
+
+    results =
+      Task.async_stream(
+        successful_providers,
+        fn provider ->
+          safe_gmail_task(fn ->
+            quota = get_in(provider_quotas, [provider, :commercial]) || 0
+
+            commercial_messages =
+              fetch_commercial_gmail_messages(
+                user_id,
+                provider,
+                queries,
+                gmail_commercial_fetch_opts(
+                  query_concurrency,
+                  min(detail_timeout, query_timeout),
+                  query_timeout
+                ),
+                quota
+              )
+              |> annotate_google_items(source_scope, provider)
+
+            {provider, commercial_messages}
+          end)
+        end,
+        max_concurrency: provider_concurrency,
+        ordered: true,
+        timeout: provider_timeout,
+        on_timeout: :kill_task
+      )
+
+    successful_providers
+    |> Enum.zip(results)
+    |> Enum.reduce({messages_by_provider, provider_statuses}, fn
+      {_expected_provider, {:ok, {provider, commercial_messages}}}, {message_acc, status_acc} ->
+        total_quota = get_in(provider_quotas, [provider, :total]) || 0
+
+        combined =
+          (commercial_messages ++ Map.get(message_acc, provider, []))
+          |> dedupe_messages()
+          |> Enum.take(total_quota)
+
+        status =
+          case Map.fetch!(status_acc, provider) do
+            {:ok, _count, metadata} -> {:ok, length(commercial_messages), metadata}
+            {:partial, _count, metadata} -> {:partial, length(commercial_messages), metadata}
+          end
+
+        {Map.put(message_acc, provider, combined), Map.put(status_acc, provider, status)}
+
+      {provider, {:ok, {:task_failure, reason}}}, {message_acc, status_acc} ->
+        Logger.debug("ChiefOfStaff optional commercial Gmail search failed",
+          user_id: user_id,
+          provider: provider,
+          reason: inspect(reason)
+        )
+
+        {message_acc, status_acc}
+
+      {provider, {:exit, reason}}, {message_acc, status_acc} ->
+        Logger.debug("ChiefOfStaff optional commercial Gmail search did not finish",
+          user_id: user_id,
+          provider: provider,
+          reason: inspect(reason)
+        )
+
+        {message_acc, status_acc}
+    end)
+  end
+
+  defp append_commercial_gmail_candidates(
+         messages_by_provider,
+         provider_statuses,
+         _user_id,
+         _source_scope,
+         _providers,
+         _provider_quotas,
+         _detail_concurrency,
+         _detail_timeout,
+         _queries,
+         _phase_timeout
+       ),
+       do: {messages_by_provider, provider_statuses}
+
+  defp gmail_candidate_fetch_opts(detail_concurrency, detail_timeout) do
+    [
+      message_format: :metadata,
+      message_fetch_concurrency: detail_concurrency,
+      message_fetch_timeout_ms: detail_timeout,
+      include_fetch_metadata: true
+    ]
+  end
+
+  defp gmail_commercial_fetch_opts(query_concurrency, detail_timeout, query_timeout) do
+    [
+      message_format: :metadata,
+      message_fetch_concurrency: 1,
+      message_fetch_timeout_ms: detail_timeout,
+      include_fetch_metadata: true,
+      commercial_query_concurrency: query_concurrency,
+      commercial_query_timeout_ms: query_timeout
+    ]
+  end
+
+  defp gmail_provider_candidate_quotas(providers, total_limit, queries)
+       when is_list(providers) and providers != [] and is_integer(total_limit) and
+              total_limit >= 0 do
+    provider_count = length(providers)
+    base_quota = div(total_limit, provider_count)
+    remainder = rem(total_limit, provider_count)
+    query_count = queries |> normalize_commercial_gmail_queries() |> length()
+
+    providers
+    |> Enum.with_index()
+    |> Map.new(fn {provider, index} ->
+      total = base_quota + if(index < remainder, do: 1, else: 0)
+
+      commercial =
+        if query_count > 0 do
+          min(query_count * @commercial_gmail_query_limit, div(total, 8))
+        else
+          0
+        end
+
+      {provider, %{total: total, base: total - commercial, commercial: commercial}}
+    end)
+  end
+
+  defp gmail_provider_candidate_quotas(providers, _total_limit, _queries)
+       when is_list(providers) do
+    Map.new(providers, &{&1, %{total: 0, base: 0, commercial: 0}})
+  end
+
+  defp normalize_commercial_gmail_queries(queries) when is_list(queries) do
+    queries
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp normalize_commercial_gmail_queries(_queries), do: []
+
+  defp gmail_commercial_query_specs(queries, total_limit) do
+    queries = normalize_commercial_gmail_queries(queries)
+    query_count = length(queries)
+
+    if query_count == 0 or not is_integer(total_limit) or total_limit <= 0 do
+      []
+    else
+      base_quota = div(total_limit, query_count)
+      remainder = rem(total_limit, query_count)
+
+      queries
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {query, index} ->
+        quota = base_quota + if(index < remainder, do: 1, else: 0)
+        if quota > 0, do: [{query, quota}], else: []
+      end)
+    end
+  end
+
+  defp normalize_gmail_fetch_metadata(metadata, requested_count, success_count) do
+    listed_count = fetch_metadata_integer(metadata, :listed_count, requested_count)
+    requested_count = fetch_metadata_integer(metadata, :requested_count, requested_count)
+    detail_success_count = fetch_metadata_integer(metadata, :detail_success_count, success_count)
+
+    detail_failure_count =
+      fetch_metadata_integer(
+        metadata,
+        :detail_failure_count,
+        max(requested_count - detail_success_count, 0)
+      )
+
+    truncated? = fetch_metadata_boolean(metadata, :truncated?, false)
+
+    declared_complete? =
+      fetch_metadata_boolean(
+        metadata,
+        :complete?,
+        detail_failure_count == 0 and not truncated?
+      )
+
+    complete? = declared_complete? and detail_failure_count == 0 and not truncated?
+
+    gmail_fetch_metadata(
+      listed_count,
+      detail_success_count,
+      detail_failure_count,
+      truncated?,
+      complete?
+    )
+    |> Map.put(:requested_count, requested_count)
+  end
+
+  defp gmail_fetch_metadata(
+         listed_count,
+         detail_success_count,
+         detail_failure_count,
+         truncated?,
+         complete?
+       ) do
+    %{
+      listed_count: listed_count,
+      requested_count: detail_success_count + detail_failure_count,
+      detail_success_count: detail_success_count,
+      detail_failure_count: detail_failure_count,
+      truncated?: truncated?,
+      complete?: complete?
+    }
+  end
+
+  defp fetch_metadata_integer(metadata, key, default) do
+    case Map.get(metadata, key, Map.get(metadata, Atom.to_string(key), default)) do
+      value when is_integer(value) and value >= 0 -> value
+      _other -> default
+    end
+  end
+
+  defp fetch_metadata_boolean(metadata, key, default) do
+    case Map.get(metadata, key, Map.get(metadata, Atom.to_string(key), default)) do
+      value when is_boolean(value) -> value
+      _other -> default
+    end
+  end
+
+  defp gmail_provider_fetch_telemetry(
+         provider,
+         status,
+         commercial_count,
+         provider_messages,
+         fetch_metadata
+       ) do
+    %{
+      "source" => "gmail",
+      "provider" => provider,
+      "mode" => "connector",
+      "status" => status,
+      "count" => length(provider_messages),
+      "commercial_search_count" => commercial_count,
+      "listed_count" => fetch_metadata.listed_count,
+      "requested_count" => fetch_metadata.requested_count,
+      "detail_success_count" => fetch_metadata.detail_success_count,
+      "detail_failure_count" => fetch_metadata.detail_failure_count,
+      "truncated" => fetch_metadata.truncated?,
+      "full_body_count" => count_full_body_messages(provider_messages),
+      "body_missing_count" => count_body_missing_messages(provider_messages)
+    }
+  end
+
+  defp safe_gmail_task(fun) when is_function(fun, 0) do
+    try do
+      fun.()
+    rescue
+      error -> {:task_failure, {:exception, error.__struct__}}
+    catch
+      kind, reason -> {:task_failure, {kind, summarize_task_value(reason)}}
+    end
+  end
+
+  defp summarize_task_value(value) do
+    inspect(value, pretty: false, limit: 10, printable_limit: 200)
+  end
+
+  defp interleave_gmail_provider_messages(providers, messages_by_provider)
+       when is_list(providers) and is_map(messages_by_provider) do
+    providers
+    |> Enum.map(&Map.get(messages_by_provider, &1, []))
+    |> interleave_gmail_queues()
+  end
+
+  defp interleave_gmail_provider_messages(_providers, _messages_by_provider), do: []
+
+  defp interleave_gmail_queues(queues) do
+    round =
+      Enum.flat_map(queues, fn
+        [message | _rest] -> [message]
+        [] -> []
+      end)
+
+    if round == [] do
+      []
+    else
+      remaining =
+        Enum.map(queues, fn
+          [_message | rest] -> rest
+          [] -> []
+        end)
+
+      round ++ interleave_gmail_queues(remaining)
     end
   end
 
@@ -1693,6 +2283,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       morning_brief? or
         commitment_review_due?(user_id, skill_ids, skill_configs, context) or
         truthy?(Map.get(context, :acquisition_deep_lookback))
+
     raw_lookback_hours = max(max_lookback_hours, 24)
 
     scheduled_scan_lookback_hours =
@@ -1715,7 +2306,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       web_context: morning_brief?,
       inbox_limit: max(max_email_scan_limit, 100),
       sent_limit: max(max_email_scan_limit * 2, 100),
-      gmail_message_limit: max(max_email_scan_limit * 4, @default_gmail_message_limit),
+      gmail_message_limit: min(max_email_scan_limit * 4, @max_gmail_message_limit),
       gmail_body_fetch_limit:
         max_skill_integer(
           skill_ids,
@@ -2248,40 +2839,116 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp enrich_gmail_messages(messages, user_id, default_provider, plan)
        when is_list(messages) and is_binary(user_id) do
-    {body_candidates, metadata_only} = Enum.split(messages, gmail_body_fetch_limit(plan))
+    normalized = Enum.map(messages, &normalize_gmail_body_state/1)
 
-    enriched =
-      enrich_gmail_message_bodies(body_candidates, user_id, default_provider, plan)
+    body_candidates =
+      normalized
+      |> Enum.with_index()
+      |> Enum.reject(fn {message, _index} -> gmail_body_available?(message) end)
+      |> Enum.take(gmail_body_fetch_limit(plan))
 
-    skipped = Enum.map(metadata_only, &mark_gmail_body_unavailable(&1, "not_fetched"))
+    enriched_by_index =
+      body_candidates
+      |> Enum.map(&elem(&1, 0))
+      |> enrich_gmail_message_bodies(user_id, default_provider, plan)
+      |> then(fn enriched ->
+        body_candidates
+        |> Enum.map(&elem(&1, 1))
+        |> Enum.zip(enriched)
+        |> Map.new()
+      end)
 
-    enriched ++ skipped
+    normalized
+    |> Enum.with_index()
+    |> Enum.map(fn {message, index} ->
+      case Map.fetch(enriched_by_index, index) do
+        {:ok, enriched} ->
+          enriched
+
+        :error ->
+          if gmail_body_available?(message) do
+            normalize_gmail_body_state(message)
+          else
+            mark_gmail_body_not_fetched(message)
+          end
+      end
+    end)
   end
 
   defp enrich_gmail_messages(messages, _user_id, _default_provider, _plan) when is_list(messages),
-    do: Enum.map(messages, &stringify_keys/1)
+    do: Enum.map(messages, &normalize_gmail_body_state/1)
 
   defp enrich_gmail_messages(_messages, _user_id, _default_provider, _plan), do: []
 
+  defp enrich_gmail_message_bodies([], _user_id, _default_provider, _plan), do: []
+
   defp enrich_gmail_message_bodies(messages, user_id, default_provider, plan) do
+    waves = ceil_div(length(messages), @gmail_body_fetch_concurrency)
+    body_phase_timeout = gmail_phase_budgets(plan).body
+
+    timeout =
+      min(
+        gmail_body_fetch_timeout_ms(plan),
+        max(div(body_phase_timeout, max(waves, 1)), 1)
+      )
+
     results =
       Task.async_stream(
         messages,
-        fn message -> enrich_gmail_message(user_id, message, default_provider) end,
-        max_concurrency: 4,
-        timeout: gmail_body_fetch_timeout_ms(plan),
+        fn message ->
+          safe_gmail_task(fn -> enrich_gmail_message(user_id, message, default_provider) end)
+        end,
+        max_concurrency: @gmail_body_fetch_concurrency,
+        ordered: true,
+        timeout: timeout,
         on_timeout: :kill_task
       )
 
     messages
     |> Enum.zip(results)
     |> Enum.map(fn
-      {_original, {:ok, message}} ->
+      {_original, {:ok, message}} when is_map(message) ->
         message
 
-      {original, {:exit, _reason}} ->
+      {original, _failure} ->
         mark_gmail_body_unavailable(original, "fetch_failed")
     end)
+  end
+
+  defp normalize_gmail_body_state(message) do
+    message = stringify_keys(message)
+
+    if gmail_body_available?(message) do
+      message
+      |> put_gmail_body_text()
+      |> mark_gmail_body_available()
+    else
+      message
+    end
+  end
+
+  defp mark_gmail_body_available(message) when is_map(message) do
+    status =
+      case Map.get(message, "body_status") do
+        "available" <> _suffix = existing -> existing
+        _other -> "available"
+      end
+
+    message
+    |> Map.put("body_available", true)
+    |> Map.put("body_status", status)
+  end
+
+  defp mark_gmail_body_not_fetched(message) do
+    message = stringify_keys(message)
+
+    case Map.get(message, "body_status") do
+      status when is_binary(status) and status != "" ->
+        Map.put(message, "body_available", false)
+
+      _status ->
+        mark_gmail_body_unavailable(message, "not_fetched")
+    end
   end
 
   defp mark_gmail_body_unavailable(message, status) do
@@ -2302,6 +2969,25 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp gmail_body_fetch_limit(_plan), do: @default_gmail_body_fetch_limit
+
+  defp gmail_phase_budgets(plan) do
+    total = max(gmail_fetch_timeout_ms(plan), 4)
+    reserve = min(2_000, max(div(total, 10), 1))
+    usable = max(total - reserve, 3)
+    commercial = min(@gmail_commercial_phase_timeout_ms, max(div(usable, 18), 1))
+    remaining = max(usable - commercial, 2)
+    provider = min(@gmail_provider_phase_timeout_ms, max(div(remaining + 1, 2), 1))
+    body = min(@gmail_body_phase_timeout_ms, max(remaining - provider, 1))
+
+    %{provider: provider, commercial: commercial, body: body, reserve: reserve, total: total}
+  end
+
+  defp ceil_div(0, divisor) when is_integer(divisor) and divisor > 0, do: 0
+
+  defp ceil_div(value, divisor)
+       when is_integer(value) and value > 0 and is_integer(divisor) and divisor > 0 do
+    div(value + divisor - 1, divisor)
+  end
 
   defp gmail_body_fetch_timeout_ms(plan) when is_map(plan) do
     plan
@@ -2381,32 +3067,93 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
-  defp fetch_commercial_gmail_messages(_user_id, _provider, []), do: []
+  defp fetch_commercial_gmail_messages(
+         _user_id,
+         _provider,
+         _queries,
+         _fetch_opts,
+         total_limit
+       )
+       when not is_integer(total_limit) or total_limit <= 0,
+       do: []
 
-  defp fetch_commercial_gmail_messages(user_id, provider, queries) when is_list(queries) do
-    queries
-    |> Enum.flat_map(fn query ->
-      case gmail_module().fetch_messages(user_id,
-             max_results: @commercial_gmail_query_limit,
-             label_ids: [],
-             query: query,
-             provider: provider
-           ) do
-        {:ok, messages} ->
-          messages
+  defp fetch_commercial_gmail_messages(user_id, provider, queries, fetch_opts, total_limit)
+       when is_list(queries) and is_list(fetch_opts) do
+    query_specs = gmail_commercial_query_specs(queries, total_limit)
 
-        {:error, reason} ->
-          Logger.debug("ChiefOfStaff commercial Gmail search failed",
-            user_id: user_id,
-            provider: provider,
-            query: query,
-            reason: inspect(reason)
-          )
+    query_concurrency =
+      fetch_opts
+      |> Keyword.get(:commercial_query_concurrency, 1)
+      |> min(max(length(query_specs), 1))
+      |> max(1)
 
-          []
-      end
+    query_timeout =
+      Keyword.get(fetch_opts, :commercial_query_timeout_ms, @gmail_commercial_phase_timeout_ms)
+
+    gmail_opts =
+      Keyword.drop(fetch_opts, [:commercial_query_concurrency, :commercial_query_timeout_ms])
+
+    query_specs
+    |> Task.async_stream(
+      fn {query, limit} ->
+        safe_gmail_task(fn ->
+          result =
+            gmail_module().fetch_messages(
+              user_id,
+              gmail_opts ++
+                [
+                  max_results: limit,
+                  label_ids: [],
+                  query: query,
+                  provider: provider
+                ]
+            )
+
+          {query, result}
+        end)
+      end,
+      max_concurrency: query_concurrency,
+      ordered: true,
+      timeout: query_timeout,
+      on_timeout: :kill_task
+    )
+    |> Enum.flat_map(fn
+      {:ok, {_query, {:ok, messages, _metadata}}} when is_list(messages) ->
+        messages
+
+      {:ok, {_query, {:ok, messages}}} when is_list(messages) ->
+        messages
+
+      {:ok, {query, {:error, reason}}} ->
+        Logger.debug("ChiefOfStaff commercial Gmail search failed",
+          user_id: user_id,
+          provider: provider,
+          query: query,
+          reason: inspect(reason)
+        )
+
+        []
+
+      {:ok, {:task_failure, reason}} ->
+        Logger.debug("ChiefOfStaff commercial Gmail task failed",
+          user_id: user_id,
+          provider: provider,
+          reason: inspect(reason)
+        )
+
+        []
+
+      {:exit, reason} ->
+        Logger.debug("ChiefOfStaff commercial Gmail search timed out",
+          user_id: user_id,
+          provider: provider,
+          reason: inspect(reason)
+        )
+
+        []
     end)
     |> dedupe_messages()
+    |> Enum.take(total_limit)
   end
 
   defp enrich_gmail_message(user_id, message, default_provider) do
@@ -2417,9 +3164,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     cond do
       gmail_body_available?(metadata) ->
         metadata
-        |> Map.put("body_available", true)
-        |> Map.put("body_status", "available")
         |> put_gmail_body_text()
+        |> mark_gmail_body_available()
 
       is_binary(provider) and provider != "" and is_binary(message_id) and message_id != "" ->
         case gmail_module().fetch_message_content(user_id, message_id, provider: provider) do
@@ -2432,8 +3178,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
             if gmail_body_available?(merged) do
               merged
-              |> Map.put("body_available", true)
-              |> Map.put("body_status", "available")
+              |> mark_gmail_body_available()
             else
               merged
               |> Map.put("body_available", false)
@@ -2536,14 +3281,37 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp local_calendar_event_for_bundle(event) when is_map(event), do: stringify_keys(event)
 
-  defp local_message_for_bundle(user_id, %Maraithon.LocalMessages.LocalMessage{} = message)
-       when is_binary(user_id) do
-    user_id
-    |> maybe_resolve_message_person(message.sender_handle)
+  defp message_sender_handles(messages, chats) when is_list(messages) and is_list(chats) do
+    chat_messages =
+      Enum.map(chats, fn chat ->
+        Map.get(chat, :latest_message) || Map.get(chat, "latest_message")
+      end)
+
+    (messages ++ chat_messages)
+    |> Enum.map(&message_sender_handle/1)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+  end
+
+  defp message_sender_handles(_messages, _chats), do: []
+
+  defp message_sender_handle(message) when is_map(message) do
+    Map.get(message, :sender_handle) || Map.get(message, "sender_handle")
+  end
+
+  defp message_sender_handle(_message), do: nil
+
+  defp local_message_for_bundle(
+         %Maraithon.LocalMessages.LocalMessage{} = message,
+         people_by_handle
+       )
+       when is_map(people_by_handle) do
+    message.sender_handle
+    |> then(&Map.get(people_by_handle, &1))
     |> add_resolved_message_person(local_message_for_bundle(message))
   end
 
-  defp local_message_for_bundle(_user_id, message), do: local_message_for_bundle(message)
+  defp local_message_for_bundle(message, _people_by_handle), do: local_message_for_bundle(message)
 
   defp local_message_for_bundle(%Maraithon.LocalMessages.LocalMessage{} = message) do
     %{
@@ -2567,13 +3335,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp local_message_for_bundle(message) when is_map(message), do: stringify_keys(message)
 
-  defp local_chat_for_bundle(user_id, %{chat_key: _chat_key} = chat) when is_binary(user_id) do
+  defp local_chat_for_bundle(%{chat_key: _chat_key} = chat, people_by_handle)
+       when is_map(people_by_handle) do
     chat
     |> local_chat_for_bundle()
-    |> add_resolved_latest_sender(user_id)
+    |> add_resolved_latest_sender(people_by_handle)
   end
 
-  defp local_chat_for_bundle(_user_id, chat), do: local_chat_for_bundle(chat)
+  defp local_chat_for_bundle(chat, _people_by_handle), do: local_chat_for_bundle(chat)
 
   defp local_chat_for_bundle(%{chat_key: chat_key} = chat) do
     latest = Map.get(chat, :latest_message) || Map.get(chat, "latest_message")
@@ -2595,12 +3364,6 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp local_chat_for_bundle(chat) when is_map(chat), do: stringify_keys(chat)
 
-  defp maybe_resolve_message_person(user_id, handle) when is_binary(handle) do
-    Crm.find_person_by_contact(user_id, handle)
-  end
-
-  defp maybe_resolve_message_person(_user_id, _handle), do: nil
-
   defp add_resolved_message_person(nil, message), do: message
 
   defp add_resolved_message_person(%Maraithon.Crm.Person{} = person, message) do
@@ -2610,8 +3373,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     |> maybe_put("sender_relationship", person.relationship)
   end
 
-  defp add_resolved_latest_sender(chat, user_id) when is_map(chat) and is_binary(user_id) do
-    case maybe_resolve_message_person(user_id, Map.get(chat, "latest_sender")) do
+  defp add_resolved_latest_sender(chat, people_by_handle)
+       when is_map(chat) and is_map(people_by_handle) do
+    case Map.get(people_by_handle, Map.get(chat, "latest_sender")) do
       %Maraithon.Crm.Person{} = person ->
         chat
         |> Map.put("latest_sender_display_name", person.display_name)
@@ -2621,8 +3385,6 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         chat
     end
   end
-
-  defp add_resolved_latest_sender(chat, _user_id), do: chat
 
   defp voice_memo_for_bundle(%Maraithon.LocalVoiceMemos.LocalVoiceMemo{} = memo) do
     %{
@@ -3000,11 +3762,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp dedupe_messages(messages) when is_list(messages) do
     Enum.uniq_by(messages, fn message ->
-      Map.get(message, "message_id") ||
-        Map.get(message, :message_id) ||
-        Map.get(message, "id") ||
-        Map.get(message, :id) ||
-        :erlang.phash2(message)
+      message_id =
+        Map.get(message, "message_id") ||
+          Map.get(message, :message_id) ||
+          Map.get(message, "id") ||
+          Map.get(message, :id)
+
+      provider = Map.get(message, "google_provider") || Map.get(message, :google_provider)
+
+      if message_id, do: {provider, message_id}, else: :erlang.phash2(message)
     end)
   end
 

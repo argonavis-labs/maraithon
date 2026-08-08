@@ -129,8 +129,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
       |> SourceBundle.put_gmail(%{
         "inbox_messages" => [
           %{
-            "message_id" => "msg-ask",
-            "thread_id" => "thread-elena",
+            "message_id" => "aa11",
+            "thread_id" => "cc33",
+            "google_provider" => "google:kent@runner.now",
             "labels" => ["INBOX"],
             "from" => "Elena Saradidis <elena@example.com>",
             "to" => "Kent <kent@runner.now>",
@@ -144,8 +145,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
         ],
         "sent_messages" => [
           %{
-            "message_id" => "msg-sent",
-            "thread_id" => "thread-elena",
+            "message_id" => "bb22",
+            "thread_id" => "cc33",
+            "google_provider" => "google:kent@runner.now",
             "labels" => ["SENT"],
             "from" => "Kent <kent@runner.now>",
             "to" => "Elena Saradidis <elena@example.com>",
@@ -233,8 +235,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
                   "You should email Elena and say: \"Thanks, I have the revised Runner ambassador agreement ready. Sending it over for your review.\""
               },
               "owner_label" => "Kent",
-              "source_account_label" => "kent@runner.now",
-              "source_item_id" => "thread-elena",
+              # Model-provided account hints are not authoritative; matched
+              # source provenance must replace a stale or hallucinated label.
+              "source_account_label" => "wrong@example.com",
+              "source_item_id" => "bb22",
               "source_occurred_at" => "2026-05-09T15:00:00Z",
               "dedupe_key" => "commitment:gmail:thread-elena:send-revised-agreement",
               "people" => [
@@ -294,6 +298,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert todo.metadata["origin_skill_id"] == "commitment_tracker"
     assert todo.metadata["commitment_direction"] == "i_owe"
     assert todo.metadata["omni_project"] == "Runner"
+    assert todo.source_item_id == "cc33"
+    assert todo.source_account_label == "kent@runner.now"
+    assert todo.metadata["gmail_message_id"] == "bb22"
+    assert todo.metadata["gmail_thread_id"] == "cc33"
+    assert todo.metadata["google_provider"] == "google:kent@runner.now"
+    assert todo.metadata["google_account_email"] == "kent@runner.now"
 
     assert get_in(todo.metadata, ["todo_intelligence", "source"]) ==
              "chief_of_staff_commitment_tracker"
