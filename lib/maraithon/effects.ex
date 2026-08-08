@@ -255,7 +255,7 @@ defmodule Maraithon.Effects do
           asc: effect.id
         ],
         limit: ^limit,
-        select: struct(effect, [:id, :agent_id])
+        select: struct(effect, [:id, :agent_id, :result_dispatch_attempts])
       )
     )
   end
