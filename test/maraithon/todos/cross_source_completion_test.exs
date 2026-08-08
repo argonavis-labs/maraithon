@@ -35,6 +35,26 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
     |> Map.merge(overrides)
   end
 
+  defp open_work_items(prompt) do
+    captures =
+      Regex.named_captures(
+        ~r/OPEN_WORK_ITEMS_JSON:\n(?<json>\[.*?\])\n\nRECENT_ACTIVITY_JSON/s,
+        prompt
+      )
+
+    Jason.decode!(captures["json"])
+  end
+
+  defp recent_activity(prompt) do
+    captures =
+      Regex.named_captures(
+        ~r/RECENT_ACTIVITY_JSON \(current time [^)]+\):\n(?<json>\[.*?\])\n\nRespond with only/s,
+        prompt
+      )
+
+    Jason.decode!(captures["json"])
+  end
+
   test "closes stale event-creation work when later source evidence shows the event is live" do
     user_id = unique_user!()
     now = ~U[2099-06-27 14:00:00Z]
@@ -267,8 +287,10 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
       })
 
     llm_complete = fn prompt ->
+      activity = recent_activity(prompt)
+      assert Enum.any?(activity, &(&1["channel"] == "source_health"))
+
       for marker <- [
-            "source_health",
             "gmail-source-marker",
             "google-calendar-source-marker",
             "local-calendar-source-marker",
@@ -293,6 +315,252 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
                source_bundle: source_bundle,
                llm_complete: llm_complete
              )
+  end
+
+  test "bounds the rendered prompt while preserving linked and cross-channel evidence" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-18 18:56:06Z]
+    giant = String.duplicate("oversized-\"\n🙂", 20_000)
+    noisy_text = String.duplicate("escaped-\"\n🙂", 80)
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Review the directly linked completion evidence", source_at, %{
+          "source" => "gmail",
+          "source_item_id" => "linked-thread",
+          "summary" => noisy_text,
+          "next_action" => noisy_text
+        })
+      ])
+
+    gmail_messages =
+      [
+        %{
+          "message_id" => giant,
+          "thread_id" => "linked-thread",
+          "subject" => "Directly linked message",
+          "text_body" => "linked-evidence-marker " <> noisy_text,
+          "internal_date" => DateTime.add(now, -500, :second),
+          "labels" => ["INBOX"],
+          "account" => giant
+        }
+      ] ++
+        Enum.map(1..119, fn index ->
+          %{
+            "message_id" => "gmail-filler-#{index}",
+            "thread_id" => "gmail-filler-thread-#{index}",
+            "subject" => "Gmail filler #{index}",
+            "text_body" => noisy_text,
+            "internal_date" => DateTime.add(now, -index, :second),
+            "labels" => ["INBOX"]
+          }
+        end)
+
+    browser_visits =
+      Enum.map(1..120, fn index ->
+        %{
+          "id" => "browser-filler-#{index}",
+          "title" => "Browser marker #{index}",
+          "url" => "https://example.test/browser-marker/#{index}?q=" <> noisy_text,
+          "visited_at" => DateTime.add(now, -index, :second)
+        }
+      end)
+
+    notes =
+      Enum.map(1..120, fn index ->
+        %{
+          "guid" => "note-#{index}",
+          "title" => "Notes marker #{index}",
+          "body" => noisy_text,
+          "updated_at" => DateTime.add(now, -index, :second)
+        }
+      end)
+
+    imessages =
+      Enum.map(1..120, fn index ->
+        %{
+          "guid" => "imessage-#{index}",
+          "chat_display_name" => "Messages marker #{index}",
+          "text" => noisy_text,
+          "sent_at" => DateTime.add(now, -index, :second),
+          "is_from_me" => false
+        }
+      end)
+
+    source_bundle =
+      %{timestamp: now, trigger: %{type: :wakeup}}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "status" => "ready",
+        "fetched_at" => now,
+        "messages" => gmail_messages,
+        "providers" => [giant],
+        "metadata" => %{"unbounded" => giant}
+      })
+      |> SourceBundle.put_slack(%{
+        "status" => "ready",
+        "fetched_at" => now,
+        "workspaces" => [
+          %{
+            "team_id" => "T-budget",
+            "channels" => [
+              %{
+                "id" => "C-budget",
+                "name" => "budget",
+                "messages" => [
+                  %{
+                    "ts" => "4086280800.000000",
+                    "date" => now,
+                    "text" => "slack-channel-marker",
+                    "permalink" => giant
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      })
+      |> SourceBundle.put_imessage(%{"messages" => imessages})
+      |> SourceBundle.put_notes(%{"notes" => notes})
+      |> SourceBundle.put_reminders(%{
+        "reminders" => [
+          %{
+            "guid" => "reminder-budget",
+            "title" => "reminders-channel-marker",
+            "notes" => noisy_text,
+            "updated_at" => now
+          }
+        ]
+      })
+      |> SourceBundle.put_browser_history(%{"visits" => browser_visits})
+      |> SourceBundle.put_voice_memos(%{
+        "status" => "partial",
+        "fetched_at" => now,
+        "memos" => [
+          %{
+            "guid" => "voice-budget",
+            "title" => "voice-memos-channel-marker",
+            "transcript" => noisy_text,
+            "created_at" => now
+          }
+        ],
+        "metadata" => %{"unbounded" => giant}
+      })
+
+    source_bundle =
+      source_bundle
+      |> put_in(
+        ["freshness", "aaa_first"],
+        %{"status" => "ready", "metadata" => %{"unbounded" => giant}}
+      )
+      |> put_in(
+        ["freshness", "zzz_last"],
+        %{
+          "status" => "unavailable",
+          "reason" => "last-source-reason",
+          "metadata" => %{"unbounded" => giant}
+        }
+      )
+
+    test_pid = self()
+
+    llm_complete = fn prompt ->
+      send(test_pid, {:bounded_prompt, prompt, recent_activity(prompt)})
+      {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
+    end
+
+    assert %{checked: 1, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_complete: llm_complete
+             )
+
+    assert_receive {:bounded_prompt, prompt, activity}
+    assert byte_size(prompt) <= 96_000
+    assert length(activity) <= 96
+
+    channels = activity |> Enum.map(& &1["channel"]) |> MapSet.new()
+
+    for channel <-
+          ~w(source_health gmail slack imessage notes reminders browser_history voice_memos) do
+      assert MapSet.member?(channels, channel)
+    end
+
+    linked = Enum.find(activity, &(&1["thread_id"] == "linked-thread"))
+    assert linked["text"] =~ "linked-evidence-marker"
+    assert byte_size(linked["source_item_id"]) <= 256
+    assert byte_size(linked["account"]) <= 200
+
+    health = Enum.find(activity, &(&1["channel"] == "source_health"))
+    health_map = Jason.decode!(health["text"])
+    assert health_map["aaa_first"]["status"] == "ready"
+    assert health_map["zzz_last"]["status"] == "unavailable"
+    assert health_map["zzz_last"]["reason"] == "last-source-reason"
+    refute health["text"] =~ "unbounded"
+  end
+
+  test "fails closed without stamping when checked todos alone exceed the prompt budget" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-18 18:56:06Z]
+    escaped = "\"\\\n"
+
+    attrs =
+      Enum.map(1..40, fn index ->
+        title = ("#{index}:" <> String.duplicate(escaped, 80)) |> String.slice(0, 240)
+
+        open_todo_attrs(title, source_at, %{
+          "source" => "gmail",
+          "summary" => String.duplicate(escaped, 666),
+          "next_action" => String.duplicate(escaped, 333),
+          "source_item_id" => "pathological-thread-#{index}",
+          "source_account_label" => String.duplicate(escaped, 85),
+          "counterparty_label" => String.duplicate(escaped, 85),
+          "dedupe_key" => "pathological-budget:#{index}:#{Ecto.UUID.generate()}"
+        })
+      end)
+
+    {:ok, todos} = Todos.upsert_many(user_id, attrs)
+
+    source_bundle =
+      %{timestamp: now, trigger: %{type: :wakeup}}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "status" => "ready",
+        "fetched_at" => now,
+        "messages" =>
+          Enum.map(1..40, fn index ->
+            %{
+              "message_id" => "pathological-message-#{index}",
+              "thread_id" => "pathological-thread-#{index}",
+              "subject" => "Pathological evidence #{index}",
+              "text_body" => String.duplicate(escaped, 100),
+              "internal_date" => DateTime.add(now, -index, :second),
+              "labels" => ["INBOX"]
+            }
+          end)
+      })
+
+    llm_complete = fn prompt ->
+      send(self(), {:pathological_prompt, prompt})
+      {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
+    end
+
+    assert {:error, {:prompt_base_exceeds_budget, prompt_bytes, 96_000}} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_complete: llm_complete
+             )
+
+    assert prompt_bytes > 96_000
+    refute_received {:pathological_prompt, _prompt}
+
+    for todo <- todos do
+      assert is_nil(Todos.get_for_user(user_id, todo.id).last_completion_checked_at)
+    end
   end
 
   defp bulk_todo_attrs(title, source_at, index) do
@@ -367,6 +635,76 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
     assert %DateTime{} = Todos.get_for_user(user_id, target.id).last_completion_checked_at
   end
 
+  test "linked candidate cap rotates instead of starving the same later todos" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-18 18:56:06Z]
+
+    attrs =
+      Enum.map(1..45, fn index ->
+        open_todo_attrs("Linked rotation item #{index}", source_at, %{
+          "source" => "gmail",
+          "source_item_id" => "linked-rotation-thread-#{index}",
+          "dedupe_key" => "linked-rotation:#{index}:#{Ecto.UUID.generate()}"
+        })
+      end)
+
+    {:ok, todos} = Todos.upsert_many(user_id, attrs)
+
+    source_bundle =
+      %{timestamp: now, trigger: %{type: :wakeup}}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "status" => "ready",
+        "fetched_at" => now,
+        "messages" =>
+          Enum.map(1..45, fn index ->
+            %{
+              "message_id" => "linked-rotation-message-#{index}",
+              "thread_id" => "linked-rotation-thread-#{index}",
+              "subject" => "Linked rotation evidence #{index}",
+              "text_body" => "Evidence for linked rotation item #{index}",
+              "internal_date" => DateTime.add(now, -index, :second),
+              "labels" => ["INBOX"]
+            }
+          end)
+      })
+
+    test_pid = self()
+
+    llm_complete = fn prompt ->
+      send(test_pid, {:rotation_prompt, prompt})
+      {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
+    end
+
+    assert %{checked: 40, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_complete: llm_complete
+             )
+
+    assert_receive {:rotation_prompt, first_prompt}
+
+    first_ids = first_prompt |> open_work_items() |> MapSet.new(& &1["todo_id"])
+    left_out = Enum.reject(todos, &MapSet.member?(first_ids, &1.id))
+    assert length(left_out) == 5
+
+    assert %{checked: 40, completed: 0} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: DateTime.add(now, 3600, :second),
+               source_bundle: source_bundle,
+               llm_complete: llm_complete
+             )
+
+    assert_receive {:rotation_prompt, second_prompt}
+    second_ids = second_prompt |> open_work_items() |> MapSet.new(& &1["todo_id"])
+
+    for todo <- left_out do
+      assert MapSet.member?(second_ids, todo.id)
+    end
+  end
+
   test "backstop rotation prefers never-checked todos over ones stamped last cycle" do
     user_id = unique_user!()
     now = ~U[2099-06-27 14:00:00Z]
@@ -397,14 +735,13 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
              )
 
     assert_receive {:prompt, first_prompt}
-
-    left_out =
-      Enum.filter(todos, fn todo -> not String.contains?(first_prompt, todo.title) end)
+    first_ids = first_prompt |> open_work_items() |> MapSet.new(& &1["todo_id"])
+    left_out = Enum.reject(todos, &MapSet.member?(first_ids, &1.id))
 
     assert length(left_out) == 5
 
     # Every checked candidate was stamped, including non-closers.
-    checked = Enum.find(todos, fn todo -> String.contains?(first_prompt, todo.title) end)
+    checked = Enum.find(todos, &MapSet.member?(first_ids, &1.id))
     assert %DateTime{} = Todos.get_for_user(user_id, checked.id).last_completion_checked_at
 
     assert %{checked: 40, completed: 0} =
@@ -415,10 +752,11 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
              )
 
     assert_receive {:prompt, second_prompt}
+    second_ids = second_prompt |> open_work_items() |> MapSet.new(& &1["todo_id"])
 
     # The five never-checked todos sort ahead of the just-stamped forty.
     for todo <- left_out do
-      assert second_prompt =~ todo.title
+      assert MapSet.member?(second_ids, todo.id)
     end
   end
 
@@ -677,9 +1015,10 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
     end
 
     llm_complete = fn prompt ->
-      assert prompt =~ "source_health"
-      assert prompt =~ "live source acquisition timed out"
-      assert prompt =~ "\\\"status\\\":\\\"unavailable\\\""
+      health = recent_activity(prompt) |> Enum.find(&(&1["channel"] == "source_health"))
+      health_map = Jason.decode!(health["text"])
+      assert health_map["live_sources"]["status"] == "unavailable"
+      assert health_map["live_sources"]["reason"] =~ "live source acquisition timed out"
 
       {:ok, %{content: Jason.encode!(%{"resolutions" => []})}}
     end

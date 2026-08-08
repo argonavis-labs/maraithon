@@ -40,6 +40,18 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   @max_observations 120
   @max_outgoing_messages 80
   @max_live_evidence_per_source 120
+  # Live acquisition intentionally sees a broad, per-source-bounded window so
+  # candidate selection can notice fresh links. The LLM prompt is a separate,
+  # much smaller budget: keep one linked item per checked todo first, then
+  # round-robin across channels so a noisy source cannot crowd out the rest.
+  @max_prompt_evidence_items 96
+  @max_prompt_linked_evidence_items 56
+  @max_prompt_evidence_per_channel 8
+  @max_prompt_bytes 96_000
+  @max_prompt_health_text 12_000
+  @max_prompt_health_sources 32
+  @max_prompt_health_providers 8
+  @max_prompt_health_counts 16
   @evidence_window_days 7
   @min_todo_age_minutes 30
   @min_confidence 0.8
@@ -210,12 +222,13 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
     {active, backstop} = Enum.split_with(todos, &evidence_linked?(&1, identifiers))
 
+    active = Enum.sort_by(active, &completion_rotation_sort_key/1)
+
     active =
       if length(active) > @max_todos do
-        # The evidence-matched set must respect the prompt-size cap too — an
-        # unbounded active set blows the response token budget. `todos` arrive
-        # ordered by `updated` ascending, so truncation keeps the stalest
-        # items; the rest re-qualify next cycle.
+        # Linked candidates still share the same finite prompt budget. Rotate
+        # them by the durable completion-check stamp instead of repeatedly
+        # taking the same updated-at prefix forever.
         Logger.info("Cross-source completion truncated active candidates to the per-cycle cap",
           user_id: user_id,
           active: length(active),
@@ -229,15 +242,20 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
     backstop_fill =
       backstop
-      |> Enum.sort_by(fn todo ->
-        case todo.last_completion_checked_at do
-          %DateTime{} = checked_at -> {1, DateTime.to_unix(checked_at, :second)}
-          _never_checked -> {0, 0}
-        end
-      end)
+      |> Enum.sort_by(&completion_rotation_sort_key/1)
       |> Enum.take(max(@max_todos - length(active), 0))
 
     active ++ backstop_fill
+  end
+
+  defp completion_rotation_sort_key(todo) do
+    case todo.last_completion_checked_at do
+      %DateTime{} = checked_at ->
+        {1, DateTime.to_unix(checked_at, :microsecond), todo.id}
+
+      _never_checked ->
+        {0, 0, todo.id}
+    end
   end
 
   defp evidence_identifiers(evidence) do
@@ -514,10 +532,93 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "channel" => "source_health",
       "kind" => "connected source coverage for this sweep",
       "subject" => "all connected Chief-of-Staff sources",
-      "text" => Jason.encode!(freshness),
+      "text" => compact_source_health_json(freshness),
       "at" => DateTime.to_iso8601(now)
     }
   end
+
+  defp compact_source_health_json(freshness) when is_map(freshness) do
+    entries =
+      freshness
+      |> Enum.sort_by(fn {source, _details} -> to_string(source) end)
+      |> Enum.take(@max_prompt_health_sources)
+
+    detailed =
+      Map.new(entries, fn {source, details} ->
+        source = bounded_prompt_string(to_string(source), 64)
+
+        value =
+          %{
+            "source" => bounded_prompt_string(read_string(details, "source", source), 64),
+            "status" => bounded_prompt_string(read_string(details, "status", "unknown"), 64),
+            "fetched_at" => bounded_prompt_string(read_string(details, "fetched_at", nil), 64),
+            "reason" => bounded_prompt_string(read_string(details, "reason", nil), 400),
+            "providers" => compact_health_providers(read_value(details, "providers")),
+            "counts" => compact_health_counts(read_value(details, "counts"))
+          }
+          |> compact_map()
+
+        {source, value}
+      end)
+
+    case Jason.encode!(detailed) do
+      encoded when byte_size(encoded) <= @max_prompt_health_text ->
+        encoded
+
+      _too_large ->
+        entries
+        |> Map.new(fn {source, details} ->
+          {bounded_prompt_string(to_string(source), 64),
+           %{"status" => bounded_prompt_string(read_string(details, "status", "unknown"), 64)}}
+        end)
+        |> Jason.encode!()
+        |> case do
+          encoded when byte_size(encoded) <= @max_prompt_health_text -> encoded
+          _still_too_large -> Jason.encode!(%{"source_health" => "summary_too_large"})
+        end
+    end
+  end
+
+  defp compact_source_health_json(_freshness), do: "{}"
+
+  defp compact_health_providers(providers) when is_list(providers) do
+    providers
+    |> Enum.take(@max_prompt_health_providers)
+    |> Enum.map(&health_provider_label/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp compact_health_providers(_providers), do: []
+
+  defp health_provider_label(provider) when is_binary(provider) do
+    bounded_prompt_string(provider, 160)
+  end
+
+  defp health_provider_label(provider) when is_map(provider) do
+    ["provider", "account", "email", "label", "name", "id"]
+    |> Enum.find_value(fn key -> read_string(provider, key, nil) end)
+    |> bounded_prompt_string(160)
+  end
+
+  defp health_provider_label(_provider), do: nil
+
+  defp compact_health_counts(counts) when is_map(counts) do
+    counts
+    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    |> Enum.take(@max_prompt_health_counts)
+    |> Enum.reduce(%{}, fn {key, value}, acc ->
+      case compact_health_count(value) do
+        nil -> acc
+        compact -> Map.put(acc, bounded_prompt_string(to_string(key), 80), compact)
+      end
+    end)
+  end
+
+  defp compact_health_counts(_counts), do: %{}
+
+  defp compact_health_count(value) when is_number(value) or is_boolean(value), do: value
+  defp compact_health_count(value) when is_binary(value), do: bounded_prompt_string(value, 160)
+  defp compact_health_count(_value), do: nil
 
   defp evidence_bucket(items, mapper) when is_list(items) and is_function(mapper, 1) do
     items
@@ -722,10 +823,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   # ── Evaluation ────────────────────────────────────────────────────────────
 
   defp evaluate(user_id, todos, evidence, now, opts) do
-    prompt = build_prompt(todos, evidence, now)
     llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, opts))
 
-    with {:ok, response} <- llm_complete.(prompt),
+    with {:ok, prompt} <- build_prompt(user_id, todos, evidence, now),
+         {:ok, response} <- llm_complete.(prompt),
          {:ok, resolutions} <- decode_response(response) do
       completed = apply_resolutions(user_id, Map.new(todos, &{&1.id, &1}), resolutions, opts)
       %{checked: length(todos), completed: completed}
@@ -743,30 +844,282 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     end
   end
 
-  defp build_prompt(todos, evidence, now) do
-    todos_json =
-      todos
-      |> Enum.map(fn todo ->
-        %{
-          "todo_id" => todo.id,
-          "source_channel" => todo.source,
-          "title" => todo.title,
-          "summary" => truncate(todo.summary, 300),
-          "next_action" => truncate(todo.next_action, 200),
-          "captured_at" => DateTime.to_iso8601(todo.source_occurred_at || todo.inserted_at),
-          # SPEC 05 R5: structured linkage so the model can match a specific
-          # piece of inbound evidence to a specific waiting-on item.
-          "direction" => todo.direction,
-          "counterparty_label" => todo.counterparty_label,
-          "source_item_id" => todo.source_item_id,
-          "source_account_label" => todo.source_account_label
-        }
-        |> compact_map()
+  defp build_prompt(user_id, todos, evidence, now) do
+    todos_json = todos |> Enum.map(&prompt_todo/1) |> Jason.encode!()
+    empty_prompt = render_prompt(todos_json, "[]", now)
+    base_bytes = byte_size(empty_prompt)
+
+    if base_bytes > @max_prompt_bytes do
+      {:error, {:prompt_base_exceeds_budget, base_bytes, @max_prompt_bytes}}
+    else
+      evidence_budget = @max_prompt_bytes - base_bytes + byte_size("[]")
+
+      with {:ok, {required, optional}} <- select_prompt_evidence(todos, evidence),
+           {:ok, {evidence_json, included_evidence}} <-
+             encode_prompt_evidence(required, optional, evidence_budget) do
+        prompt = render_prompt(todos_json, evidence_json, now)
+        prompt_bytes = byte_size(prompt)
+
+        if prompt_bytes <= @max_prompt_bytes do
+          if included_evidence < length(evidence) do
+            Logger.info("Cross-source completion bounded LLM prompt evidence",
+              user_id: user_id,
+              available_evidence: length(evidence),
+              included_evidence: included_evidence,
+              prompt_bytes: prompt_bytes,
+              prompt_byte_cap: @max_prompt_bytes
+            )
+          end
+
+          {:ok, prompt}
+        else
+          {:error, {:prompt_exceeds_budget, prompt_bytes, @max_prompt_bytes}}
+        end
+      end
+    end
+  end
+
+  defp prompt_todo(todo) do
+    %{
+      "todo_id" => bounded_prompt_string(todo.id, 64),
+      "source_channel" => bounded_prompt_string(todo.source, 64),
+      "title" => bounded_prompt_string(todo.title, 240),
+      "summary" => bounded_prompt_string(todo.summary, 480),
+      "next_action" => bounded_prompt_string(todo.next_action, 320),
+      "captured_at" => DateTime.to_iso8601(todo.source_occurred_at || todo.inserted_at),
+      # SPEC 05 R5: structured linkage so the model can match a specific piece
+      # of inbound evidence to a specific waiting-on item.
+      "direction" => bounded_prompt_string(todo.direction, 64),
+      "counterparty_label" => bounded_prompt_string(todo.counterparty_label, 200),
+      "source_item_id" => bounded_prompt_string(todo.source_item_id, 256),
+      "source_account_label" => bounded_prompt_string(todo.source_account_label, 200)
+    }
+    |> compact_map()
+  end
+
+  defp select_prompt_evidence(todos, evidence) do
+    indexed =
+      evidence
+      |> Enum.reject(&is_nil/1)
+      |> Enum.with_index()
+
+    {health, activity} =
+      Enum.split_with(indexed, fn {item, _index} ->
+        read_string(item, "channel", nil) == "source_health"
       end)
-      |> Jason.encode!()
 
-    evidence_json = Jason.encode!(evidence)
+    health = health |> sort_prompt_evidence_newest() |> Enum.take(1)
 
+    linked =
+      Enum.filter(activity, fn {item, _index} ->
+        Enum.any?(todos, &evidence_linked_to_todo?(&1, item))
+      end)
+
+    linked_heads =
+      todos
+      |> Enum.flat_map(fn todo ->
+        case best_linked_evidence(todo, linked) do
+          nil -> []
+          item -> [item]
+        end
+      end)
+      |> Enum.uniq_by(&elem(&1, 1))
+
+    linked_head_indexes = indexed_evidence_set(linked_heads)
+
+    linked_head_channels =
+      linked_heads
+      |> Enum.map(fn {item, _index} -> read_string(item, "channel", "unknown") end)
+      |> MapSet.new()
+
+    channel_heads =
+      activity
+      |> Enum.reject(fn {item, index} ->
+        MapSet.member?(linked_head_indexes, index) or
+          MapSet.member?(
+            linked_head_channels,
+            read_string(item, "channel", "unknown")
+          )
+      end)
+      |> group_prompt_evidence_by_channel()
+      |> Enum.map(fn {_channel, items} -> items |> sort_prompt_evidence_newest() |> hd() end)
+
+    required =
+      (health ++ linked_heads ++ channel_heads)
+      |> Enum.uniq_by(&elem(&1, 1))
+
+    if length(required) > @max_prompt_evidence_items do
+      {:error,
+       {:required_evidence_items_exceed_limit, length(required), @max_prompt_evidence_items}}
+    else
+      required_indexes = indexed_evidence_set(required)
+
+      linked_tail =
+        linked
+        |> Enum.reject(fn {_item, index} -> MapSet.member?(required_indexes, index) end)
+        |> sort_prompt_evidence_newest()
+        |> Enum.take(max(@max_prompt_linked_evidence_items - length(linked_heads), 0))
+
+      selected_indexes = indexed_evidence_set(required ++ linked_tail)
+
+      fair_tail =
+        activity
+        |> Enum.reject(fn {_item, index} -> MapSet.member?(selected_indexes, index) end)
+        |> group_prompt_evidence_by_channel()
+        |> Enum.map(fn {_channel, items} ->
+          items
+          |> sort_prompt_evidence_newest()
+          |> Enum.take(@max_prompt_evidence_per_channel)
+        end)
+        |> round_robin_prompt_evidence()
+
+      optional =
+        (linked_tail ++ fair_tail)
+        |> Enum.uniq_by(&elem(&1, 1))
+        |> Enum.take(@max_prompt_evidence_items - length(required))
+
+      {:ok, {Enum.map(required, &elem(&1, 0)), Enum.map(optional, &elem(&1, 0))}}
+    end
+  end
+
+  defp best_linked_evidence(todo, linked) do
+    linked
+    |> Enum.filter(fn {item, _index} -> evidence_linked_to_todo?(todo, item) end)
+    |> Enum.sort_by(
+      fn {item, index} ->
+        {if(exact_evidence_link?(todo, item), do: 1, else: 0), evidence_sort_key(item), -index}
+      end,
+      :desc
+    )
+    |> List.first()
+  end
+
+  defp exact_evidence_link?(todo, item) do
+    source_item_id = todo.source_item_id
+
+    is_binary(source_item_id) and source_item_id != "" and
+      source_item_id in [
+        read_string(item, "source_item_id", nil),
+        read_string(item, "thread_id", nil)
+      ]
+  end
+
+  defp evidence_linked_to_todo?(todo, item) do
+    evidence_linked?(todo, evidence_identifiers([item]))
+  end
+
+  defp indexed_evidence_set(indexed) do
+    indexed |> Enum.map(&elem(&1, 1)) |> MapSet.new()
+  end
+
+  defp group_prompt_evidence_by_channel(indexed) do
+    indexed
+    |> Enum.group_by(fn {item, _index} -> read_string(item, "channel", "unknown") end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp sort_prompt_evidence_newest(indexed) do
+    Enum.sort_by(indexed, fn {item, index} -> {evidence_sort_key(item), -index} end, :desc)
+  end
+
+  defp round_robin_prompt_evidence(groups) do
+    Enum.flat_map(0..(@max_prompt_evidence_per_channel - 1), fn offset ->
+      Enum.flat_map(groups, fn group ->
+        case Enum.at(group, offset) do
+          nil -> []
+          item -> [item]
+        end
+      end)
+    end)
+  end
+
+  defp encode_prompt_evidence(required, optional, max_bytes)
+       when is_integer(max_bytes) and max_bytes >= 2 do
+    with {:ok, required_json, used_bytes} <-
+           encode_required_prompt_evidence(required, max_bytes) do
+      {encoded, _used_bytes} =
+        Enum.reduce(optional, {required_json, used_bytes}, fn item, {items, bytes} ->
+          encoded_item = item |> compact_prompt_evidence_item() |> Jason.encode!()
+          separator_bytes = if items == [], do: 0, else: 1
+          item_bytes = byte_size(encoded_item) + separator_bytes
+
+          if bytes + item_bytes <= max_bytes do
+            {[encoded_item | items], bytes + item_bytes}
+          else
+            # Skip an oversized optional item and continue so one pathological
+            # record cannot starve later channels that would still fit.
+            {items, bytes}
+          end
+        end)
+
+      evidence_json = "[" <> (encoded |> Enum.reverse() |> Enum.join(",")) <> "]"
+      {:ok, {evidence_json, length(encoded)}}
+    end
+  end
+
+  defp encode_prompt_evidence(_required, _optional, max_bytes) do
+    {:error, {:evidence_budget_too_small, max_bytes}}
+  end
+
+  defp encode_required_prompt_evidence(required, max_bytes) do
+    Enum.reduce_while(required, {:ok, [], 2}, fn item, {:ok, items, bytes} ->
+      encoded_item = item |> compact_prompt_evidence_item() |> Jason.encode!()
+      separator_bytes = if items == [], do: 0, else: 1
+      item_bytes = byte_size(encoded_item) + separator_bytes
+
+      if bytes + item_bytes <= max_bytes do
+        {:cont, {:ok, [encoded_item | items], bytes + item_bytes}}
+      else
+        {:halt, {:error, {:required_evidence_exceeds_budget, bytes + item_bytes, max_bytes}}}
+      end
+    end)
+  end
+
+  defp compact_prompt_evidence_item(item) do
+    channel = read_string(item, "channel", nil)
+    text_limit = if channel == "source_health", do: @max_prompt_health_text, else: 1_000
+
+    %{
+      "channel" => bounded_prompt_string(channel, 64),
+      "kind" => bounded_prompt_string(read_string(item, "kind", nil), 160),
+      "subject" => bounded_prompt_string(read_string(item, "subject", nil), 360),
+      "text" => bounded_prompt_string(read_string(item, "text", nil), text_limit),
+      "at" => bounded_prompt_string(read_string(item, "at", nil), 64),
+      "source_item_id" => bounded_prompt_string(read_string(item, "source_item_id", nil), 256),
+      "thread_id" => bounded_prompt_string(read_string(item, "thread_id", nil), 256),
+      "account" => bounded_prompt_string(read_string(item, "account", nil), 200),
+      "permalink" => bounded_prompt_string(read_string(item, "permalink", nil), 500)
+    }
+    |> compact_map()
+  end
+
+  defp bounded_prompt_string(value, max_bytes) when is_binary(value) do
+    truncate_utf8_bytes(value, max_bytes)
+  end
+
+  defp bounded_prompt_string(_value, _max_bytes), do: nil
+
+  defp truncate_utf8_bytes(value, max_bytes) when byte_size(value) <= max_bytes, do: value
+
+  defp truncate_utf8_bytes(value, max_bytes) do
+    suffix = "…"
+    prefix_bytes = max(max_bytes - byte_size(suffix), 0)
+    take_utf8_prefix(value, prefix_bytes, []) <> suffix
+  end
+
+  defp take_utf8_prefix(_value, 0, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
+
+  defp take_utf8_prefix(value, remaining, acc) do
+    case String.next_codepoint(value) do
+      {codepoint, rest} when byte_size(codepoint) <= remaining ->
+        take_utf8_prefix(rest, remaining - byte_size(codepoint), [codepoint | acc])
+
+      _done_or_over_budget ->
+        acc |> Enum.reverse() |> IO.iodata_to_binary()
+    end
+  end
+
+  defp render_prompt(todos_json, evidence_json, now) do
     """
     You are the completion checker for a chief-of-staff product. The user has
     saved open work items. Below is current source material from every connected
