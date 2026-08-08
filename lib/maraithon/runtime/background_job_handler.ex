@@ -168,14 +168,13 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   end
 
   def execute(%BackgroundJob{job_type: "person_enrichment"} = job) do
-    with {:ok, user_id} <- require_user_id(job) do
-      case Maraithon.Crm.PersonEnrichment.run_for_upcoming(user_id,
+    with {:ok, user_id} <- require_user_id(job),
+         {:ok, summary} <-
+           Maraithon.Crm.PersonEnrichment.run_for_upcoming(user_id,
              days: payload_integer(job, "days", 21),
              max: payload_integer(job, "max", 5)
            ) do
-        {:ok, summary} -> {:ok, Map.put(summary, :source, "person_enrichment")}
-        {:error, reason} -> {:error, reason}
-      end
+      {:ok, Map.put(summary, :source, "person_enrichment")}
     end
   end
 

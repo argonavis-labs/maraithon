@@ -480,8 +480,6 @@ defmodule Maraithon.LocalContacts do
     |> merge_metadata_list("sources", ["apple_contacts"])
   end
 
-  defp attach_crm_links(_user_id, []), do: :ok
-
   defp attach_crm_links(user_id, rows) do
     Enum.each(rows, fn
       %{crm_person_id: person_id, id: contact_id} = row

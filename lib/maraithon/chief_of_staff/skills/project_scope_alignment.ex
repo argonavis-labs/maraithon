@@ -12,8 +12,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
 
-  require Logger
-
   @default_timezone_offset_hours -5
   @default_max_projects 12
   @default_max_todos 40
@@ -241,18 +239,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
             []
 
           items ->
-            case Briefs.record_many(state.user_id, context.agent_id, items) do
-              {:ok, recorded} ->
-                recorded
-
-              {:error, reason} ->
-                Logger.warning("ProjectScopeAlignment failed to record scope briefs",
-                  user_id: state.user_id,
-                  reason: inspect(reason)
-                )
-
-                []
-            end
+            {:ok, recorded} = Briefs.record_many(state.user_id, context.agent_id, items)
+            recorded
         end
       end)
 
