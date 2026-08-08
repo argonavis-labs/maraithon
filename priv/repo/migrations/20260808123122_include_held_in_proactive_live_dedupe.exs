@@ -104,7 +104,22 @@ defmodule Maraithon.Repo.Migrations.IncludeHeldInProactiveLiveDedupe do
            'delivery_unknown',
            '{}'::jsonb,
            repair.ambiguous_at
-    FROM proactive_unknown_reconciliations AS repair
+    FROM (
+      -- Multiple historical candidate rows may share one stable dedupe key.
+      -- Propose exactly one child receipt per unique constraint target so the
+      -- set-based upsert cannot hit PostgreSQL's cardinality violation.
+      SELECT DISTINCT ON (candidate.user_id, candidate.dedupe_key)
+             candidate.user_id,
+             candidate.dedupe_key,
+             candidate.source,
+             candidate.source_id,
+             candidate.ambiguous_at
+      FROM proactive_unknown_reconciliations AS candidate
+      ORDER BY candidate.user_id,
+               candidate.dedupe_key,
+               candidate.ambiguous_at,
+               candidate.id
+    ) AS repair
     ON CONFLICT (user_id, dedupe_key)
     DO UPDATE SET
       origin_type = EXCLUDED.origin_type,
