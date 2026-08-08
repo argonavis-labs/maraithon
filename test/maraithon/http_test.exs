@@ -101,6 +101,48 @@ defmodule Maraithon.HTTPTest do
       refute log =~ "HTTP request failed"
     end
 
+    test "supports narrow expected-error matchers without changing the error" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/handled-error", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(400, Jason.encode!(%{"error" => "handled"}))
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 400, body}} =
+                   HTTP.get("http://localhost:#{bypass.port}/handled-error", [],
+                     expected_error?: fn status, response_body ->
+                       status == 400 and String.contains?(response_body, "handled")
+                     end
+                   )
+
+          assert body =~ "handled"
+        end)
+
+      refute log =~ "HTTP request failed"
+    end
+
+    test "expected-error matcher failures remain warning-level" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/matcher-failed", fn conn ->
+        Plug.Conn.resp(conn, 400, "unexpected")
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 400, "unexpected"}} =
+                   HTTP.get("http://localhost:#{bypass.port}/matcher-failed", [],
+                     expected_error?: fn _status, _body -> raise "matcher failed" end
+                   )
+        end)
+
+      assert log =~ "HTTP request failed"
+    end
+
     test "passes headers" do
       bypass = Bypass.open()
 

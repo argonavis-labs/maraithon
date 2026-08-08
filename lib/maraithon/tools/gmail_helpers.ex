@@ -100,7 +100,10 @@ defmodule Maraithon.Tools.GmailHelpers do
         message_ids
         |> Task.async_stream(
           fn message_id ->
-            Gmail.fetch_message_content(access_token, message_id, access_token: true)
+            Gmail.fetch_message_content(access_token, message_id,
+              access_token: true,
+              listed_message: true
+            )
           end,
           max_concurrency: message_concurrency(message_ids),
           ordered: true,

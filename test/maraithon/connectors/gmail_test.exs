@@ -169,6 +169,35 @@ defmodule Maraithon.Connectors.GmailTest do
                Gmail.fetch_thread("nonexistent_user", "thread-with-separators")
     end
 
+    test "keeps direct full-message precondition failures visible" do
+      bypass = Bypass.open()
+      original_gmail_config = Application.get_env(:maraithon, :gmail, [])
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      on_exit(fn -> Application.put_env(:maraithon, :gmail, original_gmail_config) end)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/abc123", fn conn ->
+        assert conn.query_string == "format=full"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(400, Jason.encode!(failed_precondition_body()))
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 400, body}} =
+                   Gmail.fetch_message_content("ya29.test-token", "abc123")
+
+          assert body =~ "FAILED_PRECONDITION"
+        end)
+
+      assert log =~ "HTTP request failed"
+    end
+
     test "handles token directly starting with ya29." do
       # Will fail to connect but tests the branch
       result = Gmail.fetch_message("ya29.fake_token", "abc123")
@@ -450,6 +479,197 @@ defmodule Maraithon.Connectors.GmailTest do
       assert hd(emails).message_id == "a1"
       assert hd(emails).subject == "Test Subject"
       assert hd(emails).from == "sender@test.com"
+    end
+
+    test "retries listed full-message preconditions and retains metadata" do
+      bypass = Bypass.open()
+      test_pid = self()
+      recovered_attempts = :counters.new(1, [])
+      original_gmail_config = Application.get_env(:maraithon, :gmail, [])
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      on_exit(fn -> Application.put_env(:maraithon, :gmail, original_gmail_config) end)
+
+      user_id = "fetch-precondition-#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens(user_id, "google", %{
+          access_token: "precondition-access-token",
+          refresh_token: "precondition-refresh-token",
+          expires_in: 3_600,
+          scopes: ["gmail.readonly"]
+        })
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"messages" => [%{"id" => "f1"}, %{"id" => "c1"}]})
+        )
+      end)
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/f1", fn conn ->
+        format = conn.query_string |> URI.decode_query() |> Map.fetch!("format")
+        send(test_pid, {:message_format, "f1", format})
+
+        case format do
+          "full" ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.resp(400, Jason.encode!(failed_precondition_body()))
+
+          "metadata" ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.resp(
+              200,
+              Jason.encode!(%{
+                "id" => "f1",
+                "threadId" => "f2",
+                "snippet" => "Metadata remains available",
+                "labelIds" => ["INBOX"],
+                "payload" => %{
+                  "headers" => [%{"name" => "Subject", "value" => "Fallback"}]
+                }
+              })
+            )
+        end
+      end)
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/c1", fn conn ->
+        format = conn.query_string |> URI.decode_query() |> Map.fetch!("format")
+        send(test_pid, {:message_format, "c1", format})
+
+        if format == "full" do
+          :counters.add(recovered_attempts, 1, 1)
+
+          case :counters.get(recovered_attempts, 1) do
+            1 ->
+              conn
+              |> Plug.Conn.put_resp_content_type("application/json")
+              |> Plug.Conn.resp(400, Jason.encode!(failed_precondition_body()))
+
+            2 ->
+              conn
+              |> Plug.Conn.put_resp_content_type("application/json")
+              |> Plug.Conn.resp(
+                200,
+                Jason.encode!(%{
+                  "id" => "c1",
+                  "threadId" => "c2",
+                  "snippet" => "Recovered",
+                  "labelIds" => ["INBOX"],
+                  "payload" => %{
+                    "mimeType" => "text/plain",
+                    "headers" => [%{"name" => "Subject", "value" => "Recovered"}],
+                    "body" => %{
+                      "data" => Base.url_encode64("Recovered body", padding: false)
+                    }
+                  }
+                })
+              )
+          end
+        else
+          Plug.Conn.resp(conn, 500, "unexpected metadata fallback")
+        end
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, [fallback, recovered], metadata} =
+                   Gmail.fetch_messages(user_id,
+                     max_results: 2,
+                     include_fetch_metadata: true,
+                     failed_precondition_retry_delay_ms: 0
+                   )
+
+          assert fallback.message_id == "f1"
+          assert fallback.subject == "Fallback"
+          assert fallback.text_body == nil
+          assert fallback.html_body == nil
+          assert fallback.body_unavailable_reason == "failed_precondition"
+
+          assert recovered.message_id == "c1"
+          assert recovered.subject == "Recovered"
+          assert recovered.text_body == "Recovered body"
+          refute Map.has_key?(recovered, :body_unavailable_reason)
+
+          assert metadata.detail_success_count == 2
+          assert metadata.detail_failure_count == 0
+          assert metadata.body_fallback_count == 1
+          refute metadata.complete?
+        end)
+
+      assert_receive {:message_format, "f1", "full"}
+      assert_receive {:message_format, "f1", "full"}
+      assert_receive {:message_format, "f1", "metadata"}
+      assert_receive {:message_format, "c1", "full"}
+      assert_receive {:message_format, "c1", "full"}
+      refute_receive {:message_format, _id, _format}
+      refute log =~ "HTTP request failed"
+    end
+
+    test "keeps nonmatching listed-message preconditions visible" do
+      bypass = Bypass.open()
+      original_gmail_config = Application.get_env(:maraithon, :gmail, [])
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      on_exit(fn -> Application.put_env(:maraithon, :gmail, original_gmail_config) end)
+
+      user_id = "fetch-mail-disabled-#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens(user_id, "google", %{
+          access_token: "mail-disabled-access-token",
+          refresh_token: "mail-disabled-refresh-token",
+          expires_in: 3_600,
+          scopes: ["gmail.readonly"]
+        })
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "a1"}]}))
+      end)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/a1", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          400,
+          Jason.encode!(%{
+            "error" => %{
+              "code" => 400,
+              "message" => "Mail service not enabled",
+              "status" => "FAILED_PRECONDITION",
+              "errors" => [%{"reason" => "failedPrecondition"}]
+            }
+          })
+        )
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, [], metadata} =
+                   Gmail.fetch_messages(user_id,
+                     max_results: 1,
+                     include_fetch_metadata: true,
+                     failed_precondition_retry_delay_ms: 0
+                   )
+
+          assert metadata.detail_failure_count == 1
+          assert metadata.body_fallback_count == 0
+          refute metadata.complete?
+        end)
+
+      assert log =~ "HTTP request failed"
     end
 
     test "metadata mode reports truncation and per-message failures" do
@@ -1095,5 +1315,22 @@ defmodule Maraithon.Connectors.GmailTest do
 
       assert :ok = Gmail.stop_watch("stop_404_user")
     end
+  end
+
+  defp failed_precondition_body do
+    %{
+      "error" => %{
+        "code" => 400,
+        "message" => "Precondition check failed.",
+        "status" => "FAILED_PRECONDITION",
+        "errors" => [
+          %{
+            "domain" => "global",
+            "message" => "Precondition check failed.",
+            "reason" => "failedPrecondition"
+          }
+        ]
+      }
+    }
   end
 end

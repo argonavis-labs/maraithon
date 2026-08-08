@@ -52,6 +52,8 @@ defmodule Maraithon.Connectors.Gmail do
   @default_message_fetch_concurrency 12
   @max_message_fetch_concurrency 24
   @default_message_fetch_timeout_ms 15_000
+  @default_failed_precondition_retry_delay_ms 1_000
+  @max_failed_precondition_retry_delay_ms 5_000
   @gmail_id_pattern ~r/\A[0-9A-Fa-f]+\z/
   # Safety cap on how many `history.list` pages we'll follow for a single
   # incremental sync before giving up and falling back to a full resync. A
@@ -359,12 +361,14 @@ defmodule Maraithon.Connectors.Gmail do
             messages = if is_list(messages), do: messages, else: []
             selected = Enum.take(messages, max_results)
             {detailed, detail_failure_count} = fetch_message_details(selected, token, opts)
+            body_fallback_count = Enum.count(detailed, &metadata_body_fallback?/1)
 
             fetch_metadata = %{
               listed_count: length(messages),
               requested_count: length(selected),
               detail_success_count: length(detailed),
               detail_failure_count: detail_failure_count,
+              body_fallback_count: body_fallback_count,
               truncated?:
                 present?(Map.get(response, "nextPageToken")) or length(messages) > max_results
             }
@@ -373,7 +377,8 @@ defmodule Maraithon.Connectors.Gmail do
               Map.put(
                 fetch_metadata,
                 :complete?,
-                detail_failure_count == 0 and not fetch_metadata.truncated?
+                detail_failure_count == 0 and body_fallback_count == 0 and
+                  not fetch_metadata.truncated?
               )
 
             if Keyword.get(opts, :include_fetch_metadata, false) do
@@ -401,7 +406,7 @@ defmodule Maraithon.Connectors.Gmail do
 
     messages
     |> Task.async_stream(
-      fn message -> safe_fetch_message_detail(token, message, format) end,
+      fn message -> safe_fetch_message_detail(token, message, format, opts) end,
       max_concurrency: max_concurrency,
       ordered: true,
       timeout: message_fetch_timeout_ms(opts),
@@ -417,9 +422,9 @@ defmodule Maraithon.Connectors.Gmail do
     |> then(fn {detailed, failures} -> {Enum.reverse(detailed), failures} end)
   end
 
-  defp safe_fetch_message_detail(token, %{"id" => id}, format) when is_binary(id) do
+  defp safe_fetch_message_detail(token, %{"id" => id}, format, opts) when is_binary(id) do
     try do
-      fetch_message_detail(token, id, format)
+      fetch_message_detail(token, id, format, opts)
     rescue
       error -> {:error, {:detail_exception, error.__struct__}}
     catch
@@ -427,14 +432,21 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
-  defp safe_fetch_message_detail(_token, _message, _format), do: {:error, :missing_message_id}
+  defp safe_fetch_message_detail(_token, _message, _format, _opts),
+    do: {:error, :missing_message_id}
 
-  defp fetch_message_detail(token, id, format) when format in [:metadata, "metadata"] do
-    fetch_message(token, id, access_token: true)
+  defp fetch_message_detail(token, id, format, opts) when format in [:metadata, "metadata"] do
+    fetch_message(token, id, listed_message_opts(opts))
   end
 
-  defp fetch_message_detail(token, id, _format) do
-    fetch_message_content(token, id, access_token: true)
+  defp fetch_message_detail(token, id, _format, opts) do
+    fetch_message_content(token, id, listed_message_opts(opts))
+  end
+
+  defp listed_message_opts(opts) do
+    opts
+    |> Keyword.take([:failed_precondition_retry_delay_ms])
+    |> Keyword.merge(access_token: true, listed_message: true)
   end
 
   defp message_fetch_timeout_ms(opts) do
@@ -476,7 +488,8 @@ defmodule Maraithon.Connectors.Gmail do
   def fetch_message(user_id_or_token, message_id, opts \\ []) do
     with id when is_binary(id) <- normalize_id(message_id),
          {:ok, access_token} <- request_access_token(user_id_or_token, opts),
-         {:ok, response} <- fetch_gmail_point_resource(access_token, "messages", id, "metadata") do
+         {:ok, response} <-
+           fetch_gmail_point_resource(access_token, "messages", id, "metadata", opts) do
       {:ok, parse_message(response)}
     else
       nil -> {:error, :invalid_gmail_id}
@@ -486,12 +499,16 @@ defmodule Maraithon.Connectors.Gmail do
 
   @doc """
   Fetches a single Gmail message with decoded text and html body content.
+
+  Callers hydrating an id returned by a successful list or history request may
+  pass `listed_message: true`. Exact Gmail `FAILED_PRECONDITION` point-read
+  churn is then retried once before retaining metadata with an unavailable-body
+  marker. Direct lookups remain strict and noisy.
   """
   def fetch_message_content(user_id_or_token, message_id, opts \\ []) do
     with id when is_binary(id) <- normalize_id(message_id),
-         {:ok, access_token} <- request_access_token(user_id_or_token, opts),
-         {:ok, response} <- fetch_gmail_point_resource(access_token, "messages", id, "full") do
-      {:ok, parse_message_content(response)}
+         {:ok, access_token} <- request_access_token(user_id_or_token, opts) do
+      fetch_full_message_content(access_token, id, opts)
     else
       nil -> {:error, :invalid_gmail_id}
       {:error, _reason} = error -> error
@@ -565,12 +582,111 @@ defmodule Maraithon.Connectors.Gmail do
   # Private Functions
   # ===========================================================================
 
+  defp fetch_full_message_content(access_token, id, opts) do
+    case fetch_gmail_point_resource(access_token, "messages", id, "full", opts) do
+      {:ok, response} ->
+        {:ok, parse_message_content(response)}
+
+      {:error, {:http_status, status, body}} = error ->
+        if listed_message?(opts) and listed_message_failed_precondition?(status, body) do
+          fetch_message_metadata_fallback(access_token, id, opts)
+        else
+          error
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp fetch_message_metadata_fallback(access_token, id, opts) do
+    case fetch_gmail_point_resource(access_token, "messages", id, "metadata", opts) do
+      {:ok, response} ->
+        message =
+          response
+          |> parse_message()
+          |> Map.merge(%{
+            text_body: nil,
+            html_body: nil,
+            body_unavailable_reason: "failed_precondition"
+          })
+
+        {:ok, message}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp metadata_body_fallback?(%{body_unavailable_reason: "failed_precondition"}), do: true
+  defp metadata_body_fallback?(_message), do: false
+
   defp fetch_gmail_point_resource(access_token, resource, id, format) do
+    fetch_gmail_point_resource(access_token, resource, id, format, [])
+  end
+
+  defp fetch_gmail_point_resource(access_token, resource, id, format, opts) do
     url = "#{api_base_url()}/users/me/#{resource}/#{id}?format=#{format}"
 
-    case Google.api_request(:get, url, access_token, nil, [], expected_statuses: [404]) do
+    request_opts =
+      [expected_statuses: [404]]
+      |> maybe_expect_listed_message_error(opts)
+
+    request = fn -> Google.api_request(:get, url, access_token, nil, [], request_opts) end
+
+    request.()
+    |> maybe_retry_listed_message(request, opts)
+    |> case do
       {:error, {:http_status, 404, _body}} -> {:error, :not_found}
       result -> result
+    end
+  end
+
+  defp maybe_expect_listed_message_error(request_opts, opts) do
+    if listed_message?(opts) do
+      Keyword.put(request_opts, :expected_error?, &listed_message_failed_precondition?/2)
+    else
+      request_opts
+    end
+  end
+
+  defp maybe_retry_listed_message(
+         {:error, {:http_status, status, body}} = error,
+         request,
+         opts
+       ) do
+    if listed_message?(opts) and listed_message_failed_precondition?(status, body) do
+      delay_ms = failed_precondition_retry_delay_ms(opts)
+      if delay_ms > 0, do: Process.sleep(delay_ms)
+      request.()
+    else
+      error
+    end
+  end
+
+  defp maybe_retry_listed_message(result, _request, _opts), do: result
+
+  defp listed_message_failed_precondition?(400, body) when is_binary(body) do
+    String.contains?(body, "FAILED_PRECONDITION") and
+      String.contains?(body, "failedPrecondition") and
+      String.contains?(body, "Precondition check failed.")
+  end
+
+  defp listed_message_failed_precondition?(_status, _body), do: false
+
+  defp listed_message?(opts), do: Keyword.get(opts, :listed_message, false) == true
+
+  defp failed_precondition_retry_delay_ms(opts) do
+    case Keyword.get(
+           opts,
+           :failed_precondition_retry_delay_ms,
+           @default_failed_precondition_retry_delay_ms
+         ) do
+      delay_ms when is_integer(delay_ms) and delay_ms >= 0 ->
+        min(delay_ms, @max_failed_precondition_retry_delay_ms)
+
+      _delay_ms ->
+        @default_failed_precondition_retry_delay_ms
     end
   end
 
@@ -733,7 +849,12 @@ defmodule Maraithon.Connectors.Gmail do
       |> Enum.flat_map(fn chunk ->
         chunk
         |> Task.async_stream(
-          fn id -> fetch_message_content(access_token, id, access_token: true) end,
+          fn id ->
+            fetch_message_content(access_token, id,
+              access_token: true,
+              listed_message: true
+            )
+          end,
           max_concurrency: 8,
           ordered: true,
           timeout: :infinity

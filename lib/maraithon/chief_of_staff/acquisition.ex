@@ -3185,7 +3185,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> mark_gmail_body_available()
 
       is_binary(provider) and provider != "" and is_binary(message_id) and message_id != "" ->
-        case gmail_module().fetch_message_content(user_id, message_id, provider: provider) do
+        case gmail_module().fetch_message_content(user_id, message_id,
+               provider: provider,
+               listed_message: true
+             ) do
           {:ok, content} ->
             merged =
               metadata

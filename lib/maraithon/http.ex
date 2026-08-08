@@ -48,6 +48,9 @@ defmodule Maraithon.HTTP do
       for large-body fetches like file downloads.
     * `:expected_statuses` - response statuses that should be returned without
       warning-level logging because the caller handles them as ordinary misses.
+    * `:expected_error?` - optional two-arity predicate receiving the response
+      status and normalized body. Matching errors retain their return value but
+      do not emit duplicate warning-level logs. Predicate failures fail closed.
   """
   @spec get(String.t(), headers(), keyword()) :: response()
   def get(url, headers \\ [], opts \\ []) do
@@ -130,11 +133,23 @@ defmodule Maraithon.HTTP do
   defp handle_response(%Response{status: status, body: body}, url, opts) do
     body_string = response_body_to_string(body)
 
-    unless status in Keyword.get(opts, :expected_statuses, []) do
+    unless status in Keyword.get(opts, :expected_statuses, []) or
+             expected_error?(status, body_string, opts) do
       Logger.warning("HTTP request failed", url: url, status: status, body: body_string)
     end
 
     {:error, {:http_status, status, body_string}}
+  end
+
+  defp expected_error?(status, body, opts) do
+    case Keyword.get(opts, :expected_error?) do
+      matcher when is_function(matcher, 2) -> matcher.(status, body) == true
+      _matcher -> false
+    end
+  rescue
+    _error -> false
+  catch
+    _kind, _reason -> false
   end
 
   # `Retry-After` is either delta-seconds (what Google/Slack send in practice)
