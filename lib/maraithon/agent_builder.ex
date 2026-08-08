@@ -170,7 +170,7 @@ defmodule Maraithon.AgentBuilder do
       outputs: [
         "Saved recommendations with titles, summaries, first milestones, and evidence",
         "New project tasks and ticket notes ready for review",
-        "Telegram feature suggestions for roadmap moves that deserve same-day attention",
+        "Phone push notifications for roadmap moves that deserve same-day attention",
         "A recurring product review grounded in the current goals, task list, and selected repository"
       ],
       fields: ~w(repo_full_name base_branch feature_limit wakeup_interval_ms),
@@ -192,14 +192,6 @@ defmodule Maraithon.AgentBuilder do
           description:
             "Recommended for private repositories and higher GitHub API limits. Public repos can run without it.",
           required?: false
-        },
-        %{
-          kind: :provider,
-          provider: "telegram",
-          label: "Telegram",
-          description:
-            "Needed so the planner can push the daily feature shortlist to your linked chat.",
-          required?: true
         }
       ],
       suggestions: [
@@ -275,10 +267,10 @@ defmodule Maraithon.AgentBuilder do
         "Recent sent email and Slack follow-up evidence used to verify whether follow-through already happened"
       ],
       outputs: [
-        "Telegram nudges for unresolved commitments",
+        "Phone notifications for unresolved commitments",
         "Post-meeting and post-thread reminders when owners and next steps are still missing",
         "Structured commitment records with commitment, person, source, deadline, status, evidence, and next_action",
-        "Morning brief, end-of-day review, and weekly review summaries sent to Telegram"
+        "Morning brief, end-of-day review, and weekly review summaries sent to your phone"
       ],
       fields:
         ~w(email_scan_limit event_scan_limit prep_window_hours team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence timezone_offset_hours morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
@@ -338,14 +330,6 @@ defmodule Maraithon.AgentBuilder do
           description:
             "Needed to detect private unanswered replies and unresolved commitments in direct messages.",
           required?: true
-        },
-        %{
-          kind: :provider,
-          provider: "telegram",
-          label: "Telegram",
-          description:
-            "Needed for daily chief-of-staff briefs and the most important follow-through nudges.",
-          required?: true
         }
       ],
       suggestions: [
@@ -353,7 +337,7 @@ defmodule Maraithon.AgentBuilder do
         "Use focused review depth so the automation surfaces only the clearest unresolved commitments.",
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per executive workflow.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
-        "Use selective notifications if you want Telegram reserved for the clearest action-ready items.",
+        "Use selective notifications if you only want phone alerts for the clearest action-ready items.",
         "Choose a named timezone when possible so morning and end-of-day briefs keep landing at the right local time through daylight-saving changes."
       ]
     },
@@ -371,7 +355,7 @@ defmodule Maraithon.AgentBuilder do
       outputs: [
         "Action-ready unresolved commitment summaries with urgency, evidence, and a next action",
         "Structured records with commitment, person, source, deadline, status, evidence, and next_action",
-        "Telegram nudges for Slack commitments that need same-day attention"
+        "Phone notifications for Slack commitments that need same-day attention"
       ],
       fields:
         ~w(team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence wakeup_interval_ms),
@@ -409,7 +393,7 @@ defmodule Maraithon.AgentBuilder do
       suggestions: [
         "Use focused Slack review depth so only the clearest unresolved commitments are surfaced.",
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per automation.",
-        "Use selective notifications if you want Telegram reserved for explicit Slack commitments."
+        "Use selective notifications if you only want phone alerts for explicit Slack commitments."
       ]
     },
     %{

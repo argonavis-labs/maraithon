@@ -18,10 +18,10 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
   end
 
   describe "rendering" do
-    test "highlights the Automations tab and links back to the workspace", %{conn: conn} do
+    test "links back to the Automations workspace", %{conn: conn} do
       {:ok, view, html} = live(conn, "/agents/new")
 
-      assert has_element?(view, "a[href='/agents'][aria-current='page']", "Automations")
+      assert has_element?(view, "a[href='/agents']", "Automations")
       assert html =~ "Automations"
     end
 
@@ -119,8 +119,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Operator OS"
     end
 
-    test "shows blockers when inbox advisor permissions are missing", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
+    test "shows blockers when inbox advisor source permissions are missing", %{conn: conn} do
+      {:ok, view, html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
 
       assert html =~ "Chief of Staff"
       assert html =~ "executives who want fewer missed follow-ups"
@@ -128,7 +128,14 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
       assert html =~ "Slack Personal DMs"
-      assert html =~ "Blocked"
+
+      readiness_html =
+        view
+        |> element("section", "Permission readiness")
+        |> render()
+
+      refute readiness_html =~ "Telegram"
+      assert readiness_html =~ "Blocked"
       assert html =~ "Resolve the highlighted blockers before launch."
       refute html =~ "Google Gmail"
       refute html =~ "operators who want"
@@ -162,7 +169,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       refute html =~ "operators who want"
     end
 
-    test "shows blockers when github product planner permissions are missing", %{conn: conn} do
+    test "shows GitHub as optional for the project manager", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/agents/new")
 
       _html =
@@ -175,9 +182,17 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Project Manager"
-      assert html =~ "GitHub"
-      assert html =~ "Telegram"
-      assert html =~ "Blocked"
+
+      readiness_html =
+        view
+        |> element("section", "Permission readiness")
+        |> render()
+
+      assert readiness_html =~ "GitHub"
+      assert readiness_html =~ "Optional"
+      refute readiness_html =~ "Telegram"
+      refute readiness_html =~ "Blocked"
+      assert html =~ "Ready to create."
 
       assert html =~
                "Add a repository in `owner/repo` format so the planner can review current product work."
@@ -507,9 +522,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       end
     end
 
-    test "creates a github product planner and redirects to the agents workspace", %{conn: conn} do
+    test "creates a project manager without a Telegram account", %{conn: conn} do
       github_config = Application.get_env(:maraithon, :github, [])
-      telegram_config = Application.get_env(:maraithon, :telegram, [])
 
       Application.put_env(
         :maraithon,
@@ -521,18 +535,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
         )
       )
 
-      Application.put_env(
-        :maraithon,
-        :telegram,
-        Keyword.merge(telegram_config,
-          bot_token: "telegram-bot-token",
-          webhook_secret_path: "telegram-secret"
-        )
-      )
-
       on_exit(fn ->
         Application.put_env(:maraithon, :github, github_config)
-        Application.put_env(:maraithon, :telegram, telegram_config)
       end)
 
       {:ok, _token} =
@@ -542,11 +546,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
           metadata: %{login: "kent"}
         })
 
-      {:ok, _account} =
-        ConnectedAccounts.upsert_manual(@user_email, "telegram", %{
-          external_account_id: "6114124042",
-          metadata: %{"chat_id" => "6114124042", "username" => "kentfenwick"}
-        })
+      assert ConnectedAccounts.get(@user_email, "telegram") == nil
 
       {:ok, view, _html} = live(conn, "/agents/new?behavior=github_product_planner")
 
