@@ -55,7 +55,10 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
   alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Runtime.Effects.LLMRateLimiter
+  alias Maraithon.Runtime.Dispatch
   alias Maraithon.Agents
+  alias Maraithon.Effects
+  alias Maraithon.Effects.Effect
 
   defmodule RateLimitedProvider do
     @moduledoc false
@@ -907,6 +910,72 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       assert first_effect.status == "completed"
 
       GenServer.stop(pid, :normal)
+    end
+
+    test "does not let a late worker overwrite or notify after cancellation", %{agent: agent} do
+      case Process.whereis(EffectRunner) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      original_runtime_config = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        Keyword.put(original_runtime_config, :llm_provider, BlockingProvider)
+      )
+
+      Application.put_env(:maraithon, :effect_runner_test_pid, self())
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.Runtime, original_runtime_config)
+        Application.delete_env(:maraithon, :effect_runner_test_pid)
+      end)
+
+      :ok = Dispatch.subscribe(agent.id)
+
+      {:ok, effect_id} =
+        Effects.request(agent.id, "llm_call", nil, %{
+          "messages" => [%{"role" => "user", "content" => "Block"}],
+          "max_tokens" => 100
+        })
+
+      pid = start_supervised!({EffectRunner, []})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      send(pid, :poll)
+      assert_receive {:blocking_provider_called, worker_pid, _params}, 1_000
+
+      claimed = Maraithon.Repo.get!(Effect, effect_id)
+      assert claimed.status == "claimed"
+      assert is_binary(claimed.claimed_by)
+      assert %DateTime{} = claimed.claimed_at
+
+      assert {:ok, 1} =
+               Effects.cancel_active_for_agent(
+                 agent.id,
+                 "agent_recovered_without_effect_continuation"
+               )
+
+      cancelled = Maraithon.Repo.get!(Effect, effect_id)
+      assert cancelled.status == "cancelled"
+
+      ref = Process.monitor(worker_pid)
+      send(worker_pid, :release_blocking_provider)
+      assert_receive {:DOWN, ^ref, :process, ^worker_pid, :normal}, 1_000
+      _ = :sys.get_state(pid)
+
+      after_worker = Maraithon.Repo.get!(Effect, effect_id)
+      assert after_worker.status == "cancelled"
+      assert after_worker.error == "agent_recovered_without_effect_continuation"
+      assert after_worker.updated_at == cancelled.updated_at
+      assert after_worker.claimed_by == nil
+      assert after_worker.claimed_at == nil
+      assert after_worker.result == nil
+      assert after_worker.attempts == 0
+
+      refute_received {:agent_dispatch, {:effect_result, ^effect_id, _result}}
     end
 
     # -------------------------------------------------------------------------

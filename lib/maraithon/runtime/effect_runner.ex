@@ -199,27 +199,31 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp claim_effect(effect) do
     node_id = node() |> to_string()
+    claimed_at = DateTime.utc_now()
 
     case DbResilience.with_database("effect runner claim effect", fn ->
            Repo.update_all(
              from(e in Effect,
                where: e.id == ^effect.id,
-               where: e.status == "pending"
+               where: e.status == "pending",
+               where: is_nil(e.retry_after) or e.retry_after <= ^claimed_at,
+               select: e
              ),
              set: [
                status: "claimed",
                claimed_by: node_id,
-               claimed_at: DateTime.utc_now()
+               claimed_at: claimed_at
              ]
            )
          end) do
-      {:ok, {1, _}} ->
-        DbResilience.with_database("effect runner load claimed effect", fn ->
-          Repo.get!(Effect, effect.id)
-        end)
+      {:ok, {1, [%Effect{} = claimed]}} ->
+        {:ok, claimed}
 
-      {:ok, {0, _}} ->
+      {:ok, {0, _rows}} ->
         :already_claimed
+
+      {:ok, {_count, _rows}} ->
+        {:error, :unexpected_claim_result}
 
       {:error, reason} ->
         {:error, reason}
@@ -248,6 +252,7 @@ defmodule Maraithon.Runtime.EffectRunner do
     else
       case mark_failed(effect, error, attempts) do
         :ok -> notify_agent(effect.agent_id, effect.id, {:error, error})
+        :claim_lost -> :ok
         {:error, _reason} -> :ok
       end
     end
@@ -271,6 +276,7 @@ defmodule Maraithon.Runtime.EffectRunner do
       {:ok, data} ->
         case mark_completed(effect, data) do
           :ok -> notify_agent(effect.agent_id, effect.id, {:ok, data})
+          :claim_lost -> :ok
           {:error, _reason} -> :ok
         end
 
@@ -282,6 +288,7 @@ defmodule Maraithon.Runtime.EffectRunner do
         else
           case mark_failed(effect, reason, attempts) do
             :ok -> notify_agent(effect.agent_id, effect.id, {:error, reason})
+            :claim_lost -> :ok
             {:error, _reason} -> :ok
           end
         end
@@ -300,63 +307,84 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp mark_completed(effect, result) do
-    case DbResilience.with_database("effect runner mark completed", fn ->
-           Repo.update_all(
-             from(e in Effect, where: e.id == ^effect.id),
-             set: [
-               status: "completed",
-               result: result,
-               claimed_by: nil,
-               claimed_at: nil,
-               updated_at: DateTime.utc_now()
-             ]
-           )
-         end) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    update_claimed_effect(effect, "mark completed",
+      status: "completed",
+      result: result,
+      claimed_by: nil,
+      claimed_at: nil
+    )
   end
 
   defp mark_pending_retry(effect, reason, attempts) do
     backoff_ms = calculate_backoff(attempts, reason)
     retry_after = DateTime.add(DateTime.utc_now(), backoff_ms, :millisecond)
 
-    case DbResilience.with_database("effect runner mark retry", fn ->
-           Repo.update_all(
-             from(e in Effect, where: e.id == ^effect.id),
-             set: [
-               status: "pending",
-               claimed_by: nil,
-               claimed_at: nil,
-               attempts: attempts,
-               retry_after: retry_after,
-               error: inspect(reason),
-               updated_at: DateTime.utc_now()
-             ]
-           )
-         end) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    update_claimed_effect(effect, "mark retry",
+      status: "pending",
+      claimed_by: nil,
+      claimed_at: nil,
+      attempts: attempts,
+      retry_after: retry_after,
+      error: inspect(reason)
+    )
   end
 
   defp mark_failed(effect, reason, attempts) do
-    case DbResilience.with_database("effect runner mark failed", fn ->
-           Repo.update_all(
-             from(e in Effect, where: e.id == ^effect.id),
-             set: [
-               status: "failed",
-               error: inspect(reason),
-               attempts: attempts,
-               claimed_by: nil,
-               claimed_at: nil,
-               updated_at: DateTime.utc_now()
-             ]
-           )
+    update_claimed_effect(effect, "mark failed",
+      status: "failed",
+      error: inspect(reason),
+      attempts: attempts,
+      claimed_by: nil,
+      claimed_at: nil
+    )
+  end
+
+  # A worker may finish after its claim was cancelled or reclaimed. Fence every
+  # terminal/retry write by the exact claim generation so stale work cannot
+  # overwrite the newer status or notify an unrelated Agent incarnation.
+  defp update_claimed_effect(
+         %Effect{claimed_by: claimed_by, claimed_at: claimed_at} = effect,
+         operation,
+         updates
+       )
+       when is_binary(claimed_by) and not is_nil(claimed_at) do
+    updates = Keyword.put(updates, :updated_at, DateTime.utc_now())
+
+    case DbResilience.with_database("effect runner #{operation}", fn ->
+           Repo.update_all(claimed_effect_query(effect), set: updates)
          end) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:ok, {1, _rows}} ->
+        :ok
+
+      {:ok, {0, _rows}} ->
+        Logger.info("Discarded late effect result after claim ownership changed",
+          effect_id: effect.id,
+          operation: operation
+        )
+
+        :claim_lost
+
+      {:error, reason} ->
+        {:error, reason}
     end
+  end
+
+  defp update_claimed_effect(%Effect{} = effect, operation, _updates) do
+    Logger.warning("Discarded effect result without claim ownership",
+      effect_id: effect.id,
+      operation: operation
+    )
+
+    :claim_lost
+  end
+
+  defp claimed_effect_query(%Effect{} = effect) do
+    from(e in Effect,
+      where: e.id == ^effect.id,
+      where: e.status == "claimed",
+      where: e.claimed_by == ^effect.claimed_by,
+      where: e.claimed_at == ^effect.claimed_at
+    )
   end
 
   defp next_attempt_count(%Effect{} = effect, reason) do

@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.Agent do
   use GenStateMachine, callback_mode: [:state_functions, :state_enter]
 
   alias Maraithon.Events
+  alias Maraithon.Effects
   alias Maraithon.AgentSubscriptions
   alias Maraithon.AgentHarness.Manifest
   alias Maraithon.Agents
@@ -26,6 +27,7 @@ defmodule Maraithon.Runtime.Agent do
   @default_effect_timeout_ms 120_000
   @default_llm_effect_timeout_ms 900_000
   @effect_timeout_buffer_ms 10_000
+  @orphaned_effect_reason "agent_recovered_without_effect_continuation"
   @global_register_retry_ms 25
   @global_register_retries 80
   @max_deferred_messages 200
@@ -120,6 +122,12 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def recovering(:internal, {:init, agent}, data) do
+    # Checkpoints intentionally capture only idle behavior state. Any active
+    # outbox rows therefore belong to a process incarnation whose continuation
+    # cannot be restored safely. Cancel them before this incarnation can start
+    # another cycle; EffectRunner's claim fencing discards any late worker.
+    _cancelled_count = cancel_active_effects(agent.id, @orphaned_effect_reason)
+
     agent_config = enrich_config_with_package_manifest(agent)
 
     # Load behavior module
@@ -500,6 +508,10 @@ defmodule Maraithon.Runtime.Agent do
   def waiting_effect(:state_timeout, :effect_timeout, data) do
     Logger.warning("Effect timeout")
 
+    # The behavior is about to abandon this continuation. Cancel the durable
+    # row before it can be retried, and fence any worker already finishing it.
+    _cancelled_count = cancel_active_effects(data.agent_id, "effect_timeout")
+
     # R4 (SPEC 07): waiting_effect only ever holds the single in-flight
     # effect request_effect/2 just registered, and no effect_id is bound in
     # this clause — clear the whole map so the stale entry stops inflating
@@ -807,6 +819,20 @@ defmodule Maraithon.Runtime.Agent do
       :none ->
         :ok
     end
+  end
+
+  defp cancel_active_effects(agent_id, reason) do
+    {:ok, cancelled_count} = Effects.cancel_active_for_agent(agent_id, reason)
+
+    if cancelled_count > 0 do
+      Logger.info("Cancelled active effects after Agent continuation ended",
+        agent_id: agent_id,
+        cancelled_effect_count: cancelled_count,
+        reason: reason
+      )
+    end
+
+    cancelled_count
   end
 
   defp request_effect(data, {effect_type, params}) do

@@ -3,6 +3,8 @@ defmodule Maraithon.Effects do
   Effect outbox for managing side effects.
   """
 
+  import Ecto.Query
+
   alias Maraithon.Repo
   alias Maraithon.Effects.Effect
 
@@ -35,6 +37,36 @@ defmodule Maraithon.Effects do
       {:ok, effect} -> {:ok, effect.id}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @doc """
+  Atomically cancels active effects whose continuation belonged to an earlier
+  agent process.
+
+  Agent checkpoints are idle-only and do not persist a waiting effect's
+  continuation. Recovery must therefore cancel both queued and claimed work
+  before starting a new cycle. A database failure is allowed to raise so the
+  agent cannot continue with an ambiguous outbox.
+  """
+  def cancel_active_for_agent(agent_id, reason \\ "agent_recovered")
+      when is_binary(agent_id) and is_binary(reason) do
+    {count, _rows} =
+      Repo.update_all(
+        from(effect in Effect,
+          where: effect.agent_id == ^agent_id,
+          where: effect.status in ["pending", "claimed"]
+        ),
+        set: [
+          status: "cancelled",
+          claimed_by: nil,
+          claimed_at: nil,
+          retry_after: nil,
+          error: reason,
+          updated_at: DateTime.utc_now()
+        ]
+      )
+
+    {:ok, count}
   end
 
   @doc """

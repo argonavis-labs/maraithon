@@ -112,6 +112,8 @@ defmodule Maraithon.Runtime.AgentTest do
   alias Maraithon.Accounts
   alias Maraithon.Runtime.Agent, as: RuntimeAgent
   alias Maraithon.Agents
+  alias Maraithon.Effects
+  alias Maraithon.Effects.Effect
   alias Maraithon.ChiefOfStaff.Skills
   alias Maraithon.OperatorEvents
   alias Maraithon.TestSupport.ChiefOfStaffTestSkill
@@ -179,6 +181,48 @@ defmodule Maraithon.Runtime.AgentTest do
 
       # Clean up
       GenServer.stop(pid, :normal)
+    end
+
+    test "cancels active effects from the previous process incarnation", %{agent: agent} do
+      {:ok, first_pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      assert {:idle, _data} = :sys.get_state(first_pid)
+
+      {:ok, pending_id} = Effects.request(agent.id, :tool_call, "time", %{})
+      {:ok, claimed_id} = Effects.request(agent.id, :llm_call, nil, %{})
+
+      Repo.update_all(
+        from(effect in Effect, where: effect.id == ^claimed_id),
+        set: [
+          status: "claimed",
+          claimed_by: "old@node",
+          claimed_at: DateTime.utc_now()
+        ]
+      )
+
+      assert :ok =
+               DynamicSupervisor.terminate_child(
+                 Maraithon.Runtime.AgentSupervisor,
+                 first_pid
+               )
+
+      {:ok, recovered_pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+
+      on_exit(fn ->
+        DynamicSupervisor.terminate_child(
+          Maraithon.Runtime.AgentSupervisor,
+          recovered_pid
+        )
+      end)
+
+      assert {:idle, _data} = :sys.get_state(recovered_pid)
+
+      for effect_id <- [pending_id, claimed_id] do
+        effect = Repo.get!(Effect, effect_id)
+        assert effect.status == "cancelled"
+        assert effect.claimed_by == nil
+        assert effect.claimed_at == nil
+        assert effect.error == "agent_recovered_without_effect_continuation"
+      end
     end
 
     @doc """
@@ -979,11 +1023,20 @@ defmodule Maraithon.Runtime.AgentTest do
       # not, so the generic path records an operator event and continues
       # the cycle to the cycle-memo effect instead of failing the run —
       # the agent goes back to waiting_effect on the NEW effect.
-      assert {:next_state, :waiting_effect, next_data} = result
+      assert {:next_state, :waiting_effect, next_data, actions} = result
+      assert [{:state_timeout, timeout_ms, :effect_timeout}] = actions
+      assert timeout_ms > 0
       assert map_size(next_data.pending_effects) == 1
       # R4: the timed-out entry was removed, not left to leak/inflate
       # future pending_effect_timeout_ms calculations.
       refute Map.has_key?(next_data.pending_effects, timed_out_effect_id)
+
+      timed_out_effect = Repo.get!(Effect, timed_out_effect_id)
+      assert timed_out_effect.status == "cancelled"
+      assert timed_out_effect.error == "effect_timeout"
+      assert timed_out_effect.claimed_by == nil
+      assert timed_out_effect.claimed_at == nil
+
       # Timeouts never decrement budget.
       assert next_data.budget == waiting_data.budget
 
