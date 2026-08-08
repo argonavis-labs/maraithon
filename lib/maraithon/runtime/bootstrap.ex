@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.Bootstrap do
 
   use GenServer
 
+  alias Maraithon.Runtime.BootGate
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.IncidentLog
@@ -57,8 +58,12 @@ defmodule Maraithon.Runtime.Bootstrap do
       {:ok, {:error, reason}} ->
         retry_bootstrap(reason, state)
 
-      {:ok, _} ->
+      {:ok, :ok} ->
+        :ok = BootGate.open()
         {:stop, :normal, state}
+
+      {:ok, other} ->
+        retry_bootstrap({:unexpected_bootstrap_result, other}, state)
 
       {:error, reason} ->
         retry_bootstrap(reason, state)

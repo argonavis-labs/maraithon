@@ -23,15 +23,7 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy app
-        run: |
-          flyctl deploy \
-            --remote-only \
-            --now \
-            --strategy rolling \
-            --wait-timeout 10m \
-            --release-command-timeout 10m \
-            --app "${MARAITHON_FLY_APP}" \
-            --config fly.toml
+        run: make deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           MARAITHON_FLY_APP: maraithon

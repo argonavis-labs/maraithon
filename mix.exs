@@ -76,6 +76,8 @@ defmodule Maraithon.MixProject do
       {:finch, "~> 0.19"},
       # High-level HTTP client
       {:req, "~> 0.5"},
+      # Low-level pinned-address transport for the HTTP GET tool
+      {:mint, "~> 1.9.3"},
       # Struct definitions
       {:typed_struct, "~> 0.3"},
       # Config validation

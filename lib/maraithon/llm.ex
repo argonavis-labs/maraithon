@@ -292,10 +292,22 @@ defmodule Maraithon.LLM do
     end
   end
 
-  defp rate_limit_bucket(params) do
+  @doc false
+  def execution_bucket(params) when is_map(params) do
+    case RequestBudget.validate(params) do
+      {:ok, bounded_params} -> rate_limit_bucket(bounded_params)
+      {:error, _reason} -> :default
+    end
+  end
+
+  def execution_bucket(_params), do: :default
+
+  @doc false
+  def rate_limit_bucket(params) when is_map(params) do
     params_model = params["model"] || params[:model] || model()
     chat_model = chat_model()
     routing_model = routing_model()
+    fast_model = fast_model()
     primary_model = model()
 
     cond do
@@ -306,13 +318,20 @@ defmodule Maraithon.LLM do
           non_empty(params_model) != non_empty(primary_model) ->
         :chat
 
-      non_empty(params_model) == non_empty(routing_model) ->
+      non_empty(params_model) == non_empty(routing_model) and
+          non_empty(routing_model) != non_empty(primary_model) ->
+        :chat
+
+      non_empty(params_model) == non_empty(fast_model) and
+          non_empty(fast_model) != non_empty(primary_model) ->
         :chat
 
       true ->
         :reasoning
     end
   end
+
+  def rate_limit_bucket(_params), do: :default
 
   defp non_empty(value) when is_binary(value) and byte_size(value) <= 255 do
     if String.valid?(value) do

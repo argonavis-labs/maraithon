@@ -4,6 +4,7 @@ defmodule Maraithon.AgentsTest do
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentRun
+  alias Maraithon.Agents.AgentRunStep
   alias Maraithon.Accounts
   alias Maraithon.Projects
   alias Maraithon.Repo
@@ -120,6 +121,7 @@ defmodule Maraithon.AgentsTest do
     test "syncs a package manifest, installs it for a user, and soft-removes it" do
       slug = "test-agent-#{System.unique_integer([:positive])}"
       user_id = "marketplace@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
       manifest = %{
         "slug" => slug,
@@ -187,6 +189,7 @@ defmodule Maraithon.AgentsTest do
                "priv/agents/skills/chief_of_staff/morning_briefing.md"
              ]
 
+      {:ok, _user} = Accounts.get_or_create_user_by_email("manifest@example.com")
       assert {:ok, agent} = Agents.install_agent_package("manifest@example.com", slug)
       assert agent.behavior == "manifest_agent"
       assert agent.config["agent_package_version_id"] == package.latest_version.id
@@ -261,6 +264,7 @@ defmodule Maraithon.AgentsTest do
                  "skill_paths" => ["priv/agents/skills/chief_of_staff/morning_briefing.md"]
                })
 
+      {:ok, _user} = Accounts.get_or_create_user_by_email("upgrade@example.com")
       assert {:ok, agent} = Agents.install_agent_package("upgrade@example.com", slug)
       assert {:ok, paused} = Agents.pause_agent_installation(agent)
       assert paused.install_status == "paused"
@@ -361,6 +365,20 @@ defmodule Maraithon.AgentsTest do
 
       assert completed_run.status == "completed"
       assert completed_run.completed_at
+
+      assert {:error, {:run_step_not_requested, "completed"}} =
+               Agents.update_agent_run_step(step.id, %{
+                 status: "failed",
+                 error: "late_result"
+               })
+
+      assert {:error, {:run_not_running, "completed"}} =
+               Agents.fail_agent_run(run.id, %{error: "late_result"})
+
+      assert Repo.get!(AgentRunStep, step.id).status == "completed"
+      assert Repo.get!(AgentRun, run.id).status == "completed"
+      assert Repo.get!(AgentRun, run.id).finish_reason == "stop"
+
       assert [listed] = Agents.list_agent_runs(agent.id, preload: [:steps])
       assert listed.id == run.id
       assert [%{id: step_id}] = listed.steps
@@ -392,6 +410,32 @@ defmodule Maraithon.AgentsTest do
       assert length(resumable) == 2
       assert running.id in ids
       assert degraded.id in ids
+    end
+  end
+
+  describe "runtime recovery fence" do
+    test "excludes an Agent from effect admission until recovery finishes" do
+      {:ok, agent} =
+        Agents.create_agent(Map.merge(@valid_attrs, %{status: "running"}))
+
+      assert {:ok, recovering} = Agents.begin_runtime_agent_recovery(agent.id)
+      assert recovering.status == "recovering"
+      assert Repo.get!(Agent, agent.id).status == "recovering"
+      assert {:error, :agent_recovering} = Agents.claim_agent_start(agent.id)
+
+      assert {:ok, running} = Agents.finish_runtime_agent_recovery(agent.id)
+      assert running.status == "running"
+    end
+  end
+
+  describe "claim_agent_start/1" do
+    test "atomically admits only one start transition" do
+      {:ok, agent} = Agents.create_agent(Map.put(@valid_attrs, :status, "stopped"))
+
+      assert {:ok, claimed} = Agents.claim_agent_start(agent.id)
+      assert claimed.status == "running"
+      assert {:error, :already_running} = Agents.claim_agent_start(agent.id)
+      assert Repo.get!(Agent, agent.id).status == "running"
     end
   end
 

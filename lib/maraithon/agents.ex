@@ -18,6 +18,9 @@ defmodule Maraithon.Agents do
   alias Maraithon.Agents.AgentRun
   alias Maraithon.Agents.AgentRunStep
 
+  @agent_run_cancel_timeout_ms 2_000
+  @closed_step_reason "agent_run_closed_without_step_result"
+
   @doc """
   List all agents.
   """
@@ -189,52 +192,161 @@ defmodule Maraithon.Agents do
   Create a durable execution record for one runtime cycle.
   """
   def start_agent_run(%Agent{} = agent, attrs \\ %{}) when is_map(attrs) do
-    attrs =
-      attrs
-      |> Map.new()
-      |> Map.put(:agent_id, agent.id)
-      |> Map.put(:user_id, agent.user_id)
-      |> Map.put(:project_id, agent.project_id)
-      |> Map.put(:behavior, agent.behavior)
-      |> Map.put(:agent_package_id, agent.agent_package_id)
-      |> Map.put(:agent_package_version_id, agent.agent_package_version_id)
-      |> Map.put_new(:status, "running")
-      |> Map.put_new(:started_at, DateTime.utc_now())
-
     %AgentRun{}
-    |> AgentRun.changeset(attrs)
+    |> AgentRun.changeset(agent_run_attrs(agent, attrs))
     |> Repo.insert()
   end
 
+  @doc false
+  def start_runtime_agent_run(%Agent{} = agent, attrs \\ %{}) when is_map(attrs) do
+    Repo.transaction(fn ->
+      persisted_agent =
+        Agent
+        |> where([persisted], persisted.id == ^agent.id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case persisted_agent do
+        nil ->
+          Repo.rollback(:agent_not_found)
+
+        %Agent{active_run_id: nil, status: status, install_status: "enabled"} = persisted_agent
+        when status in ["running", "degraded"] ->
+          run =
+            %AgentRun{}
+            |> AgentRun.changeset(agent_run_attrs(persisted_agent, attrs))
+            |> insert_or_rollback()
+
+          {1, _rows} =
+            Repo.update_all(
+              from(stored_agent in Agent,
+                where: stored_agent.id == ^persisted_agent.id,
+                where: is_nil(stored_agent.active_run_id)
+              ),
+              set: [active_run_id: run.id, updated_at: DateTime.utc_now()]
+            )
+
+          run
+
+        %Agent{active_run_id: active_run_id} when is_binary(active_run_id) ->
+          Repo.rollback(:active_agent_run_exists)
+
+        %Agent{} ->
+          Repo.rollback(:agent_not_runnable)
+      end
+    end)
+  end
+
   def complete_agent_run(run_id, attrs \\ %{}) when is_binary(run_id) and is_map(attrs) do
-    update_agent_run(run_id, Map.put_new(attrs, :status, "completed"))
+    status = attrs[:status] || attrs["status"] || "completed"
+    attrs = attrs |> Map.delete("status") |> Map.put(:status, status)
+    update_agent_run(run_id, attrs)
   end
 
   def fail_agent_run(run_id, attrs \\ %{}) when is_binary(run_id) and is_map(attrs) do
-    update_agent_run(run_id, Map.put_new(attrs, :status, "failed"))
+    attrs = attrs |> Map.delete("status") |> Map.put(:status, "failed")
+    update_agent_run(run_id, attrs)
   end
 
+  @doc """
+  Closes one exact run whose owning process is terminating.
+
+  The run row is locked before requested child steps are failed. Already
+  terminal runs and steps are never overwritten, and provider completion facts
+  such as finish reason and generation mode are preserved.
+  """
+  def cancel_agent_run(run_id, agent_id, reason)
+      when is_binary(run_id) and byte_size(run_id) in 1..255 and is_binary(agent_id) and
+             byte_size(agent_id) in 1..255 and is_binary(reason) and
+             byte_size(reason) in 1..255 do
+    if valid_database_text?(run_id) and valid_database_text?(agent_id) and
+         valid_database_text?(reason) do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      Repo.transaction(
+        fn ->
+          run =
+            AgentRun
+            |> where([run], run.id == ^run_id and run.agent_id == ^agent_id)
+            |> lock("FOR UPDATE")
+            |> Repo.one()
+
+          case run do
+            nil ->
+              Repo.rollback(:run_not_found)
+
+            %AgentRun{status: "running"} = run ->
+              step_count = close_requested_run_steps(run.id, reason, now)
+
+              run =
+                run
+                |> AgentRun.changeset(%{
+                  status: "cancelled",
+                  error: run.error || reason,
+                  completed_at: now
+                })
+                |> update_or_rollback()
+
+              clear_active_run_pointer(run.agent_id, run.id, now)
+              %{cancelled: true, run: run, steps: step_count}
+
+            %AgentRun{} = run ->
+              clear_active_run_pointer(run.agent_id, run.id, now)
+              %{cancelled: false, run: run, steps: 0}
+          end
+        end,
+        timeout: @agent_run_cancel_timeout_ms
+      )
+    else
+      {:error, :invalid_agent_run_cancellation}
+    end
+  end
+
+  def cancel_agent_run(_run_id, _agent_id, _reason),
+    do: {:error, :invalid_agent_run_cancellation}
+
   def update_agent_run(run_id, attrs) when is_binary(run_id) and is_map(attrs) do
-    now = DateTime.utc_now()
+    status = attrs[:status] || attrs["status"]
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     attrs =
-      case attrs[:status] || attrs["status"] do
-        status when status in ["completed", "failed", "cancelled"] ->
-          Map.put_new(attrs, :completed_at, now)
-
-        _ ->
-          attrs
+      if status in ["completed", "failed", "cancelled"] do
+        attrs
+        |> Map.delete("status")
+        |> Map.put(:status, status)
+        |> Map.put_new(:completed_at, now)
+      else
+        attrs
       end
 
-    case Repo.get(AgentRun, run_id) do
-      nil ->
-        {:error, :run_not_found}
+    Repo.transaction(fn ->
+      run =
+        AgentRun
+        |> where([run], run.id == ^run_id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
 
-      %AgentRun{} = run ->
-        run
-        |> AgentRun.changeset(attrs)
-        |> Repo.update()
-    end
+      case run do
+        nil ->
+          Repo.rollback(:run_not_found)
+
+        %AgentRun{status: "running"} = run ->
+          if status in ["completed", "failed", "cancelled"] do
+            close_requested_run_steps(run.id, @closed_step_reason, now)
+          end
+
+          updated_run = run |> AgentRun.changeset(attrs) |> update_or_rollback()
+
+          if status in ["completed", "failed", "cancelled"] do
+            clear_active_run_pointer(run.agent_id, run.id, now)
+          end
+
+          updated_run
+
+        %AgentRun{} = run ->
+          Repo.rollback({:run_not_running, run.status})
+      end
+    end)
   end
 
   def list_agent_runs(agent_id, opts \\ []) when is_binary(agent_id) do
@@ -251,43 +363,154 @@ defmodule Maraithon.Agents do
 
   def record_agent_run_step(run_id, agent_id, attrs)
       when is_binary(run_id) and is_binary(agent_id) and is_map(attrs) do
-    sequence =
-      attrs[:sequence] ||
-        attrs["sequence"] ||
-        next_run_step_sequence(run_id)
+    Repo.transaction(fn ->
+      run =
+        AgentRun
+        |> where([run], run.id == ^run_id and run.agent_id == ^agent_id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
 
-    attrs =
-      attrs
-      |> Map.new()
-      |> Map.put(:agent_run_id, run_id)
-      |> Map.put(:agent_id, agent_id)
-      |> Map.put(:sequence, sequence)
-      |> Map.put_new(:status, "requested")
-      |> Map.put_new(:started_at, DateTime.utc_now())
+      case run do
+        nil ->
+          Repo.rollback(:run_not_found)
 
-    %AgentRunStep{}
-    |> AgentRunStep.changeset(attrs)
-    |> Repo.insert()
+        %AgentRun{status: "running"} ->
+          sequence = attrs[:sequence] || attrs["sequence"] || next_run_step_sequence(run_id)
+
+          attrs =
+            attrs
+            |> Map.new()
+            |> Map.put(:agent_run_id, run_id)
+            |> Map.put(:agent_id, agent_id)
+            |> Map.put(:sequence, sequence)
+            |> Map.put_new(:status, "requested")
+            |> Map.put_new(:started_at, DateTime.utc_now())
+
+          case %AgentRunStep{} |> AgentRunStep.changeset(attrs) |> Repo.insert() do
+            {:ok, step} -> step
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        %AgentRun{} = run ->
+          Repo.rollback({:run_not_running, run.status})
+      end
+    end)
   end
 
-  def update_agent_run_step(step_id, attrs) when is_binary(step_id) and is_map(attrs) do
-    now = DateTime.utc_now()
-
+  @doc false
+  def reconcile_terminal_effect_step(
+        %{agent_run_step_id: step_id, agent_run_id: run_id, agent_id: agent_id, status: status} =
+          effect
+      )
+      when is_binary(step_id) and is_binary(run_id) and is_binary(agent_id) and
+             status in ["completed", "failed"] do
     attrs =
-      case attrs[:status] || attrs["status"] do
-        status when status in ["completed", "failed"] -> Map.put_new(attrs, :completed_at, now)
-        _status -> attrs
+      if status == "completed" do
+        %{status: "completed", response_payload: effect.result || %{}}
+      else
+        %{
+          status: "failed",
+          error: effect.error || "effect_failed",
+          response_payload: %{"error" => effect.error || "effect_failed"}
+        }
       end
 
-    case Repo.get(AgentRunStep, step_id) do
-      nil ->
-        {:error, :run_step_not_found}
-
-      %AgentRunStep{} = step ->
-        step
-        |> AgentRunStep.changeset(attrs)
-        |> Repo.update()
+    case update_agent_run_step(step_id, agent_id, run_id, attrs) do
+      {:ok, _step} -> :ok
+      {:error, {:run_step_not_requested, ^status}} -> :ok
+      {:error, _reason} -> :error
     end
+  end
+
+  def reconcile_terminal_effect_step(_effect), do: :ok
+
+  def reconcile_terminal_effect_steps(effects) when is_list(effects) do
+    Enum.reduce_while(effects, :ok, fn effect, :ok ->
+      case reconcile_terminal_effect_step(effect) do
+        :ok -> {:cont, :ok}
+        :error -> {:halt, {:error, :agent_run_step_reconciliation_failed}}
+      end
+    end)
+  end
+
+  def update_agent_run_step(step_id, agent_id, run_id, attrs)
+      when is_binary(step_id) and is_binary(agent_id) and is_binary(run_id) and is_map(attrs) do
+    owned? =
+      Repo.exists?(
+        from(step in AgentRunStep,
+          join: run in AgentRun,
+          on: run.id == step.agent_run_id,
+          where: step.id == ^step_id,
+          where: step.agent_run_id == ^run_id,
+          where: step.agent_id == ^agent_id,
+          where: run.agent_id == ^agent_id
+        )
+      )
+
+    if owned?,
+      do: update_agent_run_step(step_id, attrs),
+      else: {:error, :run_step_not_owned}
+  end
+
+  def update_agent_run_step(_step_id, _agent_id, _run_id, _attrs),
+    do: {:error, :invalid_agent_run_step_update}
+
+  def update_agent_run_step(step_id, attrs) when is_binary(step_id) and is_map(attrs) do
+    status = attrs[:status] || attrs["status"]
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    attrs =
+      if status in ["completed", "failed"] do
+        attrs
+        |> Map.delete("status")
+        |> Map.put(:status, status)
+        |> Map.put_new(:completed_at, now)
+      else
+        attrs
+      end
+
+    Repo.transaction(fn ->
+      case Repo.get(AgentRunStep, step_id) do
+        nil ->
+          Repo.rollback(:run_step_not_found)
+
+        %AgentRunStep{status: step_status} when step_status != "requested" ->
+          Repo.rollback({:run_step_not_requested, step_status})
+
+        %AgentRunStep{agent_run_id: run_id} ->
+          run =
+            AgentRun
+            |> where([run], run.id == ^run_id)
+            |> lock("FOR UPDATE")
+            |> Repo.one()
+
+          case run do
+            nil ->
+              Repo.rollback(:run_not_found)
+
+            %AgentRun{status: "running"} ->
+              step =
+                AgentRunStep
+                |> where([step], step.id == ^step_id)
+                |> lock("FOR UPDATE")
+                |> Repo.one()
+
+              case step do
+                %AgentRunStep{status: "requested"} = requested_step ->
+                  requested_step |> AgentRunStep.changeset(attrs) |> update_or_rollback()
+
+                %AgentRunStep{status: step_status} ->
+                  Repo.rollback({:run_step_not_requested, step_status})
+
+                nil ->
+                  Repo.rollback(:run_step_not_found)
+              end
+
+            %AgentRun{} = run ->
+              Repo.rollback({:run_not_running, run.status})
+          end
+      end
+    end)
   end
 
   @doc """
@@ -595,12 +818,90 @@ defmodule Maraithon.Agents do
     project_id = Keyword.get(opts, :project_id)
     preload = Keyword.get(opts, :preload, [])
 
-    from(a in Agent, where: a.status in ["running", "degraded"])
+    from(a in Agent, where: a.status in ["recovering", "running", "degraded"])
     |> maybe_filter_user(user_id)
     |> maybe_filter_project(project_id)
     |> maybe_filter_removed(Keyword.get(opts, :include_removed, false))
     |> Repo.all()
     |> Repo.preload(preload)
+  end
+
+  @doc false
+  def begin_runtime_agent_recovery(id) when is_binary(id) do
+    now = DateTime.utc_now()
+
+    query =
+      from(agent in Agent,
+        where: agent.id == ^id,
+        where: agent.status in ["recovering", "running", "degraded"],
+        where: agent.install_status == "enabled",
+        update: [set: [status: "recovering", updated_at: ^now]],
+        select: agent
+      )
+
+    case Repo.update_all(query, []) do
+      {1, [%Agent{} = agent]} -> {:ok, agent}
+      _not_runnable -> {:error, :agent_not_runnable}
+    end
+  end
+
+  @doc false
+  def finish_runtime_agent_recovery(id) when is_binary(id) do
+    now = DateTime.utc_now()
+
+    query =
+      from(agent in Agent,
+        where: agent.id == ^id,
+        where: agent.status == "recovering",
+        where: agent.install_status == "enabled",
+        where: is_nil(agent.active_run_id),
+        update: [set: [status: "running", updated_at: ^now]],
+        select: agent
+      )
+
+    case Repo.update_all(query, []) do
+      {1, [%Agent{} = agent]} -> {:ok, agent}
+      _fenced_or_inactive -> {:error, :agent_recovery_fenced}
+    end
+  end
+
+  @doc false
+  def claim_agent_start(id) when is_binary(id) do
+    now = DateTime.utc_now()
+
+    query =
+      from(agent in Agent,
+        where: agent.id == ^id,
+        where: agent.status not in ["recovering", "running", "degraded"],
+        where: agent.install_status == "enabled",
+        update: [
+          set: [
+            status: "running",
+            started_at: ^now,
+            stopped_at: nil,
+            updated_at: ^now
+          ]
+        ],
+        select: agent
+      )
+
+    case Repo.update_all(query, []) do
+      {1, [%Agent{} = agent]} -> {:ok, agent}
+      {0, _rows} -> classify_agent_start_conflict(id)
+      {_count, _rows} -> {:error, :agent_start_conflict}
+    end
+  end
+
+  defp classify_agent_start_conflict(id) do
+    case get_agent(id, include_removed: true) do
+      nil -> {:error, :not_found}
+      %{status: status} when status in ["running", "degraded"] -> {:error, :already_running}
+      %{status: "recovering"} -> {:error, :agent_recovering}
+      %{install_status: "removed"} -> {:error, :agent_removed}
+      %{install_status: "paused"} -> {:error, :agent_paused}
+      %{install_status: "setup_required"} -> {:error, :agent_setup_required}
+      _agent -> {:error, :agent_start_conflict}
+    end
   end
 
   @doc """
@@ -622,6 +923,67 @@ defmodule Maraithon.Agents do
   """
   def mark_degraded(%Agent{} = agent) do
     update_agent(agent, %{status: "degraded"})
+  end
+
+  defp close_requested_run_steps(run_id, reason, now) do
+    query =
+      from(step in AgentRunStep,
+        where: step.agent_run_id == ^run_id and step.status == "requested",
+        update: [
+          set: [
+            status: "failed",
+            error: fragment("COALESCE(?, ?)", step.error, ^reason),
+            completed_at: ^now,
+            updated_at: ^now
+          ]
+        ]
+      )
+
+    {step_count, _rows} = Repo.update_all(query, [])
+    step_count
+  end
+
+  defp clear_active_run_pointer(agent_id, run_id, now) do
+    Repo.update_all(
+      from(agent in Agent,
+        where: agent.id == ^agent_id,
+        where: agent.active_run_id == ^run_id
+      ),
+      set: [active_run_id: nil, updated_at: now]
+    )
+
+    :ok
+  end
+
+  defp agent_run_attrs(%Agent{} = agent, attrs) do
+    attrs
+    |> Map.new()
+    |> Map.put(:agent_id, agent.id)
+    |> Map.put(:user_id, agent.user_id)
+    |> Map.put(:project_id, agent.project_id)
+    |> Map.put(:behavior, agent.behavior)
+    |> Map.put(:agent_package_id, agent.agent_package_id)
+    |> Map.put(:agent_package_version_id, agent.agent_package_version_id)
+    |> Map.put_new(:status, "running")
+    |> Map.put_new(:started_at, DateTime.utc_now())
+  end
+
+  defp insert_or_rollback(changeset) do
+    case Repo.insert(changeset) do
+      {:ok, record} -> record
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp update_or_rollback(changeset) do
+    case Repo.update(changeset) do
+      {:ok, record} -> record
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp valid_database_text?(value) do
+    String.valid?(value) and :binary.match(value, <<0>>) == :nomatch
   end
 
   defp maybe_filter_user(query, nil), do: query

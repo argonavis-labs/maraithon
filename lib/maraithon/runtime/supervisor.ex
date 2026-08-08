@@ -5,73 +5,67 @@ defmodule Maraithon.Runtime.Supervisor do
 
   use Supervisor
 
+  alias Maraithon.Runtime.BootGate
+
   def start_link(init_arg) do
     Supervisor.start_link(__MODULE__, init_arg, name: __MODULE__)
   end
 
   @impl true
   def init(_init_arg) do
-    base_children = [
-      # Registry for looking up agent processes by ID
-      {Registry, keys: :unique, name: Maraithon.Runtime.AgentRegistry},
+    background_workers? = Application.get_env(:maraithon, :start_background_workers, true)
+    if background_workers?, do: BootGate.close(), else: BootGate.open()
 
-      # Dynamic supervisor for agent processes. Intensity is raised above the
-      # OTP default (3/5s) so one deterministically-crashing agent cannot take
-      # down every other agent on the node; AgentWatcher applies its own
-      # per-agent crash-loop cap on top.
+    agent_supervisor =
       {DynamicSupervisor,
        strategy: :one_for_one,
        name: Maraithon.Runtime.AgentSupervisor,
        max_restarts: 20,
-       max_seconds: 60},
+       max_seconds: 60}
 
-      # Task supervisor for effect worker tasks
+    dependency_children = [
+      {Registry, keys: :unique, name: Maraithon.Runtime.AgentRegistry},
+      {Registry, keys: :unique, name: Maraithon.Runtime.EffectTaskRegistry},
       {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor},
-
-      # Isolates hosted MCP/tool calls from request processes while still
-      # allowing hard wall-clock limits.
       {Task.Supervisor, name: Maraithon.Runtime.ToolCallSupervisor},
-
-      # Shared provider backpressure for effect-driven LLM calls
       Maraithon.Runtime.Effects.LLMRateLimiter,
-
-      # Task supervisor for app-level background jobs
       {Task.Supervisor, name: Maraithon.Runtime.BackgroundJobTaskSupervisor}
     ]
 
-    # Background workers that poll the database - disabled in test mode
-    background_workers =
-      if Application.get_env(:maraithon, :start_background_workers, true) do
-        [
-          Maraithon.Runtime.Bootstrap,
-          Maraithon.Runtime.EffectRunner,
-          Maraithon.Runtime.BackgroundJobRunner,
-          Maraithon.Runtime.Scheduler,
-          Maraithon.Runtime.AgentWatcher,
-          Maraithon.Runtime.ShutdownReporter,
-          Maraithon.Runtime.HealthReporter,
-          Maraithon.Runtime.InsightNotifier,
-          Maraithon.Runtime.BriefingCron,
-          Maraithon.Runtime.DogfoodDigest,
-          Maraithon.Runtime.BriefNotifier,
-          Maraithon.Runtime.ProactiveCheckIn,
-          Maraithon.Runtime.TodoCompletionSweep,
-          Maraithon.Runtime.NudgeSweep,
-          Maraithon.Runtime.StalenessTriageSweep,
-          Maraithon.Runtime.TokenRefresher,
-          Maraithon.Runtime.WatchRenewer,
-          Maraithon.Runtime.FreshnessSweep,
-          Maraithon.Runtime.StuckStateWatchdog,
-          Maraithon.TelegramAssistant.RunReaper
-        ]
+    children =
+      if background_workers? do
+        dependency_children ++
+          [
+            # EffectRunner starts closed behind BootGate. Keeping it before the
+            # Agent supervisor means Agents terminate and fence their outbox
+            # work while the runner is still alive during reverse-order stop.
+            Maraithon.Runtime.EffectRunner,
+            agent_supervisor,
+            Maraithon.Runtime.Bootstrap,
+            Maraithon.Runtime.BackgroundJobRunner,
+            Maraithon.Runtime.Scheduler,
+            Maraithon.Runtime.AgentWatcher,
+            Maraithon.Runtime.ShutdownReporter,
+            Maraithon.Runtime.HealthReporter,
+            Maraithon.Runtime.InsightNotifier,
+            Maraithon.Runtime.BriefingCron,
+            Maraithon.Runtime.DogfoodDigest,
+            Maraithon.Runtime.BriefNotifier,
+            Maraithon.Runtime.ProactiveCheckIn,
+            Maraithon.Runtime.TodoCompletionSweep,
+            Maraithon.Runtime.NudgeSweep,
+            Maraithon.Runtime.StalenessTriageSweep,
+            Maraithon.Runtime.TokenRefresher,
+            Maraithon.Runtime.WatchRenewer,
+            Maraithon.Runtime.FreshnessSweep,
+            Maraithon.Runtime.StuckStateWatchdog,
+            Maraithon.TelegramAssistant.RunReaper
+          ]
       else
-        []
+        dependency_children ++ [agent_supervisor]
       end
 
-    # ~26 children share this supervisor; with the OTP default intensity
-    # (3 restarts / 5s across the whole supervisor) a DB outage killing a few
-    # pollers at once would cascade into full-runtime shutdown.
-    Supervisor.init(base_children ++ background_workers,
+    Supervisor.init(children,
       strategy: :one_for_one,
       max_restarts: 20,
       max_seconds: 60

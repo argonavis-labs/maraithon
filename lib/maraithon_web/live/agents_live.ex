@@ -21,7 +21,7 @@ defmodule MaraithonWeb.AgentsLive do
 
   @refresh_interval 30_000
   @event_limit 50
-  @status_options ~w(all running degraded stopped)
+  @status_options ~w(all recovering running degraded stopped)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -725,7 +725,7 @@ defmodule MaraithonWeb.AgentsLive do
                 <.status_badge status={@selected_agent.status} />
 
                 <div class="flex flex-wrap items-center gap-1">
-                  <%= if @selected_agent.status in ["running", "degraded"] do %>
+                  <%= if @selected_agent.status in ["recovering", "running", "degraded"] do %>
                     <button
                       type="button"
                       phx-click="stop_agent"

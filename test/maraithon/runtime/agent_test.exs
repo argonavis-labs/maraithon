@@ -252,7 +252,7 @@ defmodule Maraithon.Runtime.AgentTest do
         from(effect in Effect, where: effect.id == ^claimed_id),
         set: [
           status: "claimed",
-          claimed_by: "old@node",
+          claimed_by: Atom.to_string(node()),
           claimed_at: DateTime.utc_now()
         ]
       )
@@ -274,13 +274,198 @@ defmodule Maraithon.Runtime.AgentTest do
 
       assert {:idle, _data} = :sys.get_state(recovered_pid)
 
-      for effect_id <- [pending_id, claimed_id] do
-        effect = Repo.get!(Effect, effect_id)
-        assert effect.status == "cancelled"
-        assert effect.claimed_by == nil
-        assert effect.claimed_at == nil
-        assert effect.error == "agent_recovered_without_effect_continuation"
-      end
+      pending = Repo.get!(Effect, pending_id)
+      assert pending.status == "cancelled"
+      assert pending.error == "agent_process_terminated_without_effect_continuation"
+
+      claimed = Repo.get!(Effect, claimed_id)
+      assert claimed.status == "failed"
+      assert claimed.error == "effect_outcome_ambiguous"
+      assert claimed.result_envelope["status"] == "error"
+      assert claimed.claimed_by == nil
+      assert claimed.claimed_at == nil
+    end
+
+    test "recovery closes the durably owned run after a supervised hard process kill", %{
+      agent: agent
+    } do
+      {:ok, first_pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      assert {:idle, _data} = :sys.get_state(first_pid)
+
+      send(first_pid, {:message, "hard kill", %{}, Ecto.UUID.generate()})
+      assert {:waiting_effect, waiting_data} = :sys.get_state(first_pid)
+      run_id = waiting_data.current_run_id
+      [{effect_id, effect_info}] = Map.to_list(waiting_data.pending_effects)
+      step_id = effect_info.run_step_id
+
+      assert Repo.get!(Maraithon.Agents.Agent, agent.id).active_run_id == run_id
+
+      ref = Process.monitor(first_pid)
+      Process.exit(first_pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^first_pid, :killed}, 1_000
+
+      recovered_pid = wait_for_restarted_agent(agent.id, first_pid, 100)
+      assert {:idle, _data} = :sys.get_state(recovered_pid)
+      assert Repo.get!(Maraithon.Agents.AgentRun, run_id).status == "cancelled"
+      assert Repo.get!(Maraithon.Agents.AgentRunStep, step_id).status == "failed"
+      assert Repo.get!(Effect, effect_id).status == "cancelled"
+      assert Repo.get!(Maraithon.Agents.Agent, agent.id).active_run_id == nil
+
+      assert :ok =
+               Maraithon.Runtime.AgentSupervisor.stop_agent(recovered_pid, "test_cleanup")
+    end
+
+    test "recovery preserves a terminal effect step before cancelling its owned run", %{
+      agent: agent
+    } do
+      {:ok, first_pid} = RuntimeAgent.start_link(agent)
+      Process.unlink(first_pid)
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), first_pid)
+      assert {:idle, _data} = :sys.get_state(first_pid)
+
+      send(first_pid, {:message, "complete before crash", %{}, Ecto.UUID.generate()})
+      assert {:waiting_effect, waiting_data} = :sys.get_state(first_pid)
+      run_id = waiting_data.current_run_id
+      [{effect_id, effect_info}] = Map.to_list(waiting_data.pending_effects)
+      step_id = effect_info.run_step_id
+
+      Repo.update_all(from(effect in Effect, where: effect.id == ^effect_id),
+        set: [
+          status: "completed",
+          result: %{"content" => "durable result"},
+          result_envelope: %{"status" => "ok", "version" => 1}
+        ]
+      )
+
+      ref = Process.monitor(first_pid)
+      Process.exit(first_pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^first_pid, :killed}, 1_000
+
+      recovered_agent = Repo.get!(Maraithon.Agents.Agent, agent.id)
+      {:ok, recovered_pid} = RuntimeAgent.start_link(recovered_agent)
+
+      Process.unlink(recovered_pid)
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), recovered_pid)
+      assert {:idle, _data} = :sys.get_state(recovered_pid)
+
+      assert Repo.get!(Maraithon.Agents.AgentRun, run_id).status == "cancelled"
+      assert Repo.get!(Maraithon.Agents.AgentRunStep, step_id).status == "completed"
+      assert Repo.get!(Effect, effect_id).result_acknowledged_at != nil
+      assert Repo.get!(Maraithon.Agents.Agent, agent.id).active_run_id == nil
+
+      GenServer.stop(recovered_pid, :normal)
+    end
+
+    test "terminalizes only the current run when its process terminates", %{agent: agent} do
+      {:ok, pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      assert {:idle, _data} = :sys.get_state(pid)
+
+      send(pid, {:message, "begin one run", %{}, Ecto.UUID.generate()})
+      assert {:waiting_effect, waiting_data} = :sys.get_state(pid)
+
+      run_id = waiting_data.current_run_id
+      [{effect_id, effect_info}] = Map.to_list(waiting_data.pending_effects)
+      requested_step_id = effect_info.run_step_id
+
+      assert {:ok, _run} =
+               Agents.update_agent_run(run_id, %{
+                 finish_reason: "length",
+                 generation_mode: "llm"
+               })
+
+      {:ok, completed_step} =
+        Agents.record_agent_run_step(run_id, agent.id, %{
+          step_type: "tool_call",
+          effect_type: "tool_call"
+        })
+
+      assert {:ok, _step} =
+               Agents.update_agent_run_step(completed_step.id, %{status: "completed"})
+
+      {:ok, unrelated_run} =
+        Agents.start_agent_run(agent, %{trigger_type: "unrelated_history"})
+
+      assert :ok =
+               DynamicSupervisor.terminate_child(
+                 Maraithon.Runtime.AgentSupervisor,
+                 pid
+               )
+
+      cancelled_run = Repo.get!(Maraithon.Agents.AgentRun, run_id)
+      assert cancelled_run.status == "cancelled"
+      assert cancelled_run.finish_reason == "length"
+      assert cancelled_run.generation_mode == "llm"
+      assert cancelled_run.error == "agent_process_terminated_without_run_continuation"
+      assert cancelled_run.completed_at != nil
+
+      failed_step = Repo.get!(Maraithon.Agents.AgentRunStep, requested_step_id)
+      assert failed_step.status == "failed"
+      assert failed_step.error == "agent_process_terminated_without_run_continuation"
+      assert failed_step.completed_at != nil
+
+      assert Repo.get!(Maraithon.Agents.AgentRunStep, completed_step.id).status == "completed"
+      assert Repo.get!(Maraithon.Agents.AgentRun, unrelated_run.id).status == "running"
+
+      cancelled_effect = Repo.get!(Effect, effect_id)
+      assert cancelled_effect.status == "cancelled"
+      assert cancelled_effect.error == "agent_process_terminated_without_effect_continuation"
+      assert cancelled_effect.claimed_by == nil
+      assert cancelled_effect.claimed_at == nil
+    end
+
+    test "intentional stop preserves provider facts already observed on the current run", %{
+      agent: agent
+    } do
+      {:ok, pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      assert {:idle, _data} = :sys.get_state(pid)
+
+      send(pid, {:message, "begin provider-backed run", %{}, Ecto.UUID.generate()})
+      assert {:waiting_effect, waiting_data} = :sys.get_state(pid)
+
+      assert {:ok, _run} =
+               Agents.update_agent_run(waiting_data.current_run_id, %{
+                 finish_reason: "length",
+                 generation_mode: "llm"
+               })
+
+      assert :ok = Maraithon.Runtime.AgentSupervisor.stop_agent(pid, "test_stop")
+
+      stopped_run = Repo.get!(Maraithon.Agents.AgentRun, waiting_data.current_run_id)
+      assert stopped_run.status == "cancelled"
+      assert stopped_run.finish_reason == "length"
+      assert stopped_run.generation_mode == "llm"
+      assert stopped_run.error == "agent_stopped_without_run_continuation"
+      assert stopped_run.completed_at != nil
+    end
+
+    test "intentional stop cancels queued and claimed effects", %{agent: agent} do
+      {:ok, pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      assert {:idle, _data} = :sys.get_state(pid)
+
+      {:ok, pending_id} = Effects.request(agent.id, :tool_call, "time", %{})
+      {:ok, claimed_id} = Effects.request(agent.id, :llm_call, nil, %{})
+
+      Repo.update_all(
+        from(effect in Effect, where: effect.id == ^claimed_id),
+        set: [
+          status: "claimed",
+          claimed_by: Atom.to_string(node()),
+          claimed_at: DateTime.utc_now()
+        ]
+      )
+
+      assert :ok = Maraithon.Runtime.AgentSupervisor.stop_agent(pid, "test_stop")
+
+      pending = Repo.get!(Effect, pending_id)
+      assert pending.status == "cancelled"
+      assert pending.error == "agent_stopped_without_effect_continuation"
+
+      claimed = Repo.get!(Effect, claimed_id)
+      assert claimed.status == "failed"
+      assert claimed.error == "effect_outcome_ambiguous"
+      assert claimed.result_envelope["status"] == "error"
+      assert claimed.claimed_by == nil
+      assert claimed.claimed_at == nil
     end
 
     @doc """
@@ -986,6 +1171,107 @@ defmodule Maraithon.Runtime.AgentTest do
       :ok
     end
 
+    test "idle reconciliation cancels and acknowledges a retained running run", %{agent: agent} do
+      {:ok, run} =
+        Agents.start_runtime_agent_run(agent, %{
+          trigger_type: "message",
+          trigger: %{"type" => "message"}
+        })
+
+      {:ok, step} =
+        Agents.record_agent_run_step(run.id, agent.id, %{
+          step_type: "llm_call",
+          effect_type: "llm_call",
+          status: "requested"
+        })
+
+      {:ok, effect_id} =
+        Effects.request_prepared(
+          agent.id,
+          "llm_call",
+          nil,
+          %{"messages" => [%{"role" => "user", "content" => "reconcile"}]},
+          %{agent_run_id: run.id, agent_run_step_id: step.id}
+        )
+
+      Repo.update_all(from(effect in Effect, where: effect.id == ^effect_id),
+        set: [
+          status: "completed",
+          result: %{"content" => "persisted"},
+          result_envelope: %{"status" => "ok", "version" => 1}
+        ]
+      )
+
+      data = %RuntimeAgent{agent_id: agent.id, current_run_id: run.id}
+
+      assert {:keep_state, reconciled_data} =
+               RuntimeAgent.idle(
+                 :info,
+                 {:effect_result, effect_id, {:ok, %{content: "persisted"}}},
+                 data
+               )
+
+      assert reconciled_data.current_run_id == nil
+      assert Repo.get!(Maraithon.Agents.AgentRun, run.id).status == "cancelled"
+      assert Repo.get!(Maraithon.Agents.AgentRunStep, step.id).status == "completed"
+      assert Repo.get!(Effect, effect_id).result_acknowledged_at != nil
+    end
+
+    test "acknowledges a duplicate terminal result without cancelling the live chained run", %{
+      agent: agent
+    } do
+      {:ok, pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+      assert {:idle, _data} = :sys.get_state(pid)
+
+      send(pid, {:message, "start live run", %{}, Ecto.UUID.generate()})
+      assert {:waiting_effect, waiting_data} = :sys.get_state(pid)
+      assert map_size(waiting_data.pending_effects) == 1
+
+      {:ok, step} =
+        Agents.record_agent_run_step(waiting_data.current_run_id, agent.id, %{
+          step_type: "llm",
+          effect_type: "llm_call",
+          status: "requested",
+          request_payload: %{"messages" => []}
+        })
+
+      {:ok, duplicate_effect_id} =
+        Effects.request_prepared(
+          agent.id,
+          "llm_call",
+          nil,
+          %{"messages" => [%{"role" => "user", "content" => "duplicate"}]},
+          %{
+            agent_run_id: waiting_data.current_run_id,
+            agent_run_step_id: step.id
+          }
+        )
+
+      Repo.update_all(
+        from(effect in Effect, where: effect.id == ^duplicate_effect_id),
+        set: [
+          status: "completed",
+          result: %{"content" => "already handled"},
+          result_envelope: %{"status" => "ok", "version" => 1}
+        ]
+      )
+
+      send(
+        pid,
+        {:agent_dispatch,
+         {:effect_result, duplicate_effect_id, {:ok, %{content: "already handled"}}}}
+      )
+
+      assert {:waiting_effect, after_duplicate} = :sys.get_state(pid)
+      assert after_duplicate.current_run_id == waiting_data.current_run_id
+      assert map_size(after_duplicate.pending_effects) == 1
+
+      run = Repo.get!(Maraithon.Agents.AgentRun, waiting_data.current_run_id)
+      assert run.status == "running"
+      assert Repo.get!(Effect, duplicate_effect_id).result_acknowledged_at == nil
+    end
+
     test "continues behavior after an effect result without orphaning the run", %{
       scheduler_pid: _scheduler_pid
     } do
@@ -1004,6 +1290,7 @@ defmodule Maraithon.Runtime.AgentTest do
       end)
 
       user_id = "runtime-continue@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
       {:ok, agent} =
         Agents.create_agent(%{
@@ -1045,11 +1332,31 @@ defmodule Maraithon.Runtime.AgentTest do
       assert waiting_data.current_run_id != nil
 
       [effect_id] = Map.keys(waiting_data.pending_effects)
+
+      Repo.update_all(from(effect in Effect, where: effect.id == ^effect_id),
+        set: [
+          status: "completed",
+          result: %{"content" => "continue"},
+          result_envelope: %{"status" => "ok", "version" => 1}
+        ]
+      )
+
       send(pid, {:effect_result, effect_id, {:ok, %{content: "continue"}}})
 
       {:waiting_effect, memo_data} = :sys.get_state(pid)
       assert memo_data.behavior_state.pending_effect_skill_id == :cycle_memo
+      assert Repo.get!(Effect, effect_id).result_acknowledged_at == nil
+
       [memo_effect_id] = Map.keys(memo_data.pending_effects)
+
+      Repo.update_all(from(effect in Effect, where: effect.id == ^memo_effect_id),
+        set: [
+          status: "completed",
+          result: %{"content" => "Cycle completed."},
+          result_envelope: %{"status" => "ok", "version" => 1}
+        ]
+      )
+
       send(pid, {:effect_result, memo_effect_id, {:ok, %{content: "Cycle completed."}}})
 
       {:idle, idle_data} = :sys.get_state(pid)
@@ -1058,6 +1365,8 @@ defmodule Maraithon.Runtime.AgentTest do
       assert [run] = Agents.list_agent_runs(agent.id, limit: 1)
       assert run.status == "completed"
       assert run.metadata["terminal_event"] == "briefs_recorded"
+      assert Repo.get!(Effect, effect_id).result_acknowledged_at != nil
+      assert Repo.get!(Effect, memo_effect_id).result_acknowledged_at != nil
 
       assert [%{payload: %{"cadences" => ["morning"]}}] =
                Maraithon.Events.list_events(agent.id, types: ["briefs_recorded"])
@@ -1165,5 +1474,22 @@ defmodule Maraithon.Runtime.AgentTest do
         order_by: [asc: j.inserted_at]
       )
     )
+  end
+
+  defp wait_for_restarted_agent(_agent_id, _old_pid, 0) do
+    flunk("agent did not restart")
+  end
+
+  defp wait_for_restarted_agent(agent_id, old_pid, attempts_left) do
+    case Registry.lookup(Maraithon.Runtime.AgentRegistry, agent_id) do
+      [{pid, _metadata}] when pid != old_pid ->
+        pid
+
+      _not_restarted ->
+        receive do
+        after
+          10 -> wait_for_restarted_agent(agent_id, old_pid, attempts_left - 1)
+        end
+    end
   end
 end

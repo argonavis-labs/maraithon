@@ -15,7 +15,10 @@ fi
 
 fly_app="${MARAITHON_FLY_APP:-maraithon}"
 fly_config="${MARAITHON_FLY_CONFIG:-fly.toml}"
-fly_strategy="${MARAITHON_FLY_DEPLOY_STRATEGY:-rolling}"
+# Runtime claim generations are node-owned; stop the old runtime before the
+# replacement can admit work unless a future compatibility release explicitly
+# opts back into rolling deployment.
+fly_strategy="${MARAITHON_FLY_DEPLOY_STRATEGY:-immediate}"
 fly_wait_timeout="${MARAITHON_FLY_WAIT_TIMEOUT:-10m}"
 fly_release_command_timeout="${MARAITHON_FLY_RELEASE_COMMAND_TIMEOUT:-10m}"
 health_base_url="${MARAITHON_BASE_URL:-https://maraithon.com}"
@@ -25,6 +28,13 @@ deploy_lock_dir="${MARAITHON_DEPLOY_LOCK_DIR:-${TMPDIR:-/tmp}/maraithon-fly-depl
 
 require_command flyctl
 require_command curl
+require_command python3
+
+if [[ "${fly_strategy}" != "immediate" ]]; then
+  echo "This release requires MARAITHON_FLY_DEPLOY_STRATEGY=immediate." >&2
+  echo "Rolling/canary overlap is unsafe for node-owned effect claims." >&2
+  exit 64
+fi
 
 if [[ -z "${FLY_API_TOKEN:-}" ]]; then
   echo "FLY_API_TOKEN is required for deploys." >&2
@@ -46,6 +56,21 @@ export FLY_APP="${fly_app}"
 
 run_in "${ROOT_DIR}" flyctl auth whoami --json >/dev/null
 run_in "${ROOT_DIR}" flyctl status --app "${fly_app}" --config "${fly_config}" --json >/dev/null
+
+machine_json="$(cd "${ROOT_DIR}" && flyctl machines list --app "${fly_app}" --json)"
+if ! python3 -c '
+import json, sys
+machines = json.load(sys.stdin)
+if not isinstance(machines, list) or len(machines) != 1:
+    raise SystemExit(1)
+state = machines[0].get("state") or machines[0].get("State")
+raise SystemExit(0 if state == "started" else 1)
+' <<<"${machine_json}"; then
+  echo "Immediate deploy requires exactly one started application Machine." >&2
+  echo "Refusing deployment because the runtime topology is not single-owner." >&2
+  exit 64
+fi
+
 run_in "${ROOT_DIR}" flyctl deploy \
   --remote-only \
   --now \

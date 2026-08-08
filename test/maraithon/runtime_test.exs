@@ -103,6 +103,7 @@ defmodule Maraithon.RuntimeTest do
   alias Maraithon.Runtime
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
+  alias Maraithon.Effects.Effect
   alias Maraithon.Repo
 
   # ============================================================================
@@ -252,6 +253,43 @@ defmodule Maraithon.RuntimeTest do
     Verifies that custom stop reasons can be provided.
     Stop reasons are useful for debugging and audit trails.
     """
+    test "cancels active effects even when no agent process is registered" do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "stopped",
+          started_at: DateTime.utc_now(),
+          stopped_at: DateTime.utc_now()
+        })
+
+      effect_id = Ecto.UUID.generate()
+
+      {:ok, _effect} =
+        %Effect{}
+        |> Effect.changeset(%{
+          id: effect_id,
+          agent_id: agent.id,
+          idempotency_key: Ecto.UUID.generate(),
+          effect_type: "tool_call",
+          params: %{"tool" => "time", "arguments" => %{}},
+          status: "claimed",
+          claimed_by: Atom.to_string(node()),
+          claimed_at: DateTime.utc_now()
+        })
+        |> Repo.insert()
+
+      assert {:ok, %{stopped_at: %DateTime{}}} = Runtime.stop_agent(agent.id)
+
+      effect = Repo.get!(Effect, effect_id)
+      assert effect.status == "failed"
+      assert effect.error == "effect_outcome_ambiguous"
+      assert effect.result_envelope["status"] == "error"
+      assert effect.claimed_by == nil
+      assert effect.claimed_at == nil
+      assert effect.retry_after == nil
+    end
+
     test "accepts custom reason" do
       {:ok, agent} =
         Agents.create_agent(%{

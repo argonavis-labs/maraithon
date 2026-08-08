@@ -249,4 +249,42 @@ defmodule Maraithon.LLMTest do
                LLM.complete_routing(%{"messages" => [%{"role" => "user", "content" => "hi"}]})
     end
   end
+
+  test "classifies fast and chat models independently from reasoning" do
+    runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      runtime
+      |> Keyword.put(:llm_model, "reasoning-model")
+      |> Keyword.put(:llm_chat_model, "chat-model")
+      |> Keyword.put(:llm_routing_model, "routing-model")
+      |> Keyword.put(:llm_fast_model, "fast-model")
+    )
+
+    assert LLM.rate_limit_bucket(%{"model" => "chat-model"}) == :chat
+    assert LLM.rate_limit_bucket(%{"model" => "routing-model"}) == :chat
+    assert LLM.rate_limit_bucket(%{"model" => "fast-model"}) == :chat
+    assert LLM.rate_limit_bucket(%{"model" => "reasoning-model"}) == :reasoning
+    assert LLM.rate_limit_bucket(%{"model" => "other-model"}) == :reasoning
+    assert LLM.rate_limit_bucket(%{"model" => ""}) == :default
+  end
+
+  test "keeps aliased chat routing and fast fallbacks in the primary reasoning lane" do
+    runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      runtime
+      |> Keyword.put(:llm_model, "shared-primary")
+      |> Keyword.put(:llm_chat_model, "shared-primary")
+      |> Keyword.put(:llm_routing_model, "shared-primary")
+      |> Keyword.delete(:llm_fast_model)
+    )
+
+    assert LLM.fast_model() == "shared-primary"
+    assert LLM.rate_limit_bucket(%{"model" => "shared-primary"}) == :reasoning
+  end
 end

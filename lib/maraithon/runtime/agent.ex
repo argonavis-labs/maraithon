@@ -18,6 +18,7 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.OperatorEvents
   alias Maraithon.OperatorEvents.OperatorEvent
   alias Maraithon.Runtime.Dispatch
+  alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Runtime.Scheduler
   alias Maraithon.Runtime.Snapshot
   alias Maraithon.UserMemory
@@ -28,8 +29,15 @@ defmodule Maraithon.Runtime.Agent do
   @default_llm_effect_timeout_ms 900_000
   @effect_timeout_buffer_ms 10_000
   @orphaned_effect_reason "agent_recovered_without_effect_continuation"
+  @orphaned_run_reason "agent_recovered_without_run_continuation"
+  @stopped_effect_reason "agent_stopped_without_effect_continuation"
+  @stopped_run_reason "agent_stopped_without_run_continuation"
+  @terminated_effect_reason "agent_process_terminated_without_effect_continuation"
+  @terminated_run_reason "agent_process_terminated_without_run_continuation"
+  @abandoned_result_reason "effect_result_continuation_lost"
   @global_register_retry_ms 25
   @global_register_retries 80
+  @recovery_retry_ms 5_000
   @max_deferred_messages 200
   @periodic_wakeup_scope {"_schedule_key", "agent_periodic_wakeup"}
   @periodic_wakeup_opts [include_legacy_empty_payload: true]
@@ -88,23 +96,31 @@ defmodule Maraithon.Runtime.Agent do
 
   @impl true
   def init(agent) do
+    Process.flag(:trap_exit, true)
+
     case register_global_name(agent.id) do
       :ok ->
-        Logger.metadata(agent_reference: Maraithon.Redaction.fingerprint(agent.id))
-        Logger.info("Agent initializing", behavior: agent.behavior)
+        case Agents.begin_runtime_agent_recovery(agent.id) do
+          {:ok, recovery_agent} ->
+            Logger.metadata(agent_reference: Maraithon.Redaction.fingerprint(agent.id))
+            Logger.info("Agent initializing", behavior: recovery_agent.behavior)
 
-        data = %__MODULE__{
-          agent_id: agent.id,
-          config: agent.config,
-          sequence_num: 0,
-          pending_effects: %{},
-          handled_jobs: MapSet.new(),
-          started_at: DateTime.utc_now(),
-          deferred_messages: []
-        }
+            data = %__MODULE__{
+              agent_id: recovery_agent.id,
+              config: recovery_agent.config,
+              sequence_num: 0,
+              pending_effects: %{},
+              handled_jobs: MapSet.new(),
+              started_at: DateTime.utc_now(),
+              deferred_messages: []
+            }
 
-        # Start in recovering state to load any existing state
-        {:ok, :recovering, data, [{:next_event, :internal, {:init, agent}}]}
+            {:ok, :recovering, data, [{:next_event, :internal, {:init, recovery_agent}}]}
+
+          {:error, _reason} ->
+            :global.unregister_name({:maraithon_agent, agent.id})
+            :ignore
+        end
 
       {:error, _reason} ->
         # Another process already owns this agent globally. Return :ignore so a
@@ -112,6 +128,16 @@ defmodule Maraithon.Runtime.Agent do
         # to restart — otherwise a re-register race would loop.
         :ignore
     end
+  end
+
+  @impl true
+  def terminate(_reason, _state, data) do
+    case close_terminated_effects(data) do
+      {:ok, _cancelled_count} -> close_terminated_run(data)
+      {:error, _reason} -> :ok
+    end
+
+    :ok
   end
 
   # ==========================================================================
@@ -123,13 +149,59 @@ defmodule Maraithon.Runtime.Agent do
     {:keep_state, data}
   end
 
-  def recovering(:internal, {:init, agent}, data) do
+  def recovering(:internal, {:init, startup_agent}, data) do
+    agent =
+      case Agents.get_agent(startup_agent.id, include_removed: true) do
+        %{status: status, install_status: "enabled"} = persisted
+        when status in ["recovering", "running", "degraded"] ->
+          persisted
+
+        _missing_or_inactive ->
+          exit(:normal)
+      end
+
     # Checkpoints intentionally capture only idle behavior state. Any active
     # outbox rows therefore belong to a process incarnation whose continuation
     # cannot be restored safely. Cancel them before this incarnation can start
     # another cycle; EffectRunner's claim fencing discards any late worker.
-    _cancelled_count = cancel_active_effects(agent.id, @orphaned_effect_reason)
+    with {:ok, _cancelled_count} <- cancel_active_effects(agent.id, @orphaned_effect_reason),
+         :ok <- reconcile_persisted_active_run(agent) do
+      finish_recovery(agent, data)
+    else
+      {:error, reason} ->
+        Logger.warning("Agent recovery deferred while durable cleanup is incomplete",
+          agent_reference: Maraithon.Redaction.fingerprint(agent.id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
 
+        {:keep_state, data, [{{:timeout, :recovery_retry}, @recovery_retry_ms, :retry_recovery}]}
+    end
+  end
+
+  def recovering({:timeout, :recovery_retry}, :retry_recovery, data) do
+    case Agents.get_agent(data.agent_id, include_removed: true) do
+      nil -> {:stop, :normal, data}
+      agent -> recovering(:internal, {:init, agent}, data)
+    end
+  end
+
+  def recovering(:info, {:agent_dispatch, {:control, :stop, reason}}, data) do
+    stop_agent(reason, data)
+  end
+
+  def recovering(:info, {:control, :stop, reason}, data) do
+    stop_agent(reason, data)
+  end
+
+  def recovering(:info, {:agent_dispatch, msg}, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def recovering(:info, msg, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  defp finish_recovery(agent, data) do
     agent_config = enrich_config_with_package_manifest(agent)
 
     # Load behavior module
@@ -183,6 +255,10 @@ defmodule Maraithon.Runtime.Agent do
         current_run_id: nil
     }
 
+    expose_recovered_agent(agent, agent_config, subscriptions, data)
+  end
+
+  defp expose_recovered_agent(agent, agent_config, subscriptions, data) do
     # Replace legacy recurring timers before exposing this process to durable
     # dispatch. Otherwise Scheduler recovery can enqueue every overdue legacy
     # wakeup before the scoped replacement has a chance to cancel them.
@@ -190,7 +266,6 @@ defmodule Maraithon.Runtime.Agent do
     schedule_checkpoint(data)
     schedule_next_wakeup(data)
 
-    # Subscribe only after recurring timers have converged to one active row.
     :ok = Dispatch.subscribe(agent.id)
 
     Enum.each(subscriptions, fn topic ->
@@ -198,24 +273,25 @@ defmodule Maraithon.Runtime.Agent do
       Logger.info("Subscribed to topic", topic: topic)
     end)
 
-    # Emit started event (capture updated data with new sequence_num)
-    data =
-      emit_event(data, "agent_started", %{
-        behavior: agent.behavior,
-        config: redact_runtime_config(agent_config)
-      })
+    case Agents.finish_runtime_agent_recovery(agent.id) do
+      {:ok, _running_agent} ->
+        data =
+          emit_event(data, "agent_started", %{
+            behavior: agent.behavior,
+            config: redact_runtime_config(agent_config)
+          })
 
-    # Messages that arrived during recovery are drained in idle(:enter).
-    Logger.info("Agent recovered, transitioning to idle")
-    {:next_state, :idle, data}
-  end
+        Logger.info("Agent recovered, transitioning to idle")
+        {:next_state, :idle, data}
 
-  def recovering(:info, {:agent_dispatch, msg}, data) do
-    {:keep_state, defer_message(data, msg)}
-  end
+      {:error, reason} ->
+        Logger.warning("Agent recovery activation was fenced",
+          agent_reference: Maraithon.Redaction.fingerprint(agent.id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
 
-  def recovering(:info, msg, data) do
-    {:keep_state, defer_message(data, msg)}
+        {:keep_state, data, [{{:timeout, :recovery_retry}, @recovery_retry_ms, :retry_recovery}]}
+    end
   end
 
   # ==========================================================================
@@ -318,6 +394,11 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
+  def idle(:info, {:effect_result, effect_id, _result}, data) do
+    data = reconcile_abandoned_terminal_result(effect_id, data, false)
+    {:keep_state, data}
+  end
+
   def idle(:info, _msg, data) do
     Logger.debug("Idle received an unhandled message")
     {:keep_state, data}
@@ -382,6 +463,11 @@ defmodule Maraithon.Runtime.Agent do
     stop_agent(reason, data)
   end
 
+  def working(:info, {:effect_result, effect_id, _result}, data) do
+    reconcile_abandoned_terminal_result(effect_id, data, true)
+    {:keep_state, data}
+  end
+
   def working(:info, _msg, data) do
     Logger.debug("Working received an unhandled message")
     {:keep_state, data}
@@ -403,6 +489,111 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def waiting_effect(:info, {:effect_result, effect_id, result}, data) do
+    if Map.has_key?(data.pending_effects, effect_id) do
+      process_effect_result(effect_id, result, data)
+    else
+      outcome = process_effect_result(effect_id, result, data)
+      reconcile_abandoned_terminal_result(effect_id, data, true)
+      outcome
+    end
+  end
+
+  def waiting_effect(:state_timeout, :effect_timeout, data) do
+    Logger.warning("Effect timeout")
+
+    # The behavior is about to abandon this continuation. Cancel the durable
+    # row before it can be retried, and fence any worker already finishing it.
+    {:ok, _cancelled_count} = cancel_active_effects(data.agent_id, "effect_timeout")
+
+    # R4 (SPEC 07): waiting_effect only ever holds the single in-flight
+    # effect request_effect/2 just registered, and no effect_id is bound in
+    # this clause — clear the whole map so the stale entry stops inflating
+    # pending_effect_timeout_ms/1's Enum.max for every later effect and
+    # leaking across the agent's lifetime.
+    effect_info =
+      case Map.values(data.pending_effects) do
+        [effect_info | _rest] -> effect_info
+        [] -> nil
+      end
+
+    data = %{data | pending_effects: %{}}
+
+    # R3 (SPEC 07): route the timeout through the behavior exactly like the
+    # {:error, reason} effect_result branch above, so the waiting skill gets
+    # its handle_effect_error/4 turn and a mid-cycle timeout can resume the
+    # rest of the cycle instead of silently dropping the continuation.
+    # Timeouts never decrement budget — unchanged by this spec. If
+    # pending_effects was unexpectedly empty, fall back to today's behavior.
+    if effect_info != nil and function_exported?(data.behavior_module, :handle_effect_error, 4) do
+      update_current_run_error(data.current_run_id, effect_info, :effect_timeout)
+
+      data =
+        emit_event(data, "effect_failed", %{
+          effect_type: effect_info.type,
+          error: "effect_timeout"
+        })
+
+      context = build_context(data)
+
+      case data.behavior_module.handle_effect_error(
+             effect_info.type,
+             :effect_timeout,
+             data.behavior_state,
+             context
+           ) do
+        {:emit, {event_type, payload}, new_behavior_state} ->
+          data = %{data | behavior_state: new_behavior_state}
+          data = emit_event(data, to_string(event_type), payload)
+          data = complete_current_run(data, event_type, payload)
+          data = clear_transient_context(data)
+          schedule_next_wakeup(data)
+          {:next_state, :idle, data}
+
+        {:idle, new_behavior_state} ->
+          data = %{data | behavior_state: new_behavior_state}
+          data = complete_current_run(data, :idle, %{})
+          data = clear_transient_context(data)
+          schedule_next_wakeup(data)
+          {:next_state, :idle, data}
+
+        {:effect, effect, new_behavior_state} ->
+          data = %{data | behavior_state: new_behavior_state}
+          request_effect(data, effect)
+
+        {:continue, new_behavior_state} ->
+          data = %{data | behavior_state: new_behavior_state}
+          {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
+      end
+    else
+      data = fail_current_run(data, "effect_timeout")
+      data = clear_transient_context(data)
+      schedule_next_wakeup(data)
+      {:next_state, :idle, data}
+    end
+  end
+
+  def waiting_effect(:info, {:wakeup, _, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def waiting_effect(:info, {:pubsub_event, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def waiting_effect(:info, {:message, _, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def waiting_effect(:info, {:control, :stop, reason}, data) do
+    stop_agent(reason, data)
+  end
+
+  def waiting_effect(:info, _msg, data) do
+    Logger.debug("Waiting effect received an unhandled message")
+    {:keep_state, data}
+  end
+
+  defp process_effect_result(effect_id, result, data) do
     case Map.pop(data.pending_effects, effect_id) do
       {nil, _} ->
         Logger.warning("Received result for unknown effect",
@@ -511,101 +702,6 @@ defmodule Maraithon.Runtime.Agent do
             end
         end
     end
-  end
-
-  def waiting_effect(:state_timeout, :effect_timeout, data) do
-    Logger.warning("Effect timeout")
-
-    # The behavior is about to abandon this continuation. Cancel the durable
-    # row before it can be retried, and fence any worker already finishing it.
-    _cancelled_count = cancel_active_effects(data.agent_id, "effect_timeout")
-
-    # R4 (SPEC 07): waiting_effect only ever holds the single in-flight
-    # effect request_effect/2 just registered, and no effect_id is bound in
-    # this clause — clear the whole map so the stale entry stops inflating
-    # pending_effect_timeout_ms/1's Enum.max for every later effect and
-    # leaking across the agent's lifetime.
-    effect_info =
-      case Map.values(data.pending_effects) do
-        [effect_info | _rest] -> effect_info
-        [] -> nil
-      end
-
-    data = %{data | pending_effects: %{}}
-
-    # R3 (SPEC 07): route the timeout through the behavior exactly like the
-    # {:error, reason} effect_result branch above, so the waiting skill gets
-    # its handle_effect_error/4 turn and a mid-cycle timeout can resume the
-    # rest of the cycle instead of silently dropping the continuation.
-    # Timeouts never decrement budget — unchanged by this spec. If
-    # pending_effects was unexpectedly empty, fall back to today's behavior.
-    if effect_info != nil and function_exported?(data.behavior_module, :handle_effect_error, 4) do
-      update_current_run_error(data.current_run_id, effect_info, :effect_timeout)
-
-      data =
-        emit_event(data, "effect_failed", %{
-          effect_type: effect_info.type,
-          error: "effect_timeout"
-        })
-
-      context = build_context(data)
-
-      case data.behavior_module.handle_effect_error(
-             effect_info.type,
-             :effect_timeout,
-             data.behavior_state,
-             context
-           ) do
-        {:emit, {event_type, payload}, new_behavior_state} ->
-          data = %{data | behavior_state: new_behavior_state}
-          data = emit_event(data, to_string(event_type), payload)
-          data = complete_current_run(data, event_type, payload)
-          data = clear_transient_context(data)
-          schedule_next_wakeup(data)
-          {:next_state, :idle, data}
-
-        {:idle, new_behavior_state} ->
-          data = %{data | behavior_state: new_behavior_state}
-          data = complete_current_run(data, :idle, %{})
-          data = clear_transient_context(data)
-          schedule_next_wakeup(data)
-          {:next_state, :idle, data}
-
-        {:effect, effect, new_behavior_state} ->
-          data = %{data | behavior_state: new_behavior_state}
-          request_effect(data, effect)
-
-        {:continue, new_behavior_state} ->
-          data = %{data | behavior_state: new_behavior_state}
-          {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
-      end
-    else
-      data = fail_current_run(data, "effect_timeout")
-      data = clear_transient_context(data)
-      schedule_next_wakeup(data)
-      {:next_state, :idle, data}
-    end
-  end
-
-  def waiting_effect(:info, {:wakeup, _, _, _} = msg, data) do
-    {:keep_state, defer_message(data, msg)}
-  end
-
-  def waiting_effect(:info, {:pubsub_event, _, _} = msg, data) do
-    {:keep_state, defer_message(data, msg)}
-  end
-
-  def waiting_effect(:info, {:message, _, _, _} = msg, data) do
-    {:keep_state, defer_message(data, msg)}
-  end
-
-  def waiting_effect(:info, {:control, :stop, reason}, data) do
-    stop_agent(reason, data)
-  end
-
-  def waiting_effect(:info, _msg, data) do
-    Logger.debug("Waiting effect received an unhandled message")
-    {:keep_state, data}
   end
 
   # ==========================================================================
@@ -877,18 +973,147 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
-  defp cancel_active_effects(agent_id, reason) do
-    {:ok, cancelled_count} = Effects.cancel_active_for_agent(agent_id, reason)
+  defp close_terminated_effects(%{agent_id: agent_id}) when is_binary(agent_id) do
+    case cancel_active_effects(agent_id, @terminated_effect_reason) do
+      {:ok, _cancelled_count} = success ->
+        success
 
-    if cancelled_count > 0 do
-      Logger.info("Cancelled active effects after Agent continuation ended",
-        agent_id: agent_id,
-        cancelled_effect_count: cancelled_count,
-        reason: reason
-      )
+      {:error, reason} = error ->
+        Logger.warning("Agent termination left effect cleanup for recovery",
+          agent_reference: Maraithon.Redaction.fingerprint(agent_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        error
     end
+  end
 
-    cancelled_count
+  defp close_terminated_effects(_data), do: {:ok, 0}
+
+  defp close_terminated_run(%{current_run_id: run_id, agent_id: agent_id})
+       when is_binary(run_id) and is_binary(agent_id) do
+    result =
+      try do
+        with :ok <- reconcile_run_terminal_results(run_id, agent_id),
+             {:ok, summary} <-
+               Agents.cancel_agent_run(run_id, agent_id, @terminated_run_reason),
+             {:ok, _count} <- Effects.acknowledge_terminal_results_for_run(run_id, agent_id) do
+          {:ok, summary}
+        end
+      rescue
+        _error -> {:error, :agent_run_repository_unavailable}
+      catch
+        :exit, _reason -> {:error, :agent_run_repository_unavailable}
+      end
+
+    case result do
+      {:ok, %{cancelled: true, steps: step_count}} ->
+        Logger.info("Cancelled current agent run during process termination",
+          agent_reference: Maraithon.Redaction.fingerprint(agent_id),
+          status: "cancelled",
+          item_count: step_count
+        )
+
+      {:ok, _summary} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to cancel current agent run during process termination",
+          agent_reference: Maraithon.Redaction.fingerprint(agent_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+    end
+  end
+
+  defp close_terminated_run(_data), do: :ok
+
+  defp acknowledge_terminal_effect_result(effect_id, agent_id) do
+    case Effects.acknowledge_terminal_result(effect_id, agent_id) do
+      {:ok, _count} -> :ok
+      {:error, _reason} -> :error
+    end
+  rescue
+    _error -> :error
+  catch
+    :exit, _reason -> :error
+  end
+
+  defp reconcile_abandoned_terminal_result(effect_id, data, active_continuation?) do
+    agent_id = data.agent_id
+
+    case Effects.get_terminal_result(effect_id, agent_id) do
+      nil ->
+        data
+
+      %{agent_run_id: run_id} = effect when is_binary(run_id) ->
+        if active_continuation? and run_id == data.current_run_id do
+          # Keep the result replayable until the whole run reaches a durable
+          # terminal state. A crash can then cancel/reconcile the exact run.
+          data
+        else
+          outcome =
+            with :ok <- reconcile_abandoned_run_step(effect) do
+              case Agents.cancel_agent_run(run_id, agent_id, @abandoned_result_reason) do
+                {:ok, _summary} ->
+                  acknowledge_terminal_effect_result(effect_id, agent_id)
+
+                {:error, :run_not_found} ->
+                  acknowledge_terminal_effect_result(effect_id, agent_id)
+
+                {:error, _reason} ->
+                  :error
+              end
+            end
+
+          if outcome == :ok and run_id == data.current_run_id,
+            do: %{data | current_run_id: nil},
+            else: data
+        end
+
+      _effect_without_run ->
+        _ack_result = acknowledge_terminal_effect_result(effect_id, agent_id)
+        data
+    end
+  rescue
+    _error -> data
+  catch
+    :exit, _reason -> data
+  end
+
+  defp reconcile_abandoned_run_step(effect) do
+    Agents.reconcile_terminal_effect_step(effect)
+  end
+
+  defp cancel_active_effects(agent_id, reason) do
+    result =
+      try do
+        EffectRunner.cancel_active_for_agent(agent_id, reason)
+      rescue
+        _error -> {:error, :effect_repository_unavailable}
+      catch
+        :exit, _reason -> {:error, :effect_repository_unavailable}
+      end
+
+    case result do
+      {:ok, cancelled_count} ->
+        if cancelled_count > 0 do
+          Logger.info("Cancelled active effects after Agent continuation ended",
+            agent_reference: Maraithon.Redaction.fingerprint(agent_id),
+            status: "cancelled",
+            recovered: cancelled_count
+          )
+        end
+
+        {:ok, cancelled_count}
+
+      {:error, reason} = error ->
+        Logger.warning("Failed to cancel active effects after Agent continuation ended",
+          agent_reference: Maraithon.Redaction.fingerprint(agent_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        error
+    end
   end
 
   defp request_effect(data, {effect_type, params}) do
@@ -931,7 +1156,9 @@ defmodule Maraithon.Runtime.Agent do
         try do
           Maraithon.Effects.request_prepared(data.agent_id, effect_type, tool_name, params, %{
             effect_id: effect_id,
-            idempotency_key: idempotency_key
+            idempotency_key: idempotency_key,
+            agent_run_id: data.current_run_id,
+            agent_run_step_id: effect_info.run_step_id
           })
         rescue
           exception ->
@@ -1067,7 +1294,7 @@ defmodule Maraithon.Runtime.Agent do
       started_at: now
     }
 
-    case Agents.start_agent_run(agent, attrs) do
+    case Agents.start_runtime_agent_run(agent, attrs) do
       {:ok, run} ->
         %{data | current_run_id: run.id}
 
@@ -1077,7 +1304,7 @@ defmodule Maraithon.Runtime.Agent do
           failure_code: Maraithon.Redaction.error_class(reason)
         )
 
-        data
+        exit(:agent_run_start_failed)
     end
   end
 
@@ -1176,8 +1403,17 @@ defmodule Maraithon.Runtime.Agent do
       }
       |> maybe_put_error(payload)
 
-    case Agents.complete_agent_run(data.current_run_id, attrs) do
+    run_id = data.current_run_id
+
+    result =
+      with :ok <- reconcile_run_terminal_results(run_id, data.agent_id),
+           {:ok, run} <- Agents.complete_agent_run(run_id, attrs) do
+        {:ok, run}
+      end
+
+    case result do
       {:ok, _run} ->
+        acknowledge_terminal_effect_results_for_run(run_id, data.agent_id)
         %{data | current_run_id: nil}
 
       {:error, reason} ->
@@ -1187,21 +1423,85 @@ defmodule Maraithon.Runtime.Agent do
           failure_code: Maraithon.Redaction.error_class(reason)
         )
 
-        %{data | current_run_id: nil}
+        data
     end
+  end
+
+  defp reconcile_run_terminal_results(run_id, agent_id) do
+    with {:ok, terminal_results} <- Effects.list_terminal_results_for_run(run_id, agent_id),
+         :ok <- Agents.reconcile_terminal_effect_steps(terminal_results) do
+      :ok
+    end
+  end
+
+  defp reconcile_persisted_active_run(%{active_run_id: nil}), do: :ok
+
+  defp reconcile_persisted_active_run(%{id: agent_id, active_run_id: run_id})
+       when is_binary(agent_id) and is_binary(run_id) do
+    with :ok <- reconcile_run_terminal_results(run_id, agent_id),
+         {:ok, _summary} <- Agents.cancel_agent_run(run_id, agent_id, @orphaned_run_reason),
+         {:ok, _count} <- Effects.acknowledge_terminal_results_for_run(run_id, agent_id) do
+      :ok
+    end
+  end
+
+  defp cancel_current_run(%{current_run_id: nil} = data, _reason), do: data
+
+  defp cancel_current_run(data, reason) do
+    run_id = data.current_run_id
+
+    result =
+      with :ok <- reconcile_run_terminal_results(run_id, data.agent_id),
+           {:ok, summary} <- Agents.cancel_agent_run(run_id, data.agent_id, reason) do
+        {:ok, summary}
+      end
+
+    case result do
+      {:ok, _summary} ->
+        acknowledge_terminal_effect_results_for_run(run_id, data.agent_id)
+        %{data | current_run_id: nil}
+
+      {:error, cancellation_error} ->
+        Logger.warning("Failed to cancel current run during intentional stop",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          failure_code: Maraithon.Redaction.error_class(cancellation_error)
+        )
+
+        data
+    end
+  rescue
+    _error -> data
+  catch
+    :exit, _reason -> data
   end
 
   defp fail_current_run(%{current_run_id: nil} = data, _reason), do: data
 
   defp fail_current_run(data, reason) do
-    _ =
-      Agents.fail_agent_run(data.current_run_id, %{
-        finish_reason: "error",
-        generation_mode: "error",
-        error: Maraithon.Redaction.error_summary(reason)
-      })
+    run_id = data.current_run_id
 
-    %{data | current_run_id: nil}
+    result =
+      with :ok <- reconcile_run_terminal_results(run_id, data.agent_id),
+           {:ok, run} <-
+             Agents.fail_agent_run(run_id, %{
+               error: Maraithon.Redaction.error_summary(reason)
+             }) do
+        {:ok, run}
+      end
+
+    case result do
+      {:ok, _run} ->
+        acknowledge_terminal_effect_results_for_run(run_id, data.agent_id)
+        %{data | current_run_id: nil}
+
+      {:error, failure_reason} ->
+        Logger.warning("Failed to close current run after Agent failure",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          failure_code: Maraithon.Redaction.error_class(failure_reason)
+        )
+
+        data
+    end
   end
 
   defp update_run_step(nil, _attrs), do: :ok
@@ -1676,14 +1976,48 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp stop_agent(reason, data) do
-    data = fail_current_run(data, reason)
-    data = emit_event(data, "agent_stopped", %{reason: reason})
-    # Cancel this agent's scheduled jobs so they don't churn in the scheduler
-    # once the process is gone. Only intentional stops reach here — a crash
-    # bypasses stop_agent and is restarted by the :transient supervisor, which
-    # re-schedules its own heartbeat/checkpoint jobs on recovery.
-    _ = Scheduler.cancel_all(data.agent_id)
+    data =
+      case cancel_active_effects(data.agent_id, @stopped_effect_reason) do
+        {:ok, _cancelled_count} ->
+          cancel_current_run(data, @stopped_run_reason)
+
+        {:error, cancellation_error} ->
+          Logger.warning("Agent stop left run closure for durable recovery",
+            agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+            failure_code: Maraithon.Redaction.error_class(cancellation_error)
+          )
+
+          data
+      end
+
+    data = safely_emit_stop_event(data, reason)
+    safely_cancel_schedules(data.agent_id)
     {:stop, :normal, data}
+  end
+
+  defp acknowledge_terminal_effect_results_for_run(run_id, agent_id) do
+    Effects.acknowledge_terminal_results_for_run(run_id, agent_id)
+  rescue
+    _error -> {:error, :effect_acknowledgement_failed}
+  catch
+    :exit, _reason -> {:error, :effect_acknowledgement_failed}
+  end
+
+  defp safely_emit_stop_event(data, reason) do
+    emit_event(data, "agent_stopped", %{reason: event_label(reason)})
+  rescue
+    _error -> data
+  catch
+    _kind, _reason -> data
+  end
+
+  defp safely_cancel_schedules(agent_id) do
+    Scheduler.cancel_all(agent_id)
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   defp register_global_name(agent_id) do

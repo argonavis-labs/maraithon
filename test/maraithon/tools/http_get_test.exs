@@ -3,142 +3,348 @@ defmodule Maraithon.Tools.HttpGetTest do
 
   alias Maraithon.Tools.HttpGet
 
+  @public_ipv4 {93, 184, 216, 34}
+  @public_ipv6 {0x2606, 0x2800, 0x0220, 0x0001, 0x0248, 0x1893, 0x25C8, 0x1946}
+  @fetch_error "Could not fetch that URL. Check the address and try again."
+
   describe "execute/1" do
     test "returns error when url is missing" do
-      {:error, message} = HttpGet.execute(%{})
-
-      assert message == "url is required"
+      assert {:error, "url is required"} = HttpGet.execute(%{})
     end
 
     test "returns error when url is empty string" do
-      {:error, message} = HttpGet.execute(%{"url" => "   "})
-
-      assert message == "url is required"
+      assert {:error, "url is required"} = HttpGet.execute(%{"url" => "   "})
     end
 
     test "returns error when url is nil" do
-      {:error, message} = HttpGet.execute(%{"url" => nil})
-
-      assert message == "url is required"
+      assert {:error, "url is required"} = HttpGet.execute(%{"url" => nil})
     end
 
-    test "returns error for unsupported scheme" do
-      {:error, message} = HttpGet.execute(%{"url" => "ftp://example.com/file.txt"})
+    test "checks the byte cap and UTF-8 validity before parsing the URL" do
+      assert {:error, "url is too long"} =
+               HttpGet.execute(%{"url" => :binary.copy("a", 2_049)})
 
-      assert message == "url scheme must be http or https"
+      assert {:error, "url must be valid UTF-8"} =
+               HttpGet.execute(%{"url" => <<"http://example.com/", 0xFF>>})
     end
 
-    test "returns error when scheme is missing" do
-      {:error, message} = HttpGet.execute(%{"url" => "example.com/path"})
+    test "rejects control and backslash URL ambiguities after byte and UTF-8 validation" do
+      assert {:error, "url contains invalid characters"} =
+               HttpGet.execute(%{"url" => "http://example.com\\@127.0.0.1/"})
 
-      assert message == "url must include scheme (http or https)"
+      assert {:error, "url contains invalid characters"} =
+               HttpGet.execute(%{"url" => "http://example.com/path\nnext"})
     end
 
-    test "returns error when credentials are included in url" do
-      {:error, message} = HttpGet.execute(%{"url" => "http://user:pass@example.com/private"})
+    test "returns errors for invalid URL forms" do
+      assert {:error, "url scheme must be http or https"} =
+               HttpGet.execute(%{"url" => "ftp://example.com/file.txt"})
 
-      assert message == "url must not include credentials"
+      assert {:error, "url must include scheme (http or https)"} =
+               HttpGet.execute(%{"url" => "example.com/path"})
+
+      assert {:error, "url must not include credentials"} =
+               HttpGet.execute(%{"url" => "http://user:pass@example.com/private"})
+
+      assert {:error, "url host is required"} = HttpGet.execute(%{"url" => "http:///path"})
+
+      assert {:error, "url is invalid"} =
+               HttpGet.execute(%{"url" => "http://example.com:abc/path"})
+
+      assert {:error, "url is invalid"} =
+               HttpGet.execute(%{"url" => "http://[2606:4700:4700::1111]junk/path"})
+
+      assert {:error, "url is invalid"} =
+               HttpGet.execute(%{"url" => "http://example.com/%zz"})
+
+      assert {:error, "url is invalid"} =
+               HttpGet.execute(%{"url" => "http://example.com/path?value=%zz"})
+
+      assert {:error, "url is invalid"} =
+               HttpGet.execute(%{"url" => "http://exa%mple.com/path"})
+
+      assert {:error, "url host must not end with a dot"} =
+               HttpGet.execute(%{"url" => "https://example.com./path"})
     end
 
-    test "fetches URL successfully" do
-      bypass = Bypass.open()
+    test "pins a deterministic validated address while preserving the original hostname" do
+      test_pid = self()
 
-      Bypass.expect_once(bypass, "GET", "/test", fn conn ->
-        Plug.Conn.resp(conn, 200, "Hello World")
-      end)
+      resolver = fn hostname, deadline, clock ->
+        send(test_pid, {:resolved, hostname, deadline, clock.()})
+        {:ok, [@public_ipv6, @public_ipv4]}
+      end
 
-      {:ok, result} = HttpGet.execute(%{"url" => "http://localhost:#{bypass.port}/test"})
+      transport = fn request, deadline, clock ->
+        send(test_pid, {:request, request, deadline, clock.()})
+        {:ok, %{status: 200, body: "Hello World", truncated?: false}}
+      end
 
-      assert result.status == 200
-      assert result.body == "Hello World"
-      assert result.url == "http://localhost:#{bypass.port}/test"
+      assert {:ok, result} =
+               HttpGet.execute(
+                 %{"url" => "http://Example.COM:8080/test?q=ok#ignored"},
+                 resolver: resolver,
+                 transport: transport,
+                 clock: fn -> 100 end,
+                 deadline_ms: 500
+               )
+
+      assert result == %{
+               status: 200,
+               body: "Hello World",
+               url: "http://Example.COM:8080/test"
+             }
+
+      assert_received {:resolved, "Example.COM", 600, 100}
+      assert_received {:request, request, 600, 100}
+      assert request.address == @public_ipv4
+      assert request.hostname == "Example.COM"
+      assert request.scheme == :http
+      assert request.port == 8080
+      assert request.target == "/test?q=ok"
     end
 
-    test "redacts sensitive query parameters in returned url" do
-      bypass = Bypass.open()
+    test "rejects every result when any resolved address is non-global" do
+      resolver = fn _hostname, _deadline, _clock ->
+        {:ok, [@public_ipv4, {127, 0, 0, 1}]}
+      end
 
-      Bypass.expect_once(bypass, "GET", "/test", fn conn ->
-        assert conn.query_string == "token=secret-token&visible=ok"
-        Plug.Conn.resp(conn, 200, "Hello World")
-      end)
+      test_pid = self()
 
-      {:ok, result} =
-        HttpGet.execute(%{
-          "url" => "http://localhost:#{bypass.port}/test?token=secret-token&visible=ok"
-        })
+      transport = fn _request, _deadline, _clock ->
+        send(test_pid, :transport_called)
+        {:ok, %{status: 200, body: "unexpected", truncated?: false}}
+      end
 
-      assert result.url == "http://localhost:#{bypass.port}/test?token=redacted&visible=ok"
-      refute inspect(result) =~ "secret-token"
+      assert {:error, @fetch_error} =
+               HttpGet.execute(%{"url" => "https://example.com"},
+                 resolver: resolver,
+                 transport: transport
+               )
+
+      refute_received :transport_called
     end
 
-    test "handles non-200 status codes" do
-      bypass = Bypass.open()
+    test "rejects representative non-global IPv4 and IPv6 destinations" do
+      addresses = [
+        {0, 0, 0, 0},
+        {10, 0, 0, 1},
+        {100, 64, 0, 1},
+        {127, 0, 0, 1},
+        {169, 254, 169, 254},
+        {172, 16, 0, 1},
+        {192, 168, 0, 1},
+        {224, 0, 0, 1},
+        {0, 0, 0, 0, 0, 0, 0, 1},
+        {0xFC00, 0, 0, 0, 0, 0, 0, 1},
+        {0xFE80, 0, 0, 0, 0, 0, 0, 1}
+      ]
 
-      Bypass.expect_once(bypass, "GET", "/not-found", fn conn ->
-        Plug.Conn.resp(conn, 404, "Not Found")
-      end)
+      for address <- addresses do
+        resolver = fn _hostname, _deadline, _clock -> {:ok, [address]} end
+        test_pid = self()
 
-      {:ok, result} = HttpGet.execute(%{"url" => "http://localhost:#{bypass.port}/not-found"})
+        assert {:error, @fetch_error} =
+                 HttpGet.execute(%{"url" => "http://example.com"},
+                   resolver: resolver,
+                   transport: fn _request, _deadline, _clock ->
+                     send(test_pid, {:transport_called, address})
+                     {:ok, %{status: 200, body: "unexpected", truncated?: false}}
+                   end
+                 )
 
-      assert result.status == 404
-      assert result.body == "Not Found"
+        refute_received {:transport_called, ^address}
+      end
     end
 
-    test "truncates long response body" do
-      bypass = Bypass.open()
+    test "fails closed on DNS errors" do
+      resolver = fn _hostname, _deadline, _clock -> {:error, :dns_timeout} end
 
-      # Create a body longer than 5000 characters
-      long_body = String.duplicate("a", 6000)
+      assert {:error, @fetch_error} =
+               HttpGet.execute(%{"url" => "https://example.com"}, resolver: resolver)
+    end
 
-      Bypass.expect_once(bypass, "GET", "/long", fn conn ->
-        Plug.Conn.resp(conn, 200, long_body)
-      end)
+    test "stops the owner watcher after a successful transport" do
+      test_pid = self()
 
-      {:ok, result} = HttpGet.execute(%{"url" => "http://localhost:#{bypass.port}/long"})
+      _caller =
+        start_supervised!(
+          {Task,
+           fn ->
+             result =
+               HttpGet.execute(%{"url" => "https://example.com"},
+                 resolver: public_resolver(),
+                 transport: fn _request, _deadline, _clock ->
+                   send(test_pid, {:transport_waiting, self()})
+
+                   receive do
+                     :release_transport ->
+                       {:ok, %{status: 200, body: "ok", truncated?: false}}
+                   end
+                 end,
+                 watcher_observer: test_pid
+               )
+
+             send(test_pid, {:http_result, result})
+           end}
+        )
+
+      assert_receive {:transport_watcher_started, watcher}
+      assert_receive {:transport_waiting, transport_worker}
+      watcher_ref = Process.monitor(watcher)
+      send(transport_worker, :release_transport)
+
+      assert_receive {:http_result, {:ok, _result}}
+      assert_receive {:DOWN, ^watcher_ref, :process, ^watcher, :normal}
+    end
+
+    test "enforces the absolute deadline around transport cleanup" do
+      started_at = System.monotonic_time(:millisecond)
+
+      transport = fn _request, _deadline, _clock ->
+        receive do
+          :never -> {:error, :unexpected}
+        after
+          5_000 -> {:error, :transport_timeout}
+        end
+      end
+
+      assert {:error, @fetch_error} =
+               HttpGet.execute(%{"url" => "https://example.com"},
+                 resolver: public_resolver(),
+                 transport: transport,
+                 deadline_ms: 25
+               )
+
+      elapsed_ms = System.monotonic_time(:millisecond) - started_at
+      assert elapsed_ms < 500
+    end
+
+    test "redacts every query value and drops fragments from the returned URL" do
+      assert {:ok, result} =
+               execute_with_response(
+                 "http://example.com/test?X-Amz-Signature=query-secret&visible=ok#access_token=fragment-secret",
+                 %{status: 200, body: "Hello World", truncated?: false}
+               )
+
+      assert result.url == "http://example.com/test"
+
+      refute inspect(result) =~ "query-secret"
+      refute inspect(result) =~ "fragment-secret"
+
+      assert {:ok, opaque_result} =
+               execute_with_response(
+                 "http://example.com/test?super-secret-capability",
+                 %{status: 200, body: "Hello World", truncated?: false}
+               )
+
+      assert opaque_result.url == "http://example.com/test"
+      refute inspect(opaque_result) =~ "super-secret-capability"
+    end
+
+    test "rejects status codes outside the RFC range" do
+      for status <- [99, 600, 999] do
+        assert {:error, @fetch_error} =
+                 execute_with_response("http://example.com/status", %{
+                   status: status,
+                   body: "invalid",
+                   truncated?: false
+                 })
+      end
+    end
+
+    test "returns non-200 and redirect responses without another request" do
+      test_pid = self()
+
+      transport = fn request, _deadline, _clock ->
+        send(test_pid, {:request_target, request.target})
+        {:ok, %{status: 302, body: "Moved", truncated?: false}}
+      end
+
+      assert {:ok, %{status: 302, body: "Moved"}} =
+               HttpGet.execute(%{"url" => "http://example.com/redirect"},
+                 resolver: public_resolver(),
+                 transport: transport
+               )
+
+      assert_received {:request_target, "/redirect"}
+      refute_received {:request_target, _other_target}
+    end
+
+    test "truncates long response text" do
+      assert {:ok, result} =
+               execute_with_response("http://example.com/long", %{
+                 status: 200,
+                 body: String.duplicate("a", 6_000),
+                 truncated?: false
+               })
 
       assert result.status == 200
       assert String.ends_with?(result.body, "... (truncated)")
-      assert String.length(result.body) < 6000
+      assert String.length(result.body) < 6_000
     end
 
-    test "returns error for connection failure" do
-      # Use a port that's definitely not listening
-      {:error, reason} =
-        HttpGet.execute(%{"url" => "http://localhost:1/test?token=secret-token"})
+    test "rejects an oversized or invalid transport body before text processing" do
+      assert {:error, @fetch_error} =
+               execute_with_response("http://example.com/large", %{
+                 status: 200,
+                 body: :binary.copy("a", 20_001),
+                 truncated?: false
+               })
 
-      assert reason == "Could not fetch that URL. Check the address and try again."
-      refute reason =~ "secret-token"
-      refute reason =~ "Req."
+      assert {:error, @fetch_error} =
+               execute_with_response("http://example.com/binary", %{
+                 status: 200,
+                 body: <<"safe", 0xFF, "token=secret">>,
+                 truncated?: false
+               })
+    end
+
+    test "accepts only a valid UTF-8 prefix when the byte-capped body ends mid-codepoint" do
+      assert {:ok, result} =
+               execute_with_response("http://example.com/truncated", %{
+                 status: 200,
+                 body: <<"safe", 0xF0, 0x9F>>,
+                 truncated?: true
+               })
+
+      assert result.body == "safe... (truncated)"
     end
 
     test "redacts sensitive fields in response body text" do
-      bypass = Bypass.open()
-
-      Bypass.expect_once(bypass, "GET", "/secret", fn conn ->
-        Plug.Conn.resp(conn, 200, ~s({"access_token":"secret-token","ok":true}))
-      end)
-
-      {:ok, result} = HttpGet.execute(%{"url" => "http://localhost:#{bypass.port}/secret"})
+      assert {:ok, result} =
+               execute_with_response("http://example.com/secret", %{
+                 status: 200,
+                 body: ~s({"access_token":"secret-token","ok":true}),
+                 truncated?: false
+               })
 
       assert result.body =~ "access_token"
       assert result.body =~ "[redacted]"
       refute result.body =~ "secret-token"
     end
 
-    test "handles JSON response body" do
-      bypass = Bypass.open()
+    test "keeps JSON response bodies as bounded text" do
+      assert {:ok, result} =
+               execute_with_response("https://example.com/json", %{
+                 status: 200,
+                 body: ~s({"key":"value"}),
+                 truncated?: false
+               })
 
-      Bypass.expect_once(bypass, "GET", "/json", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, ~s({"key": "value"}))
-      end)
-
-      {:ok, result} = HttpGet.execute(%{"url" => "http://localhost:#{bypass.port}/json"})
-
-      assert result.status == 200
-      # Body could be string or map depending on how Req parses it
-      assert result.body != nil
+      assert result.body == ~s({"key":"value"})
     end
+  end
+
+  defp execute_with_response(url, response) do
+    HttpGet.execute(%{"url" => url},
+      resolver: public_resolver(),
+      transport: fn _request, _deadline, _clock -> {:ok, response} end,
+      clock: fn -> 0 end
+    )
+  end
+
+  defp public_resolver do
+    fn _hostname, _deadline, _clock -> {:ok, [@public_ipv4]} end
   end
 end

@@ -22,6 +22,7 @@ defmodule Maraithon.Agents.Agent do
     field :install_status, :string, default: "enabled"
     field :started_at, :utc_datetime_usec
     field :stopped_at, :utc_datetime_usec
+    field :active_run_id, :binary_id
     field :installed_at, :utc_datetime_usec
     field :removed_at, :utc_datetime_usec
     field :connector_grants, :map, default: %{}
@@ -61,7 +62,7 @@ defmodule Maraithon.Agents.Agent do
     |> maybe_put_system_field(attrs, :agent_package_id)
     |> maybe_put_system_field(attrs, :agent_package_version_id)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:status, ["stopped", "running", "degraded", "terminated"])
+    |> validate_inclusion(:status, ["stopped", "recovering", "running", "degraded", "terminated"])
     |> validate_inclusion(:install_status, [
       "enabled",
       "paused",
