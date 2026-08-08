@@ -6,7 +6,9 @@ defmodule MaraithonWeb.ApiErrorCopy do
 
   @companion_context_recovery "Maraithon will keep using the last successful source check until the next check."
 
-  @mobile_code_errors ~w(not_found invalid_email invalid_or_expired_code invalid_or_expired_link)a
+  @mobile_code_errors ~w(
+    not_found invalid_email invalid_or_expired_code invalid_or_expired_link email_suppressed
+  )a
   @mobile_chat_code_errors ~w(
     not_found
     assistant_run_in_progress
@@ -300,6 +302,10 @@ defmodule MaraithonWeb.ApiErrorCopy do
   defp mobile_message(:invalid_email), do: "Enter a valid email address."
   defp mobile_message(:invalid_or_expired_code), do: "Sign-in code is invalid or expired."
   defp mobile_message(:invalid_or_expired_link), do: "Sign-in link is invalid or expired."
+
+  defp mobile_message(:email_suppressed) do
+    "That email address cannot receive sign-in messages. Use another address or contact support."
+  end
 
   defp mobile_chat_message(:not_found) do
     "That conversation is no longer available. Refresh conversations to see current threads."

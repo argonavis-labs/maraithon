@@ -52,21 +52,20 @@ defmodule Maraithon.Push.APNS do
         {:error, :not_configured}
 
       {:ok, config} ->
-        with {:ok, {url, headers, body}} <- build_request(config, device_token, payload, opts) do
+        with {:ok, {url, headers, body, jwt_generation}} <-
+               build_request(config, device_token, payload, opts) do
           case post_once(url, headers, body) do
             {:ok, 200, _body} ->
               :ok
 
             {:ok, status, response_body} ->
-              classify_failure(status, response_body)
+              classify_failure(status, response_body, jwt_generation)
 
-            {:error, {:delivery_unknown, transport_class}} ->
-              Logger.warning("APNs delivery result is unknown",
-                failure_code: "delivery_unknown",
-                transport_class: transport_class
-              )
-
+            {:error, :delivery_unknown} ->
               {:error, :delivery_unknown}
+
+            {:error, reason} ->
+              {:error, reason}
           end
         end
     end
@@ -74,17 +73,20 @@ defmodule Maraithon.Push.APNS do
 
   defp build_request(config, device_token, payload, opts) do
     try do
+      {jwt, jwt_generation} = provider_jwt(config)
+
       headers =
         [
-          {"authorization", "bearer " <> provider_jwt(config)},
+          {"authorization", "bearer " <> jwt},
           {"apns-topic", config.topic},
           {"apns-push-type", "alert"},
-          {"apns-priority", "10"}
+          {"apns-priority", "10"},
+          {"apns-id", Ecto.UUID.generate()}
         ]
         |> maybe_collapse_id(opts[:collapse_id])
 
       url = "#{host(config)}/3/device/#{device_token}"
-      {:ok, {url, headers, Jason.encode!(payload)}}
+      {:ok, {url, headers, Jason.encode!(payload), jwt_generation}}
     rescue
       _exception -> {:error, :request_rejected}
     catch
@@ -97,8 +99,20 @@ defmodule Maraithon.Push.APNS do
   # so never issue a second external POST after crossing this boundary.
   defp post_once(url, headers, body) do
     case safe_post(url, headers, body) do
+      {:error, {:before_send, reason}} ->
+        Logger.debug("APNs transport preparation failed",
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        {:error, :request_rejected}
+
       {:error, reason} ->
-        {:error, {:delivery_unknown, Maraithon.Redaction.error_class(reason)}}
+        Logger.debug("APNs transport result is ambiguous",
+          failure_code: "delivery_unknown",
+          transport_class: Maraithon.Redaction.error_class(reason)
+        )
+
+        {:error, :delivery_unknown}
 
       result ->
         result
@@ -159,23 +173,71 @@ defmodule Maraithon.Push.APNS do
   defp provider_jwt(config) do
     now = System.system_time(:second)
 
-    case :persistent_term.get(@jwt_cache_key, nil) do
-      {jwt, issued_at, key_id}
-      when now - issued_at < @jwt_ttl_seconds and key_id == config.key_id ->
-        jwt
+    case cached_provider_jwt(config, now) do
+      {:ok, jwt_and_generation} ->
+        jwt_and_generation
 
-      _stale_or_missing ->
-        jwt = mint_jwt(config, now)
-        :persistent_term.put(@jwt_cache_key, {jwt, now, config.key_id})
-        jwt
+      :miss ->
+        with_jwt_cache_lock(fn ->
+          locked_now = System.system_time(:second)
+
+          case cached_provider_jwt(config, locked_now) do
+            {:ok, jwt_and_generation} ->
+              jwt_and_generation
+
+            :miss ->
+              jwt = mint_jwt(config, locked_now)
+              generation = System.unique_integer([:positive, :monotonic])
+
+              :persistent_term.put(
+                @jwt_cache_key,
+                {jwt, locked_now, config.key_id, generation}
+              )
+
+              {jwt, generation}
+          end
+        end)
     end
   end
 
-  # Public for the 403 InvalidProviderToken path and tests.
+  defp cached_provider_jwt(config, now) do
+    case :persistent_term.get(@jwt_cache_key, nil) do
+      {jwt, issued_at, key_id, generation}
+      when is_binary(jwt) and is_integer(issued_at) and is_integer(generation) and
+             now - issued_at < @jwt_ttl_seconds and key_id == config.key_id ->
+        {:ok, {jwt, generation}}
+
+      _stale_or_missing ->
+        :miss
+    end
+  end
+
+  # Public for test/setup cache isolation. Provider rejection uses the
+  # generation-checked private form below so an old response cannot erase a
+  # newer token minted by another concurrent send.
   @doc false
   def reset_jwt_cache do
-    :persistent_term.erase(@jwt_cache_key)
+    with_jwt_cache_lock(fn -> :persistent_term.erase(@jwt_cache_key) end)
     :ok
+  end
+
+  defp reset_jwt_cache(rejected_generation) when is_integer(rejected_generation) do
+    with_jwt_cache_lock(fn ->
+      case :persistent_term.get(@jwt_cache_key, nil) do
+        {_cached_jwt, _issued_at, _key_id, cached_generation}
+        when cached_generation == rejected_generation ->
+          :persistent_term.erase(@jwt_cache_key)
+
+        _newer_or_missing ->
+          :ok
+      end
+    end)
+
+    :ok
+  end
+
+  defp with_jwt_cache_lock(fun) when is_function(fun, 0) do
+    :global.trans({@jwt_cache_key, self()}, fun)
   end
 
   defp mint_jwt(config, issued_at) do
@@ -260,7 +322,7 @@ defmodule Maraithon.Push.APNS do
   defp host(%{environment: "sandbox"}), do: @sandbox_host
   defp host(_config), do: @production_host
 
-  defp classify_failure(status, response_body) do
+  defp classify_failure(status, response_body, request_jwt_generation) do
     reason = decode_reason(response_body)
 
     cond do
@@ -270,15 +332,19 @@ defmodule Maraithon.Push.APNS do
 
       status == 403 and reason in ["InvalidProviderToken", "ExpiredProviderToken"] ->
         # A bad cached token must not poison every send for 50 minutes.
-        reset_jwt_cache()
-        Logger.warning("APNs rejected provider token", failure_code: "provider_token_rejected")
+        reset_jwt_cache(request_jwt_generation)
+        Logger.debug("APNs rejected provider token", failure_code: "provider_token_rejected")
         {:error, :retryable}
 
       status == 429 or status >= 500 ->
         {:error, :retryable}
 
       true ->
-        Logger.warning("APNs rejected push", status: status, failure_code: "push_rejected")
+        Logger.debug("APNs rejected push",
+          response_status: status,
+          failure_code: "push_rejected"
+        )
+
         {:error, {:apns, status, :redacted}}
     end
   end

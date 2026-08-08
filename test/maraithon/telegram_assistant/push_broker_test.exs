@@ -349,8 +349,7 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
     assert_received {:apns_send, _url, _payload}
     refute_received {:apns_send, _url, _payload}
 
-    assert {:ok, %{decision: "suppressed", reason: "duplicate"}} =
-             PushBroker.deliver(attrs)
+    assert {:error, :delivery_unknown} = PushBroker.deliver(attrs)
 
     refute_received {:apns_send, _url, _payload}
   end
@@ -395,8 +394,7 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
     assert %PushReceipt{decision: "delivery_unknown"} =
              Maraithon.TelegramAssistant.push_receipt_for(user_id, attrs.dedupe_key)
 
-    assert {:ok, %{decision: "suppressed", reason: "duplicate"}} =
-             PushBroker.deliver(attrs)
+    assert {:error, :delivery_unknown} = PushBroker.deliver(attrs)
 
     refute_received {:apns_started, _request_pid, _url, _payload}
   end
@@ -424,8 +422,7 @@ defmodule Maraithon.TelegramAssistant.PushBrokerTest do
     stale_at = DateTime.utc_now() |> DateTime.add(-16 * 60, :second)
     sending |> Ecto.Changeset.change(inserted_at: stale_at) |> Repo.update!()
 
-    assert {:ok, %{decision: "suppressed", reason: "duplicate"}} =
-             PushBroker.deliver(attrs)
+    assert {:error, :delivery_unknown} = PushBroker.deliver(attrs)
 
     refute_received {:apns_send, _url, _payload}
 

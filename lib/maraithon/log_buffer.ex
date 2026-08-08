@@ -158,17 +158,25 @@ defmodule Maraithon.LogBuffer do
       |> inspect(pretty: false, limit: 20, printable_limit: 500)
       |> Maraithon.Redaction.redact_string()
 
-  defp normalize_metadata(metadata) when is_map(metadata) do
-    Enum.reduce(metadata, %{}, fn {key, value}, acc ->
+  defp normalize_metadata(metadata) when is_map(metadata) or is_list(metadata) do
+    metadata
+    |> Enum.take(128)
+    |> Enum.reduce(%{}, fn {key, value}, acc ->
       case normalize_metadata_key(key) do
         nil ->
           acc
 
         safe_key ->
-          safe_value = Maraithon.Redaction.log_metadata_value(safe_key, value)
-          Map.put(acc, safe_key, normalize_metadata_value(safe_value))
+          if Maraithon.SafeLogMetadata.structured_key?(safe_key) do
+            safe_value = Maraithon.Redaction.log_metadata_value(safe_key, value)
+            Map.put(acc, safe_key, normalize_metadata_value(safe_value))
+          else
+            acc
+          end
       end
     end)
+  rescue
+    _error -> %{}
   end
 
   defp normalize_metadata(_), do: %{}

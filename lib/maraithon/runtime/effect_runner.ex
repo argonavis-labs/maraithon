@@ -126,7 +126,7 @@ defmodule Maraithon.Runtime.EffectRunner do
 
         if effect && reason != :normal do
           Logger.error("Effect task crashed",
-            effect_id: effect_id,
+            effect_reference: Maraithon.Redaction.fingerprint(effect_id),
             failure_code: Maraithon.Redaction.error_class(reason)
           )
 
@@ -266,7 +266,10 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp execute_effect(effect) do
-    Logger.info("Executing effect #{effect.id}", effect_id: effect.id, type: effect.effect_type)
+    Logger.info("Executing effect",
+      effect_reference: Maraithon.Redaction.fingerprint(effect.id),
+      effect_type: effect.effect_type
+    )
 
     result =
       try do
@@ -281,10 +284,33 @@ defmodule Maraithon.Runtime.EffectRunner do
 
     case result do
       {:ok, data} ->
-        case mark_completed(effect, data) do
-          :ok -> notify_agent(effect.agent_id, effect.id, {:ok, data})
-          :claim_lost -> :ok
-          {:error, _reason} -> :ok
+        case Maraithon.Effects.prepare_result(data) do
+          {:ok, bounded_data} ->
+            case mark_completed(effect, bounded_data) do
+              :ok -> notify_agent(effect.agent_id, effect.id, {:ok, bounded_data})
+              :claim_lost -> :ok
+              {:error, _reason} -> :ok
+            end
+
+            {:ok, bounded_data}
+
+          {:error, :invalid_effect_result} ->
+            reason = :invalid_effect_result
+            attempts = effect.attempts + 1
+
+            Logger.warning("Effect result rejected before persistence",
+              effect_reference: Maraithon.Redaction.fingerprint(effect.id),
+              effect_type: effect.effect_type,
+              failure_code: "invalid_effect_result"
+            )
+
+            case mark_failed(effect, reason, attempts) do
+              :ok -> notify_agent(effect.agent_id, effect.id, {:error, reason})
+              :claim_lost -> :ok
+              {:error, _reason} -> :ok
+            end
+
+            {:error, reason}
         end
 
       {:error, reason} ->
@@ -299,9 +325,9 @@ defmodule Maraithon.Runtime.EffectRunner do
             {:error, _reason} -> :ok
           end
         end
-    end
 
-    result
+        {:error, reason}
+    end
   end
 
   defp execute_with_command(effect) do
@@ -309,7 +335,7 @@ defmodule Maraithon.Runtime.EffectRunner do
       command_module.execute(effect)
     else
       {:error, :unknown_effect_type} ->
-        {:error, "unknown_effect_type"}
+        {:error, :unknown_effect_type}
     end
   end
 
@@ -317,6 +343,8 @@ defmodule Maraithon.Runtime.EffectRunner do
     update_claimed_effect(effect, "mark completed",
       status: "completed",
       result: result,
+      error: nil,
+      retry_after: nil,
       claimed_by: nil,
       claimed_at: nil
     )
@@ -341,6 +369,7 @@ defmodule Maraithon.Runtime.EffectRunner do
       status: "failed",
       error: Maraithon.Redaction.error_summary(reason),
       attempts: attempts,
+      retry_after: nil,
       claimed_by: nil,
       claimed_at: nil
     )
@@ -365,8 +394,8 @@ defmodule Maraithon.Runtime.EffectRunner do
 
       {:ok, {0, _rows}} ->
         Logger.info("Discarded late effect result after claim ownership changed",
-          effect_id: effect.id,
-          operation: operation
+          effect_reference: Maraithon.Redaction.fingerprint(effect.id),
+          failure_code: "claim_lost"
         )
 
         :claim_lost
@@ -376,10 +405,10 @@ defmodule Maraithon.Runtime.EffectRunner do
     end
   end
 
-  defp update_claimed_effect(%Effect{} = effect, operation, _updates) do
+  defp update_claimed_effect(%Effect{} = effect, _operation, _updates) do
     Logger.warning("Discarded effect result without claim ownership",
-      effect_id: effect.id,
-      operation: operation
+      effect_reference: Maraithon.Redaction.fingerprint(effect.id),
+      failure_code: "claim_lost"
     )
 
     :claim_lost
@@ -409,8 +438,16 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp terminal_effect_error?({:insufficient_quota, _message}), do: true
   defp terminal_effect_error?(:insufficient_quota), do: true
-  defp terminal_effect_error?({:invalid_request, _detail}), do: true
+  defp terminal_effect_error?({:invalid_request, _summary}), do: true
   defp terminal_effect_error?(:invalid_request), do: true
+  defp terminal_effect_error?("invalid_request"), do: true
+  defp terminal_effect_error?(:invalid_effect_result), do: true
+  defp terminal_effect_error?(:unknown_effect_type), do: true
+  defp terminal_effect_error?("unknown_effect_type"), do: true
+  defp terminal_effect_error?(:unknown_tool), do: true
+  defp terminal_effect_error?({:tool_policy_denied, _decision}), do: true
+  defp terminal_effect_error?({:tool_policy_needs_confirmation, _decision}), do: true
+  defp terminal_effect_error?("unknown_tool:" <> _tool_name), do: true
   defp terminal_effect_error?(_reason), do: false
 
   defp no_attempt_deferrable_effect_error?(
@@ -438,7 +475,7 @@ defmodule Maraithon.Runtime.EffectRunner do
       )
 
     if count > 0 do
-      Logger.info("Reclaimed #{count} stale effects")
+      Logger.info("Reclaimed stale effects", recovered: count)
     end
   end
 

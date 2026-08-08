@@ -335,27 +335,35 @@ defmodule Maraithon.Behaviors.RepoPlanner do
     end
   end
 
-  defp handle_planning_tool_result(result, state) do
+  defp handle_planning_tool_result(result, state) when is_map(result) do
     task = state.current_task
+    content = Map.get(result, :content) || Map.get(result, "content")
+    path = Map.get(result, :path) || Map.get(result, "path")
 
-    case result do
-      {:ok, %{content: content, path: path}} ->
-        task = put_in(task.gathered_files[path], content)
-        state = %{state | current_task: task}
-        {:continue, state}
-
-      {:ok, %{content: _content}} ->
-        # Some tools might return content without explicit path
-        {:continue, state}
-
-      {:error, _reason} ->
-        # Skip files that can't be read
-        {:continue, state}
-
-      _ ->
-        {:continue, state}
+    if is_binary(content) and is_binary(path) do
+      task = put_in(task.gathered_files[path], content)
+      state = %{state | current_task: task}
+      {:continue, state}
+    else
+      {:continue, state}
     end
   end
+
+  defp handle_planning_tool_result(_result, state), do: {:continue, state}
+
+  @impl true
+  def handle_effect_error(:tool_call, _reason, %{phase: :planning} = state, _context),
+    do: {:continue, state}
+
+  def handle_effect_error(:llm_call, reason, %{phase: phase} = state, _context)
+      when phase in [:indexing, :planning] do
+    next_state = %{state | phase: :ready, current_task: nil, current_file: nil}
+
+    {:emit, {:planning_failed, %{failure_code: Maraithon.Redaction.error_class(reason)}},
+     next_state}
+  end
+
+  def handle_effect_error(_effect_type, _reason, state, _context), do: {:idle, state}
 
   # ==========================================================================
   # Prompt Builders

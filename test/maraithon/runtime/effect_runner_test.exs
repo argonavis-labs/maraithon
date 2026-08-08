@@ -77,6 +77,27 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
     end
   end
 
+  defmodule OversizedResultProvider do
+    @moduledoc false
+
+    def complete(_params) do
+      {:ok,
+       %{
+         content: String.duplicate("x", 256_001),
+         model: "oversized-result-v1",
+         tokens_in: 1,
+         tokens_out: 1,
+         finish_reason: "stop",
+         usage: %{
+           input_tokens: 1,
+           output_tokens: 1,
+           total_tokens: 2,
+           total_cost: 0.0
+         }
+       }}
+    end
+  end
+
   defmodule BlockingProvider do
     @moduledoc false
 
@@ -414,9 +435,15 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       # Create a tool call effect for the "time" tool
       {:ok, effect_id} =
-        Maraithon.Effects.request(agent.id, "tool_call", "time", %{
-          "args" => %{}
-        })
+        Maraithon.Effects.request(agent.id, "tool_call", "time", %{})
+
+      Repo.update_all(
+        from(effect in Maraithon.Effects.Effect, where: effect.id == ^effect_id),
+        set: [
+          error: "transient_failure",
+          retry_after: DateTime.add(DateTime.utc_now(), -1, :second)
+        ]
+      )
 
       {:ok, pid} = EffectRunner.start_link([])
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
@@ -425,7 +452,9 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       Process.sleep(200)
 
       updated_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, effect_id)
-      assert updated_effect.status in ["claimed", "completed"]
+      assert updated_effect.status == "completed"
+      assert updated_effect.error == nil
+      assert updated_effect.retry_after == nil
 
       GenServer.stop(pid, :normal)
     end
@@ -463,8 +492,9 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       updated_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, effect_id)
 
-      # Should be retrying (pending) or failed after exhausting retries
-      assert updated_effect.status in ["pending", "failed", "claimed"]
+      assert updated_effect.status == "failed"
+      assert updated_effect.attempts == 1
+      assert updated_effect.retry_after == nil
 
       GenServer.stop(pid, :normal)
     end
@@ -705,7 +735,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
     3. Set retry_after timestamp
     4. Reset status to "pending"
     """
-    test "retries effect when attempts < max_attempts", %{agent: agent} do
+    test "fails an unknown effect type after one deterministic attempt", %{agent: agent} do
       case Process.whereis(EffectRunner) do
         nil -> :ok
         pid -> GenServer.stop(pid, :normal)
@@ -727,8 +757,9 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       updated_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, effect_id)
 
-      # Should have incremented attempts and be pending retry
-      assert updated_effect.attempts >= 1 or updated_effect.status in ["pending", "claimed"]
+      assert updated_effect.status == "failed"
+      assert updated_effect.attempts == 1
+      assert updated_effect.retry_after == nil
 
       GenServer.stop(pid, :normal)
     end
@@ -821,7 +852,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       GenServer.stop(pid, :normal)
     end
 
-    test "fails invalid llm requests without scheduling retries", %{agent: agent} do
+    test "fails deterministic invalid llm requests after one attempt", %{agent: agent} do
       case Process.whereis(EffectRunner) do
         nil -> :ok
         pid -> GenServer.stop(pid, :normal)
@@ -830,10 +861,9 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       :ok = Dispatch.subscribe(agent.id)
 
       {:ok, effect_id} =
-        Effects.request(agent.id, "llm_call", nil, %{
-          "messages" => [
-            %{"role" => "user", "content" => String.duplicate("x", 129_000)}
-          ],
+        Maraithon.Effects.request(agent.id, "llm_call", nil, %{
+          "messages" =>
+            for(index <- 1..65, do: %{"role" => "user", "content" => "message #{index}"}),
           "max_tokens" => 100
         })
 
@@ -843,17 +873,58 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       send(pid, :poll)
 
       assert_receive {:agent_dispatch,
-                      {:effect_result, ^effect_id,
-                       {:error, {:invalid_request, %{reason: "request_exceeds_budget"}}}}},
+                      {:effect_result, ^effect_id, {:error, {:invalid_request, _summary}}}},
                      1_000
 
       _ = :sys.get_state(pid)
-      updated_effect = Maraithon.Repo.get!(Effect, effect_id)
-
+      updated_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, effect_id)
       assert updated_effect.status == "failed"
       assert updated_effect.attempts == 1
       assert updated_effect.retry_after == nil
       assert updated_effect.error == "invalid_request"
+    end
+
+    test "fails oversized successful results without retrying the effect", %{agent: agent} do
+      case Process.whereis(EffectRunner) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      original_runtime_config = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        Keyword.put(original_runtime_config, :llm_provider, OversizedResultProvider)
+      )
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.Runtime, original_runtime_config)
+      end)
+
+      :ok = Dispatch.subscribe(agent.id)
+
+      {:ok, effect_id} =
+        Effects.request(agent.id, "llm_call", nil, %{
+          "messages" => [%{"role" => "user", "content" => "Hello"}],
+          "max_tokens" => 100
+        })
+
+      pid = start_supervised!({EffectRunner, []})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+      send(pid, :poll)
+
+      assert_receive {:agent_dispatch,
+                      {:effect_result, ^effect_id, {:error, :invalid_effect_result}}},
+                     1_000
+
+      _ = :sys.get_state(pid)
+      updated_effect = Repo.get!(Effect, effect_id)
+      assert updated_effect.status == "failed"
+      assert updated_effect.attempts == 1
+      assert updated_effect.retry_after == nil
+      assert updated_effect.result == nil
+      assert updated_effect.error == "invalid_effect_result"
     end
 
     test "does not claim llm effects while provider cooldown is active", %{agent: agent} do
@@ -1035,10 +1106,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       # Create a tool call effect with a non-existent tool
       {:ok, effect_id} =
-        Maraithon.Effects.request(agent.id, "tool_call", "nonexistent_tool", %{
-          "tool" => "nonexistent_tool",
-          "args" => %{}
-        })
+        Maraithon.Effects.request(agent.id, "tool_call", "nonexistent_tool", %{})
 
       {:ok, pid} = EffectRunner.start_link([])
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
@@ -1048,8 +1116,9 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       updated_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, effect_id)
 
-      # Should be retrying or failed
-      assert updated_effect.status in ["pending", "failed", "claimed"]
+      assert updated_effect.status == "failed"
+      assert updated_effect.attempts == 1
+      assert updated_effect.retry_after == nil
 
       GenServer.stop(pid, :normal)
     end

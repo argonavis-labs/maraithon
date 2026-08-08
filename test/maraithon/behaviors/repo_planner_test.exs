@@ -453,7 +453,7 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
           }
       }
 
-      result = {:ok, %{content: "file content", path: "/path/to/file.ex"}}
+      result = %{content: "file content", path: "/path/to/file.ex"}
 
       {:continue, new_state} =
         RepoPlanner.handle_effect_result({:tool_call, result}, state, @context)
@@ -478,10 +478,32 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
           }
       }
 
-      result = {:error, :enoent}
-
       {:continue, _new_state} =
-        RepoPlanner.handle_effect_result({:tool_call, result}, state, @context)
+        RepoPlanner.handle_effect_error(:tool_call, :enoent, state, @context)
+    end
+
+    test "terminates a failed planning LLM cycle without requesting a replacement effect" do
+      state = RepoPlanner.init(%{"codebase_path" => @test_dir})
+
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :analyzing,
+            analysis: nil,
+            files_to_read: [],
+            gathered_files: %{},
+            started_at: DateTime.utc_now()
+          }
+      }
+
+      assert {:emit, {:planning_failed, %{failure_code: "timeout"}}, new_state} =
+               RepoPlanner.handle_effect_error(:llm_call, :timeout, state, @context)
+
+      assert new_state.phase == :ready
+      assert new_state.current_task == nil
     end
 
     test "returns idle for tool results in wrong phase" do
@@ -489,7 +511,7 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
       state = %{state | phase: :ready}
 
       {:idle, _state} =
-        RepoPlanner.handle_effect_result({:tool_call, {:ok, %{}}}, state, @context)
+        RepoPlanner.handle_effect_result({:tool_call, %{}}, state, @context)
     end
   end
 

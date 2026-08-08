@@ -17,8 +17,9 @@ defmodule Maraithon.EffectsTest do
       effect = Repo.get!(Effect, effect_id)
       assert effect.agent_id == agent_id
       assert effect.effect_type == "tool_call"
-      assert effect.params["path"] == "/tmp/test"
+      assert effect.params["args"]["path"] == "/tmp/test"
       assert effect.params["tool"] == "read_file"
+      refute Map.has_key?(effect.params, "path")
       assert effect.status == "pending"
     end
 
@@ -41,12 +42,60 @@ defmodule Maraithon.EffectsTest do
       assert effect.idempotency_key == key
     end
 
+    test "rejects unbounded or non-JSON params before persistence", %{agent_id: agent_id} do
+      assert {:error, :invalid_effect_params} =
+               Effects.request(agent_id, :tool_call, "http_get", %{
+                 "body" => String.duplicate("x", 128_001)
+               })
+
+      assert {:error, :invalid_effect_params} =
+               Effects.request(agent_id, :tool_call, "http_get", %{"callback" => fn -> :ok end})
+
+      assert {:error, :invalid_effect_params} =
+               Effects.request(agent_id, :tool_call, "http_get", %{
+                 "url" => "https://example.com/" <> <<0>>
+               })
+
+      assert {:error, :invalid_effect_params} =
+               Effects.request(agent_id, :llm_call, nil, DateTime.utc_now())
+
+      assert Repo.aggregate(Effect, :count) == 0
+    end
+
+    test "rejects recursive JSON key aliases before persistence", %{agent_id: agent_id} do
+      params = %{
+        "messages" => [
+          %{:role => "system", "role" => "user", "content" => "must not collapse"}
+        ]
+      }
+
+      assert {:error, :invalid_effect_params} =
+               Effects.request(agent_id, :llm_call, nil, params)
+
+      assert Repo.aggregate(Effect, :count) == 0
+    end
+
     test "does not include tool key when tool_name is nil", %{agent_id: agent_id} do
       {:ok, effect_id} = Effects.request(agent_id, :send_message, nil, %{text: "hello"})
 
       effect = Repo.get!(Effect, effect_id)
       refute Map.has_key?(effect.params, "tool")
       assert effect.params["text"] == "hello"
+    end
+
+    test "rejects non-map, oversized, and key-colliding results" do
+      assert {:error, :invalid_effect_result} = Effects.prepare_result(fn -> :ok end)
+
+      assert {:error, :invalid_effect_result} =
+               Effects.prepare_result(%{"content" => String.duplicate("x", 256_001)})
+
+      assert {:error, :invalid_effect_result} =
+               Effects.prepare_result(%{:status => "ok", "status" => "failed"})
+
+      assert {:error, :invalid_effect_result} =
+               Effects.prepare_result(%{"content" => "contains" <> <<0>> <> "nul"})
+
+      assert {:error, :invalid_effect_result} = Effects.prepare_result(DateTime.utc_now())
     end
   end
 

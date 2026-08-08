@@ -141,6 +141,25 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
     }
   end
 
+  test "rejects malformed or pathological success payloads without provider retries" do
+    swap_provider(RetryStub)
+
+    start_retry_stub_with_calls([
+      {:ok, []},
+      {:ok,
+       %{
+         content: "invalid usage",
+         model: "stub",
+         tokens_in: :erlang.bsl(1, 100_000),
+         tokens_out: 1
+       }}
+    ])
+
+    assert {:error, :invalid_effect_result} = LLMCallCommand.execute(effect_for())
+    assert {:error, :invalid_effect_result} = LLMCallCommand.execute(effect_for())
+    assert length(retry_stub_calls()) == 2
+  end
+
   test "caps pathological token strings and configured primary ceilings before provider work" do
     original = Application.get_env(:maraithon, Maraithon.Runtime, [])
 

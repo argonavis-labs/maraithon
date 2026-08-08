@@ -67,9 +67,14 @@ defmodule Maraithon.Push.Notifier do
   def prepare(_user_id, _attrs), do: {:error, :preparation_failed}
 
   @doc false
-  def deliver_prepared({:prepared_notification, user_id, devices, payload, collapse_id})
+  def deliver_prepared(prepared, opts \\ [])
+
+  def deliver_prepared(
+        {:prepared_notification, user_id, devices, payload, collapse_id},
+        opts
+      )
       when is_binary(user_id) and byte_size(user_id) <= 1_280 and is_list(devices) and
-             is_map(payload) do
+             is_map(payload) and is_list(opts) do
     devices = Enum.take(devices, 5)
 
     outcomes =
@@ -101,32 +106,17 @@ defmodule Maraithon.Push.Notifier do
           _ = disable_safely(device)
           Map.update!(counts, :unregistered, &(&1 + 1))
 
-        {:ok, {device, {:error, :delivery_unknown}}}, counts ->
-          Logger.warning("Push notification delivery result is unknown",
-            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
-            device_reference: Maraithon.Redaction.fingerprint(device.id),
-            failure_code: "delivery_unknown"
-          )
-
+        {:ok, {_device, {:error, :delivery_unknown}}}, counts ->
           Map.update!(counts, :unknown, &(&1 + 1))
 
-        {:ok, {device, {:error, reason}}}, counts ->
-          Logger.warning("Push notification send was rejected",
-            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
-            device_reference: Maraithon.Redaction.fingerprint(device.id),
-            failure_code: Maraithon.Redaction.error_class(reason)
-          )
-
+        {:ok, {_device, {:error, _reason}}}, counts ->
           Map.update!(counts, :rejected, &(&1 + 1))
 
-        {:exit, reason}, counts ->
-          Logger.warning("Push notification send task ended without a result",
-            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
-            failure_code: Maraithon.Redaction.error_class(reason)
-          )
-
+        {:exit, _reason}, counts ->
           Map.update!(counts, :unknown, &(&1 + 1))
       end)
+
+    maybe_log_outcomes(user_id, length(devices), outcomes, opts)
 
     cond do
       outcomes.delivered > 0 ->
@@ -143,7 +133,36 @@ defmodule Maraithon.Push.Notifier do
     end
   end
 
-  def deliver_prepared(_prepared), do: {:error, :preparation_failed}
+  def deliver_prepared(_prepared, _opts), do: {:error, :preparation_failed}
+
+  defp maybe_log_outcomes(user_id, device_count, outcomes, opts) do
+    if Keyword.get(opts, :log_failures?, true) do
+      cond do
+        outcomes.unknown > 0 ->
+          Logger.warning("Push notification batch had ambiguous device outcomes",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            device_count: device_count,
+            delivered: outcomes.delivered,
+            delivery_unknown: outcomes.unknown,
+            rejected: outcomes.rejected,
+            unregistered: outcomes.unregistered,
+            failure_code: "delivery_unknown"
+          )
+
+        outcomes.delivered == 0 and outcomes.rejected > 0 ->
+          Logger.warning("Push notification batch was rejected",
+            user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+            device_count: device_count,
+            rejected: outcomes.rejected,
+            unregistered: outcomes.unregistered,
+            failure_code: "undelivered"
+          )
+
+        true ->
+          :ok
+      end
+    end
+  end
 
   defp disable_safely(device) do
     Devices.disable(device)

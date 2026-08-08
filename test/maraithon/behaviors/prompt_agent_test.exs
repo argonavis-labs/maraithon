@@ -254,7 +254,7 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
         | pending_tool_call: %{tool: "read_file", args: %{"path" => "/tmp/test.txt"}}
       }
 
-      result = {:ok, "file contents here"}
+      result = "file contents here"
 
       context =
         Map.put(@context, :recent_events, [
@@ -282,14 +282,23 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
 
     test "handles failed tool result" do
       state = PromptAgent.init(%{"name" => "test"})
-      state = %{state | pending_tool_call: %{tool: "read_file", args: %{}}, processing_event: %{}}
-      result = {:error, :enoent}
+
+      state = %{
+        state
+        | pending_tool_call: %{tool: "read_file", args: %{}},
+          processing_event: %{
+            message_id: "message-123",
+            metadata: %{"correlation_id" => "correlation-123"}
+          }
+      }
 
       {:emit, {:agent_error, payload}, new_state} =
-        PromptAgent.handle_effect_result({:tool_call, result}, state, @context)
+        PromptAgent.handle_effect_error(:tool_call, :enoent, state, @context)
 
       assert payload.agent == "test"
       assert payload.error == "Action did not complete. No confirmed change was recorded."
+      assert payload.correlation_id == "correlation-123"
+      assert payload.message_id == "message-123"
       assert new_state.pending_tool_call == nil
       assert new_state.processing_event == nil
     end

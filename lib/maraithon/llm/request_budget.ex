@@ -1,7 +1,7 @@
 defmodule Maraithon.LLM.RequestBudget do
   @moduledoc false
 
-  alias Maraithon.TelegramAssistant.ProactiveCandidate
+  alias Maraithon.BoundedJSON
 
   @max_request_bytes 128_000
   @max_messages 64
@@ -14,7 +14,7 @@ defmodule Maraithon.LLM.RequestBudget do
 
   def validate_body(body) when is_map(body) do
     with true <-
-           ProactiveCandidate.safe_json_shape?(body, @max_request_bytes, @max_request_bytes),
+           BoundedJSON.valid?(body, @max_request_bytes, max_binary_bytes: @max_request_bytes),
          {:ok, encoded} <- Jason.encode(body),
          true <- byte_size(encoded) <= @max_request_bytes do
       :ok
@@ -54,7 +54,7 @@ defmodule Maraithon.LLM.RequestBudget do
          :ok <- validate_reasoning(bounded["reasoning"]),
          :ok <- validate_stream(bounded["stream"]),
          true <-
-           ProactiveCandidate.safe_json_shape?(bounded, @max_request_bytes, @max_request_bytes),
+           BoundedJSON.valid?(bounded, @max_request_bytes, max_binary_bytes: @max_request_bytes),
          {:ok, encoded} <- Jason.encode(bounded),
          true <- byte_size(encoded) <= @max_request_bytes do
       {:ok, maybe_put_reasoning_callback(bounded, params)}

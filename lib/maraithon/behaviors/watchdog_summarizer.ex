@@ -32,7 +32,10 @@ defmodule Maraithon.Behaviors.WatchdogSummarizer do
     cond do
       # Every 6th wakeup (3 hours), do a URL check if configured
       state.check_url && rem(state.iteration, 6) == 0 ->
-        Logger.info("Checking URL", url: state.check_url)
+        Logger.info("Checking URL",
+          target_reference: Maraithon.Redaction.fingerprint(state.check_url)
+        )
+
         {:effect, {:tool_call, "http_get", %{"url" => state.check_url}}, state}
 
       # Every 2nd wakeup (1 hour), ask for a summary
@@ -67,7 +70,7 @@ defmodule Maraithon.Behaviors.WatchdogSummarizer do
   end
 
   def handle_effect_result({:tool_call, result}, state, _context) do
-    status = result["status"] || "unknown"
+    status = Map.get(result, "status") || Map.get(result, :status) || "unknown"
     note = "Endpoint check: #{http_status_label(status)} at #{timestamp()}."
 
     {:emit, {:note_appended, note}, state}

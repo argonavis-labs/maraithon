@@ -99,6 +99,75 @@ defmodule Maraithon.WeatherTest do
     end
   end
 
+  defmodule MalformedGeocodeStub do
+    def get("https://geocoding-api.open-meteo.com/v1/search?" <> _query) do
+      {:ok, %{"results" => ["provider-controlled-malformed-result"]}}
+    end
+  end
+
+  defmodule MalformedCoordinatesStub do
+    def get("https://geocoding-api.open-meteo.com/v1/search?" <> _query) do
+      {:ok,
+       %{
+         "results" => [
+           %{"name" => "Malformed", "latitude" => %{"nested" => true}, "longitude" => -79.42}
+         ]
+       }}
+    end
+  end
+
+  defmodule MalformedNestedForecastStub do
+    def get("https://geocoding-api.open-meteo.com/v1/search?" <> _query) do
+      {:ok,
+       %{
+         "results" => [
+           %{"name" => "Toronto", "latitude" => 43.7, "longitude" => -79.42}
+         ]
+       }}
+    end
+
+    def get("https://api.open-meteo.com/v1/forecast?" <> _query) do
+      {:error, {:http_error, :nxdomain}}
+    end
+
+    def get("https://api.met.no/weatherapi/locationforecast/2.0/compact?" <> _query, _headers) do
+      {:ok,
+       %{
+         "properties" => %{
+           "timeseries" => [
+             %{
+               "time" => "2026-06-12T12:00:00Z",
+               "data" => "provider-controlled-scalar"
+             },
+             %{
+               "time" => "2026-06-12T13:00:00Z",
+               "data" => %{"instant" => 17, "next_6_hours" => ["invalid"]}
+             }
+           ]
+         }
+       }}
+    end
+  end
+
+  defmodule AllProvidersFailStub do
+    def get("https://geocoding-api.open-meteo.com/v1/search?" <> _query) do
+      {:ok,
+       %{
+         "results" => [
+           %{"name" => "Toronto", "latitude" => 43.7, "longitude" => -79.42}
+         ]
+       }}
+    end
+
+    def get("https://api.open-meteo.com/v1/forecast?" <> _query) do
+      {:error, {:http_error, "primary-provider-secret"}}
+    end
+
+    def get("https://api.met.no/weatherapi/locationforecast/2.0/compact?" <> _query, _headers) do
+      {:error, {:http_error, "fallback-provider-secret"}}
+    end
+  end
+
   setup do
     original = Application.get_env(:maraithon, Weather)
     Application.put_env(:maraithon, Weather, http_module: HTTPStub)
@@ -138,6 +207,30 @@ defmodule Maraithon.WeatherTest do
     assert_received {:geocode, "Kingston"}
   end
 
+  test "rejects a malformed successful geocoding result" do
+    Application.put_env(:maraithon, Weather, http_module: MalformedGeocodeStub)
+
+    assert {:error, {:geocode_no_match, "Toronto"}} =
+             Weather.fetch_for_brief(%{"timezone" => "America/Toronto"})
+  end
+
+  test "rejects provider-controlled non-numeric geocoding coordinates" do
+    Application.put_env(:maraithon, Weather, http_module: MalformedCoordinatesStub)
+
+    assert {:error, {:geocode_no_match, "Toronto"}} =
+             Weather.fetch_for_brief(%{"timezone" => "America/Toronto"})
+  end
+
+  test "returns a closed error for malformed nested MET Norway data" do
+    Application.put_env(:maraithon, Weather, http_module: MalformedNestedForecastStub)
+
+    assert {:error, {:unexpected_body, "map"}} =
+             Weather.fetch_for_brief(
+               %{"timezone" => "America/Toronto"},
+               ~U[2026-06-12 11:00:00Z]
+             )
+  end
+
   test "uses explicit coordinates without geocoding" do
     assert {:ok, weather} =
              Weather.fetch_for_brief(%{
@@ -165,9 +258,17 @@ defmodule Maraithon.WeatherTest do
     Application.put_env(:maraithon, Weather, http_module: MetNoFallbackStub)
     now = ~U[2026-06-12 11:00:00Z]
 
-    assert {:ok, weather} =
-             Weather.fetch_for_brief(%{"timezone" => "America/Toronto"}, now)
+    log =
+      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+        assert {:ok, weather} =
+                 Weather.fetch_for_brief(%{"timezone" => "America/Toronto"}, now)
 
+        send(self(), {:fallback_weather, weather})
+      end)
+
+    assert_received {:fallback_weather, weather}
+    assert log =~ "Weather provider fallback used"
+    refute log =~ "Open-Meteo forecast failed"
     assert_received {:met_no, "43.7", "-79.42", [{"user-agent", user_agent}]}
     assert user_agent =~ "Maraithon"
     assert weather["status"] == "ready"
@@ -180,6 +281,29 @@ defmodule Maraithon.WeatherTest do
     assert weather["today"]["precipitation_chance_pct"] == 35
     assert weather["tomorrow"]["high_c"] == 15.1
     assert weather["tomorrow"]["conditions"] == "rain"
+  end
+
+  test "logs one closed warning only when both forecast providers fail" do
+    Application.put_env(:maraithon, Weather, http_module: AllProvidersFailStub)
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        assert {:error, {:forecast_failed, _reason}} =
+                 Weather.fetch_for_brief(%{"timezone" => "America/Toronto"})
+      end)
+
+    assert log =~ "Weather forecast providers unavailable"
+    assert length(Regex.scan(~r/Weather forecast providers unavailable/, log)) == 1
+    refute log =~ "primary-provider-secret"
+    refute log =~ "fallback-provider-secret"
+  end
+
+  test "rejects oversized or invalid location configuration without string crashes" do
+    assert {:error, :no_location} =
+             Weather.fetch_for_brief(%{
+               "weather_location" => String.duplicate("x", 513),
+               "timezone" => <<255>>
+             })
   end
 
   test "errors when no location can be resolved" do

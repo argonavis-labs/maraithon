@@ -13,6 +13,7 @@ defmodule Maraithon.DeliveryErrorCopy do
   @temporarily_unavailable "Telegram is temporarily unavailable. Wait a minute before sending another delivery."
   @timed_out "Delivery timed out. Check Telegram status before sending another delivery."
   @generic "Delivery could not be sent. Check the connected channel before sending another delivery."
+  @delivery_unknown "delivery_unknown"
 
   # Stamped directly (via Repo.update_all) by Briefs' stale-brief expiry
   # sweep — never routed through classify_reason/1 — so it must be a literal
@@ -26,7 +27,7 @@ defmodule Maraithon.DeliveryErrorCopy do
     "telegram_not_connected"
   ]
 
-  @terminal_messages [@missing_chat, @needs_reconnect, @brief_expired_unsent]
+  @terminal_messages [@missing_chat, @needs_reconnect, @brief_expired_unsent, @delivery_unknown]
 
   def storage_message(reason) do
     reason
@@ -71,6 +72,9 @@ defmodule Maraithon.DeliveryErrorCopy do
 
   defp normalize_text(value) when is_binary(value), do: String.trim(value)
   defp normalize_text(value), do: value |> inspect(limit: 8) |> String.trim()
+
+  defp classify_reason(reason) when reason in ["delivery_unknown", ":delivery_unknown"],
+    do: @delivery_unknown
 
   defp classify_reason(reason) when reason in ["missing_chat_id", ":missing_chat_id"] do
     @missing_chat

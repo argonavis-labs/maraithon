@@ -36,6 +36,8 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   @fallback_max_tokens 8_000
   @fallback_reasoning_effort "medium"
   @default_primary_max_tokens 32_000
+  @max_usage_tokens 10_000_000
+  @max_usage_cost_usd 1_000_000
 
   @impl true
   def execute(%Effect{} = effect) do
@@ -51,7 +53,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
       {:error, reason} = error ->
         Logger.warning("LLM effect request rejected",
-          effect_id: effect.id,
+          effect_reference: Redaction.fingerprint(effect.id),
           failure_code: Redaction.error_class(reason)
         )
 
@@ -63,28 +65,37 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     timeout = request_timeout(params["timeout_ms"])
     deadline = System.monotonic_time(:millisecond) + timeout
 
-    Logger.info("Starting LLM call for effect #{effect.id}",
-      agent_id: effect.agent_id,
-      effect_id: effect.id
+    Logger.info("Starting LLM call",
+      effect_reference: Redaction.fingerprint(effect.id)
     )
 
     try do
       case run_with_retry(params, effect, 1, deadline) do
         {:ok, data} ->
-          data = ensure_usage(data)
+          case prepare_success(data) do
+            {:ok, prepared} ->
+              Logger.info("LLM call succeeded",
+                effect_reference: Redaction.fingerprint(effect.id),
+                model: prepared.model,
+                input_tokens: prepared.usage.input_tokens,
+                output_tokens: prepared.usage.output_tokens,
+                cost_usd: prepared.usage.total_cost
+              )
 
-          Logger.info("LLM call succeeded",
-            effect_id: effect.id,
-            model: data.model,
-            tokens: data.usage.total_tokens,
-            cost: data.usage.total_cost
-          )
+              {:ok, prepared}
 
-          {:ok, data}
+            {:error, :invalid_effect_result} = error ->
+              Logger.warning("LLM call returned an invalid success payload",
+                effect_reference: Redaction.fingerprint(effect.id),
+                failure_code: "invalid_effect_result"
+              )
+
+              error
+          end
 
         {:error, reason} = error ->
           Logger.warning("LLM call failed",
-            effect_id: effect.id,
+            effect_reference: Redaction.fingerprint(effect.id),
             failure_code: Redaction.error_class(reason)
           )
 
@@ -92,7 +103,11 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
       end
     catch
       :exit, {:timeout, _} ->
-        Logger.warning("LLM call timed out", effect_id: effect.id)
+        Logger.warning("LLM call timed out",
+          effect_reference: Redaction.fingerprint(effect.id),
+          failure_code: "timeout"
+        )
+
         {:error, "timeout"}
     end
   end
@@ -116,9 +131,10 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
               maybe_try_model_fallbacks(params, effect, reason, deadline)
 
             sleep_ms ->
-              Logger.info(
-                "LLM call retry #{attempt}/#{@max_retry_attempts - 1} after #{sleep_ms}ms",
-                effect_id: effect.id,
+              Logger.info("LLM call retry scheduled",
+                effect_reference: Redaction.fingerprint(effect.id),
+                attempt: attempt,
+                retry_after_ms: sleep_ms,
                 failure_code: Redaction.error_class(reason)
               )
 
@@ -175,11 +191,10 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
          errors,
          deadline
        ) do
-    Logger.info(
-      "LLM primary exhausted; falling back to alternate model",
-      effect_id: effect.id,
-      original_reason: Redaction.error_summary(original_reason),
-      fallback_model: fallback_model
+    Logger.info("LLM primary exhausted; falling back to alternate model",
+      effect_reference: Redaction.fingerprint(effect.id),
+      model: fallback_model,
+      failure_code: Redaction.error_class(original_reason)
     )
 
     remaining = remaining_ms(deadline)
@@ -215,11 +230,10 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
       {:error, fallback_reason} ->
         record_provider_limit(fallback_reason)
 
-        Logger.warning(
-          "LLM fallback model failed",
-          effect_id: effect.id,
-          fallback_model: fallback_model,
-          fallback_reason: Redaction.error_summary(fallback_reason)
+        Logger.warning("LLM fallback model failed",
+          effect_reference: Redaction.fingerprint(effect.id),
+          model: fallback_model,
+          failure_code: Redaction.error_class(fallback_reason)
         )
 
         try_fallback_models(
@@ -479,6 +493,51 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
       :timeout
     end
   end
+
+  defp prepare_success(%{content: content} = data)
+       when is_map(data) and not is_struct(data) and is_binary(content) do
+    model = Map.get(data, :model) || "unknown"
+    tokens_in = Map.get(data, :tokens_in, 0)
+    tokens_out = Map.get(data, :tokens_out, 0)
+
+    if valid_model?(model) and valid_token_count?(tokens_in) and valid_token_count?(tokens_out) do
+      prepared =
+        data
+        |> Map.put(:model, model)
+        |> Map.put(:tokens_in, tokens_in)
+        |> Map.put(:tokens_out, tokens_out)
+        |> ensure_usage()
+
+      case prepared do
+        %{usage: %{input_tokens: input, output_tokens: output, total_cost: cost}}
+        when is_integer(input) and input >= 0 and input <= @max_usage_tokens and
+               is_integer(output) and output >= 0 and output <= @max_usage_tokens ->
+          if valid_usage_cost?(cost),
+            do: {:ok, prepared},
+            else: {:error, :invalid_effect_result}
+
+        _invalid_usage ->
+          {:error, :invalid_effect_result}
+      end
+    else
+      {:error, :invalid_effect_result}
+    end
+  rescue
+    _error -> {:error, :invalid_effect_result}
+  end
+
+  defp prepare_success(_data), do: {:error, :invalid_effect_result}
+
+  defp valid_model?(model) when is_binary(model) and byte_size(model) <= 255,
+    do: String.valid?(model)
+
+  defp valid_model?(_model), do: false
+
+  defp valid_token_count?(value),
+    do: is_integer(value) and value >= 0 and value <= @max_usage_tokens
+
+  defp valid_usage_cost?(value),
+    do: is_number(value) and value >= 0 and value <= @max_usage_cost_usd
 
   defp ensure_usage(%{usage: %{} = usage} = data) do
     model = Map.get(data, :model, "unknown")

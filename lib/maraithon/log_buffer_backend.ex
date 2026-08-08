@@ -30,8 +30,7 @@ defmodule Maraithon.LogBufferBackend do
         timestamp: to_iso8601(timestamp),
         level: level,
         message: message |> format_message() |> Maraithon.Redaction.redact_string(),
-        metadata:
-          metadata |> Enum.into(%{}) |> stringify_metadata() |> Maraithon.Redaction.redact()
+        metadata: bounded_metadata(metadata)
       })
     end
 
@@ -94,9 +93,8 @@ defmodule Maraithon.LogBufferBackend do
 
   defp to_iso8601(_), do: DateTime.utc_now() |> DateTime.to_iso8601()
 
-  defp stringify_metadata(metadata) do
-    Map.new(metadata, fn {key, value} -> {to_string(key), value} end)
-  end
+  defp bounded_metadata(metadata) when is_list(metadata), do: Enum.take(metadata, 128)
+  defp bounded_metadata(_metadata), do: []
 
   defp normalize_level(:warn), do: :warning
   defp normalize_level(level), do: level

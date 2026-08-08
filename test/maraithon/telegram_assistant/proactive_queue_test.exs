@@ -46,6 +46,49 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueueTest do
     assert second.body == first.body
   end
 
+  test "held rows remain live dedupe blockers", %{user_id: user_id} do
+    attrs = candidate_attrs(user_id, %{dedupe_key: "held:duplicate"})
+
+    assert {:ok, first} = ProactiveQueue.enqueue(attrs)
+    assert {:ok, held} = ProactiveQueue.mark_held(first)
+
+    assert {:ok, duplicate} =
+             ProactiveQueue.enqueue(%{attrs | body: "must not create a second held row"})
+
+    assert duplicate.id == held.id
+    assert duplicate.status == "held"
+    assert duplicate.body == held.body
+  end
+
+  test "delivery-unknown quarantines are never folded into a later held brief", %{
+    user_id: user_id
+  } do
+    assert {:ok, candidate} =
+             ProactiveQueue.enqueue(
+               candidate_attrs(user_id, %{dedupe_key: "held:delivery-unknown"})
+             )
+
+    candidate =
+      candidate
+      |> Ecto.Changeset.change(status: "held", plan_reason: "delivery_unknown")
+      |> Repo.update!()
+
+    refute candidate.id in (ProactiveQueue.held_interruptions_for_prompt(user_id)
+                            |> Enum.map(& &1["id"]))
+
+    stale_at = DateTime.utc_now() |> DateTime.add(-8 * 24 * 60 * 60, :second)
+
+    from(row in ProactiveCandidate, where: row.id == ^candidate.id)
+    |> Repo.update_all(set: [updated_at: stale_at])
+
+    assert ProactiveQueue.expire_stale_held(DateTime.utc_now(), 1) == []
+
+    assert {:error, :not_resolvable} =
+             ProactiveQueue.mark_resolvable_held_delivered(candidate.id)
+
+    assert Repo.get!(ProactiveCandidate, candidate.id).status == "held"
+  end
+
   test "enqueue allows a reused dedupe key after the prior row is terminal", %{user_id: user_id} do
     attrs = candidate_attrs(user_id, %{dedupe_key: "terminal:duplicate"})
 

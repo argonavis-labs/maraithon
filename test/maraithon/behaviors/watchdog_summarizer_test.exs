@@ -95,7 +95,7 @@ defmodule Maraithon.Behaviors.WatchdogSummarizerTest do
 
     test "handles tool call result" do
       state = WatchdogSummarizer.init(%{})
-      result = %{"status" => 200}
+      result = %{status: 200}
 
       {:emit, {:note_appended, note}, _state} =
         WatchdogSummarizer.handle_effect_result({:tool_call, result}, state, @context)

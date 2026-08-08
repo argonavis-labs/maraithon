@@ -126,6 +126,10 @@ defmodule Maraithon.RedactionTest do
     assert Redaction.log_metadata_value(:description, "private user text") == "redacted_detail"
     assert Redaction.log_metadata_value(:query, "private search terms") == "redacted_detail"
     assert Redaction.log_metadata_value(:failure_code, "api_500") == "api_500"
+    assert Redaction.log_metadata_value(:input_tokens, 42) == 42
+
+    assert Redaction.log_metadata_value(:input_tokens, :erlang.bsl(1, 100_000)) ==
+             "redacted_detail"
 
     fingerprint = Redaction.log_metadata_value(:user_id, "person@example.com")
     assert byte_size(fingerprint) == 16
@@ -135,6 +139,10 @@ defmodule Maraithon.RedactionTest do
   test "error summaries retain only bounded retry delay semantics" do
     assert Redaction.error_summary({:rate_limited, 1_234}) == "rate_limited:1234"
     assert Redaction.error_summary({:api_error, 500, "private body"}) == "api_error:500"
+    assert Redaction.error_summary(:erlang.bsl(1, 100_000)) == "redacted_detail"
+
+    assert Redaction.error_summary({:api_error, :erlang.bsl(1, 100_000), "private"}) ==
+             "api_error"
   end
 
   test "fingerprint returns a stable opaque telemetry reference" do

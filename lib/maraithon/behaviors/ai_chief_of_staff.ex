@@ -574,11 +574,13 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   defp log_cycle_delta_summary(state) do
     sources = (state.assistant_fetch_telemetry || %{}) |> Map.get("sources", %{})
+    source_count = if is_map(sources), do: min(map_size(sources), 64), else: 0
 
-    Logger.info(
-      "ChiefOfStaff cycle source deltas: " <> safe_json(sources),
-      assistant_cycle_id: state.assistant_cycle_id,
-      user_fingerprint: Maraithon.Redaction.fingerprint(state.user_id)
+    Logger.info("ChiefOfStaff cycle source deltas",
+      cycle_reference: Maraithon.Redaction.fingerprint(state.assistant_cycle_id),
+      user_fingerprint: Maraithon.Redaction.fingerprint(state.user_id),
+      source_count: source_count,
+      item_count: min(telemetry_delta_count(state.assistant_fetch_telemetry), 1_000_000)
     )
   end
 

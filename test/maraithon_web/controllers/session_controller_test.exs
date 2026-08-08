@@ -1,7 +1,8 @@
 defmodule MaraithonWeb.SessionControllerTest do
-  use MaraithonWeb.ConnCase, async: true
+  use MaraithonWeb.ConnCase, async: false
 
   alias Maraithon.Accounts
+  alias Maraithon.Accounts.MagicLinkSender
   alias Maraithon.Accounts.{MagicLink, UserSession}
   alias Maraithon.Repo
 
@@ -20,6 +21,37 @@ defmodule MaraithonWeb.SessionControllerTest do
     assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "Check your email"
 
     assert %MagicLink{sent_to_email: ^email} = Repo.get_by(MagicLink, sent_to_email: email)
+  end
+
+  test "POST /auth/magic-link reports a definitive email rejection", %{conn: conn} do
+    bypass = Bypass.open()
+    previous = Application.get_env(:maraithon, MagicLinkSender)
+
+    on_exit(fn ->
+      case previous do
+        nil -> Application.delete_env(:maraithon, MagicLinkSender)
+        config -> Application.put_env(:maraithon, MagicLinkSender, config)
+      end
+    end)
+
+    Bypass.expect_once(bypass, "POST", "/email", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(422, Jason.encode!(%{"ErrorCode" => 406}))
+    end)
+
+    Application.put_env(:maraithon, MagicLinkSender,
+      server_token: "server-token",
+      from: "Maraithon <login@example.com>",
+      api_url: "http://localhost:#{bypass.port}/email"
+    )
+
+    email = "suppressed-#{System.unique_integer([:positive])}@example.com"
+    conn = post(conn, "/auth/magic-link", %{"magic_link" => %{"email" => email}})
+
+    assert redirected_to(conn, 303) == "/login"
+    assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "cannot receive sign-in links"
+    refute Phoenix.Flash.get(conn.assigns.flash, :info)
   end
 
   test "GET /auth/magic/:token signs in and creates session", %{conn: conn} do

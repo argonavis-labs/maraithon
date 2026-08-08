@@ -90,7 +90,7 @@ defmodule Maraithon.Runtime.Agent do
   def init(agent) do
     case register_global_name(agent.id) do
       :ok ->
-        Logger.metadata(agent_id: agent.id)
+        Logger.metadata(agent_reference: Maraithon.Redaction.fingerprint(agent.id))
         Logger.info("Agent initializing", behavior: agent.behavior)
 
         data = %__MODULE__{
@@ -405,7 +405,11 @@ defmodule Maraithon.Runtime.Agent do
   def waiting_effect(:info, {:effect_result, effect_id, result}, data) do
     case Map.pop(data.pending_effects, effect_id) do
       {nil, _} ->
-        Logger.warning("Received result for unknown effect: #{effect_id}")
+        Logger.warning("Received result for unknown effect",
+          effect_reference: Maraithon.Redaction.fingerprint(effect_id),
+          failure_code: "unknown_effect"
+        )
+
         {:keep_state, data}
 
       {effect_info, pending_effects} ->
@@ -462,6 +466,8 @@ defmodule Maraithon.Runtime.Agent do
             data =
               emit_event(data, "effect_failed", %{
                 effect_id: effect_id,
+                effect_type: effect_info.type,
+                failure_code: Maraithon.Redaction.error_class(reason),
                 error: Maraithon.Redaction.error_summary(reason)
               })
 
@@ -609,9 +615,38 @@ defmodule Maraithon.Runtime.Agent do
   defp emit_event(data, event_type, payload) do
     sequence_num = data.sequence_num + 1
     Events.append(data.agent_id, event_type, payload, sequence_num: sequence_num)
-    Logger.info("Event: #{event_type}", event_type: event_type)
+    Logger.info("Agent event", event_log_metadata(event_type, payload))
     %{data | sequence_num: sequence_num}
   end
+
+  defp event_log_metadata("effect_failed" = event_type, payload) when is_map(payload) do
+    [
+      event_type: event_type,
+      effect_reference: Maraithon.Redaction.fingerprint(payload[:effect_id]),
+      effect_type: event_label(payload[:effect_type]),
+      failure_code: event_label(payload[:failure_code])
+    ]
+  end
+
+  defp event_log_metadata("effect_requested" = event_type, payload) when is_map(payload) do
+    [
+      event_type: event_type,
+      effect_reference: Maraithon.Redaction.fingerprint(payload[:effect_id]),
+      effect_type: event_label(payload[:effect_type])
+    ]
+  end
+
+  defp event_log_metadata(event_type, _payload), do: [event_type: event_label(event_type)]
+
+  defp event_label(value) when is_atom(value), do: event_label(Atom.to_string(value))
+
+  defp event_label(value) when is_binary(value) and byte_size(value) <= 128 do
+    if String.valid?(value) and Regex.match?(~r/^[A-Za-z0-9._:\/-]+$/, value),
+      do: value,
+      else: "unknown"
+  end
+
+  defp event_label(_value), do: "unknown"
 
   defp emit_heartbeat(data) do
     now = DateTime.utc_now()
@@ -860,8 +895,20 @@ defmodule Maraithon.Runtime.Agent do
     request_effect(data, {effect_type, nil, params})
   end
 
-  defp request_effect(data, {effect_type, tool_name, params}) do
-    params = maybe_inject_memory_into_effect(data, effect_type, params)
+  defp request_effect(data, {effect_type, tool_name, raw_params}) do
+    raw_params =
+      data
+      |> maybe_inject_memory_into_effect(effect_type, raw_params)
+      |> durable_effect_params(effect_type, tool_name)
+
+    {params, validation_error} =
+      with {:ok, bounded} <- validate_effect_params(effect_type, raw_params),
+           {:ok, persistable} <- Effects.prepare_params(tool_name, bounded) do
+        {persistable, nil}
+      else
+        {:error, reason} -> {%{}, reason}
+      end
+
     effect_id = Ecto.UUID.generate()
     idempotency_key = Ecto.UUID.generate()
 
@@ -878,13 +925,18 @@ defmodule Maraithon.Runtime.Agent do
     # waiting_effect with a phantom pending effect nothing will ever resolve —
     # surface it through the normal effect-error path instead.
     write_result =
-      try do
-        Maraithon.Effects.request(data.agent_id, effect_type, tool_name, params, %{
-          effect_id: effect_id,
-          idempotency_key: idempotency_key
-        })
-      rescue
-        exception -> {:error, {:effect_write_failed, Maraithon.Redaction.error_class(exception)}}
+      if validation_error do
+        {:error, {:invalid_effect_request, validation_error}}
+      else
+        try do
+          Maraithon.Effects.request_prepared(data.agent_id, effect_type, tool_name, params, %{
+            effect_id: effect_id,
+            idempotency_key: idempotency_key
+          })
+        rescue
+          exception ->
+            {:error, {:effect_write_failed, Maraithon.Redaction.error_class(exception)}}
+        end
       end
 
     data =
@@ -906,6 +958,16 @@ defmodule Maraithon.Runtime.Agent do
       {:ok, _effect_id} ->
         {:next_state, :waiting_effect, data, actions}
 
+      {:error, {:invalid_effect_request, reason}} ->
+        Logger.warning("Effect request rejected before persistence",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          effect_type: event_label(effect_type),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        {:next_state, :waiting_effect, data,
+         actions ++ [{:next_event, :info, {:effect_result, effect_id, {:error, reason}}}]}
+
       {:error, reason} ->
         Logger.error("Effect outbox write failed",
           agent_id: data.agent_id,
@@ -918,6 +980,25 @@ defmodule Maraithon.Runtime.Agent do
          actions ++ [{:next_event, :info, {:effect_result, effect_id, failure}}]}
     end
   end
+
+  defp durable_effect_params(args, effect_type, tool_name)
+       when effect_type in [:tool_call, "tool_call"] and is_binary(tool_name),
+       do: %{"args" => args}
+
+  defp durable_effect_params(params, _effect_type, _tool_name), do: params
+
+  defp validate_effect_params(effect_type, params)
+       when effect_type in [:llm_call, "llm_call"] do
+    case Maraithon.LLM.RequestBudget.validate(params) do
+      {:ok, %{"_on_reasoning" => _callback}} ->
+        {:error, {:invalid_request, %{reason: "durable_callback_unsupported"}}}
+
+      result ->
+        result
+    end
+  end
+
+  defp validate_effect_params(_effect_type, params), do: {:ok, params}
 
   defp pending_effect_timeout_ms(pending_effects) when is_map(pending_effects) do
     pending_effects
@@ -1562,7 +1643,11 @@ defmodule Maraithon.Runtime.Agent do
     # are cycle-based, so the next wakeup re-covers anything dropped here.
     buffer =
       if length(buffer) > @max_deferred_messages do
-        Logger.warning("Deferred message buffer full for agent #{data.agent_id}; dropping oldest")
+        Logger.warning("Deferred agent message buffer full; dropping oldest",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          failure_code: "deferred_buffer_full"
+        )
+
         List.delete_at(buffer, -1)
       else
         buffer

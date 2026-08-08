@@ -157,6 +157,9 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       candidate = normalize_candidate(candidate)
 
       case reserve_delivery(candidate) do
+        {:ok, {:duplicate, %PushReceipt{decision: "delivery_unknown"}}} ->
+          {:error, :delivery_unknown}
+
         {:ok, {:duplicate, _receipt}} ->
           {:ok, %{decision: "suppressed", reason: "duplicate"}}
 
@@ -231,6 +234,8 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
           dedupe_key: candidate.dedupe_key
         )
 
+      digest_membership = digest_membership_receipt(candidate)
+
       cond do
         match?(
           %PushReceipt{decision: decision} when decision in ["reserved", "sending"],
@@ -245,13 +250,26 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
         ) ->
           {:duplicate, existing}
 
+        match?(
+          %PushReceipt{decision: decision} when decision in ["reserved", "sending"],
+          digest_membership
+        ) ->
+          Repo.rollback(:delivery_in_progress)
+
+        match?(
+          %PushReceipt{decision: decision} when decision in ["delivery_unknown", "sent_now"],
+          digest_membership
+        ) ->
+          {:duplicate, digest_membership}
+
         hold_reason = interruption_hold_reason(candidate) ->
           case TelegramAssistant.record_push_receipt(%{
                  user_id: candidate.user_id,
                  dedupe_key: candidate.dedupe_key,
                  origin_type: candidate.origin_type,
                  origin_id: candidate.origin_id,
-                 decision: "held_rate_limit"
+                 decision: "held_rate_limit",
+                 metadata: candidate.receipt_metadata
                }) do
             {:ok, _receipt} -> {:held, hold_reason}
             {:error, reason} -> Repo.rollback(reason)
@@ -263,13 +281,39 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
                  dedupe_key: candidate.dedupe_key,
                  origin_type: candidate.origin_type,
                  origin_id: candidate.origin_id,
-                 decision: "reserved"
+                 decision: "reserved",
+                 metadata: candidate.receipt_metadata
                }) do
             {:ok, receipt} -> {:reserved, receipt}
             {:error, reason} -> Repo.rollback(reason)
           end
       end
     end)
+  end
+
+  # A digest receipt is the transport proof for every child included in that
+  # APNs attempt. Match by a stable hash of the child dedupe key so expiry and
+  # re-enqueue under a new candidate UUID cannot bypass an ambiguous parent.
+  defp digest_membership_receipt(candidate) do
+    case PushReceipt.dedupe_hash(candidate.dedupe_key) do
+      hash when is_binary(hash) ->
+        membership = %{"candidate_dedupe_hashes" => [hash]}
+
+        PushReceipt
+        |> where([receipt], receipt.user_id == ^candidate.user_id)
+        |> where([receipt], receipt.origin_type == "assistant_digest")
+        |> where(
+          [receipt],
+          receipt.decision in ["reserved", "sending", "delivery_unknown", "sent_now"]
+        )
+        |> where([receipt], fragment("? @> ?", receipt.metadata, type(^membership, :map)))
+        |> order_by([receipt], desc: receipt.inserted_at, desc: receipt.id)
+        |> limit(1)
+        |> Repo.one()
+
+      _invalid ->
+        nil
+    end
   end
 
   defp begin_delivery(%PushReceipt{id: id}) do
@@ -377,7 +421,10 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       {:ok, prepared} ->
         case begin_delivery(receipt) do
           {:ok, sending_receipt} ->
-            finish_mobile_delivery(MobilePush.deliver_prepared(prepared), sending_receipt)
+            finish_mobile_delivery(
+              MobilePush.deliver_prepared(prepared, log_failures?: false),
+              sending_receipt
+            )
 
           {:error, reason} ->
             {:error, reason}
@@ -490,6 +537,8 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
         Map.get(candidate, :structured_data) || candidate["structured_data"] || %{},
       conversation_metadata:
         Map.get(candidate, :conversation_metadata) || candidate["conversation_metadata"] || %{},
+      receipt_metadata:
+        Map.get(candidate, :receipt_metadata) || candidate["receipt_metadata"] || %{},
       dedupe_key:
         Map.get(candidate, :dedupe_key) || candidate["dedupe_key"] ||
           "telegram_push:#{Map.get(candidate, :origin_type) || candidate["origin_type"]}:#{Map.get(candidate, :origin_id) || candidate["origin_id"]}",
@@ -951,7 +1000,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     |> Map.get("held_interruption_ids", [])
     |> List.wrap()
     |> Enum.each(fn
-      id when is_binary(id) -> ProactiveQueue.mark_delivered(id)
+      id when is_binary(id) -> ProactiveQueue.mark_resolvable_held_delivered(id)
       _other -> :ok
     end)
   end

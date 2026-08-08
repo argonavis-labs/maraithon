@@ -209,37 +209,42 @@ defmodule Maraithon.Behaviors.PromptAgent do
     end
   end
 
-  defp handle_tool_result(result, state, context) do
+  defp handle_tool_result(tool_result, state, context) do
     tool_call = state.pending_tool_call
+    prompt = build_tool_result_prompt(state, tool_call, tool_result, context)
+    params = llm_params(prompt, 1_500)
+    state = %{state | pending_tool_call: nil}
+    {:effect, {:llm_call, params}, state}
+  end
 
-    case result do
-      {:ok, tool_result} ->
-        # Tool succeeded - ask LLM what to do with the result
-        prompt = build_tool_result_prompt(state, tool_call, tool_result, context)
+  @impl true
+  def handle_effect_error(:tool_call, reason, state, _context) do
+    tool_call = state.pending_tool_call || %{}
+    correlation_id = get_in(state, [:processing_event, :metadata, "correlation_id"])
+    message_id = get_in(state, [:processing_event, :message_id])
 
-        params = llm_params(prompt, 1_500)
+    Logger.warning("Tool call failed",
+      agent: state.name,
+      tool: Map.get(tool_call, :tool),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    )
 
-        state = %{state | pending_tool_call: nil}
-        {:effect, {:llm_call, params}, state}
+    state = %{state | pending_tool_call: nil, processing_event: nil}
 
-      {:error, reason} ->
-        Logger.warning("Tool call failed",
-          agent: state.name,
-          tool: tool_call.tool,
-          reason: inspect(reason)
-        )
+    {:emit,
+     {:agent_error,
+      %{
+        agent: state.name,
+        error: ActionHelpers.safe_error(reason),
+        correlation_id: correlation_id,
+        message_id: message_id
+      }}, state}
+  end
 
-        state = %{state | pending_tool_call: nil, processing_event: nil}
+  def handle_effect_error(:llm_call, reason, state, _context) do
+    state = %{state | pending_tool_call: nil, processing_event: nil}
 
-        {:emit,
-         {:agent_error,
-          %{
-            agent: state.name,
-            error: ActionHelpers.safe_error(reason),
-            correlation_id: get_in(state, [:processing_event, :metadata, "correlation_id"]),
-            message_id: get_in(state, [:processing_event, :message_id])
-          }}, state}
-    end
+    {:emit, {:agent_error, %{agent: state.name, error: ActionHelpers.safe_error(reason)}}, state}
   end
 
   # ===========================================================================

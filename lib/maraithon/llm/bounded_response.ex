@@ -58,20 +58,34 @@ defmodule Maraithon.LLM.BoundedResponse do
       when is_function(request, 0) and is_integer(timeout_ms) and timeout_ms > 0 do
     owner = self()
 
-    task =
-      Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
-        worker = self()
-        watcher = spawn(fn -> watch_owner(owner, worker) end)
-        result = safe_request(request)
-        send(watcher, {:request_finished, worker})
-        result
-      end)
-
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> result
-      {:exit, _reason} -> {:error, %{reason: :request_failed}}
-      nil -> {:error, %{reason: :timeout}}
+    with {:ok, task} <- start_request_task(owner, request) do
+      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, result} -> result
+        {:exit, _reason} -> {:error, %{reason: :request_failed}}
+        nil -> {:error, %{reason: :timeout}}
+      end
     end
+  end
+
+  defp start_request_task(owner, request) do
+    if Process.whereis(Maraithon.Runtime.ToolCallSupervisor) do
+      task =
+        Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
+          worker = self()
+          watcher = spawn(fn -> watch_owner(owner, worker) end)
+          result = safe_request(request)
+          send(watcher, {:request_finished, worker})
+          result
+        end)
+
+      {:ok, task}
+    else
+      {:error, %{reason: :request_supervisor_unavailable}}
+    end
+  rescue
+    _error -> {:error, %{reason: :request_supervisor_unavailable}}
+  catch
+    :exit, _reason -> {:error, %{reason: :request_supervisor_unavailable}}
   end
 
   defp watch_owner(owner, worker) do

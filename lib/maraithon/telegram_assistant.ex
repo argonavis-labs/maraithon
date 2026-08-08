@@ -513,6 +513,14 @@ defmodule Maraithon.TelegramAssistant do
               ^blocking,
               receipt.origin_id
             ),
+          metadata:
+            fragment(
+              "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.metadata END",
+              receipt.decision,
+              ^blocking,
+              ^blocking,
+              receipt.metadata
+            ),
           conversation_turn_id:
             fragment(
               "CASE WHEN ? = ANY(?) AND NOT (EXCLUDED.decision = ANY(?)) THEN ? ELSE EXCLUDED.conversation_turn_id END",

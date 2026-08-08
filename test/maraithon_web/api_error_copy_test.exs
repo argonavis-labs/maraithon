@@ -11,6 +11,12 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
              message: "That item is no longer available. Refresh to see current work."
            }
 
+    assert ApiErrorCopy.mobile(:email_suppressed) == %{
+             error: "email_suppressed",
+             message:
+               "That email address cannot receive sign-in messages. Use another address or contact support."
+           }
+
     assert ApiErrorCopy.mobile_chat(:assistant_run_in_progress) == %{
              error: "assistant_run_in_progress",
              message:

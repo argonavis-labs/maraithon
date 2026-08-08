@@ -3,6 +3,10 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ActionLedger
+  alias Maraithon.Agents
+  alias Maraithon.Briefs.Brief
+  alias Maraithon.InsightNotifications.Delivery
+  alias Maraithon.Insights.Insight
   alias Maraithon.Memory
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.DeliveryPlanner
@@ -1032,6 +1036,205 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     )
   end
 
+  test "a durable unknown receipt quarantines a requeued candidate without another push", %{
+    user_id: user_id
+  } do
+    {:ok, candidate} =
+      ProactiveQueue.enqueue(
+        candidate_attrs(user_id, %{
+          urgency: 0.95,
+          dedupe_key: "planner:existing-delivery-unknown"
+        })
+      )
+
+    assert {:ok, _receipt} =
+             Maraithon.TelegramAssistant.record_push_receipt(%{
+               user_id: user_id,
+               dedupe_key: candidate.dedupe_key,
+               origin_type: "insight",
+               origin_id: candidate.source_id,
+               decision: "delivery_unknown"
+             })
+
+    llm_complete = plan_llm(%{candidate.id => {"interrupt_now", "Time-sensitive."}})
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    assert result.delivery_unknown == 1
+    assert result.delivered == 0
+    assert result.failed == 0
+
+    quarantined = Repo.get!(ProactiveCandidate, candidate.id)
+    assert quarantined.status == "held"
+    assert quarantined.plan_reason == "delivery_unknown"
+    assert apns_pushes() == []
+  end
+
+  test "rolls candidate quarantine back when source ambiguity repair fails", %{
+    user_id: user_id
+  } do
+    {:ok, agent} =
+      Agents.create_agent(%{
+        behavior: "prompt_agent",
+        config: %{"name" => "ambiguity-source", "prompt" => "Test"},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    brief =
+      %Brief{}
+      |> Brief.changeset(%{
+        user_id: user_id,
+        agent_id: agent.id,
+        cadence: "check_in",
+        title: "Atomic source repair",
+        summary: "Atomic source repair must not split state.",
+        body: "Atomic source repair must roll candidate and source changes back together.",
+        status: "pending",
+        scheduled_for: DateTime.utc_now(),
+        dedupe_key: "atomic-source:#{Ecto.UUID.generate()}"
+      })
+      |> Repo.insert!()
+
+    {:ok, candidate} =
+      ProactiveQueue.enqueue(
+        candidate_attrs(user_id, %{
+          source: "brief",
+          source_id: brief.id,
+          dedupe_key: "atomic-candidate:#{brief.id}",
+          urgency: 0.95
+        })
+      )
+
+    assert {:ok, _receipt} =
+             Maraithon.TelegramAssistant.record_push_receipt(%{
+               user_id: user_id,
+               dedupe_key: candidate.dedupe_key,
+               origin_type: "brief",
+               origin_id: brief.id,
+               decision: "delivery_unknown"
+             })
+
+    suffix = System.unique_integer([:positive])
+    function_name = "reject_ambiguous_brief_#{suffix}"
+    trigger_name = "reject_ambiguous_brief_trigger_#{suffix}"
+
+    Repo.query!("""
+    CREATE FUNCTION #{function_name}() RETURNS trigger AS $$
+    BEGIN
+      IF NEW.error_message = 'delivery_unknown' THEN
+        RAISE EXCEPTION 'injected source repair failure';
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER #{trigger_name}
+    BEFORE UPDATE ON briefs
+    FOR EACH ROW EXECUTE FUNCTION #{function_name}()
+    """)
+
+    llm_complete = plan_llm(%{candidate.id => {"interrupt_now", "Time-sensitive."}})
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    assert result.delivery_unknown == 1
+    assert result.failed == 1
+    assert result.held == 0
+    assert Repo.get!(ProactiveCandidate, candidate.id).status == "pending"
+    assert Repo.get!(Brief, brief.id).status == "pending"
+
+    Repo.query!("DROP TRIGGER #{trigger_name} ON briefs")
+    Repo.query!("DROP FUNCTION #{function_name}()")
+
+    assert {:ok, repaired} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    assert repaired.delivery_unknown == 1
+    assert repaired.failed == 0
+    assert repaired.held == 1
+    assert Repo.get!(ProactiveCandidate, candidate.id).status == "held"
+
+    repaired_brief = Repo.get!(Brief, brief.id)
+    assert repaired_brief.status == "failed"
+    assert repaired_brief.error_message == "delivery_unknown"
+  end
+
+  test "ambiguity quarantine does not overwrite a feedback source state", %{
+    user_id: user_id
+  } do
+    {:ok, agent} =
+      Agents.create_agent(%{
+        behavior: "prompt_agent",
+        config: %{"name" => "feedback-source", "prompt" => "Test"},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    insight =
+      %Insight{}
+      |> Insight.changeset(%{
+        user_id: user_id,
+        agent_id: agent.id,
+        source: "test_source",
+        category: "general",
+        title: "Feedback source state",
+        summary: "Confirmed feedback must survive ambiguity quarantine.",
+        recommended_action: "Keep the confirmed feedback state.",
+        dedupe_key: "feedback-insight:#{Ecto.UUID.generate()}",
+        tracking_key: "feedback-track:#{Ecto.UUID.generate()}"
+      })
+      |> Repo.insert!()
+
+    delivery =
+      %Delivery{}
+      |> Delivery.changeset(%{
+        insight_id: insight.id,
+        user_id: user_id,
+        channel: "push",
+        destination: "mobile",
+        score: 0.9,
+        threshold: 0.5,
+        status: "feedback_helpful",
+        feedback: "helpful",
+        feedback_at: DateTime.utc_now()
+      })
+      |> Repo.insert!()
+
+    {:ok, candidate} =
+      ProactiveQueue.enqueue(
+        candidate_attrs(user_id, %{
+          source: "insight",
+          source_id: delivery.id,
+          dedupe_key: "feedback-candidate:#{delivery.id}",
+          urgency: 0.95
+        })
+      )
+
+    assert {:ok, _receipt} =
+             Maraithon.TelegramAssistant.record_push_receipt(%{
+               user_id: user_id,
+               dedupe_key: candidate.dedupe_key,
+               origin_type: "insight",
+               origin_id: delivery.id,
+               decision: "delivery_unknown"
+             })
+
+    llm_complete = plan_llm(%{candidate.id => {"interrupt_now", "Time-sensitive."}})
+
+    assert {:ok, %{delivery_unknown: 1, held: 1, failed: 0}} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    assert Repo.get!(ProactiveCandidate, candidate.id).status == "held"
+    preserved = Repo.get!(Delivery, delivery.id)
+    assert preserved.status == "feedback_helpful"
+    assert preserved.feedback == "helpful"
+  end
+
   # The 2026-07-30 stuck-briefs incident: a transient APNs failure at
   # dispatch time left the candidate stranded in "planned" — a status no
   # process ever re-reads — and the live stranded row dedupe-blocked the
@@ -1039,7 +1242,11 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
   # failure). Failed dispatches must return candidates to "pending" so the
   # next planner cycle retries them, bounded by expires_at.
   describe "dispatch failure retry contract" do
-    defmodule FailingAPNSHTTP do
+    defmodule RejectedAPNSHTTP do
+      def post(_url, _headers, _body), do: {:ok, 429, ~s({"reason":"TooManyRequests"})}
+    end
+
+    defmodule AmbiguousAPNSHTTP do
       def post(_url, _headers, _body), do: {:error, %Mint.TransportError{reason: :closed}}
     end
 
@@ -1047,7 +1254,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
       Application.put_env(
         :maraithon,
         :apns,
-        Keyword.put(Application.get_env(:maraithon, :apns), :http_module, FailingAPNSHTTP)
+        Keyword.put(Application.get_env(:maraithon, :apns), :http_module, RejectedAPNSHTTP)
       )
 
       :ok
@@ -1066,6 +1273,178 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
       assert result.delivered == 0
 
       assert Repo.get!(ProactiveCandidate, candidate.id).status == "pending"
+    end
+
+    test "an ambiguous interrupt send is quarantined instead of falsely requeued", %{
+      user_id: user_id
+    } do
+      Application.put_env(
+        :maraithon,
+        :apns,
+        Keyword.put(
+          Application.get_env(:maraithon, :apns),
+          :http_module,
+          AmbiguousAPNSHTTP
+        )
+      )
+
+      {:ok, candidate} = ProactiveQueue.enqueue(candidate_attrs(user_id, %{urgency: 0.95}))
+      llm_complete = plan_llm(%{candidate.id => {"interrupt_now", "Time-sensitive."}})
+
+      assert {:ok, result} =
+               DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+      assert result.failed == 0
+      assert result.delivered == 0
+      assert result.delivery_unknown == 1
+      assert result.held == 1
+
+      quarantined = Repo.get!(ProactiveCandidate, candidate.id)
+      assert quarantined.status == "held"
+      assert quarantined.plan_reason == "delivery_unknown"
+
+      assert %PushReceipt{decision: "delivery_unknown"} =
+               Repo.get_by!(PushReceipt, user_id: user_id, dedupe_key: candidate.dedupe_key)
+    end
+
+    test "a later digest bundle is held without being mislabeled as possibly sent", %{
+      user_id: user_id
+    } do
+      Application.put_env(
+        :maraithon,
+        :apns,
+        Keyword.put(
+          Application.get_env(:maraithon, :apns),
+          :http_module,
+          AmbiguousAPNSHTTP
+        )
+      )
+
+      {:ok, first} =
+        ProactiveQueue.enqueue(candidate_attrs(user_id, %{dedupe_key: "digest-origin:one"}))
+
+      {:ok, second} =
+        ProactiveQueue.enqueue(candidate_attrs(user_id, %{dedupe_key: "digest-origin:two"}))
+
+      first_plan =
+        plan_llm(%{
+          first.id => {"digest", "Batch it."},
+          second.id => {"digest", "Batch it."}
+        })
+
+      assert {:ok, first_result} =
+               DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: first_plan)
+
+      assert first_result.delivery_unknown == 2
+
+      digest_key = "delivery_digest:#{user_id}:#{Date.utc_today() |> Date.to_iso8601()}"
+      receipt = Repo.get_by!(PushReceipt, user_id: user_id, dedupe_key: digest_key)
+      assert MapSet.new(receipt.metadata["candidate_ids"]) == MapSet.new([first.id, second.id])
+
+      assert MapSet.new(receipt.metadata["candidate_dedupe_hashes"]) ==
+               MapSet.new([
+                 PushReceipt.dedupe_hash(first.dedupe_key),
+                 PushReceipt.dedupe_hash(second.dedupe_key)
+               ])
+
+      {:ok, later} =
+        ProactiveQueue.enqueue(candidate_attrs(user_id, %{dedupe_key: "digest-later:three"}))
+
+      later_plan = plan_llm(%{later.id => {"digest", "Batch it later."}})
+
+      assert {:ok, later_result} =
+               DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: later_plan)
+
+      assert later_result.delivery_unknown == 0
+      assert later_result.delivered == 0
+      assert later_result.held == 1
+
+      held = Repo.get!(ProactiveCandidate, later.id)
+      assert held.status == "held"
+      assert held.plan_reason == "daily_digest_delivery_unknown"
+    end
+
+    test "digest dedupe membership fences a re-enqueued child even if disposition drifts", %{
+      user_id: user_id
+    } do
+      child_dedupe_key = "digest-reenqueued:stable-child"
+      old_candidate_id = Ecto.UUID.generate()
+      digest_key = "delivery_digest:#{user_id}:#{Date.utc_today() |> Date.to_iso8601()}"
+
+      assert {:ok, _receipt} =
+               Maraithon.TelegramAssistant.record_push_receipt(%{
+                 user_id: user_id,
+                 dedupe_key: digest_key,
+                 origin_type: "assistant_digest",
+                 origin_id: digest_key,
+                 decision: "delivery_unknown",
+                 metadata: %{
+                   "candidate_ids" => [old_candidate_id],
+                   "candidate_dedupe_hashes" => [PushReceipt.dedupe_hash(child_dedupe_key)]
+                 }
+               })
+
+      {:ok, replacement} =
+        ProactiveQueue.enqueue(
+          candidate_attrs(user_id, %{
+            dedupe_key: child_dedupe_key,
+            urgency: 0.95
+          })
+        )
+
+      refute replacement.id == old_candidate_id
+      llm_complete = plan_llm(%{replacement.id => {"interrupt_now", "Disposition drifted."}})
+
+      assert {:ok, result} =
+               DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+      assert result.delivery_unknown == 1
+      assert result.delivered == 0
+      assert result.held == 1
+      assert apns_pushes() == []
+
+      quarantined = Repo.get!(ProactiveCandidate, replacement.id)
+      assert quarantined.status == "held"
+      assert quarantined.plan_reason == "delivery_unknown"
+    end
+
+    test "invalid digest membership metadata is quarantined conservatively", %{user_id: user_id} do
+      Application.put_env(
+        :maraithon,
+        :apns,
+        Keyword.put(
+          Application.get_env(:maraithon, :apns),
+          :http_module,
+          AmbiguousAPNSHTTP
+        )
+      )
+
+      {:ok, original} =
+        ProactiveQueue.enqueue(candidate_attrs(user_id, %{dedupe_key: "digest-invalid:original"}))
+
+      original_plan = plan_llm(%{original.id => {"digest", "Batch it."}})
+
+      assert {:ok, %{delivery_unknown: 1}} =
+               DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: original_plan)
+
+      digest_key = "delivery_digest:#{user_id}:#{Date.utc_today() |> Date.to_iso8601()}"
+      receipt = Repo.get_by!(PushReceipt, user_id: user_id, dedupe_key: digest_key)
+
+      receipt
+      |> Ecto.Changeset.change(metadata: %{"candidate_ids" => [123]})
+      |> Repo.update!()
+
+      {:ok, later} =
+        ProactiveQueue.enqueue(candidate_attrs(user_id, %{dedupe_key: "digest-invalid:later"}))
+
+      later_plan = plan_llm(%{later.id => {"digest", "Batch it later."}})
+
+      assert {:ok, %{delivery_unknown: 1, held: 1}} =
+               DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: later_plan)
+
+      quarantined = Repo.get!(ProactiveCandidate, later.id)
+      assert quarantined.status == "held"
+      assert quarantined.plan_reason == "delivery_unknown"
     end
 
     test "a failed digest send returns every bundled candidate to pending", %{user_id: user_id} do
@@ -1089,6 +1468,41 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
 
       assert Repo.get!(ProactiveCandidate, first.id).status == "pending"
       assert Repo.get!(ProactiveCandidate, second.id).status == "pending"
+    end
+
+    test "an ambiguous digest send quarantines every bundled candidate", %{user_id: user_id} do
+      Application.put_env(
+        :maraithon,
+        :apns,
+        Keyword.put(
+          Application.get_env(:maraithon, :apns),
+          :http_module,
+          AmbiguousAPNSHTTP
+        )
+      )
+
+      {:ok, first} =
+        ProactiveQueue.enqueue(candidate_attrs(user_id, %{dedupe_key: "digest-unknown:one"}))
+
+      {:ok, second} =
+        ProactiveQueue.enqueue(candidate_attrs(user_id, %{dedupe_key: "digest-unknown:two"}))
+
+      llm_complete =
+        plan_llm(%{
+          first.id => {"digest", "Batch it."},
+          second.id => {"digest", "Batch it."}
+        })
+
+      assert {:ok, result} =
+               DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+      assert result.failed == 0
+      assert result.delivered == 0
+      assert result.delivery_unknown == 2
+      assert result.held == 2
+
+      assert Repo.get!(ProactiveCandidate, first.id).status == "held"
+      assert Repo.get!(ProactiveCandidate, second.id).status == "held"
     end
   end
 

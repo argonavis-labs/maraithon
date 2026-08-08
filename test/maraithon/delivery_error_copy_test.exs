@@ -30,6 +30,11 @@ defmodule Maraithon.DeliveryErrorCopyTest do
     assert DeliveryErrorCopy.terminal?(blocked)
   end
 
+  test "keeps ambiguous delivery terminal so no automatic resend can occur" do
+    assert DeliveryErrorCopy.storage_message(:delivery_unknown) == "delivery_unknown"
+    assert DeliveryErrorCopy.terminal?("delivery_unknown")
+  end
+
   test "keeps legacy terminal values recognized for retry suppression" do
     assert DeliveryErrorCopy.terminal?(":missing_chat_id")
     assert DeliveryErrorCopy.terminal?("missing_chat_id")

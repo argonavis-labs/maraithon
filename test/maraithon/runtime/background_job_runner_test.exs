@@ -4,7 +4,7 @@ defmodule Maraithon.Runtime.RetryAfterTestHandler do
   # clauses) that hit a 429 and want a provider-specified backoff instead of
   # burning a job attempt.
   def execute(%Maraithon.Runtime.BackgroundJob{}) do
-    {:error, {:retry_after, 5, {:rate_limited, "slow down"}}}
+    {:error, {:retry_after, 5, {:rate_limited, "provider-account-secret"}}}
   end
 end
 
@@ -136,7 +136,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
 
     before_call = DateTime.utc_now()
 
-    assert {:ok, [{^job_id, {:error, {:retry_after, 5, {:rate_limited, "slow down"}}}}]} =
+    assert {:ok,
+            [{^job_id, {:error, {:retry_after, 5, {:rate_limited, "provider-account-secret"}}}}]} =
              BackgroundJobRunner.drain_once(pid)
 
     stored = Repo.get!(BackgroundJob, job.id)
@@ -144,6 +145,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     assert stored.attempts == 0
     assert stored.claimed_by == nil
     assert stored.last_error =~ "rate_limited"
+    refute stored.last_error =~ "provider-account-secret"
     assert DateTime.diff(stored.scheduled_at, before_call, :second) in 3..7
 
     GenServer.stop(pid, :normal)
@@ -211,7 +213,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
         batch_size: 5
       )
 
-    assert {:ok, [{^job_id, {:error, {:retry_after, 5, {:rate_limited, "slow down"}}}}]} =
+    assert {:ok,
+            [{^job_id, {:error, {:retry_after, 5, {:rate_limited, "provider-account-secret"}}}}]} =
              BackgroundJobRunner.drain_once(pid)
 
     stored = Repo.get!(BackgroundJob, job.id)
@@ -249,7 +252,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     assert failed.status == "failed"
     assert failed.attempts == 1
     assert failed.failed_at
-    assert failed.last_error =~ "execute/1 is undefined"
+    assert failed.last_error == "background_job_error"
 
     GenServer.stop(pid, :normal)
   end

@@ -28,6 +28,7 @@ defmodule Maraithon.TelegramAssistant.PushReceipt do
     field :origin_type, :string
     field :origin_id, :string
     field :decision, :string
+    field :metadata, :map, default: %{}
 
     belongs_to :user, User, type: :string
     belongs_to :conversation_turn, Turn
@@ -36,7 +37,18 @@ defmodule Maraithon.TelegramAssistant.PushReceipt do
   end
 
   @required_fields [:user_id, :dedupe_key, :origin_type, :decision]
-  @optional_fields [:origin_id, :conversation_turn_id]
+  @optional_fields [:origin_id, :conversation_turn_id, :metadata]
+
+  @doc false
+  def dedupe_hash(dedupe_key)
+      when is_binary(dedupe_key) and byte_size(dedupe_key) in 1..1_024 do
+    if String.valid?(dedupe_key) do
+      :crypto.hash(:sha256, dedupe_key)
+      |> Base.encode16(case: :lower)
+    end
+  end
+
+  def dedupe_hash(_dedupe_key), do: nil
 
   def changeset(receipt, attrs) do
     receipt
@@ -45,8 +57,38 @@ defmodule Maraithon.TelegramAssistant.PushReceipt do
     |> validate_length(:dedupe_key, min: 3, max: 255)
     |> validate_inclusion(:origin_type, @origin_types)
     |> validate_inclusion(:decision, @decisions)
+    |> validate_metadata()
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:conversation_turn_id)
     |> unique_constraint([:user_id, :dedupe_key])
+  end
+
+  defp validate_metadata(changeset) do
+    case get_field(changeset, :metadata) do
+      metadata when is_map(metadata) and not is_struct(metadata) ->
+        if Maraithon.BoundedJSON.valid?(metadata, 8_000,
+             max_binary_bytes: 1_000,
+             max_depth: 4,
+             max_nodes: 150,
+             max_map_entries: 20,
+             max_list_items: 50
+           ) and encoded_metadata_within_limit?(metadata) do
+          changeset
+        else
+          add_error(changeset, :metadata, "is invalid")
+        end
+
+      _invalid ->
+        add_error(changeset, :metadata, "is invalid")
+    end
+  end
+
+  defp encoded_metadata_within_limit?(metadata) do
+    case Jason.encode(metadata) do
+      {:ok, encoded} -> byte_size(encoded) <= 8_000
+      {:error, _reason} -> false
+    end
+  rescue
+    _error -> false
   end
 end

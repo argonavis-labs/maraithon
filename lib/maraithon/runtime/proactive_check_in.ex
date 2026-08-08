@@ -111,9 +111,13 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
   defp log_delivery_planner_cycle(:disabled, _expired, _recovered), do: :ok
 
   defp log_delivery_planner_cycle(%{} = result, expired, recovered) do
-    if result.planned > 0 or result.delivered > 0 or result.held > 0 or result.failed > 0 or
-         result.undeliverable > 0 or expired > 0 or recovered > 0 do
-      level = if result.failed > 0, do: :warning, else: :info
+    if result.planned > 0 or result.delivered > 0 or result.delivery_unknown > 0 or
+         result.held > 0 or result.failed > 0 or result.undeliverable > 0 or expired > 0 or
+         recovered > 0 do
+      level =
+        if result.failed > 0 or result.delivery_unknown > 0,
+          do: :warning,
+          else: :info
 
       Logger.log(level, "Proactive delivery planner cycle",
         users: result.users,
@@ -122,6 +126,7 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
         digest: result.digest,
         held: result.held,
         delivered: result.delivered,
+        delivery_unknown: result.delivery_unknown,
         failed: result.failed,
         undeliverable: result.undeliverable,
         failure_codes: result.failure_codes,

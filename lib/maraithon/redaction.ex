@@ -19,6 +19,8 @@ defmodule Maraithon.Redaction do
   """
 
   @redacted "<redacted>"
+  @min_log_integer -9_223_372_036_854_775_808
+  @max_log_integer 9_223_372_036_854_775_807
 
   @sensitive_field_suffixes ~w(
     apikey
@@ -44,41 +46,6 @@ defmodule Maraithon.Redaction do
     systemprompt
     webhookbody
     tooloutput
-  )
-
-  @opaque_log_metadata_fields ~w(
-    body
-    callbackerror
-    content
-    context
-    error
-    fallbackreason
-    messages
-    originalreason
-    prompt
-    providerbody
-    rawbody
-    reason
-    requestbody
-    responsebody
-  )
-
-  @identifier_log_metadata_fields ~w(
-    userid chatid telegramchatid accountid owneruserid
-  )
-
-  @numeric_log_metadata_fields ~w(
-    durationms retryafterms inputtokens outputtokens reasoningtokens costusd
-    choicecount detailfailurecount promptbytes promptbytecap basepromptbytes
-    availablecandidates includedcandidates users usercount planned interruptnow
-    digest held delivered failed undeliverable expired recovered sent suppressed disabled
-    responsestatus truncated backfillneeded
-  )
-
-  @label_log_metadata_fields ~w(
-    requestid agentid effectid jobid jobtype provider useridhash model
-    reasoningeffort finishreason failurecode responseshape errorclass
-    transportclass callbackclass promptkind
   )
 
   @scanners [
@@ -182,29 +149,36 @@ defmodule Maraithon.Redaction do
   prompt or user text with no recognizable secret pattern.
   """
   def log_metadata_value(key, value) do
-    normalized_key = normalize_key(key)
-
-    cond do
-      normalized_key in @identifier_log_metadata_fields -> identifier_fingerprint(value)
-      normalized_key in @opaque_log_metadata_fields -> opaque_log_value(value)
-      normalized_key == "status" -> status_log_value(value)
-      normalized_key in @numeric_log_metadata_fields -> numeric_log_value(value)
-      normalized_key in @label_log_metadata_fields -> label_log_value(value)
-      normalized_key == "failurecodes" -> failure_codes_log_value(value)
-      true -> "redacted_detail"
+    case Maraithon.SafeLogMetadata.classification(key) do
+      :identifier -> identifier_fingerprint(value)
+      :opaque -> opaque_log_value(value)
+      :status -> status_log_value(value)
+      :numeric -> numeric_log_value(value)
+      :label -> label_log_value(value)
+      :failure_codes -> failure_codes_log_value(value)
+      :unknown -> "redacted_detail"
     end
   end
 
   defp identifier_fingerprint(value) when is_binary(value), do: fingerprint(value)
 
-  defp identifier_fingerprint(value) when is_integer(value),
-    do: fingerprint(Integer.to_string(value))
+  defp identifier_fingerprint(value)
+       when is_integer(value) and value >= @min_log_integer and value <= @max_log_integer,
+       do: fingerprint(Integer.to_string(value))
 
   defp identifier_fingerprint(_value), do: nil
 
   defp numeric_log_value(value)
-       when is_integer(value) or is_float(value) or is_boolean(value) or is_nil(value),
+       when is_integer(value) and value >= @min_log_integer and value <= @max_log_integer,
        do: value
+
+  defp numeric_log_value(value) when is_float(value) do
+    if value == value and abs(value) <= 9.223_372_036_854_776e18,
+      do: value,
+      else: "redacted_detail"
+  end
+
+  defp numeric_log_value(value) when is_boolean(value) or is_nil(value), do: value
 
   defp numeric_log_value(value) when is_binary(value) do
     if byte_size(value) <= 32 and Regex.match?(~r/^-?[0-9]+(?:\.[0-9]+)?$/, value),
@@ -264,16 +238,21 @@ defmodule Maraithon.Redaction do
        when kind in [:rate_limited, :llm_busy] and is_integer(delay_ms) and delay_ms > 0,
        do: "#{kind}:#{min(delay_ms, 86_400_000)}"
 
-  defp opaque_log_value({kind, status, _detail}) when is_atom(kind) and is_integer(status),
-    do: "#{kind}:#{status}"
+  defp opaque_log_value({kind, status, _detail})
+       when is_atom(kind) and is_integer(status) and status >= @min_log_integer and
+              status <= @max_log_integer,
+       do: "#{kind}:#{status}"
 
   defp opaque_log_value({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
   defp opaque_log_value({kind, _status, _detail}) when is_atom(kind), do: Atom.to_string(kind)
   defp opaque_log_value(%module{}) when is_atom(module), do: Atom.to_string(module)
   defp opaque_log_value(value) when is_atom(value), do: Atom.to_string(value)
 
-  defp opaque_log_value(value) when is_integer(value) or is_boolean(value) or is_nil(value),
-    do: value
+  defp opaque_log_value(value)
+       when is_integer(value) and value >= @min_log_integer and value <= @max_log_integer,
+       do: value
+
+  defp opaque_log_value(value) when is_boolean(value) or is_nil(value), do: value
 
   defp opaque_log_value(_value), do: "redacted_detail"
 

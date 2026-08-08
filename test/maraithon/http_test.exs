@@ -1,5 +1,5 @@
 defmodule Maraithon.HTTPTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
@@ -52,8 +52,22 @@ defmodule Maraithon.HTTPTest do
         Plug.Conn.resp(conn, 429, "Too many requests")
       end)
 
-      {:error, {:rate_limited, body}} = HTTP.get("http://localhost:#{bypass.port}/rate-limited")
-      assert body == "Too many requests"
+      assert {:error, {:rate_limited, :provider_limited}} =
+               HTTP.get("http://localhost:#{bypass.port}/rate-limited")
+    end
+
+    test "never returns provider-controlled 429 content" do
+      bypass = Bypass.open()
+      provider_secret = "provider-controlled-account-detail"
+
+      Bypass.expect_once(bypass, "GET", "/rate-limited-secret", fn conn ->
+        Plug.Conn.resp(conn, 429, provider_secret)
+      end)
+
+      result = HTTP.get("http://localhost:#{bypass.port}/rate-limited-secret")
+
+      assert result == {:error, {:rate_limited, :provider_limited}}
+      refute inspect(result) =~ provider_secret
     end
 
     test "returns the Retry-After seconds for 429 responses that include the header" do
@@ -65,11 +79,32 @@ defmodule Maraithon.HTTPTest do
         |> Plug.Conn.resp(429, "slow down")
       end)
 
-      {:error, {:rate_limited, seconds, body}} =
-        HTTP.get("http://localhost:#{bypass.port}/rate-limited-with-header")
+      assert {:error, {:rate_limited, 17, :provider_limited}} =
+               HTTP.get("http://localhost:#{bypass.port}/rate-limited-with-header")
+    end
 
-      assert seconds == 17
-      assert body == "slow down"
+    test "preserves closed 401 semantics when the diagnostic body overflows" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/oversized-unauthorized", fn conn ->
+        Plug.Conn.resp(conn, 401, String.duplicate("provider-auth-detail", 2_000))
+      end)
+
+      assert {:error, :unauthorized} =
+               HTTP.get("http://localhost:#{bypass.port}/oversized-unauthorized")
+    end
+
+    test "preserves Retry-After when a 429 diagnostic body overflows" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/oversized-rate-limit", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "29")
+        |> Plug.Conn.resp(429, String.duplicate("provider-rate-detail", 2_000))
+      end)
+
+      assert {:error, {:rate_limited, 29, :provider_limited}} =
+               HTTP.get("http://localhost:#{bypass.port}/oversized-rate-limit")
     end
 
     test "returns error for other status codes" do
@@ -81,6 +116,57 @@ defmodule Maraithon.HTTPTest do
 
       {:error, {:http_status, 500, body}} = HTTP.get("http://localhost:#{bypass.port}/error")
       assert body == "Internal Server Error"
+    end
+
+    test "warning logs expose only closed status metadata" do
+      bypass = Bypass.open()
+      secret_body = "provider-prompt-secret"
+      secret_path = "/error/provider-user-secret"
+
+      Bypass.expect_once(bypass, "GET", secret_path, fn conn ->
+        Plug.Conn.resp(conn, 500, secret_body)
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 500, ^secret_body}} =
+                   HTTP.get("http://localhost:#{bypass.port}#{secret_path}")
+        end)
+
+      assert log =~ "HTTP request failed"
+      refute log =~ secret_body
+      refute log =~ "provider-user-secret"
+    end
+
+    test "callers can suppress a lower-level warning when they own fallback logging" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/fallback", fn conn ->
+        Plug.Conn.resp(conn, 503, "temporary provider detail")
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 503, _body}} =
+                   HTTP.get("http://localhost:#{bypass.port}/fallback", [], log_failures?: false)
+        end)
+
+      refute log =~ "HTTP request failed"
+      refute log =~ "temporary provider detail"
+    end
+
+    test "bounds returned error bodies before callers inspect them" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/oversized", fn conn ->
+        Plug.Conn.resp(conn, 500, String.duplicate("x", 50_000))
+      end)
+
+      assert {:error, {:http_status, 500, body}} =
+               HTTP.get("http://localhost:#{bypass.port}/oversized")
+
+      assert byte_size(body) <= 16_000
+      assert String.valid?(body)
     end
 
     test "returns caller-declared expected statuses without warning noise" do
@@ -141,6 +227,47 @@ defmodule Maraithon.HTTPTest do
         end)
 
       assert log =~ "HTTP request failed"
+    end
+
+    test "stops buffering an oversized successful response" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/oversized-success", fn conn ->
+        Plug.Conn.resp(conn, 200, String.duplicate("x", 100_000))
+      end)
+
+      assert {:error, {:http_status, 200, "response_body_too_large"}} =
+               HTTP.get("http://localhost:#{bypass.port}/oversized-success", [],
+                 max_response_body_bytes: 1_024,
+                 log_failures?: false
+               )
+    end
+
+    test "does not follow redirects carrying credential-bearing request data" do
+      source = Bypass.open()
+      target = Bypass.open()
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(target, "POST", "/capture", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        Plug.Conn.resp(conn, 200, "captured")
+      end)
+
+      Bypass.expect_once(source, "POST", "/redirect", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("location", "http://localhost:#{target.port}/capture")
+        |> Plug.Conn.resp(307, "redirect")
+      end)
+
+      capture_log(fn ->
+        assert {:error, {:http_status, 307, "redirect"}} =
+                 HTTP.post_form(
+                   "http://localhost:#{source.port}/redirect",
+                   %{client_secret: "never-forward-this"}
+                 )
+      end)
+
+      assert Agent.get(counter, & &1) == 0
     end
 
     test "passes headers" do

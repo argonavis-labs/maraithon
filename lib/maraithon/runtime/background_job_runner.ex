@@ -506,6 +506,16 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp normalize_value(value) when is_list(value), do: Enum.map(value, &normalize_value/1)
   defp normalize_value(value), do: value
 
-  defp error_text(reason) when is_binary(reason), do: reason
-  defp error_text(reason), do: inspect(reason)
+  defp error_text({:retry_after, seconds, reason}) when is_integer(seconds) do
+    "retry_after=#{seconds} failure=#{closed_failure_text(reason)}"
+  end
+
+  defp error_text(reason), do: closed_failure_text(reason)
+
+  defp closed_failure_text({:rate_limited, _provider_detail}), do: "rate_limited"
+  defp closed_failure_text({:rate_limited, _seconds, _provider_detail}), do: "rate_limited"
+  defp closed_failure_text({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  defp closed_failure_text({kind, _detail, _extra}) when is_atom(kind), do: Atom.to_string(kind)
+  defp closed_failure_text(kind) when is_atom(kind), do: Atom.to_string(kind)
+  defp closed_failure_text(_reason), do: "background_job_error"
 end

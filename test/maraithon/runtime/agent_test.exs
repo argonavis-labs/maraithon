@@ -719,6 +719,37 @@ defmodule Maraithon.Runtime.AgentTest do
   # ============================================================================
 
   describe "wakeup scheduling" do
+    test "persists behavior tool arguments under the command args envelope", %{
+      scheduler_pid: _scheduler_pid
+    } do
+      check_url = "https://example.com/health"
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{"check_url" => check_url},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      pid = start_supervised!({RuntimeAgent, agent})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+      assert {:idle, _data} = :sys.get_state(pid)
+
+      :sys.replace_state(pid, fn {:idle, data} ->
+        behavior_state = Map.put(data.behavior_state, :iteration, 5)
+        {:idle, %{data | behavior_state: behavior_state}}
+      end)
+
+      send(pid, {:wakeup, "wakeup", Ecto.UUID.generate(), %{}})
+      assert {:waiting_effect, _data} = :sys.get_state(pid)
+
+      effect = Repo.get_by!(Effect, agent_id: agent.id, effect_type: "tool_call")
+      assert effect.params["tool"] == "http_get"
+      assert effect.params["args"] == %{"url" => check_url}
+      refute Map.has_key?(effect.params, "url")
+    end
+
     @doc """
     Verifies agents handle the generic "wakeup" job type.
     This is a general-purpose wakeup that agents can use for any purpose.

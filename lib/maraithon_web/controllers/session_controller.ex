@@ -13,12 +13,20 @@ defmodule MaraithonWeb.SessionController do
     case Accounts.request_magic_link(email, request_opts) do
       {:ok, %{user: user, token: token}} ->
         link = url(~p"/auth/magic/#{token}")
-        _ = MagicLinkSender.deliver(user.email, link)
 
-        conn
-        |> put_flash(:info, "Check your email for a sign-in link.")
-        |> put_status(:see_other)
-        |> redirect(to: "/login")
+        case MagicLinkSender.deliver(user.email, link) do
+          :ok ->
+            conn
+            |> put_flash(:info, "Check your email for a sign-in link.")
+            |> put_status(:see_other)
+            |> redirect(to: "/login")
+
+          {:error, reason} ->
+            conn
+            |> put_flash(:error, delivery_error_message(reason))
+            |> put_status(:see_other)
+            |> redirect(to: "/login")
+        end
 
       {:error, :invalid_email} ->
         conn
@@ -68,6 +76,12 @@ defmodule MaraithonWeb.SessionController do
     |> put_status(:see_other)
     |> redirect(to: "/")
   end
+
+  defp delivery_error_message(:email_suppressed) do
+    "That email address cannot receive sign-in links. Use another address or contact support."
+  end
+
+  defp delivery_error_message(_reason), do: "Unable to send sign-in link right now."
 
   defp extract_email(%{"magic_link" => %{"email" => email}}), do: email
   defp extract_email(%{"email" => email}), do: email

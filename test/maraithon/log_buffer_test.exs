@@ -44,8 +44,25 @@ defmodule Maraithon.LogBufferTest do
     refute serialized =~ "provider-body-secret"
     refute serialized =~ "private-user-payload"
     assert entry.metadata["reason"] == "redacted_detail"
-    assert entry.metadata["body"] == "redacted_detail"
-    assert entry.metadata["arbitrary_payload"] == "redacted_detail"
+    refute Map.has_key?(entry.metadata, "body")
+    refute Map.has_key?(entry.metadata, "arbitrary_payload")
+  end
+
+  test "drops deep unknown metadata before recursive redaction" do
+    deep = Enum.reduce(1..2_000, "private-leaf", fn index, acc -> %{index => acc} end)
+
+    Logger.warning("bounded metadata probe",
+      arbitrary_payload: deep,
+      failure_code: "bounded_probe"
+    )
+
+    Logger.flush()
+    _ = :sys.get_state(Maraithon.LogBuffer)
+    [entry] = Maraithon.LogBuffer.recent(1)
+
+    assert entry.metadata["failure_code"] == "bounded_probe"
+    refute Map.has_key?(entry.metadata, "arbitrary_payload")
+    refute inspect(entry, printable_limit: :infinity) =~ "private-leaf"
   end
 
   test "keeps only the configured maximum number of entries" do
@@ -82,7 +99,7 @@ defmodule Maraithon.LogBufferTest do
     assert entry.level == :info
     assert {:ok, _timestamp, _offset} = DateTime.from_iso8601(entry.timestamp)
     refute Map.has_key?(entry.metadata, "unsupported")
-    assert entry.metadata["description"] == "redacted_detail"
+    refute Map.has_key?(entry.metadata, "description")
     assert byte_size(entry.metadata["user_id"]) == 16
     refute inspect(entry) =~ "person@example.com"
     assert String.valid?(Jason.encode!(entry))

@@ -4,60 +4,6 @@ defmodule Maraithon.LogFormatter do
   Outputs structured logs that Cloud Logging can parse automatically.
   """
 
-  @structured_metadata_fields [
-    :request_id,
-    :agent_id,
-    :effect_id,
-    :job_id,
-    :job_type,
-    :error,
-    :reason,
-    :provider,
-    :user_id,
-    :user_id_hash,
-    :status,
-    :duration_ms,
-    :retry_after_ms,
-    :model,
-    :reasoning_effort,
-    :input_tokens,
-    :output_tokens,
-    :reasoning_tokens,
-    :cost_usd,
-    :finish_reason,
-    :choice_count,
-    :detail_failure_count,
-    :truncated,
-    :backfill_needed,
-    :sent,
-    :held,
-    :suppressed,
-    :failed,
-    :disabled,
-    :failure_code,
-    :failure_codes,
-    :response_status,
-    :response_shape,
-    :error_class,
-    :transport_class,
-    :callback_class,
-    :prompt_kind,
-    :base_prompt_bytes,
-    :prompt_bytes,
-    :prompt_byte_cap,
-    :available_candidates,
-    :included_candidates,
-    :users,
-    :user_count,
-    :planned,
-    :interrupt_now,
-    :digest,
-    :delivered,
-    :undeliverable,
-    :expired,
-    :recovered
-  ]
-
   def format(level, message, timestamp, metadata) do
     {date, {hour, minute, second, millisecond}} = timestamp
 
@@ -78,7 +24,7 @@ defmodule Maraithon.LogFormatter do
 
     log_entry =
       metadata
-      |> Keyword.take(@structured_metadata_fields)
+      |> Keyword.take(Maraithon.SafeLogMetadata.structured_fields())
       |> Enum.reduce(log_entry, fn {key, value}, acc ->
         Map.put(acc, key, metadata_value(key, value))
       end)
@@ -100,21 +46,53 @@ defmodule Maraithon.LogFormatter do
 
   defp metadata_to_labels(metadata) do
     labels =
-      metadata
-      |> Keyword.take([:module, :function, :line])
-      |> Enum.into(%{}, fn {key, value} -> {to_string(key), to_string(value)} end)
+      %{}
+      |> maybe_put_source_module(Keyword.get(metadata, :module))
+      |> maybe_put_source_line(Keyword.get(metadata, :line))
 
     case Keyword.get(metadata, :mfa) do
       {module, function, arity}
-      when is_atom(module) and is_atom(function) and is_integer(arity) ->
+      when is_atom(module) and is_atom(function) and is_integer(arity) and arity in 0..255 ->
         labels
-        |> Map.put_new("module", Atom.to_string(module))
-        |> Map.put_new("function", "#{function}/#{arity}")
+        |> maybe_put_source_module(module)
+        |> maybe_put_source_function(function, arity)
 
       _other ->
         labels
     end
   end
+
+  defp maybe_put_source_module(labels, module)
+       when is_atom(module) and module not in [nil, true, false] do
+    case safe_source_label(Atom.to_string(module), 255) do
+      nil -> labels
+      value -> Map.put_new(labels, "module", value)
+    end
+  end
+
+  defp maybe_put_source_module(labels, _module), do: labels
+
+  defp maybe_put_source_function(labels, function, arity)
+       when is_atom(function) and is_integer(arity) do
+    case safe_source_label("#{function}/#{arity}", 255) do
+      nil -> labels
+      value -> Map.put_new(labels, "function", value)
+    end
+  end
+
+  defp maybe_put_source_line(labels, line) when is_integer(line) and line in 0..10_000_000,
+    do: Map.put(labels, "line", Integer.to_string(line))
+
+  defp maybe_put_source_line(labels, _line), do: labels
+
+  defp safe_source_label(value, max_bytes)
+       when is_binary(value) and byte_size(value) <= max_bytes do
+    if String.valid?(value) and Regex.match?(~r/^[A-Za-z0-9._:\/-]+$/, value),
+      do: value,
+      else: nil
+  end
+
+  defp safe_source_label(_value, _max_bytes), do: nil
 
   defp metadata_value(key, value) do
     key

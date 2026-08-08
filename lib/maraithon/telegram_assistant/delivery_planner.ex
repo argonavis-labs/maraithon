@@ -10,6 +10,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   alias Maraithon.BriefingSchedules
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
+  alias Maraithon.DeliveryErrorCopy
   alias Maraithon.InsightFeedback
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.InsightNotifications.MemoryGate
@@ -137,47 +138,53 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
     user_ids = due_user_ids(Keyword.get(opts, :user_ids), batch_size)
 
-    Enum.reduce(user_ids, empty_due_summary(), fn user_id, acc ->
-      case safe_run_for_user(user_id, opts) do
-        {:ok, result} ->
-          _ = ProactiveQueue.rotate_pending_user(user_id)
+    summary =
+      Enum.reduce(user_ids, empty_due_summary(), fn user_id, acc ->
+        case safe_run_for_user(user_id, opts) do
+          {:ok, result} ->
+            _ = ProactiveQueue.rotate_pending_user(user_id)
 
-          failure_codes =
-            increment_failure_code(acc.failure_codes, "dispatch_failed", result.failed)
+            failure_codes =
+              acc.failure_codes
+              |> increment_failure_code("dispatch_failed", result.failed)
+              |> increment_failure_code("delivery_unknown", result.delivery_unknown)
 
-          %{
-            acc
-            | users: acc.users + 1,
-              planned: acc.planned + result.planned,
-              interrupt_now: acc.interrupt_now + result.interrupt_now,
-              digest: acc.digest + result.digest,
-              held: acc.held + result.held,
-              delivered: acc.delivered + result.delivered,
-              failed: acc.failed + result.failed,
-              failure_codes: failure_codes
-          }
+            %{
+              acc
+              | users: acc.users + 1,
+                planned: acc.planned + result.planned,
+                interrupt_now: acc.interrupt_now + result.interrupt_now,
+                digest: acc.digest + result.digest,
+                held: acc.held + result.held,
+                delivered: acc.delivered + result.delivered,
+                delivery_unknown: acc.delivery_unknown + result.delivery_unknown,
+                failed: acc.failed + result.failed,
+                failure_codes: failure_codes
+            }
 
-        {:error, :no_push_device} ->
-          _ = ProactiveQueue.rotate_pending_user(user_id)
-          %{acc | users: acc.users + 1, undeliverable: acc.undeliverable + 1}
+          {:error, :no_push_device} ->
+            _ = ProactiveQueue.rotate_pending_user(user_id)
+            %{acc | users: acc.users + 1, undeliverable: acc.undeliverable + 1}
 
-        {:error, reason} ->
-          _ = ProactiveQueue.rotate_pending_user(user_id)
-          failure_code = planning_failure_code(reason)
+          {:error, reason} ->
+            _ = ProactiveQueue.rotate_pending_user(user_id)
+            failure_code = planning_failure_code(reason)
 
-          Logger.warning("Proactive delivery planning failed",
-            user_id_hash: Redaction.fingerprint(user_id),
-            failure_code: failure_code
-          )
+            Logger.warning("Proactive delivery planning failed",
+              user_id_hash: Redaction.fingerprint(user_id),
+              failure_code: failure_code
+            )
 
-          %{
-            acc
-            | users: acc.users + 1,
-              failed: acc.failed + 1,
-              failure_codes: increment_failure_code(acc.failure_codes, failure_code, 1)
-          }
-      end
-    end)
+            %{
+              acc
+              | users: acc.users + 1,
+                failed: acc.failed + 1,
+                failure_codes: increment_failure_code(acc.failure_codes, failure_code, 1)
+            }
+        end
+      end)
+
+    summary
   end
 
   defp due_user_ids(nil, batch_size),
@@ -321,7 +328,9 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           {authorized, %{counts | failed: counts.failed + lost_count}}
         else
           relinquished = relinquish_plans(planned, plan, payload, claim_token)
-          {relinquished, %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}}
+
+          {relinquished,
+           %{delivered: 0, delivery_unknown: 0, failed: 0, held: 0, hold_reasons: %{}}}
         end
 
       # Recorded after dispatch so this reflects the enforced outcome
@@ -343,6 +352,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
          digest: counts.digest,
          held: if(dispatch?, do: dispatch_counts.held, else: counts.hold),
          delivered: dispatch_counts.delivered,
+         delivery_unknown: dispatch_counts.delivery_unknown,
          failed: dispatch_counts.failed
        }}
     end
@@ -1003,6 +1013,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
     %{
       delivered: interrupt_counts.delivered + digest_counts.delivered,
+      delivery_unknown: interrupt_counts.delivery_unknown + digest_counts.delivery_unknown,
       failed: interrupt_counts.failed + digest_counts.failed,
       held: held_count + interrupt_counts.held + digest_counts.held,
       hold_reasons:
@@ -1089,79 +1100,304 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   end
 
   defp dispatch_interrupts(candidates, chat_id, claim_token) do
-    Enum.reduce(candidates, %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}, fn candidate,
-                                                                                       acc ->
-      # Model chose interrupt_now at planning time, but PushBroker.deliver/1
-      # still re-checks the hard budget gate at send time (R2): only a
-      # genuinely high-urgency candidate skips the hourly cap/quiet hours.
-      case PushBroker.deliver(push_candidate(candidate, chat_id, interrupt_now: true)) do
-        {:ok, %{decision: "sent_now", conversation_id: conversation_id}} ->
-          {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
-          maybe_mark_brief_delivered(candidate)
-          maybe_mark_insight_delivery_sent(candidate)
-          maybe_send_candidate_todo_cards(conversation_id, candidate)
+    Enum.reduce(
+      candidates,
+      %{delivered: 0, delivery_unknown: 0, failed: 0, held: 0, hold_reasons: %{}},
+      fn candidate, acc ->
+        # Model chose interrupt_now at planning time, but PushBroker.deliver/1
+        # still re-checks the hard budget gate at send time (R2): only a
+        # genuinely high-urgency candidate skips the hourly cap/quiet hours.
+        case PushBroker.deliver(push_candidate(candidate, chat_id, interrupt_now: true)) do
+          {:ok, %{decision: "sent_now", conversation_id: conversation_id}} ->
+            {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
+            maybe_mark_brief_delivered(candidate)
+            maybe_mark_insight_delivery_sent(candidate)
+            maybe_send_candidate_todo_cards(conversation_id, candidate)
 
-          record_dispatch_decision(candidate, "proactive.sent", "sent", %{
-            "decision" => "sent_now"
-          })
+            record_dispatch_decision(candidate, "proactive.sent", "sent", %{
+              "decision" => "sent_now"
+            })
 
-          %{acc | delivered: acc.delivered + 1}
+            %{acc | delivered: acc.delivered + 1}
 
-        {:ok, %{decision: "sent_now"}} ->
-          {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
-          maybe_mark_brief_delivered(candidate)
-          maybe_mark_insight_delivery_sent(candidate)
+          {:ok, %{decision: "sent_now"}} ->
+            {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
+            maybe_mark_brief_delivered(candidate)
+            maybe_mark_insight_delivery_sent(candidate)
 
-          record_dispatch_decision(candidate, "proactive.sent", "sent", %{
-            "decision" => "sent_now"
-          })
+            record_dispatch_decision(candidate, "proactive.sent", "sent", %{
+              "decision" => "sent_now"
+            })
 
-          %{acc | delivered: acc.delivered + 1}
+            %{acc | delivered: acc.delivered + 1}
 
-        {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
-          # Already delivered under this dedupe_key through another path.
-          {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
-          maybe_mark_brief_delivered(candidate)
-          maybe_mark_insight_delivery_sent(candidate)
+          {:ok, %{decision: "suppressed", reason: "duplicate"}} ->
+            # Already delivered under this dedupe_key through another path.
+            {:ok, _candidate} = ProactiveQueue.complete_claim(candidate, claim_token, "delivered")
+            maybe_mark_brief_delivered(candidate)
+            maybe_mark_insight_delivery_sent(candidate)
 
-          record_dispatch_decision(candidate, "proactive.sent", "sent", %{
-            "decision" => "suppressed",
-            "reason" => "duplicate"
-          })
+            record_dispatch_decision(candidate, "proactive.sent", "sent", %{
+              "decision" => "suppressed",
+              "reason" => "duplicate"
+            })
 
-          %{acc | delivered: acc.delivered + 1}
+            %{acc | delivered: acc.delivered + 1}
 
-        {:ok, %{decision: "held_rate_limit", reason: reason}} ->
-          {:ok, _candidate} =
-            ProactiveQueue.complete_claim(candidate, claim_token, "held", "held")
+          {:ok, %{decision: "delivery_unknown"}} ->
+            count_unknown_quarantine(acc, candidate, claim_token)
 
-          record_dispatch_decision(candidate, "proactive.held", "held", %{
-            "decision" => "held_rate_limit",
-            "hold_reason" => reason
-          })
+          {:error, :delivery_unknown} ->
+            count_unknown_quarantine(acc, candidate, claim_token)
 
-          %{acc | held: acc.held + 1, hold_reasons: bump_reason(acc.hold_reasons, reason)}
+          {:ok, %{decision: "held_rate_limit", reason: reason}} ->
+            {:ok, _candidate} =
+              ProactiveQueue.complete_claim(candidate, claim_token, "held", "held")
 
-        {:ok, _result} ->
-          {:ok, _candidate} =
-            ProactiveQueue.complete_claim(candidate, claim_token, "held", "held")
+            record_dispatch_decision(candidate, "proactive.held", "held", %{
+              "decision" => "held_rate_limit",
+              "hold_reason" => reason
+            })
 
-          record_dispatch_decision(candidate, "proactive.held", "held", %{
-            "decision" => "unknown"
-          })
+            %{acc | held: acc.held + 1, hold_reasons: bump_reason(acc.hold_reasons, reason)}
 
-          %{acc | held: acc.held + 1, hold_reasons: bump_reason(acc.hold_reasons, "unknown")}
+          {:ok, _result} ->
+            {:ok, _candidate} =
+              ProactiveQueue.complete_claim(candidate, claim_token, "held", "held")
 
-        {:error, reason} ->
-          requeue_failed_dispatch(candidate, reason, claim_token)
-          %{acc | failed: acc.failed + 1}
+            record_dispatch_decision(candidate, "proactive.held", "held", %{
+              "decision" => "unknown"
+            })
 
-        {:fallback, reason} ->
-          requeue_failed_dispatch(candidate, reason, claim_token)
-          %{acc | failed: acc.failed + 1}
+            %{acc | held: acc.held + 1, hold_reasons: bump_reason(acc.hold_reasons, "unknown")}
+
+          {:error, reason} ->
+            requeue_failed_dispatch(candidate, reason, claim_token)
+            %{acc | failed: acc.failed + 1}
+
+          {:fallback, reason} ->
+            requeue_failed_dispatch(candidate, reason, claim_token)
+            %{acc | failed: acc.failed + 1}
+        end
+      end
+    )
+  end
+
+  defp count_unknown_quarantine(acc, candidate, claim_token) do
+    case quarantine_unknown_delivery(candidate, claim_token) do
+      :ok ->
+        %{
+          acc
+          | delivery_unknown: acc.delivery_unknown + 1,
+            held: acc.held + 1,
+            hold_reasons: bump_reason(acc.hold_reasons, "delivery_unknown")
+        }
+
+      {:error, _reason} ->
+        %{
+          acc
+          | delivery_unknown: acc.delivery_unknown + 1,
+            failed: acc.failed + 1,
+            hold_reasons: bump_reason(acc.hold_reasons, "delivery_unknown_reconciliation_failed")
+        }
+    end
+  end
+
+  defp quarantine_unknown_delivery(candidate, claim_token) do
+    result =
+      Repo.transaction(fn ->
+        with {:ok, _candidate} <-
+               ProactiveQueue.complete_claim(candidate, claim_token, "held", "delivery_unknown"),
+             :ok <- mark_source_delivery_unknown(candidate) do
+          :ok
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, :ok} ->
+        record_dispatch_decision(candidate, "proactive.delivery_unknown", "unknown", %{
+          "decision" => "delivery_unknown"
+        })
+
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to quarantine ambiguous proactive delivery",
+          candidate_reference: Redaction.fingerprint(candidate.id),
+          failure_code: Redaction.error_class(reason)
+        )
+
+        {:error, reason}
+    end
+  rescue
+    error ->
+      Logger.warning("Ambiguous proactive delivery quarantine crashed",
+        candidate_reference: Redaction.fingerprint(candidate.id),
+        failure_code: Redaction.error_class(error)
+      )
+
+      {:error, :quarantine_failed}
+  end
+
+  defp mark_source_delivery_unknown(%ProactiveCandidate{source: "brief", source_id: source_id})
+       when is_binary(source_id) do
+    with {:ok, _uuid} <- Ecto.UUID.cast(source_id) do
+      Brief
+      |> where([brief], brief.id == ^source_id)
+      |> where([brief], brief.status in ["pending", "sent", "failed"])
+      |> Repo.update_all(
+        set: [
+          status: "failed",
+          error_message: DeliveryErrorCopy.storage_message(:delivery_unknown),
+          provider_message_id: nil,
+          sent_at: nil,
+          updated_at: DateTime.utc_now()
+        ]
+      )
+      |> source_quarantine_result()
+    else
+      _invalid_id -> :ok
+    end
+  end
+
+  defp mark_source_delivery_unknown(%ProactiveCandidate{source: "insight", source_id: source_id})
+       when is_binary(source_id) do
+    with {:ok, _uuid} <- Ecto.UUID.cast(source_id) do
+      Delivery
+      |> where([delivery], delivery.id == ^source_id)
+      |> where([delivery], delivery.status in ["pending", "sent", "failed"])
+      |> Repo.update_all(
+        set: [
+          status: "failed",
+          error_message: DeliveryErrorCopy.storage_message(:delivery_unknown),
+          provider_message_id: nil,
+          sent_at: nil,
+          updated_at: DateTime.utc_now()
+        ]
+      )
+      |> source_quarantine_result()
+    else
+      _invalid_id -> :ok
+    end
+  end
+
+  defp mark_source_delivery_unknown(_candidate), do: :ok
+
+  defp source_quarantine_result({count, _rows}) when count in 0..1, do: :ok
+  defp source_quarantine_result(_unexpected), do: {:error, :source_quarantine_failed}
+
+  defp resolve_unknown_digest(user_id, digest_key, candidates, claim_token) do
+    {ambiguous, later} = partition_unknown_digest_candidates(user_id, digest_key, candidates)
+
+    if later != [] do
+      hold_digest_candidates(later, "daily_digest_delivery_unknown", claim_token)
+    end
+
+    quarantine_results = Enum.map(ambiguous, &quarantine_unknown_delivery(&1, claim_token))
+    quarantined = Enum.count(quarantine_results, &(&1 == :ok))
+    reconciliation_failures = length(quarantine_results) - quarantined
+
+    reasons =
+      %{}
+      |> maybe_put_count("delivery_unknown", quarantined)
+      |> maybe_put_count("delivery_unknown_reconciliation_failed", reconciliation_failures)
+      |> maybe_put_count("daily_digest_delivery_unknown", length(later))
+
+    %{
+      delivered: 0,
+      delivery_unknown: length(ambiguous),
+      failed: reconciliation_failures,
+      held: quarantined + length(later),
+      hold_reasons: reasons
+    }
+  end
+
+  defp partition_unknown_digest_candidates(user_id, digest_key, candidates) do
+    case Repo.get_by(PushReceipt,
+           user_id: user_id,
+           dedupe_key: digest_key,
+           decision: "delivery_unknown"
+         ) do
+      %PushReceipt{metadata: %{"candidate_dedupe_hashes" => hashes}} ->
+        case valid_digest_dedupe_hashes(hashes) do
+          {:ok, original_hashes} ->
+            Enum.split_with(candidates, fn candidate ->
+              MapSet.member?(original_hashes, PushReceipt.dedupe_hash(candidate.dedupe_key))
+            end)
+
+          :error ->
+            {candidates, []}
+        end
+
+      # Transitional receipts may have candidate UUIDs but predate durable
+      # dedupe hashes. UUID matching is safe for the original rows; missing or
+      # malformed membership remains conservative below.
+      %PushReceipt{metadata: %{"candidate_ids" => ids}} ->
+        case valid_digest_candidate_ids(ids) do
+          {:ok, original_ids} ->
+            Enum.split_with(candidates, &MapSet.member?(original_ids, &1.id))
+
+          :error ->
+            {candidates, []}
+        end
+
+      _legacy_or_invalid ->
+        # Older receipts did not retain bundle membership. Treat every
+        # current candidate as possibly sent rather than risk a resend.
+        {candidates, []}
+    end
+  end
+
+  defp valid_digest_dedupe_hashes(hashes) when is_list(hashes) do
+    hashes
+    |> Enum.take(51)
+    |> Enum.reduce_while({:ok, MapSet.new(), 0}, fn hash, {:ok, acc, count} ->
+      if valid_digest_dedupe_hash?(hash) do
+        {:cont, {:ok, MapSet.put(acc, hash), count + 1}}
+      else
+        {:halt, :error}
       end
     end)
+    |> case do
+      {:ok, hashes, count} when count in 1..50 -> {:ok, hashes}
+      _invalid -> :error
+    end
+  rescue
+    _error -> :error
   end
+
+  defp valid_digest_dedupe_hashes(_hashes), do: :error
+
+  defp valid_digest_dedupe_hash?(hash)
+       when is_binary(hash) and byte_size(hash) == 64 do
+    String.valid?(hash) and String.match?(hash, ~r/\A[0-9a-f]{64}\z/)
+  end
+
+  defp valid_digest_dedupe_hash?(_hash), do: false
+
+  defp valid_digest_candidate_ids(ids) when is_list(ids) do
+    ids
+    |> Enum.take(51)
+    |> Enum.reduce_while({:ok, MapSet.new(), 0}, fn id, {:ok, acc, count} ->
+      case Ecto.UUID.cast(id) do
+        {:ok, normalized} -> {:cont, {:ok, MapSet.put(acc, normalized), count + 1}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, ids, count} when count in 1..50 -> {:ok, ids}
+      _invalid -> :error
+    end
+  rescue
+    _error -> :error
+  end
+
+  defp valid_digest_candidate_ids(_ids), do: :error
+
+  defp maybe_put_count(counts, _reason, 0), do: counts
+  defp maybe_put_count(counts, reason, count), do: Map.put(counts, reason, count)
 
   # A dispatch failure (a transient APNs error, the broker disabled) must
   # not leave the candidate in "planned" — no process re-reads that status,
@@ -1195,7 +1431,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   defp bump_reason(reasons, _reason), do: reasons
 
   defp dispatch_digest(_user_id, _chat_id, [], _plan, _claim_token),
-    do: %{delivered: 0, failed: 0, held: 0, hold_reasons: %{}}
+    do: %{delivered: 0, delivery_unknown: 0, failed: 0, held: 0, hold_reasons: %{}}
 
   defp dispatch_digest(user_id, chat_id, candidates, plan, claim_token) do
     digest_intro = digest_intro(plan)
@@ -1225,6 +1461,10 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         "message_class" => "proactive_delivery_digest",
         "candidate_ids" => Enum.map(candidates, & &1.id)
       },
+      receipt_metadata: %{
+        "candidate_ids" => Enum.map(candidates, & &1.id),
+        "candidate_dedupe_hashes" => Enum.map(candidates, &PushReceipt.dedupe_hash(&1.dedupe_key))
+      },
       telegram_opts: [parse_mode: "HTML"]
     }
 
@@ -1233,7 +1473,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
         case load_conversation(conversation_id) do
           %Conversation{} = conversation ->
             send_digest_cards(conversation, candidates, claim_token)
-            |> Map.merge(%{held: 0, hold_reasons: %{}})
+            |> Map.merge(%{delivery_unknown: 0, held: 0, hold_reasons: %{}})
 
           nil ->
             # Mobile path: the digest push IS the delivery — there is no
@@ -1245,11 +1485,18 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
             mark_digest_delivered(candidates, claim_token)
         end
 
+      {:ok, %{decision: "delivery_unknown"}} ->
+        resolve_unknown_digest(user_id, digest_key, candidates, claim_token)
+
+      {:error, :delivery_unknown} ->
+        resolve_unknown_digest(user_id, digest_key, candidates, claim_token)
+
       {:ok, %{decision: "held_rate_limit", reason: reason}} ->
         hold_digest_candidates(candidates, reason, claim_token)
 
         %{
           delivered: 0,
+          delivery_unknown: 0,
           failed: 0,
           held: length(candidates),
           hold_reasons: %{reason => length(candidates)}
@@ -1260,6 +1507,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
         %{
           delivered: 0,
+          delivery_unknown: 0,
           failed: 0,
           held: length(candidates),
           hold_reasons: %{"unknown" => length(candidates)}
@@ -1267,11 +1515,25 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
       {:error, reason} ->
         Enum.each(candidates, &requeue_failed_dispatch(&1, reason, claim_token))
-        %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
+
+        %{
+          delivered: 0,
+          delivery_unknown: 0,
+          failed: length(candidates),
+          held: 0,
+          hold_reasons: %{}
+        }
 
       {:fallback, reason} ->
         Enum.each(candidates, &requeue_failed_dispatch(&1, reason, claim_token))
-        %{delivered: 0, failed: length(candidates), held: 0, hold_reasons: %{}}
+
+        %{
+          delivered: 0,
+          delivery_unknown: 0,
+          failed: length(candidates),
+          held: 0,
+          hold_reasons: %{}
+        }
     end
   end
 
@@ -1287,7 +1549,13 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       record_dispatch_decision(candidate, "proactive.sent", "sent", %{"decision" => "merged"})
     end)
 
-    %{delivered: length(candidates), failed: 0, held: 0, hold_reasons: %{}}
+    %{
+      delivered: length(candidates),
+      delivery_unknown: 0,
+      failed: 0,
+      held: 0,
+      hold_reasons: %{}
+    }
   end
 
   # The digest bundle itself was held (quiet hours; the hourly cap is
@@ -1815,6 +2083,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       digest: 0,
       held: 0,
       delivered: 0,
+      delivery_unknown: 0,
       failed: 0,
       undeliverable: 0,
       failure_codes: %{}
@@ -1829,6 +2098,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       digest: 0,
       held: 0,
       delivered: 0,
+      delivery_unknown: 0,
       failed: 0
     }
   end

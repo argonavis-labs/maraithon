@@ -29,6 +29,20 @@ defmodule Maraithon.LLM.RequestBudgetTest do
     assert :ok = RequestBudget.validate_body(bounded)
   end
 
+  test "allows one message to use the provider request budget beyond candidate field limits" do
+    content = String.duplicate("x", 80_000)
+
+    assert {:ok, %{"messages" => [%{"content" => ^content}]}} =
+             RequestBudget.validate(%{
+               "messages" => [%{"role" => "user", "content" => content}]
+             })
+
+    assert :ok =
+             RequestBudget.validate_body(%{
+               "messages" => [%{"role" => "user", "content" => content}]
+             })
+  end
+
   test "rejects escape-expanded requests at the final encoded-byte boundary" do
     content = String.duplicate("\\\"", 30_000)
 

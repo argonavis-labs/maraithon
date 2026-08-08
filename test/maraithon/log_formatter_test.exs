@@ -60,13 +60,27 @@ defmodule Maraithon.LogFormatterTest do
         interrupt_now: 6,
         digest: 7,
         delivered: 8,
+        delivery_unknown: 2,
         expired: 9,
         user_id_hash: "abc123",
+        user_fingerprint: "0123456789abcdef",
+        device_reference: "fedcba9876543210",
+        candidate_reference: "candidate-123",
+        effect_reference: "effect-123",
+        cycle_reference: "cycle-123",
+        effect_type: "llm_call",
+        event_type: "effect_failed",
+        candidate_count: 3,
+        device_count: 2,
+        detected: 4,
+        swept: 1,
+        alerted: 1,
         failure_code: "api_500",
         failure_codes: %{"api_500" => 1},
         cost_usd: 0.123,
         reasoning_tokens: 321,
         response_status: 500,
+        provider_error_code: 406,
         response_shape: "list",
         error_class: "server_error",
         choice_count: 1,
@@ -100,13 +114,27 @@ defmodule Maraithon.LogFormatterTest do
       assert decoded["interrupt_now"] == 6
       assert decoded["digest"] == 7
       assert decoded["delivered"] == 8
+      assert decoded["delivery_unknown"] == 2
       assert decoded["expired"] == 9
       assert decoded["user_id_hash"] == "abc123"
+      assert decoded["user_fingerprint"] == "0123456789abcdef"
+      assert decoded["device_reference"] == "fedcba9876543210"
+      assert decoded["candidate_reference"] == "candidate-123"
+      assert decoded["effect_reference"] == "effect-123"
+      assert decoded["cycle_reference"] == "cycle-123"
+      assert decoded["effect_type"] == "llm_call"
+      assert decoded["event_type"] == "effect_failed"
+      assert decoded["candidate_count"] == 3
+      assert decoded["device_count"] == 2
+      assert decoded["detected"] == 4
+      assert decoded["swept"] == 1
+      assert decoded["alerted"] == 1
       assert decoded["failure_code"] == "api_500"
       assert decoded["failure_codes"] =~ "api_500"
       assert decoded["cost_usd"] == 0.123
       assert decoded["reasoning_tokens"] == 321
       assert decoded["response_status"] == 500
+      assert decoded["provider_error_code"] == 406
       assert decoded["response_shape"] == "list"
       assert decoded["error_class"] == "server_error"
       assert decoded["choice_count"] == 1
@@ -180,6 +208,28 @@ defmodule Maraithon.LogFormatterTest do
       assert labels["module"] == "Elixir.MyModule"
       assert labels["function"] == "test/2"
       assert labels["line"] == "42"
+    end
+
+    test "drops caller-controlled source label values" do
+      timestamp = {{2024, 1, 15}, {12, 30, 45, 0}}
+      secret = "CALLSECRET-" <> String.duplicate("x", 10_000)
+
+      decoded =
+        LogFormatter.format(:warning, "Test", timestamp,
+          module: secret,
+          function: secret,
+          line: "CALLLINE",
+          mfa: {secret, secret, secret}
+        )
+        |> IO.iodata_to_binary()
+        |> String.trim()
+        |> Jason.decode!()
+
+      labels = decoded["logging.googleapis.com/labels"]
+      refute Map.has_key?(labels, "module")
+      refute Map.has_key?(labels, "function")
+      refute Map.has_key?(labels, "line")
+      refute Jason.encode!(decoded) =~ "CALLSECRET"
     end
 
     test "sanitizes invalid UTF-8 while preserving structured JSON" do

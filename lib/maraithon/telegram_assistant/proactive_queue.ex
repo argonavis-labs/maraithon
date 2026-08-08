@@ -18,7 +18,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
   @default_pending_candidate_limit 25
   @max_required_candidate_share 12
   @max_query_limit 100
-  @live_statuses ~w(pending planned)
+  @live_statuses ~w(pending planned held)
   @expirable_live_statuses ~w(pending planned)
   # SPEC 02 R7: a "held" candidate has no expires_at-based owner (its
   # original expires_at is stale pre-hold data); age is measured from
@@ -250,6 +250,10 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
     ProactiveCandidate
     |> where([candidate], candidate.user_id == ^user_id)
     |> where([candidate], candidate.status == "held")
+    |> where(
+      [candidate],
+      is_nil(candidate.plan_reason) or candidate.plan_reason != "delivery_unknown"
+    )
     |> order_by([candidate], desc: candidate.urgency, asc: candidate.inserted_at)
     |> limit(^limit)
     |> Repo.all()
@@ -664,6 +668,26 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
   def recover_stale_planned(_now, _lease_minutes), do: 0
 
   def mark_delivered(candidate_or_id), do: update_status(candidate_or_id, "delivered")
+
+  @doc false
+  def mark_resolvable_held_delivered(candidate_id) when is_binary(candidate_id) do
+    now = DateTime.utc_now()
+
+    {count, _rows} =
+      ProactiveCandidate
+      |> where([candidate], candidate.id == ^candidate_id)
+      |> where([candidate], candidate.status == "held")
+      |> where(
+        [candidate],
+        is_nil(candidate.plan_reason) or candidate.plan_reason != "delivery_unknown"
+      )
+      |> Repo.update_all(set: [status: "delivered", delivered_at: now, updated_at: now])
+
+    if count == 1, do: :ok, else: {:error, :not_resolvable}
+  end
+
+  def mark_resolvable_held_delivered(_candidate_id), do: {:error, :not_resolvable}
+
   def mark_held(candidate_or_id), do: update_status(candidate_or_id, "held")
 
   @doc """
@@ -692,8 +716,10 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
   and never in `list_held_for_user/2`'s urgency-ordered display window,
   which would hide the low-urgency stale tail from the sweep.
 
-  Only touches `status == "held"` rows, so re-running is a no-op for rows
-  already expired. Each expired row gets one `ActionLedger` entry
+  Only touches resolvable `status == "held"` rows. A `delivery_unknown`
+  quarantine remains durable until an operator or device acknowledgement can
+  reconcile it; it must never age into a fresh external send. Re-running is a
+  no-op for rows already expired. Each expired row gets one `ActionLedger` entry
   (`held_interruption_expired`) so the drop is auditable, never silent.
 
   Returns the list of expired rows as `%{id:, user_id:, title:, held_since:}`
@@ -705,6 +731,10 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
     stale =
       ProactiveCandidate
       |> where([candidate], candidate.status == "held")
+      |> where(
+        [candidate],
+        is_nil(candidate.plan_reason) or candidate.plan_reason != "delivery_unknown"
+      )
       |> where([candidate], candidate.updated_at <= ^cutoff)
       |> select([candidate], %{
         id: candidate.id,
@@ -725,6 +755,10 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
           ProactiveCandidate
           |> where([candidate], candidate.id in ^ids)
           |> where([candidate], candidate.status == "held")
+          |> where(
+            [candidate],
+            is_nil(candidate.plan_reason) or candidate.plan_reason != "delivery_unknown"
+          )
           |> select([candidate], candidate.id)
           |> Repo.update_all(set: [status: "expired", updated_at: now])
 
