@@ -49,6 +49,10 @@ defmodule Maraithon.Connectors.Gmail do
   @history_cursor_kind "gmail_history_id"
   @full_resync_window_query "newer_than:1d"
   @full_resync_message_limit 50
+  @default_message_fetch_concurrency 12
+  @max_message_fetch_concurrency 24
+  @default_message_fetch_timeout_ms 15_000
+  @gmail_id_pattern ~r/\A[0-9A-Fa-f]+\z/
   # Safety cap on how many `history.list` pages we'll follow for a single
   # incremental sync before giving up and falling back to a full resync. A
   # legitimate delta should never come close to this; it exists so a
@@ -325,7 +329,12 @@ defmodule Maraithon.Connectors.Gmail do
   end
 
   @doc """
-  Fetches recent Gmail messages with optional labels or search query.
+  Lists Gmail messages and hydrates each listed id.
+
+  The default body mode remains `:full`. Callers with a bounded acquisition
+  phase may request `message_format: :metadata`, tune concurrency/timeouts, and
+  set `include_fetch_metadata: true` to receive completeness metadata as a
+  third tuple element.
   """
   def fetch_messages(user_id_or_token, opts \\ [])
       when is_binary(user_id_or_token) and is_list(opts) do
@@ -345,20 +354,33 @@ defmodule Maraithon.Connectors.Gmail do
         url = "#{api_base_url()}/users/me/messages?#{params}"
 
         case Google.api_request(:get, url, token) do
-          {:ok, %{"messages" => messages}} ->
-            detailed =
-              messages
-              |> Enum.take(max_results)
-              |> Enum.map(fn %{"id" => id} ->
-                fetch_message_content(token, id, access_token: true)
-              end)
-              |> Enum.filter(&match?({:ok, _}, &1))
-              |> Enum.map(fn {:ok, msg} -> msg end)
+          {:ok, response} when is_map(response) ->
+            messages = Map.get(response, "messages", [])
+            messages = if is_list(messages), do: messages, else: []
+            selected = Enum.take(messages, max_results)
+            {detailed, detail_failure_count} = fetch_message_details(selected, token, opts)
 
-            {:ok, detailed}
+            fetch_metadata = %{
+              listed_count: length(messages),
+              requested_count: length(selected),
+              detail_success_count: length(detailed),
+              detail_failure_count: detail_failure_count,
+              truncated?:
+                present?(Map.get(response, "nextPageToken")) or length(messages) > max_results
+            }
 
-          {:ok, _} ->
-            {:ok, []}
+            fetch_metadata =
+              Map.put(
+                fetch_metadata,
+                :complete?,
+                detail_failure_count == 0 and not fetch_metadata.truncated?
+              )
+
+            if Keyword.get(opts, :include_fetch_metadata, false) do
+              {:ok, detailed, fetch_metadata}
+            else
+              {:ok, detailed}
+            end
 
           {:error, reason} ->
             {:error, reason}
@@ -369,76 +391,130 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
+  defp fetch_message_details(messages, token, opts) do
+    format = Keyword.get(opts, :message_format, :full)
+
+    max_concurrency =
+      opts
+      |> Keyword.get(:message_fetch_concurrency, @default_message_fetch_concurrency)
+      |> normalize_message_fetch_concurrency()
+
+    messages
+    |> Task.async_stream(
+      fn message -> safe_fetch_message_detail(token, message, format) end,
+      max_concurrency: max_concurrency,
+      ordered: true,
+      timeout: message_fetch_timeout_ms(opts),
+      on_timeout: :kill_task
+    )
+    |> Enum.reduce({[], 0}, fn
+      {:ok, {:ok, message}}, {detailed, failures} ->
+        {[message | detailed], failures}
+
+      _error, {detailed, failures} ->
+        {detailed, failures + 1}
+    end)
+    |> then(fn {detailed, failures} -> {Enum.reverse(detailed), failures} end)
+  end
+
+  defp safe_fetch_message_detail(token, %{"id" => id}, format) when is_binary(id) do
+    try do
+      fetch_message_detail(token, id, format)
+    rescue
+      error -> {:error, {:detail_exception, error.__struct__}}
+    catch
+      kind, reason -> {:error, {:detail_task_failure, kind, reason}}
+    end
+  end
+
+  defp safe_fetch_message_detail(_token, _message, _format), do: {:error, :missing_message_id}
+
+  defp fetch_message_detail(token, id, format) when format in [:metadata, "metadata"] do
+    fetch_message(token, id, access_token: true)
+  end
+
+  defp fetch_message_detail(token, id, _format) do
+    fetch_message_content(token, id, access_token: true)
+  end
+
+  defp message_fetch_timeout_ms(opts) do
+    case Keyword.get(opts, :message_fetch_timeout_ms, @default_message_fetch_timeout_ms) do
+      :infinity -> :infinity
+      value when is_integer(value) and value > 0 -> value
+      _value -> @default_message_fetch_timeout_ms
+    end
+  end
+
+  defp normalize_message_fetch_concurrency(value) when is_integer(value) do
+    value
+    |> max(1)
+    |> min(@max_message_fetch_concurrency)
+  end
+
+  defp normalize_message_fetch_concurrency(_value), do: @default_message_fetch_concurrency
+
+  @doc """
+  Normalizes a raw Gmail message or thread id, returning `nil` for composite,
+  synthetic, or otherwise invalid values.
+  """
+  def normalize_id(value) when is_binary(value) do
+    id = String.trim(value)
+
+    if id != "" and Regex.match?(@gmail_id_pattern, id), do: id
+  end
+
+  def normalize_id(_value), do: nil
+
+  @doc """
+  Returns whether a value is a valid raw Gmail API message or thread id.
+  """
+  def valid_id?(value), do: is_binary(normalize_id(value))
+
   @doc """
   Fetches a single email message.
   """
   def fetch_message(user_id_or_token, message_id, opts \\ []) do
-    token = request_access_token(user_id_or_token, opts)
-
-    case token do
-      {:ok, access_token} ->
-        url = "#{api_base_url()}/users/me/messages/#{message_id}?format=metadata"
-
-        case Google.api_request(:get, url, access_token) do
-          {:ok, response} ->
-            {:ok, parse_message(response)}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      error ->
-        error
+    with id when is_binary(id) <- normalize_id(message_id),
+         {:ok, access_token} <- request_access_token(user_id_or_token, opts),
+         {:ok, response} <- fetch_gmail_point_resource(access_token, "messages", id, "metadata") do
+      {:ok, parse_message(response)}
+    else
+      nil -> {:error, :invalid_gmail_id}
+      {:error, _reason} = error -> error
     end
   end
 
   @doc """
   Fetches a single Gmail message with decoded text and html body content.
   """
-  def fetch_message_content(user_id_or_token, message_id, opts \\ [])
-      when is_binary(message_id) do
-    token = request_access_token(user_id_or_token, opts)
-
-    case token do
-      {:ok, access_token} ->
-        url = "#{api_base_url()}/users/me/messages/#{message_id}?format=full"
-
-        case Google.api_request(:get, url, access_token) do
-          {:ok, response} ->
-            {:ok, parse_message_content(response)}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      error ->
-        error
+  def fetch_message_content(user_id_or_token, message_id, opts \\ []) do
+    with id when is_binary(id) <- normalize_id(message_id),
+         {:ok, access_token} <- request_access_token(user_id_or_token, opts),
+         {:ok, response} <- fetch_gmail_point_resource(access_token, "messages", id, "full") do
+      {:ok, parse_message_content(response)}
+    else
+      nil -> {:error, :invalid_gmail_id}
+      {:error, _reason} = error -> error
     end
   end
 
   @doc """
   Fetches all available messages in one Gmail thread using metadata format.
   """
-  def fetch_thread(user_id_or_token, thread_id, opts \\ []) when is_binary(thread_id) do
-    token = request_access_token(user_id_or_token, opts)
+  def fetch_thread(user_id_or_token, thread_id, opts \\ []) do
+    with id when is_binary(id) <- normalize_id(thread_id),
+         {:ok, access_token} <- request_access_token(user_id_or_token, opts),
+         {:ok, response} <- fetch_gmail_point_resource(access_token, "threads", id, "metadata") do
+      case response do
+        %{"messages" => messages} when is_list(messages) ->
+          {:ok, Enum.map(messages, &parse_message/1)}
 
-    case token do
-      {:ok, access_token} ->
-        url = "#{api_base_url()}/users/me/threads/#{thread_id}?format=metadata"
-
-        case Google.api_request(:get, url, access_token) do
-          {:ok, %{"messages" => messages}} when is_list(messages) ->
-            {:ok, Enum.map(messages, &parse_message/1)}
-
-          {:ok, _response} ->
-            {:ok, []}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      error ->
-        error
+        _response ->
+          {:ok, []}
+      end
+    else
+      nil -> {:error, :invalid_gmail_id}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -488,6 +564,15 @@ defmodule Maraithon.Connectors.Gmail do
   # ===========================================================================
   # Private Functions
   # ===========================================================================
+
+  defp fetch_gmail_point_resource(access_token, resource, id, format) do
+    url = "#{api_base_url()}/users/me/#{resource}/#{id}?format=#{format}"
+
+    case Google.api_request(:get, url, access_token, nil, [], expected_statuses: [404]) do
+      {:error, {:http_status, 404, _body}} -> {:error, :not_found}
+      result -> result
+    end
+  end
 
   defp get_access_token(_user_id, token) when is_binary(token) and token != "", do: {:ok, token}
 
@@ -745,28 +830,32 @@ defmodule Maraithon.Connectors.Gmail do
   defp fetch_reply_headers(_access_token, ""), do: %{}
 
   defp fetch_reply_headers(access_token, message_id) do
-    params =
-      [
-        {"format", "metadata"},
-        {"metadataHeaders", "Message-ID"},
-        {"metadataHeaders", "References"}
-      ]
-      |> Enum.map(&URI.encode_query([&1]))
-      |> Enum.join("&")
+    with id when is_binary(id) <- normalize_id(message_id) do
+      params =
+        [
+          {"format", "metadata"},
+          {"metadataHeaders", "Message-ID"},
+          {"metadataHeaders", "References"}
+        ]
+        |> Enum.map(&URI.encode_query([&1]))
+        |> Enum.join("&")
 
-    url = "#{api_base_url()}/users/me/messages/#{message_id}?#{params}"
+      url = "#{api_base_url()}/users/me/messages/#{id}?#{params}"
 
-    case Google.api_request(:get, url, access_token) do
-      {:ok, response} ->
-        parsed = parse_message(response)
+      case Google.api_request(:get, url, access_token, nil, [], expected_statuses: [404]) do
+        {:ok, response} ->
+          parsed = parse_message(response)
 
-        %{
-          "message_id" => parsed.internet_message_id,
-          "references" => parsed.references
-        }
+          %{
+            "message_id" => parsed.internet_message_id,
+            "references" => parsed.references
+          }
 
-      _ ->
-        %{}
+        _error ->
+          %{}
+      end
+    else
+      nil -> %{}
     end
   end
 

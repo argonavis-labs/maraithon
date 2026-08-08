@@ -56,7 +56,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
           "messages" => [
             %{
               "message_id" => "msg-1",
-              "thread_id" => "thread-1",
+              "thread_id" => "ab12cd11",
               "subject" => "Urgent: customer escalation",
               "snippet" => "Need response ASAP",
               "from" => "ceo@example.com",
@@ -80,7 +80,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert params["temperature"] == 0.15
       assert length(new_state.pending_candidates) >= 1
       prompt = get_in(params, ["messages", Access.at(0), "content"])
-      assert prompt =~ "thread-1"
+      assert prompt =~ "ab12cd11"
       assert prompt =~ "IMPORTANT"
       assert prompt =~ "ops@example.com"
       assert prompt =~ "automated transactional receipts"
@@ -330,14 +330,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       thread_started_at = DateTime.utc_now() |> DateTime.add(-2, :hour)
       teammate_reply_at = DateTime.add(thread_started_at, 30, :minute)
 
-      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/thread-1", fn conn ->
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/ab12cd11", fn conn ->
         assert conn.query_string == "format=metadata"
 
         body = %{
           "messages" => [
             gmail_thread_message(
               "msg-1",
-              "thread-1",
+              "ab12cd11",
               "David <david@example.com>",
               user_id,
               "Cowrie Agora Update",
@@ -346,7 +346,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
             ),
             gmail_thread_message(
               "msg-2",
-              "thread-1",
+              "ab12cd11",
               "Charlie <charlie@example.com>",
               "David <david@example.com>, #{user_id}",
               "Re: Cowrie Agora Update",
@@ -369,7 +369,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
           "messages" => [
             %{
               "message_id" => "msg-1",
-              "thread_id" => "thread-1",
+              "thread_id" => "ab12cd11",
               "subject" => "Cowrie Agora Update",
               "snippet" => "Can you send the update today?",
               "from" => "David <david@example.com>",
@@ -425,14 +425,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       first_touch_at = DateTime.utc_now() |> DateTime.add(-2, :day)
       follow_up_at = DateTime.add(first_touch_at, 1, :day)
 
-      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/thread-cold-1", fn conn ->
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/ab12cd01", fn conn ->
         assert conn.query_string == "format=metadata"
 
         body = %{
           "messages" => [
             gmail_thread_message(
-              "msg-cold-1",
-              "thread-cold-1",
+              "ab12cd02",
+              "ab12cd01",
               "Ayoub Rezala <ayoub@outly.com>",
               user_id,
               "shipping while Claude is thinking",
@@ -440,8 +440,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               first_touch_at
             ),
             gmail_thread_message(
-              "msg-cold-2",
-              "thread-cold-1",
+              "ab12cd03",
+              "ab12cd01",
               "Ayoub Rezala <ayoub@outly.com>",
               user_id,
               "Re: shipping while Claude is thinking",
@@ -463,8 +463,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         "data" => %{
           "messages" => [
             %{
-              "message_id" => "msg-cold-2",
-              "thread_id" => "thread-cold-1",
+              "message_id" => "ab12cd03",
+              "thread_id" => "ab12cd01",
               "subject" => "Re: shipping while Claude is thinking",
               "snippet" =>
                 "Following up. Worth a quick call? Here's my Calendly and outbound sales on autopilot pitch.",
@@ -1009,17 +1009,23 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
             "summary" => "Billing asked for the payment status today.",
             "recommended_action" => "Reply in the source thread with the payment status.",
             "source_occurred_at" => occurred_at,
-            "dedupe_key" => "gmail:thread:thread-billing-sync:reply_owed:v1",
-            "tracking_key" => "gmail:thread:thread-billing-sync:reply_owed",
-            "source_id" => "msg-billing-request"
+            "dedupe_key" => "gmail:thread:ab12cd91:reply_owed:v1",
+            "tracking_key" => "gmail:thread:ab12cd91:reply_owed",
+            "source_id" => "ab12cd92",
+            "confidence" => 0.95,
+            "metadata" => %{
+              "thread_id" => "ab12cd91",
+              "organization" => "Billing",
+              "reply_obligation" => true
+            }
           }
         ])
 
       [todo] = Todos.list_open_for_user(user_id)
 
       sent_reply = %{
-        "message_id" => "msg-billing-reply",
-        "thread_id" => "thread-billing-sync",
+        "message_id" => "ab12cd93",
+        "thread_id" => "ab12cd91",
         "subject" => "Re: Payment status",
         "snippet" => "Sent the payment status and next step.",
         "from" => user_id,
@@ -1037,8 +1043,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         "data" => %{
           "messages" => [
             %{
-              "message_id" => "msg-billing-request",
-              "thread_id" => "thread-billing-sync",
+              "message_id" => "ab12cd92",
+              "thread_id" => "ab12cd91",
               "subject" => "Payment status",
               "snippet" => "Can you please send the payment status today?",
               "from" => "Billing <billing@example.com>",
@@ -1100,7 +1106,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               "record" => %{
                 "commitment" => "Reply to David on Cowrie Agora Update",
                 "person" => "David",
-                "source" => "gmail_thread:thread-1",
+                "source" => "gmail_thread:ab12cd11",
                 "status" => "unresolved",
                 "evidence" => ["Charlie replied later in the conversation."],
                 "next_action" =>
@@ -1129,7 +1135,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
                 "Charlie has already responded and the conversation is moving. The final follow-through may still be yours.",
               "commitment" => "Reply to David on Cowrie Agora Update",
               "person" => "David",
-              "source" => "gmail_thread:thread-1",
+              "source" => "gmail_thread:ab12cd11",
               "deadline" => Date.utc_today() |> Date.to_iso8601(),
               "status" => "unresolved",
               "evidence" => ["Charlie replied later in the conversation."],

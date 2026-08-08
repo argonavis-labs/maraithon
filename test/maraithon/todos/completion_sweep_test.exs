@@ -1,9 +1,12 @@
 defmodule Maraithon.Todos.CompletionSweepTest do
-  use Maraithon.DataCase, async: true
+  use Maraithon.DataCase, async: false
+
+  import ExUnit.CaptureLog
 
   alias Maraithon.Accounts
   alias Maraithon.LocalMessages
   alias Maraithon.LocalReminders
+  alias Maraithon.OAuth
   alias Maraithon.Todos
   alias Maraithon.Todos.CompletionSweep
 
@@ -119,6 +122,242 @@ defmodule Maraithon.Todos.CompletionSweepTest do
 
     assert summary.completed == 0
     assert Todos.get_for_user(user_id, todo.id).status == "open"
+  end
+
+  test "scopes Gmail misses to the known account and skips malformed legacy ids" do
+    user_id = unique_user!()
+    now = ~U[2026-06-02 12:00:00Z]
+    source_at = DateTime.add(now, -3_600, :second)
+    bypass = Bypass.open()
+    original_gmail_config = Application.get_env(:maraithon, :gmail, [])
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :gmail, original_gmail_config) end)
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "google:a-personal@example.com", %{
+               access_token: "personal-token",
+               refresh_token: "personal-refresh",
+               expires_in: 3_600,
+               scopes: ["gmail.readonly"]
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "google:z-work@example.com", %{
+               access_token: "work-token",
+               refresh_token: "work-refresh",
+               expires_in: 3_600,
+               scopes: ["gmail.readonly"]
+             })
+
+    {:ok, [_scoped, _malformed]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("gmail", "abc123", "Scoped Gmail miss", source_at,
+          metadata: %{
+            "thread_id" => "abc123",
+            "google_account_email" => "z-work@example.com"
+          }
+        ),
+        todo_attrs("gmail", "gmail:synthetic-reference", "Malformed Gmail reference", source_at,
+          metadata: %{}
+        )
+      ])
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/abc123", fn conn ->
+      assert ["Bearer work-token"] == Plug.Conn.get_req_header(conn, "authorization")
+      Plug.Conn.resp(conn, 404, "Not Found")
+    end)
+
+    log =
+      capture_log(fn ->
+        summary = CompletionSweep.run_for_user(user_id, now: now)
+        assert summary.checked == 2
+        assert summary.completed == 0
+        assert summary.fetch_errors == 0
+      end)
+
+    refute log =~ "HTTP request failed"
+  end
+
+  test "continues unscoped Gmail fan-out after one mailbox has an operational error" do
+    user_id = unique_user!()
+    now = ~U[2026-06-02 12:00:00Z]
+    source_at = DateTime.add(now, -3_600, :second)
+    reply_at = DateTime.add(now, -900, :second)
+    bypass = Bypass.open()
+    original_gmail_config = Application.get_env(:maraithon, :gmail, [])
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :gmail, original_gmail_config) end)
+
+    for {provider, token} <- [
+          {"google:a-first@example.com", "first-token"},
+          {"google:z-second@example.com", "second-token"}
+        ] do
+      assert {:ok, _token} =
+               OAuth.store_tokens(user_id, provider, %{
+                 access_token: token,
+                 refresh_token: "#{token}-refresh",
+                 expires_in: 3_600,
+                 scopes: ["gmail.readonly"]
+               })
+    end
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("gmail", "abc123", "Unscoped Gmail item", source_at,
+          metadata: %{"gmail_message_id" => "abc123"}
+        )
+      ])
+
+    Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/abc123", fn conn ->
+      case Plug.Conn.get_req_header(conn, "authorization") do
+        ["Bearer first-token"] ->
+          Plug.Conn.resp(conn, 401, "Reauthorization required")
+
+        ["Bearer second-token"] ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(
+            200,
+            Jason.encode!(%{
+              "id" => "abc123",
+              "threadId" => "def456",
+              "internalDate" => Integer.to_string(DateTime.to_unix(source_at, :millisecond)),
+              "payload" => %{"headers" => []}
+            })
+          )
+      end
+    end)
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/def456", fn conn ->
+      assert ["Bearer second-token"] == Plug.Conn.get_req_header(conn, "authorization")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "messages" => [
+            %{
+              "id" => "fed654",
+              "threadId" => "def456",
+              "internalDate" => Integer.to_string(DateTime.to_unix(reply_at, :millisecond)),
+              "payload" => %{
+                "headers" => [
+                  %{"name" => "From", "value" => "Kent <#{user_id}>"},
+                  %{"name" => "Subject", "value" => "Re: Unscoped Gmail item"}
+                ]
+              }
+            }
+          ]
+        })
+      )
+    end)
+
+    summary = CompletionSweep.run_for_user(user_id, now: now)
+
+    assert summary.checked == 1
+    assert summary.completed == 1
+    assert summary.fetch_errors == 0
+  end
+
+  test "treats generic google provenance as a family hint when an account email is present" do
+    user_id = unique_user!()
+    account_email = "legacy-mailbox@example.com"
+    now = ~U[2026-06-02 12:00:00Z]
+    source_at = DateTime.add(now, -3_600, :second)
+    reply_at = DateTime.add(now, -900, :second)
+    bypass = Bypass.open()
+    original_gmail_config = Application.get_env(:maraithon, :gmail, [])
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :gmail, original_gmail_config) end)
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "google", %{
+               access_token: "legacy-token",
+               refresh_token: "legacy-refresh",
+               expires_in: 3_600,
+               scopes: ["gmail.readonly"],
+               metadata: %{"account_email" => account_email}
+             })
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("gmail", "abc123", "Legacy generic Gmail item", source_at,
+          metadata: %{
+            "thread_id" => "abc123",
+            "google_provider" => "google",
+            "google_account_email" => account_email
+          }
+        )
+      ])
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/abc123", fn conn ->
+      assert ["Bearer legacy-token"] == Plug.Conn.get_req_header(conn, "authorization")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "messages" => [
+            %{
+              "id" => "def456",
+              "threadId" => "abc123",
+              "internalDate" => Integer.to_string(DateTime.to_unix(reply_at, :millisecond)),
+              "payload" => %{
+                "headers" => [
+                  %{"name" => "From", "value" => "Legacy <#{account_email}>"},
+                  %{"name" => "Subject", "value" => "Re: Legacy generic Gmail item"}
+                ]
+              }
+            }
+          ]
+        })
+      )
+    end)
+
+    summary = CompletionSweep.run_for_user(user_id, now: now)
+    assert summary.checked == 1
+    assert summary.completed == 1
+    assert summary.fetch_errors == 0
+  end
+
+  test "aggregates unavailable-provider failures once per user" do
+    user_id = unique_user!()
+    now = ~U[2026-06-02 12:00:00Z]
+    source_at = DateTime.add(now, -3_600, :second)
+
+    {:ok, [_first, _second]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("gmail", "aa11", "First unavailable Gmail item", source_at,
+          metadata: %{"gmail_message_id" => "aa11"}
+        ),
+        todo_attrs("gmail", "bb22", "Second unavailable Gmail item", source_at,
+          metadata: %{"gmail_message_id" => "bb22"}
+        )
+      ])
+
+    log =
+      capture_log(fn ->
+        summary = CompletionSweep.run_for_user(user_id, now: now)
+        assert summary.fetch_errors == 2
+        assert summary.completed == 0
+      end)
+
+    assert length(Regex.scan(~r/Todo completion sweep could not verify Gmail items/, log)) == 1
+    assert log =~ "(2 todos)"
   end
 
   test "marks a cold-thread todo done when there is a newer outgoing local message" do

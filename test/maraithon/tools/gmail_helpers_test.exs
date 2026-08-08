@@ -36,12 +36,12 @@ defmodule Maraithon.Tools.GmailHelpersTest do
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "msg-school"}]}))
+      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "ab12cd34"}]}))
     end)
 
     body = Base.url_encode64("Class newsletter: field trip form due Friday.", padding: false)
 
-    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/msg-school", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/ab12cd34", fn conn ->
       ["Bearer gmail-helper-token"] = Plug.Conn.get_req_header(conn, "authorization")
       assert conn.query_string == "format=full"
 
@@ -50,7 +50,7 @@ defmodule Maraithon.Tools.GmailHelpersTest do
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "msg-school",
+          "id" => "ab12cd34",
           "threadId" => "thread-school",
           "snippet" => "Weekly update",
           "labelIds" => ["INBOX"],

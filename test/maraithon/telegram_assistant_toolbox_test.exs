@@ -86,10 +86,10 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "live-1"}]}))
+      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "1a1e1"}]}))
     end)
 
-    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/live-1", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/1a1e1", fn conn ->
       ["Bearer toolbox-work-token"] = Plug.Conn.get_req_header(conn, "authorization")
 
       conn
@@ -97,8 +97,8 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "live-1",
-          "threadId" => "thread-live-1",
+          "id" => "1a1e1",
+          "threadId" => "1a1e2",
           "snippet" => "Fresh inbox item",
           "labelIds" => ["INBOX"],
           "internalDate" => "1775091600000",
@@ -1368,8 +1368,8 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
                "upsert_todos",
                %{
                  "todos" => [
-                   gmail_todo("thread-billing", "Billing account past due", 98),
-                   gmail_todo("thread-oauth", "OAuth verification reply owed", 92)
+                   gmail_todo("ab12cb01", "Billing account past due", 98),
+                   gmail_todo("ab12cb02", "OAuth verification reply owed", 92)
                  ]
                },
                runtime_context
@@ -2165,6 +2165,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
         "thread_id" => thread_id,
         "subject" => title,
         "from" => "ops@example.com",
+        "organization" => "Operations",
         "google_account_email" => "kent@voteagora.com"
       }
     }

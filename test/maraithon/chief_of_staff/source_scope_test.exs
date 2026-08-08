@@ -90,4 +90,28 @@ defmodule Maraithon.ChiefOfStaff.SourceScopeTest do
              "slack:T67890"
            ]
   end
+
+  test "keeps errored providers recoverable but excludes disconnected accounts" do
+    user_id = "chief-scope-error@example.com"
+    provider = "google:broken@example.com"
+    _user = Accounts.get_or_create_user_by_email(user_id)
+
+    token_data = %{
+      access_token: "google-broken-token",
+      scopes: Google.scopes_for(["gmail"]),
+      metadata: %{"account_email" => "broken@example.com"}
+    }
+
+    assert {:ok, _token} = OAuth.store_tokens(user_id, provider, token_data)
+    assert {:ok, _account} = ConnectedAccounts.upsert_from_oauth(user_id, provider, token_data)
+    assert {:ok, _account} = ConnectedAccounts.mark_error(user_id, provider, "reauth required")
+
+    scope = SourceScope.resolve(user_id)
+    assert provider in SourceScope.google_account_providers(scope, "gmail")
+
+    assert {:ok, _account} = ConnectedAccounts.mark_disconnected(user_id, provider)
+
+    disconnected_scope = SourceScope.resolve(user_id)
+    refute provider in SourceScope.google_account_providers(disconnected_scope, "gmail")
+  end
 end

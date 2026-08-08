@@ -164,12 +164,19 @@ defmodule Maraithon.OAuth.Google do
   @doc """
   Makes an authenticated request to a Google API.
   """
-  def api_request(method, url, access_token, body \\ nil, extra_headers \\ []) do
+  def api_request(
+        method,
+        url,
+        access_token,
+        body \\ nil,
+        extra_headers \\ [],
+        request_opts \\ []
+      ) do
     headers = [{"Authorization", "Bearer #{access_token}"} | extra_headers]
 
     case method do
       :get ->
-        HTTP.get(url, headers)
+        HTTP.get(url, headers, request_opts)
 
       :post ->
         HTTP.post_json(url, body || %{}, headers)

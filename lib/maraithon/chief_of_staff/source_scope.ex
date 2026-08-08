@@ -49,10 +49,15 @@ defmodule Maraithon.ChiefOfStaff.SourceScope do
     |> Map.get("google_accounts", [])
   end
 
-  def google_account_providers(scope, service \\ nil) do
+  def google_accounts_for_service(scope, service \\ nil) do
     scope
     |> google_accounts()
     |> Enum.filter(&google_account_supports_service?(&1, service))
+  end
+
+  def google_account_providers(scope, service \\ nil) do
+    scope
+    |> google_accounts_for_service(service)
     |> Enum.map(&Map.get(&1, "provider"))
     |> Enum.filter(&is_binary/1)
     |> Enum.uniq()
@@ -60,8 +65,7 @@ defmodule Maraithon.ChiefOfStaff.SourceScope do
 
   def google_account_emails(scope, service \\ nil) do
     scope
-    |> google_accounts()
-    |> Enum.filter(&google_account_supports_service?(&1, service))
+    |> google_accounts_for_service(service)
     |> Enum.map(&Map.get(&1, "account_email"))
     |> Enum.filter(&is_binary/1)
     |> Enum.uniq()
@@ -142,6 +146,12 @@ defmodule Maraithon.ChiefOfStaff.SourceScope do
 
     tokens
     |> Enum.filter(&google_provider?(&1.provider))
+    |> Enum.filter(fn token ->
+      case Map.get(account_by_provider, token.provider) do
+        nil -> true
+        account -> account.status != "disconnected"
+      end
+    end)
     |> Enum.map(fn token ->
       account = Map.get(account_by_provider, token.provider)
       account_email = google_account_email(token, account)

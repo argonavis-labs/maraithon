@@ -46,6 +46,8 @@ defmodule Maraithon.HTTP do
   Options:
     * `:receive_timeout` - overrides the default 15s response timeout,
       for large-body fetches like file downloads.
+    * `:expected_statuses` - response statuses that should be returned without
+      warning-level logging because the caller handles them as ordinary misses.
   """
   @spec get(String.t(), headers(), keyword()) :: response()
   def get(url, headers \\ [], opts \\ []) do
@@ -100,7 +102,7 @@ defmodule Maraithon.HTTP do
 
     case Req.request(req, req_opts) do
       {:ok, %Response{} = response} ->
-        handle_response(response, url)
+        handle_response(response, url, opts)
 
       {:error, reason} ->
         Logger.warning("HTTP request failed", url: url, reason: inspect(reason))
@@ -108,14 +110,15 @@ defmodule Maraithon.HTTP do
     end
   end
 
-  defp handle_response(%Response{status: status, body: body}, _url) when status in 200..299,
-    do: {:ok, body}
+  defp handle_response(%Response{status: status, body: body}, _url, _opts)
+       when status in 200..299,
+       do: {:ok, body}
 
-  defp handle_response(%Response{status: 401}, _url) do
+  defp handle_response(%Response{status: 401}, _url, _opts) do
     {:error, :unauthorized}
   end
 
-  defp handle_response(%Response{status: 429} = response, _url) do
+  defp handle_response(%Response{status: 429} = response, _url, _opts) do
     body_string = response_body_to_string(response.body)
 
     case retry_after_seconds(response) do
@@ -124,9 +127,13 @@ defmodule Maraithon.HTTP do
     end
   end
 
-  defp handle_response(%Response{status: status, body: body}, url) do
+  defp handle_response(%Response{status: status, body: body}, url, opts) do
     body_string = response_body_to_string(body)
-    Logger.warning("HTTP request failed", url: url, status: status, body: body_string)
+
+    unless status in Keyword.get(opts, :expected_statuses, []) do
+      Logger.warning("HTTP request failed", url: url, status: status, body: body_string)
+    end
+
     {:error, {:http_status, status, body_string}}
   end
 

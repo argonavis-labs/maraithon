@@ -1,6 +1,7 @@
 defmodule Maraithon.Connectors.GmailTest do
   use Maraithon.DataCase, async: false
 
+  import ExUnit.CaptureLog
   import Plug.Test
 
   alias Maraithon.Connectors.Gmail
@@ -69,6 +70,7 @@ defmodule Maraithon.Connectors.GmailTest do
   describe "handle_webhook/2 - valid payload" do
     test "enqueues a background job and acks without calling Google" do
       {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("user@test.com")
+      {:ok, _account} = Maraithon.ConnectedAccounts.upsert_manual("user@test.com", "google")
 
       # Gmail sends payload: {"emailAddress": "user@example.com", "historyId": "12345"}
       payload_json = ~s({"emailAddress":"user@test.com","historyId":"99999"})
@@ -99,6 +101,7 @@ defmodule Maraithon.Connectors.GmailTest do
 
     test "dedupes repeated deliveries of the same Pub/Sub messageId" do
       {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email("dedupe@test.com")
+      {:ok, _account} = Maraithon.ConnectedAccounts.upsert_manual("dedupe@test.com", "google")
 
       payload_json = ~s({"emailAddress":"dedupe@test.com","historyId":"1"})
       encoded_data = Base.encode64(payload_json)
@@ -149,13 +152,49 @@ defmodule Maraithon.Connectors.GmailTest do
 
   describe "fetch_message/2" do
     test "returns error when token not found for user_id" do
-      assert {:error, :no_token} = Gmail.fetch_message("nonexistent_user", "msg_id")
+      assert {:error, :no_token} = Gmail.fetch_message("nonexistent_user", "abc123")
+    end
+
+    test "rejects malformed ids before token lookup or HTTP" do
+      assert Gmail.normalize_id("  A0b1c2  ") == "A0b1c2"
+      refute Gmail.valid_id?("gmail:synthetic-id")
+
+      assert {:error, :invalid_gmail_id} =
+               Gmail.fetch_message("nonexistent_user", "gmail:synthetic-id")
+
+      assert {:error, :invalid_gmail_id} =
+               Gmail.fetch_message_content("nonexistent_user", Ecto.UUID.generate())
+
+      assert {:error, :invalid_gmail_id} =
+               Gmail.fetch_thread("nonexistent_user", "thread-with-separators")
     end
 
     test "handles token directly starting with ya29." do
       # Will fail to connect but tests the branch
-      result = Gmail.fetch_message("ya29.fake_token", "msg_id")
+      result = Gmail.fetch_message("ya29.fake_token", "abc123")
       assert match?({:error, _}, result)
+    end
+
+    test "maps point-lookup 404s to quiet semantic misses" do
+      bypass = Bypass.open()
+      original_gmail_config = Application.get_env(:maraithon, :gmail, [])
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      on_exit(fn -> Application.put_env(:maraithon, :gmail, original_gmail_config) end)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/abc123", fn conn ->
+        Plug.Conn.resp(conn, 404, "Not Found")
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :not_found} = Gmail.fetch_message("ya29.test-token", "abc123")
+        end)
+
+      refute log =~ "HTTP request failed"
     end
   end
 
@@ -359,21 +398,21 @@ defmodule Maraithon.Connectors.GmailTest do
           200,
           Jason.encode!(%{
             "messages" => [
-              %{"id" => "msg1", "threadId" => "thread1"},
-              %{"id" => "msg2", "threadId" => "thread2"}
+              %{"id" => "a1", "threadId" => "thread1"},
+              %{"id" => "b2", "threadId" => "thread2"}
             ]
           })
         )
       end)
 
       # Mock individual message fetch
-      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/msg1", fn conn ->
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/a1", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
-            "id" => "msg1",
+            "id" => "a1",
             "threadId" => "thread1",
             "snippet" => "Test email snippet",
             "labelIds" => ["INBOX", "UNREAD"],
@@ -390,13 +429,13 @@ defmodule Maraithon.Connectors.GmailTest do
         )
       end)
 
-      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/msg2", fn conn ->
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/b2", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
-            "id" => "msg2",
+            "id" => "b2",
             "threadId" => "thread2",
             "snippet" => "Another email",
             "labelIds" => ["INBOX"],
@@ -408,9 +447,83 @@ defmodule Maraithon.Connectors.GmailTest do
       {:ok, emails} = Gmail.fetch_recent_emails("fetch_emails_user", 2)
 
       assert length(emails) == 2
-      assert hd(emails).message_id == "msg1"
+      assert hd(emails).message_id == "a1"
       assert hd(emails).subject == "Test Subject"
       assert hd(emails).from == "sender@test.com"
+    end
+
+    test "metadata mode reports truncation and per-message failures" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      user_id = "fetch-metadata-#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens(user_id, "google", %{
+          access_token: "metadata-access-token",
+          refresh_token: "metadata-refresh-token",
+          expires_in: 3_600,
+          scopes: ["gmail.readonly"]
+        })
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "messages" => [%{"id" => "d1"}, %{"id" => "e2"}],
+            "nextPageToken" => "more"
+          })
+        )
+      end)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/d1", fn conn ->
+        assert conn.query_string == "format=metadata"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => "d1",
+            "threadId" => "f3",
+            "snippet" => "Metadata only",
+            "labelIds" => ["INBOX"],
+            "payload" => %{"headers" => [%{"name" => "Subject", "value" => "Metadata"}]}
+          })
+        )
+      end)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/e2", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"id" => "e2", "payload" => %{"headers" => 123}})
+        )
+      end)
+
+      assert {:ok, [message], metadata} =
+               Gmail.fetch_messages(user_id,
+                 max_results: 2,
+                 message_format: :metadata,
+                 include_fetch_metadata: true,
+                 message_fetch_concurrency: 2,
+                 message_fetch_timeout_ms: 1_000
+               )
+
+      assert message.message_id == "d1"
+      assert message.subject == "Metadata"
+      assert metadata.listed_count == 2
+      assert metadata.requested_count == 2
+      assert metadata.detail_success_count == 1
+      assert metadata.detail_failure_count == 1
+      assert metadata.truncated?
+      refute metadata.complete?
     end
 
     test "returns empty list when no messages" do
@@ -466,7 +579,7 @@ defmodule Maraithon.Connectors.GmailTest do
             "history" => [
               %{
                 "messagesAdded" => [
-                  %{"message" => %{"id" => "new_msg1"}}
+                  %{"message" => %{"id" => "c3"}}
                 ]
               }
             ],
@@ -478,7 +591,7 @@ defmodule Maraithon.Connectors.GmailTest do
       body = Base.url_encode64("Full body text for the new message.", padding: false)
 
       # Mock message fetch
-      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/new_msg1", fn conn ->
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/c3", fn conn ->
         assert conn.query_string == "format=full"
 
         conn
@@ -486,7 +599,7 @@ defmodule Maraithon.Connectors.GmailTest do
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
-            "id" => "new_msg1",
+            "id" => "c3",
             "threadId" => "thread1",
             "snippet" => "New email",
             "labelIds" => ["INBOX"],
@@ -504,7 +617,7 @@ defmodule Maraithon.Connectors.GmailTest do
       {:ok, messages} = Gmail.sync_mail_changes("sync_bypass_user", "12345")
 
       assert length(messages) == 1
-      assert hd(messages).message_id == "new_msg1"
+      assert hd(messages).message_id == "c3"
       assert hd(messages).text_body == "Full body text for the new message."
     end
 
@@ -688,7 +801,7 @@ defmodule Maraithon.Connectors.GmailTest do
               200,
               Jason.encode!(%{
                 "history" => [
-                  %{"messagesAdded" => [%{"message" => %{"id" => "page1_msg"}}]}
+                  %{"messagesAdded" => [%{"message" => %{"id" => "a1"}}]}
                 ],
                 "nextPageToken" => "page2",
                 "historyId" => "1040"
@@ -704,7 +817,7 @@ defmodule Maraithon.Connectors.GmailTest do
               200,
               Jason.encode!(%{
                 "history" => [
-                  %{"messagesAdded" => [%{"message" => %{"id" => "page2_msg"}}]}
+                  %{"messagesAdded" => [%{"message" => %{"id" => "b2"}}]}
                 ],
                 "historyId" => "1050"
               })
@@ -712,13 +825,13 @@ defmodule Maraithon.Connectors.GmailTest do
         end
       end)
 
-      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/page1_msg", fn conn ->
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/a1", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
-            "id" => "page1_msg",
+            "id" => "a1",
             "threadId" => "t1",
             "labelIds" => ["INBOX"],
             "payload" => %{"headers" => []}
@@ -726,13 +839,13 @@ defmodule Maraithon.Connectors.GmailTest do
         )
       end)
 
-      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/page2_msg", fn conn ->
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/b2", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
-            "id" => "page2_msg",
+            "id" => "b2",
             "threadId" => "t2",
             "labelIds" => ["INBOX"],
             "payload" => %{"headers" => []}
@@ -791,7 +904,7 @@ defmodule Maraithon.Connectors.GmailTest do
               200,
               Jason.encode!(%{
                 "history" => [
-                  %{"messagesAdded" => [%{"message" => %{"id" => "page1_msg"}}]}
+                  %{"messagesAdded" => [%{"message" => %{"id" => "a1"}}]}
                 ],
                 "nextPageToken" => "page2",
                 "historyId" => "1040"
@@ -824,7 +937,7 @@ defmodule Maraithon.Connectors.GmailTest do
               200,
               Jason.encode!(%{
                 "history" => [
-                  %{"messagesAdded" => [%{"message" => %{"id" => "page3_msg"}}]}
+                  %{"messagesAdded" => [%{"message" => %{"id" => "c3"}}]}
                 ],
                 "historyId" => "1050"
               })
@@ -832,13 +945,13 @@ defmodule Maraithon.Connectors.GmailTest do
         end
       end)
 
-      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/page1_msg", fn conn ->
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/a1", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
-            "id" => "page1_msg",
+            "id" => "a1",
             "threadId" => "t1",
             "labelIds" => ["INBOX"],
             "payload" => %{"headers" => []}
@@ -846,13 +959,13 @@ defmodule Maraithon.Connectors.GmailTest do
         )
       end)
 
-      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/page3_msg", fn conn ->
+      Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/c3", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
           200,
           Jason.encode!(%{
-            "id" => "page3_msg",
+            "id" => "c3",
             "threadId" => "t3",
             "labelIds" => ["INBOX"],
             "payload" => %{"headers" => []}

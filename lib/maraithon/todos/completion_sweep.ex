@@ -16,11 +16,10 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   import Ecto.Query
 
-  alias Maraithon.ConnectedAccounts
+  alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.Connectors.Gmail
   alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.LocalReminders.LocalReminder
-  alias Maraithon.OAuth
   alias Maraithon.Repo
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
@@ -74,18 +73,19 @@ defmodule Maraithon.Todos.CompletionSweep do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
     limit = positive_integer(Keyword.get(opts, :limit), @default_limit)
 
-    # Resolve connected Google providers once per user per run; resolving them
-    # inside the per-todo fetch path was two queries per Gmail todo.
-    connected_providers = connected_google_providers(user_id)
+    # Resolve connected Google accounts once per user per run; retaining the
+    # account email is required to scope legacy `google` tokens safely.
+    connected_accounts = connected_gmail_accounts(user_id)
+    connected_providers = Enum.map(connected_accounts, &Map.fetch!(&1, "provider"))
 
     self_emails =
-      Keyword.get(opts, :self_emails) || self_emails_from_providers(user_id, connected_providers)
+      Keyword.get(opts, :self_emails) || self_emails_from_accounts(user_id, connected_accounts)
 
     opts =
       opts
       |> Keyword.put(:self_emails, self_emails)
       |> Keyword.put_new(:gmail_fetcher, fn fetch_user_id, todo ->
-        fetch_gmail_thread(fetch_user_id, todo, connected_providers)
+        fetch_gmail_thread(fetch_user_id, todo, connected_accounts)
       end)
 
     todos =
@@ -99,24 +99,37 @@ defmodule Maraithon.Todos.CompletionSweep do
         exclude_unsurfaceable?: false
       )
 
-    Enum.reduce(todos, empty_user_summary(user_id, length(todos)), fn todo, summary ->
-      case completion_evidence(todo, now, opts) do
-        {:done, reason, note} ->
-          mark_done(summary, todo, reason, note)
+    {summary, fetch_error_counts} =
+      Enum.reduce(
+        todos,
+        {empty_user_summary(user_id, length(todos)), %{}},
+        fn todo, {summary, fetch_error_counts} ->
+          case completion_evidence(todo, now, opts) do
+            {:done, reason, note} ->
+              {mark_done(summary, todo, reason, note), fetch_error_counts}
 
-        {:fetch_error, reason} ->
-          Logger.warning("Todo completion sweep could not verify Gmail thread",
-            user_id: user_id,
-            todo_id: todo.id,
-            reason: inspect(reason)
-          )
+            {:fetch_error, reason} ->
+              {
+                Map.update!(summary, :fetch_errors, &(&1 + 1)),
+                Map.update(fetch_error_counts, reason, 1, &(&1 + 1))
+              }
 
-          Map.update!(summary, :fetch_errors, &(&1 + 1))
+            :open ->
+              {summary, fetch_error_counts}
+          end
+        end
+      )
 
-        :open ->
-          summary
-      end
+    Enum.each(fetch_error_counts, fn {reason, count} ->
+      Logger.warning(
+        "Todo completion sweep could not verify Gmail items (#{count} todos)",
+        user_id: user_id,
+        affected_todo_count: count,
+        reason: inspect(reason)
+      )
     end)
+
+    summary
   end
 
   def run_for_user(_user_id, _opts), do: empty_user_summary(nil, 0)
@@ -185,7 +198,7 @@ defmodule Maraithon.Todos.CompletionSweep do
               {:done, :gmail_self_reply, gmail_resolution_note(nil, nil, message, source_at)}
           end
 
-        {:error, :not_found} ->
+        {:error, reason} when reason in [:not_found, :invalid_gmail_id] ->
           :open
 
         {:error, reason} ->
@@ -324,117 +337,253 @@ defmodule Maraithon.Todos.CompletionSweep do
   end
 
   defp fetch_gmail_thread(user_id, %Todo{} = todo) do
-    fetch_gmail_thread(user_id, todo, connected_google_providers(user_id))
+    fetch_gmail_thread(user_id, todo, connected_gmail_accounts(user_id))
   end
 
-  defp fetch_gmail_thread(user_id, %Todo{} = todo, connected_providers) do
-    providers = gmail_provider_candidates(todo, connected_providers)
+  defp fetch_gmail_thread(user_id, %Todo{} = todo, connected_accounts) do
+    with {:ok, reference} <- gmail_reference(todo),
+         {:ok, providers, scoped?} <- gmail_provider_candidates(todo, connected_accounts),
+         true <- providers != [] do
+      providers
+      |> Enum.reduce_while({nil, []}, fn provider, {_result, errors} ->
+        case fetch_gmail_reference_for_provider(user_id, reference, provider) do
+          {:ok, thread_id, messages} ->
+            {:halt, {{:ok, provider, thread_id, messages}, errors}}
 
-    providers
-    |> Enum.reduce_while({:error, :not_found}, fn provider, _acc ->
-      case fetch_gmail_thread_for_provider(user_id, todo, provider) do
-        {:ok, thread_id, messages} -> {:halt, {:ok, provider, thread_id, messages}}
-        {:error, _reason} -> {:cont, {:error, :not_found}}
+          {:error, :not_found} ->
+            {:cont, {nil, errors}}
+
+          {:error, reason} when scoped? ->
+            {:halt, {nil, [{provider, reason} | errors]}}
+
+          {:error, reason} ->
+            # An accountless legacy todo may belong to any connected mailbox.
+            # Keep searching so one broken mailbox cannot hide a healthy match,
+            # but retain every operational error if no provider succeeds.
+            {:cont, {nil, [{provider, reason} | errors]}}
+        end
+      end)
+      |> case do
+        {{:ok, _provider, _thread_id, _messages} = result, _errors} ->
+          result
+
+        {nil, []} ->
+          {:error, :not_found}
+
+        {nil, errors} ->
+          {:error, {:gmail_provider_errors, Enum.reverse(errors)}}
+      end
+    else
+      false -> {:error, :not_found}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp gmail_reference(%Todo{} = todo) do
+    metadata = todo.metadata || %{}
+
+    thread_values = [
+      metadata["thread_id"],
+      metadata["gmail_thread_id"],
+      metadata["source_thread_id"]
+    ]
+
+    message_values = [
+      metadata["message_id"],
+      metadata["gmail_message_id"],
+      metadata["source_message_id"]
+    ]
+
+    thread_id = first_valid_gmail_id(thread_values)
+    message_id = first_valid_gmail_id(message_values)
+
+    cond do
+      is_binary(thread_id) ->
+        {:ok, {:thread, thread_id}}
+
+      is_binary(message_id) ->
+        {:ok, {:message, message_id}}
+
+      valid_gmail_id?(todo.source_item_id) ->
+        {:ok, {:legacy, Gmail.normalize_id(todo.source_item_id)}}
+
+      Enum.any?(thread_values ++ message_values ++ [todo.source_item_id], &present?/1) ->
+        {:error, :invalid_gmail_id}
+
+      true ->
+        {:error, :not_found}
+    end
+  end
+
+  defp first_valid_gmail_id(values) when is_list(values) do
+    Enum.find_value(values, &Gmail.normalize_id/1)
+  end
+
+  defp valid_gmail_id?(value), do: is_binary(Gmail.normalize_id(value))
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
+
+  defp fetch_gmail_reference_for_provider(user_id, {:thread, thread_id}, provider) do
+    fetch_gmail_thread_id(user_id, thread_id, provider)
+  end
+
+  defp fetch_gmail_reference_for_provider(user_id, {:message, message_id}, provider) do
+    fetch_gmail_thread_from_message_id(user_id, message_id, provider)
+  end
+
+  defp fetch_gmail_reference_for_provider(user_id, {:legacy, id}, provider) do
+    case fetch_gmail_thread_from_message_id(user_id, id, provider) do
+      {:error, :not_found} -> fetch_gmail_thread_id(user_id, id, provider)
+      result -> result
+    end
+  end
+
+  defp fetch_gmail_thread_from_message_id(user_id, message_id, provider) do
+    with {:ok, message} <- Gmail.fetch_message(user_id, message_id, provider: provider),
+         thread_id when is_binary(thread_id) <-
+           Gmail.normalize_id(read_field(message, :thread_id)),
+         {:ok, ^thread_id, messages} <- fetch_gmail_thread_id(user_id, thread_id, provider) do
+      {:ok, thread_id, messages}
+    else
+      nil -> {:error, :invalid_gmail_thread_id}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp fetch_gmail_thread_id(user_id, thread_id, provider) do
+    case Gmail.fetch_thread(user_id, thread_id, provider: provider) do
+      {:ok, messages} when is_list(messages) and messages != [] ->
+        {:ok, thread_id, messages}
+
+      {:ok, _messages} ->
+        {:error, :unexpected_gmail_thread_response}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp gmail_provider_candidates(%Todo{} = todo, connected_accounts) do
+    metadata = todo.metadata || %{}
+
+    specific_hints =
+      [
+        metadata["google_provider"],
+        metadata["provider"],
+        metadata["google_account_email"],
+        metadata["account_email"],
+        todo.source_account_label
+      ]
+      |> Enum.map(&normalize_gmail_provider_hint/1)
+      # `google` names the provider family, not a mailbox. It must never
+      # conflict with or override a qualified account hint.
+      |> Enum.reject(&(&1 in [nil, "google"]))
+      |> Enum.uniq()
+
+    case specific_hints do
+      [] ->
+        unscoped_gmail_provider_candidates(metadata["account"], connected_accounts)
+
+      [hint] ->
+        case connected_provider_for_authoritative_hint(hint, connected_accounts) do
+          nil -> {:error, {:gmail_provider_unavailable, hint}}
+          provider -> {:ok, [provider], true}
+        end
+
+      providers ->
+        {:error, {:conflicting_gmail_provider_hints, providers}}
+    end
+  end
+
+  defp unscoped_gmail_provider_candidates(weak_hint, connected_accounts) do
+    providers =
+      connected_accounts
+      |> Enum.map(&Map.get(&1, "provider"))
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    case connected_provider_for_weak_hint(weak_hint, connected_accounts) do
+      provider when is_binary(provider) -> {:ok, [provider], true}
+      nil when providers == [] -> {:error, :no_gmail_provider}
+      nil -> {:ok, providers, false}
+    end
+  end
+
+  defp connected_provider_for_authoritative_hint(hint, connected_accounts)
+       when is_binary(hint) do
+    normalized_hint = String.downcase(hint)
+
+    Enum.find_value(connected_accounts, fn account ->
+      provider = Map.get(account, "provider")
+      account_email = normalize_account_email(Map.get(account, "account_email"))
+
+      if is_binary(provider) and
+           (String.downcase(provider) == normalized_hint or
+              (is_binary(account_email) and "google:#{account_email}" == normalized_hint)) do
+        provider
       end
     end)
   end
 
-  defp fetch_gmail_thread_for_provider(user_id, %Todo{} = todo, provider) do
-    metadata = todo.metadata || %{}
+  defp connected_provider_for_authoritative_hint(_hint, _connected_accounts), do: nil
 
-    thread_id =
-      first_present([
-        metadata["thread_id"],
-        metadata["gmail_thread_id"],
-        metadata["source_thread_id"],
-        todo.source_item_id
-      ])
+  defp connected_provider_for_weak_hint(value, connected_accounts) do
+    case normalize_gmail_provider_hint(value) do
+      candidate when is_binary(candidate) and candidate != "google" ->
+        Enum.find_value(connected_accounts, fn account ->
+          provider = Map.get(account, "provider")
 
-    with {:thread_id, thread_id} when is_binary(thread_id) <- {:thread_id, thread_id},
-         {:ok, messages} when is_list(messages) and messages != [] <-
-           Gmail.fetch_thread(user_id, thread_id, provider: provider) do
-      {:ok, thread_id, messages}
-    else
-      _ -> fetch_gmail_thread_from_message(user_id, todo, provider)
+          if is_binary(provider) and String.downcase(provider) == candidate do
+            provider
+          end
+        end)
+
+      _ ->
+        nil
     end
   end
 
-  defp fetch_gmail_thread_from_message(user_id, %Todo{} = todo, provider) do
-    metadata = todo.metadata || %{}
+  defp normalize_gmail_provider_hint(value) when is_binary(value) do
+    value = value |> String.trim() |> String.downcase()
 
-    message_id =
-      first_present([
-        metadata["message_id"],
-        metadata["gmail_message_id"],
-        metadata["source_message_id"],
-        todo.source_item_id
-      ])
-
-    with {:message_id, message_id} when is_binary(message_id) <- {:message_id, message_id},
-         {:ok, message} <- Gmail.fetch_message(user_id, message_id, provider: provider),
-         thread_id when is_binary(thread_id) and thread_id != "" <-
-           read_field(message, :thread_id),
-         {:ok, messages} when is_list(messages) and messages != [] <-
-           Gmail.fetch_thread(user_id, thread_id, provider: provider) do
-      {:ok, thread_id, messages}
-    else
-      _ -> {:error, :not_found}
+    cond do
+      value == "google" -> "google"
+      String.starts_with?(value, "google:") and byte_size(value) > byte_size("google:") -> value
+      String.contains?(value, "@") -> "google:#{value}"
+      true -> nil
     end
   end
 
-  defp gmail_provider_candidates(%Todo{} = todo, connected_providers) do
-    metadata = todo.metadata || %{}
+  defp normalize_gmail_provider_hint(_value), do: nil
 
-    source_account_provider =
-      if is_binary(todo.source_account_label) and String.contains?(todo.source_account_label, "@") do
-        "google:" <> todo.source_account_label
-      end
-
-    metadata_account_provider =
-      case metadata["google_account_email"] do
-        email when is_binary(email) and email != "" -> "google:" <> email
-        _ -> nil
-      end
-
-    [
-      metadata["google_provider"],
-      metadata["provider"],
-      metadata_account_provider,
-      source_account_provider
-    ]
-    |> Enum.concat(connected_providers)
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> Enum.uniq()
-    |> case do
-      [] -> ["google"]
-      providers -> providers
+  defp normalize_account_email(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "" -> nil
+      normalized -> normalized
     end
   end
 
-  defp connected_google_providers(user_id) when is_binary(user_id) do
-    account_providers =
-      user_id
-      |> ConnectedAccounts.list_for_user()
-      |> Enum.filter(fn account ->
-        account.status == "connected" and String.starts_with?(account.provider, "google:")
+  defp normalize_account_email(_value), do: nil
+
+  defp connected_gmail_accounts(user_id) when is_binary(user_id) do
+    user_id
+    |> SourceScope.resolve()
+    |> SourceScope.google_accounts_for_service("gmail")
+    |> Enum.sort_by(fn account ->
+      {Map.get(account, "account_email") || "~", Map.get(account, "provider") || "~"}
+    end)
+  end
+
+  defp connected_gmail_accounts(_user_id), do: []
+
+  defp self_emails_from_accounts(user_id, connected_accounts) do
+    account_emails =
+      Enum.flat_map(connected_accounts, fn account ->
+        [Map.get(account, "account_email"), provider_email(Map.get(account, "provider"))]
       end)
-      |> Enum.map(& &1.provider)
 
-    token_providers =
-      user_id
-      |> OAuth.list_user_tokens()
-      |> Enum.map(& &1.provider)
-      |> Enum.filter(&String.starts_with?(&1, "google:"))
-
-    (account_providers ++ token_providers)
-    |> Enum.uniq()
-    |> Enum.sort()
-  end
-
-  defp connected_google_providers(_user_id), do: []
-
-  defp self_emails_from_providers(user_id, connected_providers) do
-    ([user_id] ++ Enum.map(connected_providers, &provider_email/1))
+    ([user_id] ++ account_emails)
     |> Enum.filter(&is_binary/1)
     |> Enum.map(&String.downcase/1)
     |> Enum.uniq()

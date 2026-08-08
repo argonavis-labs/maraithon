@@ -1,6 +1,8 @@
 defmodule Maraithon.HTTPTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Maraithon.HTTP
 
   describe "get/2" do
@@ -79,6 +81,24 @@ defmodule Maraithon.HTTPTest do
 
       {:error, {:http_status, 500, body}} = HTTP.get("http://localhost:#{bypass.port}/error")
       assert body == "Internal Server Error"
+    end
+
+    test "returns caller-declared expected statuses without warning noise" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/missing", fn conn ->
+        Plug.Conn.resp(conn, 404, "Not Found")
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:http_status, 404, "Not Found"}} =
+                   HTTP.get("http://localhost:#{bypass.port}/missing", [],
+                     expected_statuses: [404]
+                   )
+        end)
+
+      refute log =~ "HTTP request failed"
     end
 
     test "passes headers" do

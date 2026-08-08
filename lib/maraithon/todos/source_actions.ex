@@ -9,6 +9,7 @@ defmodule Maraithon.Todos.SourceActions do
   """
 
   alias Maraithon.Cards.SourceContext
+  alias Maraithon.Connectors.Gmail
   alias Maraithon.Todos.{ActionDrafts, PublicMetadata, Todo}
 
   @max_draft_length 2_000
@@ -135,7 +136,7 @@ defmodule Maraithon.Todos.SourceActions do
     # Gmail source_item_id values should be raw Gmail API ids. Composite
     # tracking keys often contain provider names or separators and must not be
     # surfaced in user-facing mobile payloads.
-    if String.match?(id, ~r/^[A-Fa-f0-9]+$/), do: id
+    Gmail.normalize_id(id)
   end
 
   defp gmail_source_item_id(_todo), do: nil

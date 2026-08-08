@@ -625,13 +625,13 @@ defmodule Maraithon.TelegramRouterTest do
        })}
     end)
 
-    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/msg-in-1", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/a1b1c1", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "msg-in-1",
+          "id" => "a1b1c1",
           "threadId" => "thread-1",
           "snippet" => "Original message",
           "payload" => %{
@@ -849,7 +849,7 @@ defmodule Maraithon.TelegramRouterTest do
         "Send the promised follow-through now and explicitly confirm delivery in the same thread.",
       "priority" => 96,
       "confidence" => 0.93,
-      "source_id" => "msg-in-1",
+      "source_id" => "a1b1c1",
       "dedupe_key" => "telegram-router:gmail:#{System.unique_integer([:positive])}",
       "metadata" => %{
         "account" => "kent@example.com",

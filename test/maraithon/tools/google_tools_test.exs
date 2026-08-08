@@ -40,17 +40,17 @@ defmodule Maraithon.Tools.GoogleToolsTest do
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
         200,
-        Jason.encode!(%{"messages" => [%{"id" => "m-1"}, %{"id" => "m-2"}]})
+        Jason.encode!(%{"messages" => [%{"id" => "a101"}, %{"id" => "a102"}]})
       )
     end)
 
-    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/m-1", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/a101", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "m-1",
+          "id" => "a101",
           "threadId" => "t-1",
           "snippet" => "Need a response",
           "labelIds" => ["INBOX"],
@@ -65,13 +65,13 @@ defmodule Maraithon.Tools.GoogleToolsTest do
       )
     end)
 
-    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/m-2", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/a102", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "m-2",
+          "id" => "a102",
           "threadId" => "t-2",
           "snippet" => "Calendar invite",
           "labelIds" => ["INBOX"],
@@ -88,7 +88,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
 
     assert result.source == "gmail"
     assert result.count == 2
-    assert Enum.map(result.messages, & &1.message_id) == ["m-1", "m-2"]
+    assert Enum.map(result.messages, & &1.message_id) == ["a101", "a102"]
   end
 
   test "GmailSearch uses query and returns matched messages" do
@@ -107,16 +107,16 @@ defmodule Maraithon.Tools.GoogleToolsTest do
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "m-9"}]}))
+      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "a109"}]}))
     end)
 
-    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/m-9", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/a109", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "m-9",
+          "id" => "a109",
           "threadId" => "t-9",
           "snippet" => "Please reply",
           "labelIds" => ["INBOX"],
@@ -135,7 +135,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
     assert result.source == "gmail"
     assert result.query == "from:boss@example.com"
     assert result.count == 1
-    assert hd(result.messages).message_id == "m-9"
+    assert hd(result.messages).message_id == "a109"
   end
 
   test "GmailSearch fans out across connected Google accounts and sorts by latest message" do
@@ -167,16 +167,16 @@ defmodule Maraithon.Tools.GoogleToolsTest do
         ["Bearer personal-token"] ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "personal-1"}]}))
+          |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "b101"}]}))
 
         ["Bearer work-token"] ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "work-1"}]}))
+          |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "c101"}]}))
       end
     end)
 
-    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/personal-1", fn conn ->
+    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/b101", fn conn ->
       ["Bearer personal-token"] = Plug.Conn.get_req_header(conn, "authorization")
 
       conn
@@ -184,8 +184,8 @@ defmodule Maraithon.Tools.GoogleToolsTest do
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "personal-1",
-          "threadId" => "thread-personal-1",
+          "id" => "b101",
+          "threadId" => "thread-b101",
           "snippet" => "Newest personal note",
           "labelIds" => ["INBOX"],
           "internalDate" => "1775091600000",
@@ -196,7 +196,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
       )
     end)
 
-    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/work-1", fn conn ->
+    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/c101", fn conn ->
       ["Bearer work-token"] = Plug.Conn.get_req_header(conn, "authorization")
 
       conn
@@ -204,8 +204,8 @@ defmodule Maraithon.Tools.GoogleToolsTest do
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "work-1",
-          "threadId" => "thread-work-1",
+          "id" => "c101",
+          "threadId" => "thread-c101",
           "snippet" => "Reply to partner",
           "labelIds" => ["INBOX"],
           "internalDate" => "1775088000000",
@@ -230,7 +230,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
              "google:work@example.com"
            ]
 
-    assert Enum.map(result.messages, & &1.message_id) == ["personal-1", "work-1"]
+    assert Enum.map(result.messages, & &1.message_id) == ["b101", "c101"]
   end
 
   test "GmailGetMessage fetches one message by id" do
@@ -243,7 +243,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
     assert {:ok, _token} =
              OAuth.store_tokens("google-tool-user-3", "google", %{access_token: "google-token-3"})
 
-    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/m-42", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/a142", fn conn ->
       assert Plug.Conn.Query.decode(conn.query_string)["format"] == "full"
 
       conn
@@ -251,7 +251,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "m-42",
+          "id" => "a142",
           "threadId" => "t-42",
           "snippet" => "One message",
           "labelIds" => ["INBOX"],
@@ -267,12 +267,12 @@ defmodule Maraithon.Tools.GoogleToolsTest do
     assert {:ok, result} =
              GmailGetMessage.execute(%{
                "user_id" => "google-tool-user-3",
-               "message_id" => "m-42"
+               "message_id" => "a142"
              })
 
     assert result.source == "gmail"
-    assert result.message_id == "m-42"
-    assert result.message.message_id == "m-42"
+    assert result.message_id == "a142"
+    assert result.message.message_id == "a142"
     assert result.message.subject == "One"
     assert result.message.text_body == "Full body text"
   end
@@ -298,7 +298,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
                metadata: %{"account_email" => "personal@example.com"}
              })
 
-    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/m-42", fn conn ->
+    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/a142", fn conn ->
       assert Plug.Conn.Query.decode(conn.query_string)["format"] == "full"
 
       case Plug.Conn.get_req_header(conn, "authorization") do
@@ -313,7 +313,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
           |> Plug.Conn.resp(
             200,
             Jason.encode!(%{
-              "id" => "m-42",
+              "id" => "a142",
               "threadId" => "t-42",
               "snippet" => "One message",
               "labelIds" => ["INBOX"],
@@ -330,10 +330,10 @@ defmodule Maraithon.Tools.GoogleToolsTest do
     assert {:ok, result} =
              GmailGetMessage.execute(%{
                "user_id" => "google-tool-user-3b",
-               "message_id" => "m-42"
+               "message_id" => "a142"
              })
 
-    assert result.message.message_id == "m-42"
+    assert result.message.message_id == "a142"
     assert result.message.google_provider == "google:work@example.com"
     assert result.message.subject == "Cross-account"
     assert result.message.text_body == "Cross-account body"

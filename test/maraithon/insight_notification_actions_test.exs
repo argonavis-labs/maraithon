@@ -95,7 +95,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
             "Send the promised follow-through now and explicitly confirm delivery in the same thread.",
           "priority" => 96,
           "confidence" => 0.93,
-          "source_id" => "msg-in-1",
+          "source_id" => "a1b1c1",
           "dedupe_key" => "telegram-actions:gmail:1",
           "metadata" => %{
             "account" => "kent@example.com",
@@ -179,7 +179,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert drafted.text =~ "Re: Quick follow-up"
     assert button_labels(drafted.opts) |> Enum.member?("Send Now")
 
-    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/msg-in-1", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/a1b1c1", fn conn ->
       assert conn.query_string =~ "format=metadata"
       assert conn.query_string =~ "metadataHeaders=Message-ID"
 
@@ -188,7 +188,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "msg-in-1",
+          "id" => "a1b1c1",
           "threadId" => "thread-1",
           "snippet" => "Original message",
           "payload" => %{
@@ -344,7 +344,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           "recommended_action" => "Reply with the current status.",
           "priority" => 91,
           "confidence" => 0.9,
-          "source_id" => "msg-in-error",
+          "source_id" => "a1b1c2",
           "dedupe_key" => "telegram-actions:gmail:raw-error",
           "metadata" => %{
             "thread_id" => "thread-error",
@@ -376,20 +376,20 @@ defmodule Maraithon.InsightNotificationActionsTest do
               "subject" => "Re: Vendor update",
               "body" => "Sharing the latest status now.",
               "thread_id" => "thread-error",
-              "reply_to_message_id" => "msg-in-error"
+              "reply_to_message_id" => "a1b1c2"
             }
           }
         }
       })
       |> Repo.insert!()
 
-    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/msg-in-error", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/a1b1c2", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
         200,
         Jason.encode!(%{
-          "id" => "msg-in-error",
+          "id" => "a1b1c2",
           "threadId" => "thread-error",
           "payload" => %{"headers" => []}
         })
