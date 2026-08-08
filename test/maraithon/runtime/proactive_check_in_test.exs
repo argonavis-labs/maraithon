@@ -1,23 +1,32 @@
 defmodule Maraithon.Runtime.ProactiveCheckInTest do
   use Maraithon.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Maraithon.Accounts
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.Runtime.ProactiveCheckIn
   alias Maraithon.TelegramAssistant.ProactiveCandidate
   alias Maraithon.TelegramAssistant.ProactiveQueue
+  alias Maraithon.TestSupport.CapturingAPNS
 
   setup do
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_harness = Application.get_env(:maraithon, :assistant_harness, [])
     original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
 
     on_exit(fn ->
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+      Application.put_env(:maraithon, :assistant_harness, original_harness)
       Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
     end)
 
-    %{original_assistant: original_assistant, original_runtime: original_runtime}
+    %{
+      original_assistant: original_assistant,
+      original_harness: original_harness,
+      original_runtime: original_runtime
+    }
   end
 
   test "initial tick delay defaults to the configured interval", %{
@@ -54,6 +63,54 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
     assert state.initial_delay_ms == 5_000
   end
 
+  test "failed proactive cycles log at warning level", %{
+    original_assistant: original_assistant,
+    original_harness: original_harness,
+    original_runtime: original_runtime
+  } do
+    user_id = "runtime-check-in-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    :ok = CapturingAPNS.enable(user_id)
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(original_assistant,
+        telegram_proactive_checkins_enabled: true,
+        proactive_delivery_planner_enabled: false
+      )
+    )
+
+    Application.put_env(
+      :maraithon,
+      :assistant_harness,
+      Keyword.merge(original_harness,
+        llm_complete: fn _params -> {:error, :provider_unavailable} end,
+        model_fallbacks: []
+      )
+    )
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      Keyword.merge(original_runtime,
+        proactive_check_in_interval_ms: 123_456,
+        proactive_check_in_initial_delay_ms: 123_456
+      )
+    )
+
+    pid = start_supervised!(ProactiveCheckIn)
+
+    log =
+      capture_log([level: :warning], fn ->
+        send(pid, :tick)
+        _ = :sys.get_state(pid)
+      end)
+
+    assert log =~ "Proactive check-in planning or delivery failed"
+    assert log =~ "Proactive Telegram check-in cycle"
+  end
+
   test "run_delivery_planner is disabled until the planner flag is enabled", %{
     original_assistant: original_assistant
   } do
@@ -64,6 +121,41 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
     )
 
     assert ProactiveCheckIn.run_delivery_planner() == :disabled
+  end
+
+  test "run_delivery_planner logs per-user model failures", %{
+    original_assistant: original_assistant
+  } do
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(original_assistant,
+        telegram_unified_push_enabled: true,
+        proactive_delivery_planner_enabled: true
+      )
+    )
+
+    user_id = "runtime-planner-failure-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    :ok = CapturingAPNS.enable(user_id)
+
+    {:ok, _candidate} =
+      ProactiveQueue.enqueue(candidate_attrs(user_id, %{urgency: 0.95}))
+
+    log =
+      capture_log([level: :warning], fn ->
+        result =
+          ProactiveCheckIn.run_delivery_planner(
+            user_ids: [user_id],
+            context: %{},
+            llm_complete: fn _params -> {:error, :provider_unavailable} end,
+            model_fallbacks: []
+          )
+
+        assert result.failed == 1
+      end)
+
+    assert log =~ "Proactive delivery planning failed"
   end
 
   test "run_delivery_planner delegates pending candidates to the planner", %{
@@ -80,6 +172,7 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
 
     user_id = "runtime-planner-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    :ok = CapturingAPNS.enable(user_id)
 
     {:ok, _telegram} =
       ConnectedAccounts.upsert_manual(user_id, "telegram", %{
@@ -87,7 +180,8 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
         metadata: %{"username" => "runtime-planner"}
       })
 
-    {:ok, candidate} = ProactiveQueue.enqueue(candidate_attrs(user_id))
+    # Keep this contract test independent of the local quiet-hours window.
+    {:ok, candidate} = ProactiveQueue.enqueue(candidate_attrs(user_id, %{urgency: 0.95}))
 
     llm_complete = fn _params ->
       {:ok,
@@ -147,7 +241,7 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
     assert Repo.get!(ProactiveCandidate, fresh.id).status == "pending"
   end
 
-  defp candidate_attrs(user_id, overrides \\ %{}) do
+  defp candidate_attrs(user_id, overrides) do
     unique = System.unique_integer([:positive])
 
     Map.merge(

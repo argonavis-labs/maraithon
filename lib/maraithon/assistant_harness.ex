@@ -17,7 +17,11 @@ defmodule Maraithon.AssistantHarness do
   @default_max_tool_steps 10
   @default_max_wall_clock_ms 25_000
   @default_chat_max_tokens 1_800
-  @default_proactive_max_tokens 1_200
+  # Qwen's hidden reasoning tokens count against this budget. Production
+  # proactive calls were regularly landing at 1,085-1,172 tokens and
+  # intermittently exhausting the former 1,200-token ceiling before emitting
+  # assistant content.
+  @default_proactive_max_tokens 1_800
   @default_temperature 0.2
   @default_reasoning_effort "low"
   @max_tool_calls_per_step 3
@@ -30,7 +34,7 @@ defmodule Maraithon.AssistantHarness do
   @default_model_busy_max_retries 25
   @default_model_retry_base_delay_ms 250
   @default_model_retry_max_delay_ms 5_000
-  @retryable_model_errors ~w(timeout llm_busy rate_limited network_error api_408 api_425 api_429 api_500 api_502 api_503 api_504 invalid_json missing_content)
+  @retryable_model_errors ~w(timeout llm_busy rate_limited network_error api_408 api_425 api_429 api_500 api_502 api_503 api_504 invalid_json missing_content invalid_response)
   @valid_statuses ~w(tool_calls final)
   @valid_message_classes ~w(assistant_reply approval_prompt action_result system_notice todo_digest)
   @valid_proactive_decisions ~w(send_now hold)
@@ -859,6 +863,7 @@ defmodule Maraithon.AssistantHarness do
   defp retryable_model_error?({:llm_busy, _retry_after}), do: true
   defp retryable_model_error?(:assistant_harness_invalid_json), do: true
   defp retryable_model_error?(:assistant_harness_missing_content), do: true
+  defp retryable_model_error?({:invalid_response, _summary}), do: true
   # Malformed decisions — the model returned a transient JSON-shape slip
   # (e.g. status:"tool_calls" with an empty tool_calls array, an unknown
   # status, or a malformed tool call). A retry / fallback-model attempt

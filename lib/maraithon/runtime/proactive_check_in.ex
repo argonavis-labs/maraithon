@@ -67,12 +67,14 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
   def handle_info(:tick, state) do
     result = run_once(batch_size: state.batch_size)
 
-    if result.sent > 0 or result.held > 0 or result.failed > 0 do
-      Logger.info("Proactive Telegram check-in cycle",
+    if result.sent > 0 or result.held > 0 or result.suppressed > 0 or result.failed > 0 or
+         result.disabled > 0 do
+      Logger.log(cycle_log_level(result), "Proactive Telegram check-in cycle",
         sent: result.sent,
         held: result.held,
         suppressed: result.suppressed,
-        failed: result.failed
+        failed: result.failed,
+        disabled: result.disabled
       )
     end
 
@@ -102,8 +104,8 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
   defp log_delivery_planner_cycle(%{} = result, expired) do
     if result.planned > 0 or result.delivered > 0 or result.held > 0 or result.failed > 0 or
          expired > 0 do
-      Logger.info("Proactive delivery planner cycle",
-        users: result.users,
+      Logger.log(cycle_log_level(result), "Proactive delivery planner cycle",
+        user_count: result.users,
         planned: result.planned,
         interrupt_now: result.interrupt_now,
         digest: result.digest,
@@ -118,6 +120,9 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
   end
 
   defp log_delivery_planner_cycle(_result, _expired), do: :ok
+
+  defp cycle_log_level(%{failed: failed}) when is_integer(failed) and failed > 0, do: :warning
+  defp cycle_log_level(_result), do: :info
 
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
     Process.send_after(self(), :tick, delay_ms)

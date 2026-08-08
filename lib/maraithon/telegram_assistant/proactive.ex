@@ -28,6 +28,8 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   alias Maraithon.Todos
   alias Maraithon.Todos.UserFacingCopy
 
+  require Logger
+
   @recent_push_limit 8
   @default_due_batch_size 25
   @default_timezone_offset_hours -5
@@ -89,17 +91,43 @@ defmodule Maraithon.TelegramAssistant.Proactive do
       |> Enum.reduce(%{sent: 0, held: 0, suppressed: 0, failed: 0, disabled: 0}, fn user_id,
                                                                                     acc ->
         case deliver_check_in(user_id, opts) do
-          {:ok, %{"decision" => "sent_now"}} -> %{acc | sent: acc.sent + 1}
-          {:ok, %{decision: "sent_now"}} -> %{acc | sent: acc.sent + 1}
-          {:ok, %{"decision" => "queued"}} -> %{acc | sent: acc.sent + 1}
-          {:ok, %{"decision" => "hold"}} -> %{acc | held: acc.held + 1}
-          {:ok, %{decision: "hold"}} -> %{acc | held: acc.held + 1}
-          {:ok, %{"decision" => "suppressed"}} -> %{acc | suppressed: acc.suppressed + 1}
-          {:ok, %{decision: "suppressed"}} -> %{acc | suppressed: acc.suppressed + 1}
-          {:ok, %{"decision" => "disabled"}} -> %{acc | disabled: acc.disabled + 1}
-          {:ok, %{decision: "disabled"}} -> %{acc | disabled: acc.disabled + 1}
-          {:ok, _other} -> acc
-          {:error, _reason} -> %{acc | failed: acc.failed + 1}
+          {:ok, %{"decision" => "sent_now"}} ->
+            %{acc | sent: acc.sent + 1}
+
+          {:ok, %{decision: "sent_now"}} ->
+            %{acc | sent: acc.sent + 1}
+
+          {:ok, %{"decision" => "queued"}} ->
+            %{acc | sent: acc.sent + 1}
+
+          {:ok, %{"decision" => "hold"}} ->
+            %{acc | held: acc.held + 1}
+
+          {:ok, %{decision: "hold"}} ->
+            %{acc | held: acc.held + 1}
+
+          {:ok, %{"decision" => "suppressed"}} ->
+            %{acc | suppressed: acc.suppressed + 1}
+
+          {:ok, %{decision: "suppressed"}} ->
+            %{acc | suppressed: acc.suppressed + 1}
+
+          {:ok, %{"decision" => "disabled"}} ->
+            %{acc | disabled: acc.disabled + 1}
+
+          {:ok, %{decision: "disabled"}} ->
+            %{acc | disabled: acc.disabled + 1}
+
+          {:ok, _other} ->
+            acc
+
+          {:error, reason} ->
+            Logger.warning("Proactive check-in planning or delivery failed",
+              user_id: user_id,
+              reason: failure_reason_label(reason)
+            )
+
+            %{acc | failed: acc.failed + 1}
         end
       end)
     else
@@ -507,6 +535,14 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   defp stringify_result(result) when is_map(result) do
     Map.new(result, fn {key, value} -> {to_string(key), value} end)
   end
+
+  defp failure_reason_label({kind, status, _detail})
+       when is_atom(kind) and is_integer(status),
+       do: "#{kind}:#{status}"
+
+  defp failure_reason_label({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  defp failure_reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp failure_reason_label(_reason), do: "unclassified"
 
   defp record_proactive_decision(user_id, dedupe_key, plan, trigger, opts) do
     result = Map.get(opts, :result, %{})

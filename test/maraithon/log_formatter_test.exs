@@ -50,6 +50,17 @@ defmodule Maraithon.LogFormatterTest do
         detail_failure_count: 0,
         truncated: true,
         backfill_needed: true,
+        sent: 0,
+        held: 1,
+        suppressed: 2,
+        failed: 1,
+        disabled: 3,
+        user_count: 4,
+        planned: 5,
+        interrupt_now: 6,
+        digest: 7,
+        delivered: 8,
+        expired: 9,
         arbitrary_payload: "not-for-console"
       ]
 
@@ -64,6 +75,17 @@ defmodule Maraithon.LogFormatterTest do
       assert decoded["detail_failure_count"] == 0
       assert decoded["truncated"] == true
       assert decoded["backfill_needed"] == true
+      assert decoded["sent"] == 0
+      assert decoded["held"] == 1
+      assert decoded["suppressed"] == 2
+      assert decoded["failed"] == 1
+      assert decoded["disabled"] == 3
+      assert decoded["user_count"] == 4
+      assert decoded["planned"] == 5
+      assert decoded["interrupt_now"] == 6
+      assert decoded["digest"] == 7
+      assert decoded["delivered"] == 8
+      assert decoded["expired"] == 9
       refute Map.has_key?(decoded, "arbitrary_payload")
     end
 

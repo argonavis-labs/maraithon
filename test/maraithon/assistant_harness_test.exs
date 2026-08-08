@@ -79,7 +79,9 @@ defmodule Maraithon.AssistantHarnessTest do
     assert policy.tool_calls.repeat_guard.window_size == 3
     assert policy.tool_evidence.history_limit == 12
     assert policy.model_failover.enabled == false
+    assert policy.proactive_request.max_tokens == 1_800
     assert "invalid_json" in policy.model_failover.retryable_errors
+    assert "invalid_response" in policy.model_failover.retryable_errors
     assert "tool_calls" in policy.model_decision_contract.statuses
     assert "todo_digest" in policy.model_decision_contract.message_classes
 
@@ -162,7 +164,9 @@ defmodule Maraithon.AssistantHarnessTest do
 
     proactive_prompt = get_in(proactive_request, ["messages", Access.at(1), "content"])
 
-    assert system =~ "durable work state lives in open work, projects, People, and deep memory"
+    assert system =~
+             "durable direction and work state live in goals, open work, projects, People, and deep memory"
+
     assert prompt =~ "Use product language in final text"
     assert prompt =~ "say `open work`, `work item`, and `relationship context`"
     assert prompt =~ "say `People` only when naming the app's People area"
@@ -602,6 +606,44 @@ defmodule Maraithon.AssistantHarnessTest do
              )
 
     assert response["assistant_message"] == "I checked it from the fallback model."
+    assert_receive {:attempted_model, primary} when primary != "fallback-model"
+    assert_receive {:attempted_model, "fallback-model"}
+  end
+
+  test "retries provider responses without assistant content" do
+    parent = self()
+
+    llm_complete = fn params ->
+      send(parent, {:attempted_model, params["model"]})
+
+      case params["model"] do
+        "fallback-model" ->
+          {:ok,
+           %{
+             content:
+               Jason.encode!(%{
+                 "status" => "final",
+                 "assistant_message" => "The fallback recovered the empty response.",
+                 "message_class" => "assistant_reply",
+                 "tool_calls" => [],
+                 "summary" => "Provider response failover completed."
+               })
+           }}
+
+        _primary ->
+          {:error,
+           {:invalid_response,
+            %{model: "primary-model", finish_reason: "length", choice_count: 1}}}
+      end
+    end
+
+    assert {:ok, response} =
+             AssistantHarness.next_step(payload("What should I review?"),
+               llm_complete: llm_complete,
+               model_fallbacks: ["fallback-model"]
+             )
+
+    assert response["assistant_message"] == "The fallback recovered the empty response."
     assert_receive {:attempted_model, primary} when primary != "fallback-model"
     assert_receive {:attempted_model, "fallback-model"}
   end

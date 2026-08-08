@@ -208,7 +208,16 @@ defmodule Maraithon.LLM.OpenRouterProvider do
          usage: usage
        }}
     else
-      {:error, {:invalid_response, invalid_response_summary(response, model, finish_reason)}}
+      summary = invalid_response_summary(response, model, finish_reason)
+
+      Logger.warning("OpenRouter response contained no assistant content",
+        model: model,
+        finish_reason: finish_reason,
+        input_tokens: input_tokens,
+        output_tokens: output_tokens
+      )
+
+      {:error, {:invalid_response, summary}}
     end
   end
 

@@ -1,6 +1,8 @@
 defmodule Maraithon.LLM.OpenRouterProviderTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Maraithon.LLM.OpenRouterProvider
 
   setup do
@@ -107,6 +109,53 @@ defmodule Maraithon.LLM.OpenRouterProviderTest do
       assert result.finish_reason == "stop"
       assert result.usage.input_rate_per_million == 2.5
       assert result.usage.output_rate_per_million == 7.5
+    end
+
+    test "returns a diagnostic error when a completion has no assistant content" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, Maraithon.Runtime,
+        openrouter_api_key: "test_api_key",
+        openrouter_model: "qwen/qwen3.7-plus"
+      )
+
+      Application.put_env(:maraithon, :openrouter,
+        base_url: "http://localhost:#{bypass.port}/api/v1/chat/completions"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/api/v1/chat/completions", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "model" => "qwen/qwen3.7-plus",
+            "choices" => [
+              %{"finish_reason" => "length", "message" => %{"content" => ""}}
+            ],
+            "usage" => %{
+              "prompt_tokens" => 65_000,
+              "completion_tokens" => 1_200,
+              "total_tokens" => 66_200
+            }
+          })
+        )
+      end)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:error, {:invalid_response, summary}} =
+                   OpenRouterProvider.complete(%{
+                     "messages" => [%{"role" => "user", "content" => "Hello"}]
+                   })
+
+          assert summary.model == "qwen/qwen3.7-plus"
+          assert summary.finish_reason == "length"
+          assert summary.usage["prompt_tokens"] == 65_000
+          assert summary.usage["completion_tokens"] == 1_200
+        end)
+
+      assert log =~ "OpenRouter response contained no assistant content"
     end
 
     test "explicitly disables reasoning when requested" do

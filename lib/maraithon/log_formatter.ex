@@ -23,7 +23,18 @@ defmodule Maraithon.LogFormatter do
     :finish_reason,
     :detail_failure_count,
     :truncated,
-    :backfill_needed
+    :backfill_needed,
+    :sent,
+    :held,
+    :suppressed,
+    :failed,
+    :disabled,
+    :user_count,
+    :planned,
+    :interrupt_now,
+    :digest,
+    :delivered,
+    :expired
   ]
 
   def format(level, message, timestamp, metadata) do

@@ -56,7 +56,12 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
               failed: acc.failed + result.failed
           }
 
-        {:error, _reason} ->
+        {:error, reason} ->
+          Logger.warning("Proactive delivery planning failed",
+            user_id: user_id,
+            reason: failure_reason_label(reason)
+          )
+
           %{acc | users: acc.users + 1, failed: acc.failed + 1}
       end
     end)
@@ -116,7 +121,6 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       end
     end)
   end
-
 
   def run_for_user(_user_id, _opts), do: {:error, :invalid_user}
 
@@ -1165,6 +1169,14 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   defp parse_datetime(%DateTime{} = datetime, _user_id), do: datetime
   defp parse_datetime(_value, user_id), do: PushBroker.local_now_for_user(user_id)
+
+  defp failure_reason_label({kind, status, _detail})
+       when is_atom(kind) and is_integer(status),
+       do: "#{kind}:#{status}"
+
+  defp failure_reason_label({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  defp failure_reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp failure_reason_label(_reason), do: "unclassified"
 
   defp empty_due_summary do
     %{users: 0, planned: 0, interrupt_now: 0, digest: 0, held: 0, delivered: 0, failed: 0}
