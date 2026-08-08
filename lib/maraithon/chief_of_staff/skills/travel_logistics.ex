@@ -52,13 +52,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.TravelLogistics do
         label: "Google Calendar",
         description: "Required to corroborate trip timing and destination context.",
         required?: true
-      },
-      %{
-        kind: :provider,
-        provider: "telegram",
-        label: "Telegram",
-        description: "Required so Maraithon can deliver the travel brief and any later updates.",
-        required?: true
       }
     ]
   end

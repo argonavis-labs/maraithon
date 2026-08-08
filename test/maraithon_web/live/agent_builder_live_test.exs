@@ -150,7 +150,13 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
       assert html =~ "Slack Personal DMs"
-      assert html =~ "Telegram"
+
+      readiness_html =
+        view
+        |> element("section", "Permission readiness")
+        |> render()
+
+      refute readiness_html =~ "Telegram"
       assert html =~ "Blocked"
       refute html =~ "Google Gmail"
       refute html =~ "operators who want"
@@ -247,12 +253,18 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     end
 
     test "shows blockers when personal assistant permissions are missing", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/agents/new?behavior=personal_assistant_agent")
+      {:ok, view, html} = live(conn, "/agents/new?behavior=personal_assistant_agent")
 
       assert html =~ "Personal Assistant"
       assert html =~ "Gmail"
       assert html =~ "Google Calendar"
-      assert html =~ "Telegram"
+
+      readiness_html =
+        view
+        |> element("section", "Permission readiness")
+        |> render()
+
+      refute readiness_html =~ "Telegram"
       assert html =~ "Blocked"
       refute html =~ "Google Gmail"
     end
@@ -621,11 +633,10 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       end
     end
 
-    test "creates a personal assistant agent when Google and Telegram are connected", %{
+    test "creates a personal assistant agent with Google and no Telegram account", %{
       conn: conn
     } do
       google_config = Application.get_env(:maraithon, :google, [])
-      telegram_config = Application.get_env(:maraithon, :telegram, [])
 
       Application.put_env(
         :maraithon,
@@ -637,18 +648,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
         )
       )
 
-      Application.put_env(
-        :maraithon,
-        :telegram,
-        Keyword.merge(telegram_config,
-          bot_token: "telegram-bot-token",
-          webhook_secret_path: "telegram-secret"
-        )
-      )
-
       on_exit(fn ->
         Application.put_env(:maraithon, :google, google_config)
-        Application.put_env(:maraithon, :telegram, telegram_config)
       end)
 
       {:ok, _token} =
@@ -658,11 +659,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
           metadata: %{email: @user_email}
         })
 
-      {:ok, _account} =
-        ConnectedAccounts.upsert_manual(@user_email, "telegram", %{
-          external_account_id: "6114124042",
-          metadata: %{"chat_id" => "6114124042", "username" => "kentfenwick"}
-        })
+      assert ConnectedAccounts.get(@user_email, "telegram") == nil
 
       {:ok, view, _html} = live(conn, "/agents/new?behavior=personal_assistant_agent")
 
@@ -713,12 +710,11 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       end
     end
 
-    test "creates an AI Chief of Staff agent when Google, Slack, and Telegram are connected", %{
+    test "creates an AI Chief of Staff agent with source accounts and no Telegram account", %{
       conn: conn
     } do
       google_config = Application.get_env(:maraithon, :google, [])
       slack_config = Application.get_env(:maraithon, :slack, [])
-      telegram_config = Application.get_env(:maraithon, :telegram, [])
 
       Application.put_env(
         :maraithon,
@@ -740,19 +736,9 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
         )
       )
 
-      Application.put_env(
-        :maraithon,
-        :telegram,
-        Keyword.merge(telegram_config,
-          bot_token: "telegram-bot-token",
-          webhook_secret_path: "telegram-secret"
-        )
-      )
-
       on_exit(fn ->
         Application.put_env(:maraithon, :google, google_config)
         Application.put_env(:maraithon, :slack, slack_config)
-        Application.put_env(:maraithon, :telegram, telegram_config)
       end)
 
       {:ok, _google_token} =
@@ -780,11 +766,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
           }
         })
 
-      {:ok, _telegram_account} =
-        ConnectedAccounts.upsert_manual(@user_email, "telegram", %{
-          external_account_id: "6114124042",
-          metadata: %{"chat_id" => "6114124042", "username" => "kentfenwick"}
-        })
+      assert ConnectedAccounts.get(@user_email, "telegram") == nil
 
       {:ok, view, _html} = live(conn, "/agents/new?behavior=ai_chief_of_staff")
 

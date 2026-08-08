@@ -8,7 +8,6 @@ defmodule Maraithon.Travel do
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
   alias Maraithon.ChiefOfStaff.{AttentionArbiter, SourceBundle, SourceScope}
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
@@ -480,12 +479,6 @@ defmodule Maraithon.Travel do
   defp travel_delivery_ref(_brief), do: nil
 
   defp ensure_runtime_prereqs(user_id, source_scope) do
-    telegram_ready? =
-      case ConnectedAccounts.get(user_id, "telegram") do
-        %{status: "connected"} -> true
-        _ -> false
-      end
-
     cond do
       not google_service_ready?(user_id, "gmail", source_scope) ->
         {:error, :gmail_not_connected}
@@ -493,9 +486,10 @@ defmodule Maraithon.Travel do
       not google_service_ready?(user_id, "calendar", source_scope) ->
         {:error, :calendar_not_connected}
 
-      not telegram_ready? ->
-        {:error, :telegram_not_connected}
-
+      # Delivery readiness is deliberately not a source prerequisite. Travel
+      # briefs are persisted first and the push dispatcher keeps them retryable
+      # until a phone registers; the retired Telegram connector must not block
+      # itinerary refreshes or generate a warning on every wakeup.
       true ->
         :ok
     end

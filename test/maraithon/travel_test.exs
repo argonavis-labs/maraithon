@@ -1,47 +1,35 @@
 defmodule Maraithon.TravelTest do
   use Maraithon.DataCase, async: false
 
-  import Ecto.Query
-
   alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.Repo
-  alias Maraithon.TelegramAssistant.Context
-  alias Maraithon.TelegramConversations.{Conversation, Turn}
-  alias Maraithon.TestSupport.{CapturingTelegram, TravelCalendarStub, TravelGmailStub}
+  alias Maraithon.TestSupport.{TravelCalendarStub, TravelGmailStub}
   alias Maraithon.Travel
 
   setup do
-    original_insights = Application.get_env(:maraithon, :insights, [])
-    original_briefs = Application.get_env(:maraithon, :briefs, [])
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
     original_travel = Application.get_env(:maraithon, :travel, [])
     original_gmail_stub = Application.get_env(:maraithon, TravelGmailStub, [])
     original_calendar_stub = Application.get_env(:maraithon, TravelCalendarStub, [])
 
-    Application.put_env(
-      :maraithon,
-      :insights,
-      Keyword.merge(original_insights, telegram_module: CapturingTelegram)
-    )
-
-    Application.put_env(
-      :maraithon,
-      :briefs,
-      Keyword.merge(original_briefs, telegram_module: CapturingTelegram)
-    )
+    # The phone push broker still carries a legacy configuration name; this
+    # enables APNs delivery without creating or requiring a Telegram account.
+    # Pin quiet hours away from the current local hour so this regression is
+    # deterministic regardless of when the suite runs.
+    local_hour = Maraithon.TelegramAssistant.PushBroker.local_now_for_user("setup").hour
 
     Application.put_env(
       :maraithon,
       :telegram_assistant,
       Keyword.merge(original_assistant,
-        telegram_full_chat_enabled: true,
         telegram_unified_push_enabled: true,
-        proactive_delivery_planner_enabled: false
+        proactive_delivery_planner_enabled: false,
+        quiet_hours_start_local: rem(local_hour + 2, 24),
+        quiet_hours_end_local: rem(local_hour + 3, 24)
       )
     )
 
@@ -55,18 +43,11 @@ defmodule Maraithon.TravelTest do
     )
 
     on_exit(fn ->
-      Application.put_env(:maraithon, :insights, original_insights)
-      Application.put_env(:maraithon, :briefs, original_briefs)
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
       Application.put_env(:maraithon, :travel, original_travel)
       Application.put_env(:maraithon, TravelGmailStub, original_gmail_stub)
       Application.put_env(:maraithon, TravelCalendarStub, original_calendar_stub)
     end)
-
-    start_supervised!(%{
-      id: :capturing_telegram_recorder,
-      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
-    })
 
     start_supervised!(%{
       id: :capturing_apns_recorder,
@@ -89,12 +70,6 @@ defmodule Maraithon.TravelTest do
         scopes: ["gmail", "calendar"]
       })
 
-    {:ok, _telegram} =
-      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "777123",
-        metadata: %{"chat_id" => "777123", "username" => "travel-user"}
-      })
-
     now = ~U[2026-03-14 22:00:00Z]
     TravelGmailStub.configure(messages: gmail_messages(now), contents: gmail_contents(now))
     TravelCalendarStub.configure(events: calendar_events())
@@ -102,7 +77,7 @@ defmodule Maraithon.TravelTest do
     %{agent: agent, now: now, user_id: user_id}
   end
 
-  test "syncs travel evidence, records a day-before brief, and carries itinerary context into Telegram",
+  test "syncs travel evidence and records a day-before phone brief without Telegram",
        %{
          agent: agent,
          now: now,
@@ -265,12 +240,6 @@ defmodule Maraithon.TravelTest do
     assert Travel.planned_brief_at(~U[2026-03-15 12:00:00Z], -5) == ~U[2026-03-14 23:00:00Z]
     assert Travel.planned_brief_at(~U[2026-03-15 17:00:00Z], -5) == ~U[2026-03-14 21:00:00Z]
     assert Travel.planned_brief_at(~U[2026-03-16 01:00:00Z], -5) == ~U[2026-03-14 17:00:00Z]
-  end
-
-  defp telegram_events(type) do
-    :capturing_telegram_recorder
-    |> Agent.get(& &1)
-    |> Enum.filter(&(&1.type == type))
   end
 
   defp gmail_messages(now) do

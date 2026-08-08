@@ -6,7 +6,6 @@ defmodule Maraithon.AgentBuilder do
   alias Maraithon.Agents.Agent
   alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ChiefOfStaff.Skills, as: ChiefOfStaffSkills
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
   alias Maraithon.Timezones
@@ -64,7 +63,7 @@ defmodule Maraithon.AgentBuilder do
         "One assistant that combines follow-through, commitment tracking, travel logistics, and recurring chief-of-staff briefing as built-in skills.",
       inputs: [
         "Gmail, Calendar, and Slack activity relevant to commitments, unanswered replies, and travel logistics",
-        "Connected Telegram delivery for proactive nudges, travel briefs, and recurring summaries",
+        "Phone push delivery for proactive nudges, travel briefs, and recurring summaries",
         "Shared preferences that shape notification policy across all built-in skills"
       ],
       outputs: [
@@ -122,14 +121,6 @@ defmodule Maraithon.AgentBuilder do
           label: "Slack Personal DMs",
           description: "Needed to detect private unanswered replies and direct follow-ups.",
           required?: false
-        },
-        %{
-          kind: :provider,
-          provider: "telegram",
-          label: "Telegram",
-          description:
-            "Needed so the assistant can deliver the strongest nudges, travel briefs, and recurring summaries.",
-          required?: true
         }
       ],
       suggestions: [
@@ -222,7 +213,7 @@ defmodule Maraithon.AgentBuilder do
       label: "Personal Assistant",
       category: "Workflow",
       summary:
-        "Reviews Gmail and Calendar for upcoming travel, assembles an itinerary, and sends a Telegram prep brief the day before the trip.",
+        "Reviews Gmail and Calendar for upcoming travel, assembles an itinerary, and sends a phone prep brief the day before the trip.",
       inputs: [
         "Travel confirmation emails from Gmail",
         "Calendar events that corroborate destination and timing",
@@ -230,8 +221,8 @@ defmodule Maraithon.AgentBuilder do
       ],
       outputs: [
         "Persisted travel itineraries with normalized flight and hotel items",
-        "Telegram day-before travel briefs",
-        "Telegram follow-up updates when the itinerary materially changes"
+        "Phone day-before travel briefs",
+        "Phone follow-up updates when the itinerary materially changes"
       ],
       fields:
         ~w(email_scan_limit event_scan_limit lookback_hours min_confidence timezone_offset_hours wakeup_interval_ms),
@@ -262,14 +253,6 @@ defmodule Maraithon.AgentBuilder do
           service: "calendar",
           label: "Google Calendar",
           description: "Required to corroborate trip timing and destination context.",
-          required?: true
-        },
-        %{
-          kind: :provider,
-          provider: "telegram",
-          label: "Telegram",
-          description:
-            "Required so Maraithon can deliver the travel brief and any later updates.",
           required?: true
         }
       ],
@@ -1727,22 +1710,11 @@ defmodule Maraithon.AgentBuilder do
         MapSet.subset?(required_google_scopes, granted)
       end)
 
-    telegram_ready? =
-      case ConnectedAccounts.get(user_id, "telegram") do
-        %{status: "connected"} -> true
-        _ -> false
-      end
-
-    cond do
-      not google_ready? ->
-        {:error,
-         "Connect one Google account with both Gmail and Calendar before launching this automation"}
-
-      not telegram_ready? ->
-        {:error, "Connect Telegram before launching this automation"}
-
-      true ->
-        :ok
+    if google_ready? do
+      :ok
+    else
+      {:error,
+       "Connect one Google account with both Gmail and Calendar before launching this automation"}
     end
   end
 
