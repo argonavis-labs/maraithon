@@ -252,6 +252,7 @@ defmodule Maraithon.TelegramConversations do
       [t, c],
       c.chat_id == ^chat_id and t.role == "assistant" and
         t.reply_to_message_id == ^telegram_message_id and
+        fragment("COALESCE(?->>'terminal_response', 'true') = 'true'", t.structured_data) and
         (c.status != "awaiting_confirmation" or t.turn_kind != "action_result")
     )
     |> Repo.exists?()

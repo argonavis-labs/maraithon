@@ -136,7 +136,8 @@ defmodule Maraithon.TelegramRouter do
                    conversation: conversation,
                    user_turn: user_turn,
                    linked_delivery: linked_delivery,
-                   linked_insight: linked_insight
+                   linked_insight: linked_insight,
+                   durable_processing: durable_processing?(data)
                  }) do
               :ok ->
                 :ok

@@ -3,6 +3,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
   Bounded multi-step runner for Telegram assistant chat and prepared actions.
   """
 
+  import Ecto.Query
+
   alias Maraithon.AssistantHarness
   alias Maraithon.ActionLedger
   alias Maraithon.ActionCards
@@ -14,6 +16,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.OperatorEvents
   alias Maraithon.Projects
   alias Maraithon.PromptBudget
+  alias Maraithon.Repo
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ProactiveCandidate
@@ -28,7 +31,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   }
 
   alias Maraithon.TelegramConversations
-  alias Maraithon.TelegramConversations.Conversation
+  alias Maraithon.TelegramConversations.{Conversation, Turn}
   alias Maraithon.Todos
   alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Todos.SurfaceQuality
@@ -47,7 +50,12 @@ defmodule Maraithon.TelegramAssistant.Runner do
         chat_id: Map.get(attrs, :chat_id),
         trigger_type: trigger_type(attrs)
       },
-      fn -> do_run_inbound(attrs) end
+      fn ->
+        case maybe_resume_durable_delivery(attrs) do
+          :pass -> do_run_inbound(attrs)
+          result -> result
+        end
+      end
     )
   end
 
@@ -71,6 +79,42 @@ defmodule Maraithon.TelegramAssistant.Runner do
     else
       {:error, reason} ->
         {:fallback, reason}
+    end
+  end
+
+  defp maybe_resume_durable_delivery(attrs) do
+    conversation = Map.get(attrs, :conversation)
+    source_message_id = Map.get(attrs, :source_message_id)
+
+    if durable_processing?(attrs) and match?(%Conversation{}, conversation) and
+         is_binary(source_message_id) do
+      case TelegramAssistant.resumable_todo_digest_run(conversation.id, source_message_id) do
+        %Run{} = run -> resume_todo_digest_delivery(run, conversation, attrs)
+        nil -> :pass
+      end
+    else
+      :pass
+    end
+  end
+
+  defp resume_todo_digest_delivery(%Run{} = run, %Conversation{} = conversation, attrs) do
+    checkpoint = map_value(run.result_summary || %{}, "delivery_checkpoint", %{})
+    prepared_action_id = map_value(checkpoint, "prepared_action_id")
+    summary = map_value(checkpoint, "completion_summary", %{})
+
+    case drain_todo_digest_delivery(conversation, attrs, run) do
+      {:ok, final_conversation} ->
+        case TelegramAssistant.complete_run(run, %{
+               status: todo_digest_status(final_conversation, prepared_action_id),
+               result_summary: summary
+             }) do
+          {:ok, _completed_run} -> :ok
+          {:error, reason} -> {:error, {:run_completion_failed, reason}}
+        end
+
+      {:error, reason} ->
+        _ = fail_run_preserving_summary(run, reason)
+        {:error, reason}
     end
   end
 
@@ -172,6 +216,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
         {:fallback, reason}
 
+      {:error, %Run{} = run, {:final_delivery_failed, delivery_reason}, state} ->
+        if durable_processing?(attrs) do
+          _ = TelegramAssistant.cancel_liveness_session(run.id)
+          _ = fail_run_preserving_summary(run, delivery_reason)
+          {:error, delivery_reason}
+        else
+          handle_run_failure(run, delivery_reason, state, attrs)
+        end
+
       {:error, %Run{} = run, reason, state} ->
         case maybe_escalate_and_retry(
                run,
@@ -245,6 +298,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
         :pass ->
           :pass
+
+        {:error, _reason} = error ->
+          error
       end
     else
       :pass
@@ -295,6 +351,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
             _ = TelegramAssistant.cancel_liveness_session(run.id)
             {:ok, _run} = TelegramAssistant.fail_run(run, retry_reason, "degraded")
             :pass
+
+          {:error, %Run{} = retry_run, {:final_delivery_failed, delivery_reason}, retry_state} ->
+            if durable_processing?(attrs) do
+              _ = TelegramAssistant.cancel_liveness_session(retry_run.id)
+              _ = fail_run_preserving_summary(retry_run, delivery_reason)
+              {:error, delivery_reason}
+            else
+              handle_run_failure(retry_run, delivery_reason, retry_state, attrs)
+            end
 
           {:error, %Run{} = retry_run, retry_reason, retry_state} ->
             handle_run_failure(retry_run, retry_reason, retry_state, attrs)
@@ -617,8 +682,12 @@ defmodule Maraithon.TelegramAssistant.Runner do
     deadline = started_monotonic_ms + policy.loop.max_wall_clock_ms
     remaining_ms = max(deadline - System.monotonic_time(:millisecond), 1)
 
+    # These tasks must stay linked to the Runner owner. Durable ChatWorker
+    # timeout/claim-loss kills that owner; linked tool calls then terminate
+    # before a retry can overlap the abandoned execution. `*_nolink` would
+    # leave independently supervised provider work running after the owner died.
     results =
-      Task.Supervisor.async_stream_nolink(
+      Task.Supervisor.async_stream(
         Maraithon.Runtime.ToolCallSupervisor,
         indexed_calls,
         fn {tool_call, sequence} ->
@@ -692,7 +761,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
            ) do
       _ = TelegramAssistant.note_liveness_tool(run.id, tool_name, arguments)
 
-      case Toolbox.execute(tool_name, arguments, runtime_context) do
+      case toolbox_module().execute(tool_name, arguments, runtime_context) do
         {:ok, result} ->
           bounded_result = bounded_tool_result(result)
 
@@ -1177,35 +1246,30 @@ defmodule Maraithon.TelegramAssistant.Runner do
     else
       intro_text = todo_digest_intro_text(response, prepared_action_id)
 
-      with {:ok, updated_conversation, _turn, _telegram_result} <-
-             TelegramAssistant.send_turn(
-               conversation,
-               Map.fetch!(attrs, :chat_id),
+      summary =
+        build_result_summary("todo_digest", prepared_action_id, state, liveness_summary)
+        |> Map.put(:todo_items_sent, length(todos))
+        |> Map.put(:todo_ids, Enum.map(todos, &map_value(&1, "id")))
+
+      with {:ok, checkpointed_run} <-
+             checkpoint_todo_digest_delivery(
+               run,
+               attrs,
                intro_text,
-               standard_turn_opts(
-                 attrs,
-                 run,
-                 state,
-                 "assistant_reply",
-                 prepared_action_id,
-                 delivery,
-                 map_value(response, "summary")
-               )
+               todos,
+               prepared_action_id,
+               summary,
+               delivery
              ),
            {:ok, final_conversation} <-
-             send_todo_messages(updated_conversation, attrs, run, todos) do
-        summary =
-          build_result_summary("todo_digest", prepared_action_id, state, liveness_summary)
-          |> Map.put(:todo_items_sent, length(todos))
-          |> Map.put(:todo_ids, Enum.map(todos, &map_value(&1, "id")))
-
+             drain_todo_digest_delivery(conversation, attrs, checkpointed_run) do
         _ = maybe_refresh_user_memory(attrs)
         _ = maybe_compact_conversation_async(final_conversation)
 
         {:ok, todo_digest_status(final_conversation, prepared_action_id), summary}
       else
         {:error, reason} ->
-          {:error, run, reason, state}
+          {:error, run, {:final_delivery_failed, reason}, state}
       end
     end
   end
@@ -1284,7 +1348,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
          summary}
 
       {:error, reason} ->
-        {:error, run, reason, state}
+        {:error, run, {:final_delivery_failed, reason}, state}
     end
   end
 
@@ -1372,38 +1436,162 @@ defmodule Maraithon.TelegramAssistant.Runner do
     |> apply_mobile_delivery(attrs)
   end
 
-  defp send_todo_messages(conversation, attrs, run, todos) do
-    Enum.reduce_while(todos, {:ok, conversation}, fn todo, {:ok, acc_conversation} ->
-      todo_record = hydrate_todo_for_delivery(attrs, todo)
-      payload = todo_delivery_payload(attrs, todo_record)
+  defp checkpoint_todo_digest_delivery(
+         %Run{} = run,
+         attrs,
+         intro_text,
+         todos,
+         prepared_action_id,
+         completion_summary,
+         delivery
+       ) do
+    checkpoint = %{
+      "kind" => "todo_digest",
+      "source_message_id" => Map.get(attrs, :source_message_id),
+      "intro_text" => intro_text,
+      "todos" => normalize_payload(todos),
+      "prepared_action_id" => prepared_action_id,
+      "completion_summary" => normalize_payload(completion_summary),
+      "delivery_mode" => delivery |> Map.get(:mode, :send) |> to_string(),
+      "delivery_message_id" => Map.get(delivery, :message_id)
+    }
 
-      turn_opts = [
-        send_mode: if(surface(attrs) == "mobile", do: :persist, else: :send),
-        turn_kind: "assistant_reply",
-        origin_type: "chat",
-        preserve_safe_label_prefixes: true,
-        structured_data: %{
-          "run_id" => run.id,
-          "surface" => surface(attrs),
-          "message_class" => "todo_item",
-          "summary" => "Delivered one open work item.",
-          "linked_todo" => serialize_linked_todo(todo_record),
-          "surface_quality" => SurfaceQuality.assess(todo_record)
-        },
-        telegram_opts: payload.telegram_opts
-      ]
+    summary =
+      (run.result_summary || %{})
+      |> Map.put("delivery_checkpoint", checkpoint)
+
+    TelegramAssistant.update_run(run, %{result_summary: summary})
+  end
+
+  defp drain_todo_digest_delivery(%Conversation{} = conversation, attrs, %Run{} = run) do
+    checkpoint = map_value(run.result_summary || %{}, "delivery_checkpoint", %{})
+    todos = map_value(checkpoint, "todos", [])
+
+    with true <- map_value(checkpoint, "kind") == "todo_digest",
+         true <- is_list(todos) and todos != [],
+         {:ok, conversation} <-
+           maybe_send_todo_digest_intro(conversation, attrs, run, checkpoint),
+         delivered_todo_ids <- delivered_todo_ids(conversation.id, run.id),
+         {:ok, conversation} <-
+           send_todo_messages(conversation, attrs, run, todos, delivered_todo_ids) do
+      {:ok, conversation}
+    else
+      false -> {:error, :invalid_todo_digest_delivery_checkpoint}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_send_todo_digest_intro(conversation, attrs, run, checkpoint) do
+    if digest_intro_delivered?(conversation.id, run.id) do
+      {:ok, conversation}
+    else
+      turn_opts =
+        [
+          reply_to_message_id: Map.get(attrs, :source_message_id),
+          turn_kind: "assistant_reply",
+          origin_type: "chat",
+          terminal_response: false,
+          structured_data: %{
+            "run_id" => run.id,
+            "surface" => surface(attrs),
+            "message_class" => "todo_digest_intro",
+            "summary" => "Open-work digest introduction. Item delivery is still in progress."
+          }
+        ]
+        |> apply_delivery_mode(checkpoint_delivery(checkpoint))
+        |> apply_mobile_delivery(attrs)
 
       case TelegramAssistant.send_turn(
-             acc_conversation,
+             conversation,
              Map.fetch!(attrs, :chat_id),
-             payload.text,
+             map_value(checkpoint, "intro_text", "Here are the current open items."),
              turn_opts
            ) do
-        {:ok, updated_conversation, _turn, _telegram_result} ->
-          {:cont, {:ok, updated_conversation}}
+        {:ok, updated_conversation, _turn, _telegram_result} -> {:ok, updated_conversation}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
 
-        {:error, reason} ->
-          {:halt, {:error, reason}}
+  defp checkpoint_delivery(checkpoint) do
+    case map_value(checkpoint, "delivery_mode") do
+      "edit" -> %{mode: :edit, message_id: map_value(checkpoint, "delivery_message_id")}
+      _ -> %{mode: :send}
+    end
+  end
+
+  defp digest_intro_delivered?(conversation_id, run_id) do
+    Turn
+    |> where([turn], turn.conversation_id == ^conversation_id)
+    |> where([turn], turn.delivery_state == "delivered")
+    |> where([turn], fragment("?->>'run_id' = ?", turn.structured_data, ^run_id))
+    |> where(
+      [turn],
+      fragment("?->>'message_class' = 'todo_digest_intro'", turn.structured_data)
+    )
+    |> Repo.exists?()
+  end
+
+  defp delivered_todo_ids(conversation_id, run_id) do
+    Turn
+    |> where([turn], turn.conversation_id == ^conversation_id)
+    |> where([turn], turn.delivery_state == "delivered")
+    |> where([turn], fragment("?->>'run_id' = ?", turn.structured_data, ^run_id))
+    |> where([turn], fragment("?->>'message_class' = 'todo_item'", turn.structured_data))
+    |> select([turn], turn.structured_data)
+    |> Repo.all()
+    |> Enum.reduce(MapSet.new(), fn structured_data, delivered ->
+      case get_in(structured_data || %{}, ["linked_todo", "id"]) do
+        id when is_binary(id) -> MapSet.put(delivered, id)
+        _missing -> delivered
+      end
+    end)
+  end
+
+  defp send_todo_messages(conversation, attrs, run, todos, delivered_todo_ids) do
+    final_index = length(todos) - 1
+
+    todos
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, conversation}, fn {todo, index}, {:ok, acc_conversation} ->
+      todo_id = map_value(todo, "id")
+
+      if is_binary(todo_id) and MapSet.member?(delivered_todo_ids, todo_id) do
+        {:cont, {:ok, acc_conversation}}
+      else
+        todo_record = hydrate_todo_for_delivery(attrs, todo)
+        payload = todo_delivery_payload(attrs, todo_record)
+
+        turn_opts = [
+          reply_to_message_id: Map.get(attrs, :source_message_id),
+          send_mode: if(surface(attrs) == "mobile", do: :persist, else: :send),
+          turn_kind: "assistant_reply",
+          origin_type: "chat",
+          terminal_response: index == final_index,
+          preserve_safe_label_prefixes: true,
+          structured_data: %{
+            "run_id" => run.id,
+            "surface" => surface(attrs),
+            "message_class" => "todo_item",
+            "summary" => "Delivered one open work item.",
+            "linked_todo" => serialize_linked_todo(todo_record),
+            "surface_quality" => SurfaceQuality.assess(todo_record)
+          },
+          telegram_opts: payload.telegram_opts
+        ]
+
+        case TelegramAssistant.send_turn(
+               acc_conversation,
+               Map.fetch!(attrs, :chat_id),
+               payload.text,
+               turn_opts
+             ) do
+          {:ok, updated_conversation, _turn, _telegram_result} ->
+            {:cont, {:ok, updated_conversation}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
       end
     end)
   end
@@ -2190,6 +2378,26 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp existing_atom_key(key), do: key
+
+  defp fail_run_preserving_summary(%Run{} = run, reason) do
+    current_run = Repo.get(Run, run.id) || run
+
+    TelegramAssistant.complete_run(current_run, %{
+      status: "degraded",
+      error: normalize_error(reason),
+      result_summary: current_run.result_summary || %{}
+    })
+  end
+
+  defp toolbox_module do
+    Application.get_env(:maraithon, :telegram_assistant, [])
+    |> Keyword.get(:toolbox_module, Toolbox)
+  end
+
+  defp durable_processing?(attrs) when is_map(attrs),
+    do: Map.get(attrs, :durable_processing, false) == true
+
+  defp durable_processing?(_attrs), do: false
 
   defp normalize_error(error), do: Maraithon.Redaction.error_summary(error)
 end
