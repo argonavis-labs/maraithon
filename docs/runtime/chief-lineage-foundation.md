@@ -12,18 +12,20 @@ path, or acknowledge logical work.
   persisted account is connected, the Agent is enabled with an active same-user
   isolation binding, and both the Agent grant and binding scope explicitly list
   the account under `provider => %{"account_ids" => [canonical_account_key]}`.
-  The canonical account key is the persisted `external_account_id`, falling back
-  only when absent to `connected-account:<database-id>`; a caller-supplied key is
-  verification input, never identity authority. Rejected transport content is
-  not stored. Admitted payloads are canonical bounded JSON, and credential or
+  The canonical provider account identity is the canonical, nonempty persisted
+  `external_account_id`. Missing or invalid persisted identity fails closed; a
+  caller-supplied key is verification input only, never identity authority.
+  Rejected transport content is not stored. Admitted payloads are canonical
+  bounded JSON, and credential or
   provider-exception keys are rejected.
 - `chief_acquisition_runs` owns contiguous immutable pages and source-envelope
   associations. A run is sealed `complete` only from its persisted terminal
   page/count/manifest proof. A sealed `incomplete` run retains continuation
   proof but is never admitted to semantics or cursor advancement.
-- Source envelopes are immutable provider item revisions. Semantic effects are
-  immutable keys derived from their sorted envelope identities, never a UUID
-  fallback.
+- Source envelopes are immutable provider item revisions. Each semantic
+  occurrence has an immutable key scoped by its immutable acquisition key plus
+  its sorted source-envelope evidence. The same evidence observed by a later
+  acquisition is therefore a distinct occurrence; there is no UUID fallback.
 - Projection receipts are immutable and point to exactly one existing Todo or
   immutable Chief decision. The feature-dark API does not create or update a
   Todo; a later coordinator must run the existing quality/family rules first.

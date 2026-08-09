@@ -2,9 +2,10 @@ defmodule Maraithon.ChiefOfStaff.Semantics do
   @moduledoc """
   Feature-dark creation of immutable, deterministic semantic effects.
 
-  Effects are accepted only from a sealed complete acquisition, and their key
-  includes the sorted immutable source-envelope identities. There is no update
-  or UUID fallback path for semantic identity.
+  Effects are accepted only from a sealed complete acquisition. Each occurrence
+  key includes the immutable acquisition key plus the sorted immutable
+  source-envelope identities, so a later acquisition produces a distinct
+  occurrence. There is no update or UUID fallback path for semantic identity.
   """
 
   import Ecto.Query
