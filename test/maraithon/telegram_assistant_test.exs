@@ -1504,7 +1504,9 @@ defmodule Maraithon.TelegramAssistantTest do
                        "priority" => 76,
                        "metadata" => %{
                          "captured_from" => "telegram_message",
-                         "request_text" => "Add renew the domain this week to my todo list."
+                         "request_text" => "Add renew the domain this week to my todo list.",
+                         "direct_ask" => true,
+                         "source_evidence" => "Add renew the domain this week to my todo list."
                        }
                      }
                    ]
