@@ -21,6 +21,7 @@ defmodule Maraithon.Repo.Migrations.AddTelegramExecutionOrderToBackgroundJobs do
       job_type <> 'telegram_webhook_event' OR
       (telegram_bot_id IS NOT NULL AND telegram_bot_id ~ '^[0-9]+$'
        AND telegram_update_id IS NOT NULL AND telegram_update_id >= 0
+       AND dedupe_key IS NOT NULL
        AND dedupe_key = 'telegram-webhook:' || telegram_bot_id || ':' || telegram_update_id::text)
     )
     """)

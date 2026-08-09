@@ -88,6 +88,52 @@ defmodule Maraithon.Runtime.BackgroundJobsTest do
            ]
   end
 
+  test "generic enqueue cannot bypass the dedicated Telegram receipt boundary" do
+    attrs = %{
+      telegram_bot_id: "123456",
+      telegram_update_id: 8_999,
+      payload: %{
+        "event" => %{
+          "type" => "message",
+          "source" => "telegram",
+          "data" => %{"text" => "unsanitized generic attempt"}
+        }
+      }
+    }
+
+    for _attempt <- 1..2 do
+      assert {:error, :telegram_webhook_event_requires_dedicated_enqueue} =
+               BackgroundJobs.enqueue("telegram_webhook_event", attrs)
+    end
+
+    refute Repo.exists?(
+             from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event")
+           )
+
+    event = %{
+      type: "message",
+      source: "telegram",
+      data: %{text: "dedicated receipt"}
+    }
+
+    assert {:ok, first} =
+             BackgroundJobs.enqueue_telegram_webhook_event("123456", 8_999, event)
+
+    assert {:ok, replay} =
+             BackgroundJobs.enqueue_telegram_webhook_event("123456", 8_999, event)
+
+    assert replay.id == first.id
+    assert first.dedupe_key == "telegram-webhook:123456:8999"
+    assert first.telegram_bot_id == "123456"
+    assert first.telegram_update_id == 8_999
+
+    assert Repo.aggregate(
+             from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event"),
+             :count,
+             :id
+           ) == 1
+  end
+
   test "Telegram webhook dedupe is permanent across pending and terminal states" do
     for status <- BackgroundJob.statuses() do
       update_id = System.unique_integer([:positive])
