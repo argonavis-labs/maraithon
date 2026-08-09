@@ -1517,7 +1517,19 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp transient_prepared_action_error?(reason)
-       when reason in [:timeout, :closed, :econnrefused, :enetunreach, :ehostunreach, :nxdomain],
+       when reason in [
+              :timeout,
+              :closed,
+              :econnrefused,
+              :enetunreach,
+              :ehostunreach,
+              :nxdomain,
+              :network_error,
+              :transport_error,
+              :rate_limited,
+              :llm_busy,
+              :temporarily_unavailable
+            ],
        do: true
 
   defp transient_prepared_action_error?({kind, status, _detail})
@@ -1543,6 +1555,12 @@ defmodule Maraithon.TelegramAssistant do
     |> Enum.any?(&transient_prepared_action_error?/1)
   end
 
+  defp transient_prepared_action_error?(%{reason: reason}),
+    do: transient_prepared_action_error?(reason)
+
+  defp transient_prepared_action_error?(%{"reason" => reason}),
+    do: transient_prepared_action_error?(reason)
+
   defp transient_prepared_action_error?(reason) when is_binary(reason) do
     normalized = String.downcase(reason)
 
@@ -1550,6 +1568,7 @@ defmodule Maraithon.TelegramAssistant do
       "timeout",
       "timed out",
       "temporarily_unavailable",
+      "temporarily unavailable",
       "temporary unavailable",
       "rate_limit",
       "rate limit",

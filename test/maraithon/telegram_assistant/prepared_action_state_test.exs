@@ -222,7 +222,16 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     assert TelegramAssistant.prepared_action_error_class({:api_error, 503, "unavailable"}) ==
              :transient
 
+    assert TelegramAssistant.prepared_action_error_class(
+             "Gmail is temporarily unavailable. Wait a minute before running this action."
+           ) == :transient
+
+    assert TelegramAssistant.prepared_action_error_class(:rate_limited) == :transient
+    assert TelegramAssistant.prepared_action_error_class(%{reason: :econnrefused}) == :transient
     assert TelegramAssistant.prepared_action_error_class(:project_not_found) == :permanent
+
+    assert TelegramAssistant.prepared_action_error_class("google_account_reauth_required") ==
+             :permanent
   end
 
   test "a provider success followed by turn persistence failure is returned as an error", ctx do

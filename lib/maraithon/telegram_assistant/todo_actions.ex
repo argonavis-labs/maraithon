@@ -1216,11 +1216,12 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
         # SPEC 06 R5: persist the regenerated draft onto the todo's
         # `action_draft` (previously this only rendered a one-off preview
         # reply) and re-render the card so the buttons offer "Send" instead
-        # of "Draft" going forward.
-        updated_todo =
-          persist_generated_draft(user_id, todo, channel, result, callback_id, action)
-
-        {:ok, {:draft_ready, render_draft_result(channel, result), updated_todo}}
+        # of "Draft" going forward. Do not present an uncheckpointed provider
+        # draft: durable retries must have a row state they can resume.
+        with {:ok, updated_todo} <-
+               persist_generated_draft(user_id, todo, channel, result, callback_id, action) do
+          {:ok, {:draft_ready, render_draft_result(channel, result), updated_todo}}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -1239,22 +1240,27 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
     case compact_map(draft_map) do
       empty when map_size(empty) == 0 ->
-        todo
+        {:error, :invalid_generated_todo_draft}
 
       draft_map ->
-        checkpoint = %{
-          "callback_id" => callback_id,
-          "action" => action,
-          "status" => "draft_ready"
-        }
+        update_attrs = %{"action_draft" => draft_map}
 
-        case Todos.update_for_user(user_id, todo.id, %{
-               "action_draft" => draft_map,
-               "metadata" => %{"telegram_todo_action_checkpoint" => checkpoint}
-             }) do
-          {:ok, updated_todo} -> updated_todo
-          {:error, _reason} -> todo
-        end
+        update_attrs =
+          if is_binary(callback_id) and is_binary(action) do
+            checkpoint = %{
+              "callback_id" => callback_id,
+              "action" => action,
+              "status" => "draft_ready"
+            }
+
+            Map.put(update_attrs, "metadata", %{
+              "telegram_todo_action_checkpoint" => checkpoint
+            })
+          else
+            update_attrs
+          end
+
+        Todos.update_for_user(user_id, todo.id, update_attrs)
     end
   end
 
