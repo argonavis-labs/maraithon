@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramRouterTest do
   alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightNotifications
+  alias Maraithon.InsightNotifications.Actions
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
   alias Maraithon.OAuth
@@ -600,7 +601,7 @@ defmodule Maraithon.TelegramRouterTest do
           callback_id: "cb-gmail-draft",
           chat_id: 12345,
           message_id: delivery.provider_message_id,
-          data: "insact:#{delivery.id}:draft"
+          data: Actions.callback_data_for_action(delivery, "draft")
         }
       })
 
@@ -717,7 +718,7 @@ defmodule Maraithon.TelegramRouterTest do
           callback_id: "cb-gmail-draft-memory",
           chat_id: 12345,
           message_id: delivery.provider_message_id,
-          data: "insact:#{delivery.id}:draft"
+          data: Actions.callback_data_for_action(delivery, "draft")
         }
       })
 

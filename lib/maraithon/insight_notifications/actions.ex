@@ -27,6 +27,8 @@ defmodule Maraithon.InsightNotifications.Actions do
   require Logger
 
   @callback_prefix "insact"
+  @expected_delivery_revision_key "_maraithon_expected_delivery_revision"
+  @callback_replay_key "_maraithon_callback_replay"
   @max_preview_length 900
   @chief_message_max_length 700
   @section_text_max_length 180
@@ -82,11 +84,67 @@ defmodule Maraithon.InsightNotifications.Actions do
     do: {:error, :delivery_not_found}
 
   def perform_action(%Delivery{} = delivery, action) when is_binary(action) do
-    delivery = ensure_insight_preloaded(delivery)
-    dispatch_action(action, delivery)
+    current =
+      case Repo.get(Delivery, delivery.id) do
+        %Delivery{} = current -> Repo.preload(current, :insight)
+        nil -> nil
+      end
+
+    cond do
+      is_nil(current) ->
+        {:error, :delivery_not_found}
+
+      not direct_action_current?(current, action) ->
+        {:error, :stale_action_revision}
+
+      true ->
+        current
+        |> bind_expected_delivery_revision()
+        |> then(&dispatch_action(action, &1))
+    end
   end
 
+  defp direct_action_current?(%Delivery{insight: %Insight{status: status}}, _action)
+       when status not in ["acknowledged", "dismissed", "snoozed"],
+       do: true
+
+  defp direct_action_current?(%Delivery{} = delivery, "cancel") do
+    match?(%{"status" => status} when status in ["drafted", "cancelled"], action_state(delivery))
+  end
+
+  defp direct_action_current?(
+         %Delivery{insight: %Insight{status: "acknowledged"}} = delivery,
+         action
+       ) do
+    state = action_state(delivery)
+
+    (action in ["ack", "done"] and is_nil(state)) or
+      (action in ["ack", "done", "send"] and callback_applied?(action, state))
+  end
+
+  defp direct_action_current?(
+         %Delivery{insight: %Insight{status: "dismissed"}} = delivery,
+         action
+       ),
+       do:
+         action == "dismiss" and
+           (is_nil(action_state(delivery)) or callback_applied?(action, action_state(delivery)))
+
+  defp direct_action_current?(%Delivery{insight: %Insight{status: "snoozed"}} = delivery, action),
+    do:
+      action == "snooze" and
+        (is_nil(action_state(delivery)) or callback_applied?(action, action_state(delivery)))
+
+  defp direct_action_current?(_delivery, _action), do: false
+
   def action_state_for_delivery(%Delivery{} = delivery), do: action_state(delivery)
+
+  @doc false
+  def callback_data_for_action(%Delivery{} = delivery, action) when is_binary(action) do
+    delivery
+    |> ensure_insight_preloaded()
+    |> callback_data(action)
+  end
 
   def handle_callback(data) when is_map(data) do
     callback = read_string(data, "data")
@@ -94,8 +152,9 @@ defmodule Maraithon.InsightNotifications.Actions do
     chat_id = read_id_string(data, "chat_id")
     message_id = read_string(data, "message_id", read_integer(data, "message_id"))
 
-    with {:ok, delivery_id, action} <- parse_callback(callback),
+    with {:ok, delivery_id, action, callback_revision} <- parse_callback(callback),
          {:ok, delivery} <- fetch_delivery(delivery_id, chat_id),
+         {:ok, delivery} <- validate_callback_revision(delivery, action, callback_revision),
          {:ok, delivery, notice} <- dispatch_action(action, delivery),
          :ok <- refresh_telegram_message(delivery, chat_id, message_id),
          :ok <- answer_callback(callback_id, notice) do
@@ -103,6 +162,11 @@ defmodule Maraithon.InsightNotifications.Actions do
     else
       {:error, :unsupported_callback} ->
         {:error, :unsupported_callback}
+
+      {:error, :stale_action_revision} ->
+        with :ok <- answer_callback(callback_id, callback_error_text(:stale_action_revision)) do
+          {:noop, :stale_action_revision}
+        end
 
       {:error, {:telegram_edit_failed, _detail} = reason} ->
         if read_boolean(data, "durable_processing", false) do
@@ -144,6 +208,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   def build_reply_markup(%Delivery{} = delivery) do
+    delivery = ensure_insight_preloaded(delivery)
     callback_helpful = "insfb:#{delivery.id}:h"
     callback_not_helpful = "insfb:#{delivery.id}:n"
 
@@ -162,14 +227,14 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp action_rows(%Delivery{} = delivery) do
     case action_state(delivery) do
-      %{"status" => "drafted"} ->
+      %{"status" => status} when status in ["drafted", "executing"] ->
         [
           [
-            %{"text" => "Send Now", "callback_data" => callback_data(delivery.id, "send")},
-            %{"text" => "Regenerate", "callback_data" => callback_data(delivery.id, "regenerate")}
+            %{"text" => "Send Now", "callback_data" => callback_data(delivery, "send")},
+            %{"text" => "Regenerate", "callback_data" => callback_data(delivery, "regenerate")}
           ],
           [
-            %{"text" => "Cancel", "callback_data" => callback_data(delivery.id, "cancel")}
+            %{"text" => "Cancel", "callback_data" => callback_data(delivery, "cancel")}
           ]
         ]
 
@@ -189,9 +254,9 @@ defmodule Maraithon.InsightNotifications.Actions do
           else
             completion_button =
               if ackable_insight?(delivery.insight) do
-                %{"text" => "Ack", "callback_data" => callback_data(delivery.id, "ack")}
+                %{"text" => "Ack", "callback_data" => callback_data(delivery, "ack")}
               else
-                %{"text" => "Mark Done", "callback_data" => callback_data(delivery.id, "done")}
+                %{"text" => "Mark Done", "callback_data" => callback_data(delivery, "done")}
               end
 
             case primary_action(delivery.insight) do
@@ -205,7 +270,7 @@ defmodule Maraithon.InsightNotifications.Actions do
                   [
                     %{
                       "text" => label,
-                      "callback_data" => callback_data(delivery.id, callback_action)
+                      "callback_data" => callback_data(delivery, callback_action)
                     },
                     completion_button
                   ]
@@ -216,8 +281,8 @@ defmodule Maraithon.InsightNotifications.Actions do
         base_rows ++
           [
             [
-              %{"text" => "Snooze 4h", "callback_data" => callback_data(delivery.id, "snooze")},
-              %{"text" => "Dismiss", "callback_data" => callback_data(delivery.id, "dismiss")}
+              %{"text" => "Snooze 4h", "callback_data" => callback_data(delivery, "snooze")},
+              %{"text" => "Dismiss", "callback_data" => callback_data(delivery, "dismiss")}
             ]
           ]
     end
@@ -233,7 +298,20 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
-  defp dispatch_action("regenerate", %Delivery{} = delivery), do: draft_action(delivery)
+  defp dispatch_action("regenerate", %Delivery{} = delivery) do
+    if callback_replay?(delivery) do
+      case action_state(delivery) do
+        %{"status" => "drafted"} = state ->
+          {:ok, delivery, "#{action_notice_label(state)} draft ready"}
+
+        _other ->
+          {:error, :stale_action_revision}
+      end
+    else
+      draft_action(delivery)
+    end
+  end
+
   defp dispatch_action("send", %Delivery{} = delivery), do: execute_action(delivery)
   defp dispatch_action("cancel", %Delivery{} = delivery), do: cancel_action(delivery)
   defp dispatch_action("ack", %Delivery{} = delivery), do: acknowledge_insight(delivery)
@@ -255,16 +333,21 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp execute_action(%Delivery{} = delivery) do
     case action_state(delivery) do
       %{"status" => "drafted", "spec" => spec} ->
-        with {:ok, result} <- run_action(spec, delivery.insight),
-             {:ok, checkpointed_delivery} <-
+        with {:ok, claimed_delivery} <-
                put_action_state(delivery, %{
-                 "status" => "executed",
+                 "status" => "executing",
                  "spec" => spec,
-                 "result" => stringify_map_keys(result),
-                 "executed_at" => now_iso8601()
+                 "started_at" => now_iso8601()
                }) do
-          finish_executed_action(checkpointed_delivery)
+          execute_claimed_action(claimed_delivery, spec)
         end
+
+      %{"status" => "executing", "spec" => spec} ->
+        # Telegram has no provider idempotency key for these sends. A crash
+        # after provider acceptance but before the executed checkpoint leaves
+        # this resumable claim; retrying may duplicate the provider mutation,
+        # which is the documented accepted/local-checkpoint ambiguity.
+        execute_claimed_action(delivery, spec)
 
       %{"status" => "executed"} ->
         # The provider mutation is already checkpointed. A durable callback
@@ -277,6 +360,19 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
+  defp execute_claimed_action(%Delivery{} = delivery, spec) do
+    with {:ok, result} <- run_action(spec, delivery.insight),
+         {:ok, checkpointed_delivery} <-
+           put_action_state(delivery, %{
+             "status" => "executed",
+             "spec" => spec,
+             "result" => stringify_map_keys(result),
+             "executed_at" => now_iso8601()
+           }) do
+      finish_executed_action(checkpointed_delivery)
+    end
+  end
+
   defp finish_executed_action(%Delivery{} = delivery) do
     state = action_state(delivery) || %{}
     spec = read_map(state, "spec")
@@ -284,7 +380,7 @@ defmodule Maraithon.InsightNotifications.Actions do
     kind = read_string(state, "kind", read_string(spec, "kind"))
 
     cond do
-      kind in ["gmail_reply", "slack_reply", "manual_complete"] ->
+      kind in ["gmail_reply", "slack_reply", "manual_complete", "manual_ack"] ->
         spec = if map_size(spec) == 0, do: %{"kind" => kind}, else: spec
 
         with :ok <- ensure_execution_acknowledged(delivery, state, spec, result),
@@ -298,10 +394,19 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp ensure_execution_acknowledged(delivery, state, spec, result) do
-    if execution_acknowledged?(delivery.insight, state, spec) do
+    insight = Repo.get(Insight, delivery.insight_id) || delivery.insight
+
+    with :ok <- maybe_acknowledge_execution(insight, state, spec, result),
+         {:ok, _todo} <- Todos.sync_from_insight(Repo.get!(Insight, delivery.insight_id)) do
+      :ok
+    end
+  end
+
+  defp maybe_acknowledge_execution(insight, state, spec, result) do
+    if execution_acknowledged?(insight, state, spec) do
       :ok
     else
-      case acknowledge_with_result(delivery.insight, spec, result) do
+      case acknowledge_with_result(insight, spec, result) do
         {:ok, _insight} -> :ok
         {:error, reason} -> {:error, reason}
       end
@@ -355,71 +460,92 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp acknowledge_insight(%Delivery{} = delivery) do
-    state = action_state(delivery)
+    case action_state(delivery) do
+      %{"status" => "executed", "kind" => "manual_ack"} ->
+        finish_executed_action(delivery)
 
-    cond do
-      match?(%{"status" => "executed", "kind" => "manual_ack"}, state) ->
-        {:ok, delivery, "Acknowledged"}
-
-      delivery.insight.status == "acknowledged" ->
-        with {:ok, delivery} <-
+      _other ->
+        with {:ok, checkpointed} <-
                put_action_state(delivery, %{
                  "status" => "executed",
                  "kind" => "manual_ack",
-                 "acknowledged_at" => now_iso8601()
+                 "result" => %{"status" => "acknowledged_in_telegram"},
+                 "executed_at" => now_iso8601()
                }) do
-          {:ok, delivery, "Acknowledged"}
-        end
-
-      true ->
-        with {:ok, _insight} <- Insights.acknowledge(delivery.user_id, delivery.insight_id),
-             {:ok, delivery} <-
-               put_action_state(delivery, %{
-                 "status" => "executed",
-                 "kind" => "manual_ack",
-                 "acknowledged_at" => now_iso8601()
-               }) do
-          {:ok, delivery, "Acknowledged"}
+          finish_executed_action(checkpointed)
         end
     end
   end
 
   defp dismiss_insight(%Delivery{} = delivery) do
-    cond do
-      match?(%{"status" => "dismissed"}, action_state(delivery)) ->
-        {:ok, delivery, "Insight dismissed"}
+    case action_state(delivery) do
+      %{"status" => "dismissed"} ->
+        finish_dismissed_insight(delivery)
 
-      delivery.insight.status == "dismissed" ->
-        with {:ok, delivery} <- put_action_state(delivery, %{"status" => "dismissed"}) do
-          {:ok, delivery, "Insight dismissed"}
+      _other ->
+        with {:ok, checkpointed} <-
+               put_action_state(delivery, %{
+                 "status" => "dismissed",
+                 "dismissed_at" => now_iso8601()
+               }) do
+          finish_dismissed_insight(checkpointed)
         end
+    end
+  end
 
-      true ->
-        with {:ok, _insight} <- Insights.dismiss(delivery.user_id, delivery.insight_id),
-             {:ok, delivery} <- put_action_state(delivery, %{"status" => "dismissed"}) do
-          {:ok, delivery, "Insight dismissed"}
-        end
+  defp finish_dismissed_insight(%Delivery{} = delivery) do
+    state = action_state(delivery) || %{}
+
+    with :ok <- ensure_insight_status_and_todo(delivery, "dismissed"),
+         {:ok, checkpointed} <- checkpoint_action_synchronized(delivery, state) do
+      {:ok, checkpointed, "Insight dismissed"}
     end
   end
 
   defp snooze_insight(%Delivery{} = delivery) do
     case action_state(delivery) do
       %{"status" => "snoozed"} ->
-        {:ok, delivery, "Snoozed for 4 hours"}
+        finish_snoozed_insight(delivery)
 
       _other ->
         snooze_until = existing_or_new_snooze_deadline(delivery.insight)
 
-        with :ok <- ensure_insight_snoozed(delivery, snooze_until),
-             {:ok, delivery} <-
+        with {:ok, checkpointed} <-
                put_action_state(delivery, %{
                  "status" => "snoozed",
                  "until" => DateTime.to_iso8601(snooze_until)
                }) do
-          {:ok, delivery, "Snoozed for 4 hours"}
+          finish_snoozed_insight(checkpointed)
         end
     end
   end
+
+  defp finish_snoozed_insight(%Delivery{} = delivery) do
+    state = action_state(delivery) || %{}
+
+    with {:ok, snooze_until} <- parse_snooze_deadline(read_string(state, "until")),
+         :ok <- ensure_insight_snoozed_and_todo(delivery, snooze_until),
+         {:ok, checkpointed} <- checkpoint_action_synchronized(delivery, state) do
+      {:ok, checkpointed, "Snoozed for 4 hours"}
+    end
+  end
+
+  defp checkpoint_action_synchronized(delivery, state) do
+    if is_binary(read_string(state, "synchronized_at")) do
+      {:ok, delivery}
+    else
+      put_action_state(delivery, Map.put(state, "synchronized_at", now_iso8601()))
+    end
+  end
+
+  defp parse_snooze_deadline(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> {:ok, datetime}
+      _invalid -> {:error, :invalid_snooze_deadline}
+    end
+  end
+
+  defp parse_snooze_deadline(_value), do: {:error, :invalid_snooze_deadline}
 
   defp existing_or_new_snooze_deadline(%Insight{
          status: "snoozed",
@@ -430,16 +556,35 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp existing_or_new_snooze_deadline(_insight),
     do: DateTime.add(DateTime.utc_now(), 4, :hour)
 
-  defp ensure_insight_snoozed(
-         %Delivery{insight: %Insight{status: "snoozed", snoozed_until: %DateTime{}}},
-         _snooze_until
-       ),
-       do: :ok
+  defp ensure_insight_status_and_todo(%Delivery{} = delivery, status) do
+    insight = Repo.get(Insight, delivery.insight_id) || delivery.insight
 
-  defp ensure_insight_snoozed(delivery, snooze_until) do
-    case Insights.snooze(delivery.user_id, delivery.insight_id, snooze_until) do
-      {:ok, _insight} -> :ok
-      {:error, reason} -> {:error, reason}
+    result =
+      case {status, insight.status} do
+        {"dismissed", "dismissed"} -> {:ok, insight}
+        {"dismissed", _other} -> Insights.dismiss(delivery.user_id, delivery.insight_id)
+        _unsupported -> {:error, :unsupported_action}
+      end
+
+    with {:ok, _updated} <- result,
+         {:ok, _todo} <- Todos.sync_from_insight(Repo.get!(Insight, delivery.insight_id)) do
+      :ok
+    end
+  end
+
+  defp ensure_insight_snoozed_and_todo(%Delivery{} = delivery, snooze_until) do
+    insight = Repo.get(Insight, delivery.insight_id) || delivery.insight
+
+    result =
+      if insight.status == "snoozed" and match?(%DateTime{}, insight.snoozed_until) do
+        {:ok, insight}
+      else
+        Insights.snooze(delivery.user_id, delivery.insight_id, snooze_until)
+      end
+
+    with {:ok, _updated} <- result,
+         {:ok, _todo} <- Todos.sync_from_insight(Repo.get!(Insight, delivery.insight_id)) do
+      :ok
     end
   end
 
@@ -576,52 +721,135 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp run_action(_spec, _insight), do: {:error, :action_not_available}
 
   defp acknowledge_with_result(%Insight{} = insight, spec, result) do
-    merged_metadata =
-      (insight.metadata || %{})
-      |> Map.put(
-        "telegram_resolution",
-        compact_map(%{
-          "kind" => read_string(spec, "kind"),
-          "completed_at" =>
-            DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
-          "result" => stringify_map_keys(result)
-        })
-      )
+    Repo.transaction(fn ->
+      current =
+        Insight
+        |> where(
+          [candidate],
+          candidate.id == ^insight.id and candidate.user_id == ^insight.user_id
+        )
+        |> lock("FOR UPDATE")
+        |> Repo.one()
 
-    insight
-    |> Ecto.Changeset.change(
-      status: "acknowledged",
-      snoozed_until: nil,
-      metadata: merged_metadata
-    )
-    |> Repo.update()
+      case current do
+        nil ->
+          Repo.rollback(:not_found)
+
+        %Insight{} = current ->
+          merged_metadata =
+            (current.metadata || %{})
+            |> Map.put(
+              "telegram_resolution",
+              compact_map(%{
+                "kind" => read_string(spec, "kind"),
+                "completed_at" =>
+                  DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+                "result" => stringify_map_keys(result)
+              })
+            )
+
+          with {:ok, updated} <-
+                 current
+                 |> Ecto.Changeset.change(
+                   status: "acknowledged",
+                   snoozed_until: nil,
+                   metadata: merged_metadata
+                 )
+                 |> Repo.update(),
+               {:ok, _todo} <- Todos.sync_from_insight(updated) do
+            updated
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
     |> case do
-      {:ok, updated} ->
-        case Todos.sync_from_insight(updated) do
-          {:ok, _todo} -> {:ok, updated}
-          {:error, reason} -> {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %Insight{} = updated} -> {:ok, updated}
+      {:error, reason} -> {:error, reason}
     end
   end
 
   defp put_action_state(%Delivery{} = delivery, action_state) when is_map(action_state) do
-    metadata =
-      delivery.metadata || %{}
+    expected_revision =
+      read_string(delivery.metadata || %{}, @expected_delivery_revision_key) ||
+        delivery_state_revision(delivery)
 
-    updated =
-      delivery
-      |> Ecto.Changeset.change(
-        metadata: Map.put(metadata, "telegram_action", stringify_map_keys(action_state))
-      )
-      |> Repo.update()
+    desired_state = stringify_map_keys(action_state)
 
-    case updated do
-      {:ok, delivery} -> {:ok, Repo.preload(delivery, :insight)}
-      error -> error
+    Repo.transaction(fn ->
+      current =
+        Delivery
+        |> where([candidate], candidate.id == ^delivery.id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case current do
+        nil ->
+          Repo.rollback(:delivery_not_found)
+
+        %Delivery{} = current ->
+          current = Repo.preload(current, :insight)
+          current_state = action_state(current)
+
+          cond do
+            delivery_state_revision(current) != expected_revision ->
+              Repo.rollback(:stale_action_revision)
+
+            not monotone_action_transition?(current_state, desired_state) ->
+              Repo.rollback(:stale_action_revision)
+
+            true ->
+              metadata =
+                current.metadata
+                |> Kernel.||(%{})
+                |> Map.delete(@expected_delivery_revision_key)
+                |> Map.put("telegram_action", desired_state)
+
+              case current
+                   |> Ecto.Changeset.change(metadata: metadata)
+                   |> Repo.update() do
+                {:ok, updated} -> Repo.preload(updated, :insight)
+                {:error, reason} -> Repo.rollback(reason)
+              end
+          end
+      end
+    end)
+    |> case do
+      {:ok, %Delivery{} = updated} -> {:ok, updated}
+      {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp monotone_action_transition?(nil, %{"status" => desired})
+       when desired in ["drafted", "executed", "cancelled", "dismissed", "snoozed"],
+       do: true
+
+  defp monotone_action_transition?(%{"status" => "cancelled"}, %{"status" => desired})
+       when desired in ["drafted", "executed", "cancelled", "dismissed", "snoozed"],
+       do: true
+
+  defp monotone_action_transition?(%{"status" => "drafted"}, %{"status" => desired})
+       when desired in ["drafted", "executing", "executed", "cancelled"],
+       do: true
+
+  defp monotone_action_transition?(%{"status" => "executing"}, %{"status" => desired})
+       when desired in ["executing", "executed"],
+       do: true
+
+  defp monotone_action_transition?(
+         %{"status" => "executed"} = current,
+         %{"status" => "executed"} = desired
+       ),
+       do: action_state_kind(current) == action_state_kind(desired)
+
+  defp monotone_action_transition?(%{"status" => terminal}, %{"status" => terminal})
+       when terminal in ["dismissed", "snoozed"],
+       do: true
+
+  defp monotone_action_transition?(_current, _desired), do: false
+
+  defp action_state_kind(state) when is_map(state) do
+    read_string(state, "kind", read_string(read_map(state, "spec"), "kind"))
   end
 
   defp fetch_delivery(delivery_id, chat_id) when is_binary(delivery_id) do
@@ -674,6 +902,9 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp render_action_state(nil, _insight), do: ""
+
+  defp render_action_state(%{"status" => "executing"} = state, insight),
+    do: render_action_state(Map.put(state, "status", "drafted"), insight)
 
   defp render_action_state(%{"status" => "drafted"} = state, _insight) do
     spec = read_map(state, "spec")
@@ -1476,18 +1707,122 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp monitor_insight?(%Insight{} = insight), do: insight.attention_mode == "monitor"
 
+  defp validate_callback_revision(%Delivery{} = delivery, action, callback_revision) do
+    delivery = ensure_insight_preloaded(delivery)
+
+    cond do
+      callback_revision == action_revision(delivery) ->
+        {:ok, bind_expected_delivery_revision(delivery)}
+
+      callback_applied?(action, action_state(delivery)) ->
+        {:ok,
+         delivery
+         |> bind_expected_delivery_revision()
+         |> mark_callback_replay()}
+
+      true ->
+        {:error, :stale_action_revision}
+    end
+  end
+
+  defp callback_applied?(action, state) do
+    case {action, state} do
+      {action, %{"status" => "drafted"}} when action in ["draft", "regenerate"] ->
+        true
+
+      {"send", %{"status" => status, "spec" => %{} = spec}}
+      when status in ["executing", "executed"] ->
+        read_string(spec, "kind") in ["gmail_reply", "slack_reply"]
+
+      {"cancel", %{"status" => "cancelled"}} ->
+        true
+
+      {"ack", %{"status" => "executed", "kind" => "manual_ack"}} ->
+        true
+
+      {"done", %{"status" => "executed", "kind" => "manual_complete"}} ->
+        true
+
+      {"dismiss", %{"status" => "dismissed"}} ->
+        true
+
+      {"snooze", %{"status" => "snoozed"}} ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp bind_expected_delivery_revision(%Delivery{} = delivery) do
+    metadata =
+      (delivery.metadata || %{})
+      |> Map.put(@expected_delivery_revision_key, delivery_state_revision(delivery))
+
+    %{delivery | metadata: metadata}
+  end
+
+  defp mark_callback_replay(%Delivery{} = delivery) do
+    %{delivery | metadata: Map.put(delivery.metadata || %{}, @callback_replay_key, true)}
+  end
+
+  defp callback_replay?(%Delivery{} = delivery),
+    do: Map.get(delivery.metadata || %{}, @callback_replay_key, false)
+
+  defp action_revision(%Delivery{} = delivery) do
+    insight = delivery.insight
+
+    {
+      delivery.id,
+      delivery_state_revision(delivery),
+      insight.id,
+      insight.dedupe_key,
+      insight.tracking_key,
+      insight.source_id,
+      datetime_revision(insight.source_occurred_at),
+      datetime_revision(insight.updated_at)
+    }
+    |> deterministic_revision()
+  end
+
+  defp delivery_state_revision(%Delivery{} = delivery) do
+    # Delivery bookkeeping (provider_message_id, sent_at, feedback, etc.) is
+    # written after Telegram receives the message and must not invalidate the
+    # buttons embedded in that message. Only the actionable state participates
+    # in this compare-and-swap revision.
+    {delivery.id, action_state(delivery)}
+    |> deterministic_revision()
+  end
+
+  defp deterministic_revision(value) do
+    value
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 8)
+  end
+
+  defp datetime_revision(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp datetime_revision(_datetime), do: nil
+
   defp parse_callback(value) when is_binary(value) do
-    case Regex.run(~r/^#{@callback_prefix}:([0-9a-f\-]{36}):([a-z_]+)$/i, value,
+    case Regex.run(
+           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):([a-z_]+):([0-9a-f]{8})$/i,
+           value,
            capture: :all_but_first
          ) do
-      [delivery_id, action] -> {:ok, delivery_id, String.downcase(action)}
-      _ -> {:error, :unsupported_callback}
+      [delivery_id, action, revision] ->
+        {:ok, delivery_id, String.downcase(action), String.downcase(revision)}
+
+      _ ->
+        {:error, :unsupported_callback}
     end
   end
 
   defp parse_callback(_), do: {:error, :unsupported_callback}
 
-  defp callback_data(delivery_id, action), do: "#{@callback_prefix}:#{delivery_id}:#{action}"
+  defp callback_data(%Delivery{} = delivery, action),
+    do: "#{@callback_prefix}:#{delivery.id}:#{action}:#{action_revision(delivery)}"
 
   defp llm_json(prompt) when is_binary(prompt) do
     params = %{
@@ -1649,6 +1984,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp execution_notice(%{"kind" => "gmail_reply"}), do: "Email sent"
   defp execution_notice(%{"kind" => "slack_reply"}), do: "Slack reply sent"
   defp execution_notice(%{"kind" => "manual_complete"}), do: "Marked complete"
+  defp execution_notice(%{"kind" => "manual_ack"}), do: "Acknowledged"
   defp execution_notice(_), do: "Action completed"
 
   defp action_notice_label(state) do
@@ -1672,6 +2008,9 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp callback_error_text(:unauthorized_chat),
     do: "This button belongs to another chat. Use the latest message in this chat."
+
+  defp callback_error_text(:stale_action_revision),
+    do: "That action is stale. Use the buttons on the latest Maraithon message."
 
   defp callback_error_text(:unsupported_action),
     do:

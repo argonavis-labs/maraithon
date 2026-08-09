@@ -147,17 +147,9 @@ defmodule Maraithon.Insights do
 
   def snooze(user_id, insight_id, until_datetime)
       when is_binary(user_id) and is_binary(insight_id) and is_struct(until_datetime, DateTime) do
-    with %Insight{} = insight <- Repo.get_by(Insight, id: insight_id, user_id: user_id),
-         {:ok, updated} <-
-           insight
-           |> Ecto.Changeset.change(status: "snoozed", snoozed_until: until_datetime)
-           |> Repo.update(),
-         {:ok, _todo} <- Todos.sync_from_insight(updated) do
-      {:ok, updated}
-    else
-      nil -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-    end
+    update_insight_and_sync_todo(user_id, insight_id, fn insight ->
+      Ecto.Changeset.change(insight, status: "snoozed", snoozed_until: until_datetime)
+    end)
   end
 
   defp record_one(attrs, now) do
@@ -400,15 +392,36 @@ defmodule Maraithon.Insights do
   end
 
   defp update_status(user_id, insight_id, status) do
-    with %Insight{} = insight <- Repo.get_by(Insight, id: insight_id, user_id: user_id),
-         {:ok, updated} <-
-           insight
-           |> Ecto.Changeset.change(status: status, snoozed_until: nil)
-           |> Repo.update(),
-         {:ok, _todo} <- Todos.sync_from_insight(updated) do
-      {:ok, updated}
-    else
-      nil -> {:error, :not_found}
+    update_insight_and_sync_todo(user_id, insight_id, fn insight ->
+      Ecto.Changeset.change(insight, status: status, snoozed_until: nil)
+    end)
+  end
+
+  defp update_insight_and_sync_todo(user_id, insight_id, changeset_fun)
+       when is_function(changeset_fun, 1) do
+    Repo.transaction(fn ->
+      insight =
+        Insight
+        |> where([candidate], candidate.id == ^insight_id and candidate.user_id == ^user_id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case insight do
+        nil ->
+          Repo.rollback(:not_found)
+
+        %Insight{} = insight ->
+          with {:ok, updated} <- insight |> changeset_fun.() |> Repo.update(),
+               {:ok, _todo} <- Todos.sync_from_insight(updated) do
+            updated
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+    |> case do
+      {:ok, %Insight{} = updated} -> {:ok, updated}
+      {:error, :not_found} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
   end

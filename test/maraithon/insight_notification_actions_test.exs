@@ -10,6 +10,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
   alias Maraithon.Insights
   alias Maraithon.OAuth
   alias Maraithon.Repo
+  alias Maraithon.Todos.Todo
 
   setup do
     start_supervised!(%{
@@ -168,7 +169,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           callback_id: "cb-gmail-draft",
           chat_id: 12345,
           message_id: 123,
-          data: "insact:#{delivery.id}:draft"
+          data: button_callback(sent.opts, "Draft Email")
         }
       })
 
@@ -225,7 +226,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           callback_id: "cb-gmail-send",
           chat_id: 12345,
           message_id: 123,
-          data: "insact:#{delivery.id}:send"
+          data: button_callback(drafted.opts, "Send Now")
         }
       })
 
@@ -410,7 +411,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           callback_id: "cb-gmail-send-error",
           chat_id: 12345,
           message_id: 321,
-          data: "insact:#{delivery.id}:send"
+          data: Actions.callback_data_for_action(delivery, "send")
         }
       })
 
@@ -461,7 +462,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           callback_id: "cb-action-not-available",
           chat_id: 12345,
           message_id: 777,
-          data: "insact:#{delivery.id}:draft"
+          data: Actions.callback_data_for_action(delivery, "draft")
         }
       })
 
@@ -483,7 +484,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           callback_id: "cb-unsupported-action",
           chat_id: 12345,
           message_id: 777,
-          data: "insact:#{delivery.id}:archive"
+          data: Actions.callback_data_for_action(delivery, "archive")
         }
       })
 
@@ -735,7 +736,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           callback_id: "cb-slack-draft",
           chat_id: 12345,
           message_id: 123,
-          data: "insact:#{delivery.id}:draft"
+          data: button_callback(sent.opts, "Draft Slack")
         }
       })
 
@@ -764,7 +765,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           callback_id: "cb-slack-send",
           chat_id: 12345,
           message_id: 123,
-          data: "insact:#{delivery.id}:send"
+          data: button_callback(drafted.opts, "Send Now")
         }
       })
 
@@ -816,7 +817,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           callback_id: "cb-done",
           chat_id: 12345,
           message_id: 123,
-          data: "insact:#{delivery.id}:done"
+          data: Actions.callback_data_for_action(delivery, "done")
         }
       })
 
@@ -871,7 +872,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           callback_id: "cb-ack",
           chat_id: 12345,
           message_id: 123,
-          data: "insact:#{delivery.id}:ack"
+          data: Actions.callback_data_for_action(delivery, "ack")
         }
       })
 
@@ -920,7 +921,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
         callback_id: "cb-executed-resume",
         chat_id: 12345,
         message_id: 456,
-        data: "insact:#{delivery.id}:send"
+        data: Actions.callback_data_for_action(delivery, "send")
       }
     }
 
@@ -999,6 +1000,180 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     assert Repo.get!(Maraithon.Insights.Insight, snooze_delivery.insight_id).snoozed_until ==
              snoozed_insight.snoozed_until
+  end
+
+  test "action callbacks are revision-bound and stale buttons cannot regress state", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    delivery = create_action_delivery(agent, user_id, "revision-bound")
+
+    stale_done = Actions.callback_data_for_action(delivery, "done")
+    longest_callback = Actions.callback_data_for_action(delivery, "regenerate")
+
+    assert stale_done =~ ~r/^insact:[0-9a-f-]{36}:done:[0-9a-f]{8}$/
+    assert byte_size(longest_callback) <= 64
+
+    # Any newer insight revision invalidates the old evidence-bound button.
+    delivery.insight
+    |> Ecto.Changeset.change(summary: "Newer source evidence changed this insight.")
+    |> Repo.update!()
+
+    assert {:noop, :stale_action_revision} =
+             Actions.handle_callback(%{
+               callback_id: "stale-insight-revision",
+               chat_id: 12345,
+               message_id: 100,
+               data: stale_done
+             })
+
+    assert is_nil(Actions.action_state_for_delivery(Repo.get!(Delivery, delivery.id)))
+
+    current = Delivery |> Repo.get!(delivery.id) |> Repo.preload(:insight)
+    stale_done = Actions.callback_data_for_action(current, "done")
+    dismiss = Actions.callback_data_for_action(current, "dismiss")
+
+    assert :ok =
+             Actions.handle_callback(%{
+               callback_id: "current-dismiss",
+               chat_id: 12345,
+               message_id: 100,
+               data: dismiss
+             })
+
+    assert {:noop, :stale_action_revision} =
+             InsightNotifications.process_telegram_event_durable(%{
+               type: "callback_query",
+               source: "telegram",
+               data: %{
+                 callback_id: "stale-done-after-dismiss",
+                 chat_id: 12345,
+                 message_id: 100,
+                 data: stale_done
+               }
+             })
+
+    terminal = Repo.get!(Delivery, delivery.id)
+    assert Actions.action_state_for_delivery(terminal)["status"] == "dismissed"
+    assert Repo.get!(Maraithon.Insights.Insight, delivery.insight_id).status == "dismissed"
+
+    todo = synced_todo_for(delivery.insight)
+    assert todo.status == "dismissed"
+    assert todo.metadata["source_insight_status"] == "dismissed"
+  end
+
+  test "a replayed regenerate callback preserves the newer draft revision", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    delivery = create_action_delivery(agent, user_id, "stale-regenerate")
+
+    original_state = %{
+      "status" => "drafted",
+      "spec" => %{
+        "kind" => "gmail_reply",
+        "notice_label" => "Email",
+        "to" => "owner@example.com",
+        "subject" => "Re: Revision",
+        "body" => "Older draft"
+      }
+    }
+
+    delivery =
+      delivery
+      |> Delivery.changeset(%{"metadata" => %{"telegram_action" => original_state}})
+      |> Repo.update!()
+      |> Repo.preload(:insight, force: true)
+
+    stale_regenerate = Actions.callback_data_for_action(delivery, "regenerate")
+    newer_state = put_in(original_state, ["spec", "body"], "Newer draft")
+
+    delivery
+    |> Delivery.changeset(%{"metadata" => %{"telegram_action" => newer_state}})
+    |> Repo.update!()
+
+    assert :ok =
+             Actions.handle_callback(%{
+               callback_id: "stale-regenerate",
+               chat_id: 12345,
+               message_id: 100,
+               data: stale_regenerate
+             })
+
+    final_state = Repo.get!(Delivery, delivery.id).metadata["telegram_action"]
+    assert get_in(final_state, ["spec", "body"]) == "Newer draft"
+  end
+
+  test "concurrent terminal insight actions choose one monotone result and sync its todo", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    delivery = create_action_delivery(agent, user_id, "terminal-race")
+
+    done = Task.async(fn -> Actions.perform_action(delivery, "done") end)
+    snooze = Task.async(fn -> Actions.perform_action(delivery, "snooze") end)
+
+    results = [Task.await(done, 2_000), Task.await(snooze, 2_000)]
+
+    assert Enum.count(results, &match?({:ok, %Delivery{}, _notice}, &1)) == 1
+    assert Enum.count(results, &match?({:error, :stale_action_revision}, &1)) == 1
+
+    final_delivery = Repo.get!(Delivery, delivery.id)
+    final_insight = Repo.get!(Maraithon.Insights.Insight, delivery.insight_id)
+    final_todo = synced_todo_for(delivery.insight)
+    state = Actions.action_state_for_delivery(final_delivery)
+
+    case state do
+      %{"status" => "executed", "kind" => "manual_complete"} ->
+        assert final_insight.status == "acknowledged"
+        assert final_todo.status == "done"
+        assert final_todo.metadata["source_insight_status"] == "acknowledged"
+
+      %{"status" => "snoozed", "until" => until_text} ->
+        assert final_insight.status == "snoozed"
+        assert final_todo.status == "snoozed"
+        assert DateTime.to_iso8601(final_insight.snoozed_until) == until_text
+        assert final_todo.snoozed_until == final_insight.snoozed_until
+    end
+  end
+
+  test "terminal action recovery repairs a legacy insight-to-todo checkpoint gap", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    delivery = create_action_delivery(agent, user_id, "todo-recovery")
+
+    logical_key =
+      delivery.insight.tracking_key || delivery.insight.dedupe_key || delivery.insight.id
+
+    refute Repo.get_by(Todo,
+             user_id: delivery.insight.user_id,
+             dedupe_key: "insight:#{logical_key}"
+           )
+
+    delivery.insight
+    |> Ecto.Changeset.change(status: "acknowledged")
+    |> Repo.update!()
+
+    checkpoint = %{
+      "status" => "executed",
+      "kind" => "manual_ack",
+      "result" => %{"status" => "acknowledged_in_telegram"},
+      "executed_at" => DateTime.to_iso8601(DateTime.utc_now())
+    }
+
+    delivery =
+      delivery
+      |> Delivery.changeset(%{"metadata" => %{"telegram_action" => checkpoint}})
+      |> Repo.update!()
+      |> Repo.preload(:insight, force: true)
+
+    assert {:ok, recovered, "Acknowledged"} = Actions.perform_action(delivery, "ack")
+    assert is_binary(Actions.action_state_for_delivery(recovered)["acknowledged_at"])
+
+    repaired = synced_todo_for(delivery.insight)
+    assert repaired.status == "done"
+    assert repaired.metadata["source_insight_status"] == "acknowledged"
   end
 
   test "renders conversation-progress language for heads_up insights in Telegram", %{
@@ -1143,6 +1318,11 @@ defmodule Maraithon.InsightNotificationActionsTest do
     |> Repo.preload(:insight)
   end
 
+  defp synced_todo_for(insight) do
+    logical_key = insight.tracking_key || insight.dedupe_key || insight.id
+    Repo.get_by!(Todo, user_id: insight.user_id, dedupe_key: "insight:#{logical_key}")
+  end
+
   defp telegram_message_count(type) do
     Agent.get(:capturing_telegram_recorder, fn events ->
       Enum.count(events, &(&1.type == type))
@@ -1154,6 +1334,16 @@ defmodule Maraithon.InsightNotificationActionsTest do
     |> Agent.get(&Enum.reverse/1)
     |> Enum.filter(&(&1.type == type))
     |> List.last()
+  end
+
+  defp button_callback(opts, label) do
+    opts
+    |> Keyword.get(:reply_markup, %{})
+    |> Map.get("inline_keyboard", [])
+    |> List.flatten()
+    |> Enum.find_value(fn button ->
+      if button["text"] == label, do: button["callback_data"]
+    end)
   end
 
   defp button_labels(opts) do
