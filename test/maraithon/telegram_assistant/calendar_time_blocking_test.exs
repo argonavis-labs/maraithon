@@ -246,7 +246,7 @@ defmodule Maraithon.TelegramAssistant.CalendarTimeBlockingTest do
       )
     end)
 
-    assert {:error, failed_action, "slot_no_longer_free"} =
+    assert {:error, failed_action, "slot_no_longer_free", :permanent_failure} =
              TelegramAssistant.confirm_and_execute(prepared_action)
 
     assert failed_action.status == "failed"
@@ -333,7 +333,7 @@ defmodule Maraithon.TelegramAssistant.CalendarTimeBlockingTest do
       })
 
     # No Bypass expectations: any HTTP call would fail the test.
-    assert {:error, failed_action, "calendar_block_start_passed"} =
+    assert {:error, failed_action, "calendar_block_start_passed", :permanent_failure} =
              TelegramAssistant.confirm_and_execute(prepared_action)
 
     assert failed_action.status == "failed"
@@ -372,7 +372,7 @@ defmodule Maraithon.TelegramAssistant.CalendarTimeBlockingTest do
       )
     end)
 
-    assert {:error, failed_action, "calendar_write_scope_required"} =
+    assert {:error, failed_action, "calendar_write_scope_required", :permanent_failure} =
              TelegramAssistant.confirm_and_execute(prepared_action)
 
     assert failed_action.status == "failed"
@@ -522,7 +522,7 @@ defmodule Maraithon.TelegramAssistant.CalendarTimeBlockingTest do
       end
     )
 
-    assert {:error, failed_action, "calendar_event_not_managed"} =
+    assert {:error, failed_action, "calendar_event_not_managed", :permanent_failure} =
              TelegramAssistant.confirm_and_execute(prepared_action)
 
     assert failed_action.status == "failed"

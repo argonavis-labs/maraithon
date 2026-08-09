@@ -288,6 +288,22 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
         }
       ])
 
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Application.get_env(:maraithon, :telegram_assistant, [])
+      |> Keyword.put(:max_immediate_pushes_per_hour, 1)
+    )
+
+    {:ok, _receipt} =
+      TelegramAssistant.record_push_receipt(%{
+        user_id: user_id,
+        dedupe_key: "proactive:budget-seed",
+        origin_type: "assistant_digest",
+        origin_id: "budget-seed",
+        decision: "sent_now"
+      })
+
     llm_complete = fn _params ->
       {:ok,
        %{
@@ -321,6 +337,8 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
              )
 
     assert result["decision"] == "held_rate_limit"
+    assert result["urgency"] == 0.45
+    assert result["interrupt_now"] == false
     assert result["assistant_message"] =~ "Older follow-up, not urgent"
     assert result["assistant_message"] =~ "Dan Bourke"
     assert result["assistant_message"] =~ "Keep it active"

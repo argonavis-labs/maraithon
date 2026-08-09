@@ -22,7 +22,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
              %{
                "tool" => "open_work",
                "label" => "Open work",
-               "summary" => "1 work item: Send update"
+               "summary" => "Found 1 work item: Send update"
              }
            ] =
              summary["tool_calls"]
@@ -129,7 +129,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
                "tool" => "open_work",
                "label" => "Open work",
                "summary" =>
-                 "3 work items: Investor reply - Send the revised terms today.; Ops review; and 1 more"
+                 "Found 3 work items: Investor reply - Send the revised terms today.; Ops review; and 1 more"
              }
            ] = summary["tool_calls"]
 
@@ -165,7 +165,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
              %{
                "tool" => "open_work",
                "label" => "Open work",
-               "summary" => "2 work items: Reply with the owner and timing.; Ops review"
+               "summary" => "Found 2 work items: Reply with the owner and timing.; Ops review"
              }
            ] = summary["tool_calls"]
 
@@ -313,7 +313,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
              "Reviewed people, updated memory, reviewed Messages, and 2 more steps before replying"
 
     assert [
-             %{"tool" => "people", "label" => "People", "summary" => "1 person: Dana Chen"},
+             %{"tool" => "people", "label" => "People", "summary" => "Found 1 person: Dana Chen"},
              %{
                "tool" => "memory_update",
                "label" => "Memory update",
@@ -322,13 +322,13 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
              %{
                "tool" => "messages",
                "label" => "Messages",
-               "summary" => "1 message: Alex: Board prep"
+               "summary" => "Found 1 message: Alex: Board prep"
              },
              %{"tool" => "slack", "label" => "Slack", "summary" => "Found the launch thread."},
              %{
                "tool" => "connected_accounts",
                "label" => "Connected accounts",
-               "summary" => "2 connected accounts: kent@example.com; Executive Ops"
+               "summary" => "Found 2 connected accounts: kent@example.com; Executive Ops"
              }
            ] = summary["tool_calls"]
 
@@ -370,13 +370,13 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
                "tool" => "connected_accounts",
                "label" => "Connected accounts",
                "summary" =>
-                 "2 connected accounts: kent@example.com (reconnect needed); Calendar (needs permission)"
+                 "Found 2 connected accounts: kent@example.com (reconnect needed); Calendar (needs permission)"
              },
              %{
                "tool" => "automations",
                "label" => "Automations",
                "summary" =>
-                 "2 automations: Morning brief (not ready); Deep research (in progress)"
+                 "Found 2 automations: Morning brief (not ready); Deep research (in progress)"
              }
            ] = summary["tool_calls"]
 
@@ -504,7 +504,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
              %{
                "tool" => "messages",
                "label" => "Messages",
-               "summary" => "1 message: Alex: Board prep"
+               "summary" => "Found 1 message: Alex: Board prep"
              }
            ] = summary["tool_calls"]
 
@@ -565,22 +565,22 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
              %{
                "tool" => "projects",
                "label" => "Projects",
-               "summary" => "2 projects: Board prep (active); Pricing launch (paused)"
+               "summary" => "Found 2 projects: Board prep (active); Pricing launch (paused)"
              },
              %{
                "tool" => "automations",
                "label" => "Automations",
-               "summary" => "1 automation: Morning brief (running) - Board prep"
+               "summary" => "Found 1 automation: Morning brief (running) - Board prep"
              },
              %{
                "tool" => "scheduled_followups",
                "label" => "Scheduled follow-ups",
-               "summary" => "1 scheduled follow-up: Friday investor update (active)"
+               "summary" => "Found 1 scheduled follow-up: Friday investor update (active)"
              },
              %{
                "tool" => "project_run",
                "label" => "Project runs",
-               "summary" => "1 project run: bliss/maraithon (running)"
+               "summary" => "Found 1 project run: bliss/maraithon (running)"
              }
            ] = summary["tool_calls"]
 
@@ -625,12 +625,13 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
                "tool" => "preferences",
                "label" => "Preferences",
                "summary" =>
-                 "2 preferences: Keep morning briefs concise; Do not interrupt weekends"
+                 "Found 2 preferences: Keep morning briefs concise; Do not interrupt weekends"
              },
              %{
                "tool" => "memory_check",
                "label" => "Memory",
-               "summary" => "2 memories: School notices matter; Investor prefers short updates"
+               "summary" =>
+                 "Found 2 memories: School notices matter; Investor prefers short updates"
              }
            ] = summary["tool_calls"]
 
@@ -817,10 +818,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     assert summary["headline"] == "Answered directly"
 
-    assert [
-             %{"type" => "answer_preparation", "title" => "Prepared the answer"},
-             %{"type" => "reply", "title" => "Wrote the reply"}
-           ] = summary["steps"]
+    steps = Map.get(summary, "steps", [])
+    assert steps == []
 
     visible_text = inspect(summary)
     refute visible_text =~ "llm"
@@ -844,8 +843,10 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_run(run)
 
-    assert [%{"type" => "supporting_plan", "title" => "Planned supporting checks"}] =
-             summary["steps"]
+    assert summary["headline"] == "Reviewing what came back"
+
+    steps = Map.get(summary, "steps", [])
+    assert steps == []
 
     refute inspect(summary) =~ "llm_response"
     refute inspect(summary) =~ "Model chose tools"
@@ -865,7 +866,10 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_run(run)
 
-    assert [%{"type" => "supporting_work", "title" => "Updated progress"}] = summary["steps"]
+    assert summary["headline"] == "Answered directly"
+
+    steps = Map.get(summary, "steps", [])
+    assert steps == []
 
     visible_text = inspect(summary)
     refute visible_text =~ "implementation"
