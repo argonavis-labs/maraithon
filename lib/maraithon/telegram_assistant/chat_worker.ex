@@ -201,12 +201,19 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
     TelegramConversations.assistant_reply_recorded?(chat_id, message_id)
   rescue
     error ->
-      Logger.warning("[telegram_fallback] retry-completion check failed",
-        chat_id: chat_id,
-        reason: Exception.message(error)
-      )
-
+      log_retry_completion_failure(chat_id, error)
       false
+  catch
+    kind, reason ->
+      log_retry_completion_failure(chat_id, {kind, reason})
+      false
+  end
+
+  defp log_retry_completion_failure(chat_id, reason) do
+    Logger.warning("[telegram_fallback] retry-completion check failed",
+      chat_reference: Maraithon.Redaction.fingerprint(chat_id),
+      reason: Maraithon.Redaction.error_summary(reason)
+    )
   end
 
   # SPEC 02: a voice/audio message has no `text` yet when it reaches here —
