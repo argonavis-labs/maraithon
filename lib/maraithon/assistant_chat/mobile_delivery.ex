@@ -22,12 +22,18 @@ defmodule Maraithon.AssistantChat.MobileDelivery do
 
     result = TelegramAssistant.send_turn(conversation, chat_id, text, opts)
 
-    with {:ok, _conversation, _turn, _delivery} <- result do
+    with {:ok, _conversation, _turn, delivery} <- result,
+         true <- local_turn_inserted?(delivery) do
       notify_device(conversation, text)
     end
 
     result
   end
+
+  defp local_turn_inserted?(delivery) when is_map(delivery),
+    do: Map.get(delivery, "_maraithon_local_turn_inserted", true)
+
+  defp local_turn_inserted?(_delivery), do: true
 
   defp notify_device(%Conversation{user_id: user_id} = conversation, text)
        when is_binary(user_id) do

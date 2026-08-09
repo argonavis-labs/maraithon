@@ -1,3 +1,39 @@
+defmodule Maraithon.TelegramAssistant.PreparedActionStateTest.ScriptedExecutor do
+  @moduledoc false
+
+  def execute_prepared_action(prepared_action) do
+    {call_number, instruction} =
+      Agent.get_and_update(:prepared_action_scripted_executor, fn state ->
+        case state.script do
+          [next | rest] ->
+            call_number = state.calls + 1
+            {{call_number, next}, %{state | script: rest, calls: call_number}}
+
+          [] ->
+            call_number = state.calls + 1
+
+            {{call_number, {:return, {:error, :unexpected_provider_call}}},
+             %{state | calls: call_number}}
+        end
+      end)
+
+    observer = Application.fetch_env!(:maraithon, :prepared_action_executor_test_pid)
+    send(observer, {:prepared_action_executor_called, call_number, prepared_action, self()})
+
+    case instruction do
+      {:return, result} ->
+        result
+
+      {:wait, result} ->
+        receive do
+          {:release_prepared_action_executor, ^call_number} -> result
+        after
+          5_000 -> {:error, :scripted_executor_timeout}
+        end
+    end
+  end
+end
+
 defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
   use Maraithon.DataCase, async: false
 
@@ -16,6 +52,13 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     start_supervised!(%{
       id: :capturing_telegram_recorder,
       start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
+    })
+
+    start_supervised!(%{
+      id: :prepared_action_scripted_executor,
+      start:
+        {Agent, :start_link,
+         [fn -> %{script: [], calls: 0} end, [name: :prepared_action_scripted_executor]]}
     })
 
     original_insights = Application.get_env(:maraithon, :insights, [])
@@ -40,6 +83,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
       Application.put_env(:maraithon, :insights, original_insights)
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
       Application.put_env(:maraithon, :capturing_telegram, original_capture)
+      Application.delete_env(:maraithon, :prepared_action_executor_test_pid)
     end)
 
     user_id = "prepared-state-#{System.unique_integer([:positive])}@example.com"
@@ -137,10 +181,8 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
       "executed" ->
         assert match?({:ok, %PreparedAction{status: "executed"}, _result}, confirm_result)
 
-        assert match?(
-                 {:error, %PreparedAction{status: "executed"}, :already_handled},
-                 reject_result
-               )
+        assert {:error, %PreparedAction{} = rejected_view, :already_handled} = reject_result
+        assert rejected_view.status in ["confirmed", "executed"]
 
         assert final_project.summary == "after"
 
@@ -250,6 +292,161 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     assert count_telegram_events(:send) == sends_before + 1
   end
 
+  test "mobile confirmation freezes edits, releases its row lock, and executes once", ctx do
+    configure_scripted_executor([
+      {:wait, {:ok, %{"message" => "Posted the frozen Slack message."}}}
+    ])
+
+    {:ok, conversation, action} = create_mobile_action(ctx, %{"text" => "old body"})
+
+    first =
+      Task.async(fn ->
+        AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "draft_edits" => %{"text" => "frozen body"}
+        })
+      end)
+
+    assert_receive {:prepared_action_executor_called, 1, executing_action, executor_pid}, 1_000
+    assert executing_action.status == "confirmed"
+    assert executing_action.payload["text"] == "frozen body"
+    assert executing_action.payload["_maraithon_confirmed_payload_sha256"]
+    assert executing_action.payload["_maraithon_execution_attempts"] == 1
+
+    # The provider waits outside the confirmation transaction: another
+    # caller can acquire the same row immediately and observes the committed
+    # frozen decision instead of blocking behind a network call.
+    persisted_while_provider_waits = Repo.get!(PreparedAction, action.id)
+    assert persisted_while_provider_waits.status == "confirmed"
+    assert persisted_while_provider_waits.payload["text"] == "frozen body"
+
+    second =
+      Task.async(fn ->
+        AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "draft_edits" => %{"text" => "stale overwrite"}
+        })
+      end)
+
+    assert Task.await(second, 1_000) ==
+             {:error, {:prepared_action_execution_retryable, :transient}}
+
+    send(executor_pid, {:release_prepared_action_executor, 1})
+
+    assert {:ok, %{prepared_action: executed, thread: thread}} = Task.await(first, 2_000)
+    assert executed.status == "executed"
+    assert executed.payload["text"] == "frozen body"
+
+    result_turns =
+      Enum.filter(thread.turns, fn turn ->
+        turn.turn_kind == "action_result" and turn.origin_id == action.id
+      end)
+
+    assert [%Turn{client_message_id: "prepared-action-result:" <> _id}] = result_turns
+
+    # A later stale editor resumes the checkpoint; it neither calls the
+    # provider nor creates another local result/push reservation.
+    assert {:ok, %{prepared_action: resumed, thread: resumed_thread}} =
+             AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+               "client_message_id" => Ecto.UUID.generate(),
+               "draft_edits" => %{"text" => "another stale overwrite"}
+             })
+
+    assert resumed.status == "executed"
+    assert resumed.payload["text"] == "frozen body"
+    assert scripted_executor_calls() == 1
+
+    assert Enum.count(resumed_thread.turns, fn turn ->
+             turn.turn_kind == "action_result" and turn.origin_id == action.id
+           end) == 1
+
+    assert conversation.id == executed.conversation_id
+  end
+
+  test "mobile transient execution retries are finite and terminal delivery is deterministic",
+       ctx do
+    configure_scripted_executor(
+      [
+        {:return, {:error, {:http_error, 503, "provider unavailable"}}},
+        {:return, {:error, {:api_error, 409, "conflict"}}},
+        {:return, {:error, %{status: 429, reason: "rate limited"}}}
+      ],
+      prepared_action_max_attempts: 3
+    )
+
+    {:ok, _conversation, action} = create_mobile_action(ctx, %{"text" => "retry me"})
+
+    for expected_attempt <- 1..2 do
+      assert {:error, {:prepared_action_execution_retryable, :transient}} =
+               AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+                 "client_message_id" => Ecto.UUID.generate()
+               })
+
+      retryable = Repo.get!(PreparedAction, action.id)
+      assert retryable.status == "confirmed"
+      assert retryable.payload["_maraithon_execution_attempts"] == expected_attempt
+      refute Map.has_key?(retryable.payload, "_maraithon_execution_token")
+    end
+
+    assert {:ok, %{prepared_action: failed, thread: thread}} =
+             AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+               "client_message_id" => Ecto.UUID.generate()
+             })
+
+    assert failed.status == "failed"
+    assert failed.payload["_maraithon_execution_attempts"] == 3
+    assert is_map(failed.payload["_maraithon_execution_error"])
+    assert scripted_executor_calls() == 3
+
+    assert Enum.count(thread.turns, fn turn ->
+             turn.turn_kind == "action_result" and turn.origin_id == action.id
+           end) == 1
+
+    assert {:ok, %{prepared_action: still_failed, thread: resumed_thread}} =
+             AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+               "client_message_id" => Ecto.UUID.generate()
+             })
+
+    assert still_failed.status == "failed"
+    assert scripted_executor_calls() == 3
+
+    assert Enum.count(resumed_thread.turns, fn turn ->
+             turn.turn_kind == "action_result" and turn.origin_id == action.id
+           end) == 1
+  end
+
+  test "structured provider status wins over lossy detail text", ctx do
+    assert TelegramAssistant.prepared_action_error_class({:http_error, 408, "bad request"}) ==
+             :transient
+
+    assert TelegramAssistant.prepared_action_error_class({:http_error, 409, "conflict"}) ==
+             :transient
+
+    assert TelegramAssistant.prepared_action_error_class(%{status_code: 429}) == :transient
+
+    assert TelegramAssistant.prepared_action_error_class({:api_error, 500, "server"}) ==
+             :transient
+
+    assert TelegramAssistant.prepared_action_error_class(
+             {:http_error, 422, "the user text said timeout"}
+           ) == :permanent
+
+    configure_scripted_executor([
+      {:return, {:error, {:http_error, 422, "the user text said timeout"}}}
+    ])
+
+    {:ok, _conversation, action} = create_mobile_action(ctx, %{"text" => "poison"})
+
+    assert {:ok, %{prepared_action: failed}} =
+             AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+               "client_message_id" => Ecto.UUID.generate()
+             })
+
+    assert failed.status == "failed"
+    assert failed.payload["_maraithon_execution_attempts"] == 1
+    assert scripted_executor_calls() == 1
+  end
+
   test "mobile confirm resumes an executed row before considering expiry or stale draft edits",
        ctx do
     {:ok, mobile_conversation} =
@@ -301,6 +498,51 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
 
     assert still_executed.status == "executed"
     assert Repo.get!(PreparedAction, action.id).status == "executed"
+  end
+
+  defp configure_scripted_executor(script, extra_config \\ []) do
+    Application.put_env(:maraithon, :prepared_action_executor_test_pid, self())
+
+    config =
+      Application.get_env(:maraithon, :telegram_assistant, [])
+      |> Keyword.put(
+        :prepared_action_executor,
+        Maraithon.TelegramAssistant.PreparedActionStateTest.ScriptedExecutor
+      )
+      |> Keyword.merge(extra_config)
+
+    Application.put_env(:maraithon, :telegram_assistant, config)
+    Agent.update(:prepared_action_scripted_executor, &%{&1 | script: script, calls: 0})
+  end
+
+  defp scripted_executor_calls do
+    Agent.get(:prepared_action_scripted_executor, & &1.calls)
+  end
+
+  defp create_mobile_action(ctx, payload) do
+    with {:ok, conversation} <-
+           TelegramConversations.create_mobile_thread(ctx.user_id, %{
+             "client_thread_id" => Ecto.UUID.generate()
+           }),
+         {:ok, run} <-
+           create_run(ctx.user_id, conversation.chat_id, conversation.id, "mobile"),
+         {:ok, action} <-
+           TelegramAssistant.create_prepared_action(%{
+             user_id: ctx.user_id,
+             chat_id: conversation.chat_id,
+             conversation_id: conversation.id,
+             run_id: run.id,
+             surface: "mobile",
+             action_type: "slack_post",
+             target_type: "slack_channel",
+             target_id: "C123",
+             payload: payload,
+             preview_text: "Post the update",
+             status: "awaiting_confirmation",
+             expires_at: DateTime.add(DateTime.utc_now(), 600, :second)
+           }) do
+      {:ok, conversation, action}
+    end
   end
 
   defp create_action(ctx, opts) do

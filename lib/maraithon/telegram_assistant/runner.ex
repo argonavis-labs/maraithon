@@ -425,7 +425,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   def execute_prepared_action(prepared_action) do
     action_type = prepared_action.action_type
-    payload = prepared_action.payload || %{}
+    frozen_payload = prepared_action.payload || %{}
+    payload = external_prepared_action_payload(frozen_payload)
 
     case action_type do
       "agent_create" ->
@@ -460,7 +461,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
         end
 
       action_type ->
-        execute_external_action(action_type, payload, prepared_action)
+        execute_external_action(action_type, payload, prepared_action, frozen_payload)
     end
   end
 
@@ -2278,14 +2279,17 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp conversation_id(%Conversation{id: id}), do: id
   defp conversation_id(_conversation), do: nil
 
-  defp execute_external_action(action_type, payload, prepared_action) do
+  defp execute_external_action(action_type, payload, prepared_action, frozen_payload) do
     case action_type do
       "gmail_send" ->
         execute_tool_action("gmail_send_message", payload, "Sent via Gmail.", prepared_action)
 
       "gmail_draft_send" ->
-        payload = Map.put(payload || %{}, "action", "send")
-        execute_tool_action("gmail_drafts", payload, "Sent the Gmail draft.", prepared_action)
+        with :ok <-
+               maybe_update_frozen_gmail_draft(frozen_payload, payload, prepared_action) do
+          payload = Map.put(payload || %{}, "action", "send")
+          execute_tool_action("gmail_drafts", payload, "Sent the Gmail draft.", prepared_action)
+        end
 
       "slack_post" ->
         execute_tool_action(
@@ -2378,6 +2382,32 @@ defmodule Maraithon.TelegramAssistant.Runner do
         {:error, "unsupported_prepared_action"}
     end
   end
+
+  defp maybe_update_frozen_gmail_draft(frozen_payload, payload, prepared_action) do
+    if Map.get(frozen_payload || %{}, "_maraithon_update_draft_before_send") == true do
+      update_payload = Map.put(payload || %{}, "action", "update")
+
+      case execute_tool_action(
+             "gmail_drafts",
+             update_payload,
+             "Updated the frozen Gmail draft.",
+             prepared_action
+           ) do
+        {:ok, _result} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp external_prepared_action_payload(payload) when is_map(payload) do
+    Map.reject(payload, fn {key, _value} ->
+      is_binary(key) and String.starts_with?(key, "_maraithon_")
+    end)
+  end
+
+  defp external_prepared_action_payload(_payload), do: %{}
 
   defp execute_calendar_create_event(payload, prepared_action) do
     payload = payload || %{}
