@@ -33,10 +33,18 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
     {:ok, %{"id" => chat_id, "type" => "private"}}
   end
 
-  def answer_callback_query(_callback_query_id, opts \\ []) do
-    record_event(%{type: :callback, opts: opts})
+  def answer_callback_query(callback_query_id, opts \\ []) do
+    event = %{type: :callback, callback_query_id: callback_query_id, opts: opts}
 
-    {:ok, true}
+    case callback_result() do
+      {:error, reason} ->
+        notify_watcher({:capturing_telegram_callback_failed, event, reason})
+        {:error, reason}
+
+      _ ->
+        record_event(event)
+        {:ok, true}
+    end
   end
 
   def edit_message_text(chat_id, message_id, text, opts \\ []) do
@@ -70,6 +78,11 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
     else
       "1"
     end
+  end
+
+  defp callback_result do
+    Application.get_env(:maraithon, :capturing_telegram, [])
+    |> Keyword.get(:callback_result, :ok)
   end
 
   defp edit_result do

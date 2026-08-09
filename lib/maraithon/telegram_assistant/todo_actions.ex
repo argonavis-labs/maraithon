@@ -92,6 +92,30 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   def handle_callback(_data), do: :ignored
 
   defp handle_callback_result(
+         {:todo_already_updated, updated_todo},
+         user_id,
+         chat_id,
+         message_id,
+         callback_id,
+         action,
+         _original_todo
+       ) do
+    case staleness_batch_for(chat_id, message_id) do
+      %StalenessBatch{} = batch ->
+        with :ok <- resolve_staleness_batch_item(user_id, batch, updated_todo, action),
+             :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
+          :ok
+        end
+
+      nil ->
+        with :ok <- refresh_message(chat_id, message_id, updated_todo),
+             :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
+          :ok
+        end
+    end
+  end
+
+  defp handle_callback_result(
          {:todo_updated, updated_todo},
          user_id,
          chat_id,
@@ -183,6 +207,48 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp fetch_todo(%Todo{} = todo), do: {:ok, todo}
   defp fetch_todo(_todo), do: {:error, :not_found}
 
+  # Durable retries re-fetch the todo after a presentation/ack failure. When
+  # its domain state already proves the callback committed, skip the mutation
+  # and retry only the remaining Telegram edit/answer steps.
+  defp dispatch_action(_user_id, _chat_id, %Todo{status: "done"} = todo, "done"),
+    do: {:ok, {:todo_already_updated, todo}}
+
+  defp dispatch_action(_user_id, _chat_id, %Todo{status: "dismissed"} = todo, "dismiss"),
+    do: {:ok, {:todo_already_updated, todo}}
+
+  defp dispatch_action(_user_id, _chat_id, %Todo{status: "snoozed"} = todo, "snooze"),
+    do: {:ok, {:todo_already_updated, todo}}
+
+  defp dispatch_action(_user_id, _chat_id, %Todo{} = todo, "important")
+       when todo.attention_mode == "act_now" and is_integer(todo.priority) and todo.priority >= 90,
+       do: {:ok, {:todo_already_updated, todo}}
+
+  defp dispatch_action(_user_id, _chat_id, %Todo{status: "dismissed"} = todo, "see_less") do
+    if get_in(todo.metadata || %{}, ["assistant_feedback", "value"]) == "see_less" do
+      {:ok, {:todo_already_updated, todo}}
+    else
+      {:error, :todo_see_less_state_mismatch}
+    end
+  end
+
+  defp dispatch_action(_user_id, _chat_id, %Todo{} = todo, feedback)
+       when feedback in @record_feedback_values do
+    case get_in(todo.metadata || %{}, ["assistant_feedback", "value"]) do
+      ^feedback -> {:ok, {:todo_already_updated, todo}}
+      _other -> :apply_feedback
+    end
+    |> case do
+      :apply_feedback ->
+        with {:ok, updated} <-
+               Todos.record_feedback(todo.user_id, todo.id, feedback, source: "telegram") do
+          {:ok, {:todo_updated, updated}}
+        end
+
+      result ->
+        result
+    end
+  end
+
   defp dispatch_action(user_id, _chat_id, %Todo{id: todo_id}, "done") do
     with {:ok, todo} <-
            Todos.mark_done(
@@ -233,13 +299,6 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          ) do
       {:ok, %{todo: todo}} -> {:ok, {:todo_updated, todo}}
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp dispatch_action(user_id, _chat_id, %Todo{id: todo_id}, feedback)
-       when feedback in @record_feedback_values do
-    with {:ok, todo} <- Todos.record_feedback(user_id, todo_id, feedback, source: "telegram") do
-      {:ok, {:todo_updated, todo}}
     end
   end
 

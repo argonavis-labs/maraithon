@@ -103,7 +103,7 @@ defmodule Maraithon.InsightNotifications do
         normalize_processing_result(TelegramRouter.handle_edited_message(data))
 
       type == "callback_query" and is_map(data) ->
-        handle_callback_query(data)
+        handle_callback_query(mark_processing_mode(data, mode))
 
       type in @ignored_telegram_event_types ->
         {:noop, :ignored_update}
@@ -302,7 +302,7 @@ defmodule Maraithon.InsightNotifications do
 
     with {:ok, delivery_id, feedback} <- parse_feedback_data(callback_data),
          %Delivery{} = delivery <- Repo.get(Delivery, delivery_id),
-         true <- delivery.channel == "telegram" and to_string(delivery.destination) == chat_id,
+         :ok <- authorize_feedback_delivery(delivery, chat_id),
          {:ok, updated_delivery} <- apply_feedback(delivery, feedback) do
       maybe_answer_callback(callback_id, feedback_ack_text(updated_delivery, feedback))
     else
@@ -311,14 +311,21 @@ defmodule Maraithon.InsightNotifications do
           {:noop, :feedback_already_recorded}
         end
 
-      _invalid_or_missing ->
-        with :ok <- maybe_answer_callback(callback_id, "Feedback could not be recorded") do
-          {:noop, :feedback_not_recorded}
-        end
+      {:error, reason} ->
+        {:error, reason}
+
+      nil ->
+        {:error, :feedback_delivery_not_found}
+
+      other ->
+        {:error, {:invalid_feedback_processing_result, other}}
     end
   end
 
   defp handle_feedback_callback(_), do: {:error, :invalid_telegram_event}
+
+  defp mark_processing_mode(data, :durable), do: Map.put(data, :durable_processing, true)
+  defp mark_processing_mode(data, _mode), do: data
 
   defp handle_callback_query(data) when is_map(data) do
     case read_string(data, "data") do
@@ -362,54 +369,96 @@ defmodule Maraithon.InsightNotifications do
   defp normalize_processing_result(other),
     do: {:error, {:invalid_telegram_processing_result, other}}
 
-  defp apply_feedback(%Delivery{} = delivery, feedback)
-       when feedback in ["helpful", "not_helpful"] do
-    if delivery.feedback in ["helpful", "not_helpful"] do
-      {:error, :already_recorded}
+  defp authorize_feedback_delivery(%Delivery{} = delivery, chat_id) do
+    if delivery.channel == "telegram" and to_string(delivery.destination) == chat_id do
+      :ok
     else
-      status = if feedback == "helpful", do: "feedback_helpful", else: "feedback_not_helpful"
-
-      Repo.transaction(fn ->
-        updated_delivery =
-          delivery
-          |> Ecto.Changeset.change(%{
-            status: status,
-            feedback: feedback,
-            feedback_at: DateTime.utc_now()
-          })
-          |> Repo.update!()
-
-        _ =
-          case feedback do
-            "helpful" -> Insights.acknowledge(delivery.user_id, delivery.insight_id)
-            "not_helpful" -> Insights.dismiss(delivery.user_id, delivery.insight_id)
-          end
-
-        _ = tune_threshold(delivery.user_id, feedback)
-
-        updated_delivery
-      end)
-      |> case do
-        {:ok, updated_delivery} -> {:ok, Repo.preload(updated_delivery, :insight)}
-        {:error, reason} -> {:error, reason}
-      end
+      {:error, :feedback_delivery_mismatch}
     end
   end
 
+  defp apply_feedback(%Delivery{id: delivery_id}, feedback)
+       when feedback in ["helpful", "not_helpful"] do
+    status = if feedback == "helpful", do: "feedback_helpful", else: "feedback_not_helpful"
+
+    Repo.transaction(fn ->
+      delivery =
+        Delivery
+        |> where([candidate], candidate.id == ^delivery_id)
+        |> lock("FOR UPDATE")
+        |> Repo.one!()
+
+      if delivery.feedback in ["helpful", "not_helpful"] do
+        Repo.rollback(:already_recorded)
+      end
+
+      with {:ok, updated_delivery} <-
+             delivery
+             |> Ecto.Changeset.change(%{
+               status: status,
+               feedback: feedback,
+               feedback_at: DateTime.utc_now()
+             })
+             |> Repo.update(),
+           {:ok, _updated_insight} <- apply_insight_feedback(delivery, feedback),
+           {:ok, _profile} <- tune_threshold(delivery.user_id, feedback) do
+        updated_delivery
+      else
+        {:error, reason} -> Repo.rollback(reason)
+        other -> Repo.rollback({:invalid_feedback_subwrite_result, other})
+      end
+    end)
+    |> case do
+      {:ok, updated_delivery} -> {:ok, Repo.preload(updated_delivery, :insight)}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    reason ->
+      Logger.warning("Telegram insight feedback persistence failed",
+        failure_code: Maraithon.Redaction.error_class(reason)
+      )
+
+      {:error, :feedback_persistence_failed}
+  catch
+    :exit, reason ->
+      Logger.warning("Telegram insight feedback persistence exited",
+        failure_code: Maraithon.Redaction.error_class(reason)
+      )
+
+      {:error, :feedback_persistence_failed}
+  end
+
+  defp apply_insight_feedback(delivery, "helpful"),
+    do: Insights.acknowledge(delivery.user_id, delivery.insight_id)
+
+  defp apply_insight_feedback(delivery, "not_helpful"),
+    do: Insights.dismiss(delivery.user_id, delivery.insight_id)
+
   defp tune_threshold(user_id, feedback) do
-    {:ok, profile} = get_or_create_profile(user_id)
+    with {:ok, _profile} <- get_or_create_profile(user_id),
+         %ThresholdProfile{} = profile <- lock_threshold_profile(user_id) do
+      delta = if feedback == "helpful", do: -@helpful_delta, else: @not_helpful_delta
 
-    delta = if feedback == "helpful", do: -@helpful_delta, else: @not_helpful_delta
+      profile
+      |> ThresholdProfile.changeset(%{
+        score_threshold: clamp(profile.score_threshold + delta, @min_threshold, @max_threshold),
+        helpful_count: profile.helpful_count + if(feedback == "helpful", do: 1, else: 0),
+        not_helpful_count:
+          profile.not_helpful_count + if(feedback == "not_helpful", do: 1, else: 0),
+        last_feedback_at: DateTime.utc_now()
+      })
+      |> Repo.update()
+    else
+      nil -> {:error, :threshold_profile_not_found}
+      {:error, _reason} = error -> error
+    end
+  end
 
-    profile
-    |> ThresholdProfile.changeset(%{
-      score_threshold: clamp(profile.score_threshold + delta, @min_threshold, @max_threshold),
-      helpful_count: profile.helpful_count + if(feedback == "helpful", do: 1, else: 0),
-      not_helpful_count:
-        profile.not_helpful_count + if(feedback == "not_helpful", do: 1, else: 0),
-      last_feedback_at: DateTime.utc_now()
-    })
-    |> Repo.update()
+  defp lock_threshold_profile(user_id) do
+    ThresholdProfile
+    |> where([profile], profile.user_id == ^user_id)
+    |> lock("FOR UPDATE")
+    |> Repo.one()
   end
 
   defp maybe_handle_preference_command(chat_id, text) when is_binary(chat_id) do

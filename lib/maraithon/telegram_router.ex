@@ -82,10 +82,14 @@ defmodule Maraithon.TelegramRouter do
                    user_turn,
                    chat_id,
                    source_message_id,
-                   :confirm
+                   :confirm,
+                   durable: durable_processing?(data)
                  ) do
               :ok ->
                 :ok
+
+              {:noop, _reason} = noop ->
+                noop
 
               {:fallback, _reason} ->
                 confirm_pending_rules(conversation, user_turn, chat_id, source_message_id)
@@ -103,10 +107,14 @@ defmodule Maraithon.TelegramRouter do
                    user_turn,
                    chat_id,
                    source_message_id,
-                   :reject
+                   :reject,
+                   durable: durable_processing?(data)
                  ) do
               :ok ->
                 :ok
+
+              {:noop, _reason} = noop ->
+                noop
 
               {:fallback, _reason} ->
                 reject_pending_rules(conversation, user_turn, chat_id, source_message_id)
@@ -899,6 +907,9 @@ defmodule Maraithon.TelegramRouter do
   defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)
   defp normalize_id(value) when is_binary(value), do: value
   defp normalize_id(value), do: to_string(value)
+
+  defp durable_processing?(data) when is_map(data),
+    do: Map.get(data, :durable_processing, false) == true
 
   defp fetch(map, key) do
     case Map.fetch(map, key) do

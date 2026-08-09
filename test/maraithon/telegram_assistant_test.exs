@@ -717,6 +717,75 @@ defmodule Maraithon.TelegramAssistantTest do
     assert result_message.text == "Created the project."
   end
 
+  test "provider success followed by turn persistence failure stays retryable", %{
+    user_id: user_id
+  } do
+    {:ok, conversation} =
+      Maraithon.TelegramConversations.start_or_continue(user_id, "12345", %{
+        "root_message_id" => "provider-partition-1"
+      })
+
+    Repo.query!("""
+    CREATE FUNCTION maraithon_test_fail_sent_turn_persistence()
+    RETURNS trigger AS $$
+    BEGIN
+      IF NEW.conversation_id = '#{conversation.id}' THEN
+        RAISE EXCEPTION 'injected sent-turn persistence failure';
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER maraithon_test_fail_sent_turn_persistence
+    BEFORE INSERT ON telegram_conversation_turns
+    FOR EACH ROW
+    EXECUTE FUNCTION maraithon_test_fail_sent_turn_persistence()
+    """)
+
+    sends_before = Enum.count(telegram_events(), &(&1.type == :send))
+
+    assert {:error, :telegram_turn_persistence_failed} =
+             Maraithon.TelegramAssistant.send_turn(
+               conversation,
+               "12345",
+               "Provider accepted this before the local write failed.",
+               reply_to_message_id: "provider-partition-source"
+             )
+
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == sends_before + 1
+
+    assert Repo.aggregate(
+             from(turn in Turn, where: turn.conversation_id == ^conversation.id),
+             :count
+           ) == 0
+
+    Repo.query!(
+      "DROP TRIGGER maraithon_test_fail_sent_turn_persistence ON telegram_conversation_turns"
+    )
+
+    Repo.query!("DROP FUNCTION maraithon_test_fail_sent_turn_persistence()")
+
+    assert {:ok, _conversation, _turn, _telegram_result} =
+             Maraithon.TelegramAssistant.send_turn(
+               conversation,
+               "12345",
+               "Provider accepted this before the local write failed.",
+               reply_to_message_id: "provider-partition-source"
+             )
+
+    # Telegram offers no sendMessage idempotency key. The durable retry is
+    # correct, but this provider-success/local-failure partition is inherently
+    # at-least-once and therefore produced two provider sends and one local turn.
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == sends_before + 2
+
+    assert Repo.aggregate(
+             from(turn in Turn, where: turn.conversation_id == ^conversation.id),
+             :count
+           ) == 1
+  end
+
   test "prepared action failure copy hides internal reason in Telegram", %{user_id: user_id} do
     {:ok, conversation} =
       Maraithon.TelegramConversations.start_or_continue(user_id, "12345", %{
@@ -781,6 +850,214 @@ defmodule Maraithon.TelegramAssistantTest do
     refute result_message.text =~ ":project_not_found"
     refute result_message.text =~ "project_not_found"
     assert Repo.get!(PreparedAction, prepared_action.id).status == "failed"
+  end
+
+  test "a confirmed prepared action resumes after its execution status write fails", %{
+    user_id: user_id
+  } do
+    {:ok, run} =
+      Maraithon.TelegramAssistant.start_run(%{
+        user_id: user_id,
+        chat_id: "12345",
+        surface: "telegram",
+        trigger_type: "inbound_message",
+        status: "completed",
+        model_provider: "test",
+        model_name: "test",
+        prompt_snapshot: %{},
+        result_summary: %{},
+        started_at: DateTime.utc_now(),
+        finished_at: DateTime.utc_now()
+      })
+
+    {:ok, prepared_action} =
+      Maraithon.TelegramAssistant.create_prepared_action(%{
+        user_id: user_id,
+        chat_id: "12345",
+        run_id: run.id,
+        surface: "telegram",
+        action_type: "project_create",
+        target_type: "project",
+        target_id: "confirmed-recovery-project",
+        payload: %{
+          "user_id" => user_id,
+          "attrs" => %{"name" => "Confirmed Recovery Project"}
+        },
+        preview_text: "Create recovery project",
+        status: "awaiting_confirmation",
+        expires_at: DateTime.add(DateTime.utc_now(), 600, :second)
+      })
+
+    {:ok, confirmed_action} =
+      Maraithon.TelegramAssistant.update_prepared_action(prepared_action, %{
+        status: "confirmed",
+        confirmed_at: DateTime.utc_now()
+      })
+
+    Repo.query!("""
+    CREATE FUNCTION maraithon_test_fail_prepared_action_executed_write()
+    RETURNS trigger AS $$
+    BEGIN
+      IF OLD.id = '#{prepared_action.id}' AND NEW.status = 'executed' THEN
+        RAISE EXCEPTION 'injected prepared-action execution checkpoint failure';
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER maraithon_test_fail_prepared_action_executed_write
+    BEFORE UPDATE ON telegram_prepared_actions
+    FOR EACH ROW
+    EXECUTE FUNCTION maraithon_test_fail_prepared_action_executed_write()
+    """)
+
+    assert {:error, failed_checkpoint, :prepared_action_persistence_failed} =
+             Maraithon.TelegramAssistant.confirm_and_execute(confirmed_action, durable: true)
+
+    assert failed_checkpoint.status == "confirmed"
+    assert Repo.get!(PreparedAction, prepared_action.id).status == "confirmed"
+    assert Projects.get_project_by_slug_for_user("confirmed-recovery-project", user_id) == nil
+
+    Repo.query!(
+      "DROP TRIGGER maraithon_test_fail_prepared_action_executed_write ON telegram_prepared_actions"
+    )
+
+    Repo.query!("DROP FUNCTION maraithon_test_fail_prepared_action_executed_write()")
+
+    assert {:ok, executed_action, result} =
+             Maraithon.TelegramAssistant.confirm_and_execute(confirmed_action, durable: true)
+
+    assert executed_action.status == "executed"
+    assert result["message"] == "Created the project."
+
+    assert Repo.aggregate(
+             from(project in Maraithon.Projects.Project,
+               where:
+                 project.user_id == ^user_id and
+                   project.name == "Confirmed Recovery Project"
+             ),
+             :count
+           ) == 1
+  end
+
+  test "durable prepared-action retry drains only a failed callback acknowledgement", %{
+    user_id: user_id
+  } do
+    {:ok, conversation} =
+      Maraithon.TelegramConversations.start_or_continue(user_id, "12345", %{
+        "root_message_id" => "prepared-ack-retry"
+      })
+
+    {:ok, run} =
+      Maraithon.TelegramAssistant.start_run(%{
+        user_id: user_id,
+        chat_id: conversation.chat_id,
+        conversation_id: conversation.id,
+        surface: "telegram",
+        trigger_type: "inbound_message",
+        status: "completed",
+        model_provider: "test",
+        model_name: "test",
+        prompt_snapshot: %{},
+        result_summary: %{},
+        started_at: DateTime.utc_now(),
+        finished_at: DateTime.utc_now()
+      })
+
+    {:ok, prepared_action} =
+      Maraithon.TelegramAssistant.create_prepared_action(%{
+        user_id: user_id,
+        chat_id: conversation.chat_id,
+        conversation_id: conversation.id,
+        run_id: run.id,
+        surface: "telegram",
+        action_type: "project_create",
+        target_type: "project",
+        target_id: "prepared-ack-retry-project",
+        payload: %{
+          "user_id" => user_id,
+          "attrs" => %{"name" => "Prepared Ack Retry Project"}
+        },
+        preview_text: "Create project",
+        status: "awaiting_confirmation",
+        expires_at: DateTime.add(DateTime.utc_now(), 600, :second)
+      })
+
+    {:ok, _awaiting_conversation} =
+      Maraithon.TelegramAssistant.mark_conversation_awaiting_action(conversation, prepared_action)
+
+    reason = {:telegram_error, 503, "callback unavailable after action commit"}
+    Application.put_env(:maraithon, :capturing_telegram, callback_result: {:error, reason})
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        callback_id: "prepared-ack-retry-callback",
+        chat_id: 12_345,
+        message_id: "prepared-ack-retry-message",
+        data: "tgact:#{prepared_action.id}:confirm"
+      }
+    }
+
+    sends_before = Enum.count(telegram_events(), &(&1.type == :send))
+
+    assert {:error, {:telegram_callback_answer_failed, ^reason}} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    committed_action = Repo.get!(PreparedAction, prepared_action.id)
+    assert committed_action.status == "executed"
+    assert is_binary(committed_action.payload["_maraithon_result_delivered_at"])
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == sends_before + 1
+
+    delivered_turn =
+      Repo.one!(
+        from(turn in Turn,
+          where: turn.origin_type == "prepared_action",
+          where: turn.origin_id == ^prepared_action.id
+        )
+      )
+
+    assert delivered_turn.structured_data["result"] == %{
+             "message" => "Created the project."
+           }
+
+    # The delivered conversation turn is also a durable checkpoint. Even if
+    # the smaller payload marker is lost, callback retry must not send the
+    # already-recorded result again.
+    {:ok, _without_payload_marker} =
+      committed_action
+      |> PreparedAction.changeset(%{
+        payload: Map.delete(committed_action.payload, "_maraithon_result_delivered_at")
+      })
+      |> Repo.update()
+
+    assert Repo.aggregate(
+             from(project in Maraithon.Projects.Project,
+               where:
+                 project.user_id == ^user_id and
+                   project.name == "Prepared Ack Retry Project"
+             ),
+             :count
+           ) == 1
+
+    Application.put_env(:maraithon, :capturing_telegram, callback_result: :ok)
+
+    assert {:noop, :prepared_action_already_delivered} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == sends_before + 1
+
+    assert Repo.aggregate(
+             from(project in Maraithon.Projects.Project,
+               where:
+                 project.user_id == ^user_id and
+                   project.name == "Prepared Ack Retry Project"
+             ),
+             :count
+           ) == 1
   end
 
   test "a duplicate Confirm tap on an already-executed prepared action does not execute twice", %{
@@ -852,12 +1129,12 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert length(matching_projects) == 1
 
+    sends_before_retry = Enum.count(telegram_events(), &(&1.type == :send))
     :ok = confirm_tap.("9401-confirm-2", "duplicate-confirm-callback-2")
 
-    # Status is unchanged and no second project was created: the second
-    # Confirm tap loses the atomic claim (status is no longer
-    # "awaiting_confirmation") and gets a neutral "already handled" reply
-    # instead of re-executing the action.
+    # The durable execution and delivery checkpoints are both present. A
+    # duplicate confirmation retries only its callback acknowledgement: it
+    # neither repeats the project mutation nor sends a second result message.
     assert Repo.get!(PreparedAction, prepared_action.id).status == "executed"
 
     assert Repo.aggregate(
@@ -867,7 +1144,8 @@ defmodule Maraithon.TelegramAssistantTest do
              :count
            ) == 1
 
-    assert last_telegram_message(:send).text == "This was already handled."
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == sends_before_retry
+    assert last_telegram_message(:send).text == "Created the project."
   end
 
   test "a Confirm callback from a different chat than the prepared action is rejected", %{

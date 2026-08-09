@@ -1,3 +1,21 @@
+defmodule Maraithon.InsightNotificationsTest.RecordingTelegram do
+  @moduledoc false
+
+  def configured?, do: true
+  def send_message(_chat_id, _text, _opts \\ []), do: {:ok, %{"message_id" => 123}}
+  def send_chat_action(_chat_id, _action), do: {:ok, true}
+  def edit_message_text(_chat_id, _message_id, _text, _opts \\ []), do: {:ok, true}
+
+  def answer_callback_query(callback_id, opts \\ []) do
+    send(
+      Application.fetch_env!(:maraithon, :feedback_test_pid),
+      {:callback_answer, callback_id, opts}
+    )
+
+    {:ok, true}
+  end
+end
+
 defmodule Maraithon.InsightNotificationsTest do
   use Maraithon.DataCase, async: false
 
@@ -24,6 +42,7 @@ defmodule Maraithon.InsightNotificationsTest do
     on_exit(fn ->
       Application.delete_env(:maraithon, :insights)
       Application.delete_env(:maraithon, :failing_telegram)
+      Application.delete_env(:maraithon, :feedback_test_pid)
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
       Application.put_env(:maraithon, ChatWorker, original_chat_worker)
     end)
@@ -334,17 +353,50 @@ defmodule Maraithon.InsightNotificationsTest do
 
       Application.put_env(:maraithon, :failing_telegram, reason: reason)
 
+      event = %{
+        type: "callback_query",
+        source: "telegram",
+        data: %{
+          callback_id: "durable-edit-failure",
+          chat_id: 12_345,
+          message_id: 99,
+          data: "tgtodo:#{todo.id}:done"
+        }
+      }
+
+      activity_count_before =
+        Repo.aggregate(
+          from(activity in Maraithon.Todos.ActivityEvent, where: activity.todo_id == ^todo.id),
+          :count
+        )
+
       assert {:error, {:telegram_edit_failed, ^reason}} =
-               InsightNotifications.process_telegram_event_durable(%{
-                 type: "callback_query",
-                 source: "telegram",
-                 data: %{
-                   callback_id: "durable-edit-failure",
-                   chat_id: 12_345,
-                   message_id: 99,
-                   data: "tgtodo:#{todo.id}:done"
-                 }
-               })
+               InsightNotifications.process_telegram_event_durable(event)
+
+      assert Repo.get!(Todo, todo.id).status == "done"
+
+      committed_activity_count =
+        Repo.aggregate(
+          from(activity in Maraithon.Todos.ActivityEvent, where: activity.todo_id == ^todo.id),
+          :count
+        )
+
+      assert committed_activity_count == activity_count_before + 1
+
+      Application.put_env(:maraithon, :insights,
+        telegram_module: Maraithon.TestSupport.FakeTelegram
+      )
+
+      assert :ok = InsightNotifications.process_telegram_event_durable(event)
+
+      # The domain status is the callback checkpoint. The retry only drains the
+      # missing edit/ack and does not create a second completion activity.
+      assert Repo.aggregate(
+               from(activity in Maraithon.Todos.ActivityEvent,
+                 where: activity.todo_id == ^todo.id
+               ),
+               :count
+             ) == committed_activity_count
     end
 
     test "durable feedback callback propagates callback-answer failure", %{
@@ -356,6 +408,7 @@ defmodule Maraithon.InsightNotificationsTest do
       delivery =
         Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
 
+      {:ok, profile_before} = InsightNotifications.get_or_create_profile(user_id)
       reason = {:telegram_error, 503, "callback API unavailable"}
 
       Application.put_env(:maraithon, :insights,
@@ -364,16 +417,107 @@ defmodule Maraithon.InsightNotificationsTest do
 
       Application.put_env(:maraithon, :failing_telegram, reason: reason)
 
+      event = %{
+        type: "callback_query",
+        source: "telegram",
+        data: %{
+          callback_id: "durable-callback-failure",
+          chat_id: 12_345,
+          data: "insfb:#{delivery.id}:h"
+        }
+      }
+
       assert {:error, {:telegram_callback_answer_failed, ^reason}} =
-               InsightNotifications.process_telegram_event_durable(%{
-                 type: "callback_query",
-                 source: "telegram",
-                 data: %{
-                   callback_id: "durable-callback-failure",
-                   chat_id: 12_345,
-                   data: "insfb:#{delivery.id}:h"
-                 }
-               })
+               InsightNotifications.process_telegram_event_durable(event)
+
+      committed_delivery = Repo.get!(Delivery, delivery.id)
+      committed_profile = Repo.get_by!(ThresholdProfile, user_id: user_id)
+      committed_insight = Repo.get!(Maraithon.Insights.Insight, insight.id)
+
+      assert committed_delivery.feedback == "helpful"
+      assert committed_profile.helpful_count == profile_before.helpful_count + 1
+      assert committed_insight.status == "acknowledged"
+
+      Application.put_env(:maraithon, :insights,
+        telegram_module: Maraithon.TestSupport.FakeTelegram
+      )
+
+      assert {:noop, :feedback_already_recorded} =
+               InsightNotifications.process_telegram_event_durable(event)
+
+      # The retry drains only the missing callback acknowledgement. It does not
+      # apply the committed domain writes or threshold adjustment twice.
+      retried_profile = Repo.get_by!(ThresholdProfile, user_id: user_id)
+      assert retried_profile.helpful_count == committed_profile.helpful_count
+      assert retried_profile.score_threshold == committed_profile.score_threshold
+    end
+
+    test "feedback sub-write failure rolls back and a durable retry applies once", %{
+      user_id: user_id,
+      insight: insight
+    } do
+      _ = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+
+      delivery =
+        Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
+
+      {:ok, profile_before} = InsightNotifications.get_or_create_profile(user_id)
+      Application.put_env(:maraithon, :feedback_test_pid, self())
+
+      Application.put_env(:maraithon, :insights,
+        telegram_module: Maraithon.InsightNotificationsTest.RecordingTelegram
+      )
+
+      Repo.query!("""
+      CREATE FUNCTION maraithon_test_fail_insight_feedback_update()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.id = '#{insight.id}' THEN
+          RAISE EXCEPTION 'injected feedback sub-write failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+      """)
+
+      Repo.query!("""
+      CREATE TRIGGER maraithon_test_fail_insight_feedback_update
+      BEFORE UPDATE ON insights
+      FOR EACH ROW
+      EXECUTE FUNCTION maraithon_test_fail_insight_feedback_update()
+      """)
+
+      event = %{
+        type: "callback_query",
+        source: "telegram",
+        data: %{
+          callback_id: "feedback-subwrite-retry",
+          chat_id: 12_345,
+          data: "insfb:#{delivery.id}:h"
+        }
+      }
+
+      assert {:error, :feedback_persistence_failed} =
+               InsightNotifications.process_telegram_event_durable(event)
+
+      assert Repo.get!(Delivery, delivery.id).feedback == nil
+      assert Repo.get!(Maraithon.Insights.Insight, insight.id).status == "new"
+
+      assert Repo.get_by!(ThresholdProfile, user_id: user_id).helpful_count ==
+               profile_before.helpful_count
+
+      refute_received {:callback_answer, _callback_id, _opts}
+
+      Repo.query!("DROP TRIGGER maraithon_test_fail_insight_feedback_update ON insights")
+      Repo.query!("DROP FUNCTION maraithon_test_fail_insight_feedback_update()")
+
+      assert :ok = InsightNotifications.process_telegram_event_durable(event)
+      assert_received {:callback_answer, "feedback-subwrite-retry", _opts}
+      assert Repo.get!(Delivery, delivery.id).feedback == "helpful"
+      assert Repo.get!(Maraithon.Insights.Insight, insight.id).status == "acknowledged"
+
+      assert Repo.get_by!(ThresholdProfile, user_id: user_id).helpful_count ==
+               profile_before.helpful_count + 1
     end
 
     test "records callback feedback and tunes threshold", %{user_id: user_id, insight: insight} do

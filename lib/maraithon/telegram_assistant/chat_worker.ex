@@ -67,8 +67,8 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   @doc """
   Processes a durably accepted message in per-chat order.
 
-  The call returns only after routing (or the existing fallback path) finishes,
-  allowing the background job to remain claimed until work is actually done.
+  The call returns only after routing finishes. Voice/router failures remain
+  retryable; the user-visible crash fallback is reserved for legacy async work.
   """
   @spec process_durable(String.t(), map()) ::
           :ok | {:noop, atom()} | {:error, term()}
@@ -137,29 +137,33 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
         # Duplicate delivery already handled during this worker lifetime.
         {{:noop, :already_completed}, state}
 
-      message_id != nil and already_completed?(state.chat_id, message_id) ->
-        # Persisted completion survives worker restarts and prevents a retry
-        # from repeating non-idempotent tools after the user got a reply.
-        {{:noop, :already_completed}, remember(state, message_id)}
-
       true ->
-        if send_typing?, do: send_early_typing_ping(state.chat_id)
+        case completion_status(state.chat_id, message_id) do
+          {:ok, true} ->
+            # Persisted completion survives worker restarts and prevents a retry
+            # from repeating non-idempotent tools after the user got a reply.
+            {{:noop, :already_completed}, remember(state, message_id)}
 
-        result = prepare_and_run(data, state.chat_id)
+          {:ok, false} ->
+            if send_typing?, do: send_early_typing_ping(state.chat_id)
 
-        if successful_result?(result),
-          do: {result, remember(state, message_id)},
-          else: {result, state}
+            result = prepare_and_run(data, state.chat_id, :legacy)
+
+            if successful_result?(result),
+              do: {result, remember(state, message_id)},
+              else: {result, state}
+
+          {:error, reason} ->
+            {{:error, reason}, state}
+        end
     end
   end
 
   defp process_durable_inline(chat_id, data) do
-    message_id = message_id(data)
-
-    if message_id != nil and already_completed?(chat_id, message_id) do
-      {:noop, :already_completed}
-    else
-      prepare_and_run(data, chat_id)
+    case completion_status(chat_id, message_id(data)) do
+      {:ok, true} -> {:noop, :already_completed}
+      {:ok, false} -> prepare_and_run(data, chat_id, :durable)
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -197,16 +201,21 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
       :ok
   end
 
-  defp already_completed?(chat_id, message_id) do
-    TelegramConversations.assistant_reply_recorded?(chat_id, message_id)
+  defp completion_status(_chat_id, nil), do: {:ok, false}
+
+  defp completion_status(chat_id, message_id) do
+    case completion_checker().assistant_reply_recorded?(chat_id, message_id) do
+      completed? when is_boolean(completed?) -> {:ok, completed?}
+      _invalid -> {:error, :retry_completion_check_failed}
+    end
   rescue
     error ->
       log_retry_completion_failure(chat_id, error)
-      false
+      {:error, :retry_completion_check_failed}
   catch
     kind, reason ->
       log_retry_completion_failure(chat_id, {kind, reason})
-      false
+      {:error, :retry_completion_check_failed}
   end
 
   defp log_retry_completion_failure(chat_id, reason) do
@@ -219,47 +228,57 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   # SPEC 02: a voice/audio message has no `text` yet when it reaches here —
   # the webhook already acked, so downloading + transcribing happens in this
   # worker, before the message is handed to `TelegramRouter`. Any exception
-  # escaping either step (transcription included) still lands on the same
-  # "never silence" fallback path as a router crash.
-  defp prepare_and_run(data, chat_id) do
+  # escaping either step (transcription included) stays retryable for durable
+  # receipts; legacy async work retains its "never silence" fallback.
+  defp prepare_and_run(data, chat_id, mode) do
     case VoiceCapture.maybe_transcribe(data) do
       {:ok, prepared_data} ->
-        run_router(prepared_data, chat_id)
+        run_router(prepared_data, chat_id, mode)
 
       {:error, reason} ->
-        handle_voice_capture_failure(data, chat_id, reason)
+        handle_voice_capture_failure(data, chat_id, reason, mode)
     end
   rescue
     error ->
-      handle_router_failure(data, chat_id, :exception, Exception.message(error))
+      handle_router_failure(data, chat_id, :exception, Exception.message(error), mode)
   catch
     :exit, reason ->
-      handle_router_failure(data, chat_id, :exit, inspect(reason))
+      handle_router_failure(data, chat_id, :exit, inspect(reason), mode)
 
     :throw, value ->
-      handle_router_failure(data, chat_id, :throw, inspect(value))
+      handle_router_failure(data, chat_id, :throw, inspect(value), mode)
   end
 
-  defp run_router(data, chat_id) do
+  defp run_router(data, chat_id, mode) do
+    data = if mode == :durable, do: Map.put(data, :durable_processing, true), else: data
+
     router_module().handle_message(data)
     |> normalize_durable_result()
   rescue
     error ->
-      handle_router_failure(data, chat_id, :exception, Exception.message(error))
+      handle_router_failure(data, chat_id, :exception, Exception.message(error), mode)
   catch
     :exit, reason ->
-      handle_router_failure(data, chat_id, :exit, inspect(reason))
+      handle_router_failure(data, chat_id, :exit, inspect(reason), mode)
 
     :throw, value ->
-      handle_router_failure(data, chat_id, :throw, inspect(value))
+      handle_router_failure(data, chat_id, :throw, inspect(value), mode)
   end
 
-  # R5: download/transcription failure (including R6 cap violations) must
-  # still produce a short user-visible reply — never silence — using the
-  # same fallback delivery + operator-event recording as a router crash,
-  # just with copy specific to the voice failure reason
-  # (`AssistantHarness.failure_message/1`).
-  defp handle_voice_capture_failure(data, chat_id, reason) do
+  # R5: legacy download/transcription failure (including R6 cap violations)
+  # still produces a short user-visible reply. Durable execution does not turn
+  # that fallback delivery into a successful tombstone; it returns an error so
+  # the sanitized event remains available for retry.
+  defp handle_voice_capture_failure(_data, chat_id, reason, :durable) do
+    Logger.warning("[telegram] durable voice capture failed",
+      chat_reference: Maraithon.Redaction.fingerprint(chat_id),
+      reason: Maraithon.Redaction.error_summary(reason)
+    )
+
+    {:error, :durable_voice_capture_failed}
+  end
+
+  defp handle_voice_capture_failure(data, chat_id, reason, :legacy) do
     Logger.warning("[telegram_fallback] voice capture failed",
       chat_id: chat_id,
       reason: inspect(reason)
@@ -278,10 +297,20 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
 
   # Any crash anywhere inside `TelegramRouter.handle_message/1` — including a
   # `GenServer.call` timeout (`:exit`) surfacing from deep in the tool/agent
-  # stack — lands here instead of killing the worker. The failure is only
-  # considered "handled" (and the message id eligible to be marked seen)
-  # once the fallback reply has actually been delivered to the user.
-  defp handle_router_failure(data, chat_id, kind, reason) do
+  # stack — lands here instead of killing the worker. Legacy async work sends
+  # its fallback; durable work returns a closed retryable error without sending
+  # a fallback that could be mistaken for successful processing.
+  defp handle_router_failure(_data, chat_id, kind, reason, :durable) do
+    Logger.warning("[telegram] durable message handling failed",
+      chat_reference: Maraithon.Redaction.fingerprint(chat_id),
+      kind: kind,
+      reason: Maraithon.Redaction.error_summary(reason)
+    )
+
+    {:error, :durable_telegram_router_failed}
+  end
+
+  defp handle_router_failure(data, chat_id, kind, reason, :legacy) do
     Logger.warning("[telegram_fallback] ChatWorker message handling failed",
       chat_id: chat_id,
       kind: kind,
@@ -402,6 +431,10 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
 
   defp router_module do
     Keyword.get(config(), :router_module, TelegramRouter)
+  end
+
+  defp completion_checker do
+    Keyword.get(config(), :completion_checker, TelegramConversations)
   end
 
   defp config, do: Application.get_env(:maraithon, __MODULE__, [])

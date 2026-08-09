@@ -85,6 +85,57 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert last_telegram_message(:callback).opts[:text] == "Kept active"
   end
 
+  test "durable retry after callback-answer failure does not repeat a committed todo mutation", %{
+    user_id: user_id
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "manual",
+          "title" => "Commit once",
+          "summary" => "The callback retry must not complete this twice.",
+          "next_action" => "Mark it done.",
+          "priority" => 70,
+          "dedupe_key" => "todo-actions:callback-retry-once"
+        }
+      ])
+
+    original_capture = Application.get_env(:maraithon, :capturing_telegram, [])
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :capturing_telegram, original_capture)
+    end)
+
+    reason = {:telegram_error, 503, "callback unavailable after todo commit"}
+    Application.put_env(:maraithon, :capturing_telegram, callback_result: {:error, reason})
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-callback-retry",
+        callback_id: "todo-callback-retry-id",
+        data: "tgtodo:#{todo.id}:done"
+      }
+    }
+
+    assert {:error, {:telegram_callback_answer_failed, ^reason}} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    committed = Todos.get_for_user(user_id, todo.id)
+    assert committed.status == "done"
+    assert %DateTime{} = committed.closed_at
+
+    Application.put_env(:maraithon, :capturing_telegram, callback_result: :ok)
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+
+    retried = Todos.get_for_user(user_id, todo.id)
+    assert retried.status == "done"
+    assert retried.closed_at == committed.closed_at
+  end
+
   test "fresh action cards do not show stale keep-active confirmation" do
     todo = %{
       "id" => Ecto.UUID.generate(),

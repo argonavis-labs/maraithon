@@ -90,6 +90,12 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
   def init(attrs) do
     {hint_category, hint_labels} = initial_hint(attrs)
 
+    owner_monitor_ref =
+      case Map.get(attrs, :owner_pid) do
+        owner_pid when is_pid(owner_pid) and owner_pid != self() -> Process.monitor(owner_pid)
+        _owner -> nil
+      end
+
     state =
       %{
         run_id: Map.fetch!(attrs, :run_id),
@@ -113,7 +119,8 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
         stream_buffer: "",
         stream_active?: false,
         stream_flush_timer_ref: nil,
-        stream_last_flushed_at_ms: nil
+        stream_last_flushed_at_ms: nil,
+        owner_monitor_ref: owner_monitor_ref
       }
       |> schedule_initial_timers()
 
@@ -186,6 +193,11 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
   def handle_call(:timed_out?, _from, state) do
     {:reply, state.timed_out, state}
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _owner_pid, _reason}, %{owner_monitor_ref: ref} = state) do
+    {:stop, :normal, cancel_timers(state)}
   end
 
   @impl true

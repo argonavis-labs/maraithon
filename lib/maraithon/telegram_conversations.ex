@@ -243,12 +243,16 @@ defmodule Maraithon.TelegramConversations do
   """
   def assistant_reply_recorded?(chat_id, telegram_message_id)
       when is_binary(chat_id) and is_binary(telegram_message_id) do
+    # An action-result turn is not terminal while its confirmation conversation
+    # is still awaiting closure. Let the durable retry re-enter the idempotent
+    # prepared-action path and finish that local checkpoint.
     Turn
     |> join(:inner, [t], c in assoc(t, :conversation))
     |> where(
       [t, c],
       c.chat_id == ^chat_id and t.role == "assistant" and
-        t.reply_to_message_id == ^telegram_message_id
+        t.reply_to_message_id == ^telegram_message_id and
+        (c.status != "awaiting_confirmation" or t.turn_kind != "action_result")
     )
     |> Repo.exists?()
   end

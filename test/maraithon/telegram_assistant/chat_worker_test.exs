@@ -32,6 +32,49 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest.RecordingTelegram do
   end
 end
 
+defmodule Maraithon.TelegramAssistant.ChatWorkerTest.IncompleteCompletion do
+  @moduledoc false
+  def assistant_reply_recorded?(_chat_id, _message_id), do: false
+end
+
+defmodule Maraithon.TelegramAssistant.ChatWorkerTest.FailingCompletion do
+  @moduledoc false
+  def assistant_reply_recorded?(_chat_id, _message_id), do: exit(:completion_store_unavailable)
+end
+
+defmodule Maraithon.TelegramAssistant.ChatWorkerTest.CrashingRouter do
+  @moduledoc false
+  def handle_message(_data), do: raise("router exploded with token=never-log-or-complete")
+end
+
+defmodule Maraithon.TelegramAssistant.ChatWorkerTest.OwnedLivenessBlockingRouter do
+  @moduledoc false
+
+  alias Maraithon.TelegramAssistant.LivenessSupervisor
+
+  def handle_message(data) do
+    observer = Application.fetch_env!(:maraithon, :chat_worker_test_pid)
+    run_id = Map.fetch!(data, "run_id")
+
+    {:ok, session} =
+      LivenessSupervisor.start_session(%{
+        run_id: run_id,
+        user_id: "liveness-owner-test",
+        chat_id: Map.fetch!(data, "chat_id"),
+        source_text: "blocking liveness owner test",
+        owner_pid: self()
+      })
+
+    send(observer, {:owned_liveness_started, self(), session, run_id})
+
+    receive do
+      :release_owned_liveness_router -> :ok
+    after
+      10_000 -> {:error, :owned_liveness_router_timeout}
+    end
+  end
+end
+
 defmodule Maraithon.TelegramAssistant.ChatWorkerTest.BlockingRouter do
   @moduledoc false
 
@@ -62,7 +105,10 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest do
     original_insights = Application.get_env(:maraithon, :insights, [])
     original_test_pid = Application.get_env(:maraithon, :chat_worker_test_pid)
 
-    Application.put_env(:maraithon, ChatWorker, async_enabled: true)
+    Application.put_env(:maraithon, ChatWorker,
+      async_enabled: true,
+      completion_checker: Maraithon.TelegramAssistant.ChatWorkerTest.IncompleteCompletion
+    )
 
     Application.put_env(
       :maraithon,
@@ -183,11 +229,72 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest do
     refute_received {:telegram_chat_action, ^chat, "typing"}
   end
 
+  test "durable completion-store failure fails closed before routing" do
+    Application.put_env(:maraithon, :chat_worker_test_pid, self())
+
+    Application.put_env(:maraithon, ChatWorker,
+      async_enabled: true,
+      completion_checker: Maraithon.TelegramAssistant.ChatWorkerTest.FailingCompletion,
+      router_module: Maraithon.TelegramAssistant.ChatWorkerTest.BlockingRouter
+    )
+
+    chat = "chatworker-completion-failure-#{System.unique_integer([:positive])}"
+
+    assert {:error, :retry_completion_check_failed} =
+             ChatWorker.process_durable(chat, %{
+               "chat_id" => chat,
+               "message_id" => "completion-check"
+             })
+
+    refute_received {:blocking_router_started, _work, _execution_id}
+    refute_received {:telegram_send, _chat, _text, _opts}
+  end
+
+  test "durable router crashes remain retryable and do not send a tombstoning fallback" do
+    Application.put_env(:maraithon, :chat_worker_test_pid, self())
+
+    Application.put_env(:maraithon, ChatWorker,
+      async_enabled: true,
+      completion_checker: Maraithon.TelegramAssistant.ChatWorkerTest.IncompleteCompletion,
+      router_module: Maraithon.TelegramAssistant.ChatWorkerTest.CrashingRouter
+    )
+
+    chat = "chatworker-router-failure-#{System.unique_integer([:positive])}"
+
+    assert {:error, :durable_telegram_router_failed} =
+             ChatWorker.process_durable(chat, %{
+               "chat_id" => chat,
+               "message_id" => "router-crash"
+             })
+
+    refute_received {:telegram_send, _chat, _text, _opts}
+  end
+
+  test "legacy async routing keeps the user-visible crash fallback" do
+    Application.put_env(:maraithon, :chat_worker_test_pid, self())
+
+    Application.put_env(:maraithon, ChatWorker,
+      async_enabled: true,
+      completion_checker: Maraithon.TelegramAssistant.ChatWorkerTest.IncompleteCompletion,
+      router_module: Maraithon.TelegramAssistant.ChatWorkerTest.CrashingRouter
+    )
+
+    chat = "chatworker-legacy-fallback-#{System.unique_integer([:positive])}"
+    on_exit(fn -> stop_worker(chat) end)
+
+    assert :ok =
+             ChatWorker.enqueue(chat, %{"chat_id" => chat, "message_id" => "legacy-crash"})
+
+    _ = await_worker_drained(chat)
+    assert_received {:telegram_send, ^chat, _text, _opts}
+  end
+
   test "durable timeout kills owned work before returning and retry starts once" do
     Application.put_env(:maraithon, :chat_worker_test_pid, self())
 
     Application.put_env(:maraithon, ChatWorker,
       async_enabled: true,
+      completion_checker: Maraithon.TelegramAssistant.ChatWorkerTest.IncompleteCompletion,
       router_module: Maraithon.TelegramAssistant.ChatWorkerTest.BlockingRouter,
       durable_timeout_ms: 25
     )
@@ -225,11 +332,46 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest do
     refute_receive {:blocking_router_started, _extra_work, _execution_id}, 50
   end
 
+  test "durable timeout tears down the independently supervised liveness session" do
+    Application.put_env(:maraithon, :chat_worker_test_pid, self())
+
+    Application.put_env(:maraithon, ChatWorker,
+      async_enabled: true,
+      completion_checker: Maraithon.TelegramAssistant.ChatWorkerTest.IncompleteCompletion,
+      router_module: Maraithon.TelegramAssistant.ChatWorkerTest.OwnedLivenessBlockingRouter,
+      durable_timeout_ms: 25
+    )
+
+    chat = "chatworker-liveness-owner-#{System.unique_integer([:positive])}"
+    run_id = Ecto.UUID.generate()
+
+    durable =
+      Task.async(fn ->
+        ChatWorker.process_durable(chat, %{
+          "chat_id" => chat,
+          "message_id" => "liveness-timeout",
+          "run_id" => run_id
+        })
+      end)
+
+    assert_receive {:owned_liveness_started, work, session, ^run_id}, 1_000
+    work_ref = Process.monitor(work)
+    session_ref = Process.monitor(session)
+
+    assert_receive {:DOWN, ^work_ref, :process, ^work, :killed}, 1_000
+    assert Task.await(durable) == {:error, :durable_processing_timeout}
+    assert_receive {:DOWN, ^session_ref, :process, ^session, :normal}, 1_000
+    _ = :sys.get_state(Maraithon.TelegramAssistant.LivenessRegistry)
+
+    assert Registry.lookup(Maraithon.TelegramAssistant.LivenessRegistry, run_id) == []
+  end
+
   test "legacy enqueue remains immediate and serializes work in the resident worker" do
     Application.put_env(:maraithon, :chat_worker_test_pid, self())
 
     Application.put_env(:maraithon, ChatWorker,
       async_enabled: true,
+      completion_checker: Maraithon.TelegramAssistant.ChatWorkerTest.IncompleteCompletion,
       router_module: Maraithon.TelegramAssistant.ChatWorkerTest.BlockingRouter
     )
 
@@ -332,5 +474,37 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerCompletedRetryTest do
     # Durable retry checks completion inline and never queues resident work.
     assert Registry.lookup(@registry, chat) == []
     refute_received {:telegram_chat_action, ^chat, "typing"}
+  end
+
+  test "awaiting confirmation only keeps action-result completion retryable" do
+    user_id = "chatworker-confirmation-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    chat = "chatworker-confirmation-#{System.unique_integer([:positive])}"
+    message_id = "msg-confirmation-1"
+    {:ok, conversation} = TelegramConversations.start_or_continue(user_id, chat, %{})
+
+    {:ok, {_conversation, prompt_turn}} =
+      TelegramConversations.append_turn(conversation, %{
+        "role" => "assistant",
+        "reply_to_message_id" => message_id,
+        "turn_kind" => "approval_prompt",
+        "text" => "Confirm?"
+      })
+
+    {:ok, _awaiting} = TelegramConversations.mark_awaiting_confirmation(conversation)
+
+    # The original approval prompt completed its source message even though
+    # the conversation is now waiting for the user's decision.
+    assert TelegramConversations.assistant_reply_recorded?(chat, message_id)
+
+    {:ok, _action_result} =
+      prompt_turn
+      |> Ecto.Changeset.change(turn_kind: "action_result")
+      |> Maraithon.Repo.update()
+
+    # A result written before the local conversation-close checkpoint must let
+    # durable processing re-enter and finish that checkpoint.
+    refute TelegramConversations.assistant_reply_recorded?(chat, message_id)
   end
 end
