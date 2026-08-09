@@ -105,9 +105,18 @@ defmodule Maraithon.InsightNotifications.Actions do
         {:error, :unsupported_callback}
 
       {:error, {:telegram_edit_failed, _detail} = reason} ->
-        # The domain action committed; a delivered acknowledgement is enough
-        # even though the stale card could not be refreshed.
-        answer_callback(callback_id, callback_error_text(reason))
+        if read_boolean(data, "durable_processing", false) do
+          # Keep the durable receipt retryable. The action state above is the
+          # checkpoint, so the retry drains only the missing edit/answer.
+          case answer_callback(callback_id, callback_error_text(reason)) do
+            :ok -> {:error, reason}
+            {:error, _answer_reason} = answer_error -> answer_error
+          end
+        else
+          # Legacy async callbacks retain the historical acknowledgement-only
+          # fallback when the stale card cannot be refreshed.
+          answer_callback(callback_id, callback_error_text(reason))
+        end
 
       {:error, reason} = error ->
         case answer_callback(callback_id, callback_error_text(reason)) do
@@ -214,7 +223,16 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
-  defp dispatch_action("draft", %Delivery{} = delivery), do: draft_action(delivery)
+  defp dispatch_action("draft", %Delivery{} = delivery) do
+    case action_state(delivery) do
+      %{"status" => "drafted"} = state ->
+        {:ok, delivery, "#{action_notice_label(state)} draft ready"}
+
+      _missing ->
+        draft_action(delivery)
+    end
+  end
+
   defp dispatch_action("regenerate", %Delivery{} = delivery), do: draft_action(delivery)
   defp dispatch_action("send", %Delivery{} = delivery), do: execute_action(delivery)
   defp dispatch_action("cancel", %Delivery{} = delivery), do: cancel_action(delivery)
@@ -235,74 +253,193 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp execute_action(%Delivery{} = delivery) do
-    with %{"status" => "drafted", "spec" => spec} <- action_state(delivery),
-         {:ok, result} <- run_action(spec, delivery.insight),
-         {:ok, delivery} <-
-           put_action_state(delivery, %{
-             "status" => "executed",
-             "spec" => spec,
-             "result" => stringify_map_keys(result),
-             "executed_at" =>
-               DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-           }),
-         {:ok, _insight} <- acknowledge_with_result(delivery.insight, spec, result) do
-      {:ok, delivery, execution_notice(spec)}
+    case action_state(delivery) do
+      %{"status" => "drafted", "spec" => spec} ->
+        with {:ok, result} <- run_action(spec, delivery.insight),
+             {:ok, checkpointed_delivery} <-
+               put_action_state(delivery, %{
+                 "status" => "executed",
+                 "spec" => spec,
+                 "result" => stringify_map_keys(result),
+                 "executed_at" => now_iso8601()
+               }) do
+          finish_executed_action(checkpointed_delivery)
+        end
+
+      %{"status" => "executed"} ->
+        # The provider mutation is already checkpointed. A durable callback
+        # retry must only drain local insight/todo acknowledgement and Telegram
+        # presentation; never call the provider again.
+        finish_executed_action(delivery)
+
+      _missing_or_stale ->
+        {:error, :draft_not_ready}
+    end
+  end
+
+  defp finish_executed_action(%Delivery{} = delivery) do
+    state = action_state(delivery) || %{}
+    spec = read_map(state, "spec")
+    result = read_map(state, "result")
+    kind = read_string(state, "kind", read_string(spec, "kind"))
+
+    cond do
+      kind in ["gmail_reply", "slack_reply", "manual_complete"] ->
+        spec = if map_size(spec) == 0, do: %{"kind" => kind}, else: spec
+
+        with :ok <- ensure_execution_acknowledged(delivery, state, spec, result),
+             {:ok, delivery} <- checkpoint_execution_ack(delivery, state) do
+          {:ok, delivery, execution_notice(spec)}
+        end
+
+      true ->
+        {:error, :draft_not_ready}
+    end
+  end
+
+  defp ensure_execution_acknowledged(delivery, state, spec, result) do
+    if execution_acknowledged?(delivery.insight, state, spec) do
+      :ok
     else
-      nil ->
-        {:error, :draft_not_ready}
+      case acknowledge_with_result(delivery.insight, spec, result) do
+        {:ok, _insight} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
 
-      %{} ->
-        {:error, :draft_not_ready}
+  defp execution_acknowledged?(%Insight{} = insight, state, spec) do
+    resolution = read_map(insight.metadata || %{}, "telegram_resolution")
 
-      {:error, reason} ->
-        {:error, reason}
+    is_binary(read_string(state, "acknowledged_at")) or
+      (insight.status == "acknowledged" and
+         read_string(resolution, "kind") == read_string(spec, "kind"))
+  end
+
+  defp checkpoint_execution_ack(delivery, state) do
+    if is_binary(read_string(state, "acknowledged_at")) do
+      {:ok, delivery}
+    else
+      put_action_state(delivery, Map.put(state, "acknowledged_at", now_iso8601()))
     end
   end
 
   defp cancel_action(%Delivery{} = delivery) do
-    with {:ok, delivery} <- put_action_state(delivery, %{"status" => "cancelled"}) do
-      {:ok, delivery, "Draft cleared"}
+    case action_state(delivery) do
+      %{"status" => "cancelled"} ->
+        {:ok, delivery, "Draft cleared"}
+
+      _other ->
+        with {:ok, delivery} <- put_action_state(delivery, %{"status" => "cancelled"}) do
+          {:ok, delivery, "Draft cleared"}
+        end
     end
   end
 
   defp mark_done(%Delivery{} = delivery) do
-    with {:ok, delivery} <-
-           put_action_state(delivery, %{"status" => "executed", "kind" => "manual_complete"}),
-         {:ok, _insight} <-
-           acknowledge_with_result(
-             delivery.insight,
-             %{"kind" => "manual_complete"},
-             %{"status" => "marked_complete_in_telegram"}
-           ) do
-      {:ok, delivery, "Marked complete"}
+    case action_state(delivery) do
+      %{"status" => "executed", "kind" => "manual_complete"} ->
+        finish_executed_action(delivery)
+
+      _other ->
+        with {:ok, delivery} <-
+               put_action_state(delivery, %{
+                 "status" => "executed",
+                 "kind" => "manual_complete",
+                 "result" => %{"status" => "marked_complete_in_telegram"},
+                 "executed_at" => now_iso8601()
+               }) do
+          finish_executed_action(delivery)
+        end
     end
   end
 
   defp acknowledge_insight(%Delivery{} = delivery) do
-    with {:ok, _insight} <- Insights.acknowledge(delivery.user_id, delivery.insight_id),
-         {:ok, delivery} <-
-           put_action_state(delivery, %{"status" => "executed", "kind" => "manual_ack"}) do
-      {:ok, delivery, "Acknowledged"}
+    state = action_state(delivery)
+
+    cond do
+      match?(%{"status" => "executed", "kind" => "manual_ack"}, state) ->
+        {:ok, delivery, "Acknowledged"}
+
+      delivery.insight.status == "acknowledged" ->
+        with {:ok, delivery} <-
+               put_action_state(delivery, %{
+                 "status" => "executed",
+                 "kind" => "manual_ack",
+                 "acknowledged_at" => now_iso8601()
+               }) do
+          {:ok, delivery, "Acknowledged"}
+        end
+
+      true ->
+        with {:ok, _insight} <- Insights.acknowledge(delivery.user_id, delivery.insight_id),
+             {:ok, delivery} <-
+               put_action_state(delivery, %{
+                 "status" => "executed",
+                 "kind" => "manual_ack",
+                 "acknowledged_at" => now_iso8601()
+               }) do
+          {:ok, delivery, "Acknowledged"}
+        end
     end
   end
 
   defp dismiss_insight(%Delivery{} = delivery) do
-    with {:ok, _insight} <- Insights.dismiss(delivery.user_id, delivery.insight_id),
-         {:ok, delivery} <- put_action_state(delivery, %{"status" => "dismissed"}) do
-      {:ok, delivery, "Insight dismissed"}
+    cond do
+      match?(%{"status" => "dismissed"}, action_state(delivery)) ->
+        {:ok, delivery, "Insight dismissed"}
+
+      delivery.insight.status == "dismissed" ->
+        with {:ok, delivery} <- put_action_state(delivery, %{"status" => "dismissed"}) do
+          {:ok, delivery, "Insight dismissed"}
+        end
+
+      true ->
+        with {:ok, _insight} <- Insights.dismiss(delivery.user_id, delivery.insight_id),
+             {:ok, delivery} <- put_action_state(delivery, %{"status" => "dismissed"}) do
+          {:ok, delivery, "Insight dismissed"}
+        end
     end
   end
 
   defp snooze_insight(%Delivery{} = delivery) do
-    snooze_until = DateTime.add(DateTime.utc_now(), 4, :hour)
+    case action_state(delivery) do
+      %{"status" => "snoozed"} ->
+        {:ok, delivery, "Snoozed for 4 hours"}
 
-    with {:ok, _insight} <- Insights.snooze(delivery.user_id, delivery.insight_id, snooze_until),
-         {:ok, delivery} <-
-           put_action_state(delivery, %{
-             "status" => "snoozed",
-             "until" => DateTime.to_iso8601(snooze_until)
-           }) do
-      {:ok, delivery, "Snoozed for 4 hours"}
+      _other ->
+        snooze_until = existing_or_new_snooze_deadline(delivery.insight)
+
+        with :ok <- ensure_insight_snoozed(delivery, snooze_until),
+             {:ok, delivery} <-
+               put_action_state(delivery, %{
+                 "status" => "snoozed",
+                 "until" => DateTime.to_iso8601(snooze_until)
+               }) do
+          {:ok, delivery, "Snoozed for 4 hours"}
+        end
+    end
+  end
+
+  defp existing_or_new_snooze_deadline(%Insight{
+         status: "snoozed",
+         snoozed_until: %DateTime{} = snoozed_until
+       }),
+       do: snoozed_until
+
+  defp existing_or_new_snooze_deadline(_insight),
+    do: DateTime.add(DateTime.utc_now(), 4, :hour)
+
+  defp ensure_insight_snoozed(
+         %Delivery{insight: %Insight{status: "snoozed", snoozed_until: %DateTime{}}},
+         _snooze_until
+       ),
+       do: :ok
+
+  defp ensure_insight_snoozed(delivery, snooze_until) do
+    case Insights.snooze(delivery.user_id, delivery.insight_id, snooze_until) do
+      {:ok, _insight} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -1511,7 +1648,18 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp execution_notice(%{"kind" => "gmail_reply"}), do: "Email sent"
   defp execution_notice(%{"kind" => "slack_reply"}), do: "Slack reply sent"
+  defp execution_notice(%{"kind" => "manual_complete"}), do: "Marked complete"
   defp execution_notice(_), do: "Action completed"
+
+  defp action_notice_label(state) do
+    state
+    |> read_map("spec")
+    |> read_string("notice_label", "Action")
+  end
+
+  defp now_iso8601 do
+    DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+  end
 
   defp callback_error_text(:action_not_available),
     do:

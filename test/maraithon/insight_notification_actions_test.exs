@@ -5,6 +5,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
   alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightNotifications
+  alias Maraithon.InsightNotifications.Actions
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
   alias Maraithon.OAuth
@@ -884,6 +885,122 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute completed.text =~ "<b>Completed</b>"
   end
 
+  test "an executed provider checkpoint resumes acknowledgement and presentation without re-sending",
+       %{
+         agent: agent,
+         user_id: user_id
+       } do
+    delivery = create_action_delivery(agent, user_id, "executed-resume")
+
+    checkpoint = %{
+      "status" => "executed",
+      "spec" => %{
+        "kind" => "gmail_reply",
+        "notice_label" => "Email",
+        "to" => "owner@example.com",
+        "subject" => "Re: Durable checkpoint",
+        "body" => "Already sent"
+      },
+      "result" => %{"id" => "provider-side-effect-once"},
+      "executed_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    delivery =
+      delivery
+      |> Delivery.changeset(%{
+        metadata: %{"telegram_action" => checkpoint}
+      })
+      |> Repo.update!()
+
+    Code.ensure_loaded!(Maraithon.TestSupport.CapturingTelegram)
+
+    event = %{
+      type: "callback_query",
+      data: %{
+        callback_id: "cb-executed-resume",
+        chat_id: 12345,
+        message_id: 456,
+        data: "insact:#{delivery.id}:send"
+      }
+    }
+
+    # No Gmail token or provider endpoint exists in this test. Success proves
+    # the retry resumed from the executed checkpoint instead of re-sending.
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+
+    resumed_delivery = Repo.get!(Delivery, delivery.id)
+    resumed_insight = Repo.get!(Maraithon.Insights.Insight, delivery.insight_id)
+    state = get_in(resumed_delivery.metadata, ["telegram_action"])
+
+    assert resumed_insight.status == "acknowledged"
+    assert state["status"] == "executed"
+    assert state["result"] == %{"id" => "provider-side-effect-once"}
+    assert is_binary(state["acknowledged_at"])
+    assert last_telegram_message(:edit).text =~ "Sent via Gmail"
+
+    edits_before_retry = telegram_message_count(:edit)
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert telegram_message_count(:edit) == edits_before_retry + 1
+
+    retried_state =
+      Repo.get!(Delivery, delivery.id).metadata
+      |> get_in(["telegram_action"])
+
+    assert retried_state["result"] == %{"id" => "provider-side-effect-once"}
+    assert retried_state["acknowledged_at"] == state["acknowledged_at"]
+  end
+
+  test "duplicate ack, dismiss, manual completion, and snooze retries are idempotent", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    for {action, expected_status, expected_kind} <- [
+          {"ack", "acknowledged", "manual_ack"},
+          {"dismiss", "dismissed", nil},
+          {"done", "acknowledged", "manual_complete"}
+        ] do
+      delivery = create_action_delivery(agent, user_id, "terminal-#{action}")
+
+      assert {:ok, first_delivery, _notice} = Actions.perform_action(delivery, action)
+      assert {:ok, second_delivery, _notice} = Actions.perform_action(first_delivery, action)
+
+      insight = Repo.get!(Maraithon.Insights.Insight, delivery.insight_id)
+      assert insight.status == expected_status
+
+      assert Actions.action_state_for_delivery(second_delivery)["status"] in [
+               "executed",
+               "dismissed"
+             ]
+
+      if expected_kind do
+        assert Actions.action_state_for_delivery(second_delivery)["kind"] == expected_kind
+      end
+    end
+
+    snooze_delivery = create_action_delivery(agent, user_id, "terminal-snooze")
+    deadline = DateTime.add(DateTime.utc_now(), 4, :hour)
+
+    {:ok, snoozed_insight} =
+      Insights.snooze(user_id, snooze_delivery.insight_id, deadline)
+
+    # Simulate a crash after the insight mutation committed but before the
+    # delivery metadata checkpoint was written.
+    snooze_delivery =
+      snooze_delivery
+      |> Repo.reload!()
+      |> Repo.preload(:insight)
+
+    assert {:ok, first_snooze, _notice} = Actions.perform_action(snooze_delivery, "snooze")
+    assert {:ok, second_snooze, _notice} = Actions.perform_action(first_snooze, "snooze")
+
+    expected_until = DateTime.to_iso8601(snoozed_insight.snoozed_until)
+    assert Actions.action_state_for_delivery(first_snooze)["until"] == expected_until
+    assert Actions.action_state_for_delivery(second_snooze)["until"] == expected_until
+
+    assert Repo.get!(Maraithon.Insights.Insight, snooze_delivery.insight_id).snoozed_until ==
+             snoozed_insight.snoozed_until
+  end
+
   test "renders conversation-progress language for heads_up insights in Telegram", %{
     agent: agent,
     user_id: user_id
@@ -988,6 +1105,48 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute button_labels(sent.opts) |> Enum.member?("Draft Email")
     refute button_labels(sent.opts) |> Enum.member?("Mark Done")
     refute button_labels(sent.opts) |> Enum.member?("Ack")
+  end
+
+  defp create_action_delivery(agent, user_id, suffix) do
+    unique = System.unique_integer([:positive])
+
+    {:ok, [insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Durable action #{suffix}",
+          "summary" => "This action exercises a durable Telegram checkpoint.",
+          "recommended_action" => "Resolve it from Telegram.",
+          "priority" => 90,
+          "confidence" => 0.9,
+          "source_id" => "durable-action-#{suffix}-#{unique}",
+          "dedupe_key" => "telegram-actions:#{suffix}:#{unique}",
+          "metadata" => %{"ackable" => true}
+        }
+      ])
+
+    %Delivery{}
+    |> Delivery.changeset(%{
+      insight_id: insight.id,
+      user_id: user_id,
+      channel: "telegram",
+      destination: "12345",
+      score: 0.9,
+      threshold: 0.78,
+      status: "sent",
+      provider_message_id: "durable-#{unique}",
+      sent_at: DateTime.utc_now(),
+      metadata: %{}
+    })
+    |> Repo.insert!()
+    |> Repo.preload(:insight)
+  end
+
+  defp telegram_message_count(type) do
+    Agent.get(:capturing_telegram_recorder, fn events ->
+      Enum.count(events, &(&1.type == type))
+    end)
   end
 
   defp last_telegram_message(type) do
