@@ -213,7 +213,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         from(lease in AgentRuntimeLease,
           where: lease.agent_id == ^agent_id,
           where: lease.owner_token == ^owner_token,
-          where: lease.lease_until > fragment("clock_timestamp()")
+          where: lease.lease_until > fragment("timezone('UTC', clock_timestamp())")
         )
       )
     else
@@ -286,7 +286,7 @@ defmodule Maraithon.Runtime.AgentLeases do
       on: guard.agent_id == agent.id,
       where: lease.agent_id == ^agent_id,
       where: lease.owner_token == ^owner_token,
-      where: lease.lease_until > fragment("clock_timestamp()"),
+      where: lease.lease_until > fragment("timezone('UTC', clock_timestamp())"),
       where: not is_nil(lease.ready_at),
       where: is_nil(lease.draining_at),
       where: agent.install_status == "enabled",
@@ -296,7 +296,8 @@ defmodule Maraithon.Runtime.AgentLeases do
       where:
         is_nil(guard.agent_id) or
           (guard.tripped == false and guard.needs_recovery == false and
-             (is_nil(guard.blocked_until) or guard.blocked_until <= fragment("clock_timestamp()")))
+             (is_nil(guard.blocked_until) or
+                guard.blocked_until <= fragment("timezone('UTC', clock_timestamp())")))
     )
   end
 

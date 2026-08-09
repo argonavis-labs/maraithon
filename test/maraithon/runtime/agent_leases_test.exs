@@ -161,12 +161,12 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
     Repo.query!(
       """
       UPDATE agent_runtime_leases
-      SET claimed_at = clock_timestamp() - interval '3 minutes',
-          renewed_at = clock_timestamp() - interval '2 minutes',
-          lease_until = clock_timestamp() - interval '1 minute',
+      SET claimed_at = timezone('UTC', clock_timestamp()) - interval '3 minutes',
+          renewed_at = timezone('UTC', clock_timestamp()) - interval '2 minutes',
+          lease_until = timezone('UTC', clock_timestamp()) - interval '1 minute',
           ready_at = NULL,
           draining_at = NULL,
-          updated_at = clock_timestamp()
+          updated_at = timezone('UTC', clock_timestamp())
       WHERE agent_id = $1::uuid
       """,
       [Ecto.UUID.dump!(agent_id)]
