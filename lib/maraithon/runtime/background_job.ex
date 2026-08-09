@@ -27,6 +27,7 @@ defmodule Maraithon.Runtime.BackgroundJob do
     field :scheduled_at, :utc_datetime_usec
     field :claimed_by, :string
     field :claimed_at, :utc_datetime_usec
+    field :claim_token, Ecto.UUID
     field :completed_at, :utc_datetime_usec
     field :failed_at, :utc_datetime_usec
     field :cancelled_at, :utc_datetime_usec
