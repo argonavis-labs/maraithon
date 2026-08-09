@@ -938,10 +938,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {:ok, params} ->
           started_ms = System.monotonic_time(:millisecond)
 
-          # Go through LLMCallCommand so smoke_test gets the same retry +
-          # chat-tier fallback that scheduled briefs do — otherwise it can't
-          # reproduce a successful prod-path call when the primary model is
-          # rate-limited.
+          # Go through LLMCallCommand so smoke_test keeps the same bounded fast
+          # retry/fallback policy for in-budget failures. This synthetic direct
+          # call is not a durable claim: a full provider timeout returns once and
+          # retains the existing direct-call ceiling instead of pretending it can
+          # use persisted timeout provenance.
           effect = %Maraithon.Effects.Effect{
             id: Ecto.UUID.generate(),
             agent_id: agent.id,

@@ -119,6 +119,24 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
     end
   end
 
+  defmodule SequencedProvider do
+    @moduledoc false
+
+    def complete(params) do
+      test_pid = Application.fetch_env!(:maraithon, :effect_runner_test_pid)
+      responses = Application.fetch_env!(:maraithon, :effect_runner_sequence)
+
+      response =
+        Agent.get_and_update(responses, fn
+          [next | rest] -> {next, rest}
+          [] -> {{:error, :unexpected_provider_call}, []}
+        end)
+
+      send(test_pid, {:sequenced_provider_called, self(), params, response})
+      response
+    end
+  end
+
   defmodule CountingSuccessProvider do
     @moduledoc false
 
@@ -928,6 +946,160 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       GenServer.stop(pid, :normal)
     end
 
+    test "persists attempt-fenced timeout provenance and uses one final fallback", %{
+      agent: agent
+    } do
+      case Process.whereis(EffectRunner) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      success =
+        {:ok,
+         %{
+           content: "recovered",
+           model: "fallback-chat",
+           tokens_in: 1,
+           tokens_out: 1,
+           finish_reason: "stop",
+           usage: %{}
+         }}
+
+      sequence =
+        start_supervised!(
+          {Agent,
+           fn ->
+             [
+               {:error, :timeout},
+               {:error, :timeout},
+               {:error, {:llm_busy, 60_000}},
+               success
+             ]
+           end}
+        )
+
+      original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+      original_test_pid = Application.get_env(:maraithon, :effect_runner_test_pid)
+      original_sequence = Application.get_env(:maraithon, :effect_runner_sequence)
+
+      Application.put_env(:maraithon, :effect_runner_test_pid, self())
+      Application.put_env(:maraithon, :effect_runner_sequence, sequence)
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        Keyword.merge(original_runtime,
+          llm_provider: SequencedProvider,
+          llm_model: "primary-reasoning",
+          llm_chat_model: "fallback-chat",
+          llm_routing_model: "fallback-routing"
+        )
+      )
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
+
+        if original_test_pid,
+          do: Application.put_env(:maraithon, :effect_runner_test_pid, original_test_pid),
+          else: Application.delete_env(:maraithon, :effect_runner_test_pid)
+
+        if original_sequence,
+          do: Application.put_env(:maraithon, :effect_runner_sequence, original_sequence),
+          else: Application.delete_env(:maraithon, :effect_runner_sequence)
+      end)
+
+      {:ok, effect_id} =
+        Effects.request(agent.id, "llm_call", nil, %{
+          "model" => "primary-reasoning",
+          "messages" => [%{"role" => "user", "content" => "go"}],
+          "max_tokens" => 16_000
+        })
+
+      {:ok, runner} = EffectRunner.start_link([])
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), runner)
+
+      send(runner, :poll)
+      assert_receive {:sequenced_provider_called, first_pid, first, {:error, :timeout}}, 1_000
+      first_ref = Process.monitor(first_pid)
+      assert_receive {:DOWN, ^first_ref, :process, ^first_pid, _reason}, 1_000
+
+      assert :ok = await_runner_idle(runner)
+
+      first_retry = Maraithon.Repo.get!(Effect, effect_id)
+      assert first_retry.status == "pending"
+      assert first_retry.attempts == 1
+      assert first_retry.error == "timeout"
+      assert first_retry.last_failure_code == "timeout"
+      assert first_retry.last_failure_attempt == 1
+      assert first["model"] == "primary-reasoning"
+
+      Maraithon.Repo.update_all(
+        from(effect in Effect, where: effect.id == ^effect_id),
+        set: [retry_after: DateTime.add(DateTime.utc_now(), -1, :second)]
+      )
+
+      send(runner, :poll)
+      assert_receive {:sequenced_provider_called, second_pid, second, {:error, :timeout}}, 1_000
+      second_ref = Process.monitor(second_pid)
+      assert_receive {:DOWN, ^second_ref, :process, ^second_pid, _reason}, 1_000
+
+      assert :ok = await_runner_idle(runner)
+
+      second_retry = Maraithon.Repo.get!(Effect, effect_id)
+      assert second_retry.status == "pending"
+      assert second_retry.attempts == 2
+      assert second_retry.error == "timeout"
+      assert second_retry.last_failure_code == "timeout"
+      assert second_retry.last_failure_attempt == 2
+      assert second["model"] == "primary-reasoning"
+
+      Maraithon.Repo.update_all(
+        from(effect in Effect, where: effect.id == ^effect_id),
+        set: [retry_after: DateTime.add(DateTime.utc_now(), -1, :second)]
+      )
+
+      send(runner, :poll)
+
+      assert_receive {:sequenced_provider_called, busy_pid, busy_call,
+                      {:error, {:llm_busy, 60_000}}},
+                     1_000
+
+      busy_ref = Process.monitor(busy_pid)
+      assert_receive {:DOWN, ^busy_ref, :process, ^busy_pid, _reason}, 1_000
+
+      assert :ok = await_runner_idle(runner)
+
+      busy_retry = Maraithon.Repo.get!(Effect, effect_id)
+      assert busy_retry.status == "pending"
+      assert busy_retry.attempts == 2
+      assert busy_retry.last_failure_code == "timeout"
+      assert busy_retry.last_failure_attempt == 2
+      assert busy_call["model"] == "fallback-chat"
+
+      Maraithon.Repo.update_all(
+        from(effect in Effect, where: effect.id == ^effect_id),
+        set: [retry_after: DateTime.add(DateTime.utc_now(), -1, :second)]
+      )
+
+      send(runner, :poll)
+      assert_receive {:sequenced_provider_called, final_pid, final, ^success}, 1_000
+      final_ref = Process.monitor(final_pid)
+      assert_receive {:DOWN, ^final_ref, :process, ^final_pid, _reason}, 1_000
+
+      assert :ok = await_runner_idle(runner)
+
+      completed = Maraithon.Repo.get!(Effect, effect_id)
+      assert completed.status == "completed"
+      assert completed.attempts == 2
+      assert completed.last_failure_code == nil
+      assert completed.last_failure_attempt == nil
+      assert final["model"] == "fallback-chat"
+      assert final["max_tokens"] == 8_000
+      assert Agent.get(sequence, & &1) == []
+
+      GenServer.stop(runner, :normal)
+    end
+
     test "fails insufficient quota llm effects without scheduling retries", %{agent: agent} do
       case Process.whereis(EffectRunner) do
         nil -> :ok
@@ -1092,7 +1264,9 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       for retryable_reason <- [
             {:api_error, 429, :redacted},
-            {:api_error, 501, :redacted}
+            {:api_error, 501, :redacted},
+            {:timeout, :noncanonical_detail},
+            "timeout"
           ] do
         Application.put_env(:maraithon, :effect_runner_provider_error, retryable_reason)
 
@@ -1120,6 +1294,15 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
         assert retryable_effect.status == "pending"
         assert retryable_effect.attempts == 1
         assert retryable_effect.retry_after != nil
+        assert retryable_effect.last_failure_code == nil
+        assert retryable_effect.last_failure_attempt == nil
+
+        case retryable_reason do
+          {:timeout, _detail} -> assert retryable_effect.error == "timeout"
+          "timeout" -> assert retryable_effect.error == "redacted_detail"
+          _other -> :ok
+        end
+
         refute_received {:agent_dispatch, {:effect_result, ^retryable_effect_id, _result}}
       end
     end
@@ -2037,6 +2220,23 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       GenServer.stop(pid, :normal)
     end
   end
+
+  defp await_runner_idle(pid, retries \\ 100)
+
+  defp await_runner_idle(pid, retries) when retries > 0 do
+    state = :sys.get_state(pid)
+
+    if map_size(state.running) == 0 and map_size(state.tasks) == 0 do
+      :ok
+    else
+      receive do
+      after
+        10 -> await_runner_idle(pid, retries - 1)
+      end
+    end
+  end
+
+  defp await_runner_idle(_pid, 0), do: flunk("effect runner did not become idle")
 
   defp database_now do
     [[now]] = Maraithon.Repo.query!("SELECT NOW()").rows

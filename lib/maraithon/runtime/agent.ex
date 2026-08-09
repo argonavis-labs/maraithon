@@ -1257,16 +1257,11 @@ defmodule Maraithon.Runtime.Agent do
     |> Enum.max(fn -> @default_effect_timeout_ms end)
   end
 
-  defp effect_timeout_ms(%{type: type, params: params})
-       when type in [:llm_call, "llm_call"] and is_map(params) do
-    case read_timeout_ms(params) do
-      timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 ->
-        timeout_ms + @effect_timeout_buffer_ms
-
-      _other ->
-        @default_llm_effect_timeout_ms
-    end
-  end
+  # `timeout_ms` on an LLM request is the per-claim provider budget. The
+  # durable runner may need all counted claims, so the Agent continuation uses
+  # its separately bounded whole-effect window even when the request is explicit.
+  defp effect_timeout_ms(%{type: type}) when type in [:llm_call, "llm_call"],
+    do: @default_llm_effect_timeout_ms
 
   defp effect_timeout_ms(%{params: params}) when is_map(params) do
     case read_timeout_ms(params) do

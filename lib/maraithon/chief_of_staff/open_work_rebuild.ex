@@ -571,6 +571,9 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
       params: params
     }
 
+    # Manual rebuilds are intentionally direct, not durable claims. Command
+    # timeout cleanup remains one-shot; durable timeout diversification applies
+    # only to EffectRunner-owned claims with persisted attempt provenance.
     LLMCallCommand.execute(effect)
   end
 

@@ -1418,7 +1418,8 @@ defmodule Maraithon.Runtime.AgentTest do
                 "wakeup_mode" => "effect",
                 "effect_kind" => "llm_call",
                 "effect_params" => %{
-                  "messages" => [%{"role" => "user", "content" => "first pass"}]
+                  "messages" => [%{"role" => "user", "content" => "first pass"}],
+                  "timeout_ms" => 100
                 }
               }
             }
@@ -1436,6 +1437,9 @@ defmodule Maraithon.Runtime.AgentTest do
 
       {:waiting_effect, waiting_data} = :sys.get_state(pid)
       assert [timed_out_effect_id] = Map.keys(waiting_data.pending_effects)
+
+      assert {:keep_state, ^waiting_data, [{:state_timeout, 900_000, :effect_timeout}]} =
+               RuntimeAgent.waiting_effect(:enter, :working, waiting_data)
 
       # Drive the :state_timeout clause directly with the real in-flight
       # data — waiting out the multi-minute llm_call timeout is not viable

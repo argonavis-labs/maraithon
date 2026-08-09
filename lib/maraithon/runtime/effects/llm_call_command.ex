@@ -2,11 +2,14 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   @moduledoc """
   Command implementation for `llm_call` effects.
 
-  Retries short transient provider errors (network blips, 5xx API errors,
-  timeouts, and very short rate limits) up to `@max_retry_attempts` times. Long
-  provider rate limits are surfaced to the effect runner so the durable queue can
-  retry later without blocking worker tasks or stampeding fallback models in the
-  same provider bucket.
+  Retries short transient provider errors (network blips, 5xx API errors, and
+  very short rate limits) up to `@max_retry_attempts` times. Provider timeouts
+  return to the durable effect queue because one real timeout consumes the full
+  provider deadline. On the final durable attempt after an exact timeout, the
+  command selects one distinct configured fallback model before starting work.
+  Long provider rate limits are surfaced to the effect runner so the durable
+  queue can retry later without blocking worker tasks or stampeding fallback
+  models in the same provider bucket.
   """
 
   @behaviour Maraithon.Runtime.Effects.Command
@@ -42,10 +45,17 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   @impl true
   def execute(%Effect{} = effect) do
     bounded =
-      effect.params
-      |> cap_primary_tokens()
-      |> cap_primary_model()
-      |> RequestBudget.validate()
+      with {:ok, canonical_params} <-
+             effect.params
+             |> cap_primary_tokens()
+             |> cap_primary_model()
+             |> RequestBudget.validate() do
+        canonical_params
+        |> cap_primary_tokens()
+        |> cap_primary_model()
+        |> maybe_use_durable_timeout_fallback(effect)
+        |> RequestBudget.validate()
+      end
 
     case bounded do
       {:ok, params} ->
@@ -62,7 +72,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   end
 
   defp do_execute(effect, params) do
-    timeout = request_timeout(params["timeout_ms"])
+    timeout = request_timeout(params["timeout_ms"], effect)
     deadline = System.monotonic_time(:millisecond) + timeout
 
     Logger.info("Starting LLM call",
@@ -70,7 +80,12 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     )
 
     try do
-      case run_with_retry(params, effect, 1, deadline) do
+      result =
+        if durable_timeout_recovery_claim?(effect),
+          do: call_once(params, deadline),
+          else: run_with_retry(params, effect, 1, deadline)
+
+      case result do
         {:ok, data} ->
           case prepare_success(data) do
             {:ok, prepared} ->
@@ -108,7 +123,29 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
           failure_code: "timeout"
         )
 
-        {:error, "timeout"}
+        {:error, :timeout}
+    end
+  end
+
+  defp call_once(params, deadline) do
+    case remaining_ms(deadline) do
+      remaining when remaining > 0 ->
+        result =
+          params
+          |> Map.put("timeout_ms", remaining)
+          |> LLM.complete()
+
+        case result do
+          {:error, reason} = error ->
+            record_provider_limit(reason)
+            error
+
+          other ->
+            other
+        end
+
+      _expired ->
+        {:error, :command_deadline_exceeded}
     end
   end
 
@@ -119,6 +156,9 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
       case LLM.complete(params) do
         {:ok, _data} = ok ->
           ok
+
+        {:error, :timeout} = error ->
+          error
 
         {:error, reason} ->
           record_provider_limit(reason)
@@ -140,12 +180,12 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
               case sleep_with_deadline(sleep_ms, deadline) do
                 :ok -> run_with_retry(params, effect, attempt + 1, deadline)
-                :timeout -> {:error, :timeout}
+                :timeout -> {:error, reason}
               end
           end
       end
     else
-      _expired -> {:error, :timeout}
+      _expired -> {:error, :command_deadline_exceeded}
     end
   end
 
@@ -201,7 +241,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
     case remaining do
       value when value <= 0 ->
-        {:error, :timeout}
+        {:error, original_reason}
 
       value ->
         fallback_params =
@@ -227,6 +267,9 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
       {:ok, _data} = ok ->
         ok
 
+      {:error, :timeout} = error ->
+        error
+
       {:error, fallback_reason} ->
         record_provider_limit(fallback_reason)
 
@@ -249,6 +292,47 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     end
   end
 
+  # Claimed effects carry the number of already-persisted counted attempts.
+  # Preserve two full primary timeout windows; only the final allowed claim may
+  # switch models, and only from attempt-fenced server-written provenance.
+  defp maybe_use_durable_timeout_fallback(params, %Effect{} = effect) when is_map(params) do
+    if durable_timeout_recovery_claim?(effect) do
+      case fallback_models(params) do
+        [fallback_model | _rest] ->
+          Logger.info("Selected alternate model for durable LLM timeout retry",
+            effect_reference: Redaction.fingerprint(effect.id),
+            attempt: effect.attempts + 1,
+            model: fallback_model,
+            failure_code: "timeout"
+          )
+
+          fallback_params(params, fallback_model)
+
+        [] ->
+          params
+      end
+    else
+      params
+    end
+  end
+
+  defp maybe_use_durable_timeout_fallback(params, _effect), do: params
+
+  defp durable_timeout_recovery_claim?(%Effect{
+         attempts: attempts,
+         max_attempts: max_attempts,
+         last_failure_code: "timeout",
+         last_failure_attempt: failure_attempt,
+         claimed_by: claimed_by,
+         claimed_at: %DateTime{}
+       })
+       when is_binary(claimed_by) and is_integer(attempts) and is_integer(max_attempts) and
+              is_integer(failure_attempt) and max_attempts > 1 and
+              attempts == max_attempts - 1 and failure_attempt == attempts,
+       do: true
+
+  defp durable_timeout_recovery_claim?(_effect), do: false
+
   defp fallback_models(params) do
     current_model = normalize_model(Map.get(params, "model") || LLM.model())
 
@@ -264,6 +348,8 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     params
     |> Map.put("model", fallback_model)
     |> cap_fallback_tokens()
+    |> Map.delete("reasoning")
+    |> Map.delete(:reasoning)
     |> Map.put("reasoning_effort", @fallback_reasoning_effort)
   end
 
@@ -460,8 +546,6 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   defp retry_backoff_ms({:rate_limited, _}, _attempt),
     do: inline_rate_limit_backoff_ms(@default_rate_limited_backoff_ms)
 
-  defp retry_backoff_ms(:timeout, _attempt), do: 5_000
-
   defp retry_backoff_ms({:network_error, _reason}, attempt), do: 2_000 * attempt
 
   defp retry_backoff_ms({:api_error, status, _body}, attempt)
@@ -477,8 +561,18 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
   defp inline_rate_limit_backoff_ms(_retry_after_ms), do: nil
 
-  defp request_timeout(value) when is_integer(value) and value > 0, do: min(value, 300_000)
-  defp request_timeout(_value), do: 120_000
+  defp request_timeout(value, effect) when is_integer(value) and value > 0,
+    do: min(value, request_timeout_cap(effect))
+
+  defp request_timeout(_value, _effect), do: 120_000
+
+  defp request_timeout_cap(%Effect{claimed_by: claimed_by, claimed_at: %DateTime{}})
+       when is_binary(claimed_by),
+       do: 120_000
+
+  # Operator-only direct callers are not durable claims; retain their existing
+  # single-call ceiling rather than silently shortening high-reasoning work.
+  defp request_timeout_cap(_effect), do: 300_000
 
   defp remaining_ms(deadline),
     do: max(deadline - System.monotonic_time(:millisecond), 0)

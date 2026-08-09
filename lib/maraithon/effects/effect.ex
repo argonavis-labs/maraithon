@@ -29,6 +29,8 @@ defmodule Maraithon.Effects.Effect do
     field :result_acknowledged_at, :utc_datetime_usec
     field :attempts, :integer, default: 0
     field :max_attempts, :integer, default: 3
+    field :last_failure_code, :string
+    field :last_failure_attempt, :integer
     field :retry_after, :utc_datetime_usec
     field :result, :map
     field :error, :string
@@ -54,6 +56,8 @@ defmodule Maraithon.Effects.Effect do
     :result_acknowledged_at,
     :attempts,
     :max_attempts,
+    :last_failure_code,
+    :last_failure_attempt,
     :retry_after,
     :result,
     :error

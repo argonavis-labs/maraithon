@@ -989,6 +989,8 @@ defmodule Maraithon.Runtime.EffectRunner do
            result: result,
            result_envelope: %{"status" => "ok", "version" => 1},
            error: nil,
+           last_failure_code: nil,
+           last_failure_attempt: nil,
            retry_after: nil,
            completion_claimed_by: effect.claimed_by,
            completion_claimed_at: effect.claimed_at,
@@ -1025,37 +1027,57 @@ defmodule Maraithon.Runtime.EffectRunner do
     backoff_ms = calculate_backoff(attempts, reason)
     retry_after = DateTime.add(DateTime.utc_now(), backoff_ms, :millisecond)
 
-    update_claimed_effect(effect, "mark retry",
-      status: "pending",
-      claimed_by: nil,
-      claimed_at: nil,
-      attempts: attempts,
-      retry_after: retry_after,
-      error: Maraithon.Redaction.error_summary(reason)
-    )
+    fields =
+      [
+        status: "pending",
+        claimed_by: nil,
+        claimed_at: nil,
+        attempts: attempts,
+        retry_after: retry_after,
+        error: Maraithon.Redaction.error_summary(reason)
+      ] ++ counted_failure_provenance(effect, reason, attempts)
+
+    update_claimed_effect(effect, "mark retry", fields)
   end
 
   defp mark_failed(effect, reason, attempts) do
-    update_claimed_effect(effect, "mark failed",
-      status: "failed",
-      error: Maraithon.Redaction.error_summary(reason),
-      result_envelope: terminal_error_envelope(reason),
-      attempts: attempts,
-      retry_after: nil,
-      result_dispatched_at: nil,
-      result_dispatch_after: nil,
-      result_dispatch_attempts: 0,
-      result_acknowledged_at: nil,
-      claimed_by: nil,
-      claimed_at: nil
-    )
+    fields =
+      [
+        status: "failed",
+        error: Maraithon.Redaction.error_summary(reason),
+        result_envelope: terminal_error_envelope(reason),
+        attempts: attempts,
+        retry_after: nil,
+        result_dispatched_at: nil,
+        result_dispatch_after: nil,
+        result_dispatch_attempts: 0,
+        result_acknowledged_at: nil,
+        claimed_by: nil,
+        claimed_at: nil
+      ] ++ failure_provenance(reason, attempts)
+
+    update_claimed_effect(effect, "mark failed", fields)
   end
+
+  defp counted_failure_provenance(%Effect{attempts: previous}, reason, attempts)
+       when is_integer(previous) and is_integer(attempts) and attempts > previous,
+       do: failure_provenance(reason, attempts)
+
+  defp counted_failure_provenance(_effect, _reason, _attempts), do: []
+
+  defp failure_provenance(:timeout, attempts) when is_integer(attempts) and attempts >= 0,
+    do: [last_failure_code: "timeout", last_failure_attempt: attempts]
+
+  defp failure_provenance(_reason, _attempts),
+    do: [last_failure_code: nil, last_failure_attempt: nil]
 
   defp finalize_ambiguous_claim(effect) do
     update_claimed_effect(effect, "mark ambiguous outcome",
       status: "failed",
       result: nil,
       error: "effect_outcome_ambiguous",
+      last_failure_code: nil,
+      last_failure_attempt: nil,
       result_envelope: terminal_error_envelope(@ambiguous_outcome),
       retry_after: nil,
       result_dispatched_at: nil,
