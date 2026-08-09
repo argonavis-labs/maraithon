@@ -7,6 +7,7 @@ defmodule Maraithon.BriefsTest do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
   alias Maraithon.DeliveryErrorCopy
+  alias Maraithon.InsightNotifications
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.BriefTodoReview
@@ -883,6 +884,83 @@ defmodule Maraithon.BriefsTest do
     updated_brief = Repo.get!(Brief, brief.id)
     assert get_in(updated_brief.metadata, ["todo_review", "status"]) == "completed"
     assert get_in(updated_brief.metadata, ["todo_review", "summary", "done_count"]) == 1
+  end
+
+  test "durable todo retry advances an active review after the domain commit", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [first_todo, second_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-review-retry:first", "Close the first retry item",
+          priority: 96,
+          source_occurred_at: "2026-04-02T14:00:00Z"
+        ),
+        todo_attrs("briefs-review-retry:second", "Advance to the second retry item",
+          source_occurred_at: "2026-04-02T15:00:00Z"
+        )
+      ])
+
+    {:ok, %Brief{} = brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Morning brief: retry review",
+        "summary" => "Two todos exercise durable review recovery.",
+        "body" => "Review the list.",
+        "scheduled_for" => ~U[2026-04-02 16:30:00Z],
+        "dedupe_key" => "brief:morning:review-retry",
+        "metadata" => %{"linked_todo_ids" => [first_todo.id, second_todo.id]}
+      })
+
+    assert :ok =
+             BriefTodoReview.handle_callback(%{
+               chat_id: 777_123,
+               callback_id: "cb-review-retry-start",
+               data: "brftd:#{brief.id}:start"
+             })
+
+    assert length(sent_messages()) == 1
+    assert hd(sent_messages()).text =~ first_todo.next_action
+
+    original_capture = Application.get_env(:maraithon, :capturing_telegram, [])
+    failure = {:telegram_error, 503, "edit unavailable after todo commit"}
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :capturing_telegram, original_capture)
+    end)
+
+    Application.put_env(:maraithon, :capturing_telegram, edit_result: {:error, failure})
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 777_123,
+        message_id: "todo-review-retry-first",
+        callback_id: "cb-review-retry-done",
+        data: "tgtodo:#{first_todo.id}:done"
+      }
+    }
+
+    assert {:error, {:telegram_edit_failed, ^failure}} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    committed = Todos.get_for_user(user_id, first_todo.id)
+    assert committed.status == "done"
+    assert length(sent_messages()) == 1
+
+    Application.put_env(:maraithon, :capturing_telegram, edit_result: :ok)
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+
+    retried = Todos.get_for_user(user_id, first_todo.id)
+    assert retried.closed_at == committed.closed_at
+    assert length(sent_messages()) == 2
+    assert List.last(sent_messages()).text =~ second_todo.next_action
+
+    review_state = Repo.get!(Brief, brief.id).metadata["todo_review"]
+    assert review_state["status"] == "active"
+    assert review_state["current_todo_id"] == second_todo.id
   end
 
   test "brief action row lets the user scan linked open work before reviewing", %{

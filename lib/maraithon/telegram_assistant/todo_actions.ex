@@ -52,7 +52,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          %{user_id: user_id} <-
            ConnectedAccounts.get_connected_by_external_account("telegram", chat_id),
          {:ok, todo} <- Todos.get_for_user(user_id, todo_id) |> fetch_todo(),
-         {:ok, result} <- dispatch_action(user_id, chat_id, todo, action) do
+         {:ok, result} <- dispatch_callback_action(user_id, chat_id, todo, action, callback_id) do
       handle_callback_result(
         result,
         user_id,
@@ -109,8 +109,9 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
       nil ->
         with :ok <- refresh_message(chat_id, message_id, updated_todo),
-             :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
-          :ok
+             :ok <- maybe_answer_callback(callback_id, callback_notice(action)),
+             result <- BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action) do
+          normalize_follow_up_result(result)
         end
     end
   end
@@ -206,6 +207,20 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp fetch_todo(%Todo{} = todo), do: {:ok, todo}
   defp fetch_todo(_todo), do: {:error, :not_found}
+
+  defp dispatch_callback_action(user_id, _chat_id, todo, action, callback_id)
+       when action in ["draft_email", "draft_slack"] do
+    channel = if(action == "draft_email", do: "gmail", else: "slack")
+
+    if draft_callback_checkpoint?(todo, callback_id, action) do
+      {:ok, {:draft_ready, render_persisted_draft(todo, channel), todo}}
+    else
+      generate_todo_draft(user_id, todo, channel, callback_id, action)
+    end
+  end
+
+  defp dispatch_callback_action(user_id, chat_id, todo, action, _callback_id),
+    do: dispatch_action(user_id, chat_id, todo, action)
 
   # Durable retries re-fetch the todo after a presentation/ack failure. When
   # its domain state already proves the callback committed, skip the mutation
@@ -542,7 +557,15 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
               {:ok, _expired_action} ->
                 insert_prepared_send(user_id, conversation, todo, attrs, false)
 
-              {:error, reason} ->
+              {:error, _current_action, :already_handled} ->
+                # A concurrent decision already removed the row from the
+                # awaiting-only unique-index scope. Retry the insert once.
+                insert_prepared_send(user_id, conversation, todo, attrs, false)
+
+              {:error, _current_action, :confirmation_not_expired} ->
+                {:ok, {:send_prepared, existing_prepared_action}}
+
+              {:error, _current_action, reason} ->
                 {:error, {:prepared_action_expiry_failed, reason}}
 
               other ->
@@ -1152,7 +1175,34 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp raw_next_action(todo) when is_map(todo), do: map_string(todo, "next_action")
   defp raw_next_action(_todo), do: nil
 
-  defp generate_todo_draft(user_id, %Todo{} = todo, channel) do
+  defp draft_callback_checkpoint?(%Todo{} = todo, callback_id, action)
+       when is_binary(callback_id) and is_binary(action) do
+    checkpoint = read_map(todo.metadata || %{}, "telegram_todo_action_checkpoint")
+
+    read_string(checkpoint, "callback_id") == callback_id and
+      read_string(checkpoint, "action") == action and
+      read_string(checkpoint, "status") == "draft_ready"
+  end
+
+  defp draft_callback_checkpoint?(_todo, _callback_id, _action), do: false
+
+  defp render_persisted_draft(%Todo{} = todo, "gmail") do
+    draft = todo_action_draft(todo)
+
+    render_draft_result("gmail", %{
+      draft: %{
+        "subject" => read_string(draft, "subject", "Quick follow-up"),
+        "body" => read_string(draft, "body", read_string(draft, "text", ""))
+      }
+    })
+  end
+
+  defp render_persisted_draft(%Todo{} = todo, "slack") do
+    draft = todo_action_draft(todo)
+    render_draft_result("slack", %{draft: %{"text" => read_string(draft, "text", "")}})
+  end
+
+  defp generate_todo_draft(user_id, %Todo{} = todo, channel, callback_id \\ nil, action \\ nil) do
     card = ActionCards.for_todo(todo, include_disconnected: false)
 
     attrs =
@@ -1167,7 +1217,9 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
         # `action_draft` (previously this only rendered a one-off preview
         # reply) and re-render the card so the buttons offer "Send" instead
         # of "Draft" going forward.
-        updated_todo = persist_generated_draft(user_id, todo, channel, result)
+        updated_todo =
+          persist_generated_draft(user_id, todo, channel, result, callback_id, action)
+
         {:ok, {:draft_ready, render_draft_result(channel, result), updated_todo}}
 
       {:error, reason} ->
@@ -1175,7 +1227,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp persist_generated_draft(user_id, %Todo{} = todo, channel, result) do
+  defp persist_generated_draft(
+         user_id,
+         %Todo{} = todo,
+         channel,
+         result,
+         callback_id,
+         action
+       ) do
     draft_map = generated_action_draft(channel, result)
 
     case compact_map(draft_map) do
@@ -1183,7 +1242,16 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
         todo
 
       draft_map ->
-        case Todos.update_for_user(user_id, todo.id, %{"action_draft" => draft_map}) do
+        checkpoint = %{
+          "callback_id" => callback_id,
+          "action" => action,
+          "status" => "draft_ready"
+        }
+
+        case Todos.update_for_user(user_id, todo.id, %{
+               "action_draft" => draft_map,
+               "metadata" => %{"telegram_todo_action_checkpoint" => checkpoint}
+             }) do
           {:ok, updated_todo} -> updated_todo
           {:error, _reason} -> todo
         end

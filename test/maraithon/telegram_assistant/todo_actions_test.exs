@@ -670,6 +670,104 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert last_telegram_message(:send).text =~ "Email draft ready"
   end
 
+  test "durable draft retry reuses the provider checkpoint after presentation failure", %{
+    user_id: user_id
+  } do
+    generation_counter =
+      start_supervised!(%{
+        id: :todo_draft_generation_counter,
+        start: {Agent, :start_link, [fn -> 0 end]}
+      })
+
+    original_assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_insights_config = Application.get_env(:maraithon, :insights, [])
+    failure = {:telegram_error, 503, "presentation unavailable"}
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(original_assistant_config, :draft_opts,
+        llm_complete: fn _params ->
+          Agent.update(generation_counter, &(&1 + 1))
+
+          {:ok,
+           %{
+             content:
+               Jason.encode!(%{
+                 "subject" => "Re: Checkpointed renewal",
+                 "body" => "The checkpointed draft should only be generated once."
+               })
+           }}
+        end
+      )
+    )
+
+    Application.put_env(:maraithon, :failing_telegram, reason: failure)
+
+    Application.put_env(
+      :maraithon,
+      :insights,
+      Keyword.put(
+        original_insights_config,
+        :telegram_module,
+        Maraithon.TestSupport.FailingTelegram
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant_config)
+      Application.put_env(:maraithon, :insights, original_insights_config)
+      Application.delete_env(:maraithon, :failing_telegram)
+    end)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Reply about checkpointed renewal",
+          "summary" => "The renewal thread needs a response.",
+          "next_action" => "Reply with the renewal timing.",
+          "dedupe_key" => "todo-actions:draft-retry-checkpoint"
+        }
+      ])
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-draft-retry",
+        callback_id: "cb-draft-retry-stable",
+        data: "tgtodo:#{todo.id}:draft_email"
+      }
+    }
+
+    assert {:error, {:telegram_send_failed, ^failure}} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    checkpointed = Todos.get_for_user(user_id, todo.id)
+    assert checkpointed.action_draft["subject"] == "Re: Checkpointed renewal"
+
+    assert get_in(checkpointed.metadata, ["telegram_todo_action_checkpoint"]) == %{
+             "action" => "draft_email",
+             "callback_id" => "cb-draft-retry-stable",
+             "status" => "draft_ready"
+           }
+
+    assert Agent.get(generation_counter, & &1) == 1
+
+    Application.put_env(
+      :maraithon,
+      :insights,
+      Keyword.put(original_insights_config, :telegram_module, CapturingTelegram)
+    )
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Agent.get(generation_counter, & &1) == 1
+    assert last_telegram_message(:send).text =~ "checkpointed draft should only be generated once"
+  end
+
   test "send callback prepares a confirmable action for a slack-sourced todo and requires explicit confirmation",
        %{user_id: user_id} do
     {:ok, [todo]} =
