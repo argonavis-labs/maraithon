@@ -182,6 +182,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
                model_profile
              ) do
           :ok -> :ok
+          {:error, _reason} = error -> error
           :pass -> handle_run_failure(run, reason, state, attrs)
         end
 
@@ -297,7 +298,6 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
           {:error, %Run{} = retry_run, retry_reason, retry_state} ->
             handle_run_failure(retry_run, retry_reason, retry_state, attrs)
-            :ok
 
           {:error, retry_reason} ->
             _ = TelegramAssistant.cancel_liveness_session(run.id)
