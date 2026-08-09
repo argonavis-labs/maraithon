@@ -53,7 +53,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     "eod"
   ]
   @skill_path "priv/agents/skills/chief_of_staff/commitment_tracker.md"
-  @max_compact_tracker_input_bytes 72_000
+  @tracker_input_fit_budgets [72_000, 56_000, 48_000, 40_000, 32_000]
   @max_previous_cycle_memo_bytes 4_000
 
   @impl true
@@ -488,11 +488,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       source_bundle
       |> SourceBundle.gmail_inbox_messages()
       |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
+      |> Enum.sort_by(&gmail_message_sort_key/1, :desc)
 
     sent_messages =
       source_bundle
       |> SourceBundle.gmail_sent_messages()
       |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
+      |> Enum.sort_by(&gmail_message_sort_key/1, :desc)
 
     calendar_events =
       source_bundle
@@ -697,26 +699,37 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp llm_params(tracker_input, state, context) do
-    with {:ok, prompt} <- commitment_prompt(tracker_input, context) do
-      params =
-        %{
-          "messages" => [
-            %{
-              "role" => "user",
-              "content" => prompt
-            }
-          ],
-          "max_tokens" => state.llm_max_tokens,
-          "temperature" => 0.1,
-          "reasoning_effort" => state.llm_reasoning_effort
-        }
-        |> maybe_put("model", state.llm_model)
+    Enum.reduce_while(
+      @tracker_input_fit_budgets,
+      {:error, {:invalid_request, %{reason: "commitment_request_exceeds_budget"}}},
+      fn input_bytes, _last_error ->
+        case bounded_llm_params(tracker_input, state, context, input_bytes) do
+          {:ok, _params} = success -> {:halt, success}
+          {:error, _reason} = error -> {:cont, error}
+        end
+      end
+    )
+  end
 
-      RequestBudget.validate(params)
+  defp bounded_llm_params(tracker_input, state, context, input_bytes) do
+    with {:ok, prompt} <- commitment_prompt(tracker_input, context, input_bytes) do
+      %{
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => prompt
+          }
+        ],
+        "max_tokens" => state.llm_max_tokens,
+        "temperature" => 0.1,
+        "reasoning_effort" => state.llm_reasoning_effort
+      }
+      |> maybe_put("model", state.llm_model)
+      |> RequestBudget.validate()
     end
   end
 
-  defp compact_tracker_input_for_prompt(tracker_input) when is_map(tracker_input) do
+  defp compact_tracker_input_for_prompt(tracker_input, max_bytes) when is_map(tracker_input) do
     tracker_input = compact_tracker_sections_for_prompt(tracker_input)
 
     PromptBudget.project_fields(
@@ -745,7 +758,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         {"files", 2_000},
         {"browser_history", 2_000}
       ],
-      @max_compact_tracker_input_bytes,
+      max_bytes,
       string_bytes: 6_000,
       list_items: 32,
       map_entries: 100,
@@ -754,7 +767,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     ) || %{}
   end
 
-  defp compact_tracker_input_for_prompt(_tracker_input), do: %{}
+  defp compact_tracker_input_for_prompt(_tracker_input, _max_bytes), do: %{}
 
   defp compact_tracker_sections_for_prompt(tracker_input) do
     tracker_input
@@ -819,9 +832,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   defp compact_tracker_items(_items, _limit, _item_bytes), do: []
 
-  defp commitment_prompt(tracker_input, context) do
+  defp commitment_prompt(tracker_input, context, input_bytes) do
     with {:ok, skill} <- MarkdownSkill.load_file(@skill_path),
-         {:ok, input_json} <- Jason.encode(compact_tracker_input_for_prompt(tracker_input)) do
+         {:ok, input_json} <-
+           Jason.encode(compact_tracker_input_for_prompt(tracker_input, input_bytes)) do
       {:ok,
        """
        Execute the loaded Markdown skill against the supplied connector context.
@@ -2216,6 +2230,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp recent_gmail_message?(_message, _lookback_start), do: false
+
+  defp gmail_message_sort_key(message) when is_map(message) do
+    {
+      datetime_sort_key(
+        read_datetime(message, "internal_date") || read_datetime(message, "date"),
+        0
+      ),
+      read_string(message, "thread_id", ""),
+      read_string(message, "message_id", "")
+    }
+  end
+
+  defp gmail_message_sort_key(_message), do: {0, "", ""}
 
   defp recent_slack_message?(message, lookback_start) when is_map(message) do
     case slack_message_datetime(message) do

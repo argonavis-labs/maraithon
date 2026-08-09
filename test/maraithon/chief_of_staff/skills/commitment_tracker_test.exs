@@ -60,7 +60,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     agent: agent
   } do
     now = ~U[2026-05-09 15:00:00Z]
-    large_body = String.duplicate("Source-backed commitment evidence. ", 300)
+
+    large_body =
+      String.duplicate("Source-backed \"quoted\" commitment evidence at C:\\work\\file. ", 300)
 
     messages =
       Enum.map(1..40, fn index ->
@@ -77,17 +79,95 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
         }
       end)
 
+    source_items =
+      Enum.map(1..20, fn index ->
+        %{
+          "guid" => "source-item-#{index}",
+          "text" => large_body,
+          "text_resolved" => large_body,
+          "summary" => large_body,
+          "body" => large_body,
+          "snippet" => large_body,
+          "transcript" => large_body,
+          "notes" => large_body,
+          "text_content" => large_body,
+          "title" => large_body,
+          "filename" => "commitment-#{index}.txt",
+          "sender_handle" => "+1555000#{index}",
+          "sent_at" => DateTime.add(now, -index, :minute),
+          "date" => DateTime.add(now, -index, :minute),
+          "created_at" => DateTime.to_iso8601(DateTime.add(now, -index, :minute)),
+          "modified_at" => DateTime.to_iso8601(DateTime.add(now, -index, :minute)),
+          "last_visited_at" => DateTime.to_iso8601(DateTime.add(now, -index, :minute)),
+          "start" => DateTime.add(now, index, :hour),
+          "end" => DateTime.add(now, index + 1, :hour),
+          "search_mode" => "self_authored",
+          "ts" => Integer.to_string(1_700_000_000 + index),
+          "channel_id" => "channel-#{index}"
+        }
+      end)
+
     source_bundle =
       %{trigger: %{type: :wakeup}, timestamp: now}
       |> SourceBundle.empty(%{})
       |> SourceBundle.put_gmail(%{
-        "inbox_messages" => messages,
+        # Deliberately reverse connector order: prompt selection must sort by
+        # source timestamp rather than trusting transport order.
+        "inbox_messages" => Enum.reverse(messages),
         "sent_messages" =>
-          Enum.map(messages, fn message ->
+          messages
+          |> Enum.map(fn message ->
             message
             |> Map.put("labels", ["SENT"])
             |> Map.put("from", "Operator <operator@example.com>")
-          end),
+          end)
+          |> Enum.reverse(),
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_calendar(%{
+        "events" => source_items,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_calendar_local(%{
+        "events" => source_items,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_slack(%{
+        "messages" => source_items,
+        "mentions" => source_items,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_imessage(%{
+        "messages" => source_items,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_notes(%{
+        "notes" => source_items,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_voice_memos(%{
+        "memos" => source_items,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_reminders(%{
+        "reminders" => source_items,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_files(%{
+        "files" => source_items,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_browser_history(%{
+        "visits" => source_items,
         "status" => "ready",
         "fetched_at" => now
       })
@@ -121,7 +201,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     input = Jason.decode!(String.trim(input_json))
 
-    assert byte_size(Jason.encode!(input)) <= 72_000
+    input_bytes = byte_size(Jason.encode!(input))
+    assert input_bytes in 48_000..56_000
     assert length(get_in(input, ["gmail", "recent_inbox"])) == 8
     assert length(get_in(input, ["gmail", "recent_sent"])) == 8
     assert get_in(input, ["gmail", "counts", "recent_inbox"]) == 40
@@ -130,7 +211,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     [first_inbox | _rest] = get_in(input, ["gmail", "recent_inbox"])
     assert first_inbox["subject"] == "Commitment evidence 1"
     assert first_inbox["from"] =~ "Counterparty 1"
-    assert first_inbox["body"] =~ "Source-backed commitment evidence"
+    assert first_inbox["body"] =~ ~s(Source-backed "quoted" commitment evidence)
   end
 
   test "tracker input resolves iMessage sender phone numbers from People", %{user_id: user_id} do
