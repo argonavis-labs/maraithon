@@ -5,8 +5,9 @@ defmodule Maraithon.Tools.HttpGet.Resolver do
   @max_resolved_addresses 32
 
   @type clock :: (-> integer())
-  @type lookup :: (charlist(), :inet | :inet6, non_neg_integer() ->
-                     {:ok, [:inet.ip_address()]} | {:error, term()})
+  @type lookup ::
+          (charlist(), :inet | :inet6, non_neg_integer() ->
+             {:ok, [:inet.ip_address()]} | {:error, term()})
 
   @spec resolve(String.t(), integer(), keyword()) ::
           {:ok, [:inet.ip_address()]} | {:error, term()}

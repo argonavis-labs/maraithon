@@ -451,9 +451,10 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   defp put_optional_base_field(payload, key, value, opts) do
     candidate = Map.put(payload, key, value)
 
-    if AssistantHarness.delivery_plan_prompt_bytes(candidate, opts) <= @delivery_base_prompt_bytes,
-      do: candidate,
-      else: payload
+    if AssistantHarness.delivery_plan_prompt_bytes(candidate, opts) <=
+         @delivery_base_prompt_bytes,
+       do: candidate,
+       else: payload
   end
 
   defp put_context_base_fields(payload, context, opts) when is_map(context) do

@@ -184,7 +184,8 @@ defmodule Maraithon.LogBuffer do
   defp normalize_metadata_value(value) when is_binary(value), do: value
 
   defp normalize_metadata_value(value)
-       when is_number(value) or is_boolean(value) or is_nil(value), do: value
+       when is_number(value) or is_boolean(value) or is_nil(value),
+       do: value
 
   defp normalize_metadata_value(value),
     do: inspect(value, pretty: false, limit: 20, printable_limit: 500)

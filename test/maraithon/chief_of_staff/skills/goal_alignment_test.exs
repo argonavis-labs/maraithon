@@ -139,7 +139,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignmentTest do
                progress_updates_count: 1,
                todos_count: 1,
                advice_count: 1
-             }}, next_state} =
+             }},
+            next_state} =
              GoalAlignment.handle_effect_result(
                {:llm_call, %{content: model_output}},
                pending_state,
