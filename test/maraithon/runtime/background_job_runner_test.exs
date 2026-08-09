@@ -18,6 +18,42 @@ defmodule Maraithon.Runtime.HugeRetryAfterTestHandler do
   end
 end
 
+defmodule Maraithon.Runtime.BlockingClaimTestHandler do
+  @moduledoc false
+
+  def execute(%Maraithon.Runtime.BackgroundJob{} = job) do
+    claim_token = job.claim_token
+    observer = Process.whereis(:background_job_claim_test_observer)
+    send(observer, {:background_job_claim_started, self(), job.id, claim_token})
+
+    receive do
+      {:release_background_job_claim, ^claim_token, result} ->
+        result
+
+      {:crash_background_job_claim, ^claim_token, reason} ->
+        exit(reason)
+
+      {:enter_background_job_finishing, ^claim_token, runner, result} ->
+        :ok =
+          GenServer.call(
+            runner,
+            {:background_job_finishing, job.id, claim_token},
+            :infinity
+          )
+
+        send(observer, {:background_job_finishing, self(), job.id, claim_token})
+
+        receive do
+          {:release_background_job_finishing, ^claim_token} -> result
+        after
+          10_000 -> {:error, :claim_test_timeout}
+        end
+    after
+      10_000 -> {:error, :claim_test_timeout}
+    end
+  end
+end
+
 defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
   use Maraithon.DataCase, async: false
 
@@ -66,6 +102,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     assert stored.status == "completed"
     assert stored.completed_at
     assert stored.claimed_by == nil
+    assert stored.claim_token == nil
     assert stored.result["source"] == "background_open_loop_check"
 
     GenServer.stop(pid, :normal)
@@ -95,6 +132,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     stored = Repo.get!(BackgroundJob, job.id)
     assert stored.status == "pending"
     assert stored.attempts == 1
+    assert stored.claim_token == nil
     assert DateTime.compare(stored.scheduled_at, job.scheduled_at) == :gt
     assert stored.last_error =~ "unknown_background_job"
 
@@ -109,6 +147,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     failed = Repo.get!(BackgroundJob, due_job.id)
     assert failed.status == "failed"
     assert failed.attempts == 2
+    assert failed.claim_token == nil
     assert failed.failed_at
 
     GenServer.stop(pid, :normal)
@@ -144,6 +183,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     assert stored.status == "pending"
     assert stored.attempts == 0
     assert stored.claimed_by == nil
+    assert stored.claim_token == nil
     assert stored.last_error =~ "rate_limited"
     refute stored.last_error =~ "provider-account-secret"
     assert DateTime.diff(stored.scheduled_at, before_call, :second) in 3..7
@@ -251,10 +291,469 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     failed = Repo.get!(BackgroundJob, job.id)
     assert failed.status == "failed"
     assert failed.attempts == 1
+    assert failed.claim_token == nil
     assert failed.failed_at
     assert failed.last_error == "background_job_error"
 
     GenServer.stop(pid, :normal)
+  end
+
+  test "a blocked drain stays responsive, renews its claim, and replies after ownership loss", %{
+    user_id: user_id
+  } do
+    register_claim_observer!()
+
+    {:ok, job} =
+      BackgroundJobs.enqueue("drain_claim_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    legacy_token = Ecto.UUID.generate()
+
+    {1, _rows} =
+      BackgroundJob
+      |> where([candidate], candidate.id == ^job.id)
+      |> where([candidate], candidate.status == "pending")
+      |> Repo.update_all(set: [claim_token: legacy_token])
+
+    runner = start_claim_runner(:background_job_drain_claim_runner)
+    drain_call = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+    job_id = job.id
+
+    assert_receive {:background_job_claim_started, task, ^job_id, claim_token}, 1_000
+    assert claim_token != legacy_token
+
+    state = :sys.get_state(runner)
+    assert state.poll_interval_ms >= state.claim_timeout_ms
+    assert state.renew_interval_ms < state.claim_timeout_ms
+    assert is_integer(Process.read_timer(state.renew_timer))
+    assert Map.has_key?(state.running, {job.id, claim_token})
+    assert {job.id, claim_token} in Map.values(state.monitors)
+    assert map_size(state.drains) == 1
+
+    # A second call proves that the first deferred call is not blocking the
+    # GenServer, and also covers the empty-batch return shape.
+    assert {:ok, []} = BackgroundJobRunner.drain_once(runner)
+
+    claimed = Repo.get!(BackgroundJob, job.id)
+    assert claimed.status == "running"
+    assert claimed.claim_token == claim_token
+
+    backdated_heartbeat = DateTime.add(claimed.claimed_at, -5, :second)
+
+    {1, _rows} =
+      BackgroundJob
+      |> where([candidate], candidate.id == ^job.id)
+      |> where([candidate], candidate.claim_token == ^claim_token)
+      |> Repo.update_all(set: [claimed_at: backdated_heartbeat])
+
+    send(runner, :renew_claims)
+    _state = :sys.get_state(runner)
+
+    renewed = Repo.get!(BackgroundJob, job.id)
+    assert renewed.claim_token == claim_token
+    assert DateTime.compare(renewed.claimed_at, backdated_heartbeat) == :gt
+
+    replacement_token = Ecto.UUID.generate()
+
+    {1, _rows} =
+      BackgroundJob
+      |> where([candidate], candidate.id == ^job.id)
+      |> where([candidate], candidate.claim_token == ^claim_token)
+      |> Repo.update_all(set: [claim_token: replacement_token])
+
+    task_ref = Process.monitor(task)
+    send(runner, :renew_claims)
+    _state = :sys.get_state(runner)
+
+    assert_receive {:DOWN, ^task_ref, :process, ^task, :killed}, 1_000
+
+    assert {:ok, [{^job_id, {:error, :claim_lost}}]} =
+             Task.await(drain_call, 1_000)
+
+    final_state = :sys.get_state(runner)
+    refute Map.has_key?(final_state.running, {job.id, claim_token})
+    assert final_state.drains == %{}
+
+    current = Repo.get!(BackgroundJob, job.id)
+    assert current.status == "running"
+    assert current.claim_token == replacement_token
+    assert current.attempts == 0
+    assert current.last_error == nil
+  end
+
+  test "a crashed drain task releases its exact generation and replies", %{user_id: user_id} do
+    register_claim_observer!()
+
+    {:ok, job} =
+      BackgroundJobs.enqueue("drain_crash_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    runner = start_claim_runner(:background_job_drain_crash_runner)
+    drain_call = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+    job_id = job.id
+
+    assert_receive {:background_job_claim_started, task, ^job_id, claim_token}, 1_000
+    task_ref = Process.monitor(task)
+    Process.exit(task, :kill)
+
+    assert_receive {:DOWN, ^task_ref, :process, ^task, :killed}, 1_000
+
+    assert {:ok, [{^job_id, {:error, {:job_task_crashed, :killed}}}]} =
+             Task.await(drain_call, 1_000)
+
+    retried = Repo.get!(BackgroundJob, job.id)
+    assert retried.status == "pending"
+    assert retried.attempts == 1
+    assert retried.claim_token == nil
+    assert retried.claimed_by == nil
+    assert retried.claimed_at == nil
+    assert retried.last_error == "job_task_crashed"
+    refute Map.has_key?(:sys.get_state(runner).running, {job.id, claim_token})
+  end
+
+  test "drain reports claim loss when its terminal CAS loses after finishing", %{
+    user_id: user_id
+  } do
+    register_claim_observer!()
+
+    {:ok, job} =
+      BackgroundJobs.enqueue("drain_finishing_loss_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    runner = start_claim_runner(:background_job_drain_finishing_loss_runner)
+    drain_call = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+    job_id = job.id
+
+    assert_receive {:background_job_claim_started, task, ^job_id, claim_token}, 1_000
+
+    send(
+      task,
+      {:enter_background_job_finishing, claim_token, runner, {:ok, %{late: true}}}
+    )
+
+    assert_receive {:background_job_finishing, ^task, ^job_id, ^claim_token}, 1_000
+
+    replacement_token = Ecto.UUID.generate()
+
+    {1, _rows} =
+      BackgroundJob
+      |> where([candidate], candidate.id == ^job.id)
+      |> where([candidate], candidate.claim_token == ^claim_token)
+      |> Repo.update_all(set: [claim_token: replacement_token])
+
+    task_ref = Process.monitor(task)
+    send(task, {:release_background_job_finishing, claim_token})
+
+    assert_receive {:DOWN, ^task_ref, :process, ^task, :normal}, 1_000
+
+    assert {:ok, [{^job_id, {:error, :claim_lost}}]} =
+             Task.await(drain_call, 1_000)
+
+    current = Repo.get!(BackgroundJob, job.id)
+    assert current.status == "running"
+    assert current.claim_token == replacement_token
+    assert current.completed_at == nil
+    assert current.result == %{}
+    assert :sys.get_state(runner).drains == %{}
+  end
+
+  test "drain classifies a database transition failure as persistence deferred", %{
+    user_id: user_id
+  } do
+    register_claim_observer!()
+
+    Repo.query!("""
+    CREATE FUNCTION maraithon_test_fail_background_job_transition()
+    RETURNS trigger AS $$
+    BEGIN
+      IF OLD.job_type = 'drain_persistence_failure_probe'
+         AND OLD.status = 'running'
+         AND NEW.status <> 'running' THEN
+        RAISE EXCEPTION 'injected background job transition failure';
+      END IF;
+
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER maraithon_test_fail_background_job_transition
+    BEFORE UPDATE ON background_jobs
+    FOR EACH ROW
+    EXECUTE FUNCTION maraithon_test_fail_background_job_transition()
+    """)
+
+    {:ok, job} =
+      BackgroundJobs.enqueue("drain_persistence_failure_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    runner = start_claim_runner(:background_job_drain_persistence_failure_runner)
+    drain_call = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+    job_id = job.id
+
+    assert_receive {:background_job_claim_started, task, ^job_id, claim_token}, 1_000
+    task_ref = Process.monitor(task)
+
+    send(task, {:release_background_job_claim, claim_token, {:ok, %{ignored: true}}})
+    assert_receive {:DOWN, ^task_ref, :process, ^task, :normal}, 1_000
+
+    assert {:ok, [{^job_id, {:error, :persistence_deferred}}]} =
+             Task.await(drain_call, 1_000)
+  end
+
+  test "supervisor shutdown kills a blocked drain task and resolves its caller", %{
+    user_id: user_id
+  } do
+    register_claim_observer!()
+
+    {:ok, job} =
+      BackgroundJobs.enqueue("drain_stop_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    runner = start_claim_runner(:background_job_drain_stop_runner)
+    drain_call = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+    job_id = job.id
+
+    assert_receive {:background_job_claim_started, task, ^job_id, claim_token}, 1_000
+
+    assert {:trap_exit, true} = Process.info(runner, :trap_exit)
+
+    task_ref = Process.monitor(task)
+    runner_ref = Process.monitor(runner)
+    assert :ok = stop_supervised(:background_job_drain_stop_runner)
+
+    assert_receive {:DOWN, ^task_ref, :process, ^task, :killed}, 1_000
+    assert_receive {:DOWN, ^runner_ref, :process, ^runner, :shutdown}, 1_000
+    assert {:error, :runner_stopped} = Task.await(drain_call, 1_000)
+
+    # Termination cannot make already-started handler side effects exactly
+    # once. The fenced row remains recoverable by the stale-claim sweep.
+    current = Repo.get!(BackgroundJob, job.id)
+    assert current.status == "running"
+    assert current.claim_token == claim_token
+  end
+
+  test "drain caps a batch larger than max beside pre-existing work and concurrent calls", %{
+    user_id: user_id
+  } do
+    register_claim_observer!()
+
+    {:ok, existing_job} =
+      BackgroundJobs.enqueue("preexisting_claim_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    runner =
+      start_claim_runner(:background_job_drain_concurrency_runner,
+        batch_size: 5,
+        max_concurrency: 2
+      )
+
+    send(runner, :poll)
+    existing_id = existing_job.id
+
+    assert_receive {:background_job_claim_started, existing_task, ^existing_id, existing_token},
+                   1_000
+
+    {:ok, first_drain_job} =
+      BackgroundJobs.enqueue("first_bounded_drain_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    {:ok, second_drain_job} =
+      BackgroundJobs.enqueue("second_bounded_drain_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    drain_call = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+
+    assert_receive {:background_job_claim_started, drain_task, drain_job_id, drain_token}, 1_000
+    assert drain_job_id in [first_drain_job.id, second_drain_job.id]
+
+    state = :sys.get_state(runner)
+    assert state.batch_size > state.max_concurrency
+    assert map_size(state.running) == state.max_concurrency
+
+    # A concurrent drain observes no remaining slot and cannot exceed the
+    # ceiling while the first deferred drain is still blocked.
+    assert {:ok, []} = BackgroundJobRunner.drain_once(runner)
+    assert map_size(:sys.get_state(runner).running) == 2
+
+    bounded_jobs =
+      Repo.all(
+        from candidate in BackgroundJob,
+          where: candidate.id in ^[first_drain_job.id, second_drain_job.id]
+      )
+
+    assert Enum.count(bounded_jobs, &(&1.status == "running")) == 1
+    assert Enum.count(bounded_jobs, &(&1.status == "pending")) == 1
+
+    drain_ref = Process.monitor(drain_task)
+    send(drain_task, {:release_background_job_claim, drain_token, {:ok, %{drained: true}}})
+    assert_receive {:DOWN, ^drain_ref, :process, ^drain_task, :normal}, 1_000
+
+    assert {:ok, [{^drain_job_id, {:ok, %{drained: true}}}]} =
+             Task.await(drain_call, 1_000)
+
+    existing_ref = Process.monitor(existing_task)
+
+    send(
+      existing_task,
+      {:release_background_job_claim, existing_token, {:ok, %{preexisting: true}}}
+    )
+
+    assert_receive {:DOWN, ^existing_ref, :process, ^existing_task, :normal}, 1_000
+    await_claim_removed(runner, {existing_job.id, existing_token})
+  end
+
+  test "claim renewal preserves the generation and ownership loss stops the stale task", %{
+    user_id: user_id
+  } do
+    register_claim_observer!()
+
+    {:ok, job} =
+      BackgroundJobs.enqueue("claim_renewal_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    runner = start_claim_runner(:background_job_claim_renewal_runner)
+    send(runner, :poll)
+
+    assert_receive {:background_job_claim_started, task, job_id, claim_token}, 1_000
+    assert job_id == job.id
+    assert {:ok, ^claim_token} = Ecto.UUID.cast(claim_token)
+
+    claimed = Repo.get!(BackgroundJob, job.id)
+    assert claimed.claim_token == claim_token
+    assert claimed.claimed_by == to_string(node())
+    assert claimed.claim_token != claimed.claimed_by
+
+    backdated_heartbeat = DateTime.add(claimed.claimed_at, -5, :second)
+
+    {1, _rows} =
+      BackgroundJob
+      |> where([candidate], candidate.id == ^job.id)
+      |> where([candidate], candidate.claim_token == ^claim_token)
+      |> Repo.update_all(set: [claimed_at: backdated_heartbeat])
+
+    send(runner, :renew_claims)
+    _state = :sys.get_state(runner)
+
+    renewed = Repo.get!(BackgroundJob, job.id)
+    assert renewed.claim_token == claim_token
+    assert renewed.claimed_by == claimed.claimed_by
+    assert DateTime.compare(renewed.claimed_at, backdated_heartbeat) == :gt
+
+    replacement_token = Ecto.UUID.generate()
+
+    {1, _rows} =
+      BackgroundJob
+      |> where([candidate], candidate.id == ^job.id)
+      |> where([candidate], candidate.claim_token == ^claim_token)
+      |> Repo.update_all(set: [claim_token: replacement_token])
+
+    task_ref = Process.monitor(task)
+    send(runner, :renew_claims)
+    _state = :sys.get_state(runner)
+
+    assert_receive {:DOWN, ^task_ref, :process, ^task, :killed}, 1_000
+    await_claim_removed(runner, {job.id, claim_token})
+
+    current = Repo.get!(BackgroundJob, job.id)
+    assert current.status == "running"
+    assert current.claim_token == replacement_token
+    assert current.attempts == 0
+    assert current.last_error == nil
+  end
+
+  test "cancellation CAS clears the claim and late completion cannot overwrite it", %{
+    user_id: user_id
+  } do
+    register_claim_observer!()
+
+    {:ok, job} =
+      BackgroundJobs.enqueue("claim_cancel_probe", %{
+        user_id: user_id,
+        queue: "test"
+      })
+
+    runner = start_claim_runner(:background_job_claim_cancel_runner)
+    send(runner, :poll)
+
+    assert_receive {:background_job_claim_started, task, job_id, claim_token}, 1_000
+    assert job_id == job.id
+    task_ref = Process.monitor(task)
+
+    assert {:ok, :cancelled} = BackgroundJobs.cancel(job.id)
+
+    cancelled = Repo.get!(BackgroundJob, job.id)
+    assert cancelled.status == "cancelled"
+    assert cancelled.claimed_by == nil
+    assert cancelled.claimed_at == nil
+    assert cancelled.claim_token == nil
+
+    send(task, {:release_background_job_claim, claim_token, {:ok, %{late: true}}})
+    assert_receive {:DOWN, ^task_ref, :process, ^task, :normal}, 1_000
+    await_claim_removed(runner, {job.id, claim_token})
+
+    unchanged = Repo.get!(BackgroundJob, job.id)
+    assert unchanged.status == "cancelled"
+    assert unchanged.completed_at == nil
+    assert unchanged.claim_token == nil
+    assert unchanged.result == %{}
+  end
+
+  test "stale generations cannot complete, retry, fail, or rate-limit a reclaimed job", %{
+    user_id: user_id
+  } do
+    register_claim_observer!()
+
+    [
+      %{
+        suffix: "complete",
+        first_runner: :background_job_stale_complete_first_runner,
+        second_runner: :background_job_stale_complete_second_runner,
+        max_attempts: 3,
+        stale_result: {:ok, %{late: true}}
+      },
+      %{
+        suffix: "retry",
+        first_runner: :background_job_stale_retry_first_runner,
+        second_runner: :background_job_stale_retry_second_runner,
+        max_attempts: 3,
+        stale_result: {:error, :late_retry}
+      },
+      %{
+        suffix: "fail",
+        first_runner: :background_job_stale_fail_first_runner,
+        second_runner: :background_job_stale_fail_second_runner,
+        max_attempts: 1,
+        stale_result: {:error, :late_failure}
+      },
+      %{
+        suffix: "retry_after",
+        first_runner: :background_job_stale_retry_after_first_runner,
+        second_runner: :background_job_stale_retry_after_second_runner,
+        max_attempts: 3,
+        stale_result: {:error, {:retry_after, 60, :late_rate_limit}}
+      }
+    ]
+    |> Enum.each(&assert_stale_generation_fenced(user_id, &1))
   end
 
   test "drain_once force-flushes stale CRM ingest windows", %{user_id: user_id} do
@@ -309,5 +808,107 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
            )
 
     GenServer.stop(pid, :normal)
+  end
+
+  defp assert_stale_generation_fenced(user_id, spec) do
+    {:ok, job} =
+      BackgroundJobs.enqueue("claim_#{spec.suffix}_probe", %{
+        user_id: user_id,
+        queue: "test",
+        max_attempts: spec.max_attempts
+      })
+
+    first_runner = start_claim_runner(spec.first_runner)
+    send(first_runner, :poll)
+
+    job_id = job.id
+
+    assert_receive {:background_job_claim_started, first_task, ^job_id, first_token}, 1_000
+
+    stale_heartbeat = DateTime.add(DateTime.utc_now(), -5, :second)
+
+    {1, _rows} =
+      BackgroundJob
+      |> where([candidate], candidate.id == ^job.id)
+      |> where([candidate], candidate.claim_token == ^first_token)
+      |> Repo.update_all(set: [claimed_at: stale_heartbeat])
+
+    second_runner = start_claim_runner(spec.second_runner, claim_timeout_ms: 100)
+    send(second_runner, :poll)
+
+    assert_receive {:background_job_claim_started, second_task, ^job_id, second_token}, 1_000
+    assert second_token != first_token
+
+    first_ref = Process.monitor(first_task)
+    send(first_task, {:release_background_job_claim, first_token, spec.stale_result})
+    assert_receive {:DOWN, ^first_ref, :process, ^first_task, :normal}, 1_000
+    await_claim_removed(first_runner, {job.id, first_token})
+
+    current = Repo.get!(BackgroundJob, job.id)
+    assert current.status == "running"
+    assert current.claim_token == second_token
+    assert current.attempts == 0
+    assert current.completed_at == nil
+    assert current.failed_at == nil
+    assert current.last_error == nil
+    assert current.result == %{}
+
+    second_ref = Process.monitor(second_task)
+
+    send(
+      second_task,
+      {:release_background_job_claim, second_token, {:ok, %{winner: spec.suffix}}}
+    )
+
+    assert_receive {:DOWN, ^second_ref, :process, ^second_task, :normal}, 1_000
+    await_claim_removed(second_runner, {job.id, second_token})
+
+    completed = Repo.get!(BackgroundJob, job.id)
+    assert completed.status == "completed"
+    assert completed.claim_token == nil
+    assert completed.result == %{"winner" => spec.suffix}
+  end
+
+  defp start_claim_runner(name, overrides \\ []) do
+    opts =
+      Keyword.merge(
+        [
+          name: name,
+          handler: Maraithon.Runtime.BlockingClaimTestHandler,
+          poll_interval_ms: 60_000,
+          claim_timeout_ms: 60_000,
+          batch_size: 1,
+          max_concurrency: 1
+        ],
+        overrides
+      )
+
+    start_supervised!(%{
+      id: name,
+      start: {BackgroundJobRunner, :start_link, [opts]},
+      restart: :temporary,
+      type: :worker
+    })
+  end
+
+  defp register_claim_observer! do
+    assert Process.whereis(:background_job_claim_test_observer) == nil
+    assert Process.register(self(), :background_job_claim_test_observer)
+  end
+
+  defp await_claim_removed(runner, key, attempts \\ 50)
+
+  defp await_claim_removed(runner, key, attempts) when attempts > 0 do
+    state = :sys.get_state(runner)
+
+    if Map.has_key?(state.running, key) do
+      await_claim_removed(runner, key, attempts - 1)
+    else
+      :ok
+    end
+  end
+
+  defp await_claim_removed(_runner, key, 0) do
+    flunk("runner did not release claim bookkeeping for #{inspect(key)}")
   end
 end

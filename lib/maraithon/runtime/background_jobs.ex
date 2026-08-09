@@ -11,6 +11,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
 
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.DbResilience
 
   @default_max_attempts 3
   @default_limit 50
@@ -227,24 +228,59 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   end
 
   def cancel(id) when is_binary(id) do
-    now = DateTime.utc_now()
+    case DbResilience.with_database("background jobs cancel", fn ->
+           Repo.transaction(fn ->
+             job =
+               BackgroundJob
+               |> where([candidate], candidate.id == ^id)
+               |> where([candidate], candidate.status in ["pending", "running"])
+               |> lock("FOR UPDATE")
+               |> Repo.one()
+
+             cancel_locked(job)
+           end)
+         end) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp cancel_locked(nil), do: Repo.rollback(:not_found_or_not_cancellable)
+
+  defp cancel_locked(%BackgroundJob{} = job) do
+    now = database_now!()
 
     case Repo.update_all(
-           from(job in BackgroundJob,
-             where: job.id == ^id,
-             where: job.status in ["pending", "running"]
-           ),
+           cancellable_claim(job),
            set: [
              status: "cancelled",
              cancelled_at: now,
              claimed_by: nil,
              claimed_at: nil,
+             claim_token: nil,
              updated_at: now
            ]
          ) do
-      {1, _} -> {:ok, :cancelled}
-      {0, _} -> {:error, :not_found_or_not_cancellable}
+      {1, _rows} -> :cancelled
+      {0, _rows} -> Repo.rollback(:not_found_or_not_cancellable)
     end
+  end
+
+  defp cancellable_claim(%BackgroundJob{id: id, status: status, claim_token: claim_token})
+       when is_binary(claim_token) do
+    from(candidate in BackgroundJob,
+      where: candidate.id == ^id,
+      where: candidate.status == ^status,
+      where: candidate.claim_token == ^claim_token
+    )
+  end
+
+  defp cancellable_claim(%BackgroundJob{id: id, status: status, claim_token: nil}) do
+    from(candidate in BackgroundJob,
+      where: candidate.id == ^id,
+      where: candidate.status == ^status,
+      where: is_nil(candidate.claim_token)
+    )
   end
 
   def normalize_attrs(job_type, attrs) when is_binary(job_type) do
@@ -353,6 +389,13 @@ defmodule Maraithon.Runtime.BackgroundJobs do
 
     suffix = source_item_id || "latest"
     "background:#{job_type}:#{user_id}:#{suffix}"
+  end
+
+  defp database_now! do
+    case Repo.query!("SELECT timezone('UTC', clock_timestamp())", [], log: false).rows do
+      [[%NaiveDateTime{} = value]] -> DateTime.from_naive!(value, "Etc/UTC")
+      [[%DateTime{} = value]] -> value
+    end
   end
 
   defp maybe_filter(query, _field, nil), do: query

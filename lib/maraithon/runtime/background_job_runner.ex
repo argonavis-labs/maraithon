@@ -5,6 +5,16 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   This is intentionally separate from the agent wakeup scheduler and effect
   runner. It handles user-scoped application work that can be retried and
   observed without blocking request-handling processes.
+
+  A claim token fences one execution generation from the next. This protection
+  assumes the production deployment invariant remains immediate and
+  single-machine: never overlap this token-aware runner with an older runner
+  that can mutate jobs by id without the token predicate.
+
+  Orderly shutdown stops tracked handler tasks. An untrappable runner death can
+  still leave handler work in flight, so recovery relies on token fencing,
+  stale-claim recovery, and idempotent handlers. Claim tokens do not provide
+  exactly-once side effects.
   """
 
   use GenServer
@@ -40,6 +50,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
+
     poll_interval_ms =
       Keyword.get(
         opts,
@@ -77,19 +89,34 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
         )
       )
 
+    renew_interval_ms = renewal_interval_ms(claim_timeout_ms)
+
     schedule_poll(poll_interval_ms)
+    renew_timer = schedule_renewal(renew_interval_ms)
 
     {:ok,
      %{
        running: %{},
        monitors: %{},
+       drains: %{},
        poll_interval_ms: poll_interval_ms,
        claim_timeout_ms: claim_timeout_ms,
+       renew_interval_ms: renew_interval_ms,
+       renew_timer: renew_timer,
        batch_size: batch_size,
        max_concurrency: max_concurrency,
        poll_retry_attempts: 0,
        handler: Keyword.get(opts, :handler, handler_module())
      }}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    _ = Process.cancel_timer(state.renew_timer)
+    Enum.each(state.running, fn {_key, %{task: task}} -> Process.exit(task.pid, :kill) end)
+    Enum.each(state.monitors, fn {ref, _key} -> Process.demonitor(ref, [:flush]) end)
+    reply_to_stopped_drains(state.drains)
+    :ok
   end
 
   @impl true
@@ -110,20 +137,9 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
           state =
             Enum.reduce(jobs, state, fn job, acc ->
               case claim_job(job) do
-                {:ok, claimed} ->
-                  ref = execute_job_async(claimed, state.handler)
-
-                  %{
-                    acc
-                    | running: Map.put(acc.running, claimed.id, claimed),
-                      monitors: Map.put(acc.monitors, ref, claimed.id)
-                  }
-
-                :already_claimed ->
-                  acc
-
-                {:error, _reason} ->
-                  acc
+                {:ok, claimed} -> start_tracked_job(acc, claimed, nil)
+                :already_claimed -> acc
+                {:error, _reason} -> acc
               end
             end)
 
@@ -139,45 +155,78 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   end
 
   @impl true
-  def handle_info({:background_job_done, job_id, _result}, state) do
-    monitors =
-      case Enum.find(state.monitors, fn {_ref, id} -> id == job_id end) do
-        {ref, _id} ->
-          Process.demonitor(ref, [:flush])
-          Map.delete(state.monitors, ref)
-
-        nil ->
-          state.monitors
-      end
-
-    {:noreply, %{state | running: Map.delete(state.running, job_id), monitors: monitors}}
+  def handle_info(:renew_claims, state) do
+    _ = Process.cancel_timer(state.renew_timer)
+    state = renew_running_claims(state)
+    renew_timer = schedule_renewal(state.renew_interval_ms)
+    {:noreply, %{state | renew_timer: renew_timer}}
   end
 
-  # Task.Supervisor.async_nolink reply for a task whose :background_job_done
-  # message already cleaned up.
+  @impl true
+  def handle_info({:background_job_done, job_id, claim_token, result}, state) do
+    key = {job_id, claim_token}
+
+    case Map.pop(state.running, key) do
+      {nil, _running} ->
+        {:noreply, state}
+
+      {%{task: %Task{ref: ref}} = entry, running} ->
+        Process.demonitor(ref, [:flush])
+
+        state = %{
+          state
+          | running: running,
+            monitors: Map.delete(state.monitors, ref)
+        }
+
+        {:noreply, record_drain_result(state, entry, key, result)}
+    end
+  end
+
+  # Task.Supervisor.async_nolink also sends its ordinary `{ref, result}` reply.
+  # The token-keyed completion message or monitor DOWN owns cleanup, so leave
+  # monitor bookkeeping intact until one of those arrives.
   @impl true
   def handle_info({ref, _result}, state) when is_reference(ref) do
-    Process.demonitor(ref, [:flush])
-    {:noreply, %{state | monitors: Map.delete(state.monitors, ref)}}
+    {:noreply, state}
   end
 
   # A job task died before reporting back (kill, OOM). Without this, the
-  # `running` entry leaked and permanently consumed a concurrency slot.
+  # `running` entry leaked and permanently consumed a concurrency slot or left
+  # a deferred drain caller waiting forever.
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     case Map.pop(state.monitors, ref) do
       {nil, _monitors} ->
         {:noreply, state}
 
-      {job_id, monitors} ->
-        {job, running} = Map.pop(state.running, job_id)
+      {key, monitors} ->
+        {entry, running} = Map.pop(state.running, key)
+        state = %{state | running: running, monitors: monitors}
 
-        if job && reason != :normal do
-          Logger.error("Background job task crashed for job #{job_id}: #{inspect(reason)}")
-          release_crashed_job(job, reason)
+        if entry do
+          {job_id, _claim_token} = key
+
+          result =
+            case entry.stop_reason do
+              :claim_lost ->
+                {:error, :claim_lost}
+
+              nil when reason == :normal ->
+                Logger.error("Background job task exited without a result for job #{job_id}")
+                release_crashed_job(entry.job, :job_task_result_missing)
+                {:error, :job_task_result_missing}
+
+              nil ->
+                Logger.error("Background job task crashed for job #{job_id}: #{inspect(reason)}")
+                release_crashed_job(entry.job, reason)
+                {:error, {:job_task_crashed, reason}}
+            end
+
+          {:noreply, record_drain_result(state, entry, key, result)}
+        else
+          {:noreply, state}
         end
-
-        {:noreply, %{state | running: running, monitors: monitors}}
     end
   end
 
@@ -188,38 +237,204 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   end
 
   @impl true
-  def handle_call(:clear_running, _from, state) do
-    Enum.each(state.monitors, fn {ref, _id} -> Process.demonitor(ref, [:flush]) end)
-    {:reply, :ok, %{state | running: %{}, monitors: %{}}}
+  def handle_call(
+        {:background_job_finishing, job_id, claim_token},
+        {task_pid, _tag},
+        state
+      ) do
+    key = {job_id, claim_token}
+
+    case Map.get(state.running, key) do
+      %{task: %Task{pid: ^task_pid}, stop_reason: nil} = entry ->
+        running = Map.put(state.running, key, %{entry | phase: :finishing})
+        {:reply, :ok, %{state | running: running}}
+
+      _entry ->
+        {:reply, :claim_lost, state}
+    end
   end
 
   @impl true
-  def handle_call(:drain_once, _from, state) do
-    limit = max(state.batch_size, 1)
+  def handle_call(:clear_running, _from, state) do
+    Enum.each(state.running, fn {_key, %{task: task}} -> Process.exit(task.pid, :kill) end)
+    Enum.each(state.monitors, fn {ref, _key} -> Process.demonitor(ref, [:flush]) end)
+    reply_to_cleared_drains(state.drains)
+    {:reply, :ok, %{state | running: %{}, monitors: %{}, drains: %{}}}
+  end
 
-    result =
-      DbResilience.with_database("background job runner drain once", fn ->
-        reclaim_stale_jobs(state.claim_timeout_ms)
+  @impl true
+  def handle_call(:drain_once, from, state) do
+    available_slots = max(state.max_concurrency - map_size(state.running), 0)
 
-        limit
-        |> fetch_pending_jobs()
-        |> Enum.map(fn job ->
-          case claim_job(job) do
-            {:ok, claimed} -> {claimed.id, execute_job(claimed, state.handler)}
-            other -> {job.id, other}
-          end
+    if available_slots == 0 do
+      {:reply, {:ok, []}, state}
+    else
+      limit = min(max(state.batch_size, 1), available_slots)
+      start_drain(from, state, limit)
+    end
+  end
+
+  defp start_drain(from, state, limit) do
+    case DbResilience.with_database("background job runner drain once", fn ->
+           reclaim_stale_jobs(state.claim_timeout_ms)
+           fetch_pending_jobs(limit)
+         end) do
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+
+      {:ok, []} ->
+        {:reply, {:ok, []}, state}
+
+      {:ok, jobs} ->
+        drain_id = make_ref()
+
+        drain = %{
+          from: from,
+          order: Enum.map(jobs, & &1.id),
+          pending: MapSet.new(),
+          results: %{}
+        }
+
+        {state, drain} =
+          Enum.reduce(jobs, {state, drain}, fn job, {acc_state, acc_drain} ->
+            case claim_job(job) do
+              {:ok, claimed} ->
+                key = claim_key(claimed)
+
+                {
+                  start_tracked_job(acc_state, claimed, drain_id),
+                  %{acc_drain | pending: MapSet.put(acc_drain.pending, key)}
+                }
+
+              other ->
+                {acc_state, put_in(acc_drain.results[job.id], other)}
+            end
+          end)
+
+        if MapSet.size(drain.pending) == 0 do
+          {:reply, drain_reply(drain), state}
+        else
+          {:noreply, %{state | drains: Map.put(state.drains, drain_id, drain)}}
+        end
+    end
+  end
+
+  defp start_tracked_job(state, %BackgroundJob{} = job, drain_id) do
+    task = execute_job_async(job, state.handler)
+    key = claim_key(job)
+
+    entry = %{
+      job: job,
+      task: task,
+      drain_id: drain_id,
+      phase: :executing,
+      stop_reason: nil
+    }
+
+    %{
+      state
+      | running: Map.put(state.running, key, entry),
+        monitors: Map.put(state.monitors, task.ref, key)
+    }
+  end
+
+  defp record_drain_result(state, %{drain_id: nil}, _key, _result), do: state
+
+  defp record_drain_result(state, %{drain_id: drain_id}, {job_id, _token} = key, result) do
+    case Map.fetch(state.drains, drain_id) do
+      :error ->
+        state
+
+      {:ok, drain} ->
+        drain = %{
+          drain
+          | pending: MapSet.delete(drain.pending, key),
+            results: Map.put(drain.results, job_id, result)
+        }
+
+        if MapSet.size(drain.pending) == 0 do
+          GenServer.reply(drain.from, drain_reply(drain))
+          %{state | drains: Map.delete(state.drains, drain_id)}
+        else
+          %{state | drains: Map.put(state.drains, drain_id, drain)}
+        end
+    end
+  end
+
+  defp drain_reply(drain) do
+    {:ok, Enum.map(drain.order, &{&1, Map.fetch!(drain.results, &1)})}
+  end
+
+  defp reply_to_cleared_drains(drains) do
+    Enum.each(drains, fn {_drain_id, drain} ->
+      results =
+        Enum.reduce(drain.pending, drain.results, fn {job_id, _token}, acc ->
+          Map.put(acc, job_id, {:error, :runner_cleared})
         end)
-      end)
 
-    {:reply, result, state}
+      GenServer.reply(drain.from, drain_reply(%{drain | results: results}))
+    end)
+  end
+
+  defp reply_to_stopped_drains(drains) do
+    Enum.each(drains, fn {_drain_id, drain} ->
+      GenServer.reply(drain.from, {:error, :runner_stopped})
+    end)
+  end
+
+  defp renew_running_claims(state) do
+    Enum.reduce(state.running, state, fn {key, entry}, acc ->
+      if entry.stop_reason == :claim_lost do
+        acc
+      else
+        case renew_claim(entry.job) do
+          :ok ->
+            acc
+
+          # A finishing task has no handler side effects left to stop. Its
+          # terminal write is token-fenced, and a zero-row renewal can simply
+          # mean that write committed before its done message reached us. If
+          # ownership was replaced instead, the persistence classifier reports
+          # its zero-row terminal CAS as `{:error, :claim_lost}`.
+          :lost when entry.phase == :finishing ->
+            acc
+
+          :lost ->
+            Logger.warning("Stopping background job task after claim ownership loss",
+              background_job_id: entry.job.id
+            )
+
+            running = Map.put(acc.running, key, %{entry | stop_reason: :claim_lost})
+            Process.exit(entry.task.pid, :kill)
+            %{acc | running: running}
+
+          {:error, reason} ->
+            Logger.warning("Background job claim renewal deferred",
+              background_job_id: entry.job.id,
+              reason: inspect(reason)
+            )
+
+            acc
+        end
+      end
+    end)
+  end
+
+  defp renew_claim(%BackgroundJob{} = job) do
+    case DbResilience.with_database("background job runner renew claim", fn ->
+           now = database_now!()
+           Repo.update_all(owned_claim(job), set: [claimed_at: now, updated_at: now])
+         end) do
+      {:ok, {1, _rows}} -> :ok
+      {:ok, {0, _rows}} -> :lost
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp fetch_pending_jobs(limit) do
-    now = DateTime.utc_now()
-
     BackgroundJob
     |> where([job], job.status == "pending")
-    |> where([job], job.scheduled_at <= ^now)
+    |> where([job], job.scheduled_at <= fragment("timezone('UTC', clock_timestamp())"))
     |> order_by([job], asc: job.scheduled_at, asc: job.inserted_at)
     |> limit(^limit)
     |> Repo.all()
@@ -227,46 +442,69 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp claim_job(%BackgroundJob{} = job) do
     node_id = node() |> to_string()
-    now = DateTime.utc_now()
+    claim_token = Ecto.UUID.generate()
 
     case DbResilience.with_database("background job runner claim job", fn ->
-           Repo.update_all(
-             from(candidate in BackgroundJob,
-               where: candidate.id == ^job.id,
-               where: candidate.status == "pending"
-             ),
-             set: [
-               status: "running",
-               claimed_by: node_id,
-               claimed_at: now,
-               updated_at: now
-             ]
-           )
+           Repo.transaction(fn ->
+             now = database_now!()
+
+             # A pending row can retain a token after a rollback or legacy
+             # transition. The status CAS claims it and atomically replaces that
+             # stale generation with this runner's fresh token.
+             case Repo.update_all(
+                    from(candidate in BackgroundJob,
+                      where: candidate.id == ^job.id,
+                      where: candidate.status == "pending"
+                    ),
+                    set: [
+                      status: "running",
+                      claimed_by: node_id,
+                      claimed_at: now,
+                      claim_token: claim_token,
+                      updated_at: now
+                    ]
+                  ) do
+               {1, _rows} ->
+                 Repo.one!(
+                   from(candidate in BackgroundJob,
+                     where: candidate.id == ^job.id,
+                     where: candidate.status == "running",
+                     where: candidate.claim_token == ^claim_token
+                   )
+                 )
+
+               {0, _rows} ->
+                 Repo.rollback(:already_claimed)
+             end
+           end)
          end) do
-      {:ok, {1, _}} ->
-        DbResilience.with_database("background job runner load claimed job", fn ->
-          Repo.get!(BackgroundJob, job.id)
-        end)
-
-      {:ok, {0, _}} ->
-        :already_claimed
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, {:ok, %BackgroundJob{} = claimed}} -> {:ok, claimed}
+      {:ok, {:error, :already_claimed}} -> :already_claimed
+      {:error, reason} -> {:error, reason}
     end
   end
 
   defp execute_job_async(%BackgroundJob{} = job, handler) do
     parent = self()
 
-    %Task{ref: ref} =
-      Task.Supervisor.async_nolink(Maraithon.Runtime.BackgroundJobTaskSupervisor, fn ->
-        result = execute_job(job, handler)
-        send(parent, {:background_job_done, job.id, result})
-        :ok
-      end)
+    Task.Supervisor.async_nolink(Maraithon.Runtime.BackgroundJobTaskSupervisor, fn ->
+      result = execute_handler(job, handler)
 
-    ref
+      case GenServer.call(
+             parent,
+             {:background_job_finishing, job.id, job.claim_token},
+             :infinity
+           ) do
+        :ok ->
+          outcome = persist_job_result(job, result)
+          send(parent, {:background_job_done, job.id, job.claim_token, outcome})
+
+        :claim_lost ->
+          :ok
+      end
+
+      :ok
+    end)
   end
 
   defp release_crashed_job(%BackgroundJob{} = job, reason) do
@@ -280,7 +518,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     end
   end
 
-  defp execute_job(%BackgroundJob{} = job, handler) do
+  defp execute_handler(%BackgroundJob{} = job, handler) do
     Logger.info("Executing background job",
       background_job_id: job.id,
       queue: job.queue,
@@ -288,42 +526,72 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       user_id: job.user_id
     )
 
-    result = safe_execute(handler, job)
+    safe_execute(handler, job)
+  end
 
-    case result do
-      {:ok, data} ->
-        mark_completed(job, data)
+  defp persist_job_result(%BackgroundJob{} = job, handler_result) do
+    transition_result =
+      case handler_result do
+        {:ok, data} ->
+          mark_completed(job, data)
 
-      {:error, {:retry_after, seconds, reason}} when is_integer(seconds) and seconds >= 0 ->
-        # Provider-signaled backoff (e.g. HTTP 429 + Retry-After): reschedule
-        # at the requested delay without burning an attempt.
-        handle_retry_after(job, seconds, reason)
+        {:error, {:retry_after, seconds, reason}} when is_integer(seconds) and seconds >= 0 ->
+          # Provider-signaled backoff (e.g. HTTP 429 + Retry-After): reschedule
+          # at the requested delay without burning an attempt.
+          handle_retry_after(job, seconds, reason)
 
-      {:error, reason} ->
-        attempts = job.attempts + 1
+        {:error, reason} ->
+          persist_failure(job, reason)
+      end
 
-        if attempts < job.max_attempts do
-          mark_pending_retry(job, reason, attempts)
-        else
-          mark_failed(job, reason, attempts)
-        end
+    classify_persistence_result(job, handler_result, transition_result)
+  end
+
+  defp classify_persistence_result(_job, handler_result, {:ok, {1, _rows}}),
+    do: handler_result
+
+  defp classify_persistence_result(_job, _handler_result, {:ok, {0, _rows}}),
+    do: {:error, :claim_lost}
+
+  defp classify_persistence_result(job, _handler_result, {:error, _reason}) do
+    Logger.warning("Background job result persistence deferred",
+      background_job_id: job.id
+    )
+
+    {:error, :persistence_deferred}
+  end
+
+  defp classify_persistence_result(job, _handler_result, _unexpected) do
+    Logger.error("Background job result persistence returned an unexpected outcome",
+      background_job_id: job.id
+    )
+
+    {:error, :persistence_deferred}
+  end
+
+  defp persist_failure(%BackgroundJob{} = job, reason) do
+    attempts = job.attempts + 1
+
+    if attempts < job.max_attempts do
+      mark_pending_retry(job, reason, attempts)
+    else
+      mark_failed(job, reason, attempts)
     end
-
-    result
   end
 
   defp mark_completed(%BackgroundJob{} = job, result) do
-    now = DateTime.utc_now()
-
     DbResilience.with_database("background job runner mark completed", fn ->
+      now = database_now!()
+
       Repo.update_all(
-        from(candidate in BackgroundJob, where: candidate.id == ^job.id),
+        owned_claim(job),
         set: [
           status: "completed",
           result: normalize_result(result),
           completed_at: now,
           claimed_by: nil,
           claimed_at: nil,
+          claim_token: nil,
           last_error: nil,
           updated_at: now
         ]
@@ -351,8 +619,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       end
     else
       clamped_seconds = min(seconds, @max_retry_after_delay_seconds)
-      retry_at = DateTime.add(DateTime.utc_now(), clamped_seconds, :second)
-      mark_pending_rate_limited_retry(job, reason, retry_at, retry_after_count)
+      mark_pending_rate_limited_retry(job, reason, clamped_seconds, retry_after_count)
     end
   end
 
@@ -366,19 +633,22 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp mark_pending_rate_limited_retry(
          %BackgroundJob{} = job,
          reason,
-         %DateTime{} = retry_at,
+         retry_after_seconds,
          retry_after_count
-       ) do
-    now = DateTime.utc_now()
-
+       )
+       when is_integer(retry_after_seconds) and retry_after_seconds >= 0 do
     DbResilience.with_database("background job runner mark rate-limited retry", fn ->
+      now = database_now!()
+      retry_at = DateTime.add(now, retry_after_seconds, :second)
+
       Repo.update_all(
-        from(candidate in BackgroundJob, where: candidate.id == ^job.id),
+        owned_claim(job),
         set: [
           status: "pending",
           scheduled_at: retry_at,
           claimed_by: nil,
           claimed_at: nil,
+          claim_token: nil,
           last_error: error_text(reason),
           result: Map.put(job.result || %{}, "retry_after_count", retry_after_count),
           updated_at: now
@@ -389,22 +659,20 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp mark_pending_retry(%BackgroundJob{} = job, reason, attempts) do
     backoff_ms = calculate_backoff(attempts)
-    retry_at = DateTime.add(DateTime.utc_now(), backoff_ms, :millisecond)
-    mark_pending_retry(job, reason, attempts, retry_at)
-  end
-
-  defp mark_pending_retry(%BackgroundJob{} = job, reason, attempts, %DateTime{} = retry_at) do
-    now = DateTime.utc_now()
 
     DbResilience.with_database("background job runner mark retry", fn ->
+      now = database_now!()
+      retry_at = DateTime.add(now, backoff_ms, :millisecond)
+
       Repo.update_all(
-        from(candidate in BackgroundJob, where: candidate.id == ^job.id),
+        owned_claim(job),
         set: [
           status: "pending",
           attempts: attempts,
           scheduled_at: retry_at,
           claimed_by: nil,
           claimed_at: nil,
+          claim_token: nil,
           last_error: error_text(reason),
           updated_at: now
         ]
@@ -413,17 +681,18 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   end
 
   defp mark_failed(%BackgroundJob{} = job, reason, attempts) do
-    now = DateTime.utc_now()
-
     DbResilience.with_database("background job runner mark failed", fn ->
+      now = database_now!()
+
       Repo.update_all(
-        from(candidate in BackgroundJob, where: candidate.id == ^job.id),
+        owned_claim(job),
         set: [
           status: "failed",
           attempts: attempts,
           failed_at: now,
           claimed_by: nil,
           claimed_at: nil,
+          claim_token: nil,
           last_error: error_text(reason),
           updated_at: now
         ]
@@ -432,23 +701,42 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   end
 
   defp reclaim_stale_jobs(claim_timeout_ms) do
-    cutoff = DateTime.add(DateTime.utc_now(), -claim_timeout_ms, :millisecond)
-    now = DateTime.utc_now()
-
-    {count, _} =
-      Repo.update_all(
-        from(job in BackgroundJob,
-          where: job.status == "running",
-          where: job.claimed_at < ^cutoff
+    %{rows: [[count]]} =
+      Repo.query!(
+        """
+        WITH stale_claims AS (
+          SELECT id, claim_token, claimed_by, claimed_at
+          FROM background_jobs
+          WHERE status = 'running'
+            AND claimed_at <
+              timezone('UTC', clock_timestamp()) - ($1::bigint * interval '1 millisecond')
+          FOR UPDATE SKIP LOCKED
         ),
-        set: [status: "pending", claimed_by: nil, claimed_at: nil, updated_at: now]
+        reclaimed AS (
+          UPDATE background_jobs AS job
+          SET status = 'pending',
+              claimed_by = NULL,
+              claimed_at = NULL,
+              claim_token = NULL,
+              updated_at = timezone('UTC', clock_timestamp())
+          FROM stale_claims AS stale
+          WHERE job.id = stale.id
+            AND job.status = 'running'
+            AND job.claim_token IS NOT DISTINCT FROM stale.claim_token
+            AND job.claimed_by IS NOT DISTINCT FROM stale.claimed_by
+            AND job.claimed_at IS NOT DISTINCT FROM stale.claimed_at
+          RETURNING job.id
+        )
+        SELECT count(*)::bigint FROM reclaimed
+        """,
+        [claim_timeout_ms]
       )
 
     if count > 0 do
       Logger.info("Reclaimed stale background jobs", count: count)
     end
 
-    sweep_stale_ingest_windows(now)
+    sweep_stale_ingest_windows(database_now!())
   end
 
   defp sweep_stale_ingest_windows(now) do
@@ -469,11 +757,45 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       Logger.warning("CRM ingest window sweep crashed: #{kind} #{inspect(reason)}")
   end
 
+  defp claim_key(%BackgroundJob{id: id, claim_token: claim_token})
+       when is_binary(id) and is_binary(claim_token),
+       do: {id, claim_token}
+
+  defp owned_claim(%BackgroundJob{id: id, claim_token: claim_token})
+       when is_binary(id) and is_binary(claim_token) do
+    from(candidate in BackgroundJob,
+      where: candidate.id == ^id,
+      where: candidate.status == "running",
+      where: candidate.claim_token == ^claim_token
+    )
+  end
+
+  defp database_now! do
+    case Repo.query!("SELECT timezone('UTC', clock_timestamp())", [], log: false).rows do
+      [[%NaiveDateTime{} = value]] -> DateTime.from_naive!(value, "Etc/UTC")
+      [[%DateTime{} = value]] -> value
+    end
+  end
+
   defp calculate_backoff(attempts) when is_integer(attempts) and attempts > 0 do
     min(:timer.seconds(30) * round(:math.pow(2, attempts - 1)), :timer.minutes(15))
   end
 
+  defp renewal_interval_ms(claim_timeout_ms)
+       when is_integer(claim_timeout_ms) and claim_timeout_ms > 1 do
+    claim_timeout_ms
+    |> div(3)
+    |> max(1)
+    |> min(claim_timeout_ms - 1)
+  end
+
+  defp renewal_interval_ms(claim_timeout_ms) do
+    raise ArgumentError,
+          "background job claim timeout must be an integer greater than 1ms, got: #{inspect(claim_timeout_ms)}"
+  end
+
   defp schedule_poll(ms), do: Process.send_after(self(), :poll, ms)
+  defp schedule_renewal(ms), do: Process.send_after(self(), :renew_claims, ms)
 
   defp safe_execute(handler, %BackgroundJob{} = job) do
     handler.execute(job)
