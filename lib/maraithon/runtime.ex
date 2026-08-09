@@ -4,21 +4,26 @@ defmodule Maraithon.Runtime do
   Provides the main API for starting, stopping, and interacting with agents.
   """
 
+  import Ecto.Query
+
   alias Maraithon.Agents
+  alias Maraithon.Agents.AgentRun
+  alias Maraithon.Agents.AgentRunStep
+  alias Maraithon.Effects.Effect
+  alias Maraithon.Repo
   alias Maraithon.AgentSubscriptions
+  alias Maraithon.Runtime.AgentDirective
+  alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.Dispatch
-  alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Events
-  alias Maraithon.Effects
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.IncidentLog
+  alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.Scheduler
 
   require Logger
-
-  @max_lifecycle_nodes 32
 
   @doc """
   Enqueue durable app-level background work.
@@ -160,8 +165,10 @@ defmodule Maraithon.Runtime do
                 {:ok, updated_agent}
 
               {:error, reason} = error ->
-                _ = Agents.mark_stopped(updated_agent)
-
+                # `running` is desired state, not process liveness. An ambiguous
+                # spawn may already have crossed init, and an owned remote
+                # incarnation is also a successful durable intent. Never roll
+                # desired state back based on a launcher return classification.
                 Logger.error("Failed to start existing agent #{id}: #{inspect(reason)}",
                   agent_id: id
                 )
@@ -189,14 +196,16 @@ defmodule Maraithon.Runtime do
         {:error, :not_found}
 
       agent ->
-        with {:ok, stopped_agent} <- fence_agent_for_stop(agent),
-             :ok <- stop_running_agent(stopped_agent, reason) do
-          Logger.info("Stopped agent",
+        with {:ok, %{agent: stopped_agent} = stop_fence} <- fence_agent_for_stop(agent),
+             {:ok, drain_status} <- stop_running_agent(stop_fence, reason),
+             :ok <- fence_future_agent_delivery(stopped_agent.id) do
+          Logger.info("Persisted Agent stop intent",
             agent_reference: Maraithon.Redaction.fingerprint(id),
-            status: "stopped"
+            status: "stopped",
+            drain_status: drain_status
           )
 
-          {:ok, %{stopped_at: stopped_agent.stopped_at}}
+          {:ok, %{stopped_at: stopped_agent.stopped_at, drain_status: drain_status}}
         end
     end
   end
@@ -242,8 +251,10 @@ defmodule Maraithon.Runtime do
         {:error, :not_found}
 
       agent ->
-        with {:ok, stopped_agent} <- fence_agent_for_stop(agent),
-             :ok <- stop_running_agent(stopped_agent, "deleted_from_admin"),
+        with {:ok, %{agent: stopped_agent} = stop_fence} <- fence_agent_for_stop(agent),
+             {:ok, drain_status} <- stop_running_agent(stop_fence, "deleted_from_admin"),
+             :ok <- fence_future_agent_delivery(stopped_agent.id),
+             :ok <- require_agent_quiesced(drain_status),
              {:ok, _deleted_agent} <- Agents.delete_agent(stopped_agent) do
           Logger.info("Deleted agent",
             agent_reference: Maraithon.Redaction.fingerprint(id),
@@ -446,11 +457,30 @@ defmodule Maraithon.Runtime do
   defp start_resumable_agents(agents) do
     Enum.reduce_while(agents, {:ok, []}, fn agent, {:ok, pids} ->
       case with_agent_lifecycle_lock(agent.id, fn ->
-             start_resumable_agent(agent.id, resume_trigger: "node_boot")
+             start_resumable_agent(agent.id,
+               resume_trigger: "node_boot",
+               admission: :bootstrap
+             )
            end) do
         {:ok, pid} when is_pid(pid) ->
           Logger.info("Resumed agent #{agent.id}", agent_id: agent.id)
           {:cont, {:ok, [pid | pids]}}
+
+        {:error, reason}
+        when reason in [
+               :runtime_lease_owned,
+               :agent_restart_backoff,
+               :agent_lifecycle_busy,
+               :agent_binding_not_active,
+               :agent_not_resumable,
+               :agent_not_runnable,
+               :agent_restart_tripped
+             ] ->
+          # Another exact node owns it, its durable guard is not due, or
+          # desired-state/Binding consent makes it intentionally non-resident.
+          # No one legacy row may hold global effect admission closed.
+          Logger.info("Deferred exact Agent resume", agent_id: agent.id, reason: inspect(reason))
+          {:cont, {:ok, pids}}
 
         {:error, reason} ->
           Logger.error("Failed to resume agent #{agent.id}: #{inspect(reason)}",
@@ -466,38 +496,37 @@ defmodule Maraithon.Runtime do
   Resume a persisted agent after AgentWatcher detects an abnormal process exit.
   """
   def resume_agent_after_crash(id, metadata \\ %{}) when is_binary(id) and is_map(metadata) do
+    case AgentRestartGuards.get(id) do
+      %{generation: generation, needs_recovery: true, tripped: false} ->
+        resume_agent_after_crash(id, generation, metadata)
+
+      _missing_or_stale ->
+        {:error, :stale_recovery_generation}
+    end
+  end
+
+  def resume_agent_after_crash(id, guard_generation, metadata)
+      when is_binary(id) and is_binary(guard_generation) and is_map(metadata) do
     with_agent_lifecycle_lock(id, fn ->
-      start_resumable_agent(id, resume_trigger: "targeted_reresume", metadata: metadata)
+      start_resumable_agent(id,
+        resume_trigger: "targeted_reresume",
+        admission: :recovery,
+        recovery_generation: guard_generation,
+        metadata: metadata
+      )
     end)
   end
 
   # Private functions
 
   defp with_agent_lifecycle_lock(id, fun) when is_binary(id) and is_function(fun, 0) do
-    connected_nodes = Node.list(:connected) |> Enum.uniq()
-
-    cond do
-      byte_size(id) not in 1..255 or not String.valid?(id) ->
-        {:error, :invalid_agent_id}
-
-      length(connected_nodes) >= @max_lifecycle_nodes ->
-        {:error, :agent_lifecycle_busy}
-
-      true ->
-        nodes = [node() | connected_nodes]
-        lock = {{__MODULE__, :agent_lifecycle, id}, self()}
-
-        case :global.set_lock(lock, nodes, 0) do
-          true ->
-            try do
-              fun.()
-            after
-              :global.del_lock(lock, nodes)
-            end
-
-          false ->
-            {:error, :agent_lifecycle_busy}
-        end
+    # The database row/lease transactions serialize lifecycle authority. A
+    # distributed Erlang lock is neither complete (unconnected nodes) nor
+    # durable, so it must not gate exact ownership.
+    if byte_size(id) in 1..255 and String.valid?(id) do
+      fun.()
+    else
+      {:error, :invalid_agent_id}
     end
   catch
     :exit, _reason -> {:error, :agent_lifecycle_unavailable}
@@ -506,7 +535,7 @@ defmodule Maraithon.Runtime do
   defp start_resumable_agent(id, opts) do
     case Agents.get_agent(id, include_removed: true) do
       %{status: status, install_status: "enabled"} = agent
-      when status in ["recovering", "running", "degraded"] ->
+      when status in ["running", "degraded"] ->
         start_agent_process(agent, opts)
 
       nil ->
@@ -517,6 +546,20 @@ defmodule Maraithon.Runtime do
     end
   end
 
+  defp put_recorded_recovery_generation(agent_id, opts) do
+    if Keyword.has_key?(opts, :recovery_generation) do
+      opts
+    else
+      case AgentRestartGuards.get(agent_id) do
+        %{generation: generation, needs_recovery: true, tripped: false} ->
+          Keyword.put(opts, :recovery_generation, generation)
+
+        _no_due_recovery ->
+          opts
+      end
+    end
+  end
+
   defp maybe_start_installed_agent(%{install_status: "enabled", status: "running"} = agent) do
     start_agent_process(agent)
   end
@@ -524,99 +567,222 @@ defmodule Maraithon.Runtime do
   defp maybe_start_installed_agent(_agent), do: {:ok, :not_started}
 
   defp start_agent_process(agent, opts \\ []) do
-    case AgentSupervisor.start_agent(agent) do
+    opts = put_recorded_recovery_generation(agent.id, opts)
+
+    supervisor_opts =
+      opts
+      |> Keyword.take([:recovery_generation])
+      |> Keyword.put(:admission, start_admission(opts))
+
+    case AgentSupervisor.start_agent(agent, supervisor_opts) do
       {:ok, pid} = result ->
         maybe_record_agent_resumed(agent, pid, opts)
         result
-
-      {:error, {:already_started, pid}} when is_pid(pid) ->
-        {:ok, pid}
-
-      :ignore ->
-        case :global.whereis_name({:maraithon_agent, agent.id}) do
-          owner when is_pid(owner) -> {:ok, owner}
-          :undefined -> {:error, :agent_start_ignored}
-        end
 
       other ->
         other
     end
   end
 
-  defp stop_agent_process(id, reason) do
-    case lookup_agent_process(id) do
-      {:ok, pid} ->
-        AgentSupervisor.stop_agent(pid, reason)
-
-      :not_running ->
-        :ok
+  defp start_admission(opts) do
+    cond do
+      Keyword.has_key?(opts, :recovery_generation) -> :recovery
+      Keyword.get(opts, :resume_trigger) == "node_boot" -> :bootstrap
+      true -> :normal
     end
   end
 
   defp deactivate_agent_installation(agent, reason) do
-    with {:ok, stopped_agent} <- fence_agent_for_stop(agent),
-         :ok <- stop_running_agent(stopped_agent, reason) do
-      Scheduler.cancel_all(stopped_agent.id)
-      AgentSubscriptions.deactivate_for_agent(stopped_agent.id)
+    with {:ok, %{agent: stopped_agent} = stop_fence} <- fence_agent_for_stop(agent),
+         {:ok, _drain_status} <- stop_running_agent(stop_fence, reason),
+         :ok <- fence_future_agent_delivery(stopped_agent.id) do
       {:ok, stopped_agent}
     end
   end
 
-  defp stop_running_agent(agent, reason) do
-    with :ok <- normalize_agent_stop_result(stop_agent_process(agent.id, reason)),
-         {:ok, _cancelled_count} <-
-           EffectRunner.cancel_active_for_agent(
-             agent.id,
-             "agent_stopped_without_effect_continuation"
-           ),
-         :ok <- close_persisted_active_run_by_id(agent.id) do
-      :ok
+  defp fence_future_agent_delivery(agent_id) do
+    case Scheduler.cancel_all(agent_id) do
+      {count, _rows} when is_integer(count) ->
+        case AgentSubscriptions.deactivate_for_agent(agent_id) do
+          {deactivated_count, _subscriptions} when is_integer(deactivated_count) -> :ok
+          _unexpected -> {:error, :agent_delivery_fence_failed}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+
+      _unexpected ->
+        {:error, :agent_delivery_fence_failed}
+    end
+  rescue
+    _error -> {:error, :agent_delivery_fence_failed}
+  catch
+    :exit, _reason -> {:error, :agent_delivery_fence_failed}
+  end
+
+  # Desired state and exact readiness were committed before this function. It
+  # may route/wait only after the transaction has ended, and it never performs
+  # unfenced broad Effect/run cleanup on behalf of a remote or lost owner.
+  defp stop_running_agent(
+         %{agent: agent, lease: nil, lost_lease: lost_lease},
+         reason
+       ) do
+    _route_result = route_fenced_agent_stop(agent.id, lost_lease, reason)
+    {:ok, :reconciliation_pending}
+  end
+
+  defp stop_running_agent(%{agent: agent, lease: nil}, _reason) do
+    case lookup_agent_process(agent.id) do
+      {:ok, _unfenced_local_pid} ->
+        # A rolling legacy/stale PID is not ownership proof. Do not send an
+        # unqualified stop that a successor could consume, and do not claim
+        # quiescence without an explicit bridge/fleet-drain operation.
+        {:ok, :reconciliation_pending}
+
+      :not_running ->
+        if exact_work_quiesced?(agent.id),
+          do: {:ok, :quiesced},
+          else: {:ok, :reconciliation_pending}
     end
   end
 
-  defp close_persisted_active_run_by_id(agent_id) do
-    case Agents.get_agent(agent_id, include_removed: true) do
-      nil -> :ok
-      persisted_agent -> close_persisted_active_run(persisted_agent)
+  defp stop_running_agent(%{agent: agent, lease: lease}, reason) do
+    _route_result = route_fenced_agent_stop(agent.id, lease, reason)
+
+    case AgentLeases.get(agent.id) do
+      nil ->
+        if exact_work_quiesced?(agent.id),
+          do: {:ok, :quiesced},
+          else: {:ok, :reconciliation_pending}
+
+      _owned_or_reconciling ->
+        {:ok, :reconciliation_pending}
     end
   end
 
-  defp close_persisted_active_run(%{active_run_id: nil}), do: :ok
+  defp exact_work_quiesced?(agent_id) do
+    active_run_pointer? =
+      case Agents.get_agent(agent_id, include_removed: true) do
+        %{active_run_id: active_run_id} when is_binary(active_run_id) -> true
+        _no_active_run -> false
+      end
 
-  defp close_persisted_active_run(%{id: agent_id, active_run_id: run_id})
-       when is_binary(agent_id) and is_binary(run_id) do
-    with {:ok, terminal_results} <- Effects.list_terminal_results_for_run(run_id, agent_id),
-         :ok <- Agents.reconcile_terminal_effect_steps(terminal_results),
-         {:ok, _summary} <-
-           Agents.cancel_agent_run(
-             run_id,
-             agent_id,
-             "agent_stopped_without_run_continuation"
-           ),
-         {:ok, _count} <- Effects.acknowledge_terminal_results_for_run(run_id, agent_id) do
-      :ok
-    end
+    running_run? =
+      Repo.exists?(
+        from(run in AgentRun,
+          where: run.agent_id == ^agent_id,
+          where: run.status == "running"
+        )
+      )
+
+    requested_run_step? =
+      Repo.exists?(
+        from(step in AgentRunStep,
+          where: step.agent_id == ^agent_id,
+          where: step.status == "requested"
+        )
+      )
+
+    active_effect? =
+      Repo.exists?(
+        from(effect in Effect,
+          where: effect.agent_id == ^agent_id,
+          where: effect.status in ["pending", "claimed", "cancelling"]
+        )
+      )
+
+    processing_directive? =
+      Repo.exists?(
+        from(directive in AgentDirective,
+          where: directive.agent_id == ^agent_id,
+          where: directive.status == "processing"
+        )
+      )
+
+    unresolved_generation? =
+      case AgentRestartGuards.get(agent_id) do
+        %{needs_recovery: true} -> true
+        %{tripped: true} -> true
+        _settled_or_absent -> false
+      end
+
+    not active_run_pointer? and not running_run? and not requested_run_step? and
+      not active_effect? and not processing_directive? and not unresolved_generation?
+  rescue
+    _error -> false
+  catch
+    :exit, _reason -> false
   end
 
-  defp fence_agent_for_stop(%{status: "stopped"} = agent), do: {:ok, agent}
-  defp fence_agent_for_stop(agent), do: Agents.mark_stopped(agent)
+  defp require_agent_quiesced(:quiesced), do: :ok
+  defp require_agent_quiesced(:reconciliation_pending), do: {:error, :agent_drain_pending}
 
-  defp normalize_agent_stop_result(:ok), do: :ok
-  defp normalize_agent_stop_result({:error, :not_found}), do: :ok
-  defp normalize_agent_stop_result({:error, _reason}), do: {:error, :agent_stop_failed}
-  defp normalize_agent_stop_result(_result), do: {:error, :agent_stop_failed}
+  defp route_fenced_agent_stop(agent_id, lease, reason) do
+    local_node = Atom.to_string(node())
+
+    case Registry.lookup(AgentRegistry, agent_id) do
+      [{pid, owner_token}] when is_pid(pid) and owner_token == lease.owner_token ->
+        if lease.owner_node == local_node do
+          AgentSupervisor.stop_agent(pid, reason, lease.owner_token)
+        else
+          dispatch_fenced_agent_stop(agent_id, lease.owner_token, reason)
+        end
+
+      _not_local_exact_owner ->
+        dispatch_fenced_agent_stop(agent_id, lease.owner_token, reason)
+    end
+  catch
+    :exit, _reason -> {:error, :agent_stop_route_unavailable}
+  end
+
+  defp dispatch_fenced_agent_stop(agent_id, owner_token, reason) do
+    # The immutable token prevents a delayed cross-node stop from killing a
+    # successor incarnation after desired state changes again.
+    Dispatch.dispatch(agent_id, {:control, :stop, reason, owner_token})
+  end
+
+  defp fence_agent_for_stop(agent), do: fence_agent_for_stop(agent, 3, nil)
+
+  defp fence_agent_for_stop(_agent, 0, _lost_lease),
+    do: {:error, :agent_stop_reconciliation_pending}
+
+  defp fence_agent_for_stop(agent, attempts_remaining, lost_lease) do
+    case AgentLeases.fence_for_stop(agent.id) do
+      {:ok, stop_fence} ->
+        stop_fence =
+          if lost_lease, do: Map.put(stop_fence, :lost_lease, lost_lease), else: stop_fence
+
+        {:ok, stop_fence}
+
+      {:error, {:expired_lease_requires_reconciliation, expired_lease}} ->
+        # Expired ownership is recorded before desired state is changed. A
+        # concurrent renewal or reconciler is benign; retry the exact fence.
+        case AgentRestartGuards.record_expired(agent.id, expired_lease.owner_token) do
+          {:recorded, _guard} ->
+            fence_agent_for_stop(agent, attempts_remaining - 1, expired_lease)
+
+          {:duplicate, _guard} ->
+            fence_agent_for_stop(agent, attempts_remaining - 1, expired_lease)
+
+          {:ignored, :lease_renewed} ->
+            fence_agent_for_stop(agent, attempts_remaining - 1, nil)
+
+          {:ignored, _reason} ->
+            fence_agent_for_stop(agent, attempts_remaining - 1, expired_lease)
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   defp lookup_agent_process(id) do
     case Registry.lookup(AgentRegistry, id) do
-      [{pid, _}] -> {:ok, pid}
-      [] -> lookup_global_agent_process(id)
-    end
-  end
-
-  defp lookup_global_agent_process(id) do
-    case :global.whereis_name({:maraithon_agent, id}) do
-      pid when is_pid(pid) -> {:ok, pid}
-      :undefined -> :not_running
+      [{pid, _routing_metadata}] when is_pid(pid) -> {:ok, pid}
+      [] -> :not_running
     end
   end
 
@@ -690,11 +856,14 @@ defmodule Maraithon.Runtime do
     end
   end
 
-  defp stop_for_update(agent, false), do: {:ok, agent}
+  defp stop_for_update(%{status: "terminated"} = agent, false), do: {:ok, agent}
 
-  defp stop_for_update(agent, true) do
-    with {:ok, stopped_agent} <- fence_agent_for_stop(agent),
-         :ok <- stop_running_agent(stopped_agent, "restarting_with_updated_config") do
+  defp stop_for_update(agent, _was_running) do
+    with {:ok, %{agent: stopped_agent} = stop_fence} <- fence_agent_for_stop(agent),
+         {:ok, drain_status} <-
+           stop_running_agent(stop_fence, "restarting_with_updated_config"),
+         :ok <- fence_future_agent_delivery(stopped_agent.id),
+         :ok <- require_agent_quiesced(drain_status) do
       {:ok, stopped_agent}
     end
   end

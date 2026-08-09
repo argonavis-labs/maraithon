@@ -1,0 +1,193 @@
+defmodule Maraithon.Runtime.WakeCoordinator do
+  @moduledoc """
+  Bounded exact-ownership convergence for resident Agents.
+
+  This lifecycle slice deliberately does not wake ordinary pending directives
+  or idle Agents. It only reconciles expired lease generations, closes the
+  guard/directive commit gap, and admits exact due recoveries.
+  """
+
+  use GenServer
+
+  alias Maraithon.Agents
+  alias Maraithon.Runtime.AgentDirectives
+  alias Maraithon.Runtime.AgentRestartGuards
+  alias Maraithon.Runtime.AgentSupervisor
+  alias Maraithon.Runtime.AgentWatcher
+  alias Maraithon.Runtime.BootGate
+  alias Maraithon.Runtime.Config
+
+  require Logger
+
+  @default_interval_ms 2_000
+  @default_batch_size 50
+  @max_batch_size 500
+  @allowed_reconcile_options [
+    :admit_recoveries,
+    :guard_opts,
+    :limit,
+    :supervisor,
+    :watcher
+  ]
+
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+  end
+
+  @doc "Runs one bounded exact-ownership convergence pass."
+  def reconcile_once(opts \\ [])
+
+  def reconcile_once(opts) when is_list(opts) do
+    with :ok <- validate_options(opts),
+         {:ok, limit} <- reconciliation_limit(opts),
+         ownership when is_list(ownership) <-
+           AgentDirectives.reconcile_expired_ownership(
+             limit,
+             Keyword.get(opts, :guard_opts, configured_guard_opts())
+           ),
+         :ok <- validate_ownership(ownership),
+         recorded when is_list(recorded) <-
+           AgentDirectives.reconcile_recorded_generations(limit),
+         :ok <- validate_recorded(recorded) do
+      recoveries =
+        if Keyword.get(opts, :admit_recoveries, BootGate.open?()) do
+          start_due_recoveries(limit, opts)
+        else
+          []
+        end
+
+      {:ok, %{ownership: ownership, recorded: recorded, recoveries: recoveries}}
+    else
+      {:error, reason} -> {:error, reason}
+      unexpected -> {:error, {:unexpected_ownership_reconciliation, unexpected}}
+    end
+  rescue
+    error -> {:error, error}
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  def reconcile_once(_opts), do: {:error, :invalid_reconciliation_options}
+
+  @impl true
+  def init(opts) do
+    interval_ms =
+      Keyword.get(opts, :interval_ms) ||
+        Config.positive_integer(:agent_ownership_reconcile_interval_ms, @default_interval_ms)
+
+    limit = Keyword.get(opts, :limit, configured_batch_size()) |> min(@max_batch_size) |> max(1)
+    send(self(), :reconcile)
+    {:ok, %{interval_ms: interval_ms, limit: limit}}
+  end
+
+  @impl true
+  def handle_info(:reconcile, state) do
+    case reconcile_once(limit: state.limit) do
+      {:ok, _summary} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Exact Agent ownership convergence deferred",
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+    end
+
+    Process.send_after(self(), :reconcile, state.interval_ms)
+    {:noreply, state}
+  end
+
+  defp start_due_recoveries(limit, opts) do
+    supervisor = Keyword.get(opts, :supervisor, AgentSupervisor)
+    watcher = Keyword.get(opts, :watcher, AgentWatcher)
+
+    limit
+    |> AgentDirectives.list_recovery_agent_ids()
+    |> Enum.map(fn agent_id ->
+      case {AgentRestartGuards.get(agent_id), Agents.get_agent(agent_id, include_removed: true)} do
+        {%{generation: generation, needs_recovery: true, tripped: false},
+         %{status: status, install_status: "enabled"} = agent}
+        when status in ["running", "degraded"] ->
+          result =
+            AgentSupervisor.start_agent(agent,
+              admission: :recovery,
+              recovery_generation: generation,
+              supervisor: supervisor,
+              watcher: watcher
+            )
+
+          {agent_id, generation, result}
+
+        _stale_or_inactive_hint ->
+          {agent_id, nil, {:error, :stale_recovery_generation}}
+      end
+    end)
+  end
+
+  defp validate_options(opts) do
+    if Keyword.keyword?(opts) and
+         Enum.all?(Keyword.keys(opts), &(&1 in @allowed_reconcile_options)),
+       do: :ok,
+       else: {:error, :invalid_reconciliation_options}
+  end
+
+  defp reconciliation_limit(opts) do
+    limit = Keyword.get(opts, :limit, configured_batch_size())
+
+    if is_integer(limit) and limit in 1..@max_batch_size,
+      do: {:ok, limit},
+      else: {:error, :invalid_reconciliation_limit}
+  end
+
+  defp validate_ownership(results) do
+    case Enum.find(results, &ownership_failure?/1) do
+      nil -> :ok
+      failure -> {:error, {:ownership_reconciliation_failed, failure}}
+    end
+  end
+
+  defp ownership_failure?({_agent_id, _owner_token, guard_result, recovery_result}) do
+    match?({:error, _reason}, guard_result) or match?({:error, _reason}, recovery_result)
+  end
+
+  defp validate_recorded(results) do
+    case Enum.find(results, fn
+           {_agent_id, {:error, _reason}} -> true
+           _success -> false
+         end) do
+      nil -> :ok
+      failure -> {:error, {:recorded_generation_reconciliation_failed, failure}}
+    end
+  end
+
+  defp configured_batch_size do
+    Config.positive_integer(:agent_ownership_reconcile_batch_size, @default_batch_size)
+    |> min(@max_batch_size)
+  end
+
+  defp configured_guard_opts do
+    [
+      window_ms:
+        Config.positive_integer(:agent_crash_loop_window_ms, 600_000)
+        |> max(1_000)
+        |> min(86_400_000),
+      max_crashes: Config.positive_integer(:agent_crash_loop_max, 3) |> min(100),
+      backoffs_ms: configured_backoffs()
+    ]
+  end
+
+  defp configured_backoffs do
+    case Config.get(:agent_reresume_backoffs, [5_000, 15_000, 30_000]) do
+      values when is_list(values) ->
+        values
+        |> Enum.filter(&(is_integer(&1) and &1 >= 0))
+        |> Enum.map(&min(&1, 3_600_000))
+        |> case do
+          [] -> [5_000, 15_000, 30_000]
+          valid -> valid
+        end
+
+      _other ->
+        [5_000, 15_000, 30_000]
+    end
+  end
+end

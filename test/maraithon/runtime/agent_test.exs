@@ -244,7 +244,7 @@ defmodule Maraithon.Runtime.AgentTest do
     end
 
     test "cancels active effects from the previous process incarnation", %{agent: agent} do
-      {:ok, first_pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      {:ok, first_pid} = start_legacy_supervised_agent(agent)
       assert {:idle, _data} = :sys.get_state(first_pid)
 
       {:ok, pending_id} = Effects.request(agent.id, :tool_call, "time", %{})
@@ -265,7 +265,7 @@ defmodule Maraithon.Runtime.AgentTest do
                  first_pid
                )
 
-      {:ok, recovered_pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      {:ok, recovered_pid} = start_legacy_supervised_agent(agent)
 
       on_exit(fn ->
         DynamicSupervisor.terminate_child(
@@ -291,7 +291,7 @@ defmodule Maraithon.Runtime.AgentTest do
     test "recovery closes the durably owned run after a supervised hard process kill", %{
       agent: agent
     } do
-      {:ok, first_pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      {:ok, first_pid} = start_legacy_supervised_agent(agent)
       assert {:idle, _data} = :sys.get_state(first_pid)
 
       send(first_pid, {:message, "hard kill", %{}, Ecto.UUID.generate()})
@@ -359,7 +359,7 @@ defmodule Maraithon.Runtime.AgentTest do
     end
 
     test "terminalizes only the current run when its process terminates", %{agent: agent} do
-      {:ok, pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      {:ok, pid} = start_legacy_supervised_agent(agent)
       assert {:idle, _data} = :sys.get_state(pid)
 
       send(pid, {:message, "begin one run", %{}, Ecto.UUID.generate()})
@@ -418,7 +418,7 @@ defmodule Maraithon.Runtime.AgentTest do
     test "intentional stop preserves provider facts already observed on the current run", %{
       agent: agent
     } do
-      {:ok, pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      {:ok, pid} = start_legacy_supervised_agent(agent)
       assert {:idle, _data} = :sys.get_state(pid)
 
       send(pid, {:message, "begin provider-backed run", %{}, Ecto.UUID.generate()})
@@ -441,7 +441,7 @@ defmodule Maraithon.Runtime.AgentTest do
     end
 
     test "intentional stop cancels queued and claimed effects", %{agent: agent} do
-      {:ok, pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      {:ok, pid} = start_legacy_supervised_agent(agent)
       assert {:idle, _data} = :sys.get_state(pid)
 
       {:ok, pending_id} = Effects.request(agent.id, :tool_call, "time", %{})
@@ -1287,7 +1287,7 @@ defmodule Maraithon.Runtime.AgentTest do
          %{
            agent: agent
          } do
-      {:ok, pid} = Maraithon.Runtime.AgentSupervisor.start_agent(agent)
+      {:ok, pid} = start_legacy_supervised_agent(agent)
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
       assert {:idle, _data} = :sys.get_state(pid)
 
@@ -1549,6 +1549,16 @@ defmodule Maraithon.Runtime.AgentTest do
         where: fragment("?->>? = ?", j.payload, "_schedule_key", "agent_periodic_wakeup"),
         order_by: [asc: j.inserted_at]
       )
+    )
+  end
+
+  # Legacy transient supervision is retained only for historical Agent
+  # cleanup/recovery tests. Production starts exclusively through the exact
+  # AgentSupervisor launcher and always uses temporary children.
+  defp start_legacy_supervised_agent(agent) do
+    DynamicSupervisor.start_child(
+      Maraithon.Runtime.AgentSupervisor,
+      RuntimeAgent.child_spec(agent)
     )
   end
 

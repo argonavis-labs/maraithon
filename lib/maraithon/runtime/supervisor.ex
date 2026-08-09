@@ -41,10 +41,13 @@ defmodule Maraithon.Runtime.Supervisor do
             # work while the runner is still alive during reverse-order stop.
             Maraithon.Runtime.EffectRunner,
             agent_supervisor,
+            # Exact owners are temporary children. The watcher must be online
+            # before Bootstrap or any producer can spawn an Agent.
+            Maraithon.Runtime.AgentWatcher,
+            Maraithon.Runtime.WakeCoordinator,
             Maraithon.Runtime.Bootstrap,
             Maraithon.Runtime.BackgroundJobRunner,
             Maraithon.Runtime.Scheduler,
-            Maraithon.Runtime.AgentWatcher,
             Maraithon.Runtime.ShutdownReporter,
             Maraithon.Runtime.HealthReporter,
             Maraithon.Runtime.InsightNotifier,
@@ -62,7 +65,9 @@ defmodule Maraithon.Runtime.Supervisor do
             Maraithon.TelegramAssistant.RunReaper
           ]
       else
-        dependency_children ++ [agent_supervisor]
+        # Exact starts are still exercised in focused tests. Keep the mandatory
+        # monitor online even when periodic/background producers are disabled.
+        dependency_children ++ [agent_supervisor, Maraithon.Runtime.AgentWatcher]
       end
 
     Supervisor.init(children,

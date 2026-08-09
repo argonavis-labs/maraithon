@@ -1,28 +1,29 @@
 defmodule Maraithon.Runtime.AgentWatcherTest do
   use Maraithon.DataCase, async: false
 
+  alias Maraithon.Accounts
+  alias Maraithon.AgentIsolation
   alias Maraithon.Agents
+  alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentRegistry
+  alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.IncidentLog
 
   test "records crash and targeted resume incidents after abnormal agent exit" do
     {:ok, agent} = running_agent("watcher-resume")
-    {:ok, pid} = AgentSupervisor.start_agent(agent)
-    wait_for_idle(agent.id)
+    {supervisor, watcher} = exact_runtime(crash_loop_max: 3)
 
-    watcher =
-      start_supervised!(
-        {AgentWatcher,
-         [
-           name: :"agent_watcher_#{System.unique_integer([:positive])}",
-           poll_interval_ms: 10,
-           reresume_backoffs: [10],
-           crash_loop_max: 3,
-           crash_loop_window_ms: 60_000
-         ]}
+    {:ok, pid} =
+      AgentSupervisor.start_agent(agent,
+        supervisor: supervisor,
+        watcher: watcher,
+        ttl_ms: 5_000,
+        renew_interval_ms: 500
       )
+
+    wait_for_idle(agent.id)
 
     assert_eventually(fn ->
       watcher
@@ -31,6 +32,7 @@ defmodule Maraithon.Runtime.AgentWatcherTest do
       |> Map.has_key?(pid)
     end)
 
+    [{^pid, failed_owner_token}] = Registry.lookup(AgentRegistry, agent.id)
     ref = Process.monitor(pid)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 1_000
@@ -50,24 +52,60 @@ defmodule Maraithon.Runtime.AgentWatcherTest do
 
       crash_recorded? and resumed_recorded?
     end)
+
+    assert_eventually(fn ->
+      case {AgentRestartGuards.get(agent.id), AgentLeases.get(agent.id)} do
+        {%{needs_recovery: false}, %{owner_token: replacement, ready_at: ready_at}} ->
+          replacement != failed_owner_token and ready_at != nil
+
+        _other ->
+          false
+      end
+    end)
+  end
+
+  test "durably guards a normal DOWN that still owns a live lease" do
+    {:ok, agent} = running_agent("watcher-normal-live")
+    {supervisor, watcher} = exact_runtime(crash_loop_max: 3, recover?: false)
+
+    {:ok, pid} =
+      AgentSupervisor.start_agent(agent,
+        supervisor: supervisor,
+        watcher: watcher,
+        ttl_ms: 5_000,
+        renew_interval_ms: 500
+      )
+
+    wait_for_idle(agent.id)
+    [{^pid, owner_token}] = Registry.lookup(AgentRegistry, agent.id)
+    ref = Process.monitor(pid)
+    :ok = GenServer.stop(pid, :normal)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+
+    assert_eventually(fn ->
+      match?(
+        %{last_owner_token: ^owner_token, needs_recovery: true},
+        AgentRestartGuards.get(agent.id)
+      )
+    end)
+
+    assert AgentLeases.get(agent.id) == nil
+    assert Agents.get_agent(agent.id).status == "running"
   end
 
   test "records stopped unexpectedly when crash loop threshold is reached" do
     {:ok, agent} = running_agent("watcher-threshold")
-    {:ok, pid} = AgentSupervisor.start_agent(agent)
-    wait_for_idle(agent.id)
+    {supervisor, watcher} = exact_runtime(crash_loop_max: 1)
 
-    watcher =
-      start_supervised!(
-        {AgentWatcher,
-         [
-           name: :"agent_watcher_#{System.unique_integer([:positive])}",
-           poll_interval_ms: 10,
-           reresume_backoffs: [10],
-           crash_loop_max: 1,
-           crash_loop_window_ms: 60_000
-         ]}
+    {:ok, pid} =
+      AgentSupervisor.start_agent(agent,
+        supervisor: supervisor,
+        watcher: watcher,
+        ttl_ms: 5_000,
+        renew_interval_ms: 500
       )
+
+    wait_for_idle(agent.id)
 
     assert_eventually(fn ->
       watcher
@@ -87,20 +125,57 @@ defmodule Maraithon.Runtime.AgentWatcherTest do
     end)
 
     refute Enum.any?(IncidentLog.by_kind(:agent_resumed), &(&1.agent_id == agent.id))
+    assert %{tripped: true, needs_recovery: true} = AgentRestartGuards.get(agent.id)
+    assert AgentLeases.get(agent.id) == nil
+    assert Agents.get_agent(agent.id).status == "stopped"
   end
 
   defp running_agent(name) do
-    {:ok, agent} =
-      Agents.create_agent(%{
-        behavior: "prompt_agent",
-        status: "running",
-        started_at: DateTime.utc_now(),
-        config: %{"name" => name}
-      })
+    user_id = "#{name}-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
-    on_exit(fn -> stop_agent(agent.id) end)
+    with {:ok, agent} <-
+           Agents.create_agent(%{
+             user_id: user_id,
+             behavior: "prompt_agent",
+             status: "running",
+             started_at: DateTime.utc_now(),
+             config: %{"name" => name}
+           }),
+         {:ok, _binding} <- AgentIsolation.upsert_binding(agent) do
+      {:ok, agent}
+    end
+  end
 
-    {:ok, agent}
+  defp exact_runtime(opts) do
+    suffix = System.unique_integer([:positive])
+    supervisor_name = :"agent_supervisor_#{suffix}"
+    watcher_name = :"agent_watcher_#{suffix}"
+
+    supervisor =
+      start_supervised!(
+        {DynamicSupervisor,
+         strategy: :one_for_one, name: supervisor_name, max_restarts: 20, max_seconds: 60},
+        id: supervisor_name
+      )
+
+    watcher =
+      start_supervised!(
+        {AgentWatcher,
+         [
+           name: watcher_name,
+           agent_supervisor: supervisor,
+           reconcile?: false,
+           recover?: Keyword.get(opts, :recover?, true),
+           poll_interval_ms: 10,
+           reresume_backoffs: [10],
+           crash_loop_max: Keyword.fetch!(opts, :crash_loop_max),
+           crash_loop_window_ms: 60_000
+         ]},
+        id: watcher_name
+      )
+
+    {supervisor, watcher}
   end
 
   defp wait_for_idle(agent_id) do
@@ -117,13 +192,6 @@ defmodule Maraithon.Runtime.AgentWatcherTest do
         :exit, _reason -> false
       end
     end)
-  end
-
-  defp stop_agent(agent_id) do
-    case Registry.lookup(AgentRegistry, agent_id) do
-      [{pid, _value}] -> AgentSupervisor.stop_agent(pid, "test_cleanup")
-      _other -> :ok
-    end
   end
 
   defp assert_eventually(fun, attempts \\ 50)

@@ -1,6 +1,7 @@
 defmodule Maraithon.AgentsTest do
   use Maraithon.DataCase, async: true
 
+  alias Maraithon.AgentIsolation
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentRun
@@ -429,8 +430,14 @@ defmodule Maraithon.AgentsTest do
   end
 
   describe "claim_agent_start/1" do
-    test "atomically admits only one start transition" do
-      {:ok, agent} = Agents.create_agent(Map.put(@valid_attrs, :status, "stopped"))
+    test "atomically admits only one explicitly consented start transition" do
+      user_id = "claim-start-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, agent} =
+        Agents.create_agent(Map.merge(@valid_attrs, %{status: "stopped", user_id: user_id}))
+
+      {:ok, _binding} = AgentIsolation.upsert_binding(agent)
 
       assert {:ok, claimed} = Agents.claim_agent_start(agent.id)
       assert claimed.status == "running"

@@ -8,10 +8,12 @@ defmodule Maraithon.Agents do
   alias Maraithon.AgentBuilder
   alias Maraithon.AgentHarness.Manifest, as: HarnessManifest
   alias Maraithon.AgentHarness.MarkdownSkill
+  alias Maraithon.AgentIsolation.Binding
   alias Maraithon.AgentSubscriptions
   alias Maraithon.Connections
   alias Maraithon.Projects
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentPackage
   alias Maraithon.Agents.AgentPackageVersion
@@ -867,42 +869,75 @@ defmodule Maraithon.Agents do
 
   @doc false
   def claim_agent_start(id) when is_binary(id) do
-    now = DateTime.utc_now()
+    Repo.transaction(fn ->
+      agent =
+        Repo.one(
+          from(agent in Agent,
+            where: agent.id == ^id,
+            lock: "FOR UPDATE"
+          )
+        )
 
-    query =
-      from(agent in Agent,
-        where: agent.id == ^id,
-        where: agent.status not in ["recovering", "running", "degraded"],
-        where: agent.install_status == "enabled",
-        update: [
-          set: [
-            status: "running",
-            started_at: ^now,
-            stopped_at: nil,
-            updated_at: ^now
-          ]
-        ],
-        select: agent
-      )
+      ensure_agent_startable!(agent)
 
-    case Repo.update_all(query, []) do
-      {1, [%Agent{} = agent]} -> {:ok, agent}
-      {0, _rows} -> classify_agent_start_conflict(id)
-      {_count, _rows} -> {:error, :agent_start_conflict}
-    end
+      unless is_binary(agent.user_id), do: Repo.rollback(:agent_binding_not_active)
+
+      binding =
+        Repo.one(
+          from(binding in Binding,
+            where: binding.agent_id == ^id,
+            where: binding.user_id == ^agent.user_id,
+            lock: "FOR UPDATE"
+          )
+        )
+
+      unless match?(%Binding{status: "active"}, binding) do
+        Repo.rollback(:agent_binding_not_active)
+      end
+
+      existing_lease =
+        Repo.one(
+          from(lease in AgentRuntimeLease,
+            where: lease.agent_id == ^id,
+            lock: "FOR UPDATE"
+          )
+        )
+
+      if existing_lease, do: Repo.rollback(:agent_drain_pending)
+
+      now = DateTime.utc_now()
+
+      agent
+      |> Ecto.Changeset.change(%{
+        status: "running",
+        started_at: now,
+        stopped_at: nil,
+        updated_at: now
+      })
+      |> Repo.update!()
+    end)
   end
 
-  defp classify_agent_start_conflict(id) do
-    case get_agent(id, include_removed: true) do
-      nil -> {:error, :not_found}
-      %{status: status} when status in ["running", "degraded"] -> {:error, :already_running}
-      %{status: "recovering"} -> {:error, :agent_recovering}
-      %{install_status: "removed"} -> {:error, :agent_removed}
-      %{install_status: "paused"} -> {:error, :agent_paused}
-      %{install_status: "setup_required"} -> {:error, :agent_setup_required}
-      _agent -> {:error, :agent_start_conflict}
-    end
-  end
+  defp ensure_agent_startable!(nil), do: Repo.rollback(:not_found)
+
+  defp ensure_agent_startable!(%Agent{status: status})
+       when status in ["running", "degraded"],
+       do: Repo.rollback(:already_running)
+
+  defp ensure_agent_startable!(%Agent{status: "recovering"}),
+    do: Repo.rollback(:agent_recovering)
+
+  defp ensure_agent_startable!(%Agent{install_status: "removed"}),
+    do: Repo.rollback(:agent_removed)
+
+  defp ensure_agent_startable!(%Agent{install_status: "paused"}),
+    do: Repo.rollback(:agent_paused)
+
+  defp ensure_agent_startable!(%Agent{install_status: "setup_required"}),
+    do: Repo.rollback(:agent_setup_required)
+
+  defp ensure_agent_startable!(%Agent{install_status: "enabled"}), do: :ok
+  defp ensure_agent_startable!(%Agent{}), do: Repo.rollback(:agent_start_conflict)
 
   @doc """
   Mark agent as running.

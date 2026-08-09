@@ -11,6 +11,7 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.AgentSubscriptions
   alias Maraithon.AgentHarness.Manifest
   alias Maraithon.Agents
+  alias Maraithon.Agents.Agent, as: AgentRecord
   alias Maraithon.Behaviors
   alias Maraithon.Insights.Refresh, as: InsightRefresh
   alias Maraithon.LLM.RequestBudget
@@ -18,6 +19,8 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.OpenLoops
   alias Maraithon.OperatorEvents
   alias Maraithon.OperatorEvents.OperatorEvent
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Runtime.Scheduler
@@ -67,28 +70,63 @@ defmodule Maraithon.Runtime.Agent do
     :current_message_metadata,
     :current_message_id,
     :current_run_id,
-    :deferred_messages
+    :deferred_messages,
+    :startup_agent,
+    :owner_token,
+    :guard_generation,
+    :lease_ttl_ms,
+    :lease_renew_interval_ms,
+    exact_owner?: false,
+    exact_activated?: false,
+    clean_shutdown?: false
   ]
 
   # ==========================================================================
   # Client API
   # ==========================================================================
 
-  def start_link(agent) do
+  def start_link(%{agent: %AgentRecord{} = agent, owner_token: owner_token} = launch)
+      when is_binary(owner_token) do
+    GenStateMachine.start_link(__MODULE__, launch,
+      name: {:via, Registry, {Maraithon.Runtime.AgentRegistry, agent.id, owner_token}}
+    )
+  end
+
+  # Compatibility for direct process tests and non-production callers. Runtime
+  # and AgentSupervisor never use this legacy authority path.
+  def start_link(%AgentRecord{} = agent) do
     GenStateMachine.start_link(__MODULE__, agent,
       name: {:via, Registry, {Maraithon.Runtime.AgentRegistry, agent.id}}
     )
   end
 
-  def child_spec(agent) do
+  def child_spec(%{agent: %AgentRecord{} = agent, owner_token: owner_token} = launch)
+      when is_binary(owner_token) do
+    %{
+      id: {__MODULE__, agent.id, owner_token},
+      start: {__MODULE__, :start_link, [launch]},
+      # A restart must take a new database lease token through AgentSupervisor.
+      # Reusing these launch arguments would resurrect a fenced incarnation.
+      restart: :temporary,
+      shutdown: 15_000,
+      type: :worker
+    }
+  end
+
+  def child_spec(%AgentRecord{} = agent) do
     %{
       id: agent.id,
       start: {__MODULE__, :start_link, [agent]},
-      # :transient — the supervisor restarts an agent that crashes (abnormal
-      # exit) but not one that stops intentionally (:normal / :shutdown).
+      # Retained only for direct legacy tests. Production uses the exact clause.
       restart: :transient,
       type: :worker
     }
+  end
+
+  @doc false
+  def activate_exact(pid, owner_token) when is_pid(pid) and is_binary(owner_token) do
+    send(pid, {:activate_exact, owner_token})
+    :ok
   end
 
   # ==========================================================================
@@ -96,7 +134,38 @@ defmodule Maraithon.Runtime.Agent do
   # ==========================================================================
 
   @impl true
-  def init(agent) do
+  def init(%{
+        agent: %AgentRecord{} = agent,
+        owner_token: owner_token,
+        guard_generation: guard_generation,
+        lease_ttl_ms: ttl_ms,
+        lease_renew_interval_ms: renew_interval_ms
+      }) do
+    Process.flag(:trap_exit, true)
+
+    if valid_exact_launch?(agent, owner_token, guard_generation, ttl_ms, renew_interval_ms) do
+      data =
+        agent
+        |> initial_data()
+        |> Map.merge(%{
+          startup_agent: agent,
+          owner_token: owner_token,
+          guard_generation: guard_generation,
+          lease_ttl_ms: ttl_ms,
+          lease_renew_interval_ms: renew_interval_ms,
+          exact_owner?: true
+        })
+        |> then(&struct!(__MODULE__, &1))
+
+      # Stay dormant until AgentSupervisor synchronously installs the exact
+      # Watcher monitor. No recovery work or readiness write may precede it.
+      {:ok, :recovering, data}
+    else
+      {:stop, :invalid_exact_agent_launch}
+    end
+  end
+
+  def init(%AgentRecord{} = agent) do
     Process.flag(:trap_exit, true)
 
     case register_global_name(agent.id) do
@@ -106,16 +175,7 @@ defmodule Maraithon.Runtime.Agent do
             Logger.metadata(agent_reference: Maraithon.Redaction.fingerprint(agent.id))
             Logger.info("Agent initializing", behavior: recovery_agent.behavior)
 
-            data = %__MODULE__{
-              agent_id: recovery_agent.id,
-              config: recovery_agent.config,
-              sequence_num: 0,
-              pending_effects: %{},
-              handled_jobs: MapSet.new(),
-              started_at: DateTime.utc_now(),
-              deferred_messages: []
-            }
-
+            data = struct!(__MODULE__, initial_data(recovery_agent))
             {:ok, :recovering, data, [{:next_event, :internal, {:init, recovery_agent}}]}
 
           {:error, _reason} ->
@@ -124,14 +184,13 @@ defmodule Maraithon.Runtime.Agent do
         end
 
       {:error, _reason} ->
-        # Another process already owns this agent globally. Return :ignore so a
-        # :transient supervisor treats this as "not started" rather than a crash
-        # to restart — otherwise a re-register race would loop.
         :ignore
     end
   end
 
   @impl true
+  def terminate(_reason, _state, %{exact_owner?: true}), do: :ok
+
   def terminate(_reason, _state, data) do
     case close_terminated_effects(data) do
       {:ok, _cancelled_count} -> close_terminated_run(data)
@@ -139,6 +198,26 @@ defmodule Maraithon.Runtime.Agent do
     end
 
     :ok
+  end
+
+  defp initial_data(agent) do
+    %{
+      agent_id: agent.id,
+      config: agent.config,
+      sequence_num: 0,
+      pending_effects: %{},
+      handled_jobs: MapSet.new(),
+      started_at: DateTime.utc_now(),
+      deferred_messages: []
+    }
+  end
+
+  defp valid_exact_launch?(agent, owner_token, guard_generation, ttl_ms, renew_interval_ms) do
+    agent.id != nil and match?({:ok, _}, Ecto.UUID.cast(agent.id)) and
+      match?({:ok, _}, Ecto.UUID.cast(owner_token)) and
+      (is_nil(guard_generation) or match?({:ok, _}, Ecto.UUID.cast(guard_generation))) and
+      is_integer(ttl_ms) and ttl_ms >= 1_000 and ttl_ms <= 300_000 and
+      is_integer(renew_interval_ms) and renew_interval_ms > 0 and renew_interval_ms < ttl_ms
   end
 
   # ==========================================================================
@@ -150,47 +229,104 @@ defmodule Maraithon.Runtime.Agent do
     {:keep_state, data}
   end
 
+  def recovering(
+        :info,
+        {:activate_exact, owner_token},
+        %{exact_owner?: true, owner_token: owner_token, exact_activated?: false} = data
+      ) do
+    Logger.metadata(agent_reference: Maraithon.Redaction.fingerprint(data.agent_id))
+    Logger.info("Exact Agent initializing", behavior: data.startup_agent.behavior)
+
+    data = %{data | exact_activated?: true}
+
+    {:keep_state, data,
+     [
+       lease_renewal_action(data),
+       {:next_event, :internal, {:init, data.startup_agent}}
+     ]}
+  end
+
+  def recovering(:info, {:activate_exact, _owner_token}, %{exact_owner?: true} = data) do
+    {:keep_state, data}
+  end
+
+  def recovering({:timeout, :lease_renewal}, :renew_lease, data) do
+    renew_exact_lease(data)
+  end
+
   def recovering(:internal, {:init, startup_agent}, data) do
-    agent =
-      case Agents.get_agent(startup_agent.id, include_removed: true) do
-        %{status: status, install_status: "enabled"} = persisted
-        when status in ["recovering", "running", "degraded"] ->
-          persisted
+    case recovery_agent(startup_agent.id, data) do
+      {:ok, agent} ->
+        if exact_recovery_owner?(data) do
+          # Checkpoints intentionally capture only idle behavior state. Any active
+          # outbox rows therefore belong to a process incarnation whose
+          # continuation cannot be restored safely. Cancel them before this
+          # incarnation can start another cycle.
+          with {:ok, _cancelled_count} <-
+                 cancel_active_effects(agent.id, @orphaned_effect_reason),
+               :ok <- reconcile_persisted_active_run(agent) do
+            finish_recovery(agent, data)
+          else
+            {:error, reason} ->
+              Logger.warning("Agent recovery deferred while durable cleanup is incomplete",
+                agent_reference: Maraithon.Redaction.fingerprint(agent.id),
+                failure_code: Maraithon.Redaction.error_class(reason)
+              )
 
-        _missing_or_inactive ->
-          exit(:normal)
-      end
+              {:keep_state, data,
+               [{{:timeout, :recovery_retry}, @recovery_retry_ms, :retry_recovery}]}
+          end
+        else
+          # A direct/stale launch must not use recovery cleanup as an authority
+          # bypass. The Watcher guards a production token on DOWN.
+          {:stop, :exact_runtime_not_owned, data}
+        end
 
-    # Checkpoints intentionally capture only idle behavior state. Any active
-    # outbox rows therefore belong to a process incarnation whose continuation
-    # cannot be restored safely. Cancel them before this incarnation can start
-    # another cycle; EffectRunner's claim fencing discards any late worker.
-    with {:ok, _cancelled_count} <- cancel_active_effects(agent.id, @orphaned_effect_reason),
-         :ok <- reconcile_persisted_active_run(agent) do
-      finish_recovery(agent, data)
-    else
-      {:error, reason} ->
-        Logger.warning("Agent recovery deferred while durable cleanup is incomplete",
-          agent_reference: Maraithon.Redaction.fingerprint(agent.id),
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
-
-        {:keep_state, data, [{{:timeout, :recovery_retry}, @recovery_retry_ms, :retry_recovery}]}
+      :inactive ->
+        stop_inactive_agent(data)
     end
   end
 
   def recovering({:timeout, :recovery_retry}, :retry_recovery, data) do
     case Agents.get_agent(data.agent_id, include_removed: true) do
-      nil -> {:stop, :normal, data}
+      nil -> stop_inactive_agent(data)
       agent -> recovering(:internal, {:init, agent}, data)
     end
   end
 
-  def recovering(:info, {:agent_dispatch, {:control, :stop, reason}}, data) do
+  def recovering(
+        :info,
+        {:agent_dispatch, {:control, :stop, reason, owner_token}},
+        data
+      ) do
+    stop_agent(reason, data, owner_token)
+  end
+
+  def recovering(:info, {:control, :stop, reason, owner_token}, data) do
+    stop_agent(reason, data, owner_token)
+  end
+
+  def recovering(
+        :info,
+        {:agent_dispatch, {:control, :stop, _reason}},
+        %{exact_owner?: true} = data
+      ) do
+    {:keep_state, data}
+  end
+
+  def recovering(
+        :info,
+        {:agent_dispatch, {:control, :stop, reason}},
+        %{exact_owner?: false} = data
+      ) do
     stop_agent(reason, data)
   end
 
-  def recovering(:info, {:control, :stop, reason}, data) do
+  def recovering(:info, {:control, :stop, _reason}, %{exact_owner?: true} = data) do
+    {:keep_state, data}
+  end
+
+  def recovering(:info, {:control, :stop, reason}, %{exact_owner?: false} = data) do
     stop_agent(reason, data)
   end
 
@@ -260,9 +396,8 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp expose_recovered_agent(agent, agent_config, subscriptions, data) do
-    # Replace legacy recurring timers before exposing this process to durable
-    # dispatch. Otherwise Scheduler recovery can enqueue every overdue legacy
-    # wakeup before the scoped replacement has a chance to cancel them.
+    # Replace recurring timers and install every routing subscription before
+    # readiness. A ready lease is the last durable recovery fact.
     schedule_heartbeat(data)
     schedule_checkpoint(data)
     schedule_next_wakeup(data)
@@ -274,25 +409,60 @@ defmodule Maraithon.Runtime.Agent do
       Logger.info("Subscribed to topic", topic: topic)
     end)
 
-    case Agents.finish_runtime_agent_recovery(agent.id) do
-      {:ok, _running_agent} ->
-        data =
-          emit_event(data, "agent_started", %{
-            behavior: agent.behavior,
-            config: redact_runtime_config(agent_config)
-          })
+    if data.exact_owner? do
+      case activate_exact_owner(data) do
+        {:ok, _lease} ->
+          # Readiness is the last recovery authority write. Only a ready exact
+          # owner may append the startup event or enter the workload state.
+          data = %{data | guard_generation: nil}
+          data = emit_started_event(data, agent, agent_config)
+          Logger.info("Exact Agent recovered, transitioning to idle")
+          {:next_state, :idle, data}
 
-        Logger.info("Agent recovered, transitioning to idle")
-        {:next_state, :idle, data}
+        {:error, reason} ->
+          Logger.warning("Exact Agent readiness was fenced",
+            agent_reference: Maraithon.Redaction.fingerprint(agent.id),
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
 
-      {:error, reason} ->
-        Logger.warning("Agent recovery activation was fenced",
-          agent_reference: Maraithon.Redaction.fingerprint(agent.id),
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
+          {:stop, {:exact_agent_not_ready, reason}, data}
+      end
+    else
+      case Agents.finish_runtime_agent_recovery(agent.id) do
+        {:ok, _running_agent} ->
+          data = emit_started_event(data, agent, agent_config)
+          Logger.info("Agent recovered, transitioning to idle")
+          {:next_state, :idle, data}
 
-        {:keep_state, data, [{{:timeout, :recovery_retry}, @recovery_retry_ms, :retry_recovery}]}
+        {:error, reason} ->
+          Logger.warning("Agent recovery activation was fenced",
+            agent_reference: Maraithon.Redaction.fingerprint(agent.id),
+            failure_code: Maraithon.Redaction.error_class(reason)
+          )
+
+          {:keep_state, data,
+           [{{:timeout, :recovery_retry}, @recovery_retry_ms, :retry_recovery}]}
+      end
     end
+  end
+
+  defp emit_started_event(data, agent, agent_config) do
+    emit_event(data, "agent_started", %{
+      behavior: agent.behavior,
+      config: redact_runtime_config(agent_config)
+    })
+  end
+
+  defp activate_exact_owner(%{guard_generation: nil} = data) do
+    AgentLeases.mark_ready(data.agent_id, data.owner_token)
+  end
+
+  defp activate_exact_owner(data) do
+    AgentLeases.finish_recovery(
+      data.agent_id,
+      data.owner_token,
+      data.guard_generation
+    )
   end
 
   # ==========================================================================
@@ -302,6 +472,10 @@ defmodule Maraithon.Runtime.Agent do
   def idle(:enter, _old_state, data) do
     Logger.debug("Entering idle state")
     {:keep_state, drain_deferred_messages(data)}
+  end
+
+  def idle({:timeout, :lease_renewal}, :renew_lease, data) do
+    renew_exact_lease(data)
   end
 
   def idle(:info, {:agent_dispatch, msg}, data) do
@@ -344,7 +518,19 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
-  def idle(:info, {:control, :stop, reason}, data) do
+  def idle(:info, {:control, :stop, reason, owner_token}, data) do
+    stop_agent(reason, data, owner_token)
+  end
+
+  def idle(:info, {:control, :stop, _reason}, %{exact_owner?: true} = data) do
+    {:keep_state, data}
+  end
+
+  def idle(
+        :info,
+        {:control, :stop, reason},
+        %{exact_owner?: false} = data
+      ) do
     stop_agent(reason, data)
   end
 
@@ -414,11 +600,63 @@ defmodule Maraithon.Runtime.Agent do
     {:keep_state, data}
   end
 
+  def working({:timeout, :lease_renewal}, :renew_lease, data) do
+    renew_exact_lease(data)
+  end
+
   def working(:info, {:agent_dispatch, msg}, data) do
     working(:info, msg, data)
   end
 
-  def working(:internal, :execute_behavior, data) do
+  def working(:internal, :execute_behavior, %{exact_owner?: true} = data) do
+    if AgentLeases.ready?(data.agent_id, data.owner_token) do
+      execute_behavior(data)
+    else
+      {:stop, :exact_runtime_not_ready, data}
+    end
+  end
+
+  def working(:internal, :execute_behavior, data), do: execute_behavior(data)
+
+  def working(:info, {:wakeup, _, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def working(:info, {:pubsub_event, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def working(:info, {:message, _, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def working(:info, {:control, :stop, reason, owner_token}, data) do
+    stop_agent(reason, data, owner_token)
+  end
+
+  def working(:info, {:control, :stop, _reason}, %{exact_owner?: true} = data) do
+    {:keep_state, data}
+  end
+
+  def working(
+        :info,
+        {:control, :stop, reason},
+        %{exact_owner?: false} = data
+      ) do
+    stop_agent(reason, data)
+  end
+
+  def working(:info, {:effect_result, effect_id, _result}, data) do
+    reconcile_abandoned_terminal_result(effect_id, data, true)
+    {:keep_state, data}
+  end
+
+  def working(:info, _msg, data) do
+    Logger.debug("Working received an unhandled message")
+    {:keep_state, data}
+  end
+
+  defp execute_behavior(data) do
     data = ensure_current_run(data)
     context = build_context(data)
 
@@ -448,32 +686,6 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
-  def working(:info, {:wakeup, _, _, _} = msg, data) do
-    {:keep_state, defer_message(data, msg)}
-  end
-
-  def working(:info, {:pubsub_event, _, _} = msg, data) do
-    {:keep_state, defer_message(data, msg)}
-  end
-
-  def working(:info, {:message, _, _, _} = msg, data) do
-    {:keep_state, defer_message(data, msg)}
-  end
-
-  def working(:info, {:control, :stop, reason}, data) do
-    stop_agent(reason, data)
-  end
-
-  def working(:info, {:effect_result, effect_id, _result}, data) do
-    reconcile_abandoned_terminal_result(effect_id, data, true)
-    {:keep_state, data}
-  end
-
-  def working(:info, _msg, data) do
-    Logger.debug("Working received an unhandled message")
-    {:keep_state, data}
-  end
-
   # ==========================================================================
   # WAITING_EFFECT state
   # ==========================================================================
@@ -483,6 +695,10 @@ defmodule Maraithon.Runtime.Agent do
 
     Logger.debug("Entering waiting_effect state", timeout_ms: timeout_ms)
     {:keep_state, data, [{:state_timeout, timeout_ms, :effect_timeout}]}
+  end
+
+  def waiting_effect({:timeout, :lease_renewal}, :renew_lease, data) do
+    renew_exact_lease(data)
   end
 
   def waiting_effect(:info, {:agent_dispatch, msg}, data) do
@@ -605,7 +821,19 @@ defmodule Maraithon.Runtime.Agent do
     {:keep_state, defer_message(data, msg)}
   end
 
-  def waiting_effect(:info, {:control, :stop, reason}, data) do
+  def waiting_effect(:info, {:control, :stop, reason, owner_token}, data) do
+    stop_agent(reason, data, owner_token)
+  end
+
+  def waiting_effect(:info, {:control, :stop, _reason}, %{exact_owner?: true} = data) do
+    {:keep_state, data}
+  end
+
+  def waiting_effect(
+        :info,
+        {:control, :stop, reason},
+        %{exact_owner?: false} = data
+      ) do
     stop_agent(reason, data)
   end
 
@@ -753,10 +981,43 @@ defmodule Maraithon.Runtime.Agent do
   # Private Functions
   # ==========================================================================
 
+  defp emit_event(%{exact_owner?: true} = data, event_type, payload) do
+    emit_exact_event(data, event_type, payload, :ready)
+  end
+
   defp emit_event(data, event_type, payload) do
     sequence_num = data.sequence_num + 1
     Events.append(data.agent_id, event_type, payload, sequence_num: sequence_num)
     Logger.info("Agent event", event_log_metadata(event_type, payload))
+    %{data | sequence_num: sequence_num}
+  end
+
+  defp emit_exact_event(data, event_type, payload, fence_mode) do
+    case Repo.transaction(fn ->
+           case fence_mode do
+             :ready -> AgentLeases.fence_ready!(data.agent_id, data.owner_token)
+             :owner -> AgentLeases.fence_owner!(data.agent_id, data.owner_token)
+           end
+
+           append_event!(data, event_type, payload)
+         end) do
+      {:ok, updated_data} ->
+        Logger.info("Agent event", event_log_metadata(event_type, payload))
+        updated_data
+
+      {:error, reason} ->
+        exit({:exact_event_write_rejected, Maraithon.Redaction.error_class(reason)})
+    end
+  end
+
+  defp append_event!(data, event_type, payload) do
+    sequence_num = data.sequence_num + 1
+
+    case Events.append(data.agent_id, event_type, payload, sequence_num: sequence_num) do
+      {:ok, _event} -> :ok
+      {:error, reason} -> Repo.rollback({:event_append_failed, reason})
+    end
+
     %{data | sequence_num: sequence_num}
   end
 
@@ -795,6 +1056,25 @@ defmodule Maraithon.Runtime.Agent do
     %{data | last_heartbeat_at: now}
   end
 
+  defp emit_checkpoint(%{exact_owner?: true} = data) do
+    now = DateTime.utc_now()
+    payload = %{timestamp: DateTime.to_iso8601(now)}
+
+    case Repo.transaction(fn ->
+           AgentLeases.fence_ready!(data.agent_id, data.owner_token)
+           updated_data = append_event!(data, "checkpoint_created", payload)
+           persist_exact_snapshot!(updated_data)
+           updated_data
+         end) do
+      {:ok, updated_data} ->
+        Logger.info("Agent event", event_log_metadata("checkpoint_created", payload))
+        %{updated_data | last_checkpoint_at: now}
+
+      {:error, reason} ->
+        exit({:exact_checkpoint_write_rejected, Maraithon.Redaction.error_class(reason)})
+    end
+  end
+
   defp emit_checkpoint(data) do
     now = DateTime.utc_now()
     data = emit_event(data, "checkpoint_created", %{timestamp: DateTime.to_iso8601(now)})
@@ -802,8 +1082,23 @@ defmodule Maraithon.Runtime.Agent do
     %{data | last_checkpoint_at: now}
   end
 
-  # Best-effort: a snapshot write must never crash the agent loop. Checkpoints
-  # are only handled in the :idle state, so that is the captured state name.
+  defp persist_exact_snapshot!(data) do
+    case Snapshot.persist(
+           data.agent_id,
+           data.sequence_num,
+           :idle,
+           data.behavior_state,
+           data.budget,
+           behavior_schema_version(data.behavior_module)
+         ) do
+      {:ok, _snapshot} -> :ok
+      {:error, reason} -> Repo.rollback({:snapshot_persist_failed, reason})
+    end
+  end
+
+  # Best-effort only for the retained legacy compatibility path. Exact
+  # checkpoint Event + Snapshot writes share one ready-fenced transaction.
+  # Legacy checkpoints are handled only while idle.
   defp persist_snapshot(data) do
     case Snapshot.persist(
            data.agent_id,
@@ -2036,24 +2331,160 @@ defmodule Maraithon.Runtime.Agent do
     %{data | deferred_messages: []}
   end
 
-  defp stop_agent(reason, data) do
-    data =
-      case cancel_active_effects(data.agent_id, @stopped_effect_reason) do
-        {:ok, _cancelled_count} ->
-          cancel_current_run(data, @stopped_run_reason)
+  defp exact_recovery_owner?(%{exact_owner?: true} = data) do
+    AgentLeases.owner?(data.agent_id, data.owner_token)
+  end
 
-        {:error, cancellation_error} ->
-          Logger.warning("Agent stop left run closure for durable recovery",
-            agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
-            failure_code: Maraithon.Redaction.error_class(cancellation_error)
+  defp exact_recovery_owner?(_legacy_data), do: true
+
+  defp recovery_agent(agent_id, %{exact_owner?: true}) do
+    case Agents.get_agent(agent_id, include_removed: true) do
+      %{status: status, install_status: "enabled"} = agent
+      when status in ["running", "degraded"] ->
+        {:ok, agent}
+
+      _missing_or_inactive ->
+        :inactive
+    end
+  end
+
+  defp recovery_agent(agent_id, _legacy_data) do
+    case Agents.get_agent(agent_id, include_removed: true) do
+      %{status: status, install_status: "enabled"} = agent
+      when status in ["recovering", "running", "degraded"] ->
+        {:ok, agent}
+
+      _missing_or_inactive ->
+        :inactive
+    end
+  end
+
+  defp stop_inactive_agent(%{exact_owner?: true} = data) do
+    stop_agent("desired_state_inactive", data)
+  end
+
+  defp stop_inactive_agent(data), do: {:stop, :normal, data}
+
+  defp lease_renewal_action(data) do
+    {{:timeout, :lease_renewal}, data.lease_renew_interval_ms, :renew_lease}
+  end
+
+  defp renew_exact_lease(%{exact_owner?: true, exact_activated?: true} = data) do
+    renewal =
+      case data.guard_generation do
+        nil ->
+          AgentLeases.renew(data.agent_id, data.owner_token, ttl_ms: data.lease_ttl_ms)
+
+        guard_generation ->
+          AgentLeases.renew_recovery(
+            data.agent_id,
+            data.owner_token,
+            guard_generation,
+            ttl_ms: data.lease_ttl_ms
           )
-
-          data
       end
 
+    case renewal do
+      {:ok, %{draining_at: nil}} ->
+        {:keep_state, data, [lease_renewal_action(data)]}
+
+      {:ok, _draining_lease} ->
+        stop_agent("runtime_authority_revoked", data)
+
+      {:error, reason} ->
+        Logger.warning("Exact Agent lease renewal failed",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        # Do not release or perform termination cleanup. The Watcher must first
+        # durably guard this exact generation, even for a normal-looking exit.
+        {:stop, {:exact_lease_renewal_failed, reason}, data}
+    end
+  end
+
+  defp renew_exact_lease(data), do: {:keep_state, data}
+
+  defp stop_agent(reason, %{exact_owner?: true} = data) do
+    if begin_exact_draining(data) do
+      {data, cleanup_complete?} = clean_stopped_work(data)
+      data = safely_emit_stop_event(data, reason)
+      safely_cancel_schedules(data.agent_id)
+
+      data =
+        if cleanup_complete? do
+          release_exact_owner(data)
+        else
+          data
+        end
+
+      {:stop, :normal, data}
+    else
+      # Without an exact draining fence this process may already be stale. It
+      # must not cancel work, append events, or release another incarnation.
+      {:stop, :normal, data}
+    end
+  end
+
+  defp stop_agent(reason, data) do
+    {data, _cleanup_complete?} = clean_stopped_work(data)
     data = safely_emit_stop_event(data, reason)
     safely_cancel_schedules(data.agent_id)
     {:stop, :normal, data}
+  end
+
+  defp stop_agent(reason, %{exact_owner?: true, owner_token: owner_token} = data, owner_token),
+    do: stop_agent(reason, data)
+
+  defp stop_agent(_reason, %{exact_owner?: true} = data, _stale_owner_token),
+    do: {:keep_state, data}
+
+  defp stop_agent(reason, data, _legacy_owner_token), do: stop_agent(reason, data)
+
+  defp clean_stopped_work(data) do
+    case cancel_active_effects(data.agent_id, @stopped_effect_reason) do
+      {:ok, _cancelled_count} ->
+        closed = cancel_current_run(data, @stopped_run_reason)
+        {closed, is_nil(closed.current_run_id)}
+
+      {:error, cancellation_error} ->
+        Logger.warning("Agent stop left run closure for durable recovery",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          failure_code: Maraithon.Redaction.error_class(cancellation_error)
+        )
+
+        {data, false}
+    end
+  end
+
+  defp begin_exact_draining(data) do
+    case AgentLeases.begin_draining(data.agent_id, data.owner_token) do
+      {:ok, _lease} ->
+        true
+
+      {:error, reason} ->
+        Logger.warning("Exact Agent could not begin draining",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        false
+    end
+  end
+
+  defp release_exact_owner(data) do
+    case AgentLeases.release(data.agent_id, data.owner_token) do
+      {:ok, :released} ->
+        %{data | clean_shutdown?: true}
+
+      {:error, reason} ->
+        Logger.warning("Exact Agent lease release deferred to Watcher",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        data
+    end
   end
 
   defp acknowledge_terminal_effect_results_for_run(run_id, agent_id) do
@@ -2062,6 +2493,14 @@ defmodule Maraithon.Runtime.Agent do
     _error -> {:error, :effect_acknowledgement_failed}
   catch
     :exit, _reason -> {:error, :effect_acknowledgement_failed}
+  end
+
+  defp safely_emit_stop_event(%{exact_owner?: true} = data, reason) do
+    emit_exact_event(data, "agent_stopped", %{reason: event_label(reason)}, :owner)
+  rescue
+    _error -> data
+  catch
+    _kind, _reason -> data
   end
 
   defp safely_emit_stop_event(data, reason) do

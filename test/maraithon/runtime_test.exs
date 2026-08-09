@@ -103,6 +103,7 @@ defmodule Maraithon.RuntimeTest do
   alias Maraithon.Runtime
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
+  alias Maraithon.Agents.AgentRun
   alias Maraithon.Effects.Effect
   alias Maraithon.Repo
 
@@ -253,7 +254,7 @@ defmodule Maraithon.RuntimeTest do
     Verifies that custom stop reasons can be provided.
     Stop reasons are useful for debugging and audit trails.
     """
-    test "cancels active effects even when no agent process is registered" do
+    test "leaves unfenced active effects for durable reconciliation when no owner is registered" do
       {:ok, agent} =
         Agents.create_agent(%{
           behavior: "watchdog_summarizer",
@@ -279,15 +280,49 @@ defmodule Maraithon.RuntimeTest do
         })
         |> Repo.insert()
 
-      assert {:ok, %{stopped_at: %DateTime{}}} = Runtime.stop_agent(agent.id)
+      assert {:ok, %{stopped_at: %DateTime{}, drain_status: :reconciliation_pending}} =
+               Runtime.stop_agent(agent.id)
 
       effect = Repo.get!(Effect, effect_id)
-      assert effect.status == "failed"
-      assert effect.error == "effect_outcome_ambiguous"
-      assert effect.result_envelope["status"] == "error"
-      assert effect.claimed_by == nil
-      assert effect.claimed_at == nil
-      assert effect.retry_after == nil
+      assert effect.status == "claimed"
+      assert effect.error == nil
+      assert effect.claimed_by == Atom.to_string(node())
+      assert effect.claimed_at != nil
+    end
+
+    test "an orphan running Run keeps stop reconciliation pending" do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "stopped",
+          stopped_at: DateTime.utc_now()
+        })
+
+      {:ok, run} = Agents.start_agent_run(agent)
+      assert Agents.get_agent(agent.id).active_run_id == nil
+
+      assert {:ok, %{drain_status: :reconciliation_pending}} =
+               Runtime.stop_agent(agent.id)
+
+      assert Repo.get!(AgentRun, run.id).status == "running"
+    end
+
+    test "refreshes a stale stopped_at when stopping live desired state" do
+      stale_stopped_at = DateTime.add(DateTime.utc_now(), -3_600, :second)
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now(),
+          stopped_at: stale_stopped_at
+        })
+
+      assert {:ok, %{stopped_at: stopped_at}} = Runtime.stop_agent(agent.id)
+      assert DateTime.compare(stopped_at, stale_stopped_at) == :gt
+      assert Agents.get_agent(agent.id).stopped_at == stopped_at
     end
 
     test "accepts custom reason" do
@@ -338,6 +373,18 @@ defmodule Maraithon.RuntimeTest do
   end
 
   describe "start_existing_agent/1" do
+    test "missing Binding consent does not mutate stopped desired state" do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          status: "stopped"
+        })
+
+      assert {:error, :agent_binding_not_active} = Runtime.start_existing_agent(agent.id)
+      assert Agents.get_agent(agent.id).status == "stopped"
+    end
+
     test "returns not_found for non-existent agent" do
       assert {:error, :not_found} = Runtime.start_existing_agent(Ecto.UUID.generate())
     end

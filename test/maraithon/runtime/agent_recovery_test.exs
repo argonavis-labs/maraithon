@@ -1,14 +1,10 @@
 defmodule Maraithon.Runtime.AgentRecoveryTest do
   @moduledoc """
-  End-to-end verification of the OTP self-healing bet:
-
-    * a crashed agent is restarted by its supervisor (the `:transient`
-      contract from Gap 1), and
-    * the restarted agent recovers its `behavior_state` from the latest
-      checkpoint snapshot (Gap 4) instead of starting blank.
-
-  Uses the real `Runtime.AgentSupervisor` (`DynamicSupervisor`) so we are
-  exercising the actual supervision tree, not a stub.
+  Verification of snapshot recovery plus the retained legacy direct-Agent
+  compatibility surface. Production exact Agents are temporary and are
+  relaunched with a fresh lease by AgentWatcher; these historical tests start
+  the legacy child spec explicitly so they cannot bypass AgentSupervisor in
+  production code.
   """
 
   use Maraithon.DataCase, async: false
@@ -174,7 +170,7 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
     agent: agent
   } do
     # 1. Start the agent under the real DynamicSupervisor.
-    {:ok, original_pid} = AgentSupervisor.start_agent(agent)
+    {:ok, original_pid} = start_legacy_supervised_agent(agent)
     wait_for_idle(original_pid)
 
     # 2. Plant a distinctive marker in behavior_state so we can prove the
@@ -227,7 +223,7 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
     legacy_budget = %{llm_calls: 7, refilled_at: refilled_at}
     {:ok, _} = Snapshot.persist(agent.id, 1, :idle, legacy_state, legacy_budget, 0)
 
-    {:ok, pid} = AgentSupervisor.start_agent(agent)
+    {:ok, pid} = start_legacy_supervised_agent(agent)
     wait_for_idle(pid)
     {_state, data} = :sys.get_state(pid)
 
@@ -392,6 +388,10 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
       assert state == ProbeBehavior.init(%{})
       assert budget == %{llm_calls: 500, tool_calls: 1000}
     end
+  end
+
+  defp start_legacy_supervised_agent(agent) do
+    DynamicSupervisor.start_child(AgentSupervisor, RuntimeAgent.child_spec(agent))
   end
 
   defp wait_for_idle(pid) do

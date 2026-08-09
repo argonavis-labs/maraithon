@@ -11,6 +11,7 @@ defmodule Maraithon.Runtime.Bootstrap do
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.IncidentLog
+  alias Maraithon.Runtime.WakeCoordinator
 
   require Logger
 
@@ -51,7 +52,12 @@ defmodule Maraithon.Runtime.Bootstrap do
              }
            })
 
-           with {:ok, _installations} <- Maraithon.AgentMarketplace.ensure_default_installations() do
+           with {:ok, _installations} <-
+                  Maraithon.AgentMarketplace.ensure_default_installations(),
+                {:ok, _reconciliation} <- WakeCoordinator.reconcile_once() do
+             # BootGate remains closed until expired/staged ownership evidence is
+             # reconciled and every resident desired Agent has taken the exact
+             # preclaim path.
              Maraithon.Runtime.resume_all_agents()
            end
          end) do

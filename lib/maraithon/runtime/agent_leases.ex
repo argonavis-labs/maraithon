@@ -120,6 +120,42 @@ defmodule Maraithon.Runtime.AgentLeases do
 
   def renew(_agent_id, _owner_token, _opts), do: {:error, :invalid_runtime_lease}
 
+  @doc """
+  Renews an unready recovery incarnation without publishing readiness or
+  converting the lease to draining while its exact guard generation remains
+  due. Recovery readiness is still published only by `finish_recovery/3`.
+  """
+  def renew_recovery(agent_id, owner_token, guard_generation, opts \\ [])
+
+  def renew_recovery(agent_id, owner_token, guard_generation, opts) when is_list(opts) do
+    with {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, owner_token} <- cast_uuid(owner_token),
+         {:ok, guard_generation} <- cast_uuid(guard_generation),
+         {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms]) do
+      Repo.transaction(fn ->
+        agent = lock_agent!(agent_id)
+        binding = lock_active_binding!(agent)
+        guard = lock_guard(agent_id)
+        lease = lock_lease(agent_id)
+        {now, lease_until} = DatabaseClock.window!(ttl_ms)
+
+        ensure_runnable!(agent)
+        ensure_binding_matches!(agent, binding)
+        ensure_due_recovery_guard!(guard, guard_generation, now)
+        ensure_exact_live_lease!(lease, owner_token, now)
+
+        update_lease!(lease, %{
+          renewed_at: now,
+          lease_until: lease_until,
+          updated_at: now
+        })
+      end)
+    end
+  end
+
+  def renew_recovery(_agent_id, _owner_token, _guard_generation, _opts),
+    do: {:error, :invalid_runtime_lease}
+
   def mark_ready(agent_id, owner_token) do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
@@ -170,6 +206,71 @@ defmodule Maraithon.Runtime.AgentLeases do
       end)
     end
   end
+
+  @doc """
+  Atomically revoke workload readiness and persist stopped desired state.
+
+  The returned lease token is routing metadata for the exact incarnation that
+  was fenced. Callers must finish this transaction before signalling a local or
+  remote process; no process/RPC wait belongs inside the database lock scope.
+  """
+  def fence_for_stop(agent_id, opts \\ [])
+
+  def fence_for_stop(agent_id, opts) when is_list(opts) do
+    with {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms]) do
+      Repo.transaction(fn ->
+        agent = lock_agent!(agent_id)
+        _binding = lock_binding(agent)
+        _guard = lock_guard(agent_id)
+        lease = lock_lease(agent_id)
+        {now, drain_until} = DatabaseClock.window!(ttl_ms)
+
+        {lease_state, fenced_lease} =
+          cond do
+            is_nil(lease) ->
+              {:none, nil}
+
+            DateTime.compare(lease.lease_until, now) == :gt ->
+              fenced =
+                update_lease!(lease, %{
+                  ready_at: nil,
+                  draining_at: lease.draining_at || now,
+                  lease_until: later_datetime(lease.lease_until, drain_until),
+                  updated_at: now
+                })
+
+              {:live, fenced}
+
+            true ->
+              # Expiry is generation loss, never permission to resurrect that
+              # incarnation for cleanup. Abort before changing desired state so
+              # the caller can durably record the exact loss generation first.
+              Repo.rollback(
+                {:expired_lease_requires_reconciliation,
+                 %{owner_token: lease.owner_token, owner_node: lease.owner_node}}
+              )
+          end
+
+        stopped_agent =
+          if agent.status == "stopped" and not is_nil(agent.stopped_at) do
+            agent
+          else
+            agent
+            |> Ecto.Changeset.change(%{
+              status: "stopped",
+              stopped_at: now,
+              updated_at: now
+            })
+            |> Repo.update!()
+          end
+
+        %{agent: stopped_agent, lease: fenced_lease, lease_state: lease_state}
+      end)
+    end
+  end
+
+  def fence_for_stop(_agent_id, _opts), do: {:error, :invalid_runtime_lease}
 
   def begin_draining(agent_id, owner_token) do
     with {:ok, agent_id} <- cast_uuid(agent_id),
@@ -461,6 +562,10 @@ defmodule Maraithon.Runtime.AgentLeases do
 
   defp blocked?(%AgentRestartGuard{blocked_until: blocked_until}, now),
     do: DateTime.compare(blocked_until, now) == :gt
+
+  defp later_datetime(left, right) do
+    if DateTime.compare(left, right) == :lt, do: right, else: left
+  end
 
   defp ensure_no_processing_directive!(agent_id, reason) do
     case Repo.one(
