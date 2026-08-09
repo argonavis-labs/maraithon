@@ -489,14 +489,34 @@ defmodule Maraithon.Runtime.Agent do
     waiting_effect(:info, msg, data)
   end
 
-  def waiting_effect(:info, {:effect_result, effect_id, result}, data) do
-    if Map.has_key?(data.pending_effects, effect_id) do
-      process_effect_result(effect_id, result, data)
-    else
-      outcome = process_effect_result(effect_id, result, data)
-      reconcile_abandoned_terminal_result(effect_id, data, true)
-      outcome
+  def waiting_effect(:info, {:effect_result, effect_id, _reported_result}, data) do
+    case authoritative_terminal_result(effect_id, data.agent_id) do
+      {:terminal, result} ->
+        process_received_effect_result(effect_id, result, data)
+
+      :not_terminal ->
+        Logger.warning("Ignored non-terminal effect result notification",
+          effect_reference: Maraithon.Redaction.fingerprint(effect_id),
+          failure_code: "effect_not_terminal"
+        )
+
+        {:keep_state, data}
+
+      {:error, reason} ->
+        Logger.warning("Ignored invalid effect result notification",
+          effect_reference: Maraithon.Redaction.fingerprint(effect_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        {:keep_state, data}
     end
+  end
+
+  # Locally generated request-validation/write failures have no durable Effect
+  # row. Keep them on gen_statem's internal event channel so they cannot be
+  # forged through a process mailbox or PubSub dispatch.
+  def waiting_effect(:internal, {:synthetic_effect_result, effect_id, result}, data) do
+    process_received_effect_result(effect_id, result, data)
   end
 
   def waiting_effect(:state_timeout, :effect_timeout, data) do
@@ -592,6 +612,24 @@ defmodule Maraithon.Runtime.Agent do
   def waiting_effect(:info, _msg, data) do
     Logger.debug("Waiting effect received an unhandled message")
     {:keep_state, data}
+  end
+
+  defp process_received_effect_result(effect_id, result, data) do
+    if Map.has_key?(data.pending_effects, effect_id) do
+      process_effect_result(effect_id, result, data)
+    else
+      outcome = process_effect_result(effect_id, result, data)
+      reconcile_abandoned_terminal_result(effect_id, data, true)
+      outcome
+    end
+  end
+
+  defp authoritative_terminal_result(effect_id, agent_id) do
+    Effects.terminal_result(effect_id, agent_id)
+  rescue
+    _error -> {:error, :effect_repository_unavailable}
+  catch
+    :exit, _reason -> {:error, :effect_repository_unavailable}
   end
 
   defp process_effect_result(effect_id, result, data) do
@@ -1216,7 +1254,8 @@ defmodule Maraithon.Runtime.Agent do
         )
 
         {:next_state, :waiting_effect, data,
-         actions ++ [{:next_event, :info, {:effect_result, effect_id, {:error, reason}}}]}
+         actions ++
+           [{:next_event, :internal, {:synthetic_effect_result, effect_id, {:error, reason}}}]}
 
       {:error, reason} ->
         Logger.error("Effect outbox write failed",
@@ -1227,7 +1266,7 @@ defmodule Maraithon.Runtime.Agent do
         failure = {:error, {:effect_write_failed, reason}}
 
         {:next_state, :waiting_effect, data,
-         actions ++ [{:next_event, :info, {:effect_result, effect_id, failure}}]}
+         actions ++ [{:next_event, :internal, {:synthetic_effect_result, effect_id, failure}}]}
     end
   end
 

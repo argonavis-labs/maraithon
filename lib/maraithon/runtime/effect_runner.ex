@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   alias Maraithon.Effects
   alias Maraithon.LLM
   alias Maraithon.Effects.Effect
+  alias Maraithon.Effects.TerminalEnvelope
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentRun
   alias Maraithon.Agents.AgentRunStep
@@ -40,23 +41,6 @@ defmodule Maraithon.Runtime.EffectRunner do
   @continuation_check_timeout_ms 1_000
   @max_runtime_nodes 32
   @llm_lanes [:chat, :reasoning, :default]
-  @llm_result_atom_keys %{
-    "content" => :content,
-    "model" => :model,
-    "tokens_in" => :tokens_in,
-    "tokens_out" => :tokens_out,
-    "usage" => :usage,
-    "input_tokens" => :input_tokens,
-    "output_tokens" => :output_tokens,
-    "total_tokens" => :total_tokens,
-    "total_cost" => :total_cost,
-    "finish_reason" => :finish_reason,
-    "generation_mode" => :generation_mode,
-    "intelligence" => :intelligence,
-    "reasoning" => :reasoning,
-    "messages" => :messages,
-    "todos" => :todos
-  }
   @execution_lane_key "__maraithon_execution_lane"
   @legacy_llm_scan_limit 200
   @shutdown_timeout_ms 15_000
@@ -987,7 +971,7 @@ defmodule Maraithon.Runtime.EffectRunner do
     case update_claimed_effect(effect, "mark completed",
            status: "completed",
            result: result,
-           result_envelope: %{"status" => "ok", "version" => 1},
+           result_envelope: TerminalEnvelope.success(),
            error: nil,
            last_failure_code: nil,
            last_failure_attempt: nil,
@@ -1045,7 +1029,7 @@ defmodule Maraithon.Runtime.EffectRunner do
       [
         status: "failed",
         error: Maraithon.Redaction.error_summary(reason),
-        result_envelope: terminal_error_envelope(reason),
+        result_envelope: TerminalEnvelope.error(reason),
         attempts: attempts,
         retry_after: nil,
         result_dispatched_at: nil,
@@ -1078,7 +1062,7 @@ defmodule Maraithon.Runtime.EffectRunner do
       error: "effect_outcome_ambiguous",
       last_failure_code: nil,
       last_failure_attempt: nil,
-      result_envelope: terminal_error_envelope(@ambiguous_outcome),
+      result_envelope: TerminalEnvelope.error(@ambiguous_outcome),
       retry_after: nil,
       result_dispatched_at: nil,
       result_dispatch_after: nil,
@@ -1224,7 +1208,7 @@ defmodule Maraithon.Runtime.EffectRunner do
            end
          end) do
       {:ok, {%Effect{} = stored, {:ok, true}}} ->
-        notify_agent(stored.agent_id, stored.id, terminal_effect_result(stored))
+        notify_agent(stored.agent_id, stored.id, Effects.terminal_result(stored))
 
       {:ok, _not_reserved} ->
         :ok
@@ -1233,149 +1217,6 @@ defmodule Maraithon.Runtime.EffectRunner do
         :ok
     end
   end
-
-  defp terminal_effect_result(%Effect{
-         effect_type: effect_type,
-         result_envelope: %{"status" => "ok"},
-         result: result
-       })
-       when is_map(result),
-       do: {:ok, restore_callback_result(effect_type, result)}
-
-  defp terminal_effect_result(%Effect{
-         result_envelope: %{"status" => "error", "reason" => reason}
-       }),
-       do: {:error, decode_error_reason(reason)}
-
-  defp terminal_effect_result(%Effect{
-         effect_type: effect_type,
-         status: "completed",
-         result: result
-       })
-       when is_map(result),
-       do: {:ok, restore_callback_result(effect_type, result)}
-
-  defp terminal_effect_result(%Effect{status: "failed", error: error}) when is_binary(error),
-    do: {:error, error}
-
-  defp terminal_effect_result(_effect), do: {:error, @ambiguous_outcome}
-
-  defp restore_callback_result("llm_call", value) when is_map(value) do
-    Map.new(value, fn {key, nested} ->
-      restored_key = Map.get(@llm_result_atom_keys, key, key)
-      {restored_key, restore_callback_result("llm_call", nested)}
-    end)
-  end
-
-  defp restore_callback_result("llm_call", value) when is_list(value),
-    do: Enum.map(value, &restore_callback_result("llm_call", &1))
-
-  defp restore_callback_result(_effect_type, value), do: value
-
-  defp terminal_error_envelope(reason) do
-    %{"status" => "error", "reason" => encode_error_reason(reason)}
-  end
-
-  defp encode_error_reason(reason) when is_atom(reason),
-    do: %{"type" => "atom", "value" => Atom.to_string(reason)}
-
-  defp encode_error_reason({kind, %{reason: reason}})
-       when kind in [:incomplete_response, :invalid_response] and is_binary(reason) do
-    encode_closed_validation_reason(kind, reason)
-  end
-
-  defp encode_error_reason({kind, %{"reason" => reason}})
-       when kind in [:incomplete_response, :invalid_response] and is_binary(reason) do
-    encode_closed_validation_reason(kind, reason)
-  end
-
-  defp encode_error_reason({kind, detail})
-       when kind in [:provider_refusal, :content_filtered] and detail == :redacted,
-       do: %{
-         "type" => "tuple",
-         "items" => [encode_error_reason(kind), encode_error_reason(detail)]
-       }
-
-  defp encode_error_reason({kind, delay_ms})
-       when kind in [:rate_limited, :llm_busy] and is_integer(delay_ms),
-       do: %{
-         "type" => "tuple",
-         "items" => [encode_error_reason(kind), %{"type" => "integer", "value" => delay_ms}]
-       }
-
-  defp encode_error_reason({kind, status, detail})
-       when is_atom(kind) and is_integer(status),
-       do: %{
-         "type" => "tuple",
-         "items" => [
-           encode_error_reason(kind),
-           %{"type" => "integer", "value" => status},
-           if(detail == :redacted,
-             do: encode_error_reason(:redacted),
-             else: %{"type" => "string", "value" => "redacted_detail"}
-           )
-         ]
-       }
-
-  defp encode_error_reason({kind, _detail}) when is_atom(kind),
-    do: %{
-      "type" => "tuple",
-      "items" => [
-        encode_error_reason(kind),
-        %{"type" => "string", "value" => "redacted_detail"}
-      ]
-    }
-
-  defp encode_error_reason(value) when is_integer(value),
-    do: %{"type" => "integer", "value" => value}
-
-  defp encode_error_reason(value) when is_binary(value),
-    do: %{"type" => "string", "value" => Maraithon.Redaction.error_summary(value)}
-
-  defp encode_error_reason(_reason),
-    do: %{"type" => "string", "value" => "redacted_detail"}
-
-  defp encode_closed_validation_reason(kind, reason) do
-    safe_reason =
-      if byte_size(reason) <= 128 and String.valid?(reason) and
-           Regex.match?(~r/^[A-Za-z0-9._:-]+$/, reason),
-         do: reason,
-         else: "redacted_detail"
-
-    %{
-      "type" => "closed_validation",
-      "kind" => Atom.to_string(kind),
-      "reason" => safe_reason
-    }
-  end
-
-  defp decode_error_reason(%{
-         "type" => "closed_validation",
-         "kind" => kind,
-         "reason" => reason
-       })
-       when kind in ["incomplete_response", "invalid_response"] and is_binary(reason) do
-    {String.to_existing_atom(kind), %{reason: reason}}
-  end
-
-  defp decode_error_reason(%{"type" => "atom", "value" => value}) when is_binary(value) do
-    String.to_existing_atom(value)
-  rescue
-    ArgumentError -> value
-  end
-
-  defp decode_error_reason(%{"type" => "integer", "value" => value}) when is_integer(value),
-    do: value
-
-  defp decode_error_reason(%{"type" => "string", "value" => value}) when is_binary(value),
-    do: value
-
-  defp decode_error_reason(%{"type" => "tuple", "items" => items})
-       when is_list(items) and length(items) in 1..3 do
-    items |> Enum.map(&decode_error_reason/1) |> List.to_tuple()
-  end
-
-  defp decode_error_reason(_reason), do: @ambiguous_outcome
 
   defp notify_agent(agent_id, effect_id, result) do
     :ok = Dispatch.dispatch(agent_id, {:effect_result, effect_id, result})

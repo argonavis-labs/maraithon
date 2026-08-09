@@ -7,6 +7,7 @@ defmodule Maraithon.Effects do
 
   alias Maraithon.Repo
   alias Maraithon.Effects.Effect
+  alias Maraithon.Effects.TerminalEnvelope
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentRun
   alias Maraithon.Agents.AgentRunStep
@@ -22,10 +23,6 @@ defmodule Maraithon.Effects do
   @max_terminal_dispatch_batch 32
   @max_cancellation_claims 512
   @max_run_terminal_results 64
-  @ambiguous_cancellation_envelope %{
-    "status" => "error",
-    "reason" => %{"type" => "atom", "value" => "effect_outcome_ambiguous"}
-  }
 
   @doc """
   Request an effect to be executed.
@@ -308,34 +305,39 @@ defmodule Maraithon.Effects do
   @doc false
   def acknowledge_terminal_result(effect_id, agent_id)
       when is_binary(effect_id) and is_binary(agent_id) do
-    query =
-      from(effect in Effect,
-        join: agent in Agent,
-        on: agent.id == effect.agent_id,
-        where: effect.id == ^effect_id,
-        where: effect.agent_id == ^agent_id,
-        where: fragment("? IS NOT DISTINCT FROM ?", effect.owner_user_id, agent.user_id),
-        where:
-          is_nil(effect.agent_run_id) or
-            fragment(
-              "EXISTS (SELECT 1 FROM agent_runs AS ownership_run WHERE ownership_run.id = ? AND ownership_run.agent_id = ? AND ownership_run.user_id IS NOT DISTINCT FROM ?)",
-              effect.agent_run_id,
-              effect.agent_id,
-              effect.owner_user_id
-            ),
-        where: effect.status in ["completed", "failed"],
-        where: not is_nil(effect.result_envelope),
-        where: is_nil(effect.result_acknowledged_at),
-        update: [
-          set: [
-            result_acknowledged_at: fragment("timezone('UTC', NOW())"),
-            updated_at: fragment("timezone('UTC', NOW())")
+    with {:ok, effect_id} <- required_uuid(effect_id),
+         {:ok, agent_id} <- required_uuid(agent_id) do
+      query =
+        from(effect in Effect,
+          join: agent in Agent,
+          on: agent.id == effect.agent_id,
+          where: effect.id == ^effect_id,
+          where: effect.agent_id == ^agent_id,
+          where: fragment("? IS NOT DISTINCT FROM ?", effect.owner_user_id, agent.user_id),
+          where:
+            is_nil(effect.agent_run_id) or
+              fragment(
+                "EXISTS (SELECT 1 FROM agent_runs AS ownership_run WHERE ownership_run.id = ? AND ownership_run.agent_id = ? AND ownership_run.user_id IS NOT DISTINCT FROM ?)",
+                effect.agent_run_id,
+                effect.agent_id,
+                effect.owner_user_id
+              ),
+          where: effect.status in ["completed", "failed"],
+          where: not is_nil(effect.result_envelope),
+          where: is_nil(effect.result_acknowledged_at),
+          update: [
+            set: [
+              result_acknowledged_at: fragment("timezone('UTC', NOW())"),
+              updated_at: fragment("timezone('UTC', NOW())")
+            ]
           ]
-        ]
-      )
+        )
 
-    {count, _rows} = Repo.update_all(query, [])
-    {:ok, count}
+      {count, _rows} = Repo.update_all(query, [])
+      {:ok, count}
+    else
+      :error -> {:error, :invalid_effect_acknowledgement}
+    end
   end
 
   def acknowledge_terminal_result(_effect_id, _agent_id),
@@ -397,28 +399,59 @@ defmodule Maraithon.Effects do
   def acknowledge_terminal_results_for_run(_run_id, _agent_id),
     do: {:error, :invalid_effect_acknowledgement}
 
+  @doc """
+  Interpret an already-loaded persisted Effect row using the terminal codec.
+  """
+  def terminal_result(%Effect{} = effect), do: TerminalEnvelope.decode(effect)
+
+  @doc """
+  Load and interpret an unacknowledged terminal Effect owned by the agent.
+
+  The returned callback result always comes from the persisted row. The caller
+  may use a mailbox notification only as a hint to perform this lookup.
+  """
+  def terminal_result(effect_id, agent_id)
+      when is_binary(effect_id) and is_binary(agent_id) do
+    with {:ok, canonical_effect_id} <- required_uuid(effect_id),
+         {:ok, canonical_agent_id} <- required_uuid(agent_id) do
+      case get_terminal_result(canonical_effect_id, canonical_agent_id) do
+        %Effect{} = effect -> {:terminal, terminal_result(effect)}
+        nil -> :not_terminal
+      end
+    else
+      :error -> {:error, :invalid_effect_reference}
+    end
+  end
+
+  def terminal_result(_effect_id, _agent_id), do: {:error, :invalid_effect_reference}
+
   @doc false
   def get_terminal_result(effect_id, agent_id)
       when is_binary(effect_id) and is_binary(agent_id) do
-    Repo.one(
-      from(effect in Effect,
-        join: agent in Agent,
-        on: agent.id == effect.agent_id,
-        left_join: run in AgentRun,
-        on: run.id == effect.agent_run_id,
-        where: effect.id == ^effect_id,
-        where: effect.agent_id == ^agent_id,
-        where: fragment("? IS NOT DISTINCT FROM ?", effect.owner_user_id, agent.user_id),
-        where:
-          is_nil(effect.agent_run_id) or
-            (run.agent_id == effect.agent_id and
-               fragment("? IS NOT DISTINCT FROM ?", run.user_id, effect.owner_user_id)),
-        where: effect.status in ["completed", "failed"],
-        where: not is_nil(effect.result_envelope),
-        where: is_nil(effect.result_acknowledged_at),
-        select: effect
+    with {:ok, effect_id} <- required_uuid(effect_id),
+         {:ok, agent_id} <- required_uuid(agent_id) do
+      Repo.one(
+        from(effect in Effect,
+          join: agent in Agent,
+          on: agent.id == effect.agent_id,
+          left_join: run in AgentRun,
+          on: run.id == effect.agent_run_id,
+          where: effect.id == ^effect_id,
+          where: effect.agent_id == ^agent_id,
+          where: fragment("? IS NOT DISTINCT FROM ?", effect.owner_user_id, agent.user_id),
+          where:
+            is_nil(effect.agent_run_id) or
+              (run.agent_id == effect.agent_id and
+                 fragment("? IS NOT DISTINCT FROM ?", run.user_id, effect.owner_user_id)),
+          where: effect.status in ["completed", "failed"],
+          where: not is_nil(effect.result_envelope),
+          where: is_nil(effect.result_acknowledged_at),
+          select: effect
+        )
       )
-    )
+    else
+      :error -> nil
+    end
   end
 
   def get_terminal_result(_effect_id, _agent_id), do: nil
@@ -522,7 +555,7 @@ defmodule Maraithon.Effects do
                 status: "failed",
                 result: nil,
                 error: "effect_outcome_ambiguous",
-                result_envelope: @ambiguous_cancellation_envelope,
+                result_envelope: TerminalEnvelope.error(:effect_outcome_ambiguous),
                 result_dispatched_at: nil,
                 result_dispatch_after: nil,
                 result_dispatch_attempts: 0,
@@ -568,11 +601,25 @@ defmodule Maraithon.Effects do
   @doc """
   Check if an effect has already been executed (for idempotency).
   """
-  def check_idempotency(idempotency_key) do
-    case Repo.get_by(Effect, idempotency_key: idempotency_key) do
-      %Effect{status: "completed", result: result} -> {:cached, result}
-      %Effect{status: "failed", error: error} -> {:cached_error, error}
-      _ -> :not_found
+  def check_idempotency(idempotency_key) when is_binary(idempotency_key) do
+    with {:ok, idempotency_key} <- required_uuid(idempotency_key) do
+      case Repo.get_by(Effect, idempotency_key: idempotency_key) do
+        %Effect{status: status} = effect when status in ["completed", "failed"] ->
+          case terminal_result(effect) do
+            {:ok, result} -> {:cached, result}
+            {:error, reason} -> {:cached_error, reason}
+          end
+
+        _nonterminal_or_missing ->
+          :not_found
+      end
+    else
+      :error -> :not_found
     end
   end
+
+  def check_idempotency(_idempotency_key), do: :not_found
+
+  defp required_uuid(value) when is_binary(value), do: Ecto.UUID.cast(value)
+  defp required_uuid(_value), do: :error
 end

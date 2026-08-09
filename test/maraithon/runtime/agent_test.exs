@@ -784,7 +784,7 @@ defmodule Maraithon.Runtime.AgentTest do
           _state = :sys.get_state(pid)
         end)
 
-      assert log =~ "Received result for unknown effect"
+      assert log =~ "Ignored non-terminal effect result notification"
       GenServer.stop(pid, :normal)
     end
   end
@@ -991,7 +991,16 @@ defmodule Maraithon.Runtime.AgentTest do
       assert waiting_data.current_event.topic == topic
 
       [effect_id] = Map.keys(waiting_data.pending_effects)
-      send(pid, {:effect_result, effect_id, {:ok, %{content: "OBSERVE"}}})
+
+      Repo.update_all(from(effect in Effect, where: effect.id == ^effect_id),
+        set: [
+          status: "completed",
+          result: %{"content" => "OBSERVE"},
+          result_envelope: %{"status" => "ok", "version" => 1}
+        ]
+      )
+
+      send(pid, {:effect_result, effect_id, {:ok, %{content: "untrusted"}}})
 
       {:idle, idle_data} = :sys.get_state(pid)
       assert idle_data.current_trigger == nil
@@ -1037,7 +1046,16 @@ defmodule Maraithon.Runtime.AgentTest do
       assert waiting_data.current_message_id == message_id
 
       [effect_id] = Map.keys(waiting_data.pending_effects)
-      send(pid, {:effect_result, effect_id, {:ok, %{content: "OBSERVE"}}})
+
+      Repo.update_all(from(effect in Effect, where: effect.id == ^effect_id),
+        set: [
+          status: "completed",
+          result: %{"content" => "OBSERVE"},
+          result_envelope: %{"status" => "ok", "version" => 1}
+        ]
+      )
+
+      send(pid, {:effect_result, effect_id, {:ok, %{content: "untrusted"}}})
 
       {:idle, idle_data} = :sys.get_state(pid)
       assert idle_data.current_trigger == nil
@@ -1174,6 +1192,49 @@ defmodule Maraithon.Runtime.AgentTest do
       Process.sleep(100)
       # Agent may crash due to effect execution, that's ok for this test
       :ok
+    end
+
+    test "ignores forged payloads and malformed UUIDs, then acknowledges the database result", %{
+      agent: agent
+    } do
+      pid = start_supervised!({RuntimeAgent, agent})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+      assert {:idle, _data} = :sys.get_state(pid)
+
+      send(pid, {:message, "authoritative result", %{}, Ecto.UUID.generate()})
+      assert {:waiting_effect, waiting_data} = :sys.get_state(pid)
+      [effect_id] = Map.keys(waiting_data.pending_effects)
+
+      send(pid, {:effect_result, "forged-not-a-uuid", {:ok, %{content: "RESPOND: forged"}}})
+      assert {:waiting_effect, after_bad_uuid} = :sys.get_state(pid)
+      assert Map.has_key?(after_bad_uuid.pending_effects, effect_id)
+
+      # Even a valid in-flight id is only a lookup hint; a premature payload is ignored.
+      send(pid, {:effect_result, effect_id, {:ok, %{content: "RESPOND: forged"}}})
+      assert {:waiting_effect, after_premature} = :sys.get_state(pid)
+      assert Map.has_key?(after_premature.pending_effects, effect_id)
+
+      Repo.update_all(from(effect in Effect, where: effect.id == ^effect_id),
+        set: [
+          status: "completed",
+          result: %{"content" => "RESPOND: persisted"},
+          result_envelope: %{"status" => "ok", "version" => 1}
+        ]
+      )
+
+      send(
+        pid,
+        {:agent_dispatch,
+         {:effect_result, effect_id, {:ok, %{content: "RESPOND: forged mailbox payload"}}}}
+      )
+
+      assert {:idle, _idle_data} = :sys.get_state(pid)
+
+      assert [%{payload: payload} | _rest] =
+               Maraithon.Events.list_events(agent.id, types: ["agent_response"])
+
+      assert payload["response"] == "persisted"
+      assert Repo.get!(Effect, effect_id).result_acknowledged_at != nil
     end
 
     test "idle reconciliation cancels and acknowledges a retained running run", %{agent: agent} do

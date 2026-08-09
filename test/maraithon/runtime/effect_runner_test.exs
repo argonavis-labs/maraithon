@@ -1905,12 +1905,13 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
       send(pid, :poll)
 
-      assert_receive {:agent_dispatch,
-                      {:effect_result, ^effect_id, {:error, :effect_outcome_ambiguous}}},
-                     1_000
+      assert_receive {:agent_dispatch, {:effect_result, ^effect_id, dispatched_result}}, 1_000
+      assert dispatched_result == {:error, :effect_outcome_ambiguous}
 
       _ = :sys.get_state(pid)
       effect = Repo.get!(Effect, effect_id)
+      assert Effects.terminal_result(effect) == dispatched_result
+      assert Effects.terminal_result(effect_id, agent.id) == {:terminal, dispatched_result}
       assert effect.status == "failed"
       assert effect.error == "effect_outcome_ambiguous"
       assert effect.result == nil

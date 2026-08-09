@@ -3,6 +3,7 @@ defmodule Maraithon.EffectsTest do
 
   alias Maraithon.Effects
   alias Maraithon.Effects.Effect
+  alias Maraithon.Effects.TerminalEnvelope
   alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.LLM
@@ -117,6 +118,221 @@ defmodule Maraithon.EffectsTest do
                Effects.prepare_result(%{"content" => "contains" <> <<0>> <> "nul"})
 
       assert {:error, :invalid_effect_result} = Effects.prepare_result(DateTime.utc_now())
+    end
+  end
+
+  describe "terminal result envelope codec" do
+    test "round-trips typed atoms, tuples, and closed validation errors" do
+      for reason <- [
+            :invalid_effect_result,
+            {:rate_limited, 1_234},
+            {:api_error, 400, :redacted},
+            {:invalid_response, %{reason: "missing_content"}}
+          ] do
+        envelope = TerminalEnvelope.error(reason)
+
+        assert envelope["version"] == 1
+
+        assert TerminalEnvelope.decode(%Effect{
+                 status: "failed",
+                 result_envelope: envelope,
+                 error: "conflicting_legacy_error"
+               }) == {:error, reason}
+      end
+    end
+
+    test "encodes policy decisions with old-reader-compatible closed reason codes" do
+      decision = %{
+        "status" => "deny",
+        "reason_code" => "invalid_user_context",
+        "message" => String.duplicate("provider-controlled copy ", 1_000),
+        "metadata" => %{
+          "surface" => "runtime",
+          "tool_name" => "provider-secret-tool",
+          "discarded" => Enum.reduce(1..20, "provider-secret-leaf", &%{&1 => &2})
+        }
+      }
+
+      envelope = TerminalEnvelope.error({:tool_policy_denied, decision})
+      encoded = Jason.encode!(envelope)
+
+      # The deployed reader already understands this atom/tuple grammar. New
+      # policy-specific wire types require a separate reader-first rollout.
+      assert envelope["reason"] == %{
+               "type" => "tuple",
+               "items" => [
+                 %{"type" => "atom", "value" => "tool_policy_denied"},
+                 %{"type" => "atom", "value" => "invalid_user_context"}
+               ]
+             }
+
+      refute encoded =~ "closed_policy_decision"
+      refute encoded =~ "provider-controlled"
+      refute encoded =~ "provider-secret"
+      refute encoded =~ "tool_name"
+
+      assert {:error, {:tool_policy_denied, restored}} =
+               TerminalEnvelope.decode(%Effect{
+                 status: "failed",
+                 result_envelope: envelope
+               })
+
+      assert restored == %{
+               "status" => "deny",
+               "reason_code" => "invalid_user_context",
+               "message" => "Sign in again so Maraithon can confirm the account.",
+               "metadata" => %{}
+             }
+
+      confirmation =
+        TerminalEnvelope.error(
+          {:tool_policy_needs_confirmation,
+           %{
+             "reason_code" => "confirmation_required",
+             "message" => "untrusted confirmation copy"
+           }}
+        )
+
+      assert {:error, {:tool_policy_needs_confirmation, confirmation_copy}} =
+               TerminalEnvelope.decode(%Effect{
+                 status: "failed",
+                 result_envelope: confirmation
+               })
+
+      assert confirmation_copy == %{
+               "status" => "needs_confirmation",
+               "reason_code" => "confirmation_required",
+               "message" => "Confirm this action before it runs.",
+               "metadata" => %{"confirmation_required" => true}
+             }
+
+      oversized_code = String.duplicate("x", 100_000)
+      fallback = TerminalEnvelope.error({:tool_policy_denied, %{"reason_code" => oversized_code}})
+      refute Jason.encode!(fallback) =~ oversized_code
+
+      assert {:error, {:tool_policy_denied, fallback_copy}} =
+               TerminalEnvelope.decode(%Effect{status: "failed", result_envelope: fallback})
+
+      assert fallback_copy["reason_code"] == "tool_failed"
+
+      provider_envelope = TerminalEnvelope.error({:api_error, 400, "raw-provider-secret"})
+      refute Jason.encode!(provider_envelope) =~ "raw-provider-secret"
+
+      assert TerminalEnvelope.decode(%Effect{
+               status: "failed",
+               result_envelope: provider_envelope
+             }) == {:error, {:api_error, 400, "redacted_detail"}}
+    end
+
+    test "gives a present envelope precedence and uses legacy columns only when it is nil" do
+      error_envelope = TerminalEnvelope.error(:invalid_effect_result)
+
+      assert TerminalEnvelope.decode(%Effect{
+               effect_type: "llm_call",
+               status: "completed",
+               result: %{"content" => "must not win"},
+               error: "must not win",
+               result_envelope: error_envelope
+             }) == {:error, :invalid_effect_result}
+
+      assert TerminalEnvelope.decode(%Effect{
+               effect_type: "llm_call",
+               status: "completed",
+               result: %{
+                 "content" => "legacy",
+                 "usage" => %{"input_tokens" => 2},
+                 "custom" => "kept"
+               },
+               result_envelope: nil
+             }) ==
+               {:ok,
+                %{
+                  "custom" => "kept",
+                  content: "legacy",
+                  usage: %{input_tokens: 2}
+                }}
+
+      assert TerminalEnvelope.decode(%Effect{
+               status: "failed",
+               error: "legacy_failure",
+               result_envelope: nil
+             }) == {:error, "legacy_failure"}
+
+      assert TerminalEnvelope.decode(%Effect{
+               effect_type: "test",
+               status: "completed",
+               result: nil,
+               result_envelope: nil
+             }) == {:ok, %{}}
+
+      # Existing production error envelopes predate the explicit version.
+      assert TerminalEnvelope.decode(%Effect{
+               status: "failed",
+               result_envelope: Map.delete(error_envelope, "version")
+             }) == {:error, :invalid_effect_result}
+
+      # Success envelopes have always been versioned; a present versionless
+      # success must not fall through to its otherwise valid result column.
+      assert TerminalEnvelope.decode(%Effect{
+               effect_type: "llm_call",
+               status: "completed",
+               result: %{"content" => "must not decode"},
+               result_envelope: %{"status" => "ok"}
+             }) == {:error, :effect_outcome_ambiguous}
+    end
+
+    test "fails malformed, unknown, and over-deep present envelopes closed without atoms" do
+      unknown_atom = "terminal_codec_unknown_#{System.unique_integer([:positive])}"
+
+      unknown_atom_envelope = %{
+        "status" => "error",
+        "version" => 1,
+        "reason" => %{"type" => "atom", "value" => unknown_atom}
+      }
+
+      completed = %Effect{
+        status: "completed",
+        result: %{"content" => "legacy must not win"},
+        result_envelope: unknown_atom_envelope
+      }
+
+      assert TerminalEnvelope.decode(completed) == {:error, :effect_outcome_ambiguous}
+      assert_raise ArgumentError, fn -> String.to_existing_atom(unknown_atom) end
+
+      assert TerminalEnvelope.decode(%{
+               completed
+               | result_envelope: %{"status" => "ok", "version" => 999}
+             }) == {:error, :effect_outcome_ambiguous}
+
+      too_wide =
+        TerminalEnvelope.error(:invalid_effect_result)
+        |> put_in(
+          ["reason"],
+          %{
+            "type" => "tuple",
+            "items" => Enum.map(1..4, fn _ -> %{"type" => "atom", "value" => "redacted"} end)
+          }
+        )
+
+      assert TerminalEnvelope.decode(%Effect{
+               status: "failed",
+               error: "legacy must not win",
+               result_envelope: too_wide
+             }) == {:error, :effect_outcome_ambiguous}
+
+      nested_reason =
+        Enum.reduce(1..6, %{"type" => "atom", "value" => "redacted"}, fn _, nested ->
+          %{"type" => "tuple", "items" => [nested]}
+        end)
+
+      assert TerminalEnvelope.decode(%Effect{
+               status: "failed",
+               result_envelope: %{
+                 "status" => "error",
+                 "version" => 1,
+                 "reason" => nested_reason
+               }
+             }) == {:error, :effect_outcome_ambiguous}
     end
   end
 
@@ -304,6 +520,28 @@ defmodule Maraithon.EffectsTest do
       assert {:cached_error, "Something went wrong"} = Effects.check_idempotency(key)
     end
 
+    test "uses the same envelope interpreter for cached terminal errors", %{
+      agent_id: agent_id
+    } do
+      key = Ecto.UUID.generate()
+
+      %Effect{}
+      |> Effect.changeset(%{
+        id: Ecto.UUID.generate(),
+        agent_id: agent_id,
+        idempotency_key: key,
+        effect_type: "test",
+        status: "completed",
+        result: %{"success" => true},
+        error: "legacy_must_not_win",
+        result_envelope: TerminalEnvelope.error(:invalid_effect_result)
+      })
+      |> Repo.insert!()
+
+      assert Effects.check_idempotency(key) == {:cached_error, :invalid_effect_result}
+      assert Effects.check_idempotency("not-a-uuid") == :not_found
+    end
+
     test "returns :not_found for pending effect", %{agent_id: agent_id} do
       key = Ecto.UUID.generate()
 
@@ -399,6 +637,13 @@ defmodule Maraithon.EffectsTest do
         })
         |> Repo.insert!()
 
+      expected_result = {:ok, %{content: "done"}}
+      assert Effects.terminal_result(effect) == expected_result
+      assert Effects.terminal_result(effect.id, agent_id) == {:terminal, expected_result}
+
+      assert Effects.terminal_result("forged-not-a-uuid", agent_id) ==
+               {:error, :invalid_effect_reference}
+
       assert [listed] = Effects.list_terminal_results_for_dispatch()
       assert listed.id == effect.id
 
@@ -423,6 +668,7 @@ defmodule Maraithon.EffectsTest do
       assert Repo.get!(Effect, effect.id).result_dispatch_attempts == 2
 
       assert {:ok, 1} = Effects.acknowledge_terminal_result(effect.id, agent_id)
+      assert Effects.terminal_result(effect.id, agent_id) == :not_terminal
       assert Effects.get_terminal_result(effect.id, agent_id) == nil
       assert Effects.list_terminal_results_for_dispatch() == []
     end
