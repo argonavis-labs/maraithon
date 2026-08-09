@@ -36,6 +36,12 @@ defmodule Maraithon.Repo.Migrations.CreateAgentWorkResultLineage do
              name: :agent_work_results_exact_owner_unique_index
            )
 
+    create_if_not_exists unique_index(
+                           :agent_work_results,
+                           [:id, :agent_directive_id, :agent_id, :user_id],
+                           name: :agent_work_results_directive_owner_unique_index
+                         )
+
     create index(:agent_work_results, [:status, :inserted_at, :id],
              where: "status = 'provisional'",
              name: :agent_work_results_provisional_index
@@ -108,6 +114,7 @@ defmodule Maraithon.Repo.Migrations.CreateAgentWorkResultLineage do
       add :acquisition_run_id, :binary_id, primary_key: true
       add :user_id, :string, null: false
       add :agent_id, :binary_id, null: false
+      add :agent_directive_id, :binary_id, null: false
 
       timestamps(
         type: :utc_datetime_usec,
@@ -128,8 +135,9 @@ defmodule Maraithon.Repo.Migrations.CreateAgentWorkResultLineage do
       """
       ALTER TABLE agent_work_result_acquisitions
       ADD CONSTRAINT agent_work_result_acquisitions_result_owner_fkey
-      FOREIGN KEY (agent_work_result_id, agent_id, user_id)
-      REFERENCES agent_work_results(id, agent_id, user_id) ON DELETE CASCADE
+      FOREIGN KEY (agent_work_result_id, agent_directive_id, agent_id, user_id)
+      REFERENCES agent_work_results(id, agent_directive_id, agent_id, user_id)
+      ON DELETE CASCADE
       """,
       "ALTER TABLE agent_work_result_acquisitions DROP CONSTRAINT agent_work_result_acquisitions_result_owner_fkey"
     )
@@ -138,8 +146,9 @@ defmodule Maraithon.Repo.Migrations.CreateAgentWorkResultLineage do
       """
       ALTER TABLE agent_work_result_acquisitions
       ADD CONSTRAINT agent_work_result_acquisitions_acquisition_owner_fkey
-      FOREIGN KEY (acquisition_run_id, agent_id, user_id)
-      REFERENCES chief_acquisition_runs(id, agent_id, user_id) ON DELETE RESTRICT
+      FOREIGN KEY (acquisition_run_id, agent_directive_id, agent_id, user_id)
+      REFERENCES chief_acquisition_runs(id, agent_directive_id, agent_id, user_id)
+      ON DELETE RESTRICT
       """,
       "ALTER TABLE agent_work_result_acquisitions DROP CONSTRAINT agent_work_result_acquisitions_acquisition_owner_fkey"
     )
@@ -154,6 +163,7 @@ defmodule Maraithon.Repo.Migrations.CreateAgentWorkResultLineage do
       add :agent_id, :binary_id, null: false
       add :connected_account_id, :bigint, null: false
       add :provider, :string, null: false
+      add :provider_account_key, :string, null: false
       add :cursor_kind, :string, null: false
       add :expected_value, :text
       add :advanced_value, :text, null: false
@@ -201,8 +211,13 @@ defmodule Maraithon.Repo.Migrations.CreateAgentWorkResultLineage do
       """
       ALTER TABLE source_cursor_advancements
       ADD CONSTRAINT source_cursor_advancements_acquisition_owner_fkey
-      FOREIGN KEY (acquisition_run_id, agent_id, user_id, connected_account_id, provider)
-      REFERENCES chief_acquisition_runs(id, agent_id, user_id, connected_account_id, provider)
+      FOREIGN KEY (
+        acquisition_run_id, agent_id, user_id, connected_account_id, provider,
+        provider_account_key
+      )
+      REFERENCES chief_acquisition_runs(
+        id, agent_id, user_id, connected_account_id, provider, provider_account_key
+      )
       ON DELETE RESTRICT
       """,
       "ALTER TABLE source_cursor_advancements DROP CONSTRAINT source_cursor_advancements_acquisition_owner_fkey"
@@ -221,7 +236,6 @@ defmodule Maraithon.Repo.Migrations.CreateAgentWorkResultLineage do
 
     create constraint(:source_cursor_advancements, :source_cursor_advancements_value_check,
              check: """
-             expected_value IS DISTINCT FROM advanced_value AND
              (expected_value IS NULL OR (octet_length(expected_value) BETWEEN 1 AND 4096 AND expected_value !~ '[[:cntrl:]]')) AND
              octet_length(advanced_value) BETWEEN 1 AND 4096 AND advanced_value !~ '[[:cntrl:]]'
              """
@@ -231,6 +245,7 @@ defmodule Maraithon.Repo.Migrations.CreateAgentWorkResultLineage do
              check: """
              octet_length(user_id) BETWEEN 1 AND 320 AND user_id !~ '[[:space:][:cntrl:]]' AND
              octet_length(provider) BETWEEN 1 AND 80 AND provider !~ '[[:space:][:cntrl:]]' AND
+             octet_length(provider_account_key) BETWEEN 1 AND 255 AND provider_account_key !~ '[[:cntrl:]]' AND
              octet_length(cursor_kind) BETWEEN 1 AND 80 AND cursor_kind !~ '[[:cntrl:]]'
              """
            )

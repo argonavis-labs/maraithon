@@ -14,6 +14,7 @@ defmodule Maraithon.Runtime.AgentWorkResultAcquisition do
     field :acquisition_run_id, :binary_id, primary_key: true
     field :user_id, :string
     field :agent_id, :binary_id
+    field :agent_directive_id, :binary_id
 
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
@@ -25,6 +26,7 @@ defmodule Maraithon.Runtime.AgentWorkResultAcquisition do
       :acquisition_run_id,
       :user_id,
       :agent_id,
+      :agent_directive_id,
       :inserted_at
     ])
     |> validate_required([
@@ -32,6 +34,7 @@ defmodule Maraithon.Runtime.AgentWorkResultAcquisition do
       :acquisition_run_id,
       :user_id,
       :agent_id,
+      :agent_directive_id,
       :inserted_at
     ])
     |> unique_constraint(:acquisition_run_id,

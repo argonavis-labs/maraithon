@@ -38,6 +38,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
          {:ok, identity} <- acquisition_identity(attrs),
          {:ok, directive} <- exact_directive(identity),
          {:ok, receipt} <- exact_receipt(identity),
+         identity <- Map.put(identity, :provider_account_key, receipt.provider_account_key),
          {:ok, cursor} <- exact_cursor(identity),
          {:ok, start_cursor} <- start_cursor(cursor),
          {:ok, request_fingerprint} <-
@@ -47,6 +48,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
              receipt.receipt_key,
              directive.dedupe_key,
              identity.request_key,
+             identity.provider_account_key,
              identity.source,
              identity.scope_key,
              identity.contract_version
@@ -95,19 +97,27 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
   def record_page_in_transaction(run_or_id, page_attrs, envelope_attrs)
       when is_map(page_attrs) and is_list(envelope_attrs) and
              length(envelope_attrs) <= @max_page_items do
-    with :ok <- Transaction.require(),
-         {:ok, run_id} <- schema_id(run_or_id, AcquisitionRun),
-         %AcquisitionRun{} = run <- lock_run(run_id),
-         :ok <- fetching(run),
-         {:ok, page_identity} <- page_identity(run, page_attrs, envelope_attrs),
-         {:ok, prepared_envelopes} <- prepare_envelopes(run, envelope_attrs) do
-      case page_by_ordinal(run.id, page_identity.ordinal) do
-        nil -> insert_page(run, page_identity, prepared_envelopes)
-        page -> compare_page(page, page_identity, prepared_envelopes)
-      end
-    else
-      nil -> {:error, :acquisition_not_found}
-      {:error, reason} -> {:error, reason}
+    with :ok <- Transaction.require() do
+      with_savepoint(fn ->
+        with {:ok, run_id} <- schema_id(run_or_id, AcquisitionRun),
+             %AcquisitionRun{} = run <- lock_run(run_id),
+             :ok <- fetching(run),
+             {:ok, page_identity} <- page_identity(run, page_attrs, envelope_attrs),
+             {:ok, prepared_envelopes} <- prepare_envelopes(run, envelope_attrs) do
+          case page_by_ordinal(run.id, page_identity.ordinal) do
+            nil ->
+              with :ok <- pagination_open(run) do
+                insert_page(run, page_identity, prepared_envelopes)
+              end
+
+            page ->
+              compare_page(page, page_identity, prepared_envelopes)
+          end
+        else
+          nil -> {:error, :acquisition_not_found}
+          {:error, reason} -> {:error, reason}
+        end
+      end)
     end
   end
 
@@ -124,6 +134,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
          {:ok, run_id} <- schema_id(run_or_id, AcquisitionRun),
          %AcquisitionRun{} = run <- lock_run(run_id),
          :ok <- fetching(run),
+         :ok <- pagination_open(run),
          {:ok, failure_code} <- failure_code(failure_code),
          {:ok, continuation, encoded, _digest} <-
            Canonical.object(continuation, @max_continuation_bytes,
@@ -289,6 +300,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
              user_id: run.user_id,
              connected_account_id: run.connected_account_id,
              provider: run.provider,
+             provider_account_key: run.provider_account_key,
              item_ordinal: ordinal,
              provenance: provenance,
              inserted_at: now
@@ -327,15 +339,20 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
   end
 
   defp envelope_same?(existing, prepared) do
-    existing.user_id == prepared.user_id and
+    existing.envelope_key == prepared.envelope_key and
+      existing.user_id == prepared.user_id and
       existing.connected_account_id == prepared.connected_account_id and
       existing.provider == prepared.provider and
+      existing.provider_account_key == prepared.provider_account_key and
       existing.source == prepared.source and
       existing.scope_key == prepared.scope_key and
       existing.source_item_key == prepared.source_item_key and
       existing.source_revision_key == prepared.source_revision_key and
+      existing.raw_payload == prepared.raw_payload and
+      existing.normalized_payload == prepared.normalized_payload and
       existing.raw_digest == prepared.raw_digest and
-      existing.normalized_digest == prepared.normalized_digest
+      existing.normalized_digest == prepared.normalized_digest and
+      existing.occurred_at == prepared.occurred_at
   end
 
   defp advance_page_counts(run, page, now) do
@@ -361,25 +378,39 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
           on: envelope.id == association.source_envelope_id,
           where: association.acquisition_page_id == ^page.id,
           order_by: [asc: association.item_ordinal],
-          select: envelope
+          select: {association, envelope}
         )
       )
 
-    expected_keys = Enum.map(prepared_envelopes, & &1.envelope_key)
-
-    same_envelopes? =
+    same_links? =
       length(associated) == length(prepared_envelopes) and
         associated
         |> Enum.zip(prepared_envelopes)
-        |> Enum.all?(fn {existing, prepared} -> envelope_same?(existing, prepared) end)
+        |> Enum.with_index()
+        |> Enum.all?(fn {{{association, existing}, prepared}, ordinal} ->
+          association.acquisition_run_id == page.acquisition_run_id and
+            association.acquisition_page_id == page.id and
+            association.source_envelope_id == existing.id and
+            association.user_id == prepared.user_id and
+            association.connected_account_id == prepared.connected_account_id and
+            association.provider == prepared.provider and
+            association.provider_account_key == prepared.provider_account_key and
+            association.item_ordinal == ordinal and
+            association.provenance == prepared.provenance and
+            envelope_same?(existing, prepared)
+        end)
 
-    if page.request_cursor == page_identity.request_cursor and
+    envelopes = Enum.map(associated, &elem(&1, 1))
+    expected_keys = Enum.map(prepared_envelopes, & &1.envelope_key)
+
+    if page.item_count == length(prepared_envelopes) and
+         page.request_cursor == page_identity.request_cursor and
          page.next_cursor == page_identity.next_cursor and
          page.terminal == page_identity.terminal and
          page.request_fingerprint == page_identity.request_fingerprint and
          page.response_digest == page_identity.response_digest and
-         Enum.map(associated, & &1.envelope_key) == expected_keys and same_envelopes? do
-      {:ok, page, associated, :duplicate}
+         Enum.map(envelopes, & &1.envelope_key) == expected_keys and same_links? do
+      {:ok, page, envelopes, :duplicate}
     else
       {:error, :acquisition_page_idempotency_conflict}
     end
@@ -474,6 +505,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
              run.user_id,
              run.connected_account_id,
              run.provider,
+             run.provider_account_key,
              run.source,
              run.scope_key,
              source_item_key,
@@ -489,6 +521,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
         user_id: run.user_id,
         connected_account_id: run.connected_account_id,
         provider: run.provider,
+        provider_account_key: run.provider_account_key,
         source: run.source,
         scope_key: run.scope_key,
         source_item_key: source_item_key,
@@ -613,6 +646,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
       directive.dedupe_key,
       receipt.receipt_key,
       identity.provider,
+      identity.provider_account_key,
       identity.source,
       identity.scope_key,
       identity.request_key,
@@ -642,14 +676,32 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
               request_key: prepared.request_key
             )
 
-          if existing.acquisition_key == prepared.acquisition_key and
-               existing.request_fingerprint == prepared.request_fingerprint,
-             do: {:ok, existing, :duplicate},
-             else: {:error, :acquisition_idempotency_conflict}
+          if run_same?(existing, prepared),
+            do: {:ok, existing, :duplicate},
+            else: {:error, :acquisition_idempotency_conflict}
       end
     else
       {:error, changeset}
     end
+  end
+
+  defp run_same?(existing, prepared) do
+    existing.acquisition_key == prepared.acquisition_key and
+      existing.user_id == prepared.user_id and
+      existing.agent_id == prepared.agent_id and
+      existing.agent_directive_id == prepared.agent_directive_id and
+      existing.runtime_ingress_receipt_id == prepared.runtime_ingress_receipt_id and
+      existing.connected_account_id == prepared.connected_account_id and
+      existing.source_cursor_id == prepared.source_cursor_id and
+      existing.cursor_kind == prepared.cursor_kind and
+      existing.provider == prepared.provider and
+      existing.provider_account_key == prepared.provider_account_key and
+      existing.source == prepared.source and
+      existing.scope_key == prepared.scope_key and
+      existing.request_key == prepared.request_key and
+      existing.request_fingerprint == prepared.request_fingerprint and
+      existing.contract_version == prepared.contract_version and
+      existing.start_cursor == prepared.start_cursor
   end
 
   defp expected_request_cursor(run, page) do
@@ -678,8 +730,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
     ordinals = Enum.map(pages, & &1.ordinal)
     expected_ordinals = if pages == [], do: [], else: Enum.to_list(0..(length(pages) - 1))
     item_count = Enum.sum(Enum.map(pages, & &1.item_count))
-    association_count = association_count(run.id)
-    last_page = List.last(pages)
+    association_ordinals = association_ordinals(run.id)
+    association_count = association_ordinals |> Map.values() |> Enum.map(&length/1) |> Enum.sum()
 
     cond do
       pages == [] ->
@@ -694,7 +746,10 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
       run.item_count != item_count or item_count != association_count ->
         {:error, :acquisition_item_count_mismatch}
 
-      not last_page.terminal ->
+      not exact_page_item_ordinals?(pages, association_ordinals) ->
+        {:error, :acquisition_item_ordinal_mismatch}
+
+      not complete_cursor_chain?(pages, run.start_cursor) ->
         {:error, :acquisition_pagination_incomplete}
 
       not run.pagination_exhausted or not is_nil(run.continuation) ->
@@ -703,6 +758,42 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
       true ->
         :ok
     end
+  end
+
+  defp complete_cursor_chain?([first | rest], start_cursor) do
+    first.request_cursor == start_cursor and
+      Enum.reduce_while(rest, first, fn page, previous ->
+        if not previous.terminal and page.request_cursor == previous.next_cursor,
+          do: {:cont, page},
+          else: {:halt, false}
+      end)
+      |> case do
+        false -> false
+        last -> last.terminal
+      end
+  end
+
+  defp complete_cursor_chain?([], _start_cursor), do: false
+
+  defp exact_page_item_ordinals?(pages, association_ordinals) do
+    Enum.all?(pages, fn page ->
+      actual = Map.get(association_ordinals, page.id, [])
+      expected = if page.item_count == 0, do: [], else: Enum.to_list(0..(page.item_count - 1))
+      actual == expected
+    end)
+  end
+
+  defp association_ordinals(run_id) do
+    Repo.all(
+      from(association in AcquisitionEnvelope,
+        join: page in AcquisitionPage,
+        on: page.id == association.acquisition_page_id,
+        where: association.acquisition_run_id == ^run_id,
+        order_by: [asc: page.ordinal, asc: association.item_ordinal],
+        select: {page.id, association.item_ordinal}
+      )
+    )
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
   end
 
   defp manifest_digest(run, suffix) do
@@ -760,15 +851,6 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
     Repo.get_by(AcquisitionPage, acquisition_run_id: run_id, ordinal: ordinal)
   end
 
-  defp association_count(run_id) do
-    Repo.aggregate(
-      from(association in AcquisitionEnvelope,
-        where: association.acquisition_run_id == ^run_id
-      ),
-      :count
-    )
-  end
-
   defp proposed_cursor(%AcquisitionRun{source_cursor_id: nil}, nil), do: {:ok, nil}
 
   defp proposed_cursor(%AcquisitionRun{source_cursor_id: nil}, _value),
@@ -778,6 +860,20 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
 
   defp fetching(%AcquisitionRun{status: "fetching"}), do: :ok
   defp fetching(%AcquisitionRun{}), do: {:error, :acquisition_sealed}
+
+  defp pagination_open(%AcquisitionRun{pagination_exhausted: true}),
+    do: {:error, :acquisition_pagination_exhausted}
+
+  defp pagination_open(%AcquisitionRun{} = run) do
+    terminal_exists? =
+      Repo.exists?(
+        from(page in AcquisitionPage,
+          where: page.acquisition_run_id == ^run.id and page.terminal == true
+        )
+      )
+
+    if terminal_exists?, do: {:error, :acquisition_pagination_exhausted}, else: :ok
+  end
 
   defp failure_code(value) when is_atom(value), do: failure_code(Atom.to_string(value))
 
@@ -842,6 +938,36 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionStore do
     do: {:ok, DateTime.truncate(value, :microsecond)}
 
   defp optional_datetime(_value), do: {:error, :invalid_datetime}
+
+  defp with_savepoint(fun) do
+    savepoint = "chief_record_page_#{System.unique_integer([:positive])}"
+    Repo.query!("SAVEPOINT " <> savepoint)
+
+    try do
+      result = fun.()
+
+      case result do
+        {:error, _reason} -> rollback_savepoint(savepoint)
+        _success -> Repo.query!("RELEASE SAVEPOINT " <> savepoint)
+      end
+
+      result
+    rescue
+      exception ->
+        rollback_savepoint(savepoint)
+        reraise exception, __STACKTRACE__
+    catch
+      kind, reason ->
+        rollback_savepoint(savepoint)
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    end
+  end
+
+  defp rollback_savepoint(savepoint) do
+    Repo.query!("ROLLBACK TO SAVEPOINT " <> savepoint)
+    Repo.query!("RELEASE SAVEPOINT " <> savepoint)
+    :ok
+  end
 
   defp transact(fun) do
     case Repo.transaction(fn ->

@@ -62,7 +62,8 @@ defmodule Maraithon.Connectors.SourceCursorAdvancements do
           join: link in AgentWorkResultAcquisition,
           on: link.acquisition_run_id == acquisition.id,
           where: link.agent_work_result_id == ^result.id,
-          where: acquisition.id in ^ids,
+          where: link.agent_directive_id == ^result.agent_directive_id,
+          where: acquisition.agent_directive_id == ^result.agent_directive_id,
           where: acquisition.agent_id == ^result.agent_id,
           where: acquisition.user_id == ^result.user_id,
           where: acquisition.status == "complete",
@@ -73,9 +74,11 @@ defmodule Maraithon.Connectors.SourceCursorAdvancements do
         )
       )
 
-    if length(acquisitions) == length(ids),
+    stored_ids = acquisitions |> Enum.map(& &1.id) |> Enum.sort()
+
+    if stored_ids == ids,
       do: {:ok, acquisitions},
-      else: {:error, :cursor_acquisition_proof_mismatch}
+      else: {:error, :cursor_acquisition_set_mismatch}
   end
 
   defp lock_cursors(acquisitions) do
@@ -122,13 +125,6 @@ defmodule Maraithon.Connectors.SourceCursorAdvancements do
        ),
        do: {:ok, nil}
 
-  defp advance_one(
-         _result,
-         %AcquisitionRun{start_cursor: value, proposed_cursor: value},
-         _cursors
-       ),
-       do: {:ok, nil}
-
   defp advance_one(result, acquisition, cursors) do
     with %SourceCursor{} = cursor <- Map.get(cursors, acquisition.source_cursor_id),
          :ok <- exact_cursor_owner(acquisition, cursor),
@@ -137,6 +133,7 @@ defmodule Maraithon.Connectors.SourceCursorAdvancements do
            Canonical.identity("source-cursor-advancement-v1", [
              result.result_key,
              acquisition.acquisition_key,
+             acquisition.provider_account_key,
              cursor.id,
              acquisition.start_cursor,
              acquisition.proposed_cursor
@@ -147,6 +144,7 @@ defmodule Maraithon.Connectors.SourceCursorAdvancements do
              acquisition.agent_id,
              acquisition.connected_account_id,
              acquisition.provider,
+             acquisition.provider_account_key,
              acquisition.cursor_kind,
              acquisition.start_cursor,
              acquisition.proposed_cursor
@@ -164,6 +162,7 @@ defmodule Maraithon.Connectors.SourceCursorAdvancements do
            agent_id: acquisition.agent_id,
            connected_account_id: acquisition.connected_account_id,
            provider: acquisition.provider,
+           provider_account_key: acquisition.provider_account_key,
            cursor_kind: acquisition.cursor_kind,
            expected_value: acquisition.start_cursor,
            advanced_value: acquisition.proposed_cursor,
@@ -183,6 +182,8 @@ defmodule Maraithon.Connectors.SourceCursorAdvancements do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp compare_and_set(_cursor, value, value, _now), do: {1, []}
 
   defp compare_and_set(cursor, expected, advanced, now) do
     Repo.update_all(

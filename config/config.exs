@@ -40,7 +40,9 @@ config :tailwind,
   ]
 
 # Use a custom Postgrex types module so pgvector types are registered.
-config :maraithon, Maraithon.Repo, types: Maraithon.PostgrexTypes
+config :maraithon, Maraithon.Repo,
+  types: Maraithon.PostgrexTypes,
+  migration_lock: :pg_advisory_lock
 
 # Maraithon runtime configuration
 config :maraithon, Maraithon.Runtime,

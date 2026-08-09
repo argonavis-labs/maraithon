@@ -17,6 +17,7 @@ defmodule Maraithon.ChiefOfStaff.Semantics do
   alias Maraithon.Lineage.Canonical
   alias Maraithon.Lineage.Transaction
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentWorkResultAcquisition
   alias Maraithon.Runtime.DatabaseClock
 
   @max_effect_sources 1_000
@@ -45,7 +46,7 @@ defmodule Maraithon.ChiefOfStaff.Semantics do
              length(source_envelope_ids) in 1..@max_effect_sources do
     with :ok <- Transaction.require(),
          {:ok, acquisition_run_id} <- uuid(value(attrs, :acquisition_run_id)),
-         %AcquisitionRun{} = acquisition <- complete_acquisition(acquisition_run_id),
+         {:ok, acquisition} <- open_complete_acquisition(acquisition_run_id),
          {:ok, kind} <- effect_kind(value(attrs, :kind)),
          {:ok, subject_key} <- Canonical.string(value(attrs, :subject_key), 1024),
          {:ok, contract_version} <- contract_version(value(attrs, :contract_version, 1)),
@@ -82,7 +83,6 @@ defmodule Maraithon.ChiefOfStaff.Semantics do
 
       insert_or_compare(prepared, envelopes, now)
     else
-      nil -> {:error, :acquisition_not_complete}
       {:error, :invalid_lineage_payload} -> {:error, :invalid_semantic_payload}
       {:error, reason} -> {:error, reason}
     end
@@ -181,17 +181,33 @@ defmodule Maraithon.ChiefOfStaff.Semantics do
     end
   end
 
-  defp complete_acquisition(id) do
-    Repo.one(
-      from(acquisition in AcquisitionRun,
-        where: acquisition.id == ^id,
-        where: acquisition.status == "complete",
-        where: acquisition.pagination_exhausted == true,
-        where: not is_nil(acquisition.sealed_at),
-        where: not is_nil(acquisition.manifest_digest),
-        lock: "FOR SHARE"
+  defp open_complete_acquisition(id) do
+    acquisition =
+      Repo.one(
+        from(acquisition in AcquisitionRun,
+          where: acquisition.id == ^id,
+          where: acquisition.status == "complete",
+          where: acquisition.pagination_exhausted == true,
+          where: not is_nil(acquisition.sealed_at),
+          where: not is_nil(acquisition.manifest_digest),
+          lock: "FOR UPDATE"
+        )
       )
-    )
+
+    cond do
+      is_nil(acquisition) ->
+        {:error, :acquisition_not_complete}
+
+      Repo.exists?(
+        from(link in AgentWorkResultAcquisition,
+          where: link.acquisition_run_id == ^acquisition.id
+        )
+      ) ->
+        {:error, :acquisition_semantics_closed}
+
+      true ->
+        {:ok, acquisition}
+    end
   end
 
   defp exact_source_envelopes(acquisition, ids) do
@@ -222,6 +238,7 @@ defmodule Maraithon.ChiefOfStaff.Semantics do
       [
         acquisition.user_id,
         acquisition.agent_id,
+        acquisition.acquisition_key,
         contract_version,
         kind,
         subject_key,

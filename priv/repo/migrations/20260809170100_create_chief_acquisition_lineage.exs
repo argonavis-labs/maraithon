@@ -46,7 +46,14 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
 
     create unique_index(
              :runtime_ingress_receipts,
-             [:id, :agent_id, :user_id, :connected_account_id, :provider],
+             [
+               :id,
+               :agent_id,
+               :user_id,
+               :connected_account_id,
+               :provider,
+               :provider_account_key
+             ],
              name: :runtime_ingress_receipts_exact_owner_unique_index
            )
 
@@ -109,6 +116,7 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
       add :source_cursor_id, :binary_id
       add :cursor_kind, :string
       add :provider, :string, null: false
+      add :provider_account_key, :string, null: false
       add :source, :string, null: false
       add :scope_key, :string, null: false
       add :request_key, :string, null: false
@@ -139,7 +147,14 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
 
     create unique_index(
              :chief_acquisition_runs,
-             [:id, :agent_id, :user_id, :connected_account_id, :provider],
+             [
+               :id,
+               :agent_id,
+               :user_id,
+               :connected_account_id,
+               :provider,
+               :provider_account_key
+             ],
              name: :chief_acquisition_runs_exact_owner_unique_index
            )
 
@@ -149,9 +164,15 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
              name: :chief_acquisition_runs_agent_owner_unique_index
            )
 
+    create_if_not_exists unique_index(
+                           :chief_acquisition_runs,
+                           [:id, :agent_directive_id, :agent_id, :user_id],
+                           name: :chief_acquisition_runs_directive_owner_unique_index
+                         )
+
     create unique_index(
              :chief_acquisition_runs,
-             [:id, :user_id, :connected_account_id, :provider],
+             [:id, :user_id, :connected_account_id, :provider, :provider_account_key],
              name: :chief_acquisition_runs_source_owner_unique_index
            )
 
@@ -189,8 +210,13 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
       """
       ALTER TABLE chief_acquisition_runs
       ADD CONSTRAINT chief_acquisition_runs_ingress_owner_fkey
-      FOREIGN KEY (runtime_ingress_receipt_id, agent_id, user_id, connected_account_id, provider)
-      REFERENCES runtime_ingress_receipts(id, agent_id, user_id, connected_account_id, provider)
+      FOREIGN KEY (
+        runtime_ingress_receipt_id, agent_id, user_id, connected_account_id, provider,
+        provider_account_key
+      )
+      REFERENCES runtime_ingress_receipts(
+        id, agent_id, user_id, connected_account_id, provider, provider_account_key
+      )
       ON DELETE CASCADE
       """,
       "ALTER TABLE chief_acquisition_runs DROP CONSTRAINT chief_acquisition_runs_ingress_owner_fkey"
@@ -211,6 +237,7 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
              check: """
              octet_length(user_id) BETWEEN 1 AND 320 AND user_id !~ '[[:space:][:cntrl:]]' AND
              octet_length(provider) BETWEEN 1 AND 80 AND provider !~ '[[:space:][:cntrl:]]' AND
+             octet_length(provider_account_key) BETWEEN 1 AND 255 AND provider_account_key !~ '[[:cntrl:]]' AND
              octet_length(source) BETWEEN 1 AND 80 AND source !~ '[[:space:][:cntrl:]]' AND
              octet_length(scope_key) BETWEEN 1 AND 255 AND scope_key !~ '[[:cntrl:]]' AND
              octet_length(request_key) BETWEEN 1 AND 255 AND request_key !~ '[[:cntrl:]]' AND
@@ -314,6 +341,7 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
       add :user_id, :string, null: false
       add :connected_account_id, :bigint, null: false
       add :provider, :string, null: false
+      add :provider_account_key, :string, null: false
       add :source, :string, null: false
       add :scope_key, :string, null: false
       add :source_item_key, :string, null: false
@@ -342,6 +370,7 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
                :user_id,
                :connected_account_id,
                :provider,
+               :provider_account_key,
                :source,
                :scope_key,
                :source_item_key,
@@ -352,7 +381,7 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
 
     create unique_index(
              :chief_source_envelopes,
-             [:id, :user_id, :connected_account_id, :provider],
+             [:id, :user_id, :connected_account_id, :provider, :provider_account_key],
              name: :chief_source_envelopes_exact_owner_unique_index
            )
 
@@ -376,6 +405,7 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
              check: """
              octet_length(user_id) BETWEEN 1 AND 320 AND user_id !~ '[[:space:][:cntrl:]]' AND
              octet_length(provider) BETWEEN 1 AND 80 AND provider !~ '[[:space:][:cntrl:]]' AND
+             octet_length(provider_account_key) BETWEEN 1 AND 255 AND provider_account_key !~ '[[:cntrl:]]' AND
              octet_length(source) BETWEEN 1 AND 80 AND source !~ '[[:space:][:cntrl:]]' AND
              octet_length(scope_key) BETWEEN 1 AND 255 AND scope_key !~ '[[:cntrl:]]' AND
              octet_length(source_item_key) BETWEEN 1 AND 512 AND source_item_key !~ '[[:cntrl:]]' AND
@@ -402,6 +432,7 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
       add :user_id, :string, null: false
       add :connected_account_id, :bigint, null: false
       add :provider, :string, null: false
+      add :provider_account_key, :string, null: false
       add :item_ordinal, :integer, null: false
       add :provenance, :map, null: false, default: %{}
 
@@ -424,8 +455,12 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
       """
       ALTER TABLE chief_acquisition_envelopes
       ADD CONSTRAINT chief_acquisition_envelopes_run_owner_fkey
-      FOREIGN KEY (acquisition_run_id, user_id, connected_account_id, provider)
-      REFERENCES chief_acquisition_runs(id, user_id, connected_account_id, provider)
+      FOREIGN KEY (
+        acquisition_run_id, user_id, connected_account_id, provider, provider_account_key
+      )
+      REFERENCES chief_acquisition_runs(
+        id, user_id, connected_account_id, provider, provider_account_key
+      )
       ON DELETE CASCADE
       """,
       "ALTER TABLE chief_acquisition_envelopes DROP CONSTRAINT chief_acquisition_envelopes_run_owner_fkey"
@@ -435,8 +470,12 @@ defmodule Maraithon.Repo.Migrations.CreateChiefAcquisitionLineage do
       """
       ALTER TABLE chief_acquisition_envelopes
       ADD CONSTRAINT chief_acquisition_envelopes_envelope_owner_fkey
-      FOREIGN KEY (source_envelope_id, user_id, connected_account_id, provider)
-      REFERENCES chief_source_envelopes(id, user_id, connected_account_id, provider)
+      FOREIGN KEY (
+        source_envelope_id, user_id, connected_account_id, provider, provider_account_key
+      )
+      REFERENCES chief_source_envelopes(
+        id, user_id, connected_account_id, provider, provider_account_key
+      )
       ON DELETE RESTRICT
       """,
       "ALTER TABLE chief_acquisition_envelopes DROP CONSTRAINT chief_acquisition_envelopes_envelope_owner_fkey"

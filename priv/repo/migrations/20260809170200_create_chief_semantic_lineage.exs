@@ -72,8 +72,9 @@ defmodule Maraithon.Repo.Migrations.CreateChiefSemanticLineage do
       """
       ALTER TABLE chief_semantic_effects
       ADD CONSTRAINT chief_semantic_effects_acquisition_owner_fkey
-      FOREIGN KEY (acquisition_run_id, agent_id, user_id)
-      REFERENCES chief_acquisition_runs(id, agent_id, user_id) ON DELETE CASCADE
+      FOREIGN KEY (acquisition_run_id, agent_directive_id, agent_id, user_id)
+      REFERENCES chief_acquisition_runs(id, agent_directive_id, agent_id, user_id)
+      ON DELETE CASCADE
       """,
       "ALTER TABLE chief_semantic_effects DROP CONSTRAINT chief_semantic_effects_acquisition_owner_fkey"
     )

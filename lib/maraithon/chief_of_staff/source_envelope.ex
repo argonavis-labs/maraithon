@@ -16,6 +16,7 @@ defmodule Maraithon.ChiefOfStaff.SourceEnvelope do
     field :user_id, :string
     field :connected_account_id, :id
     field :provider, :string
+    field :provider_account_key, :string
     field :source, :string
     field :scope_key, :string
     field :source_item_key, :string
@@ -38,6 +39,7 @@ defmodule Maraithon.ChiefOfStaff.SourceEnvelope do
       :user_id,
       :connected_account_id,
       :provider,
+      :provider_account_key,
       :source,
       :scope_key,
       :source_item_key,
@@ -55,6 +57,7 @@ defmodule Maraithon.ChiefOfStaff.SourceEnvelope do
       :user_id,
       :connected_account_id,
       :provider,
+      :provider_account_key,
       :source,
       :scope_key,
       :source_item_key,
@@ -71,6 +74,7 @@ defmodule Maraithon.ChiefOfStaff.SourceEnvelope do
     |> V.validate_digest(:normalized_digest)
     |> V.validate_bytes(:user_id, min: 1, max: 320)
     |> V.validate_bytes(:provider, min: 1, max: 80)
+    |> V.validate_bytes(:provider_account_key, min: 1, max: 255)
     |> V.validate_bytes(:source, min: 1, max: 80)
     |> V.validate_bytes(:scope_key, min: 1, max: 255)
     |> V.validate_bytes(:source_item_key, min: 1, max: 512)
@@ -81,7 +85,16 @@ defmodule Maraithon.ChiefOfStaff.SourceEnvelope do
       name: :chief_source_envelopes_envelope_key_unique_index
     )
     |> unique_constraint(
-      [:user_id, :source, :scope_key, :source_item_key, :source_revision_key],
+      [
+        :user_id,
+        :connected_account_id,
+        :provider,
+        :provider_account_key,
+        :source,
+        :scope_key,
+        :source_item_key,
+        :source_revision_key
+      ],
       name: :chief_source_envelopes_provider_revision_unique_index
     )
     |> foreign_key_constraint(:connected_account_id,

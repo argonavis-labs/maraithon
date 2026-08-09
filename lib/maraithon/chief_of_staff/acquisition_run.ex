@@ -23,6 +23,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionRun do
     field :source_cursor_id, :binary_id
     field :cursor_kind, :string
     field :provider, :string
+    field :provider_account_key, :string
     field :source, :string
     field :scope_key, :string
     field :request_key, :string
@@ -59,6 +60,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionRun do
       :source_cursor_id,
       :cursor_kind,
       :provider,
+      :provider_account_key,
       :source,
       :scope_key,
       :request_key,
@@ -86,6 +88,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionRun do
       :runtime_ingress_receipt_id,
       :connected_account_id,
       :provider,
+      :provider_account_key,
       :source,
       :scope_key,
       :request_key,
@@ -109,6 +112,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionRun do
     |> V.validate_digest(:manifest_digest)
     |> V.validate_bytes(:user_id, min: 1, max: 320)
     |> V.validate_bytes(:provider, min: 1, max: 80)
+    |> V.validate_bytes(:provider_account_key, min: 1, max: 255)
     |> V.validate_bytes(:source, min: 1, max: 80)
     |> V.validate_bytes(:cursor_kind, min: 1, max: 80)
     |> V.validate_bytes(:scope_key, min: 1, max: 255)

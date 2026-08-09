@@ -176,7 +176,9 @@ defmodule Maraithon.Runtime.IngressReceipts do
       not same_identity? or existing.receipt_key != prepared.receipt_key ->
         {:error, :ingress_identity_collision}
 
-      existing.request_fingerprint == prepared.request_fingerprint ->
+      existing.request_fingerprint == prepared.request_fingerprint and
+        existing.payload == prepared.payload and
+          existing.provider_occurred_at == prepared.provider_occurred_at ->
         {:ok, existing, :duplicate}
 
       true ->
@@ -266,11 +268,6 @@ defmodule Maraithon.Runtime.IngressReceipts do
       {:ok, key} -> {:ok, key}
       _error -> {:error, :invalid_provider_account_identity}
     end
-  end
-
-  defp persisted_provider_account_key(%ConnectedAccount{id: id})
-       when is_integer(id) and id > 0 do
-    {:ok, "connected-account:#{id}"}
   end
 
   defp persisted_provider_account_key(_account),

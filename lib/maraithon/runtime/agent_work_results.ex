@@ -229,6 +229,7 @@ defmodule Maraithon.Runtime.AgentWorkResults do
           acquisition_run_id: acquisition.id,
           user_id: work_result.user_id,
           agent_id: work_result.agent_id,
+          agent_directive_id: work_result.agent_directive_id,
           inserted_at: now
         }
       end)

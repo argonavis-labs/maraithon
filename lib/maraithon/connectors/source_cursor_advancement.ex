@@ -20,6 +20,7 @@ defmodule Maraithon.Connectors.SourceCursorAdvancement do
     field :agent_id, :binary_id
     field :connected_account_id, :id
     field :provider, :string
+    field :provider_account_key, :string
     field :cursor_kind, :string
     field :expected_value, :string
     field :advanced_value, :string
@@ -41,6 +42,7 @@ defmodule Maraithon.Connectors.SourceCursorAdvancement do
       :agent_id,
       :connected_account_id,
       :provider,
+      :provider_account_key,
       :cursor_kind,
       :expected_value,
       :advanced_value,
@@ -57,6 +59,7 @@ defmodule Maraithon.Connectors.SourceCursorAdvancement do
       :agent_id,
       :connected_account_id,
       :provider,
+      :provider_account_key,
       :cursor_kind,
       :advanced_value,
       :advance_digest,
@@ -67,6 +70,7 @@ defmodule Maraithon.Connectors.SourceCursorAdvancement do
     |> V.validate_digest(:advance_digest)
     |> V.validate_bytes(:user_id, min: 1, max: 320)
     |> V.validate_bytes(:provider, min: 1, max: 80)
+    |> V.validate_bytes(:provider_account_key, min: 1, max: 255)
     |> V.validate_bytes(:cursor_kind, min: 1, max: 80)
     |> V.validate_bytes(:expected_value, min: 1, max: 4096)
     |> V.validate_bytes(:advanced_value, min: 1, max: 4096)

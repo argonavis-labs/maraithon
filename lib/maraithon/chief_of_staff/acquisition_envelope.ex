@@ -16,6 +16,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionEnvelope do
     field :user_id, :string
     field :connected_account_id, :id
     field :provider, :string
+    field :provider_account_key, :string
     field :item_ordinal, :integer
     field :provenance, :map, default: %{}
 
@@ -31,6 +32,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionEnvelope do
       :user_id,
       :connected_account_id,
       :provider,
+      :provider_account_key,
       :item_ordinal,
       :provenance,
       :inserted_at
@@ -42,6 +44,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionEnvelope do
       :user_id,
       :connected_account_id,
       :provider,
+      :provider_account_key,
       :item_ordinal,
       :provenance,
       :inserted_at
@@ -52,7 +55,9 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionEnvelope do
         do: [],
         else: [provenance: "must be an object"]
     end)
-    |> unique_constraint([:acquisition_run_id, :source_envelope_id])
+    |> unique_constraint([:acquisition_run_id, :source_envelope_id],
+      name: :chief_acquisition_envelopes_pkey
+    )
     |> unique_constraint([:acquisition_page_id, :item_ordinal],
       name: :chief_acquisition_envelopes_page_ordinal_unique_index
     )

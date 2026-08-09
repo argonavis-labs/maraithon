@@ -32,6 +32,11 @@ defmodule Maraithon.Runtime.IngressReceiptsTest do
     assert {:error, :ingress_idempotency_conflict} =
              IngressReceipts.record(%{attrs | payload: %{"cursor_hint" => "changed"}})
 
+    assert {:error, :ingress_idempotency_conflict} =
+             attrs
+             |> Map.put(:provider_occurred_at, ~U[2026-08-09 12:00:00.000000Z])
+             |> IngressReceipts.record()
+
     assert {:error, :ingress_provider_account_mismatch} =
              attrs
              |> Map.put(:provider_account_key, "caller-forked-account")
@@ -97,6 +102,20 @@ defmodule Maraithon.Runtime.IngressReceiptsTest do
              |> IngressReceipts.record()
 
     assert Repo.aggregate(IngressReceipt, :count) == 2
+  end
+
+  test "admission fails closed when the connected account lacks stable external identity" do
+    fixture = ChiefLineageFixtures.base("ingress-no-external-identity")
+
+    Repo.query!(
+      "UPDATE connected_accounts SET external_account_id = NULL WHERE id = $1",
+      [fixture.account.id]
+    )
+
+    assert {:error, :invalid_provider_account_identity} =
+             fixture
+             |> ingress_attrs("missing-provider-account")
+             |> IngressReceipts.record()
   end
 
   test "raw admission rejects credentials and oversized payloads before persistence" do
