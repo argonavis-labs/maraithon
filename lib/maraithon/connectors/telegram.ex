@@ -340,6 +340,29 @@ defmodule Maraithon.Connectors.Telegram do
   end
 
   @doc """
+  Returns the configured bot's non-secret numeric id.
+
+  The bot id namespaces durable webhook update identifiers without retaining
+  any part of the secret token suffix.
+  """
+  def configured_bot_id do
+    case get_bot_token() do
+      bot_token when is_binary(bot_token) ->
+        case String.split(bot_token, ":", parts: 2) do
+          [id, token_suffix]
+          when id != "" and token_suffix != "" and byte_size(id) <= 32 ->
+            if Regex.match?(~r/^\d+$/, id), do: {:ok, id}, else: {:error, :invalid_bot_token}
+
+          _other ->
+            {:error, :invalid_bot_token}
+        end
+
+      _other ->
+        {:error, :invalid_bot_token}
+    end
+  end
+
+  @doc """
   Sends a text message.
   """
   def send_message(chat_id, text, opts \\ []) do
@@ -656,11 +679,9 @@ defmodule Maraithon.Connectors.Telegram do
   end
 
   defp get_bot_id do
-    bot_token = get_bot_token()
-
-    case String.split(bot_token, ":") do
-      [id | _] -> id
-      _ -> "unknown"
+    case configured_bot_id() do
+      {:ok, id} -> id
+      {:error, _reason} -> "unknown"
     end
   end
 

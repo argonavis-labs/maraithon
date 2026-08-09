@@ -87,4 +87,123 @@ defmodule Maraithon.Runtime.BackgroundJobsTest do
              "relationships"
            ]
   end
+
+  test "Telegram webhook dedupe is permanent across pending and terminal states" do
+    for status <- ["pending", "completed", "failed"] do
+      update_id = System.unique_integer([:positive])
+      bot_id = "123456"
+
+      assert {:ok, first} =
+               BackgroundJobs.enqueue_telegram_webhook_event(bot_id, update_id, %{
+                 type: "message",
+                 source: "telegram",
+                 data: %{text: "first"}
+               })
+
+      if status != "pending" do
+        timestamps =
+          case status do
+            "completed" -> %{completed_at: DateTime.utc_now()}
+            "failed" -> %{failed_at: DateTime.utc_now()}
+          end
+
+        first
+        |> Ecto.Changeset.change(Map.merge(%{status: status}, timestamps))
+        |> Repo.update!()
+      end
+
+      assert {:ok, duplicate} =
+               BackgroundJobs.enqueue_telegram_webhook_event(bot_id, update_id, %{
+                 type: "message",
+                 source: "telegram",
+                 data: %{text: "replay"}
+               })
+
+      assert duplicate.id == first.id
+
+      assert Repo.aggregate(
+               from(job in BackgroundJob,
+                 where:
+                   job.job_type == "telegram_webhook_event" and
+                     job.dedupe_key == ^"telegram-webhook:#{bot_id}:#{update_id}"
+               ),
+               :count
+             ) == 1
+    end
+  end
+
+  test "Telegram webhook payload normalization recursively removes raw fields" do
+    assert {:ok, job} =
+             BackgroundJobs.enqueue_telegram_webhook_event("123456", 9_001, %{
+               type: "unknown",
+               raw: %{"sentinel" => "never-store"},
+               data: %{
+                 "raw" => %{"nested_sentinel" => "never-store-nested"},
+                 "safe" => [%{raw: "drop", value: "keep"}]
+               }
+             })
+
+    assert job.payload == %{
+             "event" => %{
+               "type" => "unknown",
+               "data" => %{"safe" => [%{"value" => "keep"}]}
+             }
+           }
+
+    refute inspect(job.payload) =~ "never-store"
+  end
+
+  test "ordinary terminal job dedupe keys remain reusable", %{user_id: user_id} do
+    key = "background:test:terminal-reuse:#{user_id}"
+
+    assert {:ok, first} =
+             BackgroundJobs.enqueue("email_processing", %{
+               user_id: user_id,
+               dedupe_key: key
+             })
+
+    first
+    |> Ecto.Changeset.change(%{status: "completed", completed_at: DateTime.utc_now()})
+    |> Repo.update!()
+
+    assert {:ok, second} =
+             BackgroundJobs.enqueue("email_processing", %{
+               user_id: user_id,
+               dedupe_key: key
+             })
+
+    refute second.id == first.id
+  end
+
+  test "concurrent Telegram enqueue calls converge on one row" do
+    owner = self()
+    update_id = System.unique_integer([:positive])
+
+    tasks =
+      for _index <- 1..4 do
+        Task.async(fn ->
+          receive do
+            :go ->
+              BackgroundJobs.enqueue_telegram_webhook_event("123456", update_id, %{
+                type: "message",
+                source: "telegram",
+                data: %{text: "same update"}
+              })
+          end
+        end)
+      end
+
+    Enum.each(tasks, fn task ->
+      Ecto.Adapters.SQL.Sandbox.allow(Repo, owner, task.pid)
+      send(task.pid, :go)
+    end)
+
+    ids =
+      Enum.map(tasks, fn task ->
+        assert {:ok, job} = Task.await(task)
+        job.id
+      end)
+
+    assert ids |> Enum.uniq() |> length() == 1
+  end
 end
