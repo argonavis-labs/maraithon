@@ -25,6 +25,7 @@ defmodule MaraithonWeb.Plugs.TelegramWebhookGateTest do
     conn =
       :post
       |> conn("/webhooks/telegram", "{}")
+      |> put_req_header("content-length", "2")
       |> put_req_header("x-telegram-bot-api-secret-token", @token)
       |> TelegramWebhookGate.call([])
 
@@ -57,6 +58,7 @@ defmodule MaraithonWeb.Plugs.TelegramWebhookGateTest do
       assert rejected.halted
       assert rejected.status == 404
       assert rejected.resp_body == ""
+      assert get_resp_header(rejected, "connection") == ["close"]
     end
   end
 
@@ -70,6 +72,7 @@ defmodule MaraithonWeb.Plugs.TelegramWebhookGateTest do
 
     assert rejected.status == 404
     assert rejected.resp_body == ""
+    assert get_resp_header(rejected, "connection") == ["close"]
 
     oversized =
       :post
@@ -80,10 +83,12 @@ defmodule MaraithonWeb.Plugs.TelegramWebhookGateTest do
 
     assert oversized.status == 413
     assert oversized.resp_body == ""
+    assert get_resp_header(oversized, "connection") == ["close"]
   end
 
-  test "rejects malformed or duplicate content-length only after authentication" do
+  test "rejects missing, malformed, or duplicate content-length only after authentication" do
     for request <- [
+          conn(:post, "/webhooks/telegram", ""),
           conn(:post, "/webhooks/telegram", "")
           |> put_req_header("content-length", "12x"),
           conn(:post, "/webhooks/telegram", "")
@@ -96,7 +101,41 @@ defmodule MaraithonWeb.Plugs.TelegramWebhookGateTest do
 
       assert rejected.status == 413
       assert rejected.resp_body == ""
+      assert get_resp_header(rejected, "connection") == ["close"]
     end
+  end
+
+  test "rejects transfer-encoded requests before parsers without authenticating first" do
+    wrong =
+      :post
+      |> conn("/webhooks/telegram", "")
+      |> put_req_header("transfer-encoding", "chunked")
+      |> put_req_header("x-telegram-bot-api-secret-token", "wrong")
+      |> TelegramWebhookGate.call([])
+
+    assert wrong.status == 404
+    assert get_resp_header(wrong, "connection") == ["close"]
+
+    authenticated =
+      :post
+      |> conn("/webhooks/telegram", "")
+      |> put_req_header("transfer-encoding", "chunked")
+      |> put_req_header("x-telegram-bot-api-secret-token", @token)
+      |> TelegramWebhookGate.call([])
+
+    assert authenticated.status == 413
+    assert authenticated.resp_body == ""
+    assert get_resp_header(authenticated, "connection") == ["close"]
+
+    global =
+      :post
+      |> conn("/api/v1/some-json-route", "")
+      |> put_req_header("transfer-encoding", "chunked")
+      |> TelegramWebhookGate.call([])
+
+    assert global.status == 400
+    assert global.resp_body == ""
+    assert get_resp_header(global, "connection") == ["close"]
   end
 
   test "rejects non-POST, legacy, and suffix paths before parsing" do
@@ -109,6 +148,7 @@ defmodule MaraithonWeb.Plugs.TelegramWebhookGateTest do
       assert rejected.halted
       assert rejected.status == 404
       assert rejected.resp_body == ""
+      assert get_resp_header(rejected, "connection") == ["close"]
     end
   end
 

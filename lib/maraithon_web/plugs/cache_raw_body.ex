@@ -11,7 +11,7 @@ defmodule MaraithonWeb.Plugs.CacheRawBody do
   @webhook_inflated_limit 600_000
   @tool_compressed_limit 1_048_576
   @tool_inflated_limit 600_000
-  @default_compressed_limit 4_194_304
+  @default_compressed_limit 8_388_608
   @default_inflated_limit 8_388_608
   @socket_read_size 64_000
   @socket_read_timeout 5_000

@@ -616,11 +616,14 @@ defmodule MaraithonWeb.WebhookControllerTest do
     end
 
     test "returns 400 for authenticated malformed JSON and invalid update ids" do
+      malformed = "{not-json"
+
       assert_error_sent 400, fn ->
         build_conn()
         |> put_req_header("content-type", "application/json")
+        |> put_req_header("content-length", Integer.to_string(byte_size(malformed)))
         |> put_req_header("x-telegram-bot-api-secret-token", @telegram_secret)
-        |> post("/webhooks/telegram", "{not-json")
+        |> post("/webhooks/telegram", malformed)
       end
 
       for update_id <- [-1, 9_223_372_036_854_775_808, "80005", nil] do
@@ -634,12 +637,17 @@ defmodule MaraithonWeb.WebhookControllerTest do
     test "returns 413 for cumulative compressed and gzip-inflated overflow" do
       oversized_identity = String.duplicate("x", 600_001)
 
-      assert_error_sent 413, fn ->
-        build_conn()
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("x-telegram-bot-api-secret-token", @telegram_secret)
-        |> post("/webhooks/telegram", oversized_identity)
-      end
+      assert response(
+               build_conn()
+               |> put_req_header("content-type", "application/json")
+               |> put_req_header(
+                 "content-length",
+                 Integer.to_string(byte_size(oversized_identity))
+               )
+               |> put_req_header("x-telegram-bot-api-secret-token", @telegram_secret)
+               |> post("/webhooks/telegram", oversized_identity),
+               413
+             ) == ""
 
       inflated_json = Jason.encode!(%{"update_id" => 80_005, "padding" => oversized_identity})
       gzipped = :zlib.gzip(inflated_json)
@@ -649,6 +657,7 @@ defmodule MaraithonWeb.WebhookControllerTest do
         build_conn()
         |> put_req_header("content-type", "application/json")
         |> put_req_header("content-encoding", "gzip")
+        |> put_req_header("content-length", Integer.to_string(byte_size(gzipped)))
         |> put_req_header("x-telegram-bot-api-secret-token", @telegram_secret)
         |> post("/webhooks/telegram", gzipped)
       end
@@ -965,9 +974,13 @@ defmodule MaraithonWeb.WebhookControllerTest do
   end
 
   defp telegram_post(conn, payload) do
+    body = Jason.encode!(payload)
+
     conn
+    |> put_req_header("content-type", "application/json")
+    |> put_req_header("content-length", Integer.to_string(byte_size(body)))
     |> put_req_header("x-telegram-bot-api-secret-token", @telegram_secret)
-    |> post("/webhooks/telegram", payload)
+    |> post("/webhooks/telegram", body)
   end
 
   defp telegram_job_count do

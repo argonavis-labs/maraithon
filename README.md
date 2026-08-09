@@ -486,6 +486,10 @@ curl -X POST http://localhost:4000/api/v1/agents \
   }'
 ```
 
+Telegram ingress is intentionally narrow: only `POST /webhooks/telegram` is accepted, the request must contain exactly one matching `X-Telegram-Bot-Api-Secret-Token`, and authenticated requests must use a single valid `Content-Length` of at most 600 KB. HTTP/1 `Transfer-Encoding` is rejected before body parsing and every early rejection closes the connection. Accepted updates become permanent deduplicated receipts; work is executed durably in ascending update-id order per bot, and terminal receipts retain their identity while scrubbing event payloads.
+
+Non-webhook JSON and urlencoded requests have independent 8 MiB compressed and inflated ceilings so Companion voice-memo batches can carry a high-entropy 5 MiB M4A after base64 encoding. Signed webhook connectors retain bounded wire bytes for signature verification; other routes do not retain a second raw copy.
+
 **Supported events**: `message`, `photo`, `document`, `voice`, `video`, `location`, `callback_query`, `edited_message`, `member_joined`, `member_left`
 
 ### Connector Status

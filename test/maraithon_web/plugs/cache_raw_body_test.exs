@@ -84,13 +84,43 @@ defmodule MaraithonWeb.Plugs.CacheRawBodyTest do
       assert conn.assigns.raw_body == wire_body
     end
 
-    test "five MiB inflated Companion payload succeeds under OTP 26" do
-      body = Jason.encode!(%{"notes" => [String.duplicate("x", 5 * 1_024 * 1_024)]})
+    test "five MiB high-entropy Companion M4A payload succeeds under OTP 26" do
+      audio_size = 5 * 1_024 * 1_024
+
+      # A deterministic AES-CTR keystream models already-compressed M4A bytes.
+      # Unlike repeated text, its base64 form cannot collapse below the former
+      # four-MiB compressed request ceiling.
+      audio =
+        :crypto.crypto_one_time(
+          :aes_256_ctr,
+          :binary.copy(<<0x42>>, 32),
+          <<0::128>>,
+          :binary.copy(<<0>>, audio_size),
+          true
+        )
+
+      body =
+        Jason.encode!(%{
+          "device_id" => "companion-body-limit-test",
+          "source" => "voice_memos",
+          "voice_memos" => [
+            %{
+              "guid" => "deterministic-five-mib-m4a",
+              "audio_mime" => "audio/m4a",
+              "audio_bytes" => Base.encode64(audio)
+            }
+          ]
+        })
+
       wire_body = :zlib.gzip(body)
+      assert byte_size(audio) == audio_size
+      assert byte_size(wire_body) > 4 * 1_024 * 1_024
+      assert byte_size(wire_body) < 8 * 1_024 * 1_024
+      assert byte_size(body) < 8 * 1_024 * 1_024
 
       conn =
         :post
-        |> conn("/api/v1/companion/notes", wire_body)
+        |> conn("/api/v1/companion/voice-memos", wire_body)
         |> put_req_header("content-encoding", "gzip")
 
       assert {:ok, ^body, conn} = CacheRawBody.read_body(conn, [])

@@ -24,6 +24,10 @@ defmodule MaraithonWeb.Endpoint do
     websocket: [connect_info: [peer_data: true, user_agent: true]],
     longpoll: false
 
+  # Reject unsafe HTTP/1 request framing before any endpoint plug can read or
+  # drain a body. Telegram authentication remains first within its route gate.
+  plug MaraithonWeb.Plugs.TelegramWebhookGate
+
   # Serve at "/" the static files from "priv/static" directory, including
   # the lightweight PWA shell assets.
   #
@@ -51,9 +55,6 @@ defmodule MaraithonWeb.Endpoint do
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :maraithon
   end
 
-  # Telegram ingress is authenticated before request ids, endpoint telemetry,
-  # and parsers can observe or traverse the request.
-  plug MaraithonWeb.Plugs.TelegramWebhookGate
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
