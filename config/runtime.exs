@@ -453,6 +453,16 @@ config :maraithon, Maraithon.Runtime,
   heartbeat_interval_ms: heartbeat_interval_ms,
   checkpoint_interval_ms: checkpoint_interval_ms,
   effect_poll_interval_ms: String.to_integer(System.get_env("EFFECT_POLL_INTERVAL_MS", "1000")),
+  # Telegram asks the provider for one delivery connection. This short grace
+  # also lets concurrently admitted requests become visible before the DB head
+  # is selected; it is not a substitute for the provider serialization contract.
+  telegram_ingress_ordering_grace_ms:
+    String.to_integer(
+      System.get_env(
+        "TELEGRAM_INGRESS_ORDERING_GRACE_MS",
+        if(config_env() == :test, do: "0", else: "1000")
+      )
+    ),
   effect_claim_timeout_ms:
     String.to_integer(System.get_env("EFFECT_CLAIM_TIMEOUT_MS", "1500000")),
   effect_batch_size: String.to_integer(System.get_env("EFFECT_BATCH_SIZE", "10")),

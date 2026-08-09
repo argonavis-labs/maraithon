@@ -314,17 +314,26 @@ defmodule Maraithon.Connectors.Telegram do
 
   @doc """
   Sets the webhook URL for receiving updates.
+
+  Telegram delivery is intentionally serialized with `max_connections: 1`;
+  unsafe overrides are rejected because unseen concurrent updates cannot be
+  ordered by a database query until their receipt transactions commit.
   """
   def set_webhook(url, opts \\ []) do
     secret_token = Keyword.get(opts, :secret_token, get_webhook_secret_token())
+    max_connections = Keyword.get(opts, :max_connections, 1)
 
-    if valid_webhook_secret_token?(secret_token) do
-      %{url: url, secret_token: secret_token}
-      |> maybe_put(:max_connections, opts[:max_connections])
-      |> maybe_put(:allowed_updates, opts[:allowed_updates])
-      |> then(&api_request("setWebhook", &1))
-    else
-      {:error, :webhook_secret_token_not_configured}
+    cond do
+      not valid_webhook_secret_token?(secret_token) ->
+        {:error, :webhook_secret_token_not_configured}
+
+      max_connections != 1 ->
+        {:error, :unsafe_telegram_webhook_concurrency}
+
+      true ->
+        %{url: url, secret_token: secret_token, max_connections: 1}
+        |> maybe_put(:allowed_updates, opts[:allowed_updates])
+        |> then(&api_request("setWebhook", &1))
     end
   end
 

@@ -609,15 +609,26 @@ defmodule Maraithon.Connectors.TelegramTest do
 
       assert {:ok, true} =
                Telegram.set_webhook("https://example.test/webhooks/telegram",
-                 max_connections: 12,
                  allowed_updates: ["message", "callback_query"]
                )
 
       assert_received {:set_webhook_payload, payload}
       assert payload["url"] == "https://example.test/webhooks/telegram"
       assert payload["secret_token"] == @secret
-      assert payload["max_connections"] == 12
+      assert payload["max_connections"] == 1
       assert payload["allowed_updates"] == ["message", "callback_query"]
+    end
+
+    test "rejects an override that would allow concurrent Telegram deliveries" do
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "12345ABC",
+        webhook_secret_token: @secret
+      )
+
+      assert {:error, :unsafe_telegram_webhook_concurrency} =
+               Telegram.set_webhook("https://example.test/webhooks/telegram",
+                 max_connections: 2
+               )
     end
 
     test "missing token fails locally without an HTTP request" do

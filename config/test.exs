@@ -39,7 +39,8 @@ config :maraithon, Maraithon.Runtime,
   openai_model: "gpt-5.4",
   openrouter_model: "qwen/qwen3.7-max",
   openrouter_reasoning_effort: "medium",
-  openai_reasoning_effort: "high"
+  openai_reasoning_effort: "high",
+  telegram_ingress_ordering_grace_ms: 0
 
 config :maraithon, :todos, mock_llm_when_unconfigured: true
 
