@@ -67,7 +67,7 @@ The install must be connector-aware: it must **never** start a "running" agent t
 These resolve the spec's four open questions as decisions to implement.
 
 ### D1 — Telegram self-serve via bot deep-link + `/start` token (the blocker)
-There is **no** Telegram OAuth route today; Telegram accounts are created only by the webhook (`POST /webhooks/telegram/:secret_path` → `WebhookController.telegram`), `ConnectedAccounts.upsert_manual/3`, or the Companion app's `/companion/auth` device pairing. A web-only user has no path.
+There is **no** Telegram OAuth route today; Telegram accounts are created only by the webhook (`POST /webhooks/telegram` with the configured secret-token header → `WebhookController.telegram`), `ConnectedAccounts.upsert_manual/3`, or the Companion app's `/companion/auth` device pairing. A web-only user has no path.
 
 **Decision:** add a **bot deep-link connect flow** reusing the existing webhook ingress:
 - Mint a short-lived signed token bound to the user (`Phoenix.Token.sign/4`, ~15-min TTL, payload `%{user_id: …}`) — no new table.
@@ -107,7 +107,7 @@ Live verification contradicts the spec:
 
 ### Phase 1 — Telegram self-serve connect (D1; do first, it's the blocker)
 1. **Token + helper** (`lib/maraithon/telegram/connect.ex` or in `connected_accounts.ex`): `mint_link(user_id)` → `{deep_link, token}` via `Phoenix.Token.sign` (salt `"telegram-connect"`, 15-min max age); `verify_token/1` → `{:ok, user_id} | {:error, _}`; `bot_username/0` from config.
-2. **Webhook handling** in `WebhookController.telegram` (router `post "/webhooks/telegram/:secret_path"`) / its message router: detect `/start <token>` → verify → `ConnectedAccounts.upsert_manual(user_id, "telegram", %{"chat_id" => …, "telegram_user_id" => …})` → confirmation reply. Bad/expired token → friendly "link expired" message, no account.
+2. **Webhook handling** in `WebhookController.telegram` (router `post "/webhooks/telegram"` after the endpoint secret-token gate) / its message router: detect `/start <token>` → verify → `ConnectedAccounts.upsert_manual(user_id, "telegram", %{"chat_id" => …, "telegram_user_id" => …})` → confirmation reply. Bad/expired token → friendly "link expired" message, no account.
 3. **Connect UI** on `/connectors` (reused by dashboard row): **Connect Telegram** button (Catalyst) rendering the deep link + copyable URL.
 4. **Test:** `/start <valid-token>` creates a `"telegram"` `ConnectedAccount` with `chat_id`; expired token does not.
 

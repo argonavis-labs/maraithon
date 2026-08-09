@@ -8,7 +8,11 @@ defmodule Maraithon.Connectors.TelegramTest do
 
   setup do
     # Set up bot token so bot_id is extracted correctly
-    Application.put_env(:maraithon, :telegram, bot_token: "12345:ABC", allow_unsigned: true)
+    Application.put_env(:maraithon, :telegram,
+      bot_token: "12345:ABC",
+      webhook_secret_token: "telegram_webhook_secret_token_123456789"
+    )
+
     on_exit(fn -> Application.delete_env(:maraithon, :telegram) end)
     :ok
   end
@@ -20,7 +24,7 @@ defmodule Maraithon.Connectors.TelegramTest do
 
       Application.put_env(:maraithon, :telegram,
         bot_token: "12345ABC",
-        allow_unsigned: true,
+        webhook_secret_token: "telegram_webhook_secret_token_123456789",
         api_base_url: "http://localhost:#{bypass.port}/bot"
       )
 
@@ -53,7 +57,7 @@ defmodule Maraithon.Connectors.TelegramTest do
 
       Application.put_env(:maraithon, :telegram,
         bot_token: "12345ABC",
-        allow_unsigned: true,
+        webhook_secret_token: "telegram_webhook_secret_token_123456789",
         api_base_url: "http://localhost:#{bypass.port}/bot"
       )
 
@@ -520,56 +524,121 @@ defmodule Maraithon.Connectors.TelegramTest do
   end
 
   describe "verify_signature/2" do
-    test "returns error when webhook secret not configured and unsigned not allowed" do
+    @secret "telegram_webhook_secret_token_123456789"
+
+    test "requires one exact Telegram secret-token header" do
       Application.put_env(:maraithon, :telegram,
         bot_token: "12345:ABC",
-        allow_unsigned: false,
-        webhook_secret_path: ""
+        webhook_secret_token: @secret
       )
 
-      conn =
-        conn(:post, "/webhooks/telegram", %{}) |> Map.put(:request_path, "/webhooks/telegram")
+      valid =
+        :post
+        |> conn("/webhooks/telegram", "{}")
+        |> Plug.Conn.put_req_header("x-telegram-bot-api-secret-token", @secret)
 
-      assert {:error, :webhook_secret_path_not_configured} = Telegram.verify_signature(conn, "{}")
+      assert :ok = Telegram.verify_signature(valid, "{}")
+
+      for supplied <- [nil, "", "wrong", String.duplicate("x", byte_size(@secret))] do
+        request =
+          case supplied do
+            nil ->
+              conn(:post, "/webhooks/telegram", "{}")
+
+            token ->
+              :post
+              |> conn("/webhooks/telegram", "{}")
+              |> Plug.Conn.put_req_header("x-telegram-bot-api-secret-token", token)
+          end
+
+        assert {:error, :invalid_webhook_secret_token} =
+                 Telegram.verify_signature(request, "{}")
+      end
+
+      duplicate =
+        :post
+        |> conn("/webhooks/telegram", "{}")
+        |> Plug.Conn.prepend_req_headers([
+          {"x-telegram-bot-api-secret-token", @secret},
+          {"x-telegram-bot-api-secret-token", @secret}
+        ])
+
+      assert {:error, :invalid_webhook_secret_token} =
+               Telegram.verify_signature(duplicate, "{}")
     end
 
-    test "returns ok when path contains secret" do
+    test "rejects missing or formally invalid configuration" do
+      for configured <- ["", "has spaces", String.duplicate("x", 257)] do
+        Application.put_env(:maraithon, :telegram,
+          bot_token: "12345:ABC",
+          webhook_secret_token: configured
+        )
+
+        conn =
+          :post
+          |> conn("/webhooks/telegram", "{}")
+          |> Plug.Conn.put_req_header("x-telegram-bot-api-secret-token", configured)
+
+        assert {:error, :webhook_secret_token_not_configured} =
+                 Telegram.verify_signature(conn, "{}")
+      end
+    end
+  end
+
+  describe "set_webhook/2" do
+    @secret "telegram_webhook_secret_token_123456789"
+
+    test "registers the static URL with the configured secret_token and options" do
+      bypass = Bypass.open()
+      parent = self()
+
       Application.put_env(:maraithon, :telegram,
-        bot_token: "12345:ABC",
-        webhook_secret_path: "secret123"
+        bot_token: "12345ABC",
+        webhook_secret_token: @secret,
+        api_base_url: "http://localhost:#{bypass.port}/bot"
       )
 
-      conn =
-        conn(:post, "/webhooks/telegram/secret123", %{})
-        |> Map.put(:request_path, "/webhooks/telegram/secret123")
+      Bypass.expect_once(bypass, "POST", "/bot12345ABC/setWebhook", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:set_webhook_payload, Jason.decode!(body)})
 
-      assert :ok = Telegram.verify_signature(conn, "{}")
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "result" => true}))
+      end)
+
+      assert {:ok, true} =
+               Telegram.set_webhook("https://example.test/webhooks/telegram",
+                 max_connections: 12,
+                 allowed_updates: ["message", "callback_query"]
+               )
+
+      assert_received {:set_webhook_payload, payload}
+      assert payload["url"] == "https://example.test/webhooks/telegram"
+      assert payload["secret_token"] == @secret
+      assert payload["max_connections"] == 12
+      assert payload["allowed_updates"] == ["message", "callback_query"]
     end
 
-    test "returns error when path doesn't contain secret" do
+    test "missing token fails locally without an HTTP request" do
+      bypass = Bypass.open()
+      parent = self()
+
       Application.put_env(:maraithon, :telegram,
-        bot_token: "12345:ABC",
-        webhook_secret_path: "secret123"
+        bot_token: "12345ABC",
+        webhook_secret_token: "",
+        api_base_url: "http://localhost:#{bypass.port}/bot"
       )
 
-      conn =
-        conn(:post, "/webhooks/telegram", %{})
-        |> Map.put(:request_path, "/webhooks/telegram/wrong")
+      Bypass.stub(bypass, "POST", "/bot12345ABC/setWebhook", fn conn ->
+        send(parent, :unexpected_set_webhook_request)
+        Plug.Conn.resp(conn, 200, Jason.encode!(%{"ok" => true, "result" => true}))
+      end)
 
-      assert {:error, :invalid_path} = Telegram.verify_signature(conn, "{}")
-    end
+      assert {:error, :webhook_secret_token_not_configured} =
+               Telegram.set_webhook("https://example.test/webhooks/telegram")
 
-    test "returns ok when allow_unsigned and no secret configured" do
-      Application.put_env(:maraithon, :telegram,
-        bot_token: "12345:ABC",
-        allow_unsigned: true,
-        webhook_secret_path: ""
-      )
-
-      conn =
-        conn(:post, "/webhooks/telegram", %{}) |> Map.put(:request_path, "/webhooks/telegram")
-
-      assert :ok = Telegram.verify_signature(conn, "{}")
+      refute_received :unexpected_set_webhook_request
     end
   end
 

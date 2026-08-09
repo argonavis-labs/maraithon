@@ -29,20 +29,20 @@ defmodule Maraithon.Connectors.Telegram do
 
   1. Create a bot via @BotFather on Telegram
   2. Get your bot token
-  3. Set webhook URL to `/webhooks/telegram/{secret_path}`
+  3. Set the webhook URL to `/webhooks/telegram` with a secret-token header
   4. Telegram sends updates to your webhook
 
   ## Configuration
 
       config :maraithon, :telegram,
         bot_token: "123456789:ABC...",
-        webhook_secret_path: "random_secret_string"
+        webhook_secret_token: "random_secret_string"
 
   ## Webhook Setup
 
   Call `Maraithon.Connectors.Telegram.set_webhook/1` to configure the webhook:
 
-      Telegram.set_webhook("https://your-domain.com/webhooks/telegram/your_secret")
+      Telegram.set_webhook("https://your-domain.com/webhooks/telegram")
   """
 
   @behaviour Maraithon.Connectors.Connector
@@ -64,27 +64,37 @@ defmodule Maraithon.Connectors.Telegram do
 
   @impl true
   def verify_signature(conn, _raw_body) do
-    # Telegram uses a secret path in the URL instead of signature verification
-    # The secret is verified by the router matching the path
-    secret_path = get_webhook_secret_path()
+    configured = get_webhook_secret_token()
 
-    if secret_path == "" do
-      # No secret configured - only allow if explicitly enabled
-      if allow_unsigned?() do
-        :ok
-      else
-        {:error, :webhook_secret_path_not_configured}
-      end
+    cond do
+      not valid_webhook_secret_token?(configured) ->
+        {:error, :webhook_secret_token_not_configured}
+
+      true ->
+        case Plug.Conn.get_req_header(conn, "x-telegram-bot-api-secret-token") do
+          [supplied] -> verify_webhook_secret_token(configured, supplied)
+          _missing_or_duplicate -> {:error, :invalid_webhook_secret_token}
+        end
+    end
+  end
+
+  @doc false
+  def valid_webhook_secret_token?(token) when is_binary(token) do
+    byte_size(token) in 1..256 and String.valid?(token) and
+      Regex.match?(~r/^[A-Za-z0-9_-]+$/, token)
+  end
+
+  def valid_webhook_secret_token?(_token), do: false
+
+  defp verify_webhook_secret_token(configured, supplied) do
+    if valid_webhook_secret_token?(supplied) and
+         Plug.Crypto.secure_compare(
+           :crypto.hash(:sha256, configured),
+           :crypto.hash(:sha256, supplied)
+         ) do
+      :ok
     else
-      # Check if the request path contains the secret
-      # This should be handled by the router, but double-check here
-      path = conn.request_path
-
-      if String.contains?(path, secret_path) do
-        :ok
-      else
-        {:error, :invalid_path}
-      end
+      {:error, :invalid_webhook_secret_token}
     end
   end
 
@@ -306,15 +316,16 @@ defmodule Maraithon.Connectors.Telegram do
   Sets the webhook URL for receiving updates.
   """
   def set_webhook(url, opts \\ []) do
-    params = %{url: url}
+    secret_token = Keyword.get(opts, :secret_token, get_webhook_secret_token())
 
-    params =
-      params
-      |> maybe_put(:secret_token, opts[:secret_token])
+    if valid_webhook_secret_token?(secret_token) do
+      %{url: url, secret_token: secret_token}
       |> maybe_put(:max_connections, opts[:max_connections])
       |> maybe_put(:allowed_updates, opts[:allowed_updates])
-
-    api_request("setWebhook", params)
+      |> then(&api_request("setWebhook", &1))
+    else
+      {:error, :webhook_secret_token_not_configured}
+    end
   end
 
   @doc """
@@ -685,14 +696,9 @@ defmodule Maraithon.Connectors.Telegram do
     end
   end
 
-  defp get_webhook_secret_path do
+  defp get_webhook_secret_token do
     Application.get_env(:maraithon, :telegram, [])
-    |> Keyword.get(:webhook_secret_path, "")
-  end
-
-  defp allow_unsigned? do
-    Application.get_env(:maraithon, :telegram, [])
-    |> Keyword.get(:allow_unsigned, false)
+    |> Keyword.get(:webhook_secret_token, "")
   end
 
   defp prepare_text(text, opts) do

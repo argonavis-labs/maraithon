@@ -10,7 +10,9 @@ defmodule Maraithon.Application do
     # OpenTelemetry auto-instrumentation. Must run before the supervisor starts
     # so :telemetry handlers are attached before the first request. No-op for
     # export when traces_exporter is :none (default dev/test).
-    OpentelemetryBandit.setup()
+    # Bandit creates its span before Endpoint plugs run. Never allowlist the
+    # Telegram secret-token header (or other request credentials) into spans.
+    OpentelemetryBandit.setup(request_headers: [])
     OpentelemetryPhoenix.setup(adapter: :bandit)
     OpentelemetryEcto.setup([:maraithon, :repo])
 

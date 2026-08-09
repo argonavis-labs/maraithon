@@ -51,14 +51,18 @@ defmodule MaraithonWeb.Endpoint do
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :maraithon
   end
 
+  # Telegram ingress is authenticated before request ids, endpoint telemetry,
+  # and parsers can observe or traverse the request.
+  plug MaraithonWeb.Plugs.TelegramWebhookGate
   plug Plug.RequestId
-  plug MaraithonWeb.Plugs.RedactSecretPath
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
-    # Cache raw body for webhook signature verification
+    # Independent global/multipart ceiling. The body reader applies stricter
+    # route-specific compressed and inflated limits for non-multipart bodies.
+    length: 8_388_608,
     body_reader: {MaraithonWeb.Plugs.CacheRawBody, :read_body, []},
     json_decoder: Phoenix.json_library()
 

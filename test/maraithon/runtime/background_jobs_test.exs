@@ -89,7 +89,7 @@ defmodule Maraithon.Runtime.BackgroundJobsTest do
   end
 
   test "Telegram webhook dedupe is permanent across pending and terminal states" do
-    for status <- ["pending", "completed", "failed"] do
+    for status <- BackgroundJob.statuses() do
       update_id = System.unique_integer([:positive])
       bot_id = "123456"
 
@@ -103,8 +103,10 @@ defmodule Maraithon.Runtime.BackgroundJobsTest do
       if status != "pending" do
         timestamps =
           case status do
+            "running" -> %{claimed_at: DateTime.utc_now(), claimed_by: "test"}
             "completed" -> %{completed_at: DateTime.utc_now()}
             "failed" -> %{failed_at: DateTime.utc_now()}
+            "cancelled" -> %{cancelled_at: DateTime.utc_now()}
           end
 
         first
@@ -132,25 +134,45 @@ defmodule Maraithon.Runtime.BackgroundJobsTest do
     end
   end
 
-  test "Telegram webhook payload normalization recursively removes raw fields" do
+  test "Telegram webhook payload is raw-free, normalized, and redacted" do
     assert {:ok, job} =
              BackgroundJobs.enqueue_telegram_webhook_event("123456", 9_001, %{
                type: "unknown",
                raw: %{"sentinel" => "never-store"},
                data: %{
                  "raw" => %{"nested_sentinel" => "never-store-nested"},
-                 "safe" => [%{raw: "drop", value: "keep"}]
+                 "safe" => [%{raw: "drop", value: "keep"}],
+                 "authorization" => "Bearer abcdefghijklmnopqrstuvwxyz0123456789",
+                 "note" => "token=abcdefghijklmnopqrstuvwxyz0123456789"
                }
              })
 
-    assert job.payload == %{
-             "event" => %{
-               "type" => "unknown",
-               "data" => %{"safe" => [%{"value" => "keep"}]}
-             }
-           }
-
+    assert job.payload["event"]["type"] == "unknown"
+    assert job.payload["event"]["data"]["safe"] == [%{"value" => "keep"}]
+    assert job.payload["event"]["data"]["authorization"] == "<redacted>"
+    assert job.payload["event"]["data"]["note"] == "token=<redacted>"
     refute inspect(job.payload) =~ "never-store"
+    refute inspect(job.payload) =~ "abcdefghijklmnopqrstuvwxyz0123456789"
+  end
+
+  test "out-of-bounds Telegram events insert no receipts" do
+    deep = Enum.reduce(1..18, "leaf", fn index, acc -> %{"level#{index}" => acc} end)
+
+    events = [
+      %{"type" => "message", "data" => %{"text" => String.duplicate("x", 64_001)}},
+      %{"type" => "message", "data" => deep},
+      %{"type" => "message", "data" => Enum.to_list(1..1_001)},
+      %{:type => "message", "type" => "collision", "data" => %{}}
+    ]
+
+    for {event, index} <- Enum.with_index(events) do
+      assert {:error, :telegram_webhook_event_out_of_bounds} =
+               BackgroundJobs.enqueue_telegram_webhook_event("123456", 91_000 + index, event)
+    end
+
+    refute Repo.exists?(
+             from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event")
+           )
   end
 
   test "ordinary terminal job dedupe keys remain reusable", %{user_id: user_id} do

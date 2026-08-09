@@ -471,8 +471,9 @@ Maraithon stores the resulting workspace token encrypted on the server and expos
 export TELEGRAM_BOT_TOKEN="123456789:ABC..."
 export TELEGRAM_WEBHOOK_SECRET="random_secret_string"
 
-# Set webhook (call once)
-# Telegram.set_webhook("https://your-domain.com/webhooks/telegram/your_secret")
+# Set webhook (call once). set_webhook includes TELEGRAM_WEBHOOK_SECRET as
+# Telegram's secret_token, which Telegram returns in its dedicated header.
+# Telegram.set_webhook("https://your-domain.com/webhooks/telegram")
 
 # Create agent subscribed to Telegram messages
 curl -X POST http://localhost:4000/api/v1/agents \
@@ -564,7 +565,7 @@ When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
 | `GET /webhooks/whatsapp` | WhatsApp webhook verification |
 | `POST /webhooks/whatsapp` | WhatsApp message events |
 | `POST /webhooks/linear` | Linear webhooks |
-| `POST /webhooks/telegram/:secret` | Telegram bot updates |
+| `POST /webhooks/telegram` | Telegram bot updates (secret-token header required) |
 
 ### OAuth
 
@@ -897,7 +898,7 @@ export NOTION_REDIRECT_URI="https://your-domain.com/auth/notion/callback"
 
 # Telegram (required for Telegram connector)
 export TELEGRAM_BOT_TOKEN="123456789:ABC..."
-export TELEGRAM_WEBHOOK_SECRET="random_secret_path"
+export TELEGRAM_WEBHOOK_SECRET="high_entropy_secret_token"
 ```
 
 ## Use Cases

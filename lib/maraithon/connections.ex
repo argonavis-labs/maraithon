@@ -2067,13 +2067,6 @@ defmodule Maraithon.Connections do
   end
 
   defp provider_setup("telegram") do
-    secret_path = config_value(:telegram, :webhook_secret_path)
-
-    webhook_path =
-      if present?(secret_path),
-        do: "/webhooks/telegram/#{secret_path}",
-        else: "/webhooks/telegram/{TELEGRAM_WEBHOOK_SECRET}"
-
     %{
       logo: :telegram,
       permissions: [
@@ -2082,7 +2075,11 @@ defmodule Maraithon.Connections do
         "Read inline button feedback to tune thresholds"
       ],
       callback_urls: [
-        %{label: "Webhook callback", url: callback_url(webhook_path), required?: true}
+        %{
+          label: "Webhook callback",
+          url: callback_url("/webhooks/telegram"),
+          required?: true
+        }
       ],
       env_requirements: [
         env_requirement(
@@ -2100,13 +2097,13 @@ defmodule Maraithon.Connections do
         ),
         env_requirement(
           "TELEGRAM_WEBHOOK_SECRET",
-          config_value(:telegram, :webhook_secret_path),
-          "Secret path segment used by the webhook endpoint",
+          config_value(:telegram, :webhook_secret_token),
+          "Secret token registered as Telegram Bot API setWebhook.secret_token",
           true
         )
       ],
       setup_notes: [
-        "Set your webhook to the callback URL shown above.",
+        "Register the static callback URL with setWebhook and pass TELEGRAM_WEBHOOK_SECRET as secret_token.",
         "Users link their chat from the Connect Telegram button or with: /start their-email@example.com",
         "Only insights above each user's threshold are pushed."
       ]

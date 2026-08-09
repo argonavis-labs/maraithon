@@ -131,6 +131,8 @@ defmodule MaraithonWeb.WebhookControllerTest do
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
 
+  @telegram_secret "telegram_webhook_secret_token_123456789"
+
   # ----------------------------------------------------------------------------
   # Test Setup
   # ----------------------------------------------------------------------------
@@ -161,8 +163,7 @@ defmodule MaraithonWeb.WebhookControllerTest do
 
     Application.put_env(:maraithon, :telegram,
       bot_token: "123456:ABC-DEF",
-      webhook_secret_path: "secret123",
-      allow_unsigned: true
+      webhook_secret_token: @telegram_secret
     )
 
     on_exit(fn ->
@@ -170,7 +171,7 @@ defmodule MaraithonWeb.WebhookControllerTest do
       Application.put_env(:maraithon, :slack, signing_secret: "", allow_unsigned: false)
       Application.put_env(:maraithon, :whatsapp, app_secret: "", allow_unsigned: false)
       Application.put_env(:maraithon, :linear, webhook_secret: "", allow_unsigned: false)
-      Application.put_env(:maraithon, :telegram, allow_unsigned: false)
+      Application.put_env(:maraithon, :telegram, webhook_secret_token: "")
 
       if original_webhook_controller do
         Application.put_env(
@@ -471,54 +472,65 @@ defmodule MaraithonWeb.WebhookControllerTest do
   # ============================================================================
   # TELEGRAM WEBHOOK TESTS
   # ============================================================================
-  #
-  # Telegram webhooks are triggered by bot interactions:
-  # - Message received
-  # - Callback query (inline button pressed)
-  # - Inline query
-  #
-  # Telegram uses a secret path for verification (no signature header).
-  # ============================================================================
 
-  describe "POST /webhooks/telegram/:secret" do
+  describe "POST /webhooks/telegram" do
     @describetag telegram_ingress: true
 
-    test "accepts only the exact nonblank configured secret despite allow_unsigned", %{conn: conn} do
+    test "requires the static path and exact singleton header before parsing", %{conn: conn} do
       payload = telegram_message_payload(80_001)
+      assert response(telegram_post(conn, payload), 204) == ""
 
-      assert response(post(conn, "/webhooks/telegram/secret123", payload), 204) == ""
+      accepted_count = telegram_job_count()
 
-      accepted_count =
-        Repo.aggregate(
-          from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event"),
-          :count,
-          :id
+      rejected = [
+        post(build_conn(), "/webhooks/telegram", payload),
+        build_conn()
+        |> put_req_header("x-telegram-bot-api-secret-token", "wrong")
+        |> post("/webhooks/telegram", payload),
+        build_conn()
+        |> put_req_header(
+          "x-telegram-bot-api-secret-token",
+          String.duplicate("x", byte_size(@telegram_secret))
         )
+        |> post("/webhooks/telegram", payload),
+        build_conn()
+        |> Plug.Conn.prepend_req_headers([
+          {"x-telegram-bot-api-secret-token", @telegram_secret},
+          {"x-telegram-bot-api-secret-token", @telegram_secret}
+        ])
+        |> post("/webhooks/telegram", payload),
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> post("/webhooks/telegram/legacy-secret", "not json"),
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> post("/webhooks/telegram/legacy-secret/suffix", "not json")
+      ]
 
-      for wrong_secret <- ["secret124", "secret12", "secret1234"] do
-        assert response(
-                 post(build_conn(), "/webhooks/telegram/#{wrong_secret}", payload),
-                 404
-               ) == ""
+      for rejected_conn <- rejected do
+        assert response(rejected_conn, 404) == ""
       end
 
       Application.put_env(:maraithon, :telegram,
         bot_token: "123456:ABC-DEF",
-        webhook_secret_path: "",
-        allow_unsigned: true
+        webhook_secret_token: ""
       )
 
-      assert response(post(build_conn(), "/webhooks/telegram/secret123", payload), 404) == ""
+      assert response(
+               build_conn()
+               |> put_req_header("content-length", "999999999")
+               |> telegram_post(payload),
+               404
+             ) == ""
 
-      assert Repo.aggregate(
-               from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event"),
-               :count,
-               :id
-             ) == accepted_count
+      assert telegram_job_count() == accepted_count
     end
 
-    test "normalizes, recursively scrubs raw payloads, and commits before 204", %{conn: conn} do
-      sentinel = "RAW-WEBHOOK-SENTINEL-DO-NOT-STORE"
+    test "normalizes, bounds, redacts, and recursively scrubs raw fields before 204", %{
+      conn: conn
+    } do
+      raw_sentinel = "RAW-WEBHOOK-SENTINEL-DO-NOT-STORE"
+      token_sentinel = "Bearer abcdefghijklmnopqrstuvwxyz0123456789"
 
       payload = %{
         "update_id" => 80_002,
@@ -527,17 +539,14 @@ defmodule MaraithonWeb.WebhookControllerTest do
           "date" => 1_700_000_000,
           "chat" => %{"id" => 222, "type" => "private"},
           "from" => %{"id" => 222, "username" => "tester", "is_bot" => false},
-          "unsupported" => %{"raw" => sentinel},
-          "sentinel" => sentinel
+          "unsupported" => %{"raw" => raw_sentinel, "authorization" => token_sentinel},
+          "sentinel" => raw_sentinel
         }
       }
 
-      log =
-        capture_log(fn ->
-          assert response(post(conn, "/webhooks/telegram/secret123", payload), 204) == ""
-        end)
-
-      refute log =~ sentinel
+      log = capture_log(fn -> assert response(telegram_post(conn, payload), 204) == "" end)
+      refute log =~ raw_sentinel
+      refute log =~ token_sentinel
 
       job =
         Repo.get_by!(BackgroundJob,
@@ -551,14 +560,14 @@ defmodule MaraithonWeb.WebhookControllerTest do
       assert job.payload["event"]["type"] == "unknown"
       assert is_binary(job.payload["event"]["timestamp"])
       refute contains_raw_field?(job.payload)
-      refute inspect(job.payload) =~ sentinel
-      refute inspect(job.payload) =~ "secret123"
+      refute inspect(job.payload) =~ raw_sentinel
+      refute inspect(job.payload) =~ token_sentinel
+      refute inspect(job.payload) =~ @telegram_secret
     end
 
     test "persists ignored valid updates as replay tombstones", %{conn: conn} do
       payload = %{"update_id" => 80_003, "poll_answer" => %{"poll_id" => "ignored"}}
-
-      assert response(post(conn, "/webhooks/telegram/secret123", payload), 204) == ""
+      assert response(telegram_post(conn, payload), 204) == ""
 
       job =
         Repo.get_by!(BackgroundJob,
@@ -574,10 +583,9 @@ defmodule MaraithonWeb.WebhookControllerTest do
              }
     end
 
-    test "a replay after completion never creates fresh work", %{conn: conn} do
+    test "every replay converges on the permanent receipt", %{conn: conn} do
       payload = telegram_message_payload(80_004)
-
-      assert response(post(conn, "/webhooks/telegram/secret123", payload), 204) == ""
+      assert response(telegram_post(conn, payload), 204) == ""
 
       first =
         Repo.get_by!(BackgroundJob,
@@ -594,7 +602,7 @@ defmodule MaraithonWeb.WebhookControllerTest do
       |> Repo.update!()
 
       replay = put_in(payload, ["message", "text"], "different replay content")
-      assert response(post(build_conn(), "/webhooks/telegram/secret123", replay), 204) == ""
+      assert response(telegram_post(build_conn(), replay), 204) == ""
 
       assert Repo.aggregate(
                from(job in BackgroundJob,
@@ -607,26 +615,72 @@ defmodule MaraithonWeb.WebhookControllerTest do
       assert Repo.get!(BackgroundJob, first.id).payload == %{}
     end
 
-    test "rejects malformed authenticated update ids with 400" do
-      for update_id <- [-1, 9_223_372_036_854_775_808, "80005", nil] do
-        payload = telegram_message_payload(update_id)
-        assert response(post(build_conn(), "/webhooks/telegram/secret123", payload), 400) == ""
+    test "returns 400 for authenticated malformed JSON and invalid update ids" do
+      assert_error_sent 400, fn ->
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("x-telegram-bot-api-secret-token", @telegram_secret)
+        |> post("/webhooks/telegram", "{not-json")
       end
 
-      refute Repo.exists?(
-               from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event")
-             )
+      for update_id <- [-1, 9_223_372_036_854_775_808, "80005", nil] do
+        assert response(telegram_post(build_conn(), telegram_message_payload(update_id)), 400) ==
+                 ""
+      end
+
+      assert telegram_job_count() == 0
     end
 
-    test "returns 503 when durable persistence fails", %{conn: conn} do
+    test "returns 413 for cumulative compressed and gzip-inflated overflow" do
+      oversized_identity = String.duplicate("x", 600_001)
+
+      assert_error_sent 413, fn ->
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("x-telegram-bot-api-secret-token", @telegram_secret)
+        |> post("/webhooks/telegram", oversized_identity)
+      end
+
+      inflated_json = Jason.encode!(%{"update_id" => 80_005, "padding" => oversized_identity})
+      gzipped = :zlib.gzip(inflated_json)
+      assert byte_size(gzipped) < 600_000
+
+      assert_error_sent 413, fn ->
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("content-encoding", "gzip")
+        |> put_req_header("x-telegram-bot-api-secret-token", @telegram_secret)
+        |> post("/webhooks/telegram", gzipped)
+      end
+
+      assert telegram_job_count() == 0
+    end
+
+    test "returns 413 when the normalized durable event is out of bounds", %{conn: conn} do
+      payload =
+        put_in(
+          telegram_message_payload(80_006),
+          ["message", "text"],
+          String.duplicate("x", 64_001)
+        )
+
+      assert response(telegram_post(conn, payload), 413) == ""
+      assert telegram_job_count() == 0
+    end
+
+    test "returns 503 when bot configuration or durable persistence is unavailable", %{conn: conn} do
       Application.put_env(:maraithon, MaraithonWeb.WebhookController,
         background_jobs_module: MaraithonWeb.WebhookControllerTest.FailingBackgroundJobs
       )
 
-      assert response(
-               post(conn, "/webhooks/telegram/secret123", telegram_message_payload(80_006)),
-               503
-             ) == ""
+      assert response(telegram_post(conn, telegram_message_payload(80_007)), 503) == ""
+
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "",
+        webhook_secret_token: @telegram_secret
+      )
+
+      assert response(telegram_post(build_conn(), telegram_message_payload(80_008)), 503) == ""
     end
   end
 
@@ -908,6 +962,20 @@ defmodule MaraithonWeb.WebhookControllerTest do
       # Should still succeed (with allow_unsigned)
       assert json_response(conn, 200)["status"] == "published"
     end
+  end
+
+  defp telegram_post(conn, payload) do
+    conn
+    |> put_req_header("x-telegram-bot-api-secret-token", @telegram_secret)
+    |> post("/webhooks/telegram", payload)
+  end
+
+  defp telegram_job_count do
+    Repo.aggregate(
+      from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event"),
+      :count,
+      :id
+    )
   end
 
   defp telegram_message_payload(update_id) do

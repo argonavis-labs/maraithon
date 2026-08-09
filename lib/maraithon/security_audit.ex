@@ -15,7 +15,7 @@ defmodule Maraithon.SecurityAudit do
     {:slack, :signing_secret},
     {:whatsapp, :app_secret},
     {:linear, :webhook_secret},
-    {:telegram, :webhook_secret_path}
+    {:telegram, :webhook_secret_token}
   ]
 
   def run(opts \\ []) when is_list(opts) do
@@ -49,8 +49,11 @@ defmodule Maraithon.SecurityAudit do
   defp add_webhook_findings(findings, env) do
     Enum.reduce(@webhook_configs, findings, fn {app_key, secret_key}, acc ->
       config = Application.get_env(:maraithon, app_key, [])
-      allow_unsigned? = Keyword.get(config, :allow_unsigned, false) == true
-      secret = config |> Keyword.get(secret_key, "") |> blank?()
+      secret = Keyword.get(config, secret_key, "")
+      secret_missing? = blank?(secret)
+
+      allow_unsigned? =
+        app_key != :telegram and Keyword.get(config, :allow_unsigned, false) == true
 
       acc
       |> maybe_add(
@@ -64,23 +67,32 @@ defmodule Maraithon.SecurityAudit do
         }
       )
       |> maybe_add(
-        not allow_unsigned? and secret and env == :prod,
+        not allow_unsigned? and secret_missing? and env == :prod,
         %{
           id: "webhook_secret_missing_#{app_key}",
           severity: "high",
-          message:
-            "#{app_key} webhook signature verification is enabled but its secret is missing.",
+          message: "#{app_key} webhook authentication is enabled but its secret is missing.",
           remediation: "Configure #{secret_env_name(app_key)} before enabling the webhook."
         }
       )
       |> maybe_add(
-        app_key == :telegram and not allow_unsigned? and secret and env != :prod,
+        app_key == :telegram and secret_missing? and env != :prod,
         %{
           id: "telegram_webhook_secret_missing",
           severity: "medium",
-          message: "Telegram webhook secret path is missing.",
+          message: "Telegram webhook secret token is missing.",
           remediation:
-            "Set TELEGRAM_WEBHOOK_SECRET or enable unsigned webhooks only for local development."
+            "Set TELEGRAM_WEBHOOK_SECRET and register it as Bot API setWebhook.secret_token."
+        }
+      )
+      |> maybe_add(
+        app_key == :telegram and not secret_missing? and byte_size(to_string(secret)) < 32,
+        %{
+          id: "telegram_webhook_secret_weak",
+          severity: if(env == :prod, do: "high", else: "medium"),
+          message: "Telegram webhook secret token is shorter than 32 bytes.",
+          remediation:
+            "Rotate TELEGRAM_WEBHOOK_SECRET to a high-entropy token of at least 32 bytes and re-register setWebhook."
         }
       )
     end)

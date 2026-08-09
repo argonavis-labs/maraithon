@@ -1,256 +1,100 @@
-# ==============================================================================
-# CacheRawBody Plug Unit Tests
-# ==============================================================================
-#
-# WHAT THIS TESTS (Product Perspective):
-# --------------------------------------
-# The CacheRawBody plug is critical for webhook signature verification.
-# When services like GitHub, Slack, or WhatsApp send webhooks, they include
-# a signature calculated from the raw HTTP body. To verify these signatures,
-# we need the EXACT bytes that were sent - not a parsed/re-encoded version.
-#
-# Without this plug:
-# 1. Webhook arrives with signature: HMAC-SHA256(raw_body, secret)
-# 2. Phoenix parses JSON body automatically
-# 3. We try to re-encode JSON to verify signature
-# 4. Re-encoded JSON has different byte order, spacing, etc.
-# 5. Signature verification FAILS
-# 6. Legitimate webhooks get rejected!
-#
-# With this plug:
-# 1. Webhook arrives with signature: HMAC-SHA256(raw_body, secret)
-# 2. CacheRawBody intercepts and saves exact bytes to conn.assigns[:raw_body]
-# 3. Phoenix parses JSON body normally
-# 4. We verify signature using saved raw bytes
-# 5. Signature matches!
-# 6. Webhook is processed correctly
-#
-# Example: GitHub Webhook Flow
-#
-#   GitHub sends:
-#   POST /webhooks/github
-#   X-Hub-Signature-256: sha256=abc123...
-#   Body: {"action":"opened","pull_request":{...}}
-#
-#   Our server:
-#   1. CacheRawBody saves exact bytes
-#   2. JSON parser reads body
-#   3. WebhookController uses raw bytes to verify signature
-#   4. If valid, event is published to agents
-#
-# WHY THESE TESTS MATTER:
-# -----------------------
-# If the CacheRawBody plug breaks, users experience:
-# - All webhook integrations failing
-# - GitHub PR notifications not reaching agents
-# - Slack messages not being processed
-# - WhatsApp messages being rejected
-# - Linear issue updates being lost
-# - "Invalid signature" errors in logs
-#
-# This is a critical security and functionality component!
-#
-# ==============================================================================
-#
-# TECHNICAL DETAILS:
-# ------------------
-# This test module validates the CacheRawBody plug which implements a custom
-# body reader for Plug connections. It intercepts the body reading process
-# to cache the raw bytes before they're parsed.
-#
-# How Plug Body Reading Works:
-# ----------------------------
-#
-#   Normal Flow (without CacheRawBody):
-#   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-#   │   Request   │────►│  Plug.Conn  │────►│ JSON Parser │
-#   │   (bytes)   │     │ read_body/2 │     │             │
-#   └─────────────┘     └─────────────┘     └─────────────┘
-#                                                  │
-#                                                  ▼
-#                                           (bytes consumed,
-#                                            raw form lost)
-#
-#   With CacheRawBody:
-#   ┌─────────────┐     ┌───────────────┐     ┌─────────────┐
-#   │   Request   │────►│ CacheRawBody  │────►│ JSON Parser │
-#   │   (bytes)   │     │  read_body/2  │     │             │
-#   └─────────────┘     └───────────────┘     └─────────────┘
-#                              │
-#                              ▼
-#                       conn.assigns[:raw_body]
-#                       (exact bytes preserved)
-#
-# Implementation:
-# ---------------
-# The plug provides a custom `read_body/2` function that:
-# 1. Reads all chunks from the request body
-# 2. Concatenates them into a single binary
-# 3. Stores the binary in conn.assigns[:raw_body]
-# 4. Returns the body for further processing
-#
-# This is configured in the router with:
-#   plug Plug.Parsers, body_reader: {CacheRawBody, :read_body, []}
-#
-# Test Categories:
-# ----------------
-# - Small Bodies: Typical JSON payloads
-# - Large Bodies: Multi-kilobyte payloads (chunked reading)
-# - Empty Bodies: Edge case handling
-# - JSON Bodies: Verify JSON-specific content preserved
-# - Byte Preservation: Cryptographic verification of exact bytes
-#
-# Dependencies:
-# -------------
-# - Plug.Test (for creating test connections)
-# - MaraithonWeb.Plugs.CacheRawBody (the plug being tested)
-# - :crypto (for SHA256 hash verification)
-#
-# ==============================================================================
-
 defmodule MaraithonWeb.Plugs.CacheRawBodyTest do
   use ExUnit.Case, async: true
 
+  import Plug.Conn
   import Plug.Test
 
   alias MaraithonWeb.Plugs.CacheRawBody
 
-  # ============================================================================
-  # READ BODY TESTS
-  # ============================================================================
-  #
-  # These tests verify the read_body/2 function correctly reads and caches
-  # the raw HTTP body for signature verification.
-  # ============================================================================
-
   describe "read_body/2" do
-    @doc """
-    Verifies that small JSON bodies are read and cached correctly.
-    This is the most common case - typical webhook payloads are a few KB.
-    """
-    test "caches raw body in assigns for small bodies" do
-      body = ~s({"key": "value"})
-      conn = conn(:post, "/test", body)
+    test "caches identity bodies and consumes multiple socket chunks" do
+      body = String.duplicate("x", 200_000)
+      conn = conn(:post, "/api/v1/companion/notes", body)
 
-      {:ok, read_body, conn} = CacheRawBody.read_body(conn, [])
-
-      assert read_body == body
-      assert conn.assigns[:raw_body] == body
+      assert {:ok, ^body, conn} = CacheRawBody.read_body(conn, [])
+      assert conn.assigns.raw_body == body
     end
 
-    @doc """
-    Verifies that larger bodies are read completely.
-    Plug reads bodies in chunks, so we need to verify all chunks are
-    concatenated correctly. 1000 bytes tests chunk handling.
-    """
-    test "reads entire body" do
-      body = String.duplicate("x", 1000)
-      conn = conn(:post, "/test", body)
+    test "returns the Plug 413 shape on cumulative compressed overflow" do
+      body = String.duplicate("x", CacheRawBody.webhook_compressed_limit() + 1)
+      conn = conn(:post, "/webhooks/github", body)
 
-      {:ok, read_body, conn} = CacheRawBody.read_body(conn, [])
-
-      assert read_body == body
-      assert conn.assigns[:raw_body] == body
+      assert {:more, "", _conn} = CacheRawBody.read_body(conn, [])
     end
 
-    @doc """
-    Verifies that empty bodies are handled gracefully.
-    Some webhooks (like verification challenges) may have empty bodies.
-    """
-    test "handles empty body" do
-      conn = conn(:post, "/test", "")
-
-      {:ok, read_body, conn} = CacheRawBody.read_body(conn, [])
-
-      assert read_body == ""
-      assert conn.assigns[:raw_body] == ""
+    test "applies the inflated ceiling to identity bodies" do
+      conn = conn(:post, "/mcp", String.duplicate("x", 600_001))
+      assert {:more, "", _conn} = CacheRawBody.read_body(conn, [])
     end
 
-    @doc """
-    Verifies that JSON bodies with various data types are preserved.
-    Tests strings, numbers, arrays, and nested objects.
-    """
-    test "handles JSON body" do
-      body = Jason.encode!(%{name: "test", values: [1, 2, 3]})
-      conn = conn(:post, "/test", body)
-
-      {:ok, read_body, conn} = CacheRawBody.read_body(conn, [])
-
-      assert read_body == body
-      assert conn.assigns[:raw_body] == body
-    end
-
-    @doc """
-    CRITICAL: Verifies exact byte preservation for signature verification.
-
-    This test uses SHA256 hashing to prove the exact bytes are preserved.
-    Even a single byte difference (like a changed escape sequence) would
-    cause the hash to differ, which would cause signature verification
-    to fail in production.
-
-    The test uses a body with unicode escapes to catch potential
-    encoding/decoding issues that could corrupt the raw bytes.
-    """
-    test "preserves exact bytes for signature verification" do
-      # Create a body with specific byte representation
-      body = ~s({"message":"Hello\\u0000World"})
-      conn = conn(:post, "/test", body)
-
-      {:ok, read_body, _conn} = CacheRawBody.read_body(conn, [])
-
-      # Ensure exact bytes are preserved
-      assert byte_size(read_body) == byte_size(body)
-      assert :crypto.hash(:sha256, read_body) == :crypto.hash(:sha256, body)
-    end
-
-    @doc """
-    Verifies gzipped bodies are transparently inflated when the request
-    carries `Content-Encoding: gzip`. The macOS companion app sends every
-    ingest batch this way to cut bandwidth; without inflation Plug.Parsers
-    would choke on the compressed bytes and Phoenix would return a generic
-    400 to the client.
-    """
-    test "inflates gzip-encoded bodies" do
-      body = ~s({"notes":[{"guid":"abc","title":"hello"}]})
-      gzipped = :zlib.gzip(body)
+    test "bounds streaming gzip inflation before retaining a zip bomb" do
+      inflated = String.duplicate("x", 600_001)
+      gzipped = :zlib.gzip(inflated)
+      assert byte_size(gzipped) < CacheRawBody.webhook_compressed_limit()
 
       conn =
         :post
-        |> conn("/test", gzipped)
-        |> Plug.Conn.put_req_header("content-encoding", "gzip")
+        |> conn("/webhooks/github", gzipped)
+        |> put_req_header("content-encoding", "gzip")
 
-      {:ok, read_body, conn} = CacheRawBody.read_body(conn, [])
-
-      assert read_body == body
-      assert conn.assigns[:raw_body] == body
+      assert {:more, "", _conn} = CacheRawBody.read_body(conn, [])
     end
 
-    @doc """
-    Bodies without Content-Encoding are returned as-is — the gunzip path
-    only kicks in for explicitly-gzipped requests.
-    """
-    test "leaves non-gzip bodies untouched" do
-      body = ~s({"plain":"json"})
-      conn = conn(:post, "/test", body)
-
-      {:ok, read_body, _conn} = CacheRawBody.read_body(conn, [])
-
-      assert read_body == body
-    end
-
-    @doc """
-    Bogus gzip bytes return an error tuple — Plug.Parsers will surface
-    the failure as a 400 instead of crashing the connection process.
-    """
-    test "returns :invalid_gzip on malformed gzip body" do
-      bogus = <<0, 1, 2, 3, 4, 5>>
+    test "rejects truncated gzip trailers" do
+      gzipped = :zlib.gzip(~s({"hello":"world"}))
+      truncated = binary_part(gzipped, 0, byte_size(gzipped) - 2)
 
       conn =
         :post
-        |> conn("/test", bogus)
-        |> Plug.Conn.put_req_header("content-encoding", "gzip")
+        |> conn("/webhooks/github", truncated)
+        |> put_req_header("content-encoding", "gzip")
 
       assert {:error, :invalid_gzip} = CacheRawBody.read_body(conn, [])
+    end
+
+    test "rejects malformed gzip and unsupported encoding chains" do
+      malformed =
+        :post
+        |> conn("/webhooks/github", <<0, 1, 2, 3>>)
+        |> put_req_header("content-encoding", "gzip")
+
+      assert {:error, :invalid_gzip} = CacheRawBody.read_body(malformed, [])
+
+      for encoding <- ["br", "gzip, identity"] do
+        unsupported =
+          :post
+          |> conn("/webhooks/github", "body")
+          |> put_req_header("content-encoding", encoding)
+
+        assert {:error, :unsupported_content_encoding} =
+                 CacheRawBody.read_body(unsupported, [])
+      end
+    end
+
+    test "signed connector cache retains gzip wire bytes while parser receives JSON" do
+      body = ~s({"action":"opened"})
+      wire_body = :zlib.gzip(body)
+
+      conn =
+        :post
+        |> conn("/webhooks/github", wire_body)
+        |> put_req_header("content-encoding", "gzip")
+
+      assert {:ok, ^body, conn} = CacheRawBody.read_body(conn, [])
+      assert conn.assigns.raw_body == wire_body
+    end
+
+    test "five MiB inflated Companion payload succeeds under OTP 26" do
+      body = Jason.encode!(%{"notes" => [String.duplicate("x", 5 * 1_024 * 1_024)]})
+      wire_body = :zlib.gzip(body)
+
+      conn =
+        :post
+        |> conn("/api/v1/companion/notes", wire_body)
+        |> put_req_header("content-encoding", "gzip")
+
+      assert {:ok, ^body, conn} = CacheRawBody.read_body(conn, [])
+      assert conn.assigns.raw_body == body
     end
   end
 end

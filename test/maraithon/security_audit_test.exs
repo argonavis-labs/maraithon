@@ -25,7 +25,7 @@ defmodule Maraithon.SecurityAuditTest do
 
   test "fails loudly for representative dangerous production settings" do
     Application.put_env(:maraithon, :github, webhook_secret: "", allow_unsigned: true)
-    Application.put_env(:maraithon, :telegram, webhook_secret_path: "", allow_unsigned: false)
+    Application.put_env(:maraithon, :telegram, webhook_secret_token: "")
     Application.put_env(:maraithon, :api_auth, bearer_token: "short")
     Application.put_env(:maraithon, :admin_auth, username: "", password: "tiny")
     Application.put_env(:maraithon, Maraithon.Runtime, tool_allowed_paths: ["/"])
@@ -50,5 +50,14 @@ defmodule Maraithon.SecurityAuditTest do
     refute "tool_policy_confirmation_missing" in finding_ids
     refute "tool_policy_metadata_missing" in finding_ids
     refute "redaction_self_test_failed" in finding_ids
+  end
+
+  test "flags short Telegram secret tokens without an unsigned escape hatch" do
+    Application.put_env(:maraithon, :telegram, webhook_secret_token: "short-token")
+
+    finding_ids = SecurityAudit.run(env: :prod).findings |> Enum.map(& &1.id)
+
+    assert "telegram_webhook_secret_weak" in finding_ids
+    refute "webhook_unsigned_telegram" in finding_ids
   end
 end

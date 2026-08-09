@@ -27,8 +27,7 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     Application.put_env(:maraithon, :telegram,
       bot_token: "12345:telegram-token",
       bot_username: "maraithon_test_bot",
-      webhook_secret_path: "telegram-secret",
-      allow_unsigned: true
+      webhook_secret_token: "telegram_webhook_secret_token_123456789"
     )
 
     on_exit(fn ->

@@ -19,16 +19,11 @@ defmodule MaraithonWeb.WebhookController do
   @max_telegram_update_id 9_223_372_036_854_775_807
 
   @doc """
-  Handle a Telegram webhook after exact secret-path authentication.
+  Handle a Telegram webhook authenticated by the pre-parser endpoint gate.
   """
-  def telegram(conn, %{"secret" => provided_secret} = params) do
-    configured_secret = telegram_webhook_secret()
-
-    if secure_secret_match?(configured_secret, provided_secret) do
-      handle_authenticated_telegram(conn, Map.delete(params, "secret"))
-    else
-      send_resp(conn, :not_found, "")
-    end
+  def telegram(%Plug.Conn{private: %{telegram_webhook_authenticated: true}} = conn, params)
+      when is_map(params) do
+    handle_authenticated_telegram(conn, params)
   end
 
   def telegram(conn, _params), do: send_resp(conn, :not_found, "")
@@ -236,6 +231,7 @@ defmodule MaraithonWeb.WebhookController do
       {:error, :invalid_update_id} -> send_resp(conn, :bad_request, "")
       {:error, :malformed_update} -> send_resp(conn, :bad_request, "")
       {:error, :telegram_not_configured} -> send_resp(conn, :service_unavailable, "")
+      {:error, :payload_too_large} -> send_resp(conn, 413, "")
       {:error, :persistence_unavailable} -> send_resp(conn, :service_unavailable, "")
     end
   end
@@ -289,7 +285,8 @@ defmodule MaraithonWeb.WebhookController do
 
     case background_jobs_module.enqueue_telegram_webhook_event(bot_id, update_id, event) do
       {:ok, job} -> {:ok, job}
-      {:error, _reason} -> {:error, :persistence_unavailable}
+      {:error, :telegram_webhook_event_out_of_bounds} -> {:error, :payload_too_large}
+      {:error, _closed_reason} -> {:error, :persistence_unavailable}
     end
   rescue
     error ->
@@ -309,23 +306,6 @@ defmodule MaraithonWeb.WebhookController do
     |> Application.get_env(__MODULE__, [])
     |> Keyword.get(:background_jobs_module, BackgroundJobs)
   end
-
-  defp telegram_webhook_secret do
-    case Application.get_env(:maraithon, :telegram, []) do
-      config when is_list(config) -> Keyword.get(config, :webhook_secret_path, "")
-      config when is_map(config) -> Map.get(config, :webhook_secret_path, "")
-      _other -> ""
-    end
-  end
-
-  defp secure_secret_match?(configured, provided)
-       when is_binary(configured) and is_binary(provided) do
-    configured != "" and String.valid?(configured) and String.trim(configured) != "" and
-      byte_size(configured) == byte_size(provided) and
-      Plug.Crypto.secure_compare(configured, provided)
-  end
-
-  defp secure_secret_match?(_configured, _provided), do: false
 
   defp handle_signed_connector(conn, params, opts) do
     connector_module = Keyword.fetch!(opts, :connector_module)
