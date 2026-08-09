@@ -557,8 +557,16 @@ defmodule Maraithon.Todos.IntelligenceTest do
         "title" => "Return Emma permission form",
         "summary" => "A school email says Emma's permission form is due Friday.",
         "next_action" => "Send the signed permission form back to school.",
+        "source_item_id" => "msg-school-4m-1",
         "dedupe_key" => "gmail:thread:emma-permission",
         "metadata" => %{
+          "message_id" => "msg-school-4m-1",
+          "thread_id" => "thread-school-4m-1",
+          "body_excerpt" =>
+            "Emma's field trip permission form is due Friday. Please send the signed form back by Friday.",
+          "direct_ask" => true,
+          "why_now" => "The school needs Emma's signed permission form by Friday.",
+          "confidence" => 0.95,
           "relationship_domain" => "family",
           "family_member" => true,
           "family_role" => "child",
@@ -593,8 +601,13 @@ defmodule Maraithon.Todos.IntelligenceTest do
                source: "test"
              )
 
-    assert [%{title: "Return Emma permission form"}] = result.todos
+    assert [%{title: "Return Emma permission form"} = created] = result.todos
     assert result.skipped_count == 0
+    assert created.source_item_id == "msg-school-4m-1"
+    assert created.metadata["body_excerpt"] =~ "Please send the signed form"
+    assert get_in(created.metadata, ["surface_quality", "source_backed"]) == true
+    assert get_in(created.metadata, ["surface_quality", "why_now"]) == true
+    assert get_in(created.metadata, ["surface_quality", "surfaceable"]) == true
     assert [%{title: "Return Emma permission form"}] = Todos.list_for_user(user_id, limit: 10)
   end
 
