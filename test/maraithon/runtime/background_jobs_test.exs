@@ -101,9 +101,9 @@ defmodule Maraithon.Runtime.BackgroundJobsTest do
       }
     }
 
-    for _attempt <- 1..2 do
+    for job_type <- ["telegram_webhook_event", " telegram_webhook_event "] do
       assert {:error, :telegram_webhook_event_requires_dedicated_enqueue} =
-               BackgroundJobs.enqueue("telegram_webhook_event", attrs)
+               BackgroundJobs.enqueue(job_type, attrs)
     end
 
     refute Repo.exists?(
