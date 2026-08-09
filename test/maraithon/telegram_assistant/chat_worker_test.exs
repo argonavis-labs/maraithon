@@ -402,13 +402,25 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest do
   end
 end
 
+defmodule Maraithon.TelegramAssistant.ChatWorkerTest.IngressContextEngine do
+  @moduledoc false
+
+  def build_context(_attrs), do: %{"engine" => "chat-worker-ingress", "defaults" => %{}}
+  def tool_catalog(_context), do: []
+end
+
 defmodule Maraithon.TelegramAssistant.ChatWorkerCompletedRetryTest do
   # DataCase (shared sandbox) so the worker process can run the persisted
   # already_completed?/2 check against a real recorded assistant reply.
   use Maraithon.DataCase, async: false
 
+  import Ecto.Query
+
   alias Maraithon.Accounts
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.ChatWorker
+  alias Maraithon.TelegramAssistant.Run
   alias Maraithon.TelegramAssistant.ChatWorkerTest.RecordingTelegram
   alias Maraithon.TelegramConversations
 
@@ -417,6 +429,8 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerCompletedRetryTest do
   setup do
     original = Application.get_env(:maraithon, ChatWorker, [])
     original_insights = Application.get_env(:maraithon, :insights, [])
+    original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_engine = Application.get_env(:maraithon, Maraithon.ContextEngine, [])
 
     Application.put_env(:maraithon, ChatWorker, async_enabled: true)
 
@@ -431,6 +445,8 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerCompletedRetryTest do
     on_exit(fn ->
       Application.put_env(:maraithon, ChatWorker, original)
       Application.put_env(:maraithon, :insights, original_insights)
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+      Application.put_env(:maraithon, Maraithon.ContextEngine, original_engine)
       Application.delete_env(:maraithon, :chat_worker_test_pid)
     end)
 
@@ -442,6 +458,101 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerCompletedRetryTest do
       [{pid, _}] -> if Process.alive?(pid), do: GenServer.stop(pid, :normal)
       [] -> :ok
     end
+  end
+
+  test "full durable ingress retry reuses the root and reconciles the delivered run" do
+    user_id = "chatworker-ingress-#{System.unique_integer([:positive])}@example.com"
+    chat = "chatworker-ingress-#{System.unique_integer([:positive])}"
+    message_id = "ingress-root-1"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: chat,
+        metadata: %{"username" => "ingress-retry"}
+      })
+
+    completion_attempts =
+      start_supervised!(%{
+        id: :chat_worker_completion_attempts,
+        start: {Agent, :start_link, [fn -> 0 end]}
+      })
+
+    llm_attempts =
+      start_supervised!(%{
+        id: :chat_worker_llm_attempts,
+        start: {Agent, :start_link, [fn -> 0 end]}
+      })
+
+    assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(assistant_config,
+        telegram_full_chat_enabled: true,
+        telegram_liveness_enabled: false,
+        client_module: Maraithon.TestSupport.TelegramAssistantClientStub,
+        next_step: fn _payload ->
+          Agent.update(llm_attempts, &(&1 + 1))
+
+          {:ok,
+           %{
+             "status" => "final",
+             "message_class" => "assistant_reply",
+             "assistant_message" => "The durable answer is ready."
+           }}
+        end,
+        run_completion_guard: fn _run, _attrs ->
+          attempt = Agent.get_and_update(completion_attempts, &{&1 + 1, &1 + 1})
+          if attempt == 1, do: {:error, :injected_run_completion_gap}, else: :ok
+        end
+      )
+    )
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.ContextEngine,
+      engine: Maraithon.TelegramAssistant.ChatWorkerTest.IngressContextEngine
+    )
+
+    data = %{
+      "chat_id" => chat,
+      "message_id" => message_id,
+      "text" => "Give me the durable answer"
+    }
+
+    assert {:error, :durable_telegram_router_failed} = ChatWorker.process_durable(chat, data)
+    assert Agent.get(llm_attempts, & &1) == 1
+
+    conversation = TelegramConversations.find_by_root(chat, message_id)
+    assert conversation
+    refute TelegramConversations.assistant_reply_recorded?(chat, message_id)
+
+    assert Repo.aggregate(
+             from(conversation in Maraithon.TelegramConversations.Conversation,
+               where:
+                 conversation.chat_id == ^chat and
+                   conversation.root_message_id == ^message_id
+             ),
+             :count
+           ) == 1
+
+    assert :ok = ChatWorker.process_durable(chat, data)
+    assert Agent.get(llm_attempts, & &1) == 1
+    assert Agent.get(completion_attempts, & &1) == 2
+
+    assert TelegramConversations.assistant_reply_recorded?(chat, message_id)
+
+    assert [%Run{status: "completed"}] =
+             Repo.all(from run in Run, where: run.conversation_id == ^conversation.id)
+
+    turns = TelegramConversations.recent_turns(conversation, limit: 10)
+    assert Enum.count(turns, &(&1.role == "user")) == 1
+    assert Enum.count(turns, &(&1.role == "assistant")) == 1
+
+    assert_received {:telegram_send, ^chat, "The durable answer is ready.", _opts}
+    refute_received {:telegram_send, ^chat, "The durable answer is ready.", _opts}
   end
 
   # SPEC 09 R0 acceptance: a webhook retry for an already-completed message

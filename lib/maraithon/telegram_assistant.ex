@@ -231,16 +231,26 @@ defmodule Maraithon.TelegramAssistant do
     finish_at =
       Map.get(attrs, :finished_at) || Map.get(attrs, "finished_at") || DateTime.utc_now()
 
-    _ = Maraithon.TelegramAssistant.RunStreamPreview.delete(run.id)
+    with :ok <- run_completion_guard(run, attrs) do
+      _ = Maraithon.TelegramAssistant.RunStreamPreview.delete(run.id)
 
-    run
-    |> Ecto.Changeset.change(%{
-      status: Map.get(attrs, :status) || Map.get(attrs, "status") || "completed",
-      result_summary: Map.get(attrs, :result_summary) || Map.get(attrs, "result_summary") || %{},
-      finished_at: finish_at,
-      error: Map.get(attrs, :error) || Map.get(attrs, "error")
-    })
-    |> Repo.update()
+      run
+      |> Ecto.Changeset.change(%{
+        status: Map.get(attrs, :status) || Map.get(attrs, "status") || "completed",
+        result_summary:
+          Map.get(attrs, :result_summary) || Map.get(attrs, "result_summary") || %{},
+        finished_at: finish_at,
+        error: Map.get(attrs, :error) || Map.get(attrs, "error")
+      })
+      |> Repo.update()
+    end
+  end
+
+  defp run_completion_guard(run, attrs) do
+    case Keyword.get(config(), :run_completion_guard) do
+      guard when is_function(guard, 2) -> guard.(run, attrs)
+      _missing -> :ok
+    end
   end
 
   def fail_run(%Run{} = run, error, status \\ "failed") do
@@ -253,7 +263,7 @@ defmodule Maraithon.TelegramAssistant do
     |> Repo.update()
   end
 
-  def resumable_todo_digest_run(conversation_id, source_message_id)
+  def resumable_delivery_run(conversation_id, source_message_id)
       when is_binary(conversation_id) and is_binary(source_message_id) do
     Run
     |> where([run], run.conversation_id == ^conversation_id)
@@ -271,7 +281,11 @@ defmodule Maraithon.TelegramAssistant do
     |> Repo.one()
   end
 
-  def resumable_todo_digest_run(_conversation_id, _source_message_id), do: nil
+  def resumable_delivery_run(_conversation_id, _source_message_id), do: nil
+
+  # Kept for callers compiled against the narrower checkpoint API.
+  def resumable_todo_digest_run(conversation_id, source_message_id),
+    do: resumable_delivery_run(conversation_id, source_message_id)
 
   defp handle_assistant_callback(data, callback_data) do
     case TelegramResponder.parse_action_callback(callback_data) do
@@ -709,8 +723,12 @@ defmodule Maraithon.TelegramAssistant do
         }
 
         case append_delivered_turn(conversation, turn_attrs) do
-          {:ok, {updated_conversation, turn}} -> {:ok, updated_conversation, turn, result}
-          {:error, reason} -> {:error, reason}
+          {:ok, {updated_conversation, turn, insert_status}} ->
+            delivery_result = put_local_turn_status(result, insert_status)
+            {:ok, updated_conversation, turn, delivery_result}
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       {:error, reason} ->
@@ -724,7 +742,7 @@ defmodule Maraithon.TelegramAssistant do
   # partition: return an error so durable ingress retries, while accepting that
   # the retry can produce a duplicate provider message.
   defp append_delivered_turn(conversation, turn_attrs) do
-    case TelegramConversations.append_turn(conversation, turn_attrs) do
+    case TelegramConversations.append_turn_with_status(conversation, turn_attrs) do
       {:error, reason} ->
         Logger.warning("Telegram provider send succeeded but turn persistence failed",
           conversation_reference: Maraithon.Redaction.fingerprint(conversation.id),
@@ -733,7 +751,7 @@ defmodule Maraithon.TelegramAssistant do
 
         {:error, :telegram_turn_persistence_failed}
 
-      {:ok, {_updated_conversation, _turn}} = result ->
+      {:ok, {_updated_conversation, _turn, _insert_status}} = result ->
         result
 
       other ->
@@ -762,6 +780,12 @@ defmodule Maraithon.TelegramAssistant do
 
       {:error, :telegram_turn_persistence_failed}
   end
+
+  defp put_local_turn_status(result, insert_status) when is_map(result) do
+    Map.put(result, "_maraithon_local_turn_inserted", insert_status == :inserted)
+  end
+
+  defp put_local_turn_status(result, _insert_status), do: result
 
   def mark_conversation_awaiting_action(
         %Conversation{} = conversation,

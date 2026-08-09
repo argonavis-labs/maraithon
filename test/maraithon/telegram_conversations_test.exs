@@ -36,6 +36,27 @@ defmodule Maraithon.TelegramConversationsTest do
       refute first.id == second.id
     end
 
+    test "a top-level webhook retry reuses the durable root conversation" do
+      user_id = "root-retry-#{System.unique_integer([:positive])}@example.com"
+      chat_id = "chat-#{System.unique_integer([:positive])}"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      attrs = %{"root_message_id" => "telegram-source-42"}
+      assert {:ok, first} = TelegramConversations.start_or_continue(user_id, chat_id, attrs)
+      assert {:ok, retried} = TelegramConversations.start_or_continue(user_id, chat_id, attrs)
+
+      assert retried.id == first.id
+
+      assert Repo.aggregate(
+               from(conversation in Maraithon.TelegramConversations.Conversation,
+                 where:
+                   conversation.chat_id == ^chat_id and
+                     conversation.root_message_id == "telegram-source-42"
+               ),
+               :count
+             ) == 1
+    end
+
     test "a reply_to message continues the matching conversation" do
       user_id = "reply-test-#{System.unique_integer([:positive])}@example.com"
       chat_id = "chat-#{System.unique_integer([:positive])}"
@@ -99,6 +120,31 @@ defmodule Maraithon.TelegramConversationsTest do
              ),
              :count
            ) == 1
+  end
+
+  test "append_turn_with_status reserves one deterministic client message id" do
+    user_id = "client-idempotent-#{System.unique_integer([:positive])}@example.com"
+    chat_id = "chat-#{System.unique_integer([:positive])}"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, conversation} =
+      TelegramConversations.start_or_continue(user_id, chat_id, %{
+        "root_message_id" => "client-root"
+      })
+
+    attrs = %{
+      "role" => "assistant",
+      "client_message_id" => "stable-result",
+      "text" => "Delivered once"
+    }
+
+    assert {:ok, {_conversation, first, :inserted}} =
+             TelegramConversations.append_turn_with_status(conversation, attrs)
+
+    assert {:ok, {_conversation, second, :reused}} =
+             TelegramConversations.append_turn_with_status(conversation, attrs)
+
+    assert second.id == first.id
   end
 
   test "append_turn emits a canonical operator event for the persisted turn" do

@@ -44,13 +44,14 @@ defmodule Maraithon.TelegramConversations do
            is_nil(linked_insight_id) do
         nil
       else
-        # Each top-level ask gets its own conversation row. We only continue
-        # an existing thread when there is an explicit signal: the user
-        # replied to a specific bot message, there's a pending confirmation,
-        # or the message is linked to a delivery/insight push. Without one of
-        # those, two unrelated asks ("what emails do I have?" then "who is
-        # Charlie?") would pile into one conversation and bleed context.
-        find_by_reply(chat_id, reply_to_message_id) ||
+        # Each top-level ask gets its own conversation row. A webhook retry is
+        # the one exception: Telegram's source message id is the durable root,
+        # so the same `(chat_id, root_message_id)` must re-enter the original
+        # conversation and its resumable Run instead of minting a parallel
+        # thread. The database unique index is the final race barrier; this
+        # lookup is the normal retry path.
+        find_by_root(chat_id, root_message_id) ||
+          find_by_reply(chat_id, reply_to_message_id) ||
           open_pending_confirmation(chat_id, confirmation_reply?) ||
           open_pending_clarification(chat_id, clarification_reply?) ||
           find_open_linked(chat_id, linked_delivery_id, linked_insight_id)
@@ -71,19 +72,36 @@ defmodule Maraithon.TelegramConversations do
         |> Repo.update()
 
       nil ->
-        %Conversation{}
-        |> Conversation.changeset(%{
-          user_id: user_id,
-          chat_id: chat_id,
-          surface: surface,
-          root_message_id: root_message_id,
-          linked_delivery_id: linked_delivery_id,
-          linked_insight_id: linked_insight_id,
-          status: "open",
-          last_turn_at: now,
-          metadata: metadata
-        })
-        |> Repo.insert()
+        changeset =
+          Conversation.changeset(%Conversation{}, %{
+            user_id: user_id,
+            chat_id: chat_id,
+            surface: surface,
+            root_message_id: root_message_id,
+            linked_delivery_id: linked_delivery_id,
+            linked_insight_id: linked_insight_id,
+            status: "open",
+            last_turn_at: now,
+            metadata: metadata
+          })
+
+        case Repo.insert(changeset) do
+          {:ok, conversation} ->
+            {:ok, conversation}
+
+          {:error, changeset} = error ->
+            # Two workers can race before either sees the root lookup. Reuse
+            # the winner on the unique conflict; every other insert failure
+            # remains visible to the caller.
+            if is_binary(root_message_id) and root_conflict?(changeset) do
+              case find_by_root(chat_id, root_message_id) do
+                %Conversation{} = conversation -> {:ok, conversation}
+                nil -> error
+              end
+            else
+              error
+            end
+        end
     end
   end
 
@@ -178,20 +196,25 @@ defmodule Maraithon.TelegramConversations do
   @doc """
   Appends a turn to a conversation.
 
-  Idempotent for redelivered Telegram messages: a webhook retry re-runs
-  `TelegramRouter.handle_message/1` from scratch (see R3 — mark-as-seen is
-  deferred until after handling completes), so a second `append_turn/2` for
-  the same `(conversation_id, telegram_message_id)` pair is expected, not a
-  bug. Rather than raising on the DB's unique-constraint conflict (which
-  would look like a real failure and mask whatever actually happened on the
-  retry), we fetch and reuse the existing turn.
+  Idempotent for both Telegram provider message ids and deterministic local
+  client message ids. The latter is used by mobile and checkpointed delivery
+  drains to reserve exactly one local turn even when two retries race.
   """
   def append_turn(%Conversation{} = conversation, attrs) when is_map(attrs) do
+    case append_turn_with_status(conversation, attrs) do
+      {:ok, {conversation, turn, _insert_status}} -> {:ok, {conversation, turn}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc false
+  def append_turn_with_status(%Conversation{} = conversation, attrs) when is_map(attrs) do
     now = DateTime.utc_now()
     telegram_message_id = read_string(attrs, "telegram_message_id")
+    client_message_id = read_string(attrs, "client_message_id")
 
     Repo.transaction(fn ->
-      case insert_or_reuse_turn(conversation, attrs, telegram_message_id) do
+      case insert_or_reuse_turn(conversation, attrs, telegram_message_id, client_message_id) do
         {:ok, turn, :inserted} ->
           updated_conversation =
             conversation
@@ -205,22 +228,22 @@ defmodule Maraithon.TelegramConversations do
           {:ok, operator_event} =
             OperatorEvents.record(turn_operator_event_attrs(updated_conversation, turn, now))
 
-          {updated_conversation, turn, operator_event}
+          {updated_conversation, turn, :inserted, operator_event}
 
         {:ok, turn, :reused} ->
-          {conversation, turn, nil}
+          {conversation, turn, :reused, nil}
 
         {:error, changeset} ->
           Repo.rollback(changeset)
       end
     end)
     |> case do
-      {:ok, {conversation, turn, nil}} ->
-        {:ok, {conversation, turn}}
+      {:ok, {conversation, turn, status, nil}} ->
+        {:ok, {conversation, turn, status}}
 
-      {:ok, {conversation, turn, operator_event}} ->
+      {:ok, {conversation, turn, status, operator_event}} ->
         :ok = OperatorBus.broadcast(operator_event)
-        {:ok, {conversation, turn}}
+        {:ok, {conversation, turn, status}}
 
       {:error, reason} ->
         {:error, reason}
@@ -243,64 +266,107 @@ defmodule Maraithon.TelegramConversations do
   """
   def assistant_reply_recorded?(chat_id, telegram_message_id)
       when is_binary(chat_id) and is_binary(telegram_message_id) do
-    # An action-result turn is not terminal while its confirmation conversation
-    # is still awaiting closure. Let the durable retry re-enter the idempotent
-    # prepared-action path and finish that local checkpoint.
+    # A terminal turn tagged with a Runner run id is only completion evidence
+    # once that Run's ledger is terminal too. If the process died after the
+    # turn commit but before `complete_run/2`, durable ingress must re-enter
+    # the checkpoint drain instead of skipping reconciliation.
     Turn
-    |> join(:inner, [t], c in assoc(t, :conversation))
+    |> join(:inner, [turn], conversation in assoc(turn, :conversation))
     |> where(
-      [t, c],
-      c.chat_id == ^chat_id and t.role == "assistant" and
-        t.reply_to_message_id == ^telegram_message_id and
-        fragment("COALESCE(?->>'terminal_response', 'true') = 'true'", t.structured_data) and
-        (c.status != "awaiting_confirmation" or t.turn_kind != "action_result")
+      [turn, conversation],
+      conversation.chat_id == ^chat_id and turn.role == "assistant" and
+        turn.reply_to_message_id == ^telegram_message_id and
+        fragment(
+          "COALESCE(?->>'terminal_response', 'true') = 'true'",
+          turn.structured_data
+        ) and
+        (conversation.status != "awaiting_confirmation" or turn.turn_kind != "action_result")
     )
-    |> Repo.exists?()
+    |> select([turn, _conversation], turn.structured_data)
+    |> Repo.all()
+    |> Enum.any?(&terminal_turn_run_reconciled?/1)
   end
 
   def assistant_reply_recorded?(_chat_id, _telegram_message_id), do: false
 
-  defp insert_or_reuse_turn(conversation, attrs, telegram_message_id) do
+  defp terminal_turn_run_reconciled?(structured_data) when is_map(structured_data) do
+    case Map.get(structured_data, "run_id") do
+      run_id when is_binary(run_id) ->
+        case Ecto.UUID.cast(run_id) do
+          {:ok, run_id} ->
+            case Repo.get(Maraithon.TelegramAssistant.Run, run_id) do
+              %Maraithon.TelegramAssistant.Run{
+                status: status,
+                finished_at: %DateTime{}
+              }
+              when status in ["completed", "waiting_confirmation", "degraded"] ->
+                true
+
+              _incomplete_or_missing ->
+                false
+            end
+
+          :error ->
+            false
+        end
+
+      _legacy_turn_without_run ->
+        true
+    end
+  end
+
+  defp terminal_turn_run_reconciled?(_structured_data), do: true
+
+  defp insert_or_reuse_turn(conversation, attrs, telegram_message_id, client_message_id) do
     %Turn{}
     |> Turn.changeset(Map.merge(attrs, %{"conversation_id" => conversation.id}))
-    # `append_turn/2` runs this inside a `Repo.transaction`. Without
-    # `mode: :savepoint`, a real unique-constraint violation here aborts the
-    # whole Postgres transaction, so the `Repo.get_by` lookup below (needed
-    # to fetch-and-reuse the existing turn) would itself raise
-    # `Postgrex.Error, 25P02 in_failed_sql_transaction` instead of running.
+    # The savepoint keeps the surrounding transaction usable after the
+    # expected unique conflict so we can fetch the winning reservation.
     |> Repo.insert(mode: :savepoint)
     |> case do
       {:ok, turn} ->
         {:ok, turn, :inserted}
 
       {:error, changeset} ->
-        if is_binary(telegram_message_id) and
-             unique_constraint_error?(changeset, :telegram_message_id) do
-          case Repo.get_by(Turn,
-                 conversation_id: conversation.id,
-                 telegram_message_id: telegram_message_id
-               ) do
-            %Turn{} = existing -> {:ok, existing, :reused}
-            nil -> {:error, changeset}
-          end
-        else
-          {:error, changeset}
+        cond do
+          is_binary(telegram_message_id) and
+              unique_constraint_error?(changeset, :telegram_message_id) ->
+            reuse_turn(conversation.id, :telegram_message_id, telegram_message_id, changeset)
+
+          is_binary(client_message_id) and
+              unique_constraint_error?(changeset, :client_message_id) ->
+            reuse_turn(conversation.id, :client_message_id, client_message_id, changeset)
+
+          true ->
+            {:error, changeset}
         end
     end
   end
 
-  # Must match the `name:` passed to `unique_constraint/3` for this field in
-  # `Turn.changeset/2` — see the comment there on why this is truncated to
-  # Postgres's 63-byte identifier limit rather than the full inferred name.
+  defp reuse_turn(conversation_id, field, value, changeset) do
+    case Repo.get_by(Turn, [{:conversation_id, conversation_id}, {field, value}]) do
+      %Turn{} = existing -> {:ok, existing, :reused}
+      nil -> {:error, changeset}
+    end
+  end
+
   @telegram_message_id_constraint_name "telegram_conversation_turns_conversation_id_telegram_message_id"
+  @client_message_id_constraint_name "telegram_conversation_turns_conversation_id_client_message_id_i"
 
-  defp unique_constraint_error?(changeset, :telegram_message_id) do
+  defp unique_constraint_error?(changeset, field)
+       when field in [:telegram_message_id, :client_message_id] do
+    expected_name =
+      case field do
+        :telegram_message_id -> @telegram_message_id_constraint_name
+        :client_message_id -> @client_message_id_constraint_name
+      end
+
     Enum.any?(changeset.errors, fn
-      {:telegram_message_id, {_message, opts}} ->
+      {^field, {_message, opts}} ->
         Keyword.get(opts, :constraint) == :unique and
-          Keyword.get(opts, :constraint_name) == @telegram_message_id_constraint_name
+          Keyword.get(opts, :constraint_name) == expected_name
 
-      _ ->
+      _other ->
         false
     end)
   end
@@ -389,6 +455,18 @@ defmodule Maraithon.TelegramConversations do
   end
 
   def delete_turn(_conversation, _turn_id), do: {:error, :not_found}
+
+  def find_by_root(chat_id, root_message_id)
+      when is_binary(chat_id) and is_binary(root_message_id) do
+    Conversation
+    |> where([conversation], conversation.chat_id == ^chat_id)
+    |> where([conversation], conversation.root_message_id == ^root_message_id)
+    |> preload([:linked_delivery, :linked_insight, :turns])
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def find_by_root(_chat_id, _root_message_id), do: nil
 
   def find_by_reply(chat_id, reply_to_message_id)
       when is_binary(chat_id) and is_binary(reply_to_message_id) do
@@ -852,6 +930,18 @@ defmodule Maraithon.TelegramConversations do
       end
 
     stale? or resolved?
+  end
+
+  defp root_conflict?(changeset) do
+    Enum.any?(changeset.errors, fn
+      {_field, {_message, opts}} ->
+        Keyword.get(opts, :constraint) == :unique and
+          Keyword.get(opts, :constraint_name) ==
+            "telegram_conversations_chat_id_root_message_id_index"
+
+      _other ->
+        false
+    end)
   end
 
   defp read_string(map, key, default \\ nil) when is_map(map) do

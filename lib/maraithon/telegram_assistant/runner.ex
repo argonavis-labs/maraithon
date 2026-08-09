@@ -88,12 +88,39 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
     if durable_processing?(attrs) and match?(%Conversation{}, conversation) and
          is_binary(source_message_id) do
-      case TelegramAssistant.resumable_todo_digest_run(conversation.id, source_message_id) do
-        %Run{} = run -> resume_todo_digest_delivery(run, conversation, attrs)
+      case TelegramAssistant.resumable_delivery_run(conversation.id, source_message_id) do
+        %Run{} = run -> resume_checkpointed_delivery(run, conversation, attrs)
         nil -> :pass
       end
     else
       :pass
+    end
+  end
+
+  defp resume_checkpointed_delivery(%Run{} = run, %Conversation{} = conversation, attrs) do
+    checkpoint = map_value(run.result_summary || %{}, "delivery_checkpoint", %{})
+
+    case map_value(checkpoint, "kind") do
+      "todo_digest" -> resume_todo_digest_delivery(run, conversation, attrs)
+      "standard" -> resume_standard_delivery(run, conversation, attrs)
+      _unknown -> :pass
+    end
+  end
+
+  defp resume_standard_delivery(%Run{} = run, %Conversation{} = conversation, attrs) do
+    checkpoint = map_value(run.result_summary || %{}, "delivery_checkpoint", %{})
+    status = map_value(checkpoint, "completion_status", "completed")
+    summary = map_value(checkpoint, "completion_summary", %{})
+
+    case drain_standard_delivery(conversation, attrs, run, checkpoint) do
+      {:ok, _conversation} ->
+        case TelegramAssistant.complete_run(run, %{status: status, result_summary: summary}) do
+          {:ok, _completed_run} -> :ok
+          {:error, reason} -> {:error, {:run_completion_failed, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1325,32 +1352,169 @@ defmodule Maraithon.TelegramAssistant.Runner do
        ) do
     text = final_text(response, prepared_action_id, state)
 
-    case TelegramAssistant.send_turn(
-           conversation,
-           Map.fetch!(attrs, :chat_id),
-           text,
-           standard_turn_opts(
-             attrs,
-             run,
-             state,
-             message_class,
-             prepared_action_id,
-             delivery,
-             map_value(response, "summary")
-           )
-         ) do
-      {:ok, updated_conversation, _turn, _telegram_result} ->
-        summary = build_result_summary(message_class, prepared_action_id, state, liveness_summary)
-        _ = maybe_refresh_user_memory(attrs)
-        _ = maybe_compact_conversation_async(updated_conversation)
+    completion_summary =
+      build_result_summary(message_class, prepared_action_id, state, liveness_summary)
 
-        {:ok, todo_digest_status(updated_conversation, prepared_action_id, message_class),
-         summary}
+    completion_status =
+      standard_completion_status(conversation, prepared_action_id, message_class)
 
+    turn_opts =
+      standard_turn_opts(
+        attrs,
+        run,
+        state,
+        message_class,
+        prepared_action_id,
+        delivery,
+        map_value(response, "summary")
+      )
+      |> Keyword.put(:client_message_id, final_turn_client_message_id(run.id))
+
+    checkpoint =
+      standard_delivery_checkpoint(
+        run,
+        attrs,
+        text,
+        turn_opts,
+        completion_status,
+        completion_summary,
+        delivery
+      )
+
+    with {:ok, checkpointed_run} <- checkpoint_standard_delivery(run, checkpoint),
+         {:ok, updated_conversation} <-
+           drain_standard_delivery(conversation, attrs, checkpointed_run, checkpoint) do
+      _ = maybe_refresh_user_memory(attrs)
+      _ = maybe_compact_conversation_async(updated_conversation)
+
+      {:ok, completion_status, completion_summary}
+    else
       {:error, reason} ->
-        {:error, run, {:final_delivery_failed, reason}, state}
+        checkpointed_run =
+          case TelegramAssistant.resumable_delivery_run(
+                 run.conversation_id,
+                 Map.get(attrs, :source_message_id)
+               ) do
+            %Run{id: id} = persisted when id == run.id -> persisted
+            _missing -> run
+          end
+
+        {:error, checkpointed_run, {:final_delivery_failed, reason}, state}
     end
   end
+
+  defp standard_completion_status(conversation, prepared_action_id, message_class) do
+    # This performs the same awaiting-confirmation local transition as the old
+    # post-send status helper, but before the delivery checkpoint is drained.
+    # Repeating it during a durable retry is idempotent.
+    todo_digest_status(conversation, prepared_action_id, message_class)
+  end
+
+  defp standard_delivery_checkpoint(
+         run,
+         attrs,
+         text,
+         turn_opts,
+         completion_status,
+         completion_summary,
+         delivery
+       ) do
+    %{
+      "kind" => "standard",
+      "source_message_id" => Map.get(attrs, :source_message_id),
+      "text" => text,
+      "client_message_id" => final_turn_client_message_id(run.id),
+      "turn_kind" => Keyword.get(turn_opts, :turn_kind, "assistant_reply"),
+      "origin_type" => Keyword.get(turn_opts, :origin_type, "chat"),
+      "origin_id" => Keyword.get(turn_opts, :origin_id),
+      "structured_data" => normalize_payload(Keyword.get(turn_opts, :structured_data, %{})),
+      "terminal_response" => Keyword.get(turn_opts, :terminal_response, true),
+      "preserve_safe_label_prefixes" =>
+        Keyword.get(turn_opts, :preserve_safe_label_prefixes, false),
+      "approval_markup" => Keyword.has_key?(turn_opts, :telegram_opts),
+      "completion_status" => completion_status,
+      "completion_summary" => normalize_payload(completion_summary),
+      "delivery_mode" => delivery |> Map.get(:mode, :send) |> to_string(),
+      "delivery_message_id" => Map.get(delivery, :message_id),
+      "surface" => surface(attrs)
+    }
+  end
+
+  defp checkpoint_standard_delivery(%Run{} = run, checkpoint) do
+    summary = (run.result_summary || %{}) |> Map.put("delivery_checkpoint", checkpoint)
+    TelegramAssistant.update_run(run, %{result_summary: summary})
+  end
+
+  defp drain_standard_delivery(
+         %Conversation{} = conversation,
+         attrs,
+         %Run{} = run,
+         checkpoint
+       ) do
+    checkpoint =
+      checkpoint || map_value(run.result_summary || %{}, "delivery_checkpoint", %{})
+
+    client_message_id =
+      map_value(checkpoint, "client_message_id", final_turn_client_message_id(run.id))
+
+    case TelegramConversations.find_turn_by_client_message_id(
+           conversation.id,
+           client_message_id
+         ) do
+      %Turn{} ->
+        {:ok, conversation}
+
+      nil ->
+        opts = standard_checkpoint_turn_opts(checkpoint, attrs)
+
+        case TelegramAssistant.send_turn(
+               conversation,
+               Map.fetch!(attrs, :chat_id),
+               map_value(checkpoint, "text", "I finished that step."),
+               opts
+             ) do
+          {:ok, updated_conversation, _turn, _delivery_result} ->
+            {:ok, updated_conversation}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp standard_checkpoint_turn_opts(checkpoint, attrs) do
+    opts = [
+      reply_to_message_id: map_value(checkpoint, "source_message_id"),
+      client_message_id: map_value(checkpoint, "client_message_id"),
+      turn_kind: map_value(checkpoint, "turn_kind", "assistant_reply"),
+      origin_type: map_value(checkpoint, "origin_type", "chat"),
+      origin_id: map_value(checkpoint, "origin_id"),
+      terminal_response: map_value(checkpoint, "terminal_response", true),
+      preserve_safe_label_prefixes: map_value(checkpoint, "preserve_safe_label_prefixes", false),
+      structured_data: map_value(checkpoint, "structured_data", %{})
+    ]
+
+    opts =
+      if map_value(checkpoint, "approval_markup", false) do
+        case map_value(checkpoint, "origin_id") do
+          id when is_binary(id) ->
+            Keyword.put(opts, :telegram_opts,
+              reply_markup: Maraithon.TelegramResponder.action_markup(id)
+            )
+
+          _missing ->
+            opts
+        end
+      else
+        opts
+      end
+
+    opts
+    |> apply_delivery_mode(checkpoint_delivery(checkpoint))
+    |> apply_mobile_delivery(attrs)
+  end
+
+  defp final_turn_client_message_id(run_id), do: "assistant-run-final:#{run_id}"
 
   defp verified_message_class(message_class, response, state) do
     if should_force_todo_digest?(message_class, response, state) do
