@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
   alias Maraithon.Insights
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Repo
+  alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.RuntimeIncident
   alias Maraithon.Runtime.StuckStateWatchdog
   alias Maraithon.TelegramAssistant
@@ -56,6 +57,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
       :maraithon,
       :telegram_assistant,
       Keyword.merge(assistant_config,
+        telegram_unified_push_enabled: true,
         quiet_hours_start_local: rem(local_hour + 2, 24),
         quiet_hours_end_local: rem(local_hour + 3, 24)
       )
@@ -112,6 +114,100 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
       |> Repo.all()
 
     assert briefs_incidents == []
+  end
+
+  test "an explicit proactive admission pause suppresses only unattempted delivery alarms", %{
+    operator_id: operator_id,
+    agent: agent,
+    opts: opts
+  } do
+    set_unified_push_setting(false)
+    assert TelegramAssistant.unified_push_explicitly_disabled?()
+    two_hours_ago = DateTime.add(DateTime.utc_now(), -2 * 3600, :second)
+
+    pending_brief = stale_brief(operator_id, agent.id, two_hours_ago, "paused-brief")
+
+    failed_brief =
+      operator_id
+      |> stale_brief(agent.id, two_hours_ago, "retryable-failed-brief")
+      |> Ecto.Changeset.change(%{
+        status: "failed",
+        error_message: "temporary delivery failure"
+      })
+      |> Repo.update!()
+
+    delivery = stranded_insight_delivery(operator_id, agent.id, minutes_old: 30)
+    candidate = stale_pending_candidate(operator_id, hours_old: 5)
+    background_job = stale_background_job(hours_old: 2)
+
+    result = StuckStateWatchdog.run_cycle(opts)
+
+    assert result == %{detected: 3, swept: 0, alerted: 3}
+    assert detected_tables() == ["background_jobs", "briefs", "proactive_candidates"]
+
+    brief_incident =
+      Repo.one!(
+        from incident in RuntimeIncident,
+          where: incident.kind == "stuck_state_detected",
+          where: fragment("?->>'table' = ?", incident.metadata, "briefs")
+      )
+
+    # Only the retryable failed brief contributes; the equally old pending
+    # brief retained by the admission pause does not inflate the alarm.
+    assert brief_incident.metadata["count"] == 1
+
+    subjects =
+      :capturing_email_recorder
+      |> Agent.get(&Enum.reverse/1)
+      |> Enum.map(& &1.content.subject)
+
+    assert Enum.any?(subjects, &(&1 =~ "background_jobs"))
+    assert Enum.any?(subjects, &(&1 =~ "briefs"))
+    assert Enum.any?(subjects, &(&1 =~ "proactive_candidates"))
+    refute Enum.any?(subjects, &(&1 =~ "insight_deliveries"))
+
+    # Detection is read-only. Only rows whose lack of delivery is explained
+    # by the admission pause are suppressed; attempted failures and cleanup
+    # or lifecycle signals remain visible.
+    assert Repo.get!(Maraithon.Briefs.Brief, pending_brief.id).status == "pending"
+    assert Repo.get!(Maraithon.Briefs.Brief, failed_brief.id).status == "failed"
+    assert Repo.get!(Delivery, delivery.id).status == "pending"
+    assert Repo.get!(ProactiveCandidate, candidate.id).status == "pending"
+    assert Repo.get!(BackgroundJob, background_job.id).status == "pending"
+  end
+
+  test "delivery SLA alarms remain active when proactive admission is true", %{
+    operator_id: operator_id,
+    agent: agent,
+    opts: opts
+  } do
+    set_unified_push_setting(true)
+    refute TelegramAssistant.unified_push_explicitly_disabled?()
+    two_hours_ago = DateTime.add(DateTime.utc_now(), -2 * 3600, :second)
+    brief = stale_brief(operator_id, agent.id, two_hours_ago, "enabled-brief")
+
+    result = StuckStateWatchdog.run_cycle(opts)
+
+    assert result == %{detected: 1, swept: 0, alerted: 1}
+    assert detected_tables() == ["briefs"]
+    assert Repo.get!(Maraithon.Briefs.Brief, brief.id).status == "pending"
+  end
+
+  test "delivery SLA alarms remain active when proactive admission is nil", %{
+    operator_id: operator_id,
+    agent: agent,
+    opts: opts
+  } do
+    set_unified_push_setting(nil)
+    refute TelegramAssistant.unified_push_explicitly_disabled?()
+    two_hours_ago = DateTime.add(DateTime.utc_now(), -2 * 3600, :second)
+    brief = stale_brief(operator_id, agent.id, two_hours_ago, "defaulted-brief")
+
+    result = StuckStateWatchdog.run_cycle(opts)
+
+    assert result == %{detected: 1, swept: 0, alerted: 1}
+    assert detected_tables() == ["briefs"]
+    assert Repo.get!(Maraithon.Briefs.Brief, brief.id).status == "pending"
   end
 
   test "stale detect-only rows alarm exactly once per table per day",
@@ -296,6 +392,82 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
     assert result.detected == 0
     assert result.swept == 0
     assert Agent.get(:capturing_email_recorder, &Enum.reverse/1) == []
+  end
+
+  defp set_unified_push_setting(value) do
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(config, :telegram_unified_push_enabled, value)
+    )
+  end
+
+  defp stale_brief(user_id, agent_id, scheduled_for, suffix) do
+    {:ok, brief} =
+      Briefs.record(user_id, agent_id, %{
+        "cadence" => "morning",
+        "scheduled_for" => DateTime.to_iso8601(scheduled_for),
+        "dedupe_key" => "watchdog-#{suffix}-#{System.unique_integer([:positive])}",
+        "status" => "pending",
+        "title" => "Stale delivery brief",
+        "summary" => "The delivery SLA determines whether this should alarm.",
+        "body" => "The watchdog must never mutate this pending brief."
+      })
+
+    brief
+  end
+
+  defp stale_pending_candidate(user_id, hours_old: hours_old) do
+    {:ok, candidate} =
+      ProactiveQueue.enqueue(%{
+        user_id: user_id,
+        source: "brief",
+        source_id: "paused-candidate-#{System.unique_integer([:positive])}",
+        dedupe_key: "paused-candidate-#{System.unique_integer([:positive])}",
+        title: "Paused proactive delivery",
+        body: "This row is intentionally retained while admission is paused.",
+        urgency: 0.7
+      })
+
+    backdated = DateTime.add(DateTime.utc_now(), -hours_old * 3600, :second)
+
+    {1, _} =
+      ProactiveCandidate
+      |> where([row], row.id == ^candidate.id)
+      |> Repo.update_all(set: [inserted_at: backdated, updated_at: backdated])
+
+    Repo.get!(ProactiveCandidate, candidate.id)
+  end
+
+  defp stale_background_job(hours_old: hours_old) do
+    backdated = DateTime.add(DateTime.utc_now(), -hours_old * 3600, :second)
+
+    job =
+      %BackgroundJob{}
+      |> BackgroundJob.changeset(%{
+        queue: "watchdog",
+        job_type: "watchdog_lifecycle_probe",
+        scheduled_at: backdated,
+        status: "pending"
+      })
+      |> Repo.insert!()
+
+    {1, _} =
+      BackgroundJob
+      |> where([row], row.id == ^job.id)
+      |> Repo.update_all(set: [inserted_at: backdated, updated_at: backdated])
+
+    Repo.get!(BackgroundJob, job.id)
+  end
+
+  defp detected_tables do
+    RuntimeIncident
+    |> where([incident], incident.kind == "stuck_state_detected")
+    |> order_by([incident], asc: incident.occurred_at)
+    |> select([incident], fragment("?->>'table'", incident.metadata))
+    |> Repo.all()
   end
 
   defp stranded_insight_delivery(user_id, agent_id, minutes_old: minutes_old) do

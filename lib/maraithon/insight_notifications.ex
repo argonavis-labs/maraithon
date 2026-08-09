@@ -34,7 +34,7 @@ defmodule Maraithon.InsightNotifications do
   Polls for open insights, stages eligible Telegram deliveries, and dispatches pending ones.
   """
   def dispatch_telegram_batch(opts \\ []) do
-    if telegram_configured?() do
+    if telegram_configured?() and not TelegramAssistant.unified_push_explicitly_disabled?() do
       batch_size = Keyword.get(opts, :batch_size, 20)
 
       staged = stage_eligible_telegram_deliveries()
@@ -47,16 +47,19 @@ defmodule Maraithon.InsightNotifications do
         |> limit(^batch_size)
         |> Repo.all()
 
-      Enum.reduce(pending, %{staged: staged, sent: 0, failed: 0}, fn delivery, acc ->
+      Enum.reduce(pending, empty_dispatch_result(staged), fn delivery, acc ->
         case send_delivery(delivery) do
           :ok -> %{acc | sent: acc.sent + 1}
+          :skip -> acc
           {:error, _reason} -> %{acc | failed: acc.failed + 1}
         end
       end)
     else
-      %{staged: 0, sent: 0, failed: 0}
+      empty_dispatch_result()
     end
   end
+
+  defp empty_dispatch_result(staged \\ 0), do: %{staged: staged, sent: 0, failed: 0}
 
   @doc """
   Handles Telegram webhook events relevant to linking and feedback.
@@ -215,42 +218,46 @@ defmodule Maraithon.InsightNotifications do
         :ok
 
       {:fallback, :disabled} ->
-        payload = Actions.telegram_payload(delivery)
+        if TelegramAssistant.unified_push_explicitly_disabled?() do
+          :skip
+        else
+          payload = Actions.telegram_payload(delivery)
 
-        case telegram_module().send_message(
-               delivery.destination,
-               payload.text,
-               parse_mode: "HTML",
-               reply_markup: payload.reply_markup
-             ) do
-          {:ok, result} ->
-            message_id = read_message_id(result)
+          case telegram_module().send_message(
+                 delivery.destination,
+                 payload.text,
+                 parse_mode: "HTML",
+                 reply_markup: payload.reply_markup
+               ) do
+            {:ok, result} ->
+              message_id = read_message_id(result)
 
-            delivery
-            |> Ecto.Changeset.change(%{
-              status: "sent",
-              sent_at: DateTime.utc_now(),
-              provider_message_id: message_id,
-              metadata:
-                Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
-            })
-            |> Repo.update()
+              delivery
+              |> Ecto.Changeset.change(%{
+                status: "sent",
+                sent_at: DateTime.utc_now(),
+                provider_message_id: message_id,
+                metadata:
+                  Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
+              })
+              |> Repo.update()
 
-            :ok
+              :ok
 
-          {:error, reason} ->
-            Logger.warning("Failed to send Telegram insight notification",
-              reason: inspect(reason)
-            )
+            {:error, reason} ->
+              Logger.warning("Failed to send Telegram insight notification",
+                reason: inspect(reason)
+              )
 
-            delivery
-            |> Ecto.Changeset.change(%{
-              status: "failed",
-              error_message: DeliveryErrorCopy.storage_message(reason)
-            })
-            |> Repo.update()
+              delivery
+              |> Ecto.Changeset.change(%{
+                status: "failed",
+                error_message: DeliveryErrorCopy.storage_message(reason)
+              })
+              |> Repo.update()
 
-            {:error, reason}
+              {:error, reason}
+          end
         end
 
       {:error, reason} ->

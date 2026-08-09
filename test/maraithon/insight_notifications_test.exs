@@ -72,13 +72,63 @@ defmodule Maraithon.InsightNotificationsTest do
       assert delivery.score >= delivery.threshold
     end
 
+    test "an explicit admission pause neither stages nor sends insight deliveries", %{
+      user_id: user_id,
+      insight: insight
+    } do
+      use_failing_delivery(:unexpected_send,
+        telegram_full_chat_enabled: false,
+        telegram_unified_push_enabled: false,
+        proactive_delivery_planner_enabled: false
+      )
+
+      assert InsightNotifications.dispatch_telegram_batch(batch_size: 10) == %{
+               staged: 0,
+               sent: 0,
+               failed: 0
+             }
+
+      assert Repo.get_by(Delivery,
+               insight_id: insight.id,
+               user_id: user_id,
+               channel: "telegram"
+             ) == nil
+
+      {:ok, pending} =
+        %Delivery{}
+        |> Delivery.changeset(%{
+          insight_id: insight.id,
+          user_id: user_id,
+          channel: "telegram",
+          destination: "12345",
+          score: 0.94,
+          threshold: 0.78,
+          status: "pending"
+        })
+        |> Repo.insert()
+
+      assert InsightNotifications.dispatch_telegram_batch(batch_size: 10) == %{
+               staged: 0,
+               sent: 0,
+               failed: 0
+             }
+
+      reloaded = Repo.get!(Delivery, pending.id)
+      assert reloaded.status == "pending"
+      assert reloaded.error_message == nil
+      assert reloaded.sent_at == nil
+      assert reloaded.updated_at == pending.updated_at
+      assert Repo.aggregate(Delivery, :count, :id) == 1
+    end
+
     test "fallback delivery failures store product-safe copy", %{
       user_id: user_id,
       insight: insight
     } do
       use_failing_delivery(
         {:telegram_error, 500, "RuntimeError token=secret stacktrace %{chat_id: 12345}"},
-        telegram_unified_push_enabled: false,
+        telegram_full_chat_enabled: false,
+        telegram_unified_push_enabled: nil,
         proactive_delivery_planner_enabled: false
       )
 

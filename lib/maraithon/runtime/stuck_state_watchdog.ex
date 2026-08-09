@@ -291,15 +291,33 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
     terminal_errors = DeliveryErrorCopy.terminal_storage_messages()
     cutoff = DateTime.add(now, -@briefs_max_late_minutes * 60, :second)
 
-    rows =
+    query =
       Brief
-      |> where(
-        [brief],
-        brief.status == "pending" or
-          (brief.status == "failed" and
-             (is_nil(brief.error_message) or brief.error_message not in ^terminal_errors))
-      )
       |> where([brief], brief.scheduled_for < ^cutoff)
+
+    query =
+      if TelegramAssistant.unified_push_explicitly_disabled?() do
+        # Pending rows are retained intentionally while proactive admission is
+        # paused. Retryable failed rows crossed an attempted-delivery boundary
+        # and remain actionable evidence, so they must continue to alarm.
+        where(
+          query,
+          [brief],
+          brief.status == "failed" and
+            (is_nil(brief.error_message) or brief.error_message not in ^terminal_errors)
+        )
+      else
+        where(
+          query,
+          [brief],
+          brief.status == "pending" or
+            (brief.status == "failed" and
+               (is_nil(brief.error_message) or brief.error_message not in ^terminal_errors))
+        )
+      end
+
+    rows =
+      query
       |> select([brief], {brief.user_id, brief.scheduled_for})
       |> Repo.all()
 
@@ -345,17 +363,23 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
   # Detect only: after SPEC 02 R6, a pending telegram delivery should clear
   # within one InsightNotifier tick (60s); 10 minutes means it is stranded.
   defp check_insight_deliveries(now) do
-    cutoff = DateTime.add(now, -@insight_deliveries_max_pending_minutes * 60, :second)
+    if TelegramAssistant.unified_push_explicitly_disabled?() do
+      # These rows have not crossed an attempted-delivery boundary. The
+      # explicit admission pause intentionally leaves them pending.
+      nil
+    else
+      cutoff = DateTime.add(now, -@insight_deliveries_max_pending_minutes * 60, :second)
 
-    oldest_first(
-      Delivery
-      |> where([delivery], delivery.status == "pending")
-      |> where([delivery], delivery.channel == "telegram")
-      |> where([delivery], delivery.inserted_at <= ^cutoff),
-      :inserted_at,
-      now,
-      reason: "insight deliveries stranded pending (planner not marking them sent?)"
-    )
+      oldest_first(
+        Delivery
+        |> where([delivery], delivery.status == "pending")
+        |> where([delivery], delivery.channel == "telegram")
+        |> where([delivery], delivery.inserted_at <= ^cutoff),
+        :inserted_at,
+        now,
+        reason: "insight deliveries stranded pending (planner not marking them sent?)"
+      )
+    end
   end
 
   defp oldest_first(query, age_field, now, opts) do

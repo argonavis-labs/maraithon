@@ -66,6 +66,11 @@ defmodule Maraithon.TelegramAssistant do
     end
   end
 
+  @doc false
+  def unified_push_explicitly_disabled? do
+    Keyword.get(config(), :telegram_unified_push_enabled) == false
+  end
+
   def proactive_delivery_planner_enabled? do
     case Keyword.get(config(), :proactive_delivery_planner_enabled) do
       true -> true
