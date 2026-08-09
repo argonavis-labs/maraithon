@@ -2,6 +2,7 @@ defmodule Maraithon.Todos.IntelligenceTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.Accounts
+  alias Maraithon.LLM.RequestBudget
   alias Maraithon.Memory
   alias Maraithon.Todos
 
@@ -730,6 +731,247 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert todo.metadata["commitment_direction"] == "i_owe"
     assert todo.metadata["quote"] == "I am going to message Sheila tomorrow"
     assert get_in(todo.metadata, ["completion_check", "status"]) == "open"
+  end
+
+  test "fits the complete escaped request while preserving candidates and existing anchors" do
+    user_id = unique_user_email("todo-intelligence-request-budget")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    escaped = String.duplicate(~s|"C:\\work\\file"\n|, 12_000)
+
+    existing_attrs =
+      for index <- 1..80 do
+        %{
+          "source" => "gmail",
+          "title" => "Existing work #{index}",
+          "summary" => "Existing work summary #{index}",
+          "next_action" => "Complete existing work #{index}.",
+          "priority" => 50,
+          "dedupe_key" => "existing-budget-#{index}",
+          "metadata" => %{
+            "completion_check" => %{
+              "status" => "open",
+              "reasoning" => if(index == 1, do: escaped, else: "Still open")
+            }
+          }
+        }
+      end
+
+    assert {:ok, existing} = Todos.upsert_many(user_id, existing_attrs)
+    late_dedupe_key = "existing-budget-80"
+
+    candidates =
+      for index <- 1..7 do
+        %{
+          "source" => "gmail",
+          "title" => "Candidate work #{index}",
+          "summary" =>
+            "A direct request needs action #{index}: " <> String.duplicate(~s|"q\\"|, 30),
+          "next_action" => "Reply with the requested decision #{index}.",
+          "dedupe_key" => "candidate-budget-#{index}"
+        }
+      end
+
+    parent = self()
+
+    llm_complete = fn prompt ->
+      params = %{
+        "messages" => [%{"role" => "user", "content" => prompt}],
+        "max_tokens" => 64_000,
+        "temperature" => 0.1,
+        "reasoning_effort" => "low",
+        "timeout_ms" => 1_200_000
+      }
+
+      assert {:ok, bounded_params} = RequestBudget.validate(params)
+      assert byte_size(Jason.encode!(bounded_params)) <= 120_000
+
+      decoded_existing =
+        decode_prompt_section(prompt, "EXISTING_TODOS_JSON", "TODO_RELEVANCE_MEMORIES_JSON")
+
+      decoded_candidates = decode_prompt_section(prompt, "CANDIDATE_TODOS_JSON", nil)
+
+      assert Enum.map(decoded_candidates, & &1["dedupe_key"]) ==
+               Enum.map(candidates, & &1["dedupe_key"])
+
+      assert length(decoded_existing) == length(existing)
+      assert Enum.any?(decoded_existing, &(&1["dedupe_key"] == late_dedupe_key))
+
+      assert Enum.all?(decoded_existing, fn item ->
+               is_binary(item["id"]) and item["id"] != "" and
+                 is_binary(item["dedupe_key"]) and item["dedupe_key"] != "" and
+                 is_binary(item["source"]) and item["source"] != "" and
+                 is_binary(item["status"]) and item["status"] != "" and
+                 is_binary(item["title"]) and item["title"] != ""
+             end)
+
+      assert prompt =~ "untrusted"
+      assert prompt =~ "copy SHARED_CONTEXT_JSON.user_id exactly"
+      send(parent, {:fitted_request_bytes, byte_size(Jason.encode!(bounded_params))})
+
+      decisions =
+        candidates
+        |> Enum.with_index()
+        |> Enum.map(fn {_candidate, index} ->
+          %{
+            "candidate_index" => index,
+            "action" => "skip",
+            "reasoning" => "Budget regression fixture."
+          }
+        end)
+
+      {:ok,
+       %{content: Jason.encode!(%{"summary" => "Skipped fixtures.", "decisions" => decisions})}}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               reasoning_effort: "low",
+               source: "test",
+               now: ~U[2026-08-09 12:00:00Z],
+               semantic_dedupe: false,
+               memory_query: "bounded request regression"
+             )
+
+    assert result.todos == []
+    assert result.skipped_count == 7
+    assert_received {:fitted_request_bytes, request_bytes}
+    assert request_bytes <= 120_000
+  end
+
+  test "fails closed before the model when mandatory candidates cannot fit" do
+    user_id = unique_user_email("todo-intelligence-required-overflow")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    parent = self()
+
+    candidates =
+      for index <- 1..700 do
+        %{
+          "source" => "gmail",
+          "title" => "Required candidate #{index}",
+          "summary" => String.duplicate("required evidence #{index} ", 20),
+          "next_action" => "Reply to the direct request #{index}.",
+          "dedupe_key" => "required-overflow-#{index}"
+        }
+      end
+
+    llm_complete = fn _prompt ->
+      send(parent, :provider_called)
+      {:error, :must_not_run}
+    end
+
+    assert {:error, {:invalid_request, %{reason: "todo_intelligence_request_exceeds_budget"}}} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test",
+               semantic_dedupe: false,
+               memory_query: "required overflow"
+             )
+
+    refute_received :provider_called
+    assert Todos.list_for_user(user_id, limit: 10) == []
+  end
+
+  test "rejects updates to existing work omitted from the fitted prompt" do
+    user_id = unique_user_email("todo-intelligence-admitted-existing")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    existing_attrs =
+      for index <- 1..80 do
+        %{
+          "source" => "gmail",
+          "title" => "Authorization anchor #{index}",
+          "summary" => "Saved work #{index} remains open.",
+          "next_action" => "Complete saved work #{index}.",
+          "dedupe_key" => "authorization-anchor-#{index}"
+        }
+      end
+
+    assert {:ok, existing} = Todos.upsert_many(user_id, existing_attrs)
+
+    [candidate] = [
+      %{
+        "source" => "gmail",
+        "title" => "Large direct request",
+        "summary" => String.duplicate("x", 85_000),
+        "next_action" => "Reply to the direct request.",
+        "dedupe_key" => "large-direct-request",
+        "metadata" => %{
+          "direct_ask" => true,
+          "body_excerpt" => "Please reply; a customer is waiting."
+        }
+      }
+    ]
+
+    llm_complete = fn prompt ->
+      visible_existing =
+        decode_prompt_section(prompt, "EXISTING_TODOS_JSON", "TODO_RELEVANCE_MEMORIES_JSON")
+
+      visible_ids = MapSet.new(visible_existing, & &1["id"])
+      hidden = Enum.find(existing, &(not MapSet.member?(visible_ids, &1.id)))
+
+      assert visible_existing != []
+      assert length(visible_existing) < length(existing)
+      assert hidden
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Attempted hidden update.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "update",
+                 "existing_todo_id" => hidden.id,
+                 "reasoning" => "The hidden row must not be authorized.",
+                 "todo" => %{
+                   "source" => "gmail",
+                   "title" => "Reply to customer approval request",
+                   "summary" => "A customer is waiting for your approval before launch.",
+                   "next_action" => "Reply with approval or requested changes.",
+                   "action_draft" => %{"text" => "Thanks — I approve this for launch."},
+                   "dedupe_key" => hidden.dedupe_key,
+                   "metadata" => %{
+                     "direct_ask" => true,
+                     "body_excerpt" => "Please reply with approval."
+                   }
+                 }
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:error, :todo_intelligence_invalid_decisions} =
+             Todos.ingest_many(user_id, [candidate],
+               llm_complete: llm_complete,
+               reasoning_effort: "low",
+               source: "test",
+               now: ~U[2026-08-09 12:00:00Z],
+               semantic_dedupe: false,
+               memory_query: "admitted existing authorization"
+             )
+
+    refute Enum.any?(Todos.list_for_user(user_id, limit: 100), fn todo ->
+             todo.title == "Reply to customer approval request"
+           end)
+  end
+
+  defp decode_prompt_section(prompt, label, next_label) do
+    [_before, tail] = String.split(prompt, "#{label}:\n", parts: 2)
+
+    encoded =
+      case next_label do
+        nil ->
+          String.trim(tail)
+
+        next_label ->
+          tail |> String.split("\n\n#{next_label}:", parts: 2) |> hd() |> String.trim()
+      end
+
+    Jason.decode!(encoded)
   end
 
   defp unique_user_email(prefix) do
