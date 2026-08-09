@@ -657,19 +657,17 @@ defmodule MaraithonWeb.WebhookControllerTest do
         |> put_req_header("x-goog-channel-token", "user_123")
         |> post("/webhooks/google/calendar", %{})
 
-      # Calendar returns ignore for sync notifications
-      assert json_response(conn, 200)["status"] == "ignored"
+      # Unknown legacy channels reveal no state and are acknowledged empty.
+      assert response(conn, 204) == ""
     end
 
     @doc """
-    Verifies that exists notifications are processed.
-    Exists means the resource was modified - we need to fetch changes.
-    Published to topic "calendar:{user_id}".
+    Verifies that an unregistered exists notification is acknowledged and dropped.
+    User-controlled channel tokens are not proof of a stored watch identity.
     """
-    test "handles calendar exists notification", %{conn: conn} do
-      # Enqueuing the sync job requires a real user row (background_jobs has
-      # a user_id FK); the actual sync now happens out-of-request via the
-      # gmail/calendar_incremental_sync background job, not inline here.
+    test "acknowledges and drops an unregistered calendar exists notification", %{conn: conn} do
+      # Even a real user id in the caller-controlled token is not enough. A
+      # connected account with the exact stored watch channel is required.
       {:ok, _user} =
         Maraithon.Accounts.get_or_create_user_by_email("webhook-calendar-exists@example.com")
 
@@ -682,12 +680,10 @@ defmodule MaraithonWeb.WebhookControllerTest do
         |> put_req_header("x-goog-channel-token", "webhook-calendar-exists@example.com")
         |> post("/webhooks/google/calendar", %{})
 
-      assert json_response(conn, 200)["status"] == "published"
+      assert response(conn, 204) == ""
 
-      [job] =
-        Maraithon.Runtime.BackgroundJobs.list(user_id: "webhook-calendar-exists@example.com")
-
-      assert job.job_type == "calendar_incremental_sync"
+      assert Maraithon.Runtime.BackgroundJobs.list(user_id: "webhook-calendar-exists@example.com") ==
+               []
     end
   end
 
