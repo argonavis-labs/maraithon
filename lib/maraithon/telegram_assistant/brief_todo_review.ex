@@ -302,18 +302,22 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
           start_review_for_brief(brief, chat_id, callback_id: callback_id)
 
         "list" ->
-          maybe_answer_callback(callback_id, "Sending the open-work list")
-          send_todo_list(chat_id, review_todos(brief), brief_review_choice_markup(brief))
+          with :ok <- maybe_answer_callback(callback_id, "Sending the open-work list") do
+            send_todo_list(chat_id, review_todos(brief), brief_review_choice_markup(brief))
+          end
       end
-
-      :ok
     else
       {:error, :invalid_callback} ->
         :ignored
 
       _ ->
-        maybe_answer_callback(callback_id, "That open work review is no longer available.")
-        :ok
+        with :ok <-
+               maybe_answer_callback(
+                 callback_id,
+                 "That open work review is no longer available."
+               ) do
+          {:noop, :brief_review_not_available}
+        end
     end
   end
 
@@ -329,17 +333,22 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
           start_latest_review(user_id, chat_id, callback_id: callback_id)
 
         "list" ->
-          maybe_answer_callback(callback_id, "Sending a quick list")
-          send_todo_list_summary(user_id, chat_id)
+          with :ok <- maybe_answer_callback(callback_id, "Sending a quick list") do
+            send_todo_list_summary(user_id, chat_id)
+          end
 
         "cancel" ->
           maybe_answer_callback(callback_id, "Canceled")
-          :ok
       end
     else
       _ ->
-        maybe_answer_callback(callback_id, "This open work review is not linked to this chat.")
-        :ok
+        with :ok <-
+               maybe_answer_callback(
+                 callback_id,
+                 "This open work review is not linked to this chat."
+               ) do
+          {:noop, :brief_review_chat_mismatch}
+        end
     end
   end
 
@@ -349,20 +358,27 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
        when is_binary(user_id) and is_binary(chat_id) do
     case active_review_for_chat(user_id, chat_id) do
       %Brief{} = brief ->
-        maybe_answer_callback(Keyword.get(opts, :callback_id), "Resuming open work review")
-        resume_review(brief, chat_id)
-        :ok
+        with :ok <-
+               maybe_answer_callback(
+                 Keyword.get(opts, :callback_id),
+                 "Resuming open work review"
+               ) do
+          resume_review(brief, chat_id)
+        end
 
       nil ->
         case current_open_work_review_brief(user_id) || latest_reviewable_brief(user_id) do
           %Brief{} = brief ->
             start_review_for_brief(brief, chat_id, callback_id: Keyword.get(opts, :callback_id))
-            :ok
 
           nil ->
-            maybe_answer_callback(Keyword.get(opts, :callback_id), "No saved open work to review")
-            send_no_todos(chat_id)
-            :ok
+            with :ok <-
+                   maybe_answer_callback(
+                     Keyword.get(opts, :callback_id),
+                     "No saved open work to review"
+                   ) do
+              send_no_todos(chat_id)
+            end
         end
     end
   end
@@ -404,7 +420,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
            reply_markup: reply_markup
          ) do
       {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end
 
@@ -427,13 +443,25 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     case next_unreviewed_open_todo(brief) do
       {%Todo{} = todo, position, total} ->
         brief = set_current_todo!(brief, todo.id)
-        maybe_answer_callback(Keyword.get(opts, :callback_id), "Sending #{position}/#{total}")
-        send_review_todo(chat_id, brief, todo, position, total)
+
+        with :ok <-
+               maybe_answer_callback(
+                 Keyword.get(opts, :callback_id),
+                 "Sending #{position}/#{total}"
+               ) do
+          send_review_todo(chat_id, brief, todo, position, total)
+        end
 
       nil ->
         brief = complete_review!(brief)
-        maybe_answer_callback(Keyword.get(opts, :callback_id), "No saved open work to review")
-        send_summary(chat_id, brief)
+
+        with :ok <-
+               maybe_answer_callback(
+                 Keyword.get(opts, :callback_id),
+                 "No saved open work to review"
+               ) do
+          send_summary(chat_id, brief)
+        end
     end
   end
 
@@ -461,8 +489,6 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
         brief = complete_review!(brief)
         send_summary(chat_id, brief)
     end
-
-    :ok
   end
 
   defp active_review_for_chat(user_id, chat_id) do
@@ -583,7 +609,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
            reply_markup: payload.reply_markup
          ) do
       {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end
 
@@ -592,7 +618,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
     case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
       {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end
 
@@ -601,7 +627,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
     case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
       {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end
 
@@ -610,7 +636,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
            parse_mode: "HTML"
          ) do
       {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end
 
@@ -633,7 +659,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
              reply_markup: review_mode_markup()
            ) do
         {:ok, _result} -> :ok
-        {:error, _reason} -> :ok
+        {:error, reason} -> {:error, {:telegram_send_failed, reason}}
       end
     else
       _ -> :ignored
@@ -1091,8 +1117,11 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   defp maybe_answer_callback(callback_id, text)
        when is_binary(callback_id) and is_binary(text) and text != "" do
-    _ = TelegramResponder.answer_callback(callback_id, text)
-    :ok
+    case TelegramResponder.answer_callback(callback_id, text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
+      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
+    end
   end
 
   defp maybe_answer_callback(_callback_id, _text), do: :ok

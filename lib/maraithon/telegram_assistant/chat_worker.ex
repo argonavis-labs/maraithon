@@ -41,6 +41,7 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   # Remember the last N message ids per chat to drop duplicate webhook
   # deliveries (Telegram retries). Small and bounded — N recent ids.
   @dedupe_window 100
+  @default_durable_timeout_ms 120_000
 
   @doc """
   Enqueue an inbound Telegram message for per-chat-serialized processing.
@@ -58,7 +59,7 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
 
       :ok
     else
-      _ = TelegramRouter.handle_message(data)
+      _ = router_module().handle_message(data)
       :ok
     end
   end
@@ -69,14 +70,26 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   The call returns only after routing (or the existing fallback path) finishes,
   allowing the background job to remain claimed until work is actually done.
   """
-  @spec process_durable(String.t(), map()) :: :ok | :unhandled
+  @spec process_durable(String.t(), map()) ::
+          :ok | {:noop, atom()} | {:error, term()}
   def process_durable(chat_id, data) when is_binary(chat_id) and is_map(data) do
-    if async_enabled?() do
-      chat_id
-      |> ensure_worker()
-      |> GenServer.call({:handle_message_durable, data}, :infinity)
-    else
-      process_durable_inline(chat_id, data)
+    # Durable work is owned directly by the claimed job task. It must not be
+    # queued in the resident per-chat GenServer: after a timeout that server
+    # would keep executing while the durable receipt retried.
+    task = Task.async(fn -> process_durable_inline(chat_id, data) end)
+
+    case Task.yield(task, durable_timeout_ms()) do
+      {:ok, result} ->
+        normalize_durable_result(result)
+
+      {:exit, reason} ->
+        {:error, {:durable_processing_exit, reason}}
+
+      nil ->
+        case Task.shutdown(task, :brutal_kill) do
+          {:ok, result} -> normalize_durable_result(result)
+          _terminated -> {:error, :durable_processing_timeout}
+        end
     end
   end
 
@@ -116,35 +129,27 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_call({:handle_message_durable, data}, _from, state) do
-    {result, state} = process_message(data, state, false)
-    {:reply, result, state}
-  end
-
   defp process_message(data, state, send_typing?) do
     message_id = message_id(data)
 
     cond do
       message_id != nil and MapSet.member?(state.seen_set, message_id) ->
         # Duplicate delivery already handled during this worker lifetime.
-        {:ok, state}
+        {{:noop, :already_completed}, state}
 
       message_id != nil and already_completed?(state.chat_id, message_id) ->
         # Persisted completion survives worker restarts and prevents a retry
         # from repeating non-idempotent tools after the user got a reply.
-        {:ok, remember(state, message_id)}
+        {{:noop, :already_completed}, remember(state, message_id)}
 
       true ->
-        # The ordinary async path retains its early typing hint. Durable ingress
-        # has already acknowledged before reaching this synchronous call and
-        # relies on the normal liveness session instead.
         if send_typing?, do: send_early_typing_ping(state.chat_id)
 
-        case prepare_and_run(data, state.chat_id) do
-          :ok -> {:ok, remember(state, message_id)}
-          :unhandled -> {:unhandled, state}
-        end
+        result = prepare_and_run(data, state.chat_id)
+
+        if successful_result?(result),
+          do: {result, remember(state, message_id)},
+          else: {result, state}
     end
   end
 
@@ -152,7 +157,7 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
     message_id = message_id(data)
 
     if message_id != nil and already_completed?(chat_id, message_id) do
-      :ok
+      {:noop, :already_completed}
     else
       prepare_and_run(data, chat_id)
     end
@@ -229,8 +234,8 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
   end
 
   defp run_router(data, chat_id) do
-    TelegramRouter.handle_message(data)
-    :ok
+    router_module().handle_message(data)
+    |> normalize_durable_result()
   rescue
     error ->
       handle_router_failure(data, chat_id, :exception, Exception.message(error))
@@ -259,7 +264,8 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
 
     case send_result do
       {:ok, _} -> :ok
-      _ -> :unhandled
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
+      other -> {:error, {:invalid_telegram_send_result, other}}
     end
   end
 
@@ -281,7 +287,8 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
 
     case send_result do
       {:ok, _} -> :ok
-      _ -> :unhandled
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
+      other -> {:error, {:invalid_telegram_send_result, other}}
     end
   end
 
@@ -370,9 +377,30 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
     end
   end
 
+  defp successful_result?(:ok), do: true
+  defp successful_result?({:noop, reason}) when is_atom(reason), do: true
+  defp successful_result?(_result), do: false
+
+  defp normalize_durable_result(:ok), do: :ok
+  defp normalize_durable_result({:noop, reason}) when is_atom(reason), do: {:noop, reason}
+  defp normalize_durable_result({:error, reason}), do: {:error, reason}
+  defp normalize_durable_result(other), do: {:error, {:invalid_durable_processing_result, other}}
+
+  defp durable_timeout_ms do
+    case Keyword.get(config(), :durable_timeout_ms, @default_durable_timeout_ms) do
+      timeout when is_integer(timeout) and timeout > 0 -> timeout
+      _invalid -> @default_durable_timeout_ms
+    end
+  end
+
+  defp router_module do
+    Keyword.get(config(), :router_module, TelegramRouter)
+  end
+
+  defp config, do: Application.get_env(:maraithon, __MODULE__, [])
+
   defp async_enabled? do
-    :maraithon
-    |> Application.get_env(__MODULE__, [])
+    config()
     |> Keyword.get(:async_enabled, true)
   end
 end

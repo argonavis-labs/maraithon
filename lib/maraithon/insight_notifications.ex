@@ -62,37 +62,63 @@ defmodule Maraithon.InsightNotifications do
   defp empty_dispatch_result(staged \\ 0), do: %{staged: staged, sent: 0, failed: 0}
 
   @doc """
-  Handles Telegram webhook events relevant to linking and feedback.
+  Handles Telegram webhook events while preserving the legacy asynchronous API.
   """
   def handle_telegram_event(event), do: handle_telegram_event(event, [])
 
-  def handle_telegram_event(%{} = event, opts) when is_list(opts) do
-    case read_string(event, "type") do
-      "message" ->
-        handle_message_event(read_map(event, "data"), opts)
-
-      # Voice/audio messages arrive as their own connector event types (no
-      # "text"), classified by `Connectors.Telegram.classify_message/1`.
-      # They still need the same chat-linking / enqueue handling as a plain
-      # text message — the transcription step happens later, inside
-      # `ChatWorker`, before the message reaches `TelegramRouter` (SPEC 02).
-      type when type in ["voice", "audio"] ->
-        handle_message_event(read_map(event, "data"), opts)
-
-      "edited_message" ->
-        TelegramRouter.handle_edited_message(read_map(event, "data"))
-
-      "callback_query" ->
-        handle_callback_query(read_map(event, "data"))
-
-      _ ->
-        :ok
+  def handle_telegram_event(event, opts) when is_list(opts) do
+    if Keyword.get(opts, :durable, false) do
+      process_telegram_event_durable(event)
+    else
+      _ = dispatch_telegram_event(event, :async)
+      :ok
     end
   end
 
-  def handle_telegram_event(_event, _opts), do: :ok
+  @doc """
+  Processes a durably accepted Telegram event with a closed result contract.
+  """
+  @spec process_telegram_event_durable(term()) ::
+          :ok | {:noop, atom()} | {:error, term()}
+  def process_telegram_event_durable(event), do: dispatch_telegram_event(event, :durable)
 
-  defp handle_message_event(data, opts) when is_map(data) do
+  @ignored_telegram_event_types ~w(
+    photo document video location contact sticker poll unknown inline_query
+    member_joined member_left chat_member_updated ignored_update
+  )
+
+  defp dispatch_telegram_event(%{} = event, mode) do
+    type = read_string(event, "type")
+    data = fetch(event, "data")
+    source = read_string(event, "source")
+
+    cond do
+      source not in [nil, "telegram"] ->
+        {:error, :invalid_telegram_event}
+
+      type in ["message", "voice", "audio"] and is_map(data) ->
+        handle_message_event(data, mode)
+
+      type == "edited_message" and is_map(data) ->
+        normalize_processing_result(TelegramRouter.handle_edited_message(data))
+
+      type == "callback_query" and is_map(data) ->
+        handle_callback_query(data)
+
+      type in @ignored_telegram_event_types ->
+        {:noop, :ignored_update}
+
+      is_binary(type) and String.starts_with?(type, "channel_") ->
+        {:noop, :ignored_update}
+
+      true ->
+        {:error, :invalid_telegram_event}
+    end
+  end
+
+  defp dispatch_telegram_event(_event, _mode), do: {:error, :invalid_telegram_event}
+
+  defp handle_message_event(data, mode) when is_map(data) do
     chat_id = read_id_string(data, "chat_id")
     text = read_string(data, "text")
 
@@ -100,29 +126,26 @@ defmodule Maraithon.InsightNotifications do
 
     cond do
       is_nil(chat_id) ->
-        :ok
+        {:noop, :unlinked_or_unroutable}
 
       String.starts_with?(text || "", "/start") or String.starts_with?(text || "", "/link") ->
         link_telegram_chat(chat_id, text, read_map(data, "from"))
 
       true ->
         case maybe_handle_preference_command(chat_id, text) do
-          :handled ->
-            :ok
-
-          _ ->
-            if Keyword.get(opts, :durable, false) do
-              Maraithon.TelegramAssistant.ChatWorker.process_durable(chat_id, data)
-            else
-              # Hand off to the per-chat worker so ordinary callers retain the
-              # current fast asynchronous behavior.
-              Maraithon.TelegramAssistant.ChatWorker.enqueue(chat_id, data)
+          :pass ->
+            case mode do
+              :durable -> Maraithon.TelegramAssistant.ChatWorker.process_durable(chat_id, data)
+              :async -> Maraithon.TelegramAssistant.ChatWorker.enqueue(chat_id, data)
             end
+
+          result ->
+            normalize_processing_result(result)
         end
     end
   end
 
-  defp handle_message_event(_data, _opts), do: :ok
+  defp handle_message_event(_data, _mode), do: {:error, :invalid_telegram_event}
 
   def get_or_create_profile(user_id) when is_binary(user_id) do
     case Repo.get_by(ThresholdProfile, user_id: user_id) do
@@ -282,37 +305,62 @@ defmodule Maraithon.InsightNotifications do
          true <- delivery.channel == "telegram" and to_string(delivery.destination) == chat_id,
          {:ok, updated_delivery} <- apply_feedback(delivery, feedback) do
       maybe_answer_callback(callback_id, feedback_ack_text(updated_delivery, feedback))
-      :ok
     else
       {:error, :already_recorded} ->
-        maybe_answer_callback(callback_id, "Feedback already recorded")
-        :ok
+        with :ok <- maybe_answer_callback(callback_id, "Feedback already recorded") do
+          {:noop, :feedback_already_recorded}
+        end
 
-      _ ->
-        maybe_answer_callback(callback_id, "Feedback could not be recorded")
-        :ok
-    end
-  end
-
-  defp handle_feedback_callback(_), do: :ok
-
-  defp handle_callback_query(data) when is_map(data) do
-    case read_string(data, "data") do
-      "tgtodo:" <> _ ->
-        TodoActions.handle_callback(data)
-
-      "insfb:" <> _ ->
-        handle_feedback_callback(data)
-
-      _ ->
-        case TelegramRouter.handle_callback_query(data) do
-          :ok -> :ok
-          _ -> Actions.handle_callback(data)
+      _invalid_or_missing ->
+        with :ok <- maybe_answer_callback(callback_id, "Feedback could not be recorded") do
+          {:noop, :feedback_not_recorded}
         end
     end
   end
 
-  defp handle_callback_query(_), do: :ok
+  defp handle_feedback_callback(_), do: {:error, :invalid_telegram_event}
+
+  defp handle_callback_query(data) when is_map(data) do
+    case read_string(data, "data") do
+      "tgtodo:" <> _ ->
+        normalize_callback_result(TodoActions.handle_callback(data))
+
+      "insfb:" <> _ ->
+        normalize_callback_result(handle_feedback_callback(data))
+
+      _other ->
+        cascade_callback(data)
+    end
+  end
+
+  defp handle_callback_query(_), do: {:error, :invalid_telegram_event}
+
+  defp cascade_callback(data) do
+    case normalize_callback_result(TelegramRouter.handle_callback_query(data)) do
+      {:noop, :unsupported_callback} ->
+        case normalize_callback_result(Actions.handle_callback(data)) do
+          {:noop, :unsupported_callback} -> {:noop, :unsupported_callback}
+          result -> result
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp normalize_callback_result(:ignored), do: {:noop, :unsupported_callback}
+
+  defp normalize_callback_result({:error, :unsupported_callback}),
+    do: {:noop, :unsupported_callback}
+
+  defp normalize_callback_result(result), do: normalize_processing_result(result)
+
+  defp normalize_processing_result(:ok), do: :ok
+  defp normalize_processing_result({:noop, reason}) when is_atom(reason), do: {:noop, reason}
+  defp normalize_processing_result({:error, reason}), do: {:error, reason}
+
+  defp normalize_processing_result(other),
+    do: {:error, {:invalid_telegram_processing_result, other}}
 
   defp apply_feedback(%Delivery{} = delivery, feedback)
        when feedback in ["helpful", "not_helpful"] do
@@ -368,47 +416,40 @@ defmodule Maraithon.InsightNotifications do
     command_text = String.trim(text || "")
 
     case ConnectedAccounts.get_connected_by_external_account("telegram", chat_id) do
-      nil ->
-        maybe_reply_preference_help(chat_id, command_text)
-
-      account ->
-        handle_connected_preference_command(account.user_id, chat_id, command_text)
+      nil -> maybe_reply_preference_help(chat_id, command_text)
+      account -> handle_connected_preference_command(account.user_id, chat_id, command_text)
     end
   end
 
-  defp maybe_handle_preference_command(_chat_id, _text), do: :ok
+  defp maybe_handle_preference_command(_chat_id, _text), do: :pass
 
   defp handle_connected_preference_command(user_id, chat_id, text) do
     cond do
       text in ["/preferences", "/prefs", "/memory"] ->
-        telegram_module().send_message(chat_id, PreferenceMemory.render_summary(user_id))
-        :handled
+        telegram_send(chat_id, PreferenceMemory.render_summary(user_id))
 
       String.starts_with?(text, "/prefer") or String.starts_with?(text, "/policy") ->
         instruction = text |> String.split(~r/\s+/, parts: 2) |> Enum.at(1, "")
 
-        case PreferenceMemory.apply_explicit_instruction(user_id, instruction) do
-          {:ok, %{reply: reply}} -> telegram_module().send_message(chat_id, reply)
-          {:error, _reason} -> telegram_module().send_message(chat_id, preference_help_text())
-        end
+        reply =
+          case PreferenceMemory.apply_explicit_instruction(user_id, instruction) do
+            {:ok, %{reply: reply}} -> reply
+            {:error, _reason} -> preference_help_text()
+          end
 
-        :handled
+        telegram_send(chat_id, reply)
 
       String.starts_with?(text, "/forget") ->
         rule_id = text |> String.split(~r/\s+/, parts: 2) |> Enum.at(1, "")
 
-        case PreferenceMemory.forget_rule(user_id, rule_id) do
-          {:ok, reply} ->
-            telegram_module().send_message(chat_id, reply)
+        reply =
+          case PreferenceMemory.forget_rule(user_id, rule_id) do
+            {:ok, reply} -> reply
+            {:error, :rule_not_found} -> "No saved rule matched that id."
+            {:error, _reason} -> preference_help_text()
+          end
 
-          {:error, :rule_not_found} ->
-            telegram_module().send_message(chat_id, "No saved rule matched that id.")
-
-          {:error, _reason} ->
-            telegram_module().send_message(chat_id, preference_help_text())
-        end
-
-        :handled
+        telegram_send(chat_id, reply)
 
       true ->
         :pass
@@ -420,12 +461,10 @@ defmodule Maraithon.InsightNotifications do
          String.starts_with?(command_text, "/prefer") or
          String.starts_with?(command_text, "/policy") or
          String.starts_with?(command_text, "/forget") do
-      telegram_module().send_message(
+      telegram_send(
         chat_id,
         "Link this chat first with /start your@email.com, then use /prefer or /preferences."
       )
-
-      :handled
     else
       :pass
     end
@@ -455,53 +494,50 @@ defmodule Maraithon.InsightNotifications do
   defp link_telegram_chat(chat_id, command_text, from_user) do
     case parse_link_user_id(command_text) do
       {:error, :invalid_token} ->
-        telegram_module().send_message(
+        telegram_send(
           chat_id,
           "That Telegram link expired or is invalid. Generate a new Connect Telegram link before linking Telegram."
         )
 
       nil ->
-        telegram_module().send_message(
+        telegram_send(
           chat_id,
           "Use /start your-email@example.com to link this Telegram chat to Maraithon."
         )
 
       {:ok, user_id} ->
-        case Accounts.get_user(user_id) do
-          nil ->
-            telegram_module().send_message(chat_id, "No Maraithon user found for #{user_id}.")
+        link_telegram_chat_to_user(chat_id, user_id, from_user)
+    end
+  end
 
-          _user ->
-            metadata = %{
-              "chat_id" => to_string(chat_id),
-              "telegram_user_id" => to_string(read_integer(from_user, "id") || ""),
-              "username" => read_string(from_user, "username"),
-              "first_name" => read_string(from_user, "first_name"),
-              "last_name" => read_string(from_user, "last_name")
-            }
+  defp link_telegram_chat_to_user(chat_id, user_id, from_user) do
+    case Accounts.get_user(user_id) do
+      nil ->
+        telegram_send(chat_id, "No Maraithon user found for #{user_id}.")
 
-            case ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-                   external_account_id: to_string(chat_id),
-                   metadata: metadata
-                 }) do
-              {:ok, _account} ->
-                telegram_module().send_message(
-                  chat_id,
-                  "Linked to Maraithon user #{user_id}. Important insights will be sent here."
-                )
+      _user ->
+        metadata = %{
+          "chat_id" => to_string(chat_id),
+          "telegram_user_id" => to_string(read_integer(from_user, "id") || ""),
+          "username" => read_string(from_user, "username"),
+          "first_name" => read_string(from_user, "first_name"),
+          "last_name" => read_string(from_user, "last_name")
+        }
 
-              {:error, reason} ->
-                Logger.warning("Failed linking telegram chat",
-                  reason: inspect(reason),
-                  user_id: user_id
-                )
+        case ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+               external_account_id: to_string(chat_id),
+               metadata: metadata
+             }) do
+          {:ok, _account} ->
+            telegram_send(
+              chat_id,
+              "Linked to Maraithon user #{user_id}. Important insights will be sent here."
+            )
 
-                telegram_module().send_message(chat_id, "Could not link this chat right now.")
-            end
+          {:error, _reason} ->
+            telegram_send(chat_id, "Could not link this chat right now.")
         end
     end
-
-    :ok
   end
 
   defp parse_link_user_id(command_text) when is_binary(command_text) do
@@ -593,8 +629,19 @@ defmodule Maraithon.InsightNotifications do
   defp maybe_answer_callback(nil, _text), do: :ok
 
   defp maybe_answer_callback(callback_id, text) do
-    _ = telegram_module().answer_callback_query(callback_id, text: text)
-    :ok
+    case telegram_module().answer_callback_query(callback_id, text: text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
+      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
+    end
+  end
+
+  defp telegram_send(chat_id, text) do
+    case telegram_module().send_message(chat_id, text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
+      other -> {:error, {:invalid_telegram_send_result, other}}
+    end
   end
 
   defp feedback_ack_text(%Delivery{} = delivery, feedback) do

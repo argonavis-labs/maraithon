@@ -32,6 +32,22 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest.RecordingTelegram do
   end
 end
 
+defmodule Maraithon.TelegramAssistant.ChatWorkerTest.BlockingRouter do
+  @moduledoc false
+
+  def handle_message(data) do
+    observer = Application.fetch_env!(:maraithon, :chat_worker_test_pid)
+    execution_id = Map.get(data, "execution_id", Map.get(data, :execution_id))
+    send(observer, {:blocking_router_started, self(), execution_id})
+
+    receive do
+      {:release_blocking_router, result} -> result
+    after
+      10_000 -> {:error, :blocking_router_test_timeout}
+    end
+  end
+end
+
 defmodule Maraithon.TelegramAssistant.ChatWorkerTest do
   # async: false — these tests flip the global async_enabled config.
   use ExUnit.Case, async: false
@@ -98,8 +114,8 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest do
     assert :ok = ChatWorker.enqueue(chat_a, inert_message(chat_a, "2"))
     assert :ok = ChatWorker.enqueue(chat_b, inert_message(chat_b, "1"))
 
-    # Let the casts drain.
-    Process.sleep(50)
+    _ = await_worker_drained(chat_a)
+    _ = await_worker_drained(chat_b)
 
     assert [{pid_a, _}] = Registry.lookup(@registry, chat_a)
     assert [{pid_b, _}] = Registry.lookup(@registry, chat_b)
@@ -115,14 +131,14 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest do
     on_exit(fn -> stop_worker(chat) end)
 
     ChatWorker.enqueue(chat, inert_message(chat, "msg-1"))
-    Process.sleep(50)
+    _ = await_worker_drained(chat)
 
     [{pid, _}] = Registry.lookup(@registry, chat)
     assert MapSet.member?(:sys.get_state(pid).seen_set, "msg-1")
 
     # A duplicate (Telegram retried) is a no-op — seen set stays size 1.
     ChatWorker.enqueue(chat, inert_message(chat, "msg-1"))
-    Process.sleep(50)
+    _ = await_worker_drained(chat)
     assert MapSet.size(:sys.get_state(pid).seen_set) == 1
   end
 
@@ -167,24 +183,80 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest do
     refute_received {:telegram_chat_action, ^chat, "typing"}
   end
 
-  test "durable processing waits for prior same-chat work and its own completion" do
+  test "durable timeout kills owned work before returning and retry starts once" do
     Application.put_env(:maraithon, :chat_worker_test_pid, self())
+
+    Application.put_env(:maraithon, ChatWorker,
+      async_enabled: true,
+      router_module: Maraithon.TelegramAssistant.ChatWorkerTest.BlockingRouter,
+      durable_timeout_ms: 25
+    )
+
     chat = "chatworker-durable-#{System.unique_integer([:positive])}"
+
+    first =
+      Task.async(fn ->
+        ChatWorker.process_durable(chat, %{
+          "chat_id" => chat,
+          "message_id" => "first",
+          "execution_id" => "first"
+        })
+      end)
+
+    assert_receive {:blocking_router_started, first_work, "first"}, 1_000
+    first_ref = Process.monitor(first_work)
+    assert_receive {:DOWN, ^first_ref, :process, ^first_work, :killed}, 1_000
+    assert Task.await(first) == {:error, :durable_processing_timeout}
+    assert Registry.lookup(@registry, chat) == []
+
+    second =
+      Task.async(fn ->
+        ChatWorker.process_durable(chat, %{
+          "chat_id" => chat,
+          "message_id" => "second",
+          "execution_id" => "second"
+        })
+      end)
+
+    assert_receive {:blocking_router_started, second_work, "second"}, 1_000
+    refute second_work == first_work
+    send(second_work, {:release_blocking_router, :ok})
+    assert Task.await(second) == :ok
+    refute_receive {:blocking_router_started, _extra_work, _execution_id}, 50
+  end
+
+  test "legacy enqueue remains immediate and serializes work in the resident worker" do
+    Application.put_env(:maraithon, :chat_worker_test_pid, self())
+
+    Application.put_env(:maraithon, ChatWorker,
+      async_enabled: true,
+      router_module: Maraithon.TelegramAssistant.ChatWorkerTest.BlockingRouter
+    )
+
+    chat = "chatworker-legacy-#{System.unique_integer([:positive])}"
     on_exit(fn -> stop_worker(chat) end)
 
-    # Messages from this process reach the worker in send order: the synchronous
-    # call cannot return until the preceding cast and its own turn both finish.
-    assert :ok = ChatWorker.enqueue(chat, inert_message(chat, "queued-first"))
-    assert :ok = ChatWorker.process_durable(chat, inert_message(chat, "durable-second"))
+    assert :ok =
+             ChatWorker.enqueue(chat, %{
+               "chat_id" => chat,
+               "message_id" => "one",
+               "execution_id" => "one"
+             })
 
-    [{pid, _}] = Registry.lookup(@registry, chat)
-    state = :sys.get_state(pid)
-    assert MapSet.subset?(MapSet.new(["queued-first", "durable-second"]), state.seen_set)
+    assert :ok =
+             ChatWorker.enqueue(chat, %{
+               "chat_id" => chat,
+               "message_id" => "two",
+               "execution_id" => "two"
+             })
 
-    # Durable calls happen after HTTP acceptance and do not duplicate the
-    # ordinary async path's early typing hint.
-    assert_receive {:telegram_chat_action, ^chat, "typing"}
-    refute_received {:telegram_chat_action, ^chat, "typing"}
+    assert_receive {:blocking_router_started, first_work, "one"}, 1_000
+    refute_receive {:blocking_router_started, _second_work, "two"}, 50
+    send(first_work, {:release_blocking_router, :ok})
+
+    assert_receive {:blocking_router_started, second_work, "two"}, 1_000
+    send(second_work, {:release_blocking_router, {:noop, :handled}})
+    _ = await_worker_drained(chat)
   end
 end
 
@@ -251,17 +323,14 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerCompletedRetryTest do
 
     assert TelegramConversations.assistant_reply_recorded?(chat, message_id)
 
-    assert :ok =
+    assert {:noop, :already_completed} =
              ChatWorker.process_durable(chat, %{
                "chat_id" => chat,
                "message_id" => message_id
              })
 
-    [{pid, _}] = Registry.lookup(@registry, chat)
-    state = :sys.get_state(pid)
-
-    # The retry was remembered without reprocessing — and no typing ping.
-    assert MapSet.member?(state.seen_set, message_id)
+    # Durable retry checks completion inline and never queues resident work.
+    assert Registry.lookup(@registry, chat) == []
     refute_received {:telegram_chat_action, ^chat, "typing"}
   end
 end

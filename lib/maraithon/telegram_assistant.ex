@@ -134,29 +134,33 @@ defmodule Maraithon.TelegramAssistant do
          structured_data
        )
        when is_binary(chat_id) do
-    _ =
-      send_turn(conversation, chat_id, text,
-        reply_to_message_id: Map.get(attrs, :source_message_id),
-        intent: "credential_disclosure_guard",
-        confidence: 1.0,
-        turn_kind: "assistant_reply",
-        origin_type: "system",
-        structured_data: structured_data
-      )
-
-    :ok
+    case send_turn(conversation, chat_id, text,
+           reply_to_message_id: Map.get(attrs, :source_message_id),
+           intent: "credential_disclosure_guard",
+           confidence: 1.0,
+           turn_kind: "assistant_reply",
+           origin_type: "system",
+           structured_data: structured_data
+         ) do
+      {:ok, _conversation, _turn, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
+      other -> {:error, {:invalid_telegram_send_result, other}}
+    end
   end
 
-  defp send_secret_guard_reply(_attrs, _text, _structured_data), do: :ok
+  defp send_secret_guard_reply(_attrs, _text, _structured_data),
+    do: {:error, :invalid_secret_guard_reply}
 
   def handle_callback_query(data) when is_map(data) do
-    with true <- enabled?(),
-         callback_data when is_binary(callback_data) <- read_string(data, "data"),
-         :ok <- handle_assistant_callback(data, callback_data) do
-      :ok
-    else
-      false -> :ignored
-      _ -> :ignored
+    cond do
+      not enabled?() ->
+        :ignored
+
+      not is_binary(read_string(data, "data")) ->
+        :ignored
+
+      true ->
+        handle_assistant_callback(data, read_string(data, "data"))
     end
   end
 
@@ -240,12 +244,13 @@ defmodule Maraithon.TelegramAssistant do
           callback_id
         )
 
-        :ok
-
       {:error, :invalid_callback} ->
         case BriefTodoReview.handle_callback(data) do
           :ok -> :ok
-          _ -> TodoActions.handle_callback(data)
+          {:noop, _reason} = noop -> noop
+          {:error, _reason} = error -> error
+          :ignored -> TodoActions.handle_callback(data)
+          other -> {:error, {:invalid_brief_callback_result, other}}
         end
     end
   end
@@ -754,33 +759,44 @@ defmodule Maraithon.TelegramAssistant do
             prepared_action.conversation_id &&
               Repo.get(Conversation, prepared_action.conversation_id)
 
-          if callback_id do
-            _ =
-              TelegramResponder.answer_callback(
-                callback_id,
-                if(decision == "confirm", do: "Confirmed", else: "Cancelled")
-              )
+          with :ok <-
+                 answer_prepared_action_callback(
+                   callback_id,
+                   if(decision == "confirm", do: "Confirmed", else: "Cancelled")
+                 ) do
+            respond_to_prepared_action(
+              prepared_action,
+              normalize_decision(decision),
+              conversation,
+              nil,
+              chat_id,
+              reply_to_message_id
+            )
           end
-
-          respond_to_prepared_action(
-            prepared_action,
-            normalize_decision(decision),
-            conversation,
-            nil,
-            chat_id,
-            reply_to_message_id
-          )
         else
-          if callback_id,
-            do:
-              TelegramResponder.answer_callback(callback_id, "This action isn't available here.")
-
-          :ok
+          with :ok <-
+                 answer_prepared_action_callback(
+                   callback_id,
+                   "This action isn't available here."
+                 ) do
+            {:noop, :prepared_action_chat_mismatch}
+          end
         end
 
       nil ->
-        if callback_id, do: TelegramResponder.answer_callback(callback_id, "Action not found")
-        :ok
+        with :ok <- answer_prepared_action_callback(callback_id, "Action not found") do
+          {:noop, :prepared_action_not_found}
+        end
+    end
+  end
+
+  defp answer_prepared_action_callback(nil, _text), do: :ok
+
+  defp answer_prepared_action_callback(callback_id, text) do
+    case TelegramResponder.answer_callback(callback_id, text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
+      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
     end
   end
 
@@ -811,85 +827,19 @@ defmodule Maraithon.TelegramAssistant do
        when decision in [:confirm, :reject] do
     case decision do
       :confirm ->
-        case confirm_and_execute(prepared_action) do
-          {:ok, updated_action, result} ->
-            _ = maybe_close_confirmation(conversation)
-
-            {:ok, _conversation, _turn, _telegram_result} =
-              send_turn(
-                conversation,
-                chat_id,
-                prepared_action_result_text(updated_action, result),
-                reply_to_message_id: reply_to_message_id,
-                turn_kind: "action_result",
-                origin_type: "prepared_action",
-                origin_id: updated_action.id,
-                structured_data: %{
-                  "prepared_action_id" => updated_action.id,
-                  "decision" => "confirm",
-                  "result" => serialize_result(result),
-                  "source_turn_id" => user_turn && user_turn.id
-                }
-              )
-
-            :ok
-
-          {:error, updated_action, :already_handled} ->
-            _ = maybe_close_confirmation(conversation)
-
-            {:ok, _conversation, _turn, _telegram_result} =
-              send_turn(
-                conversation,
-                chat_id,
-                "This was already handled.",
-                reply_to_message_id: reply_to_message_id,
-                turn_kind: "system_notice",
-                origin_type: "prepared_action",
-                origin_id: updated_action.id,
-                structured_data: %{
-                  "prepared_action_id" => updated_action.id,
-                  "decision" => "confirm",
-                  "already_handled" => true,
-                  "source_turn_id" => user_turn && user_turn.id
-                }
-              )
-
-            :ok
-
-          {:error, updated_action, reason} ->
-            _ = maybe_close_confirmation(conversation)
-
-            {:ok, _conversation, _turn, _telegram_result} =
-              send_turn(
-                conversation,
-                chat_id,
-                prepared_action_failure_text(updated_action, reason),
-                reply_to_message_id: reply_to_message_id,
-                turn_kind: "action_result",
-                origin_type: "prepared_action",
-                origin_id: updated_action.id,
-                structured_data: %{
-                  "prepared_action_id" => updated_action.id,
-                  "decision" => "confirm",
-                  "error" => normalize_error(reason),
-                  "source_turn_id" => user_turn && user_turn.id
-                }
-              )
-
-            :ok
-        end
+        respond_to_prepared_action_confirmation(
+          prepared_action,
+          conversation,
+          user_turn,
+          chat_id,
+          reply_to_message_id
+        )
 
       :reject ->
-        {:ok, updated_action} =
-          update_prepared_action(prepared_action, %{
-            status: "rejected",
-            error: nil
-          })
-
-        _ = maybe_close_confirmation(conversation)
-
-        {:ok, _conversation, _turn, _telegram_result} =
-          send_turn(
+        with {:ok, updated_action} <-
+               update_prepared_action(prepared_action, %{status: "rejected", error: nil}),
+             :ok <- maybe_close_confirmation(conversation) do
+          deliver_prepared_action_turn(
             conversation,
             chat_id,
             "Understood. I cancelled that action.",
@@ -903,8 +853,7 @@ defmodule Maraithon.TelegramAssistant do
               "source_turn_id" => user_turn && user_turn.id
             }
           )
-
-        :ok
+        end
     end
   end
 
@@ -916,7 +865,85 @@ defmodule Maraithon.TelegramAssistant do
          _chat_id,
          _reply_to_message_id
        ),
-       do: :ok
+       do: {:error, :missing_prepared_action_conversation}
+
+  defp respond_to_prepared_action_confirmation(
+         prepared_action,
+         conversation,
+         user_turn,
+         chat_id,
+         reply_to_message_id
+       ) do
+    case confirm_and_execute(prepared_action) do
+      {:ok, updated_action, result} ->
+        with :ok <- maybe_close_confirmation(conversation) do
+          deliver_prepared_action_turn(
+            conversation,
+            chat_id,
+            prepared_action_result_text(updated_action, result),
+            reply_to_message_id: reply_to_message_id,
+            turn_kind: "action_result",
+            origin_type: "prepared_action",
+            origin_id: updated_action.id,
+            structured_data: %{
+              "prepared_action_id" => updated_action.id,
+              "decision" => "confirm",
+              "result" => serialize_result(result),
+              "source_turn_id" => user_turn && user_turn.id
+            }
+          )
+        end
+
+      {:error, updated_action, :already_handled} ->
+        with :ok <- maybe_close_confirmation(conversation) do
+          deliver_prepared_action_turn(
+            conversation,
+            chat_id,
+            "This was already handled.",
+            reply_to_message_id: reply_to_message_id,
+            turn_kind: "system_notice",
+            origin_type: "prepared_action",
+            origin_id: updated_action.id,
+            structured_data: %{
+              "prepared_action_id" => updated_action.id,
+              "decision" => "confirm",
+              "already_handled" => true,
+              "source_turn_id" => user_turn && user_turn.id
+            }
+          )
+        end
+
+      {:error, updated_action, reason} ->
+        with :ok <- maybe_close_confirmation(conversation) do
+          deliver_prepared_action_turn(
+            conversation,
+            chat_id,
+            prepared_action_failure_text(updated_action, reason),
+            reply_to_message_id: reply_to_message_id,
+            turn_kind: "action_result",
+            origin_type: "prepared_action",
+            origin_id: updated_action.id,
+            structured_data: %{
+              "prepared_action_id" => updated_action.id,
+              "decision" => "confirm",
+              "error" => normalize_error(reason),
+              "source_turn_id" => user_turn && user_turn.id
+            }
+          )
+        end
+
+      other ->
+        {:error, {:invalid_prepared_action_result, other}}
+    end
+  end
+
+  defp deliver_prepared_action_turn(conversation, chat_id, text, opts) do
+    case send_turn(conversation, chat_id, text, opts) do
+      {:ok, _conversation, _turn, _telegram_result} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
+      other -> {:error, {:invalid_telegram_send_result, other}}
+    end
+  end
 
   def confirm_and_execute(%PreparedAction{} = prepared_action) do
     if prepared_action_expired?(prepared_action) do
@@ -997,12 +1024,17 @@ defmodule Maraithon.TelegramAssistant do
   def prepared_action_expired?(_prepared_action), do: false
 
   defp maybe_close_confirmation(%Conversation{} = conversation) do
-    TelegramConversations.reopen(conversation)
-    _ = clear_prepared_action_pointer(conversation)
-    :ok
+    with {:ok, reopened} <- TelegramConversations.reopen(conversation),
+         {:ok, _updated} <- clear_prepared_action_pointer(reopened) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:conversation_update_failed, reason}}
+      other -> {:error, {:invalid_conversation_update_result, other}}
+    end
   end
 
-  defp maybe_close_confirmation(_conversation), do: :ok
+  defp maybe_close_confirmation(_conversation),
+    do: {:error, :missing_prepared_action_conversation}
 
   defp prepared_action_result_text(prepared_action, result) do
     case Map.get(serialize_result(result), "message") do

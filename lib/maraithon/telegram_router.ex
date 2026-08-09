@@ -89,6 +89,12 @@ defmodule Maraithon.TelegramRouter do
 
               {:fallback, _reason} ->
                 confirm_pending_rules(conversation, user_turn, chat_id, source_message_id)
+
+              {:error, _reason} = error ->
+                error
+
+              other ->
+                {:error, {:invalid_telegram_confirmation_result, other}}
             end
 
           awaiting_confirmation?(conversation) and negative?(text) ->
@@ -104,6 +110,12 @@ defmodule Maraithon.TelegramRouter do
 
               {:fallback, _reason} ->
                 reject_pending_rules(conversation, user_turn, chat_id, source_message_id)
+
+              {:error, _reason} = error ->
+                error
+
+              other ->
+                {:error, {:invalid_telegram_confirmation_result, other}}
             end
 
           true ->
@@ -132,15 +144,18 @@ defmodule Maraithon.TelegramRouter do
                   linked_delivery,
                   linked_insight
                 )
+
+              {:error, _reason} = error ->
+                error
+
+              other ->
+                {:error, {:invalid_telegram_assistant_result, other}}
             end
         end
       end
     else
-      nil ->
-        :ok
-
-      _ ->
-        :ok
+      _unlinked_or_invalid ->
+        {:noop, :unlinked_or_unroutable}
     end
   end
 
@@ -148,10 +163,14 @@ defmodule Maraithon.TelegramRouter do
     with chat_id when is_binary(chat_id) <- read_id_string(data, "chat_id"),
          message_id when is_binary(message_id) <- read_id_string(data, "message_id"),
          text when is_binary(text) <- read_string(data, "text") do
-      _ = TelegramConversations.update_turn_text(chat_id, message_id, text)
-      :ok
+      case TelegramConversations.update_turn_text(chat_id, message_id, text) do
+        {:ok, _turn} -> :ok
+        {:error, :not_found} -> {:noop, :turn_not_found}
+        {:error, reason} -> {:error, {:telegram_edit_failed, reason}}
+        other -> {:error, {:invalid_telegram_edit_result, other}}
+      end
     else
-      _ -> :ok
+      _invalid_edit -> {:error, :invalid_telegram_edit}
     end
   end
 
@@ -160,7 +179,13 @@ defmodule Maraithon.TelegramRouter do
       :ok ->
         :ok
 
-      _ ->
+      {:noop, _reason} = noop ->
+        noop
+
+      {:error, _reason} = error ->
+        error
+
+      :ignored ->
         callback_data = read_string(data, "data", "")
         callback_id = read_string(data, "callback_id")
         chat_id = read_id_string(data, "chat_id")
@@ -186,8 +211,11 @@ defmodule Maraithon.TelegramRouter do
             )
 
           {:error, :invalid_callback} ->
-            :ignored
+            {:noop, :unsupported_callback}
         end
+
+      other ->
+        {:error, {:invalid_telegram_callback_result, other}}
     end
   end
 
@@ -235,6 +263,15 @@ defmodule Maraithon.TelegramRouter do
 
           :ok ->
             :ok
+
+          {:noop, _reason} = noop ->
+            noop
+
+          {:error, _reason} = error ->
+            error
+
+          other ->
+            {:error, {:invalid_telegram_route_result, other}}
         end
 
       {:error, reason} ->
@@ -463,59 +500,79 @@ defmodule Maraithon.TelegramRouter do
   defp handle_confirmation_callback(conversation_id, decision, chat_id, message_id, callback_id) do
     case Repo.get(TelegramConversations.Conversation, conversation_id) do
       nil ->
-        TelegramResponder.answer_callback(callback_id, "Conversation not found")
+        with :ok <- delivered_callback_answer(callback_id, "Conversation not found") do
+          {:noop, :conversation_not_found}
+        end
 
       conversation ->
-        pending = pending_rule_ids(conversation)
-
-        case decision do
-          :confirm ->
-            {:ok, confirmed} =
-              PreferenceMemory.confirm_rules(conversation.user_id, pending,
-                conversation_id: conversation.id
-              )
-
-            _ =
-              TelegramConversations.close(conversation, %{
-                "metadata" => %{"pending_rule_ids" => []}
-              })
-
-            TelegramResponder.answer_callback(callback_id, "Preference remembered")
-
-            send_assistant_turn(
-              conversation,
-              chat_id,
-              message_id,
-              PreferenceConfirmationCopy.saved_text(confirmed),
-              %{"intent" => "preference_create", "confidence" => 1.0},
-              []
-            )
-
-          :reject ->
-            {:ok, _} =
-              PreferenceMemory.reject_rules(conversation.user_id, pending,
-                conversation_id: conversation.id
-              )
-
-            _ =
-              TelegramConversations.close(conversation, %{
-                "metadata" => %{"pending_rule_ids" => []}
-              })
-
-            TelegramResponder.answer_callback(callback_id, "Kept in this conversation")
-
-            send_assistant_turn(
-              conversation,
-              chat_id,
-              message_id,
-              PreferenceConfirmationCopy.local_only_text(),
-              %{"intent" => "preference_reject", "confidence" => 1.0},
-              []
-            )
-        end
+        handle_confirmation_decision(
+          conversation,
+          decision,
+          chat_id,
+          message_id,
+          callback_id
+        )
     end
+  end
 
-    :ok
+  defp handle_confirmation_decision(conversation, :confirm, chat_id, message_id, callback_id) do
+    pending = pending_rule_ids(conversation)
+
+    with {:ok, confirmed} <-
+           PreferenceMemory.confirm_rules(conversation.user_id, pending,
+             conversation_id: conversation.id
+           ),
+         {:ok, _closed} <-
+           TelegramConversations.close(conversation, %{
+             "metadata" => %{"pending_rule_ids" => []}
+           }),
+         :ok <- delivered_callback_answer(callback_id, "Preference remembered") do
+      send_assistant_turn(
+        conversation,
+        chat_id,
+        message_id,
+        PreferenceConfirmationCopy.saved_text(confirmed),
+        %{"intent" => "preference_create", "confidence" => 1.0},
+        []
+      )
+    else
+      {:error, _reason} = error -> error
+      other -> {:error, {:invalid_confirmation_result, other}}
+    end
+  end
+
+  defp handle_confirmation_decision(conversation, :reject, chat_id, message_id, callback_id) do
+    pending = pending_rule_ids(conversation)
+
+    with {:ok, _rejected} <-
+           PreferenceMemory.reject_rules(conversation.user_id, pending,
+             conversation_id: conversation.id
+           ),
+         {:ok, _closed} <-
+           TelegramConversations.close(conversation, %{
+             "metadata" => %{"pending_rule_ids" => []}
+           }),
+         :ok <- delivered_callback_answer(callback_id, "Kept in this conversation") do
+      send_assistant_turn(
+        conversation,
+        chat_id,
+        message_id,
+        PreferenceConfirmationCopy.local_only_text(),
+        %{"intent" => "preference_reject", "confidence" => 1.0},
+        []
+      )
+    else
+      {:error, _reason} = error -> error
+      other -> {:error, {:invalid_confirmation_result, other}}
+    end
+  end
+
+  defp delivered_callback_answer(callback_id, text) do
+    case TelegramResponder.answer_callback(callback_id, text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
+      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
+    end
   end
 
   defp send_assistant_turn(
@@ -545,7 +602,7 @@ defmodule Maraithon.TelegramRouter do
 
       {:error, reason} ->
         Logger.warning("Failed Telegram assistant reply", reason: inspect(reason))
-        :ok
+        {:error, {:telegram_send_failed, reason}}
     end
   end
 
@@ -800,8 +857,11 @@ defmodule Maraithon.TelegramRouter do
   defp action_failure_text(reason), do: ActionFailureCopy.insight_action(reason)
 
   defp send_ephemeral_reply(chat_id, reply_to_message_id, text) do
-    _ = TelegramResponder.reply(chat_id, reply_to_message_id, text)
-    :ok
+    case TelegramResponder.reply(chat_id, reply_to_message_id, text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
+      other -> {:error, {:invalid_telegram_send_result, other}}
+    end
   end
 
   # R4: tag the turn as voice-originated without prepending any visible text

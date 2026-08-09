@@ -53,60 +53,117 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
            ConnectedAccounts.get_connected_by_external_account("telegram", chat_id),
          {:ok, todo} <- Todos.get_for_user(user_id, todo_id) |> fetch_todo(),
          {:ok, result} <- dispatch_action(user_id, chat_id, todo, action) do
-      case result do
-        {:todo_updated, updated_todo} ->
-          # SPEC 05 R12: a tap on a staleness batch card must re-render the
-          # ORIGINAL multi-item message, never the single-todo refresh below —
-          # that would silently destroy the other pending items' buttons.
-          case staleness_batch_for(chat_id, message_id) do
-            %StalenessBatch{} = batch ->
-              :ok = resolve_staleness_batch_item(user_id, batch, updated_todo, action)
-              maybe_answer_callback(callback_id, callback_notice(action))
-              :ok
-
-            nil ->
-              :ok = refresh_message(chat_id, message_id, updated_todo)
-              maybe_answer_callback(callback_id, callback_notice(action))
-              _ = BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action)
-              :ok
-          end
-
-        {:draft_ready, draft_text, updated_todo} ->
-          :ok = send_draft(chat_id, message_id, draft_text)
-          :ok = refresh_message(chat_id, message_id, updated_todo)
-          maybe_answer_callback(callback_id, callback_notice(action))
-          :ok
-
-        {:send_prepared, prepared_action} ->
-          :ok = send_confirmation_prompt(chat_id, message_id, prepared_action)
-          # SPEC 06 review finding #2: without this, the card's Send button
-          # stays rendered exactly as before the tap, inviting a second tap
-          # (and, pre-dedupe-fix, a second independent prepared action/send).
-          # Re-rendering here picks up `awaiting_send_confirmation?/1` below so
-          # the button reflects the confirmation now pending.
-          :ok = refresh_message(chat_id, message_id, todo)
-          maybe_answer_callback(callback_id, callback_notice(action))
-          :ok
-      end
+      handle_callback_result(
+        result,
+        user_id,
+        chat_id,
+        message_id,
+        callback_id,
+        action,
+        todo
+      )
     else
       {:error, :invalid_callback} ->
         :ignored
 
       {:error, :not_found} ->
-        maybe_answer_callback(callback_id, ActionFailureCopy.todo_callback(:not_found))
-        :ok
+        with :ok <-
+               maybe_answer_callback(callback_id, ActionFailureCopy.todo_callback(:not_found)) do
+          {:noop, :todo_not_found}
+        end
 
-      {:error, reason} ->
-        maybe_answer_callback(callback_id, ActionFailureCopy.todo_callback(reason))
-        :ok
+      {:error, reason} = error ->
+        case maybe_answer_callback(callback_id, ActionFailureCopy.todo_callback(reason)) do
+          :ok -> error
+          {:error, _reason} = answer_error -> answer_error
+        end
 
-      _ ->
-        maybe_answer_callback(callback_id, ActionFailureCopy.todo_callback(:chat_mismatch))
-        :ok
+      _chat_mismatch ->
+        with :ok <-
+               maybe_answer_callback(
+                 callback_id,
+                 ActionFailureCopy.todo_callback(:chat_mismatch)
+               ) do
+          {:noop, :todo_chat_mismatch}
+        end
     end
   end
 
   def handle_callback(_data), do: :ignored
+
+  defp handle_callback_result(
+         {:todo_updated, updated_todo},
+         user_id,
+         chat_id,
+         message_id,
+         callback_id,
+         action,
+         _original_todo
+       ) do
+    case staleness_batch_for(chat_id, message_id) do
+      %StalenessBatch{} = batch ->
+        with :ok <- resolve_staleness_batch_item(user_id, batch, updated_todo, action),
+             :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
+          :ok
+        end
+
+      nil ->
+        with :ok <- refresh_message(chat_id, message_id, updated_todo),
+             :ok <- maybe_answer_callback(callback_id, callback_notice(action)),
+             result <- BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action) do
+          normalize_follow_up_result(result)
+        end
+    end
+  end
+
+  defp handle_callback_result(
+         {:draft_ready, draft_text, updated_todo},
+         _user_id,
+         chat_id,
+         message_id,
+         callback_id,
+         action,
+         _original_todo
+       ) do
+    with :ok <- send_draft(chat_id, message_id, draft_text),
+         :ok <- refresh_message(chat_id, message_id, updated_todo),
+         :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
+      :ok
+    end
+  end
+
+  defp handle_callback_result(
+         {:send_prepared, prepared_action},
+         _user_id,
+         chat_id,
+         message_id,
+         callback_id,
+         action,
+         todo
+       ) do
+    with :ok <- send_confirmation_prompt(chat_id, message_id, prepared_action),
+         :ok <- refresh_message(chat_id, message_id, todo),
+         :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
+      :ok
+    end
+  end
+
+  defp handle_callback_result(
+         other,
+         _user_id,
+         _chat_id,
+         _message_id,
+         _callback_id,
+         _action,
+         _todo
+       ),
+       do: {:error, {:invalid_todo_callback_result, other}}
+
+  defp normalize_follow_up_result(:ok), do: :ok
+  defp normalize_follow_up_result(:ignored), do: :ok
+  defp normalize_follow_up_result({:noop, _reason}), do: :ok
+  defp normalize_follow_up_result({:error, _reason} = error), do: error
+  defp normalize_follow_up_result(other), do: {:error, {:invalid_todo_follow_up_result, other}}
 
   def parse_callback(""), do: {:error, :invalid_callback}
 
@@ -220,38 +277,47 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   # the "keep" decision on the todo, mark the batch complete when every item
   # is resolved, and re-render the original multi-item message.
   defp resolve_staleness_batch_item(user_id, %StalenessBatch{} = batch, %Todo{} = todo, action) do
-    batch =
-      if action in @staleness_resolution_actions do
-        case StalenessBatch.record_resolution(batch, todo.id, action) do
-          {:ok, updated} -> updated
-          {:error, _reason} -> batch
-        end
-      else
-        batch
+    with {:ok, batch} <- maybe_record_staleness_resolution(batch, todo, action),
+         :ok <- maybe_stamp_staleness_keep(user_id, todo, action),
+         {:ok, batch} <- maybe_complete_staleness_batch(batch) do
+      payload = StalenessTriage.batch_payload(user_id, batch)
+
+      case TelegramResponder.edit(batch.chat_id, batch.message_id, payload.text,
+             parse_mode: "HTML",
+             reply_markup: payload.reply_markup
+           ) do
+        {:ok, _result} -> :ok
+        {:error, reason} -> {:error, {:telegram_edit_failed, reason}}
+        other -> {:error, {:invalid_telegram_edit_result, other}}
       end
-
-    _ = maybe_stamp_staleness_keep(user_id, todo, action)
-
-    batch =
-      if batch.status != "complete" and StalenessBatch.all_resolved?(batch) do
-        case StalenessBatch.mark_complete(batch) do
-          {:ok, complete} -> complete
-          {:error, _reason} -> batch
-        end
-      else
-        batch
-      end
-
-    payload = StalenessTriage.batch_payload(user_id, batch)
-
-    case TelegramResponder.edit(batch.chat_id, batch.message_id, payload.text,
-           parse_mode: "HTML",
-           reply_markup: payload.reply_markup
-         ) do
-      {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
     end
   end
+
+  defp maybe_record_staleness_resolution(batch, todo, action)
+       when action in @staleness_resolution_actions do
+    case StalenessBatch.record_resolution(batch, todo.id, action) do
+      {:ok, updated} -> {:ok, updated}
+      {:error, reason} -> {:error, {:staleness_resolution_failed, reason}}
+      other -> {:error, {:invalid_staleness_resolution_result, other}}
+    end
+  end
+
+  defp maybe_record_staleness_resolution(batch, _todo, _action), do: {:ok, batch}
+
+  defp maybe_complete_staleness_batch(%StalenessBatch{status: status} = batch)
+       when status != "complete" do
+    if StalenessBatch.all_resolved?(batch) do
+      case StalenessBatch.mark_complete(batch) do
+        {:ok, complete} -> {:ok, complete}
+        {:error, reason} -> {:error, {:staleness_completion_failed, reason}}
+        other -> {:error, {:invalid_staleness_completion_result, other}}
+      end
+    else
+      {:ok, batch}
+    end
+  end
+
+  defp maybe_complete_staleness_batch(batch), do: {:ok, batch}
 
   # "Keep active" on a batch item (SPEC 05 R13): a real "keep" signal for the
   # R9 re-proposal guard, distinct from "never proposed". Merges into the
@@ -269,7 +335,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
            "metadata" => %{"staleness_triage" => triage}
          }) do
       {:ok, _todo} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:todo_update_failed, reason}}
     end
   end
 
@@ -284,7 +350,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
            reply_markup: payload.reply_markup
          ) do
       {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:telegram_edit_failed, reason}}
     end
   end
 
@@ -294,14 +360,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
        when is_binary(chat_id) and is_binary(message_id) and is_binary(text) do
     case TelegramResponder.reply(chat_id, message_id, text, parse_mode: "HTML") do
       {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end
 
   defp send_draft(chat_id, _message_id, text) when is_binary(chat_id) and is_binary(text) do
     case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
       {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end
 
@@ -356,8 +422,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp insert_prepared_send(user_id, conversation, %Todo{} = todo, attrs, may_retry?) do
     case TelegramAssistant.create_prepared_action(attrs) do
       {:ok, prepared_action} ->
-        _ = TelegramAssistant.mark_conversation_awaiting_action(conversation, prepared_action)
-        {:ok, {:send_prepared, prepared_action}}
+        case TelegramAssistant.mark_conversation_awaiting_action(conversation, prepared_action) do
+          {:ok, _conversation} -> {:ok, {:send_prepared, prepared_action}}
+          {:error, reason} -> {:error, {:conversation_update_failed, reason}}
+          other -> {:error, {:invalid_conversation_update_result, other}}
+        end
 
       {:error, %Ecto.Changeset{} = changeset} ->
         if awaiting_todo_conflict?(changeset) do
@@ -410,8 +479,16 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
             # insert exactly once. A repeat conflict (third concurrent
             # racer) falls through to the found-row handling above rather
             # than retrying again — no loop.
-            _ = TelegramAssistant.expire_prepared_action(existing_prepared_action)
-            insert_prepared_send(user_id, conversation, todo, attrs, false)
+            case TelegramAssistant.expire_prepared_action(existing_prepared_action) do
+              {:ok, _expired_action} ->
+                insert_prepared_send(user_id, conversation, todo, attrs, false)
+
+              {:error, reason} ->
+                {:error, {:prepared_action_expiry_failed, reason}}
+
+              other ->
+                {:error, {:invalid_prepared_action_expiry_result, other}}
+            end
 
           true ->
             {:ok, {:send_prepared, existing_prepared_action}}
@@ -465,7 +542,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
     case result do
       {:ok, _result} -> :ok
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end
 
@@ -1507,8 +1584,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp maybe_answer_callback(callback_id, text)
        when is_binary(callback_id) and is_binary(text) and text != "" do
-    _ = TelegramResponder.answer_callback(callback_id, text)
-    :ok
+    case TelegramResponder.answer_callback(callback_id, text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
+      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
+    end
   end
 
   defp maybe_answer_callback(_callback_id, _text), do: :ok

@@ -122,6 +122,8 @@ defmodule Maraithon.Runtime.BackgroundJobsTest do
                })
 
       assert duplicate.id == first.id
+      assert duplicate.telegram_bot_id == bot_id
+      assert duplicate.telegram_update_id == update_id
 
       assert Repo.aggregate(
                from(job in BackgroundJob,

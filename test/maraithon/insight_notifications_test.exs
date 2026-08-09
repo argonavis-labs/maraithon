@@ -242,33 +242,63 @@ defmodule Maraithon.InsightNotificationsTest do
       assert account.external_account_id == "223344"
     end
 
-    test "durable message dispatch waits behind earlier work in the same chat" do
+    test "durable unlinked messages return an explicit noop without resident work" do
       Application.put_env(:maraithon, ChatWorker, async_enabled: true)
       chat_id = "durable-insight-#{System.unique_integer([:positive])}"
 
-      on_exit(fn ->
-        case Registry.lookup(Maraithon.TelegramAssistant.ChatRegistry, chat_id) do
-          [{pid, _value}] -> GenServer.stop(pid, :normal)
-          [] -> :ok
-        end
-      end)
+      assert {:noop, :unlinked_or_unroutable} =
+               InsightNotifications.process_telegram_event_durable(%{
+                 type: "message",
+                 source: "telegram",
+                 data: %{chat_id: chat_id, message_id: "second", text: "unlinked"}
+               })
 
-      ordinary = %{
-        type: "message",
-        data: %{chat_id: chat_id, message_id: "first", text: "unlinked first"}
-      }
+      assert Registry.lookup(Maraithon.TelegramAssistant.ChatRegistry, chat_id) == []
+    end
 
-      durable = %{
-        type: "message",
-        data: %{chat_id: chat_id, message_id: "second", text: "unlinked second"}
-      }
+    test "durable dispatch closes ignored and malformed outcomes" do
+      assert {:noop, :ignored_update} =
+               InsightNotifications.process_telegram_event_durable(%{
+                 type: "ignored_update",
+                 source: "telegram",
+                 data: %{}
+               })
 
-      assert :ok = InsightNotifications.handle_telegram_event(ordinary)
-      assert :ok = InsightNotifications.handle_telegram_event(durable, durable: true)
+      assert {:error, :invalid_telegram_event} =
+               InsightNotifications.process_telegram_event_durable(%{
+                 type: "unexpected",
+                 source: "telegram",
+                 data: %{}
+               })
 
-      [{pid, _value}] = Registry.lookup(Maraithon.TelegramAssistant.ChatRegistry, chat_id)
-      state = :sys.get_state(pid)
-      assert MapSet.subset?(MapSet.new(["first", "second"]), state.seen_set)
+      assert {:error, :invalid_telegram_event} =
+               InsightNotifications.process_telegram_event_durable("malformed")
+    end
+
+    test "durable start command propagates Telegram send failure" do
+      reason = {:telegram_error, 503, "provider unavailable"}
+
+      Application.put_env(:maraithon, :insights,
+        telegram_module: Maraithon.TestSupport.FailingTelegram
+      )
+
+      Application.put_env(:maraithon, :failing_telegram, reason: reason)
+
+      assert {:error, {:telegram_send_failed, ^reason}} =
+               InsightNotifications.process_telegram_event_durable(%{
+                 type: "message",
+                 source: "telegram",
+                 data: %{chat_id: 998_001, message_id: 7, text: "/start"}
+               })
+    end
+
+    test "durable edit-not-found is an explicit noop" do
+      assert {:noop, :turn_not_found} =
+               InsightNotifications.process_telegram_event_durable(%{
+                 type: "edited_message",
+                 source: "telegram",
+                 data: %{chat_id: 998_002, message_id: 8, text: "edited"}
+               })
     end
 
     test "records callback feedback and tunes threshold", %{user_id: user_id, insight: insight} do

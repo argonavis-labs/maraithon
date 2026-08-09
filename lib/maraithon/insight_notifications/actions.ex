@@ -97,16 +97,23 @@ defmodule Maraithon.InsightNotifications.Actions do
     with {:ok, delivery_id, action} <- parse_callback(callback),
          {:ok, delivery} <- fetch_delivery(delivery_id, chat_id),
          {:ok, delivery, notice} <- dispatch_action(action, delivery),
-         :ok <- refresh_telegram_message(delivery, chat_id, message_id) do
-      answer_callback(callback_id, notice)
+         :ok <- refresh_telegram_message(delivery, chat_id, message_id),
+         :ok <- answer_callback(callback_id, notice) do
       :ok
     else
       {:error, :unsupported_callback} ->
         {:error, :unsupported_callback}
 
-      {:error, reason} ->
+      {:error, {:telegram_edit_failed, _detail} = reason} ->
+        # The domain action committed; a delivered acknowledgement is enough
+        # even though the stale card could not be refreshed.
         answer_callback(callback_id, callback_error_text(reason))
-        :ok
+
+      {:error, reason} = error ->
+        case answer_callback(callback_id, callback_error_text(reason)) do
+          :ok -> error
+          {:error, _answer_reason} = answer_error -> answer_error
+        end
     end
   end
 
@@ -1538,8 +1545,11 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp answer_callback(nil, _text), do: :ok
 
   defp answer_callback(callback_id, text) do
-    _ = telegram_module().answer_callback_query(callback_id, text: text)
-    :ok
+    case telegram_module().answer_callback_query(callback_id, text: text) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
+      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
+    end
   end
 
   defp gmail_target_address(insight, metadata) do

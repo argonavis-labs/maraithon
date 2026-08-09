@@ -35,10 +35,18 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
         payload: %{"event" => event}
       })
       when is_map(event) do
-    case InsightNotifications.handle_telegram_event(event, durable: true) do
-      :ok -> {:ok, %{source: "telegram_webhook", processed: true}}
-      {:error, _reason} -> {:error, :telegram_event_processing_failed}
-      _other -> {:error, :telegram_event_processing_failed}
+    case InsightNotifications.process_telegram_event_durable(event) do
+      :ok ->
+        {:ok, %{source: "telegram_webhook", outcome: "processed"}}
+
+      {:noop, reason} when is_atom(reason) ->
+        {:ok, %{source: "telegram_webhook", outcome: "noop", reason: to_string(reason)}}
+
+      {:error, reason} ->
+        {:error, {:telegram_event_processing_failed, reason}}
+
+      other ->
+        {:error, {:invalid_telegram_processing_result, other}}
     end
   end
 

@@ -871,27 +871,28 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
     case {state.tool_history, Map.get(attrs, :conversation)} do
       {_history, %Conversation{} = conversation} ->
-        _ =
-          TelegramAssistant.send_turn(
-            conversation,
-            Map.fetch!(attrs, :chat_id),
-            AssistantHarness.failure_message(reason),
-            reply_to_message_id: Map.get(attrs, :source_message_id),
-            send_mode: send_mode_for_delivery(delivery, attrs),
-            message_id: delivery[:message_id],
-            turn_kind: "system_notice",
-            origin_type: "system",
-            structured_data: %{
-              "run_id" => run.id,
-              "surface" => surface(attrs),
-              "error" => normalize_error(reason)
-            }
-          )
-
-        :ok
+        case TelegramAssistant.send_turn(
+               conversation,
+               Map.fetch!(attrs, :chat_id),
+               AssistantHarness.failure_message(reason),
+               reply_to_message_id: Map.get(attrs, :source_message_id),
+               send_mode: send_mode_for_delivery(delivery, attrs),
+               message_id: delivery[:message_id],
+               turn_kind: "system_notice",
+               origin_type: "system",
+               structured_data: %{
+                 "run_id" => run.id,
+                 "surface" => surface(attrs),
+                 "error" => normalize_error(reason)
+               }
+             ) do
+          {:ok, _conversation, _turn, _result} -> :ok
+          {:error, send_reason} -> {:error, {:telegram_send_failed, send_reason}}
+          other -> {:error, {:invalid_telegram_send_result, other}}
+        end
 
       _ ->
-        :ok
+        {:error, :missing_failure_delivery_conversation}
     end
   end
 
