@@ -173,29 +173,41 @@ defmodule Maraithon.AssistantChat do
          %Conversation{} = conversation <-
            Repo.get(Conversation, prepared_action.conversation_id),
          {:ok, client_message_id} <- optional_client_message_id(attrs) do
-      if TelegramAssistant.prepared_action_expired?(prepared_action) do
-        {:ok, expired_action} = TelegramAssistant.expire_prepared_action(prepared_action)
-        {:error, :prepared_action_expired, expired_action, reload_thread(conversation)}
-      else
-        prepared_action =
-          if decision == :confirm do
-            apply_prepared_action_draft_edits(prepared_action, attrs)
-          else
-            {:ok, prepared_action}
-          end
-
-        case prepared_action do
-          {:ok, prepared_action} ->
-            apply_prepared_action_decision(
-              prepared_action,
-              conversation,
-              decision,
-              client_message_id
-            )
-
-          {:error, reason} ->
-            {:error, reason}
+      edit_result =
+        if decision == :confirm do
+          apply_prepared_action_draft_edits(prepared_action, attrs)
+        else
+          {:ok, prepared_action}
         end
+
+      case edit_result do
+        {:ok, current_action} ->
+          apply_prepared_action_decision(
+            current_action,
+            conversation,
+            decision,
+            client_message_id
+          )
+
+        {:error, expired_action, :confirmation_expired} ->
+          {:error, :prepared_action_expired, expired_action, reload_thread(conversation)}
+
+        {:error, current_action, :already_handled} when decision == :confirm ->
+          apply_prepared_action_decision(
+            current_action,
+            conversation,
+            decision,
+            client_message_id
+          )
+
+        {:error, current_action, :already_handled} ->
+          {:ok, %{prepared_action: current_action, thread: reload_thread(conversation)}}
+
+        {:error, _current_action, reason} ->
+          {:error, reason}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       :invalid -> {:error, :invalid_decision}
@@ -433,91 +445,164 @@ defmodule Maraithon.AssistantChat do
   end
 
   defp apply_prepared_action_decision(prepared_action, conversation, :reject, client_message_id) do
-    {:ok, updated_action} =
-      TelegramAssistant.update_prepared_action(prepared_action, %{status: "rejected", error: nil})
+    case TelegramAssistant.reject_prepared_action(prepared_action) do
+      {:ok, updated_action} ->
+        _ = TelegramConversations.reopen(conversation)
+        _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
 
-    _ = TelegramConversations.reopen(conversation)
-    _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+        with {:ok, _conversation, _turn, _result} <-
+               Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+                 conversation,
+                 updated_action.chat_id,
+                 "Understood. I cancelled that action.",
+                 client_message_id: client_message_id,
+                 turn_kind: "system_notice",
+                 origin_type: "prepared_action",
+                 origin_id: updated_action.id,
+                 structured_data: %{
+                   "surface" => "mobile",
+                   "prepared_action_id" => updated_action.id,
+                   "decision" => "reject"
+                 }
+               ) do
+          {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
+        end
 
-    {:ok, _conversation, _turn, _result} =
-      Maraithon.AssistantChat.MobileDelivery.deliver_turn(
-        conversation,
-        prepared_action.chat_id,
-        "Understood. I cancelled that action.",
-        client_message_id: client_message_id,
-        turn_kind: "system_notice",
-        origin_type: "prepared_action",
-        origin_id: updated_action.id,
-        structured_data: %{
-          "surface" => "mobile",
-          "prepared_action_id" => updated_action.id,
-          "decision" => "reject"
-        }
-      )
+      {:error, expired_action, :confirmation_expired} ->
+        {:error, :prepared_action_expired, expired_action, reload_thread(conversation)}
 
-    {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
+      {:error, current_action, :already_handled} ->
+        {:ok, %{prepared_action: current_action, thread: reload_thread(conversation)}}
+
+      {:error, _current_action, reason} ->
+        {:error, reason}
+    end
   end
 
   defp apply_prepared_action_decision(prepared_action, conversation, :confirm, client_message_id) do
     case TelegramAssistant.confirm_and_execute(prepared_action) do
       {:ok, updated_action, result} ->
-        todo_completion = maybe_mark_linked_todo_done(updated_action, conversation)
+        deliver_mobile_prepared_action_success(
+          updated_action,
+          result,
+          conversation,
+          client_message_id
+        )
 
-        _ = TelegramConversations.reopen(conversation)
-        _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
-
-        structured_data =
-          %{
-            "surface" => "mobile",
-            "prepared_action_id" => updated_action.id,
-            "decision" => "confirm",
-            "result" => serialize_result(result)
-          }
-          |> Map.merge(todo_completion_structured_data(todo_completion))
-
-        {:ok, _conversation, _turn, _delivery} =
-          Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+      {:ok, updated_action, result, :already_executed} ->
+        if TelegramAssistant.prepared_action_result_delivered?(updated_action) do
+          {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
+        else
+          deliver_mobile_prepared_action_success(
+            updated_action,
+            result,
             conversation,
-            prepared_action.chat_id,
-            prepared_action_result_text(updated_action, result),
-            client_message_id: client_message_id,
-            turn_kind: "action_result",
-            origin_type: "prepared_action",
-            origin_id: updated_action.id,
-            structured_data: structured_data
+            client_message_id
           )
+        end
 
-        {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
+      {:error, expired_action, :confirmation_expired} ->
+        {:error, :prepared_action_expired, expired_action, reload_thread(conversation)}
+
+      {:error, updated_action, reason, :already_failed} ->
+        if TelegramAssistant.prepared_action_result_delivered?(updated_action) do
+          {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
+        else
+          deliver_mobile_prepared_action_failure(
+            updated_action,
+            reason,
+            conversation,
+            client_message_id
+          )
+        end
+
+      {:error, current_action, :already_handled} ->
+        {:ok, %{prepared_action: current_action, thread: reload_thread(conversation)}}
 
       {:error, updated_action, reason} ->
-        _ = TelegramConversations.reopen(conversation)
-        _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+        deliver_mobile_prepared_action_failure(
+          updated_action,
+          reason,
+          conversation,
+          client_message_id
+        )
+    end
+  end
 
-        {:ok, _conversation, _turn, _delivery} =
-          Maraithon.AssistantChat.MobileDelivery.deliver_turn(
-            conversation,
-            prepared_action.chat_id,
-            prepared_action_failure_text(updated_action, reason),
-            client_message_id: client_message_id,
-            turn_kind: "action_result",
-            origin_type: "prepared_action",
-            origin_id: updated_action.id,
-            structured_data: %{
-              "surface" => "mobile",
-              "prepared_action_id" => updated_action.id,
-              "decision" => "confirm",
-              "error" => normalize_error(reason)
-            }
-          )
+  defp deliver_mobile_prepared_action_success(
+         updated_action,
+         result,
+         conversation,
+         client_message_id
+       ) do
+    todo_completion = maybe_mark_linked_todo_done(updated_action, conversation)
 
-        {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
+    _ = TelegramConversations.reopen(conversation)
+    _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+
+    structured_data =
+      %{
+        "surface" => "mobile",
+        "prepared_action_id" => updated_action.id,
+        "decision" => "confirm",
+        "result" => serialize_result(result)
+      }
+      |> Map.merge(todo_completion_structured_data(todo_completion))
+
+    with {:ok, _conversation, _turn, _delivery} <-
+           Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+             conversation,
+             updated_action.chat_id,
+             prepared_action_result_text(updated_action, result),
+             client_message_id: client_message_id,
+             turn_kind: "action_result",
+             origin_type: "prepared_action",
+             origin_id: updated_action.id,
+             structured_data: structured_data
+           ),
+         {:ok, checkpointed_action} <-
+           TelegramAssistant.mark_prepared_action_result_delivered(updated_action) do
+      {:ok, %{prepared_action: checkpointed_action, thread: reload_thread(conversation)}}
+    end
+  end
+
+  defp deliver_mobile_prepared_action_failure(
+         updated_action,
+         reason,
+         conversation,
+         client_message_id
+       ) do
+    _ = TelegramConversations.reopen(conversation)
+    _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+
+    with {:ok, _conversation, _turn, _delivery} <-
+           Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+             conversation,
+             updated_action.chat_id,
+             prepared_action_failure_text(updated_action, reason),
+             client_message_id: client_message_id,
+             turn_kind: "action_result",
+             origin_type: "prepared_action",
+             origin_id: updated_action.id,
+             structured_data: %{
+               "surface" => "mobile",
+               "prepared_action_id" => updated_action.id,
+               "decision" => "confirm",
+               "error" => normalize_error(reason)
+             }
+           ),
+         {:ok, checkpointed_action} <-
+           TelegramAssistant.mark_prepared_action_result_delivered(updated_action) do
+      {:ok, %{prepared_action: checkpointed_action, thread: reload_thread(conversation)}}
     end
   end
 
   defp apply_prepared_action_draft_edits(%PreparedAction{} = prepared_action, attrs) do
     case draft_edits(attrs) do
       edits when map_size(edits) > 0 ->
-        update_prepared_action_from_draft_edits(prepared_action, edits)
+        TelegramAssistant.edit_prepared_action(prepared_action, fn locked_action ->
+          prepared_action_draft_edit_attrs(locked_action, edits)
+        end)
 
       _empty ->
         {:ok, prepared_action}
@@ -531,7 +616,7 @@ defmodule Maraithon.AssistantChat do
     end
   end
 
-  defp update_prepared_action_from_draft_edits(
+  defp prepared_action_draft_edit_attrs(
          %PreparedAction{action_type: "slack_post"} = prepared_action,
          edits
        ) do
@@ -544,31 +629,31 @@ defmodule Maraithon.AssistantChat do
       payload
       |> maybe_put_payload("text", body)
 
-    TelegramAssistant.update_prepared_action(prepared_action, %{payload: payload})
+    {:ok, %{payload: payload}}
   end
 
-  defp update_prepared_action_from_draft_edits(
+  defp prepared_action_draft_edit_attrs(
          %PreparedAction{action_type: "gmail_send"} = prepared_action,
          edits
        ) do
     payload = gmail_payload_with_edits(prepared_action.payload || %{}, edits)
-    TelegramAssistant.update_prepared_action(prepared_action, %{payload: payload})
+    {:ok, %{payload: payload}}
   end
 
-  defp update_prepared_action_from_draft_edits(
+  defp prepared_action_draft_edit_attrs(
          %PreparedAction{action_type: "gmail_draft_send"} = prepared_action,
          edits
        ) do
     payload = gmail_payload_with_edits(prepared_action.payload || %{}, edits)
 
     case maybe_update_provider_gmail_draft(payload) do
-      :ok -> TelegramAssistant.update_prepared_action(prepared_action, %{payload: payload})
+      :ok -> {:ok, %{payload: payload}}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp update_prepared_action_from_draft_edits(prepared_action, _edits),
-    do: {:ok, prepared_action}
+  defp prepared_action_draft_edit_attrs(%PreparedAction{} = prepared_action, _edits),
+    do: {:ok, %{payload: prepared_action.payload || %{}}}
 
   defp gmail_payload_with_edits(payload, edits) do
     payload

@@ -1,0 +1,342 @@
+defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
+  use Maraithon.DataCase, async: false
+
+  alias Maraithon.Accounts
+  alias Maraithon.AssistantChat
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.InsightNotifications
+  alias Maraithon.Projects
+  alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.PreparedAction
+  alias Maraithon.TelegramConversations
+  alias Maraithon.TelegramConversations.Turn
+  alias Maraithon.TestSupport.CapturingTelegram
+
+  setup do
+    start_supervised!(%{
+      id: :capturing_telegram_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
+    })
+
+    original_insights = Application.get_env(:maraithon, :insights, [])
+    original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_capture = Application.get_env(:maraithon, :capturing_telegram, [])
+
+    Application.put_env(
+      :maraithon,
+      :insights,
+      Keyword.put(original_insights, :telegram_module, CapturingTelegram)
+    )
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(original_assistant, :telegram_full_chat_enabled, true)
+    )
+
+    Application.put_env(:maraithon, :capturing_telegram, callback_result: :ok, edit_result: :ok)
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :insights, original_insights)
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+      Application.put_env(:maraithon, :capturing_telegram, original_capture)
+    end)
+
+    user_id = "prepared-state-#{System.unique_integer([:positive])}@example.com"
+    chat_id = "prepared-state-chat-#{System.unique_integer([:positive])}"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: chat_id,
+        metadata: %{"username" => "prepared-state"}
+      })
+
+    {:ok, conversation} = TelegramConversations.start_or_continue(user_id, chat_id, %{})
+    {:ok, run} = create_run(user_id, chat_id, conversation.id, "telegram")
+
+    %{user_id: user_id, chat_id: chat_id, conversation: conversation, run: run}
+  end
+
+  test "stale reject, expiry, and draft edit cannot overwrite a closed state", ctx do
+    for status <- ~w(confirmed executed failed rejected) do
+      {:ok, stale_action} =
+        create_action(ctx,
+          status: "awaiting_confirmation",
+          expires_at: DateTime.add(DateTime.utc_now(), -60, :second),
+          target_id: "closed-#{status}-#{System.unique_integer([:positive])}"
+        )
+
+      stale_action
+      |> Ecto.Changeset.change(status: status)
+      |> Repo.update!()
+
+      assert {:error, %PreparedAction{status: ^status}, :already_handled} =
+               TelegramAssistant.reject_prepared_action(stale_action)
+
+      assert {:error, %PreparedAction{status: ^status}, :already_handled} =
+               TelegramAssistant.expire_prepared_action(stale_action)
+
+      test_pid = self()
+
+      assert {:error, %PreparedAction{status: ^status}, :already_handled} =
+               TelegramAssistant.edit_prepared_action(stale_action, fn _locked ->
+                 send(test_pid, :stale_edit_ran)
+                 {:ok, %{payload: %{"text" => "overwritten"}}}
+               end)
+
+      refute_received :stale_edit_ran
+      assert Repo.get!(PreparedAction, stale_action.id).status == status
+    end
+  end
+
+  test "confirmation and rejection race to one coherent terminal outcome", ctx do
+    {:ok, project} =
+      Projects.create_project(ctx.user_id, %{
+        "name" => "Race target",
+        "summary" => "before"
+      })
+
+    {:ok, action} =
+      create_action(ctx,
+        target_id: project.id,
+        payload: %{
+          "project_id" => project.id,
+          "attrs" => %{"summary" => "after"}
+        }
+      )
+
+    parent = self()
+
+    confirm_task =
+      Task.async(fn ->
+        receive do
+          :go -> send(parent, {:confirm_result, TelegramAssistant.confirm_and_execute(action)})
+        end
+      end)
+
+    reject_task =
+      Task.async(fn ->
+        receive do
+          :go -> send(parent, {:reject_result, TelegramAssistant.reject_prepared_action(action)})
+        end
+      end)
+
+    send(confirm_task.pid, :go)
+    send(reject_task.pid, :go)
+
+    assert_receive {:confirm_result, confirm_result}
+    assert_receive {:reject_result, reject_result}
+    Task.await(confirm_task)
+    Task.await(reject_task)
+
+    final_action = Repo.get!(PreparedAction, action.id)
+    final_project = Projects.get_project_for_user(project.id, ctx.user_id)
+
+    case final_action.status do
+      "executed" ->
+        assert match?({:ok, %PreparedAction{status: "executed"}, _result}, confirm_result)
+
+        assert match?(
+                 {:error, %PreparedAction{status: "executed"}, :already_handled},
+                 reject_result
+               )
+
+        assert final_project.summary == "after"
+
+      "rejected" ->
+        assert match?(
+                 {:error, %PreparedAction{status: "rejected"}, :already_handled},
+                 confirm_result
+               )
+
+        assert match?({:ok, %PreparedAction{status: "rejected"}}, reject_result)
+        assert final_project.summary == "before"
+    end
+  end
+
+  test "approval prompts are not result proof and permanent failures drain once", ctx do
+    missing_project_id = Ecto.UUID.generate()
+
+    {:ok, action} =
+      create_action(ctx,
+        action_type: "project_update",
+        target_id: missing_project_id,
+        payload: %{
+          "project_id" => missing_project_id,
+          "attrs" => %{"summary" => "will not apply"}
+        }
+      )
+
+    {:ok, _waiting} =
+      TelegramAssistant.mark_conversation_awaiting_action(ctx.conversation, action)
+
+    assert {:ok, _conversation, %Turn{turn_kind: "approval_prompt"}, _result} =
+             TelegramAssistant.send_turn(
+               ctx.conversation,
+               ctx.chat_id,
+               "Approve this update?",
+               reply_to_message_id: "approval-source",
+               turn_kind: "approval_prompt",
+               origin_type: "prepared_action",
+               origin_id: action.id,
+               structured_data: %{"prepared_action_id" => action.id}
+             )
+
+    refute TelegramAssistant.prepared_action_result_delivered?(action)
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: ctx.chat_id,
+        message_id: "approval-source",
+        callback_id: "permanent-action-callback",
+        data: "tgact:#{action.id}:confirm"
+      }
+    }
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+
+    failed = Repo.get!(PreparedAction, action.id)
+    assert failed.status == "failed"
+    assert byte_size(failed.error) <= 240
+    assert get_in(failed.payload, ["_maraithon_execution_error", "status"]) == "failed"
+    assert is_binary(failed.payload["_maraithon_result_delivered_at"])
+
+    assert %Turn{turn_kind: "action_result", origin_id: origin_id} =
+             Repo.get_by!(Turn,
+               conversation_id: ctx.conversation.id,
+               turn_kind: "action_result",
+               origin_id: action.id
+             )
+
+    assert origin_id == action.id
+    sends_before_retry = count_telegram_events(:send)
+
+    assert {:noop, :prepared_action_already_delivered} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    assert count_telegram_events(:send) == sends_before_retry
+
+    assert TelegramAssistant.prepared_action_error_class({:api_error, 503, "unavailable"}) ==
+             :transient
+
+    assert TelegramAssistant.prepared_action_error_class(:project_not_found) == :permanent
+  end
+
+  test "a provider success followed by turn persistence failure is returned as an error", ctx do
+    Code.ensure_loaded!(CapturingTelegram)
+    missing_conversation = %{ctx.conversation | id: Ecto.UUID.generate()}
+    sends_before = count_telegram_events(:send)
+
+    assert {:error, :telegram_turn_persistence_failed} =
+             TelegramAssistant.send_turn(
+               missing_conversation,
+               ctx.chat_id,
+               "The provider accepted this, but the local turn cannot commit.",
+               turn_kind: "assistant_reply"
+             )
+
+    assert count_telegram_events(:send) == sends_before + 1
+  end
+
+  test "mobile confirm resumes an executed row before considering expiry or stale draft edits",
+       ctx do
+    {:ok, mobile_conversation} =
+      TelegramConversations.create_mobile_thread(ctx.user_id, %{
+        "client_thread_id" => Ecto.UUID.generate()
+      })
+
+    {:ok, mobile_run} =
+      create_run(ctx.user_id, mobile_conversation.chat_id, mobile_conversation.id, "mobile")
+
+    {:ok, action} =
+      TelegramAssistant.create_prepared_action(%{
+        user_id: ctx.user_id,
+        chat_id: mobile_conversation.chat_id,
+        conversation_id: mobile_conversation.id,
+        run_id: mobile_run.id,
+        surface: "mobile",
+        action_type: "slack_post",
+        target_type: "slack_channel",
+        target_id: "C123",
+        payload: %{
+          "text" => "committed body",
+          "_maraithon_execution_result" => %{"message" => "Slack message sent."}
+        },
+        preview_text: "Post the update",
+        status: "executed",
+        confirmed_at: DateTime.add(DateTime.utc_now(), -120, :second),
+        executed_at: DateTime.add(DateTime.utc_now(), -119, :second),
+        expires_at: DateTime.add(DateTime.utc_now(), -60, :second)
+      })
+
+    assert {:ok, %{prepared_action: resumed, thread: thread}} =
+             AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+               "client_message_id" => Ecto.UUID.generate(),
+               "draft_edits" => %{"text" => "stale overwrite"}
+             })
+
+    assert resumed.status == "executed"
+    assert resumed.payload["text"] == "committed body"
+
+    assert Enum.any?(thread.turns, fn turn ->
+             turn.turn_kind == "action_result" and turn.origin_id == action.id
+           end)
+
+    assert {:ok, %{prepared_action: still_executed}} =
+             AssistantChat.decide_prepared_action(ctx.user_id, action.id, "reject", %{
+               "client_message_id" => Ecto.UUID.generate()
+             })
+
+    assert still_executed.status == "executed"
+    assert Repo.get!(PreparedAction, action.id).status == "executed"
+  end
+
+  defp create_action(ctx, opts) do
+    TelegramAssistant.create_prepared_action(%{
+      user_id: ctx.user_id,
+      chat_id: ctx.chat_id,
+      conversation_id: ctx.conversation.id,
+      run_id: ctx.run.id,
+      surface: "telegram",
+      action_type: Keyword.get(opts, :action_type, "project_update"),
+      target_type: "project",
+      target_id: Keyword.get(opts, :target_id, Ecto.UUID.generate()),
+      payload:
+        Keyword.get(opts, :payload, %{
+          "project_id" => Ecto.UUID.generate(),
+          "attrs" => %{"summary" => "updated"}
+        }),
+      preview_text: "Update project",
+      status: Keyword.get(opts, :status, "awaiting_confirmation"),
+      expires_at: Keyword.get(opts, :expires_at, DateTime.add(DateTime.utc_now(), 600, :second))
+    })
+  end
+
+  defp create_run(user_id, chat_id, conversation_id, surface) do
+    now = DateTime.utc_now()
+
+    TelegramAssistant.start_run(%{
+      user_id: user_id,
+      chat_id: chat_id,
+      conversation_id: conversation_id,
+      surface: surface,
+      trigger_type: "inbound_message",
+      status: "completed",
+      model_provider: "test",
+      model_name: "test",
+      prompt_snapshot: %{},
+      result_summary: %{},
+      started_at: now,
+      finished_at: now
+    })
+  end
+
+  defp count_telegram_events(type) do
+    Agent.get(:capturing_telegram_recorder, fn events ->
+      Enum.count(events, &(&1.type == type))
+    end)
+  end
+end

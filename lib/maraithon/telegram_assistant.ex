@@ -37,7 +37,9 @@ defmodule Maraithon.TelegramAssistant do
   # when a gmail/slack draft is prepared from a todo chat thread).
   @nudge_action_types ~w(gmail_send gmail_draft_send slack_post)
   @prepared_execution_result_key "_maraithon_execution_result"
+  @prepared_execution_error_key "_maraithon_execution_error"
   @prepared_result_delivered_at_key "_maraithon_result_delivered_at"
+  @prepared_error_max_bytes 240
 
   require Logger
 
@@ -251,6 +253,26 @@ defmodule Maraithon.TelegramAssistant do
     |> Repo.update()
   end
 
+  def resumable_todo_digest_run(conversation_id, source_message_id)
+      when is_binary(conversation_id) and is_binary(source_message_id) do
+    Run
+    |> where([run], run.conversation_id == ^conversation_id)
+    |> where([run], run.status in ["running", "degraded", "failed"])
+    |> where(
+      [run],
+      fragment(
+        "?->'delivery_checkpoint'->>'source_message_id' = ?",
+        run.result_summary,
+        ^source_message_id
+      )
+    )
+    |> order_by([run], desc: run.started_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def resumable_todo_digest_run(_conversation_id, _source_message_id), do: nil
+
   defp handle_assistant_callback(data, callback_data) do
     case TelegramResponder.parse_action_callback(callback_data) do
       {:ok, prepared_action_id, decision} ->
@@ -328,6 +350,63 @@ defmodule Maraithon.TelegramAssistant do
 
   def get_prepared_action(id) when is_binary(id), do: Repo.get(PreparedAction, id)
   def get_prepared_action(_id), do: nil
+
+  @doc """
+  Rejects an action only while the row is still awaiting confirmation.
+
+  The supplied struct is only an identifier: the row is reloaded under
+  `FOR UPDATE` before the transition so a stale Cancel tap cannot overwrite a
+  concurrent confirmation or execution checkpoint.
+  """
+  def reject_prepared_action(%PreparedAction{} = prepared_action) do
+    with_locked_prepared_action(prepared_action, fn
+      %PreparedAction{status: "awaiting_confirmation"} = locked_action ->
+        if prepared_action_expired?(locked_action) do
+          with {:ok, expired_action} <-
+                 update_prepared_action(locked_action, %{
+                   status: "expired",
+                   error: "confirmation_expired"
+                 }) do
+            {:error, expired_action, :confirmation_expired}
+          end
+        else
+          update_prepared_action(locked_action, %{status: "rejected", error: nil})
+        end
+
+      %PreparedAction{} = locked_action ->
+        {:error, locked_action, :already_handled}
+    end)
+  end
+
+  @doc """
+  Applies mobile draft edits to the latest locked action only while it is
+  awaiting confirmation. The updater receives the reloaded row and returns
+  `{:ok, attrs}` or `{:error, reason}`.
+  """
+  def edit_prepared_action(%PreparedAction{} = prepared_action, updater)
+      when is_function(updater, 1) do
+    with_locked_prepared_action(prepared_action, fn
+      %PreparedAction{status: "awaiting_confirmation"} = locked_action ->
+        if prepared_action_expired?(locked_action) do
+          with {:ok, expired_action} <-
+                 update_prepared_action(locked_action, %{
+                   status: "expired",
+                   error: "confirmation_expired"
+                 }) do
+            {:error, expired_action, :confirmation_expired}
+          end
+        else
+          case updater.(locked_action) do
+            {:ok, attrs} when is_map(attrs) -> update_prepared_action(locked_action, attrs)
+            {:error, reason} -> {:error, locked_action, reason}
+            other -> {:error, locked_action, {:invalid_prepared_action_edit, other}}
+          end
+        end
+
+      %PreparedAction{} = locked_action ->
+        {:error, locked_action, :already_handled}
+    end)
+  end
 
   @doc """
   Finds an existing non-expired, still-`awaiting_confirmation` PreparedAction
@@ -608,6 +687,12 @@ defmodule Maraithon.TelegramAssistant do
 
     case dispatch_turn(chat_id, text, reply_to_message_id, send_mode, telegram_opts, opts) do
       {:ok, result, telegram_message_id} ->
+        structured_data =
+          opts
+          |> Keyword.get(:structured_data, %{})
+          |> sanitize_structured_data()
+          |> Map.put("terminal_response", Keyword.get(opts, :terminal_response, true))
+
         turn_attrs = %{
           "role" => Keyword.get(opts, :role, "assistant"),
           "telegram_message_id" => telegram_message_id,
@@ -620,7 +705,7 @@ defmodule Maraithon.TelegramAssistant do
           "turn_kind" => Keyword.get(opts, :turn_kind, "assistant_reply"),
           "origin_type" => Keyword.get(opts, :origin_type, "chat"),
           "origin_id" => Keyword.get(opts, :origin_id),
-          "structured_data" => sanitize_structured_data(Keyword.get(opts, :structured_data, %{}))
+          "structured_data" => structured_data
         }
 
         case append_delivered_turn(conversation, turn_attrs) do
@@ -864,6 +949,22 @@ defmodule Maraithon.TelegramAssistant do
   defp finish_prepared_action_callback(:ok, callback_id, text),
     do: answer_prepared_action_callback(callback_id, text)
 
+  defp finish_prepared_action_callback(
+         {:noop, :prepared_action_already_handled} = noop,
+         callback_id,
+         _text
+       ) do
+    with :ok <- answer_prepared_action_callback(callback_id, "Already handled"), do: noop
+  end
+
+  defp finish_prepared_action_callback(
+         {:noop, :prepared_action_expired} = noop,
+         callback_id,
+         _text
+       ) do
+    with :ok <- answer_prepared_action_callback(callback_id, "Confirmation expired"), do: noop
+  end
+
   defp finish_prepared_action_callback({:noop, _reason} = noop, callback_id, text) do
     with :ok <- answer_prepared_action_callback(callback_id, text), do: noop
   end
@@ -922,23 +1023,33 @@ defmodule Maraithon.TelegramAssistant do
         )
 
       :reject ->
-        with {:ok, updated_action} <-
-               update_prepared_action(prepared_action, %{status: "rejected", error: nil}),
-             :ok <- maybe_close_confirmation(conversation) do
-          deliver_prepared_action_turn(
-            conversation,
-            chat_id,
-            "Understood. I cancelled that action.",
-            reply_to_message_id: reply_to_message_id,
-            turn_kind: "system_notice",
-            origin_type: "prepared_action",
-            origin_id: updated_action.id,
-            structured_data: %{
-              "prepared_action_id" => updated_action.id,
-              "decision" => "reject",
-              "source_turn_id" => user_turn && user_turn.id
-            }
-          )
+        case reject_prepared_action(prepared_action) do
+          {:ok, updated_action} ->
+            with :ok <- maybe_close_confirmation(conversation) do
+              deliver_prepared_action_turn(
+                conversation,
+                chat_id,
+                "Understood. I cancelled that action.",
+                reply_to_message_id: reply_to_message_id,
+                turn_kind: "system_notice",
+                origin_type: "prepared_action",
+                origin_id: updated_action.id,
+                structured_data: %{
+                  "prepared_action_id" => updated_action.id,
+                  "decision" => "reject",
+                  "source_turn_id" => user_turn && user_turn.id
+                }
+              )
+            end
+
+          {:error, _updated_action, :already_handled} ->
+            {:noop, :prepared_action_already_handled}
+
+          {:error, _expired_action, :confirmation_expired} ->
+            {:noop, :prepared_action_expired}
+
+          {:error, _updated_action, reason} ->
+            {:error, reason}
         end
     end
   end
@@ -984,6 +1095,23 @@ defmodule Maraithon.TelegramAssistant do
           deliver_prepared_action_result(
             updated_action,
             result,
+            conversation,
+            user_turn,
+            chat_id,
+            reply_to_message_id
+          )
+        end
+
+      {:error, updated_action, reason, failure_state}
+      when failure_state in [:permanent_failure, :already_failed] ->
+        if prepared_action_result_delivered?(updated_action) do
+          with :ok <- maybe_close_confirmation(conversation) do
+            {:noop, :prepared_action_already_delivered}
+          end
+        else
+          deliver_prepared_action_failure(
+            updated_action,
+            reason,
             conversation,
             user_turn,
             chat_id,
@@ -1075,20 +1203,57 @@ defmodule Maraithon.TelegramAssistant do
     end
   end
 
-  defp prepared_action_result_delivered?(%PreparedAction{} = prepared_action) do
+  defp deliver_prepared_action_failure(
+         updated_action,
+         reason,
+         conversation,
+         user_turn,
+         chat_id,
+         reply_to_message_id
+       ) do
+    with :ok <-
+           deliver_prepared_action_turn(
+             conversation,
+             chat_id,
+             prepared_action_failure_text(updated_action, reason),
+             reply_to_message_id: reply_to_message_id,
+             turn_kind: "action_result",
+             origin_type: "prepared_action",
+             origin_id: updated_action.id,
+             structured_data: %{
+               "prepared_action_id" => updated_action.id,
+               "decision" => "confirm",
+               "status" => "failed",
+               "error" => compact_prepared_action_error(reason),
+               "source_turn_id" => user_turn && user_turn.id
+             }
+           ),
+         {:ok, _checkpointed_action} <- mark_prepared_action_result_delivered(updated_action),
+         :ok <- maybe_close_confirmation(conversation) do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:invalid_prepared_action_failure_delivery_result, other}}
+    end
+  end
+
+  def prepared_action_result_delivered?(%PreparedAction{} = prepared_action) do
     payload = prepared_action.payload || %{}
 
     is_binary(Map.get(payload, @prepared_result_delivered_at_key)) or
       Repo.exists?(
         from turn in Turn,
           where: turn.conversation_id == ^prepared_action.conversation_id,
+          where: turn.turn_kind == "action_result",
           where: turn.origin_type == "prepared_action",
           where: turn.origin_id == ^prepared_action.id,
+          where:
+            fragment("?->>'prepared_action_id' = ?", turn.structured_data, ^prepared_action.id),
           where: turn.delivery_state == "delivered"
       )
   end
 
-  defp mark_prepared_action_result_delivered(%PreparedAction{} = prepared_action) do
+  def mark_prepared_action_result_delivered(%PreparedAction{} = prepared_action) do
     payload =
       Map.put(
         prepared_action.payload || %{},
@@ -1162,6 +1327,41 @@ defmodule Maraithon.TelegramAssistant do
     |> Repo.one!()
   end
 
+  defp with_locked_prepared_action(%PreparedAction{} = prepared_action, callback)
+       when is_function(callback, 1) do
+    case Repo.transaction(
+           fn ->
+             prepared_action
+             |> lock_prepared_action!()
+             |> callback.()
+           end,
+           timeout: :infinity
+         ) do
+      {:ok, result} ->
+        result
+
+      {:error, reason} ->
+        {:error, current_prepared_action_or(prepared_action),
+         {:prepared_action_persistence_failed, closed_prepared_action_failure(reason)}}
+    end
+  rescue
+    reason ->
+      Logger.warning("Prepared action transition transaction failed",
+        prepared_action_reference: Maraithon.Redaction.fingerprint(prepared_action.id),
+        failure_code: Maraithon.Redaction.error_class(reason)
+      )
+
+      {:error, current_prepared_action_or(prepared_action), :prepared_action_persistence_failed}
+  catch
+    :exit, reason ->
+      Logger.warning("Prepared action transition transaction exited",
+        prepared_action_reference: Maraithon.Redaction.fingerprint(prepared_action.id),
+        failure_code: Maraithon.Redaction.error_class(reason)
+      )
+
+      {:error, current_prepared_action_or(prepared_action), :prepared_action_persistence_failed}
+  end
+
   defp confirm_or_resume_prepared_action(
          %PreparedAction{status: "awaiting_confirmation"} = prepared_action,
          opts
@@ -1196,6 +1396,10 @@ defmodule Maraithon.TelegramAssistant do
     {:ok, action, prepared_execution_result(action), :already_executed}
   end
 
+  defp confirm_or_resume_prepared_action(%PreparedAction{status: "failed"} = action, _opts) do
+    {:error, action, prepared_execution_error(action), :already_failed}
+  end
+
   defp confirm_or_resume_prepared_action(%PreparedAction{} = action, _opts),
     do: {:error, action, :already_handled}
 
@@ -1221,22 +1425,40 @@ defmodule Maraithon.TelegramAssistant do
         {:ok, executed_action, result}
 
       {:error, reason} ->
-        failed_action =
-          if Keyword.get(opts, :durable, false) do
-            # Keep durable failures resumable. The owning webhook receipt stays
-            # retryable, and the next attempt re-enters the confirmed state.
+        durable? = Keyword.get(opts, :durable, false)
+
+        if durable? and prepared_action_error_class(reason) == :transient do
+          # Transport, throttling, and dependency availability failures remain
+          # resumable. A retry re-enters this confirmed row under the same lock.
+          retryable_action =
             update_prepared_action_or_rollback(confirmed_action, %{
               status: "confirmed",
-              error: normalize_error(reason)
+              error: compact_prepared_action_error(reason)
             })
-          else
+
+          {:error, retryable_action, reason}
+        else
+          error_checkpoint = prepared_execution_error_checkpoint(reason)
+
+          payload =
+            (confirmed_action.payload || %{})
+            |> Map.put(@prepared_execution_result_key, error_checkpoint)
+            |> Map.put(@prepared_execution_error_key, error_checkpoint)
+            |> Map.delete(@prepared_result_delivered_at_key)
+
+          failed_action =
             update_prepared_action_or_rollback(confirmed_action, %{
               status: "failed",
-              error: normalize_error(reason)
+              error: compact_prepared_action_error(reason),
+              payload: payload
             })
-          end
 
-        {:error, failed_action, reason}
+          if durable? do
+            {:error, failed_action, reason, :permanent_failure}
+          else
+            {:error, failed_action, reason}
+          end
+        end
 
       other ->
         Repo.rollback({:invalid_prepared_action_execution_result, other})
@@ -1264,12 +1486,102 @@ defmodule Maraithon.TelegramAssistant do
     end
   end
 
+  defp prepared_execution_error(%PreparedAction{payload: payload, error: error})
+       when is_map(payload) do
+    case Map.get(payload, @prepared_execution_error_key) do
+      %{"error" => checkpointed_error} when is_binary(checkpointed_error) -> checkpointed_error
+      _missing when is_binary(error) -> error
+      _missing -> "prepared_action_failed"
+    end
+  end
+
+  defp prepared_execution_error(%PreparedAction{error: error}) when is_binary(error), do: error
+  defp prepared_execution_error(_prepared_action), do: "prepared_action_failed"
+
+  defp prepared_execution_error_checkpoint(reason) do
+    %{
+      "status" => "failed",
+      "error" => compact_prepared_action_error(reason)
+    }
+  end
+
+  defp compact_prepared_action_error(reason) do
+    reason
+    |> normalize_error()
+    |> Maraithon.PromptBudget.truncate_utf8(@prepared_error_max_bytes)
+  end
+
+  @doc false
+  def prepared_action_error_class(reason) do
+    if transient_prepared_action_error?(reason), do: :transient, else: :permanent
+  end
+
+  defp transient_prepared_action_error?(reason)
+       when reason in [:timeout, :closed, :econnrefused, :enetunreach, :ehostunreach, :nxdomain],
+       do: true
+
+  defp transient_prepared_action_error?({kind, status, _detail})
+       when kind in [:api_error, :http_error] and
+              (status in [408, 425, 429] or (is_integer(status) and status >= 500)),
+       do: true
+
+  defp transient_prepared_action_error?({kind, _detail})
+       when kind in [
+              :api_error,
+              :http_error,
+              :network_error,
+              :transport_error,
+              :rate_limited,
+              :llm_busy,
+              :temporarily_unavailable
+            ],
+       do: true
+
+  defp transient_prepared_action_error?(reason) when is_tuple(reason) do
+    reason
+    |> Tuple.to_list()
+    |> Enum.any?(&transient_prepared_action_error?/1)
+  end
+
+  defp transient_prepared_action_error?(reason) when is_binary(reason) do
+    normalized = String.downcase(reason)
+
+    String.contains?(normalized, [
+      "timeout",
+      "timed out",
+      "temporarily_unavailable",
+      "temporary unavailable",
+      "rate_limit",
+      "rate limit",
+      "connection refused",
+      "connection reset",
+      "network_error",
+      "transport_error",
+      "service unavailable"
+    ]) or Regex.match?(~r/(?:^|[^0-9])(408|425|429|5[0-9]{2})(?:[^0-9]|$)/, normalized)
+  end
+
+  defp transient_prepared_action_error?(_reason), do: false
+
   defp closed_prepared_action_failure({kind, _detail}) when is_atom(kind), do: kind
   defp closed_prepared_action_failure(kind) when is_atom(kind), do: kind
   defp closed_prepared_action_failure(_reason), do: :prepared_action_persistence_failed
 
   def expire_prepared_action(%PreparedAction{} = prepared_action) do
-    update_prepared_action(prepared_action, %{status: "expired", error: "confirmation_expired"})
+    with_locked_prepared_action(prepared_action, fn
+      %PreparedAction{status: "awaiting_confirmation"} = locked_action ->
+        if prepared_action_expired?(locked_action) do
+          update_prepared_action(locked_action, %{
+            status: "expired",
+            error: "confirmation_expired"
+          })
+        else
+          {:error, locked_action, :confirmation_not_expired}
+        end
+
+      %PreparedAction{} = locked_action ->
+        {:error, locked_action, :already_handled}
+    end)
   end
 
   def prepared_action_expired?(%PreparedAction{expires_at: %DateTime{} = expires_at}) do
