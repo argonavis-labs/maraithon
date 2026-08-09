@@ -3,11 +3,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   Telegram-native rendering and callback handling for assistant todo items.
   """
 
+  import Ecto.Query
+
   alias Maraithon.AppUrl
   alias Maraithon.ActionCards
   alias Maraithon.AssistantChat.TodoThreadPrimer
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Drafts
+  alias Maraithon.Repo
   alias Maraithon.SourceLabels
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ActionFailureCopy
@@ -143,15 +146,24 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp handle_callback_result(
          {:draft_ready, draft_text, updated_todo},
-         _user_id,
+         user_id,
          chat_id,
          message_id,
          callback_id,
          action,
          _original_todo
        ) do
-    with :ok <- send_draft(chat_id, message_id, draft_text),
-         :ok <- refresh_message(chat_id, message_id, updated_todo),
+    with {:ok, presented_todo} <-
+           ensure_draft_preview_delivered(
+             user_id,
+             chat_id,
+             message_id,
+             callback_id,
+             action,
+             draft_text,
+             updated_todo
+           ),
+         :ok <- refresh_message(chat_id, message_id, presented_todo),
          :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
       :ok
     end
@@ -430,17 +442,109 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp refresh_message(_chat_id, _message_id, _todo), do: :ok
 
+  defp ensure_draft_preview_delivered(
+         user_id,
+         chat_id,
+         message_id,
+         callback_id,
+         action,
+         draft_text,
+         %Todo{} = todo
+       ) do
+    cond do
+      draft_preview_delivered?(todo, callback_id, action) ->
+        {:ok, todo}
+
+      true ->
+        with {:ok, result} <- send_draft(chat_id, message_id, draft_text),
+             {:ok, checkpointed} <-
+               checkpoint_draft_preview(user_id, todo, callback_id, action, result) do
+          {:ok, checkpointed}
+        end
+    end
+  end
+
+  defp draft_preview_delivered?(%Todo{} = todo, callback_id, action)
+       when is_binary(callback_id) and is_binary(action) do
+    checkpoint = read_map(todo.metadata || %{}, "telegram_todo_action_checkpoint")
+    delivery = read_map(checkpoint, "preview_delivery")
+
+    read_string(checkpoint, "callback_id") == callback_id and
+      read_string(checkpoint, "action") == action and
+      read_string(checkpoint, "status") == "draft_ready" and
+      read_string(delivery, "status") == "delivered"
+  end
+
+  defp draft_preview_delivered?(_todo, _callback_id, _action), do: false
+
+  defp checkpoint_draft_preview(user_id, %Todo{} = todo, callback_id, action, result)
+       when is_binary(user_id) and is_binary(callback_id) and is_binary(action) do
+    Repo.transaction(fn ->
+      current =
+        Todo
+        |> where([candidate], candidate.id == ^todo.id and candidate.user_id == ^user_id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case current do
+        nil ->
+          Repo.rollback(:not_found)
+
+        %Todo{} = current ->
+          checkpoint = read_map(current.metadata || %{}, "telegram_todo_action_checkpoint")
+
+          cond do
+            draft_preview_delivered?(current, callback_id, action) ->
+              current
+
+            read_string(checkpoint, "callback_id") != callback_id or
+              read_string(checkpoint, "action") != action or
+                read_string(checkpoint, "status") != "draft_ready" ->
+              Repo.rollback(:stale_draft_checkpoint)
+
+            true ->
+              preview_delivery = %{
+                "status" => "delivered",
+                "delivery_key" => "todo-draft-preview:#{current.id}:#{callback_id}",
+                "provider_message_id" => read_id_string(result, "message_id"),
+                "delivered_at" => DateTime.to_iso8601(DateTime.utc_now())
+              }
+
+              updated_checkpoint = Map.put(checkpoint, "preview_delivery", preview_delivery)
+
+              metadata =
+                (current.metadata || %{})
+                |> Map.put("telegram_todo_action_checkpoint", updated_checkpoint)
+
+              case current
+                   |> Todo.changeset(%{metadata: metadata})
+                   |> Repo.update() do
+                {:ok, updated} -> updated
+                {:error, reason} -> Repo.rollback(reason)
+              end
+          end
+      end
+    end)
+    |> case do
+      {:ok, %Todo{} = updated} -> {:ok, updated}
+      {:error, reason} -> {:error, {:todo_draft_delivery_checkpoint_failed, reason}}
+    end
+  end
+
+  defp checkpoint_draft_preview(_user_id, %Todo{} = todo, _callback_id, _action, _result),
+    do: {:ok, todo}
+
   defp send_draft(chat_id, message_id, text)
        when is_binary(chat_id) and is_binary(message_id) and is_binary(text) do
     case TelegramResponder.reply(chat_id, message_id, text, parse_mode: "HTML") do
-      {:ok, _result} -> :ok
+      {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end
 
   defp send_draft(chat_id, _message_id, text) when is_binary(chat_id) and is_binary(text) do
     case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
-      {:ok, _result} -> :ok
+      {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, {:telegram_send_failed, reason}}
     end
   end

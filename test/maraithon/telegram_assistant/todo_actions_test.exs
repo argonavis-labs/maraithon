@@ -768,6 +768,98 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert last_telegram_message(:send).text =~ "checkpointed draft should only be generated once"
   end
 
+  test "draft preview delivery is checkpointed before later presentation work", %{
+    user_id: user_id
+  } do
+    generation_counter =
+      start_supervised!(%{
+        id: :todo_draft_preview_generation_counter,
+        start: {Agent, :start_link, [fn -> 0 end]}
+      })
+
+    original_assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_capture = Application.get_env(:maraithon, :capturing_telegram, [])
+    edit_failure = {:telegram_error, 503, "card edit unavailable after preview"}
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(original_assistant_config, :draft_opts,
+        llm_complete: fn _params ->
+          Agent.update(generation_counter, &(&1 + 1))
+
+          {:ok,
+           %{
+             content:
+               Jason.encode!(%{
+                 "subject" => "Re: Deterministic preview",
+                 "body" => "This preview should be delivered exactly once across the retry."
+               })
+           }}
+        end
+      )
+    )
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(original_capture, :edit_result, {:error, edit_failure})
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant_config)
+      Application.put_env(:maraithon, :capturing_telegram, original_capture)
+    end)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Reply with a deterministic preview",
+          "summary" => "The draft preview must survive a later edit failure.",
+          "next_action" => "Reply with the deterministic preview.",
+          "dedupe_key" => "todo-actions:deterministic-draft-preview"
+        }
+      ])
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-draft-preview",
+        callback_id: "cb-draft-preview-stable",
+        data: "tgtodo:#{todo.id}:draft_email"
+      }
+    }
+
+    assert {:error, {:telegram_edit_failed, ^edit_failure}} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    assert Agent.get(generation_counter, & &1) == 1
+    assert telegram_message_count(:send) == 1
+
+    checkpoint =
+      Todos.get_for_user(user_id, todo.id).metadata["telegram_todo_action_checkpoint"]
+
+    assert checkpoint["callback_id"] == "cb-draft-preview-stable"
+    assert checkpoint["status"] == "draft_ready"
+    assert get_in(checkpoint, ["preview_delivery", "status"]) == "delivered"
+
+    assert get_in(checkpoint, ["preview_delivery", "delivery_key"]) ==
+             "todo-draft-preview:#{todo.id}:cb-draft-preview-stable"
+
+    Application.put_env(:maraithon, :capturing_telegram, original_capture)
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Agent.get(generation_counter, & &1) == 1
+    assert telegram_message_count(:send) == 1
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert telegram_message_count(:send) == 1
+  end
+
   test "send callback prepares a confirmable action for a slack-sourced todo and requires explicit confirmation",
        %{user_id: user_id} do
     {:ok, [todo]} =
@@ -1372,6 +1464,12 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert edit.message_id == "plain-single-card"
     # Single-todo card render, not the batch header.
     refute edit.text =~ "still relevant?"
+  end
+
+  defp telegram_message_count(type) do
+    Agent.get(:capturing_telegram_recorder, fn events ->
+      Enum.count(events, &(&1.type == type))
+    end)
   end
 
   defp last_telegram_message(type) do

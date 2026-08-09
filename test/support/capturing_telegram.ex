@@ -6,15 +6,23 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
   def send_message(chat_id, text, opts \\ []) do
     message_id = next_message_id()
 
-    record_event(%{
+    event = %{
       type: :send,
       chat_id: normalize_chat_id(chat_id),
       message_id: message_id,
       text: text,
       opts: opts
-    })
+    }
 
-    {:ok, %{"message_id" => message_id}}
+    case send_result(event) do
+      {:error, reason} ->
+        notify_watcher({:capturing_telegram_send_failed, event, reason})
+        {:error, reason}
+
+      _ ->
+        record_event(event)
+        {:ok, %{"message_id" => message_id}}
+    end
   end
 
   def send_chat_action(chat_id, action) do
@@ -77,6 +85,14 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
       end)
     else
       "1"
+    end
+  end
+
+  defp send_result(event) do
+    case Application.get_env(:maraithon, :capturing_telegram, [])
+         |> Keyword.get(:send_result, :ok) do
+      fun when is_function(fun, 1) -> fun.(event)
+      result -> result
     end
   end
 

@@ -1797,6 +1797,222 @@ defmodule Maraithon.TelegramAssistantTest do
     assert List.last(sends).text =~ "Done and dismissed items are off future briefs"
   end
 
+  test "todo review retries resume checkpointed advancement without duplicating previews", %{
+    user_id: user_id
+  } do
+    assert {:ok, [first, second]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Recover the first review decision",
+                 "summary" => "The first review decision must advance durably.",
+                 "next_action" => "Mark the first review item done.",
+                 "priority" => 98,
+                 "dedupe_key" => "telegram-assistant:review-recovery:1"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Recover the second review decision",
+                 "summary" => "The final review summary must also resume.",
+                 "next_action" => "Dismiss the second review item.",
+                 "priority" => 94,
+                 "dedupe_key" => "telegram-assistant:review-recovery:2"
+               }
+             ])
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{
+          chat_id: 12345,
+          message_id: 9221,
+          text: "Let's review my todos one at a time"
+        }
+      })
+
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 1
+
+    failure = {:telegram_error, 503, "next review preview unavailable"}
+    capture_config = Application.get_env(:maraithon, :capturing_telegram, [])
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(capture_config, :send_result, {:error, failure})
+    )
+
+    first_event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12345,
+        message_id: "todo-review-recovery-1",
+        callback_id: "todo-review-recovery-done",
+        data: "tgtodo:#{first.id}:done"
+      }
+    }
+
+    assert {:error, {:telegram_send_failed, ^failure}} =
+             InsightNotifications.process_telegram_event_durable(first_event)
+
+    assert Todos.get_for_user(user_id, first.id).status == "done"
+
+    review_brief = latest_todo_review_brief(user_id)
+    review = review_brief.metadata["todo_review"]
+    assert review["status"] == "active"
+    assert review["current_todo_id"] == second.id
+    assert Enum.any?(review["reviewed"], &(&1["todo_id"] == first.id))
+    assert get_in(review, ["presentation", "status"]) == "failed"
+    assert get_in(review, ["presentation", "item_id"]) == second.id
+
+    Application.put_env(:maraithon, :capturing_telegram, capture_config)
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(first_event)
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 2
+
+    assert List.last(Enum.filter(telegram_events(), &(&1.type == :send))).text =~
+             "decision 2 of 2"
+
+    # A duplicate webhook drains edits/answers but the persisted presentation
+    # key prevents another copy of item 2.
+    assert :ok = InsightNotifications.process_telegram_event_durable(first_event)
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 2
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(capture_config, :send_result, {:error, failure})
+    )
+
+    second_event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12345,
+        message_id: "todo-review-recovery-2",
+        callback_id: "todo-review-recovery-dismiss",
+        data: "tgtodo:#{second.id}:dismiss"
+      }
+    }
+
+    assert {:error, {:telegram_send_failed, ^failure}} =
+             InsightNotifications.process_telegram_event_durable(second_event)
+
+    completed = latest_todo_review_brief(user_id)
+    assert get_in(completed.metadata, ["todo_review", "status"]) == "completed"
+    assert get_in(completed.metadata, ["todo_review", "presentation", "status"]) == "failed"
+    assert get_in(completed.metadata, ["todo_review", "presentation", "kind"]) == "summary"
+
+    Application.put_env(:maraithon, :capturing_telegram, capture_config)
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(second_event)
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 3
+
+    assert List.last(Enum.filter(telegram_events(), &(&1.type == :send))).text =~
+             "review finished"
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(second_event)
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 3
+  end
+
+  test "concurrent todo review retries share one claimed next-item presentation", %{
+    user_id: user_id
+  } do
+    assert {:ok, [first, second]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Serialize the first review callback",
+                 "summary" => "Concurrent callbacks must share one next presentation.",
+                 "next_action" => "Mark this review item done.",
+                 "priority" => 97,
+                 "dedupe_key" => "telegram-assistant:review-concurrency:1"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Present the second review item once",
+                 "summary" => "Only the presentation claim owner may send this item.",
+                 "next_action" => "Review this item after the first.",
+                 "priority" => 93,
+                 "dedupe_key" => "telegram-assistant:review-concurrency:2"
+               }
+             ])
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{
+          chat_id: 12345,
+          message_id: 9231,
+          text: "Let's review my todos one at a time"
+        }
+      })
+
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 1
+
+    parent = self()
+    capture_config = Application.get_env(:maraithon, :capturing_telegram, [])
+
+    blocking_send = fn event ->
+      provider_pid = self()
+      send(parent, {:review_presentation_claimed, provider_pid, event})
+
+      receive do
+        {:release_review_presentation, ^provider_pid} -> :ok
+      after
+        5_000 -> {:error, :test_provider_timeout}
+      end
+    end
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(capture_config, :send_result, blocking_send)
+    )
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12345,
+        message_id: "todo-review-concurrent",
+        callback_id: "todo-review-concurrent-done",
+        data: "tgtodo:#{first.id}:done"
+      }
+    }
+
+    owner =
+      Task.async(fn ->
+        InsightNotifications.process_telegram_event_durable(event)
+      end)
+
+    assert_receive {:review_presentation_claimed, provider_pid, provider_event}, 2_000
+    assert provider_event.text =~ "Review this item after the first."
+
+    assert {:error, {:brief_review_delivery_in_progress, delivery_key}} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    assert delivery_key =~ second.id
+
+    send(provider_pid, {:release_review_presentation, provider_pid})
+    assert :ok = Task.await(owner, 5_000)
+    Application.put_env(:maraithon, :capturing_telegram, capture_config)
+
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 2
+
+    review = latest_todo_review_brief(user_id).metadata["todo_review"]
+    assert review["current_todo_id"] == second.id
+    assert get_in(review, ["presentation", "status"]) == "delivered"
+    assert get_in(review, ["presentation", "attempt"]) == 1
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 2
+  end
+
   test "todo list replies with dense bullets are converted to contextual todo cards", %{
     user_id: user_id
   } do
@@ -2898,6 +3114,14 @@ defmodule Maraithon.TelegramAssistantTest do
   defp configure_liveness(opts) do
     config = Application.get_env(:maraithon, :telegram_assistant, [])
     Application.put_env(:maraithon, :telegram_assistant, Keyword.merge(config, opts))
+  end
+
+  defp latest_todo_review_brief(user_id) do
+    Maraithon.Briefs.Brief
+    |> where([brief], brief.user_id == ^user_id)
+    |> order_by([brief], desc: brief.updated_at, desc: brief.inserted_at)
+    |> Repo.all()
+    |> Enum.find(fn brief -> is_map(get_in(brief.metadata || %{}, ["todo_review"])) end)
   end
 
   defp telegram_events do
