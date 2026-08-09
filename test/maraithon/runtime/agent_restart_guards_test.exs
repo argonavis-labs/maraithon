@@ -52,12 +52,15 @@ defmodule Maraithon.Runtime.AgentRestartGuardsTest do
 
   test "expired ownership is recorded before its lease evidence is removed", %{agent: agent} do
     assert {:ok, lease} = AgentLeases.claim(agent.id)
+
+    assert {:ignored, :lease_renewed} =
+             AgentRestartGuards.record_expired(agent.id, lease.owner_token, backoffs_ms: [0])
+
+    assert AgentLeases.owner?(agent.id, lease.owner_token)
     expire_lease!(agent.id)
 
     assert {:recorded, guard} =
-             AgentRestartGuards.record_crash(agent.id, lease.owner_token, :lease_expired,
-               backoffs_ms: [0]
-             )
+             AgentRestartGuards.record_expired(agent.id, lease.owner_token, backoffs_ms: [0])
 
     assert guard.last_owner_token == lease.owner_token
     assert guard.needs_recovery
@@ -138,7 +141,7 @@ defmodule Maraithon.Runtime.AgentRestartGuardsTest do
 
     assert tripped.crash_count == 3
     assert tripped.tripped
-    refute tripped.needs_recovery
+    assert tripped.needs_recovery
     assert Repo.get!(Agent, agent.id).status == "stopped"
     assert Repo.get(AgentRuntimeLease, agent.id) == nil
 

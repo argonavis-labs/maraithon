@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
   alias Maraithon.AgentIsolation.Binding
   alias Maraithon.Agents.Agent
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
@@ -26,6 +27,27 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
   def record_crash(agent_id, owner_token, reason, opts \\ [])
 
   def record_crash(agent_id, owner_token, reason, opts) when is_list(opts) do
+    record_loss(agent_id, owner_token, reason, opts, false)
+  end
+
+  def record_crash(_agent_id, _owner_token, _reason, _opts),
+    do: {:error, :invalid_restart_guard}
+
+  @doc """
+  Records an expired generation only after rechecking expiry while holding the
+  exact Agent -> Binding -> Guard -> Lease locks. A stale sweeper hint can
+  therefore never delete a lease that renewed before its transaction began.
+  """
+  def record_expired(agent_id, owner_token, opts \\ [])
+
+  def record_expired(agent_id, owner_token, opts) when is_list(opts) do
+    record_loss(agent_id, owner_token, :lease_expired, opts, true)
+  end
+
+  def record_expired(_agent_id, _owner_token, _opts),
+    do: {:error, :invalid_restart_guard}
+
+  defp record_loss(agent_id, owner_token, reason, opts, require_expired?) do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token),
          {:ok, policy} <- policy(opts) do
@@ -44,45 +66,48 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
             {:ignored, :stale_owner}
 
           {:exact, %AgentRuntimeLease{} = exact_lease} ->
-            {window_started_at, crash_count} = next_window(guard, now, policy.window_ms)
-            tripped = crash_count >= policy.max_crashes
-            blocked_until = if tripped, do: nil, else: deadline(now, backoff(policy, crash_count))
+            if require_expired? and DateTime.compare(exact_lease.lease_until, now) == :gt do
+              {:ignored, :lease_renewed}
+            else
+              {window_started_at, crash_count} = next_window(guard, now, policy.window_ms)
+              tripped = crash_count >= policy.max_crashes
 
-            attrs = %{
-              agent_id: agent_id,
-              generation: Ecto.UUID.generate(),
-              last_owner_token: owner_token,
-              blocked_until: blocked_until,
-              window_started_at: window_started_at,
-              crash_count: crash_count,
-              tripped: tripped,
-              needs_recovery: not tripped,
-              last_reason: safe_reason(reason)
-            }
+              blocked_until =
+                if tripped, do: nil, else: deadline(now, backoff(policy, crash_count))
 
-            stored_guard = put_guard!(guard, attrs, now)
+              attrs = %{
+                agent_id: agent_id,
+                generation: Ecto.UUID.generate(),
+                last_owner_token: owner_token,
+                blocked_until: blocked_until,
+                window_started_at: window_started_at,
+                crash_count: crash_count,
+                tripped: tripped,
+                needs_recovery: true,
+                last_reason: safe_reason(reason)
+              }
 
-            if tripped and agent.status not in ["stopped", "terminated"] do
-              agent
-              |> Ecto.Changeset.change(%{
-                status: "stopped",
-                stopped_at: now,
-                updated_at: now
-              })
-              |> Repo.update!()
+              stored_guard = put_guard!(guard, attrs, now)
+
+              if tripped and agent.status not in ["stopped", "terminated"] do
+                agent
+                |> Ecto.Changeset.change(%{
+                  status: "stopped",
+                  stopped_at: now,
+                  updated_at: now
+                })
+                |> Repo.update!()
+              end
+
+              # Guard evidence is durable before the exact matching lease vanishes.
+              Repo.delete!(exact_lease)
+              {:recorded, stored_guard}
             end
-
-            # Guard evidence is durable before the exact matching lease vanishes.
-            Repo.delete!(exact_lease)
-            {:recorded, stored_guard}
         end
       end)
       |> unwrap_transaction()
     end
   end
-
-  def record_crash(_agent_id, _owner_token, _reason, _opts),
-    do: {:error, :invalid_restart_guard}
 
   def reset_for_operator(agent_id) do
     with {:ok, agent_id} <- cast_uuid(agent_id) do
@@ -94,6 +119,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
         now = DatabaseClock.now!()
 
         if lease, do: Repo.rollback(:runtime_lease_owned)
+        ensure_no_processing_directive!(agent_id)
 
         put_guard!(
           guard,
@@ -166,6 +192,19 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
     |> AgentRestartGuard.changeset(attrs)
     |> Ecto.Changeset.change(updated_at: now)
     |> Repo.update!()
+  end
+
+  defp ensure_no_processing_directive!(agent_id) do
+    case Repo.one(
+           from(directive in AgentDirective,
+             where: directive.agent_id == ^agent_id,
+             where: directive.status == "processing",
+             lock: "FOR UPDATE"
+           )
+         ) do
+      nil -> :ok
+      _processing -> Repo.rollback(:runtime_work_requires_reconciliation)
+    end
   end
 
   defp lock_agent!(agent_id) do

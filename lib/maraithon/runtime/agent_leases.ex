@@ -13,6 +13,7 @@ defmodule Maraithon.Runtime.AgentLeases do
   alias Maraithon.AgentIsolation.Binding
   alias Maraithon.Agents.Agent
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
@@ -41,6 +42,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_binding_matches!(agent, binding)
         ensure_initial_guard_allows_claim!(guard, now)
         ensure_no_existing_lease!(lease, now)
+        ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
 
         insert_lease!(agent_id, owner_token, owner_node, now, lease_until)
       end)
@@ -69,6 +71,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_binding_matches!(agent, binding)
         ensure_due_recovery_guard!(guard, guard_generation, now)
         ensure_no_existing_lease!(lease, now)
+        ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
 
         insert_lease!(agent_id, owner_token, owner_node, now, lease_until)
       end)
@@ -200,6 +203,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         lease = lock_lease(agent_id)
         now = DatabaseClock.now!()
         ensure_exact_live_lease!(lease, owner_token, now)
+        ensure_no_processing_directive!(agent_id, :runtime_work_in_progress)
         Repo.delete!(lease)
         :released
       end)
@@ -457,6 +461,19 @@ defmodule Maraithon.Runtime.AgentLeases do
 
   defp blocked?(%AgentRestartGuard{blocked_until: blocked_until}, now),
     do: DateTime.compare(blocked_until, now) == :gt
+
+  defp ensure_no_processing_directive!(agent_id, reason) do
+    case Repo.one(
+           from(directive in AgentDirective,
+             where: directive.agent_id == ^agent_id,
+             where: directive.status == "processing",
+             lock: "FOR UPDATE"
+           )
+         ) do
+      nil -> :ok
+      _processing -> Repo.rollback(reason)
+    end
+  end
 
   defp owner_node(opts) do
     if Keyword.keyword?(opts) and

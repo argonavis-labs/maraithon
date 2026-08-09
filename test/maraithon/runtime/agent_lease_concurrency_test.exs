@@ -10,6 +10,8 @@ defmodule Maraithon.Runtime.AgentLeaseConcurrencyTest do
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentDirective
+  alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentRuntimeLease
@@ -62,6 +64,81 @@ defmodule Maraithon.Runtime.AgentLeaseConcurrencyTest do
     results = [Task.await(first), Task.await(second)]
     assert Enum.count(results, &match?({:ok, %AgentRuntimeLease{}}, &1)) == 1
     assert Enum.count(results, &(&1 == {:error, :runtime_lease_owned})) == 1
+  end
+
+  test "two physical connections coalesce one enqueue dedupe key", %{agent: agent} do
+    parent = self()
+
+    enqueue = fn ->
+      send(parent, {:enqueue_ready, self()})
+
+      receive do
+        :go ->
+          unboxed(fn ->
+            AgentDirectives.enqueue(
+              agent.id,
+              agent.user_id,
+              "message",
+              %{"body" => "same"},
+              "concurrent-dedupe"
+            )
+          end)
+      end
+    end
+
+    first = Task.async(enqueue)
+    second = Task.async(enqueue)
+    assert_receive {:enqueue_ready, first_pid}
+    assert_receive {:enqueue_ready, second_pid}
+    send(first_pid, :go)
+    send(second_pid, :go)
+
+    assert [{:ok, %AgentDirective{} = one}, {:ok, %AgentDirective{} = two}] =
+             [Task.await(first), Task.await(second)]
+
+    assert one.id == two.id
+  end
+
+  test "two physical connections claim at most one processing directive", %{agent: agent} do
+    lease =
+      unboxed(fn ->
+        {:ok, _directive} =
+          AgentDirectives.enqueue(
+            agent.id,
+            agent.user_id,
+            "message",
+            %{"body" => "once"},
+            "concurrent-claim"
+          )
+
+        {:ok, lease} = AgentLeases.claim(agent.id)
+        {:ok, _ready} = AgentLeases.mark_ready(agent.id, lease.owner_token)
+        lease
+      end)
+
+    parent = self()
+
+    claim = fn ->
+      send(parent, {:directive_claim_ready, self()})
+
+      receive do
+        :go ->
+          unboxed(fn ->
+            AgentDirectives.claim_next(agent.id, agent.user_id, lease.owner_token)
+          end)
+      end
+    end
+
+    first = Task.async(claim)
+    second = Task.async(claim)
+    assert_receive {:directive_claim_ready, first_pid}
+    assert_receive {:directive_claim_ready, second_pid}
+    send(first_pid, :go)
+    send(second_pid, :go)
+
+    results = [Task.await(first), Task.await(second)]
+    assert Enum.count(results, &match?({:ok, %AgentDirective{}}, &1)) == 1
+    assert Enum.count(results, &(&1 == {:ok, nil})) == 1
   end
 
   test "a transactional ready fence holds ownership locks until caller commit", %{agent: agent} do
