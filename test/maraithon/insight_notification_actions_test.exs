@@ -886,6 +886,135 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute completed.text =~ "<b>Completed</b>"
   end
 
+  test "a live provider execution claim allows only its owner to send", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    bypass = Bypass.open()
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}")
+    delivery = create_slack_send_delivery(agent, user_id, "live-claim")
+    test_pid = self()
+    provider_calls = :atomics.new(1, [])
+
+    Bypass.stub(bypass, "POST", "/chat.postMessage", fn conn ->
+      call_number = :atomics.add_get(provider_calls, 1, 1)
+      send(test_pid, {:slack_provider_called, call_number, self()})
+
+      receive do
+        {:release_slack_provider, ^call_number} -> :ok
+      after
+        2_000 -> raise "timed out waiting to release Slack provider"
+      end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "ts" => "live-owner-result"}))
+    end)
+
+    owner_send = Task.async(fn -> Actions.perform_action(delivery, "send") end)
+
+    assert_receive {:slack_provider_called, 1, provider_pid}, 1_000
+
+    live_state =
+      Repo.get!(Delivery, delivery.id).metadata
+      |> get_in(["telegram_action"])
+
+    assert live_state["status"] == "executing"
+    assert is_binary(live_state["execution_owner"])
+    assert is_binary(live_state["execution_lease_expires_at"])
+
+    assert {:error, :action_in_progress} = Actions.perform_action(delivery, "send")
+    assert :atomics.get(provider_calls, 1) == 1
+    refute_receive {:slack_provider_called, 2, _provider_pid}, 100
+
+    send(provider_pid, {:release_slack_provider, 1})
+    assert {:ok, _completed, "Slack reply sent"} = Task.await(owner_send, 2_000)
+
+    final_state =
+      Repo.get!(Delivery, delivery.id).metadata
+      |> get_in(["telegram_action"])
+
+    assert final_state["status"] == "executed"
+    assert final_state["result"]["ts"] == "live-owner-result"
+    assert final_state["execution_owner"] == live_state["execution_owner"]
+  end
+
+  test "an expired provider claim is reclaimed and fences the late owner checkpoint", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    bypass = Bypass.open()
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}")
+    delivery = create_slack_send_delivery(agent, user_id, "expired-claim")
+    test_pid = self()
+    provider_calls = :atomics.new(1, [])
+
+    Bypass.stub(bypass, "POST", "/chat.postMessage", fn conn ->
+      call_number = :atomics.add_get(provider_calls, 1, 1)
+      send(test_pid, {:slack_provider_called, call_number, self()})
+
+      if call_number == 1 do
+        receive do
+          {:release_slack_provider, 1} -> :ok
+        after
+          3_000 -> raise "timed out waiting to release the original Slack provider call"
+        end
+      end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"ok" => true, "ts" => "owner-result-#{call_number}"})
+      )
+    end)
+
+    original_send = Task.async(fn -> Actions.perform_action(delivery, "send") end)
+    assert_receive {:slack_provider_called, 1, original_provider_pid}, 1_000
+
+    live_delivery = Repo.get!(Delivery, delivery.id)
+    live_state = get_in(live_delivery.metadata, ["telegram_action"])
+    original_owner = live_state["execution_owner"]
+
+    expired_state =
+      Map.put(
+        live_state,
+        "execution_lease_expires_at",
+        DateTime.utc_now()
+        |> DateTime.add(-1, :second)
+        |> DateTime.truncate(:second)
+        |> DateTime.to_iso8601()
+      )
+
+    live_delivery
+    |> Ecto.Changeset.change(
+      metadata: put_in(live_delivery.metadata, ["telegram_action"], expired_state)
+    )
+    |> Repo.update!()
+
+    # Reclaiming after the bounded lease can repeat an accepted provider
+    # mutation. The new owner may checkpoint; the old late owner may not.
+    assert {:ok, reclaimed, "Slack reply sent"} = Actions.perform_action(delivery, "send")
+    assert_receive {:slack_provider_called, 2, _reclaim_provider_pid}, 1_000
+
+    reclaimed_state = Actions.action_state_for_delivery(reclaimed)
+    assert reclaimed_state["status"] == "executed"
+    assert reclaimed_state["result"]["ts"] == "owner-result-2"
+    refute reclaimed_state["execution_owner"] == original_owner
+
+    send(original_provider_pid, {:release_slack_provider, 1})
+    assert {:error, :execution_claim_lost} = Task.await(original_send, 2_000)
+    assert :atomics.get(provider_calls, 1) == 2
+
+    final_state =
+      Repo.get!(Delivery, delivery.id).metadata
+      |> get_in(["telegram_action"])
+
+    assert final_state["status"] == "executed"
+    assert final_state["result"]["ts"] == "owner-result-2"
+    assert final_state["execution_owner"] == reclaimed_state["execution_owner"]
+  end
+
   test "an executed provider checkpoint resumes acknowledgement and presentation without re-sending",
        %{
          agent: agent,
@@ -1280,6 +1409,36 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute button_labels(sent.opts) |> Enum.member?("Draft Email")
     refute button_labels(sent.opts) |> Enum.member?("Mark Done")
     refute button_labels(sent.opts) |> Enum.member?("Ack")
+  end
+
+  defp create_slack_send_delivery(agent, user_id, suffix) do
+    team_id = "TCLAIM"
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "slack:#{team_id}:user:UCLAIM", %{
+        access_token: "slack-user-access",
+        refresh_token: "slack-user-refresh",
+        expires_in: 3_600,
+        scopes: ["chat:write"]
+      })
+
+    state = %{
+      "status" => "drafted",
+      "spec" => %{
+        "kind" => "slack_reply",
+        "notice_label" => "Slack",
+        "team_id" => team_id,
+        "channel" => "CCLAIM",
+        "thread_ts" => "171234.000100",
+        "text" => "The reviewed Slack reply"
+      }
+    }
+
+    agent
+    |> create_action_delivery(user_id, suffix)
+    |> Delivery.changeset(%{metadata: %{"telegram_action" => state}})
+    |> Repo.update!()
+    |> Repo.preload(:insight, force: true)
   end
 
   defp create_action_delivery(agent, user_id, suffix) do

@@ -29,6 +29,10 @@ defmodule Maraithon.InsightNotifications.Actions do
   @callback_prefix "insact"
   @expected_delivery_revision_key "_maraithon_expected_delivery_revision"
   @callback_replay_key "_maraithon_callback_replay"
+  @execution_claim_lease_seconds 300
+  @execution_owner_key "execution_owner"
+  @execution_claimed_at_key "execution_claimed_at"
+  @execution_lease_expires_at_key "execution_lease_expires_at"
   @max_preview_length 900
   @chief_message_max_length 700
   @section_text_max_length 180
@@ -332,22 +336,17 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp execute_action(%Delivery{} = delivery) do
     case action_state(delivery) do
-      %{"status" => "drafted", "spec" => spec} ->
-        with {:ok, claimed_delivery} <-
-               put_action_state(delivery, %{
-                 "status" => "executing",
-                 "spec" => spec,
-                 "started_at" => now_iso8601()
-               }) do
-          execute_claimed_action(claimed_delivery, spec)
-        end
+      %{"status" => status} when status in ["drafted", "executing"] ->
+        case claim_action_execution(delivery) do
+          {:ok, claimed_delivery, spec, owner_token} ->
+            execute_claimed_action(claimed_delivery, spec, owner_token)
 
-      %{"status" => "executing", "spec" => spec} ->
-        # Telegram has no provider idempotency key for these sends. A crash
-        # after provider acceptance but before the executed checkpoint leaves
-        # this resumable claim; retrying may duplicate the provider mutation,
-        # which is the documented accepted/local-checkpoint ambiguity.
-        execute_claimed_action(delivery, spec)
+          {:executed, checkpointed_delivery} ->
+            finish_executed_action(checkpointed_delivery)
+
+          {:error, _reason} = error ->
+            error
+        end
 
       %{"status" => "executed"} ->
         # The provider mutation is already checkpointed. A durable callback
@@ -360,15 +359,121 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
-  defp execute_claimed_action(%Delivery{} = delivery, spec) do
+  defp claim_action_execution(%Delivery{} = delivery) do
+    expected_revision = expected_delivery_revision(delivery)
+    expected_spec = delivery |> action_state() |> read_map("spec")
+    owner_token = Ecto.UUID.generate()
+    claimed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    Repo.transaction(fn ->
+      current =
+        Delivery
+        |> where([candidate], candidate.id == ^delivery.id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case current do
+        nil ->
+          Repo.rollback(:delivery_not_found)
+
+        %Delivery{} = current ->
+          current = Repo.preload(current, :insight)
+          current_state = action_state(current)
+
+          case current_state do
+            %{"status" => "executed"} = executed_state ->
+              if read_map(executed_state, "spec") == expected_spec and
+                   action_state_kind(executed_state) in ["gmail_reply", "slack_reply"] do
+                {:executed, current}
+              else
+                Repo.rollback(:stale_action_revision)
+              end
+
+            %{"status" => status, "spec" => %{} = spec}
+            when status in ["drafted", "executing"] ->
+              desired_state = execution_claim_state(current_state, owner_token, claimed_at)
+
+              # The row lock makes a live claim exclusive. An expired claim (or
+              # a legacy executing state without lease fields) is reclaimable.
+              # Providers offer no idempotency key here, so acceptance before a
+              # crashed owner's checkpoint retains the documented ambiguity.
+              cond do
+                execution_claim_live?(current_state, claimed_at) ->
+                  Repo.rollback(:action_in_progress)
+
+                delivery_state_revision(current) != expected_revision ->
+                  Repo.rollback(:stale_action_revision)
+
+                not monotone_action_transition?(current_state, desired_state) ->
+                  Repo.rollback(:stale_action_revision)
+
+                true ->
+                  updated = persist_action_state(current, desired_state)
+                  {:claimed, updated, spec, owner_token}
+              end
+
+            _missing_or_stale ->
+              Repo.rollback(:draft_not_ready)
+          end
+      end
+    end)
+    |> case do
+      {:ok, {:claimed, %Delivery{} = updated, spec, owner_token}} ->
+        {:ok, updated, spec, owner_token}
+
+      {:ok, {:executed, %Delivery{} = updated}} ->
+        {:executed, updated}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp execution_claim_state(state, owner_token, claimed_at) do
+    state
+    |> Map.put("status", "executing")
+    |> Map.put("started_at", DateTime.to_iso8601(claimed_at))
+    |> Map.put(@execution_owner_key, owner_token)
+    |> Map.put(@execution_claimed_at_key, DateTime.to_iso8601(claimed_at))
+    |> Map.put(
+      @execution_lease_expires_at_key,
+      claimed_at
+      |> DateTime.add(@execution_claim_lease_seconds, :second)
+      |> DateTime.to_iso8601()
+    )
+  end
+
+  defp execution_claim_live?(%{"status" => "executing"} = state, now) do
+    owner_token = read_string(state, @execution_owner_key)
+    lease_expires_at = read_string(state, @execution_lease_expires_at_key)
+
+    with true <- present?(owner_token),
+         true <- present?(lease_expires_at),
+         {:ok, expires_at, _offset} <- DateTime.from_iso8601(lease_expires_at) do
+      DateTime.compare(expires_at, now) == :gt
+    else
+      _missing_or_invalid -> false
+    end
+  end
+
+  defp execution_claim_live?(_state, _now), do: false
+
+  defp execute_claimed_action(%Delivery{} = delivery, spec, owner_token) do
+    # The owner check and claim-state revision fence a late provider response
+    # after another caller has reclaimed the lease.
     with {:ok, result} <- run_action(spec, delivery.insight),
          {:ok, checkpointed_delivery} <-
-           put_action_state(delivery, %{
-             "status" => "executed",
-             "spec" => spec,
-             "result" => stringify_map_keys(result),
-             "executed_at" => now_iso8601()
-           }) do
+           put_action_state(
+             delivery,
+             %{
+               "status" => "executed",
+               "spec" => spec,
+               "result" => stringify_map_keys(result),
+               "executed_at" => now_iso8601(),
+               @execution_owner_key => owner_token
+             },
+             execution_owner: owner_token
+           ) do
       finish_executed_action(checkpointed_delivery)
     end
   end
@@ -769,11 +874,10 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
-  defp put_action_state(%Delivery{} = delivery, action_state) when is_map(action_state) do
-    expected_revision =
-      read_string(delivery.metadata || %{}, @expected_delivery_revision_key) ||
-        delivery_state_revision(delivery)
-
+  defp put_action_state(%Delivery{} = delivery, action_state, opts \\ [])
+       when is_map(action_state) and is_list(opts) do
+    expected_revision = expected_delivery_revision(delivery)
+    expected_execution_owner = Keyword.get(opts, :execution_owner)
     desired_state = stringify_map_keys(action_state)
 
     Repo.transaction(fn ->
@@ -792,6 +896,9 @@ defmodule Maraithon.InsightNotifications.Actions do
           current_state = action_state(current)
 
           cond do
+            not execution_owner_matches?(current_state, expected_execution_owner) ->
+              Repo.rollback(:execution_claim_lost)
+
             delivery_state_revision(current) != expected_revision ->
               Repo.rollback(:stale_action_revision)
 
@@ -799,24 +906,40 @@ defmodule Maraithon.InsightNotifications.Actions do
               Repo.rollback(:stale_action_revision)
 
             true ->
-              metadata =
-                current.metadata
-                |> Kernel.||(%{})
-                |> Map.delete(@expected_delivery_revision_key)
-                |> Map.put("telegram_action", desired_state)
-
-              case current
-                   |> Ecto.Changeset.change(metadata: metadata)
-                   |> Repo.update() do
-                {:ok, updated} -> Repo.preload(updated, :insight)
-                {:error, reason} -> Repo.rollback(reason)
-              end
+              persist_action_state(current, desired_state)
           end
       end
     end)
     |> case do
       {:ok, %Delivery{} = updated} -> {:ok, updated}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp expected_delivery_revision(%Delivery{} = delivery) do
+    read_string(delivery.metadata || %{}, @expected_delivery_revision_key) ||
+      delivery_state_revision(delivery)
+  end
+
+  defp execution_owner_matches?(_state, nil), do: true
+
+  defp execution_owner_matches?(state, owner_token) when is_binary(owner_token),
+    do: read_string(state || %{}, @execution_owner_key) == owner_token
+
+  defp execution_owner_matches?(_state, _owner_token), do: false
+
+  defp persist_action_state(%Delivery{} = current, desired_state) do
+    metadata =
+      current.metadata
+      |> Kernel.||(%{})
+      |> Map.delete(@expected_delivery_revision_key)
+      |> Map.put("telegram_action", desired_state)
+
+    case current
+         |> Ecto.Changeset.change(metadata: metadata)
+         |> Repo.update() do
+      {:ok, updated} -> Repo.preload(updated, :insight)
+      {:error, reason} -> Repo.rollback(reason)
     end
   end
 
@@ -828,13 +951,22 @@ defmodule Maraithon.InsightNotifications.Actions do
        when desired in ["drafted", "executed", "cancelled", "dismissed", "snoozed"],
        do: true
 
+  defp monotone_action_transition?(
+         %{"status" => "drafted"} = current,
+         %{"status" => "executing"} = desired
+       ),
+       do: read_map(current, "spec") == read_map(desired, "spec")
+
   defp monotone_action_transition?(%{"status" => "drafted"}, %{"status" => desired})
-       when desired in ["drafted", "executing", "executed", "cancelled"],
+       when desired in ["drafted", "executed", "cancelled"],
        do: true
 
-  defp monotone_action_transition?(%{"status" => "executing"}, %{"status" => desired})
-       when desired in ["executing", "executed"],
-       do: true
+  defp monotone_action_transition?(
+         %{"status" => "executing"} = current,
+         %{"status" => desired_status} = desired
+       )
+       when desired_status in ["executing", "executed"],
+       do: read_map(current, "spec") == read_map(desired, "spec")
 
   defp monotone_action_transition?(
          %{"status" => "executed"} = current,
@@ -2000,6 +2132,10 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp callback_error_text(:action_not_available),
     do:
       "No quick action is available for this item. Use the latest message or handle it in the source app."
+
+  defp callback_error_text(reason)
+       when reason in [:action_in_progress, :execution_claim_lost],
+       do: "This send is already in progress. Check again shortly."
 
   defp callback_error_text(:draft_not_ready), do: "Draft first, then choose Send Now."
 
