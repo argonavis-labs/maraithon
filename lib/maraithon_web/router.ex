@@ -263,6 +263,7 @@ defmodule MaraithonWeb.Router do
   scope "/webhooks", MaraithonWeb do
     pipe_through :api
 
+    post "/telegram/:secret", WebhookController, :telegram, log: false
     post "/github", WebhookController, :github
     post "/google/calendar", WebhookController, :google_calendar
     post "/google/gmail", WebhookController, :google_gmail

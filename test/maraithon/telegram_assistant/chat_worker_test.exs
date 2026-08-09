@@ -166,6 +166,26 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerTest do
     await_worker_drained(chat)
     refute_received {:telegram_chat_action, ^chat, "typing"}
   end
+
+  test "durable processing waits for prior same-chat work and its own completion" do
+    Application.put_env(:maraithon, :chat_worker_test_pid, self())
+    chat = "chatworker-durable-#{System.unique_integer([:positive])}"
+    on_exit(fn -> stop_worker(chat) end)
+
+    # Messages from this process reach the worker in send order: the synchronous
+    # call cannot return until the preceding cast and its own turn both finish.
+    assert :ok = ChatWorker.enqueue(chat, inert_message(chat, "queued-first"))
+    assert :ok = ChatWorker.process_durable(chat, inert_message(chat, "durable-second"))
+
+    [{pid, _}] = Registry.lookup(@registry, chat)
+    state = :sys.get_state(pid)
+    assert MapSet.subset?(MapSet.new(["queued-first", "durable-second"]), state.seen_set)
+
+    # Durable calls happen after HTTP acceptance and do not duplicate the
+    # ordinary async path's early typing hint.
+    assert_receive {:telegram_chat_action, ^chat, "typing"}
+    refute_received {:telegram_chat_action, ^chat, "typing"}
+  end
 end
 
 defmodule Maraithon.TelegramAssistant.ChatWorkerCompletedRetryTest do
@@ -231,7 +251,11 @@ defmodule Maraithon.TelegramAssistant.ChatWorkerCompletedRetryTest do
 
     assert TelegramConversations.assistant_reply_recorded?(chat, message_id)
 
-    ChatWorker.enqueue(chat, %{"chat_id" => chat, "message_id" => message_id})
+    assert :ok =
+             ChatWorker.process_durable(chat, %{
+               "chat_id" => chat,
+               "message_id" => message_id
+             })
 
     [{pid, _}] = Registry.lookup(@registry, chat)
     state = :sys.get_state(pid)

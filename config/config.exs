@@ -7,6 +7,10 @@
 # General application configuration
 import Config
 
+# Never render webhook credentials or auth material in Phoenix parameter logs.
+# Secret-bearing Telegram request paths are separately redacted before telemetry.
+config :phoenix, :filter_parameters, ["password", "secret", "token", "credential"]
+
 config :maraithon,
   ecto_repos: [Maraithon.Repo],
   generators: [timestamp_type: :utc_datetime]

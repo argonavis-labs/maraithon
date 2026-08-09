@@ -63,6 +63,23 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
     end
   end
 
+  @doc """
+  Processes a durably accepted message in per-chat order.
+
+  The call returns only after routing (or the existing fallback path) finishes,
+  allowing the background job to remain claimed until work is actually done.
+  """
+  @spec process_durable(String.t(), map()) :: :ok | :unhandled
+  def process_durable(chat_id, data) when is_binary(chat_id) and is_map(data) do
+    if async_enabled?() do
+      chat_id
+      |> ensure_worker()
+      |> GenServer.call({:handle_message_durable, data}, :infinity)
+    else
+      process_durable_inline(chat_id, data)
+    end
+  end
+
   defp ensure_worker(chat_id) do
     case Registry.lookup(@registry, chat_id) do
       [{pid, _}] ->
@@ -95,51 +112,49 @@ defmodule Maraithon.TelegramAssistant.ChatWorker do
 
   @impl true
   def handle_cast({:handle_message, data}, state) do
+    {_result, state} = process_message(data, state, true)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:handle_message_durable, data}, _from, state) do
+    {result, state} = process_message(data, state, false)
+    {:reply, result, state}
+  end
+
+  defp process_message(data, state, send_typing?) do
     message_id = message_id(data)
 
     cond do
       message_id != nil and MapSet.member?(state.seen_set, message_id) ->
-        # Duplicate webhook delivery — Telegram retried, and this worker
-        # already handled it in this lifetime.
-        {:noreply, state}
+        # Duplicate delivery already handled during this worker lifetime.
+        {:ok, state}
 
       message_id != nil and already_completed?(state.chat_id, message_id) ->
-        # Deferring mark-as-seen until after handling (R3) means a webhook
-        # retry re-runs `TelegramRouter.handle_message/1` from scratch — but
-        # `seen_set` alone can't catch a retry that arrives after a worker
-        # restart, since it's only in-memory. Check persisted state instead:
-        # if a completed assistant reply already exists for this inbound
-        # message, the prior attempt actually finished and answered the
-        # user. Re-running from scratch here would risk double-firing
-        # non-idempotent tool side effects (e.g. sending an email twice), so
-        # just remember the id and skip reprocessing.
-        {:noreply, remember(state, message_id)}
+        # Persisted completion survives worker restarts and prevents a retry
+        # from repeating non-idempotent tools after the user got a reply.
+        {:ok, remember(state, message_id)}
 
       true ->
-        # SPEC 09 R0: fire a stateless "typing…" hint the moment a genuinely
-        # new message is picked up — strictly before transcription, routing
-        # (including the bounded model-routing classifier), context build,
-        # and preflight. `sendChatAction` is a fire-and-forget UI hint with
-        # no persisted state, so re-asserting it again ~1.2s later when the
-        # LivenessSession's own :start_typing timer fires is exactly as safe
-        # as the session's periodic typing refreshes. A retry of an
-        # already-completed message never reaches this branch (guards above),
-        # so the ping never fires for a turn the user already got a reply to.
-        _ = send_early_typing_ping(state.chat_id)
+        # The ordinary async path retains its early typing hint. Durable ingress
+        # has already acknowledged before reaching this synchronous call and
+        # relies on the normal liveness session instead.
+        if send_typing?, do: send_early_typing_ping(state.chat_id)
 
-        # `run_router/2` never lets an exception, exit, or throw escape — it
-        # always resolves to `:ok` (success, or a caught failure whose fallback
-        # reply was actually delivered) or `:unhandled` (a caught failure whose
-        # fallback reply also failed to send). Only `:ok` marks the message id
-        # as seen. If the worker dies outright before this point, or the
-        # fallback itself could not reach the user, the id is never
-        # remembered, so a Telegram webhook retry (or any other redelivery of
-        # the same message id) can still be processed — by this worker or a
-        # fresh one — instead of the message being silently, permanently lost.
         case prepare_and_run(data, state.chat_id) do
-          :ok -> {:noreply, remember(state, message_id)}
-          :unhandled -> {:noreply, state}
+          :ok -> {:ok, remember(state, message_id)}
+          :unhandled -> {:unhandled, state}
         end
+    end
+  end
+
+  defp process_durable_inline(chat_id, data) do
+    message_id = message_id(data)
+
+    if message_id != nil and already_completed?(chat_id, message_id) do
+      :ok
+    else
+      prepare_and_run(data, chat_id)
     end
   end
 

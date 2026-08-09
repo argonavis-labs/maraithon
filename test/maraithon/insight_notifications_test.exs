@@ -9,10 +9,12 @@ defmodule Maraithon.InsightNotificationsTest do
   alias Maraithon.InsightNotifications.{Delivery, ThresholdProfile}
   alias Maraithon.Insights
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant.ChatWorker
   alias MaraithonWeb.TelegramLink
 
   setup do
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_chat_worker = Application.get_env(:maraithon, ChatWorker, [])
 
     Application.put_env(:maraithon, :insights,
       telegram_module: Maraithon.TestSupport.FakeTelegram
@@ -22,6 +24,7 @@ defmodule Maraithon.InsightNotificationsTest do
       Application.delete_env(:maraithon, :insights)
       Application.delete_env(:maraithon, :failing_telegram)
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+      Application.put_env(:maraithon, ChatWorker, original_chat_worker)
     end)
 
     user_id = "notify-user@example.com"
@@ -237,6 +240,35 @@ defmodule Maraithon.InsightNotificationsTest do
       account = ConnectedAccounts.get(user_id, "telegram")
       assert account.status == "connected"
       assert account.external_account_id == "223344"
+    end
+
+    test "durable message dispatch waits behind earlier work in the same chat" do
+      Application.put_env(:maraithon, ChatWorker, async_enabled: true)
+      chat_id = "durable-insight-#{System.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        case Registry.lookup(Maraithon.TelegramAssistant.ChatRegistry, chat_id) do
+          [{pid, _value}] -> GenServer.stop(pid, :normal)
+          [] -> :ok
+        end
+      end)
+
+      ordinary = %{
+        type: "message",
+        data: %{chat_id: chat_id, message_id: "first", text: "unlinked first"}
+      }
+
+      durable = %{
+        type: "message",
+        data: %{chat_id: chat_id, message_id: "second", text: "unlinked second"}
+      }
+
+      assert :ok = InsightNotifications.handle_telegram_event(ordinary)
+      assert :ok = InsightNotifications.handle_telegram_event(durable, durable: true)
+
+      [{pid, _value}] = Registry.lookup(Maraithon.TelegramAssistant.ChatRegistry, chat_id)
+      state = :sys.get_state(pid)
+      assert MapSet.subset?(MapSet.new(["first", "second"]), state.seen_set)
     end
 
     test "records callback feedback and tunes threshold", %{user_id: user_id, insight: insight} do

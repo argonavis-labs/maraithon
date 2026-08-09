@@ -64,10 +64,12 @@ defmodule Maraithon.InsightNotifications do
   @doc """
   Handles Telegram webhook events relevant to linking and feedback.
   """
-  def handle_telegram_event(%{} = event) do
+  def handle_telegram_event(event), do: handle_telegram_event(event, [])
+
+  def handle_telegram_event(%{} = event, opts) when is_list(opts) do
     case read_string(event, "type") do
       "message" ->
-        handle_message_event(read_map(event, "data"))
+        handle_message_event(read_map(event, "data"), opts)
 
       # Voice/audio messages arrive as their own connector event types (no
       # "text"), classified by `Connectors.Telegram.classify_message/1`.
@@ -75,7 +77,7 @@ defmodule Maraithon.InsightNotifications do
       # text message — the transcription step happens later, inside
       # `ChatWorker`, before the message reaches `TelegramRouter` (SPEC 02).
       type when type in ["voice", "audio"] ->
-        handle_message_event(read_map(event, "data"))
+        handle_message_event(read_map(event, "data"), opts)
 
       "edited_message" ->
         TelegramRouter.handle_edited_message(read_map(event, "data"))
@@ -88,9 +90,9 @@ defmodule Maraithon.InsightNotifications do
     end
   end
 
-  def handle_telegram_event(_event), do: :ok
+  def handle_telegram_event(_event, _opts), do: :ok
 
-  defp handle_message_event(data) when is_map(data) do
+  defp handle_message_event(data, opts) when is_map(data) do
     chat_id = read_id_string(data, "chat_id")
     text = read_string(data, "text")
 
@@ -109,14 +111,18 @@ defmodule Maraithon.InsightNotifications do
             :ok
 
           _ ->
-            # Hand off to the per-chat worker so the webhook acks immediately
-            # and concurrent messages in this chat are serialized.
-            Maraithon.TelegramAssistant.ChatWorker.enqueue(chat_id, data)
+            if Keyword.get(opts, :durable, false) do
+              Maraithon.TelegramAssistant.ChatWorker.process_durable(chat_id, data)
+            else
+              # Hand off to the per-chat worker so ordinary callers retain the
+              # current fast asynchronous behavior.
+              Maraithon.TelegramAssistant.ChatWorker.enqueue(chat_id, data)
+            end
         end
     end
   end
 
-  defp handle_message_event(_), do: :ok
+  defp handle_message_event(_data, _opts), do: :ok
 
   def get_or_create_profile(user_id) when is_binary(user_id) do
     case Repo.get_by(ThresholdProfile, user_id: user_id) do

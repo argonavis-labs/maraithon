@@ -15,6 +15,7 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   alias Maraithon.Crm.Ingest
   alias Maraithon.Crm.Ingest.Window
   alias Maraithon.Crm.Observation
+  alias Maraithon.InsightNotifications
   alias Maraithon.Insights.Refresh
   alias Maraithon.LocalContacts
   alias Maraithon.OpenLoops
@@ -28,6 +29,21 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   # Default backoff applied when a provider returns 429 without a parseable
   # `Retry-After` header.
   @default_rate_limit_retry_seconds 30
+
+  def execute(%BackgroundJob{
+        job_type: "telegram_webhook_event",
+        payload: %{"event" => event}
+      })
+      when is_map(event) do
+    case InsightNotifications.handle_telegram_event(event, durable: true) do
+      :ok -> {:ok, %{source: "telegram_webhook", processed: true}}
+      {:error, _reason} -> {:error, :telegram_event_processing_failed}
+      _other -> {:error, :telegram_event_processing_failed}
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "telegram_webhook_event"}),
+    do: {:error, :invalid_telegram_webhook_payload}
 
   def execute(%BackgroundJob{job_type: "gmail_incremental_sync"} = job) do
     with {:ok, user_id} <- require_user_id(job) do

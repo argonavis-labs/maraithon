@@ -114,9 +114,22 @@
 #
 # ==============================================================================
 
+defmodule MaraithonWeb.WebhookControllerTest.FailingBackgroundJobs do
+  @moduledoc false
+
+  def enqueue_telegram_webhook_event(_bot_id, _update_id, _event),
+    do: {:error, :database_unavailable}
+end
+
 defmodule MaraithonWeb.WebhookControllerTest do
   # Non-async due to application config modification
   use MaraithonWeb.ConnCase, async: false
+
+  import Ecto.Query
+  import ExUnit.CaptureLog
+
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.BackgroundJob
 
   # ----------------------------------------------------------------------------
   # Test Setup
@@ -129,6 +142,11 @@ defmodule MaraithonWeb.WebhookControllerTest do
   # test webhook handling without computing real HMAC signatures.
   # ----------------------------------------------------------------------------
   setup do
+    original_webhook_controller =
+      Application.get_env(:maraithon, MaraithonWeb.WebhookController)
+
+    Application.delete_env(:maraithon, MaraithonWeb.WebhookController)
+
     # Enable unsigned webhooks for testing
     Application.put_env(:maraithon, :github, webhook_secret: "", allow_unsigned: true)
     Application.put_env(:maraithon, :slack, signing_secret: "", allow_unsigned: true)
@@ -153,6 +171,16 @@ defmodule MaraithonWeb.WebhookControllerTest do
       Application.put_env(:maraithon, :whatsapp, app_secret: "", allow_unsigned: false)
       Application.put_env(:maraithon, :linear, webhook_secret: "", allow_unsigned: false)
       Application.put_env(:maraithon, :telegram, allow_unsigned: false)
+
+      if original_webhook_controller do
+        Application.put_env(
+          :maraithon,
+          MaraithonWeb.WebhookController,
+          original_webhook_controller
+        )
+      else
+        Application.delete_env(:maraithon, MaraithonWeb.WebhookController)
+      end
     end)
 
     :ok
@@ -452,6 +480,156 @@ defmodule MaraithonWeb.WebhookControllerTest do
   # Telegram uses a secret path for verification (no signature header).
   # ============================================================================
 
+  describe "POST /webhooks/telegram/:secret" do
+    @describetag telegram_ingress: true
+
+    test "accepts only the exact nonblank configured secret despite allow_unsigned", %{conn: conn} do
+      payload = telegram_message_payload(80_001)
+
+      assert response(post(conn, "/webhooks/telegram/secret123", payload), 204) == ""
+
+      accepted_count =
+        Repo.aggregate(
+          from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event"),
+          :count,
+          :id
+        )
+
+      for wrong_secret <- ["secret124", "secret12", "secret1234"] do
+        assert response(
+                 post(build_conn(), "/webhooks/telegram/#{wrong_secret}", payload),
+                 404
+               ) == ""
+      end
+
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "123456:ABC-DEF",
+        webhook_secret_path: "",
+        allow_unsigned: true
+      )
+
+      assert response(post(build_conn(), "/webhooks/telegram/secret123", payload), 404) == ""
+
+      assert Repo.aggregate(
+               from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event"),
+               :count,
+               :id
+             ) == accepted_count
+    end
+
+    test "normalizes, recursively scrubs raw payloads, and commits before 204", %{conn: conn} do
+      sentinel = "RAW-WEBHOOK-SENTINEL-DO-NOT-STORE"
+
+      payload = %{
+        "update_id" => 80_002,
+        "message" => %{
+          "message_id" => 91,
+          "date" => 1_700_000_000,
+          "chat" => %{"id" => 222, "type" => "private"},
+          "from" => %{"id" => 222, "username" => "tester", "is_bot" => false},
+          "unsupported" => %{"raw" => sentinel},
+          "sentinel" => sentinel
+        }
+      }
+
+      log =
+        capture_log(fn ->
+          assert response(post(conn, "/webhooks/telegram/secret123", payload), 204) == ""
+        end)
+
+      refute log =~ sentinel
+
+      job =
+        Repo.get_by!(BackgroundJob,
+          job_type: "telegram_webhook_event",
+          dedupe_key: "telegram-webhook:123456:80002"
+        )
+
+      assert job.status == "pending"
+      assert job.queue == "ingress"
+      assert job.max_attempts == 5
+      assert job.payload["event"]["type"] == "unknown"
+      assert is_binary(job.payload["event"]["timestamp"])
+      refute contains_raw_field?(job.payload)
+      refute inspect(job.payload) =~ sentinel
+      refute inspect(job.payload) =~ "secret123"
+    end
+
+    test "persists ignored valid updates as replay tombstones", %{conn: conn} do
+      payload = %{"update_id" => 80_003, "poll_answer" => %{"poll_id" => "ignored"}}
+
+      assert response(post(conn, "/webhooks/telegram/secret123", payload), 204) == ""
+
+      job =
+        Repo.get_by!(BackgroundJob,
+          dedupe_key: "telegram-webhook:123456:80003",
+          job_type: "telegram_webhook_event"
+        )
+
+      assert job.payload["event"] == %{
+               "data" => %{},
+               "source" => "telegram",
+               "timestamp" => job.payload["event"]["timestamp"],
+               "type" => "ignored_update"
+             }
+    end
+
+    test "a replay after completion never creates fresh work", %{conn: conn} do
+      payload = telegram_message_payload(80_004)
+
+      assert response(post(conn, "/webhooks/telegram/secret123", payload), 204) == ""
+
+      first =
+        Repo.get_by!(BackgroundJob,
+          dedupe_key: "telegram-webhook:123456:80004",
+          job_type: "telegram_webhook_event"
+        )
+
+      first
+      |> Ecto.Changeset.change(%{
+        status: "completed",
+        completed_at: DateTime.utc_now(),
+        payload: %{}
+      })
+      |> Repo.update!()
+
+      replay = put_in(payload, ["message", "text"], "different replay content")
+      assert response(post(build_conn(), "/webhooks/telegram/secret123", replay), 204) == ""
+
+      assert Repo.aggregate(
+               from(job in BackgroundJob,
+                 where: job.dedupe_key == "telegram-webhook:123456:80004"
+               ),
+               :count,
+               :id
+             ) == 1
+
+      assert Repo.get!(BackgroundJob, first.id).payload == %{}
+    end
+
+    test "rejects malformed authenticated update ids with 400" do
+      for update_id <- [-1, 9_223_372_036_854_775_808, "80005", nil] do
+        payload = telegram_message_payload(update_id)
+        assert response(post(build_conn(), "/webhooks/telegram/secret123", payload), 400) == ""
+      end
+
+      refute Repo.exists?(
+               from(job in BackgroundJob, where: job.job_type == "telegram_webhook_event")
+             )
+    end
+
+    test "returns 503 when durable persistence fails", %{conn: conn} do
+      Application.put_env(:maraithon, MaraithonWeb.WebhookController,
+        background_jobs_module: MaraithonWeb.WebhookControllerTest.FailingBackgroundJobs
+      )
+
+      assert response(
+               post(conn, "/webhooks/telegram/secret123", telegram_message_payload(80_006)),
+               503
+             ) == ""
+    end
+  end
+
   # ============================================================================
   # GOOGLE CALENDAR WEBHOOK TESTS
   # ============================================================================
@@ -735,4 +913,29 @@ defmodule MaraithonWeb.WebhookControllerTest do
       assert json_response(conn, 200)["status"] == "published"
     end
   end
+
+  defp telegram_message_payload(update_id) do
+    %{
+      "update_id" => update_id,
+      "message" => %{
+        "message_id" => 90,
+        "date" => 1_700_000_000,
+        "chat" => %{"id" => 222, "type" => "private"},
+        "from" => %{"id" => 222, "username" => "tester", "is_bot" => false},
+        "text" => "hello"
+      }
+    }
+  end
+
+  defp contains_raw_field?(value) when is_map(value) do
+    Enum.any?(value, fn
+      {key, _nested} when key in [:raw, "raw"] -> true
+      {_key, nested} -> contains_raw_field?(nested)
+    end)
+  end
+
+  defp contains_raw_field?(value) when is_list(value),
+    do: Enum.any?(value, &contains_raw_field?/1)
+
+  defp contains_raw_field?(_value), do: false
 end

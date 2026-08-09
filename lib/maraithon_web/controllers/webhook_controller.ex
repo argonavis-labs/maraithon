@@ -7,11 +7,31 @@ defmodule MaraithonWeb.WebhookController do
     GoogleCalendar,
     Gmail,
     Slack,
+    Telegram,
     WhatsApp,
     Linear
   }
 
+  alias Maraithon.Runtime.BackgroundJobs
+
   require Logger
+
+  @max_telegram_update_id 9_223_372_036_854_775_807
+
+  @doc """
+  Handle a Telegram webhook after exact secret-path authentication.
+  """
+  def telegram(conn, %{"secret" => provided_secret} = params) do
+    configured_secret = telegram_webhook_secret()
+
+    if secure_secret_match?(configured_secret, provided_secret) do
+      handle_authenticated_telegram(conn, Map.delete(params, "secret"))
+    else
+      send_resp(conn, :not_found, "")
+    end
+  end
+
+  def telegram(conn, _params), do: send_resp(conn, :not_found, "")
 
   @doc """
   Handle GitHub webhooks.
@@ -205,6 +225,107 @@ defmodule MaraithonWeb.WebhookController do
       Logger.warning("Connector side-effect handler failed", reason: Exception.message(error))
       :ok
   end
+
+  defp handle_authenticated_telegram(conn, params) do
+    with {:ok, update_id} <- telegram_update_id(params),
+         {:ok, bot_id} <- configured_telegram_bot_id(),
+         {:ok, event} <- normalize_telegram_event(conn, params),
+         {:ok, _job} <- persist_telegram_event(bot_id, update_id, event) do
+      send_resp(conn, :no_content, "")
+    else
+      {:error, :invalid_update_id} -> send_resp(conn, :bad_request, "")
+      {:error, :malformed_update} -> send_resp(conn, :bad_request, "")
+      {:error, :telegram_not_configured} -> send_resp(conn, :service_unavailable, "")
+      {:error, :persistence_unavailable} -> send_resp(conn, :service_unavailable, "")
+    end
+  end
+
+  defp telegram_update_id(%{"update_id" => update_id})
+       when is_integer(update_id) and update_id >= 0 and
+              update_id <= @max_telegram_update_id,
+       do: {:ok, update_id}
+
+  defp telegram_update_id(_params), do: {:error, :invalid_update_id}
+
+  defp configured_telegram_bot_id do
+    case Telegram.configured_bot_id() do
+      {:ok, bot_id} -> {:ok, bot_id}
+      {:error, _reason} -> {:error, :telegram_not_configured}
+    end
+  rescue
+    _error -> {:error, :telegram_not_configured}
+  catch
+    _kind, _reason -> {:error, :telegram_not_configured}
+  end
+
+  defp normalize_telegram_event(conn, params) do
+    case Telegram.handle_webhook(conn, params) do
+      {:ok, _topic, event} when is_map(event) ->
+        {:ok, event}
+
+      {:ok, event} when is_map(event) ->
+        {:ok, event}
+
+      {:ignore, _reason} ->
+        {:ok,
+         %{
+           type: "ignored_update",
+           source: "telegram",
+           timestamp: DateTime.utc_now(),
+           data: %{}
+         }}
+
+      _other ->
+        {:error, :malformed_update}
+    end
+  rescue
+    _error -> {:error, :malformed_update}
+  catch
+    _kind, _reason -> {:error, :malformed_update}
+  end
+
+  defp persist_telegram_event(bot_id, update_id, event) do
+    background_jobs_module = background_jobs_module()
+
+    case background_jobs_module.enqueue_telegram_webhook_event(bot_id, update_id, event) do
+      {:ok, job} -> {:ok, job}
+      {:error, _reason} -> {:error, :persistence_unavailable}
+    end
+  rescue
+    error ->
+      Logger.error("Unable to persist Telegram webhook update",
+        exception: inspect(error.__struct__)
+      )
+
+      {:error, :persistence_unavailable}
+  catch
+    kind, _reason ->
+      Logger.error("Unable to persist Telegram webhook update", exception: inspect(kind))
+      {:error, :persistence_unavailable}
+  end
+
+  defp background_jobs_module do
+    :maraithon
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:background_jobs_module, BackgroundJobs)
+  end
+
+  defp telegram_webhook_secret do
+    case Application.get_env(:maraithon, :telegram, []) do
+      config when is_list(config) -> Keyword.get(config, :webhook_secret_path, "")
+      config when is_map(config) -> Map.get(config, :webhook_secret_path, "")
+      _other -> ""
+    end
+  end
+
+  defp secure_secret_match?(configured, provided)
+       when is_binary(configured) and is_binary(provided) do
+    configured != "" and String.valid?(configured) and String.trim(configured) != "" and
+      byte_size(configured) == byte_size(provided) and
+      Plug.Crypto.secure_compare(configured, provided)
+  end
+
+  defp secure_secret_match?(_configured, _provided), do: false
 
   defp handle_signed_connector(conn, params, opts) do
     connector_module = Keyword.fetch!(opts, :connector_module)
