@@ -10,6 +10,7 @@ defmodule Maraithon.InsightNotificationsTest do
   alias Maraithon.Insights
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.ChatWorker
+  alias Maraithon.Todos.Todo
   alias MaraithonWeb.TelegramLink
 
   setup do
@@ -298,6 +299,80 @@ defmodule Maraithon.InsightNotificationsTest do
                  type: "edited_message",
                  source: "telegram",
                  data: %{chat_id: 998_002, message_id: 8, text: "edited"}
+               })
+    end
+
+    test "durable preference reply propagates ordinary Telegram send failure" do
+      reason = {:telegram_error, 503, "provider unavailable"}
+
+      Application.put_env(:maraithon, :insights,
+        telegram_module: Maraithon.TestSupport.FailingTelegram
+      )
+
+      Application.put_env(:maraithon, :failing_telegram, reason: reason)
+
+      assert {:error, {:telegram_send_failed, ^reason}} =
+               InsightNotifications.process_telegram_event_durable(%{
+                 type: "message",
+                 source: "telegram",
+                 data: %{chat_id: 12_345, message_id: 9, text: "/preferences"}
+               })
+    end
+
+    test "durable todo callback propagates Telegram edit failure", %{user_id: user_id} do
+      todo =
+        Repo.get_by!(Todo,
+          user_id: user_id,
+          dedupe_key: "insight:email:notify:reply_urgent"
+        )
+
+      reason = {:telegram_error, 503, "edit API unavailable"}
+
+      Application.put_env(:maraithon, :insights,
+        telegram_module: Maraithon.TestSupport.FailingTelegram
+      )
+
+      Application.put_env(:maraithon, :failing_telegram, reason: reason)
+
+      assert {:error, {:telegram_edit_failed, ^reason}} =
+               InsightNotifications.process_telegram_event_durable(%{
+                 type: "callback_query",
+                 source: "telegram",
+                 data: %{
+                   callback_id: "durable-edit-failure",
+                   chat_id: 12_345,
+                   message_id: 99,
+                   data: "tgtodo:#{todo.id}:done"
+                 }
+               })
+    end
+
+    test "durable feedback callback propagates callback-answer failure", %{
+      user_id: user_id,
+      insight: insight
+    } do
+      _ = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+
+      delivery =
+        Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
+
+      reason = {:telegram_error, 503, "callback API unavailable"}
+
+      Application.put_env(:maraithon, :insights,
+        telegram_module: Maraithon.TestSupport.FailingTelegram
+      )
+
+      Application.put_env(:maraithon, :failing_telegram, reason: reason)
+
+      assert {:error, {:telegram_callback_answer_failed, ^reason}} =
+               InsightNotifications.process_telegram_event_durable(%{
+                 type: "callback_query",
+                 source: "telegram",
+                 data: %{
+                   callback_id: "durable-callback-failure",
+                   chat_id: 12_345,
+                   data: "insfb:#{delivery.id}:h"
+                 }
                })
     end
 
