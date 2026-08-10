@@ -192,6 +192,7 @@ defmodule Maraithon.TelegramConversations do
     |> order_by([run], desc: run.started_at)
     |> limit(1)
     |> Repo.one()
+    |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
   end
 
   def active_run_for_conversation(conversation_id) when is_binary(conversation_id) do
@@ -201,6 +202,7 @@ defmodule Maraithon.TelegramConversations do
     |> order_by([run], desc: run.started_at)
     |> limit(1)
     |> Repo.one()
+    |> Maraithon.TelegramAssistant.Run.hydrate_payloads()
   end
 
   @doc """

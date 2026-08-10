@@ -229,7 +229,10 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
        ) do
     with prepared_action_id when is_binary(prepared_action_id) <-
            get_in(turn.structured_data || %{}, ["prepared_action_id"]),
-         %PreparedAction{} = prepared_action <- Repo.get(PreparedAction, prepared_action_id),
+         %PreparedAction{} = prepared_action <-
+           prepared_action_id
+           |> then(&Repo.get(PreparedAction, &1))
+           |> PreparedAction.hydrate_payload(),
          false <- stale_prepared_action?(prepared_action),
          true <-
            prepared_action_matches_current_draft?(prepared_action, conversation, todo, draft) do

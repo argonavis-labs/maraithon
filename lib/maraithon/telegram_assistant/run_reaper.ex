@@ -19,6 +19,7 @@ defmodule Maraithon.TelegramAssistant.RunReaper do
 
   require Logger
 
+  alias Maraithon.DurablePayload
   alias Maraithon.Repo
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
@@ -52,19 +53,23 @@ defmodule Maraithon.TelegramAssistant.RunReaper do
     now = DateTime.utc_now()
     cutoff = DateTime.add(now, -stale_timeout_ms, :millisecond)
 
-    {count, _} =
-      Repo.update_all(
-        from(r in Run,
-          where: r.status == "running",
-          where: r.started_at < ^cutoff
-        ),
-        set: [
-          status: "degraded",
-          error: "run_reaper_orphaned",
-          finished_at: now,
-          updated_at: now
-        ]
-      )
+    {:ok, {count, _}} =
+      Repo.transaction(fn ->
+        :ok = DurablePayload.require_current_mutation!()
+
+        Repo.update_all(
+          from(r in Run,
+            where: r.status == "running",
+            where: r.started_at < ^cutoff
+          ),
+          set: [
+            status: "degraded",
+            error: "run_reaper_orphaned",
+            finished_at: now,
+            updated_at: now
+          ]
+        )
+      end)
 
     if count > 0 do
       Logger.warning("Reaped #{count} orphaned Telegram assistant runs stuck in :running")

@@ -14,6 +14,7 @@ defmodule Maraithon.Runtime.IngressReceipts do
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Agents.Agent
   alias Maraithon.AgentIsolation.Binding
+  alias Maraithon.DurablePayload
   alias Maraithon.Lineage.Canonical
   alias Maraithon.Lineage.Transaction
   alias Maraithon.Repo
@@ -51,6 +52,7 @@ defmodule Maraithon.Runtime.IngressReceipts do
 
   def record_in_transaction(attrs) when is_map(attrs) do
     with :ok <- Transaction.require(),
+         :ok <- DurablePayload.require_current_mutation!(),
          {:ok, prepared} <- prepare(attrs) do
       insert_or_compare(prepared)
     end
@@ -69,6 +71,7 @@ defmodule Maraithon.Runtime.IngressReceipts do
       |> Map.put(:provider_account_key, provider_account_key)
       |> identity_query()
       |> Repo.one()
+      |> IngressReceipt.hydrate_payload()
     else
       _error -> nil
     end
@@ -116,11 +119,20 @@ defmodule Maraithon.Runtime.IngressReceipts do
           id: Ecto.UUID.generate(),
           receipt_key: receipt_key,
           payload: payload,
+          legacy_payload: if(DurablePayload.legacy_write?(), do: payload, else: %{}),
+          payload_encryption_version: 1,
+          payload_purged_at: nil,
           request_fingerprint: request_fingerprint,
           provider_occurred_at: provider_occurred_at,
           received_at: now,
           inserted_at: now
         })
+
+      prepared =
+        Map.merge(
+          prepared,
+          DurablePayload.binding_attrs!(prepared, IngressReceipt.payload_binding_spec())
+        )
 
       changeset = IngressReceipt.changeset(%IngressReceipt{}, prepared)
       if changeset.valid?, do: {:ok, prepared}, else: {:error, changeset}
@@ -160,10 +172,17 @@ defmodule Maraithon.Runtime.IngressReceipts do
            returning: [:id]
          ) do
       {1, _rows} ->
-        {:ok, Repo.get!(IngressReceipt, prepared.id), :inserted}
+        {:ok,
+         prepared.id |> then(&Repo.get!(IngressReceipt, &1)) |> IngressReceipt.hydrate_payload(),
+         :inserted}
 
       {0, _rows} ->
-        existing = Repo.one!(identity_query(prepared) |> lock("FOR SHARE"))
+        existing =
+          identity_query(prepared)
+          |> lock("FOR SHARE")
+          |> Repo.one!()
+          |> IngressReceipt.hydrate_payload()
+
         compare_existing(existing, prepared)
     end
   end

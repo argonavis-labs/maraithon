@@ -5,6 +5,7 @@ defmodule Maraithon.OperatorEvents do
 
   import Ecto.Query
 
+  alias Maraithon.DurablePayload
   alias Maraithon.OperatorEvents.OperatorEvent
   alias Maraithon.Repo
 
@@ -63,6 +64,7 @@ defmodule Maraithon.OperatorEvents do
     |> order_by([event], desc: event.occurred_at, desc: event.inserted_at)
     |> limit(^limit)
     |> Repo.all()
+    |> Enum.map(&OperatorEvent.hydrate_payloads/1)
   end
 
   def list_recent_for_user(user_id, limit \\ 20)
@@ -75,16 +77,19 @@ defmodule Maraithon.OperatorEvents do
 
   defp existing_event(%{user_id: user_id, dedupe_key: dedupe_key})
        when is_binary(user_id) and is_binary(dedupe_key) do
-    Repo.get_by(OperatorEvent, user_id: user_id, dedupe_key: dedupe_key)
+    OperatorEvent
+    |> Repo.get_by(user_id: user_id, dedupe_key: dedupe_key)
+    |> OperatorEvent.hydrate_payloads()
   end
 
   defp existing_event(_attrs), do: nil
 
-  defp handle_dedupe_conflict({:ok, %OperatorEvent{} = event}, _attrs), do: {:ok, event}
+  defp handle_dedupe_conflict({:ok, %OperatorEvent{} = event}, _attrs),
+    do: {:ok, OperatorEvent.hydrate_payloads(event)}
 
   defp handle_dedupe_conflict({:error, changeset}, %{user_id: user_id, dedupe_key: dedupe_key}) do
     case Repo.get_by(OperatorEvent, user_id: user_id, dedupe_key: dedupe_key) do
-      %OperatorEvent{} = event -> {:ok, event}
+      %OperatorEvent{} = event -> {:ok, OperatorEvent.hydrate_payloads(event)}
       nil -> {:error, changeset}
     end
   end
@@ -105,27 +110,41 @@ defmodule Maraithon.OperatorEvents do
       dedupe_key: event.dedupe_key,
       occurred_at: event.occurred_at,
       payload: event.payload || %{},
+      legacy_payload: event.legacy_payload || %{},
       metadata: event.metadata || %{},
+      legacy_metadata: event.legacy_metadata || %{},
+      payload_encryption_version: event.payload_encryption_version || 1,
+      conversation_content_redacted_at: event.conversation_content_redacted_at,
       inserted_at: now,
       updated_at: now
     }
 
-    case Repo.insert_all(OperatorEvent, [row],
-           on_conflict: :nothing,
-           conflict_target: [:user_id, :dedupe_key],
-           returning: true
-         ) do
-      {1, [%OperatorEvent{} = inserted]} ->
-        {:ok, :inserted, inserted}
+    case Repo.transaction(fn ->
+           :ok = DurablePayload.require_current_mutation!()
 
-      {1, [inserted]} when is_map(inserted) ->
-        {:ok, :inserted, struct(OperatorEvent, inserted)}
+           Repo.insert_all(OperatorEvent, [row],
+             on_conflict: :nothing,
+             conflict_target: [:user_id, :dedupe_key],
+             returning: true
+           )
+         end) do
+      {:ok, {1, [%OperatorEvent{} = inserted]}} ->
+        {:ok, :inserted, OperatorEvent.hydrate_payloads(inserted)}
 
-      {0, _} ->
+      {:ok, {1, [inserted]}} when is_map(inserted) ->
+        {:ok, :inserted, struct(OperatorEvent, inserted) |> OperatorEvent.hydrate_payloads()}
+
+      {:ok, {0, _}} ->
         case Repo.get_by(OperatorEvent, user_id: event.user_id, dedupe_key: event.dedupe_key) do
-          %OperatorEvent{} = existing -> {:ok, :existing, existing}
-          nil -> {:error, :dedupe_conflict_not_found}
+          %OperatorEvent{} = existing ->
+            {:ok, :existing, OperatorEvent.hydrate_payloads(existing)}
+
+          nil ->
+            {:error, :dedupe_conflict_not_found}
         end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

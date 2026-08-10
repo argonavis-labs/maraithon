@@ -7,6 +7,8 @@ defmodule Maraithon.Application do
 
   @impl true
   def start(_type, _args) do
+    :ok = Maraithon.DurablePayloadBinding.validate_config!()
+
     # OpenTelemetry auto-instrumentation. Must run before the supervisor starts
     # so :telemetry handlers are attached before the first request. No-op for
     # export when traces_exporter is :none (default dev/test).

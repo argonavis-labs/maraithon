@@ -377,7 +377,9 @@ defmodule MaraithonWeb.MobileChatJSON do
   defp actions_for(_turn, _prepared_action_id), do: []
 
   defp pending_prepared_action(prepared_action_id) do
-    case Repo.get(PreparedAction, prepared_action_id) do
+    case prepared_action_id
+         |> then(&Repo.get(PreparedAction, &1))
+         |> PreparedAction.hydrate_payload() do
       %PreparedAction{status: "awaiting_confirmation"} = prepared_action -> prepared_action
       _ -> nil
     end

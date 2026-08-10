@@ -2653,7 +2653,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp existing_atom_key(key), do: key
 
   defp fail_run_preserving_summary(%Run{} = run, reason) do
-    current_run = Repo.get(Run, run.id) || run
+    current_run = (Repo.get(Run, run.id) || run) |> Run.hydrate_payloads()
 
     TelegramAssistant.complete_run(current_run, %{
       status: "degraded",

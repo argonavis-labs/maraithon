@@ -18,6 +18,8 @@ defmodule Maraithon.OperatorMemory do
     |> where([s], s.user_id == ^user_id)
     |> order_by([s], asc: s.summary_type)
     |> Repo.all()
+    |> Enum.map(&Summary.hydrate_content/1)
+    |> Enum.reject(&match?(%Summary{content_erased_at: %DateTime{}}, &1))
     |> Enum.map(fn summary ->
       %{
         type: summary.summary_type,
@@ -187,6 +189,7 @@ defmodule Maraithon.OperatorMemory do
 
       %Summary{} = summary ->
         summary
+        |> Summary.hydrate_content()
         |> Summary.changeset(attrs)
         |> Repo.update()
     end

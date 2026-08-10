@@ -33,6 +33,8 @@ defmodule Maraithon.Runtime.AgentWorkResult do
     field :payload_binding_mac, :binary, redact: true
     field :result_purged_at, :utc_datetime_usec
     field :result_digest, :binary
+    field :result_digest_version, :integer
+    field :result_digest_key_tag, :string
     field :provisional_at, :utc_datetime_usec
     field :committed_at, :utc_datetime_usec
 
@@ -69,6 +71,8 @@ defmodule Maraithon.Runtime.AgentWorkResult do
       :terminal_event,
       :result,
       :result_digest,
+      :result_digest_version,
+      :result_digest_key_tag,
       :provisional_at,
       :committed_at,
       :inserted_at,
@@ -122,7 +126,9 @@ defmodule Maraithon.Runtime.AgentWorkResult do
 
   def hydrate_result(%__MODULE__{} = work_result, mode) do
     :ok = DurablePayload.verify_binding!(work_result, payload_binding_spec(), mode)
-    %{work_result | result: read_result!(work_result, mode)}
+    result = read_result!(work_result, mode)
+    :ok = verify_authority_digest!(work_result, result, mode)
+    %{work_result | result: result}
   end
 
   def hydrate_result(other, _mode), do: other
@@ -147,6 +153,36 @@ defmodule Maraithon.Runtime.AgentWorkResult do
       row.result
     else
       raise ArgumentError, "exact AgentWorkResult is not ciphertext-only"
+    end
+  end
+
+  defp verify_authority_digest!(row, _result, :legacy)
+       when is_nil(row.result_digest_version) and is_nil(row.result_digest_key_tag),
+       do: :ok
+
+  defp verify_authority_digest!(row, result, mode) when mode in [:legacy, :exact] do
+    scope =
+      DurablePayload.context_identity([
+        row.user_id,
+        row.agent_id,
+        row.agent_directive_id,
+        row.agent_run_id
+      ])
+
+    case Maraithon.DurablePayloadBinding.verify(
+           "agent_work_result_authority",
+           row.id,
+           scope,
+           [{"result", result}],
+           row.result_digest_version,
+           row.result_digest_key_tag,
+           row.result_digest
+         ) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        raise ArgumentError, "AgentWorkResult authority digest failed: #{reason}"
     end
   end
 

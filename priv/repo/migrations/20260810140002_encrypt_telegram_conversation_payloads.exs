@@ -186,6 +186,14 @@ defmodule Maraithon.Repo.Migrations.EncryptTelegramConversationPayloads do
       "ALTER TABLE agent_work_results ADD COLUMN IF NOT EXISTS result_purged_at timestamp(6) without time zone"
     )
 
+    execute(
+      "ALTER TABLE agent_work_results ADD COLUMN IF NOT EXISTS result_digest_version smallint"
+    )
+
+    execute(
+      "ALTER TABLE agent_work_results ADD COLUMN IF NOT EXISTS result_digest_key_tag varchar(64)"
+    )
+
     execute("ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS trigger_ciphertext bytea")
     execute("ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS metadata_ciphertext bytea")
 
@@ -398,6 +406,14 @@ defmodule Maraithon.Repo.Migrations.EncryptTelegramConversationPayloads do
       """
       (payload_encryption_version IS NULL OR payload_encryption_version = 1)
       AND (result_ciphertext IS NULL OR octet_length(result_ciphertext) <= 160000)
+      AND (
+        (result_digest_version IS NULL AND result_digest_key_tag IS NULL)
+        OR (
+          result_digest_version = 1
+          AND result_digest_key_tag ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+          AND octet_length(result_digest) = 32
+        )
+      )
       AND (
         result_purged_at IS NULL OR (
           status = 'committed'
@@ -786,7 +802,10 @@ defmodule Maraithon.Repo.Migrations.EncryptTelegramConversationPayloads do
         IF NEW.result_purged_at IS NULL THEN
           IF NOT ((NEW.payload_encryption_version = 1
                    AND NEW.result_ciphertext IS NOT NULL
-                   AND NEW.result = '{}'::jsonb) IS TRUE) THEN
+                   AND NEW.result = '{}'::jsonb
+                   AND NEW.result_digest_version = 1
+                   AND NEW.result_digest_key_tag ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+                   AND octet_length(NEW.result_digest) = 32) IS TRUE) THEN
             RAISE EXCEPTION 'Exact AgentWorkResult payload must be ciphertext-only'
               USING ERRCODE = 'check_violation';
           END IF;

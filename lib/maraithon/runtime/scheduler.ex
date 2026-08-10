@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.Scheduler do
 
   import Ecto.Query
   alias Maraithon.Agents.Agent
+  alias Maraithon.DurablePayload
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.Config, as: RuntimeConfig
@@ -139,11 +140,12 @@ defmodule Maraithon.Runtime.Scheduler do
     result =
       DbResilience.with_database("scheduler cancel scoped jobs", fn ->
         Repo.transaction(fn ->
+          :ok = DurablePayload.require_current_mutation!()
           lock_unique_jobs(agent_id, job_type)
 
           agent_id
           |> active_jobs_query(job_type, scope, opts)
-          |> Repo.update_all(
+          |> private_update_all(
             set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
           )
         end)
@@ -166,7 +168,7 @@ defmodule Maraithon.Runtime.Scheduler do
              where: j.job_type == ^job_type,
              where: j.status in ["pending", "dispatched"]
            )
-           |> Repo.update_all(
+           |> private_update_all(
              set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
            )
          end) do
@@ -184,7 +186,7 @@ defmodule Maraithon.Runtime.Scheduler do
              where: j.agent_id == ^agent_id,
              where: j.status in ["pending", "dispatched"]
            )
-           |> Repo.update_all(
+           |> private_update_all(
              set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
            )
          end) do
@@ -197,17 +199,36 @@ defmodule Maraithon.Runtime.Scheduler do
       when is_binary(agent_id) and is_binary(job_type) and is_binary(payload_key) and
              is_binary(payload_value) do
     case DbResilience.with_database("scheduler pending payload lookup", fn ->
-           from(j in ScheduledJob,
-             where: j.agent_id == ^agent_id,
-             where: j.job_type == ^job_type,
-             where: j.status in ["pending", "dispatched"],
-             where: fragment("?->>? = ?", j.payload, ^payload_key, ^payload_value)
-           )
+           ScheduledJob
+           |> where([job], job.agent_id == ^agent_id)
+           |> where([job], job.job_type == ^job_type)
+           |> where([job], job.status in ["pending", "dispatched"])
+           |> pending_payload_filter(payload_key, payload_value)
            |> Repo.exists?()
          end) do
       {:ok, result} -> result
       {:error, _reason} -> false
     end
+  end
+
+  defp pending_payload_filter(query, "dedupe_key", value) do
+    where(
+      query,
+      [job],
+      job.payload_dedupe_key == ^value or
+        (is_nil(job.payload_encryption_version) and
+           fragment("?->>? = ?", job.legacy_payload, "dedupe_key", ^value))
+    )
+  end
+
+  defp pending_payload_filter(query, key, value) do
+    where(
+      query,
+      [job],
+      (job.payload_scope_key == ^key and job.payload_scope_value == ^value) or
+        (is_nil(job.payload_encryption_version) and
+           fragment("?->>? = ?", job.legacy_payload, ^key, ^value))
+    )
   end
 
   @doc """
@@ -217,7 +238,7 @@ defmodule Maraithon.Runtime.Scheduler do
     now = DateTime.utc_now()
 
     case DbResilience.with_database("scheduler ack delivered", fn ->
-           Repo.update_all(
+           private_update_all(
              from(j in ScheduledJob,
                where: j.id == ^job_id,
                where: j.status in ["pending", "dispatched"]
@@ -310,6 +331,7 @@ defmodule Maraithon.Runtime.Scheduler do
                limit: 50
              )
              |> Repo.all()
+             |> Enum.map(&ScheduledJob.hydrate_payload/1)
 
            Enum.reduce(jobs, state.in_flight, fn job, acc ->
              unless MapSet.member?(acc, job.id) do
@@ -335,7 +357,7 @@ defmodule Maraithon.Runtime.Scheduler do
   @impl true
   def handle_info({:fire, job_id}, state) do
     case DbResilience.with_database("scheduler fire job", fn ->
-           case Repo.get(ScheduledJob, job_id) do
+           case job_id |> then(&Repo.get(ScheduledJob, &1)) |> ScheduledJob.hydrate_payload() do
              %ScheduledJob{status: "pending"} = job ->
                deliver_job(job)
 
@@ -371,23 +393,26 @@ defmodule Maraithon.Runtime.Scheduler do
   # Private functions
 
   defp replace_unique_job(agent_id, job_type, fire_at, payload, scope, opts) do
-    attrs = %{
-      agent_id: agent_id,
-      job_type: job_type,
-      fire_at: fire_at,
-      payload: payload,
-      status: "pending"
-    }
+    attrs =
+      %{
+        agent_id: agent_id,
+        job_type: job_type,
+        fire_at: fire_at,
+        payload: payload,
+        status: "pending"
+      }
+      |> maybe_put_scope(scope)
 
     result =
       DbResilience.with_database("scheduler replace unique job", fn ->
         Repo.transaction(fn ->
+          :ok = DurablePayload.require_current_mutation!()
           lock_unique_jobs(agent_id, job_type)
 
           {cancelled_count, _} =
             agent_id
             |> active_jobs_query(job_type, scope, opts)
-            |> Repo.update_all(
+            |> private_update_all(
               set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
             )
 
@@ -446,16 +471,29 @@ defmodule Maraithon.Runtime.Scheduler do
         where: j.status in ["pending", "dispatched"]
       )
 
+    promoted_scope =
+      dynamic(
+        [job],
+        job.payload_scope_key == ^scope_key and job.payload_scope_value == ^scope_value
+      )
+
+    legacy_scope =
+      dynamic(
+        [job],
+        is_nil(job.payload_encryption_version) and
+          fragment("?->>? = ?", job.legacy_payload, ^scope_key, ^scope_value)
+      )
+
     if include_legacy_empty_payload? do
-      from(j in base_query,
-        where:
-          fragment("?->>? = ?", j.payload, ^scope_key, ^scope_value) or
-            fragment("? = '{}'::jsonb", j.payload)
+      where(
+        base_query,
+        [job],
+        ^promoted_scope or ^legacy_scope or job.payload_empty == true or
+          (is_nil(job.payload_encryption_version) and
+             fragment("? = '{}'::jsonb", job.legacy_payload))
       )
     else
-      from(j in base_query,
-        where: fragment("?->>? = ?", j.payload, ^scope_key, ^scope_value)
-      )
+      where(base_query, [job], ^promoted_scope or ^legacy_scope)
     end
   end
 
@@ -474,6 +512,8 @@ defmodule Maraithon.Runtime.Scheduler do
     result =
       if is_binary(user_id) do
         Repo.transaction(fn ->
+          :ok = DurablePayload.require_current_mutation!()
+
           payload = %{
             "job_type" => job.job_type,
             "job_id" => job.id,
@@ -503,7 +543,7 @@ defmodule Maraithon.Runtime.Scheduler do
               now = DatabaseClock.now!()
 
               {1, _rows} =
-                Repo.update_all(
+                private_update_all(
                   from(stored in ScheduledJob,
                     where: stored.id == ^job.id and stored.status == "pending"
                   ),
@@ -556,7 +596,7 @@ defmodule Maraithon.Runtime.Scheduler do
   defp deliver_job_legacy(job) do
     # Compatibility path for the stopped-fleet non-rolling cutover. Mailbox
     # receipt is not durable acceptance and is never used by the exact runtime.
-    case Repo.update_all(
+    case private_update_all(
            from(j in ScheduledJob,
              where: j.id == ^job.id,
              where: j.status == "pending"
@@ -597,6 +637,7 @@ defmodule Maraithon.Runtime.Scheduler do
       limit: 200
     )
     |> Repo.all()
+    |> Enum.map(&ScheduledJob.hydrate_payload/1)
   end
 
   defp reclaim_stale_dispatched_jobs(timeout_ms) do
@@ -606,7 +647,7 @@ defmodule Maraithon.Runtime.Scheduler do
     # wakeups for an agent process that is gone. Run this first so the reclaim
     # below only re-queues jobs that still have retries left.
     {failed_count, _} =
-      Repo.update_all(
+      private_update_all(
         from(j in ScheduledJob,
           where: j.status == "dispatched",
           where: j.claimed_at < ^cutoff,
@@ -616,7 +657,7 @@ defmodule Maraithon.Runtime.Scheduler do
       )
 
     {count, _} =
-      Repo.update_all(
+      private_update_all(
         from(j in ScheduledJob,
           where: j.status == "dispatched",
           where: j.claimed_at < ^cutoff
@@ -632,6 +673,30 @@ defmodule Maraithon.Runtime.Scheduler do
 
     if count > 0 do
       Logger.info("Reclaimed #{count} stale scheduled jobs")
+    end
+  end
+
+  defp maybe_put_scope(attrs, {scope_key, scope_value}),
+    do: Map.merge(attrs, %{payload_scope_key: scope_key, payload_scope_value: scope_value})
+
+  defp maybe_put_scope(attrs, _scope), do: attrs
+
+  defp private_update_all(query, updates) do
+    private_mutation(fn -> Repo.update_all(query, updates) end)
+  end
+
+  defp private_mutation(fun) when is_function(fun, 0) do
+    if Repo.in_transaction?() do
+      :ok = DurablePayload.require_current_mutation!()
+      fun.()
+    else
+      case Repo.transaction(fn ->
+             :ok = DurablePayload.require_current_mutation!()
+             fun.()
+           end) do
+        {:ok, result} -> result
+        {:error, reason} -> raise "private ScheduledJob mutation failed: #{inspect(reason)}"
+      end
     end
   end
 
