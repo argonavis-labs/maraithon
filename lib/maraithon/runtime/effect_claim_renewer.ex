@@ -14,6 +14,7 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
   alias Maraithon.Repo
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.EffectTaskSupervisor
+  alias Maraithon.Runtime.Coordination.TaskClaims
 
   require Logger
 
@@ -237,6 +238,8 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
                Enum.reduce(identities, [], fn identity, lost ->
                  configure_renewal_statement_timeout!(deadline_ms)
 
+                 renew_coordination_assignment!(identity, ttl_ms)
+
                  query =
                    from(effect in Effect,
                      where: effect.id == ^identity.effect_id,
@@ -281,6 +284,33 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
          ) do
       {:ok, lost} -> {:ok, Enum.reverse(lost)}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp renew_coordination_assignment!(identity, ttl_ms) do
+    case Repo.one(
+           from effect in Effect,
+             where:
+               effect.id == ^identity.effect_id and
+                 effect.claim_token == ^identity.claim_token and
+                 effect.claim_supervisor_id == ^identity.supervisor_id and
+                 effect.claim_task_id == ^identity.task_id,
+             select: effect.coordination_task_assignment_id
+         ) do
+      nil ->
+        :ok
+
+      assignment_id ->
+        case TaskClaims.get(assignment_id) do
+          %{state: "running"} = assignment ->
+            case TaskClaims.renew(assignment, ttl_ms) do
+              {:ok, _} -> :ok
+              _ -> Repo.rollback(:coordination_task_authority_lost)
+            end
+
+          _ ->
+            Repo.rollback(:coordination_task_authority_lost)
+        end
     end
   end
 

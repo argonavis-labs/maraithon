@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.Scheduler do
 
   import Ecto.Query
   alias Maraithon.Agents.Agent
+  alias Maraithon.Effects.ProtocolCutover, as: EffectProtocol
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.Config, as: RuntimeConfig
@@ -14,6 +15,7 @@ defmodule Maraithon.Runtime.Scheduler do
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.ScheduledJob
+  alias Maraithon.Runtime.Coordination.{Protocol, Scope}
 
   require Logger
 
@@ -309,6 +311,7 @@ defmodule Maraithon.Runtime.Scheduler do
                order_by: [asc: j.fire_at],
                limit: 50
              )
+             |> scoped_schedule_query()
              |> Repo.all()
 
            Enum.reduce(jobs, state.in_flight, fn job, acc ->
@@ -460,10 +463,19 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   defp deliver_job(job) do
-    if RuntimeConfig.exact_agent_runtime_ready?() do
-      durably_accept_job(job)
-    else
-      deliver_job_legacy(job)
+    case {Protocol.mode(), EffectProtocol.mode()} do
+      {:dark, :legacy} ->
+        deliver_job_legacy(job)
+
+      {:active, :exact} ->
+        if RuntimeConfig.exact_agent_runtime_ready?() do
+          durably_accept_job(job)
+        else
+          {:error, :exact_runtime_not_ready}
+        end
+
+      _blocked_or_mismatched ->
+        {:error, :runtime_authority_not_ready}
     end
   end
 
@@ -472,7 +484,8 @@ defmodule Maraithon.Runtime.Scheduler do
       Repo.one(from(agent in Agent, where: agent.id == ^job.agent_id, select: agent.user_id))
 
     result =
-      if is_binary(user_id) do
+      with true <- is_binary(user_id),
+           {:ok, session, partition} <- Scope.partition_for_user(user_id) do
         Repo.transaction(fn ->
           payload = %{
             "job_type" => job.job_type,
@@ -501,6 +514,12 @@ defmodule Maraithon.Runtime.Scheduler do
           case locked_job do
             %ScheduledJob{status: "pending"} ->
               now = DatabaseClock.now!()
+              dispatch_token = Ecto.UUID.generate()
+
+              Repo.query!(
+                "SELECT set_config('maraithon.runtime_schedule_action', $1, true)",
+                [dispatch_token]
+              )
 
               {1, _rows} =
                 Repo.update_all(
@@ -512,7 +531,11 @@ defmodule Maraithon.Runtime.Scheduler do
                     delivered_at: now,
                     claimed_by: nil,
                     claimed_at: nil,
-                    dispatched_at: nil
+                    dispatched_at: nil,
+                    dispatch_token: dispatch_token,
+                    coordination_activation_epoch: session.activation_epoch,
+                    coordination_partition_epoch: partition.ownership_epoch,
+                    coordination_node_incarnation_id: session.id
                   ],
                   inc: [attempts: 1]
                 )
@@ -531,7 +554,8 @@ defmodule Maraithon.Runtime.Scheduler do
           end
         end)
       else
-        {:error, :scheduled_job_agent_not_found}
+        false -> {:error, :scheduled_job_agent_not_found}
+        {:error, reason} -> {:error, reason}
       end
 
     case result do
@@ -586,6 +610,35 @@ defmodule Maraithon.Runtime.Scheduler do
       Dispatch.dispatch(agent_id, message, receipt: {self(), {:scheduled_job_enqueued, job_id}})
   end
 
+  defp scoped_schedule_query(query) do
+    case {Protocol.mode(), EffectProtocol.mode()} do
+      {:dark, :legacy} ->
+        query
+
+      {:active, :exact} ->
+        case Scope.current() do
+          {:ok, session} ->
+            from(j in query,
+              join: partition in "runtime_partitions",
+              on: field(partition, :partition_id) == j.partition_id,
+              where: field(partition, :activation_epoch) == ^session.activation_epoch,
+              where: field(partition, :owner_node_incarnation_id) == ^session.id,
+              where: field(partition, :state) == "ready",
+              where: fragment("? IS NOT NULL", field(partition, :ready_at)),
+              where:
+                field(partition, :lease_expires_at) >
+                  fragment("timezone('UTC', clock_timestamp())")
+            )
+
+          _ ->
+            where(query, [j], false)
+        end
+
+      _ ->
+        where(query, [j], false)
+    end
+  end
+
   defp fetch_overdue_jobs do
     # Bounded: after an outage the backlog can be large, and delivering it all
     # in one handle_info floods agent mailboxes. The regular :poll drains the
@@ -596,6 +649,7 @@ defmodule Maraithon.Runtime.Scheduler do
       order_by: [asc: j.fire_at],
       limit: 200
     )
+    |> scoped_schedule_query()
     |> Repo.all()
   end
 

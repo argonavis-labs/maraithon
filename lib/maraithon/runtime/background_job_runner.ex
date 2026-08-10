@@ -25,11 +25,21 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   import Ecto.Query
 
+  alias Maraithon.Effects.ProtocolCutover, as: EffectProtocol
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobHandler
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
+
+  alias Maraithon.Runtime.Coordination.{
+    Authority,
+    FairScheduler,
+    Protocol,
+    Scope,
+    TaskClaims,
+    TaskSupervisor
+  }
 
   require Logger
 
@@ -110,7 +120,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
        batch_size: batch_size,
        max_concurrency: max_concurrency,
        poll_retry_attempts: 0,
-       handler: Keyword.get(opts, :handler, handler_module())
+       handler: Keyword.get(opts, :handler, handler_module()),
+       renew_job_writer: Keyword.get(opts, :renew_job_writer)
      }}
   end
 
@@ -125,36 +136,16 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   @impl true
   def handle_info(:poll, state) do
-    available_slots = max(state.max_concurrency - map_size(state.running), 0)
+    case {Protocol.mode(), EffectProtocol.mode()} do
+      {:active, :exact} ->
+        poll_coordinated(state)
 
-    if available_slots == 0 do
-      schedule_poll(state.poll_interval_ms)
-      {:noreply, state}
-    else
-      limit = min(state.batch_size, available_slots)
+      {:dark, :legacy} ->
+        poll_legacy(state)
 
-      case DbResilience.with_database("background job runner poll", fn ->
-             reclaim_stale_jobs(state.claim_timeout_ms)
-             fetch_pending_jobs(limit)
-           end) do
-        {:ok, jobs} ->
-          state =
-            Enum.reduce(jobs, state, fn job, acc ->
-              case claim_job(job) do
-                {:ok, claimed} -> start_tracked_job(acc, claimed, nil)
-                :already_claimed -> acc
-                {:error, _reason} -> acc
-              end
-            end)
-
-          schedule_poll(state.poll_interval_ms)
-          {:noreply, %{state | poll_retry_attempts: 0}}
-
-        {:error, _reason} ->
-          retry_in_ms = DbResilience.backoff_ms(state.poll_interval_ms, state.poll_retry_attempts)
-          schedule_poll(retry_in_ms)
-          {:noreply, %{state | poll_retry_attempts: state.poll_retry_attempts + 1}}
-      end
+      _blocked_or_mismatched ->
+        schedule_poll(state.poll_interval_ms)
+        {:noreply, %{state | poll_retry_attempts: state.poll_retry_attempts + 1}}
     end
   end
 
@@ -218,12 +209,15 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
               nil when reason == :normal ->
                 Logger.error("Background job task exited without a result for job #{job_id}")
-                release_crashed_job(entry.job, :job_task_result_missing)
+
+                if is_nil(entry.coordination),
+                  do: release_crashed_job(entry.job, :job_task_result_missing)
+
                 {:error, :job_task_result_missing}
 
               nil ->
                 Logger.error("Background job task crashed for job #{job_id}: #{inspect(reason)}")
-                release_crashed_job(entry.job, reason)
+                if is_nil(entry.coordination), do: release_crashed_job(entry.job, reason)
                 {:error, {:job_task_crashed, reason}}
             end
 
@@ -274,8 +268,125 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       {:reply, {:ok, []}, state}
     else
       limit = min(max(state.batch_size, 1), available_slots)
-      start_drain(from, state, limit)
+
+      case {Protocol.mode(), EffectProtocol.mode()} do
+        {:active, :exact} -> start_coordinated_drain(from, state, limit)
+        {:dark, :legacy} -> start_drain(from, state, limit)
+        _blocked_or_mismatched -> {:reply, {:error, :runtime_authority_not_ready}, state}
+      end
     end
+  end
+
+  defp start_coordinated_drain(from, state, limit) do
+    with {:ok, session} <- Scope.current(),
+         partitions <- Authority.owned_partitions(session, ["ready"]),
+         {:ok, reservations} <-
+           coordinated_reservations(session, partitions, limit, state.claim_timeout_ms) do
+      if reservations == [] do
+        {:reply, {:ok, []}, state}
+      else
+        drain_id = make_ref()
+
+        drain = %{
+          from: from,
+          order: Enum.map(reservations, fn {job, _, _} -> job.id end),
+          pending: MapSet.new(),
+          results: %{}
+        }
+
+        {state, drain} =
+          Enum.reduce(reservations, {state, drain}, fn {job, assignment, identity}, {acc, d} ->
+            key = claim_key(job)
+
+            {start_tracked_job(acc, job, drain_id, %{assignment: assignment, identity: identity}),
+             %{d | pending: MapSet.put(d.pending, key)}}
+          end)
+
+        {:noreply, %{state | drains: Map.put(state.drains, drain_id, drain)}}
+      end
+    else
+      error -> {:reply, error, state}
+    end
+  end
+
+  defp poll_legacy(state) do
+    available_slots = max(state.max_concurrency - map_size(state.running), 0)
+
+    if available_slots == 0 do
+      schedule_poll(state.poll_interval_ms)
+      {:noreply, state}
+    else
+      limit = min(state.batch_size, available_slots)
+
+      case DbResilience.with_database("background job runner poll", fn ->
+             reclaim_stale_jobs(state.claim_timeout_ms)
+             fetch_pending_jobs(limit)
+           end) do
+        {:ok, jobs} ->
+          state =
+            Enum.reduce(jobs, state, fn job, acc ->
+              case claim_job(job) do
+                {:ok, claimed} -> start_tracked_job(acc, claimed, nil)
+                :already_claimed -> acc
+                {:error, _reason} -> acc
+              end
+            end)
+
+          schedule_poll(state.poll_interval_ms)
+          {:noreply, %{state | poll_retry_attempts: 0}}
+
+        {:error, _reason} ->
+          retry_in_ms = DbResilience.backoff_ms(state.poll_interval_ms, state.poll_retry_attempts)
+          schedule_poll(retry_in_ms)
+          {:noreply, %{state | poll_retry_attempts: state.poll_retry_attempts + 1}}
+      end
+    end
+  end
+
+  defp poll_coordinated(state) do
+    available_slots = max(state.max_concurrency - map_size(state.running), 0)
+
+    result =
+      with true <- available_slots > 0,
+           {:ok, session} <- Scope.current() do
+        partitions = Authority.owned_partitions(session, ["ready"])
+
+        coordinated_reservations(
+          session,
+          partitions,
+          min(state.batch_size, available_slots),
+          state.claim_timeout_ms
+        )
+      else
+        false -> {:ok, []}
+        error -> error
+      end
+
+    case result do
+      {:ok, reservations} ->
+        state =
+          Enum.reduce(reservations, state, fn {job, assignment, identity}, acc ->
+            start_tracked_job(acc, job, nil, %{assignment: assignment, identity: identity})
+          end)
+
+        schedule_poll(state.poll_interval_ms)
+        {:noreply, %{state | poll_retry_attempts: 0}}
+
+      _ ->
+        retry_in_ms = DbResilience.backoff_ms(state.poll_interval_ms, state.poll_retry_attempts)
+        schedule_poll(retry_in_ms)
+        {:noreply, %{state | poll_retry_attempts: state.poll_retry_attempts + 1}}
+    end
+  end
+
+  defp coordinated_reservations(session, partitions, limit, ttl_ms) do
+    Enum.reduce_while(1..limit, {:ok, []}, fn _, {:ok, acc} ->
+      case FairScheduler.reserve_next(session, partitions, task_ttl_ms: ttl_ms) do
+        {:ok, nil} -> {:halt, {:ok, Enum.reverse(acc)}}
+        {:ok, reservation} -> {:cont, {:ok, [reservation | acc]}}
+        error -> {:halt, error}
+      end
+    end)
   end
 
   defp start_drain(from, state, limit) do
@@ -323,8 +434,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     end
   end
 
-  defp start_tracked_job(state, %BackgroundJob{} = job, drain_id) do
-    task = execute_job_async(job, state.handler)
+  defp start_tracked_job(state, %BackgroundJob{} = job, drain_id, coordination \\ nil) do
+    task = execute_job_async(job, state.handler, coordination)
     key = claim_key(job)
 
     entry = %{
@@ -332,7 +443,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       task: task,
       drain_id: drain_id,
       phase: :executing,
-      stop_reason: nil
+      stop_reason: nil,
+      coordination: coordination
     }
 
     %{
@@ -391,7 +503,12 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       if entry.stop_reason == :claim_lost do
         acc
       else
-        case renew_claim(entry.job) do
+        case renew_claim(
+               entry.job,
+               entry.coordination,
+               state.claim_timeout_ms,
+               state.renew_job_writer
+             ) do
           :ok ->
             acc
 
@@ -413,26 +530,55 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
             %{acc | running: running}
 
           {:error, reason} ->
-            Logger.warning("Background job claim renewal deferred",
+            Logger.warning("Stopping background job task after uncertain claim renewal",
               background_job_id: entry.job.id,
               reason: inspect(reason)
             )
 
-            acc
+            running = Map.put(acc.running, key, %{entry | stop_reason: :claim_lost})
+            Process.exit(entry.task.pid, :kill)
+            %{acc | running: running}
         end
       end
     end)
   end
 
-  defp renew_claim(%BackgroundJob{} = job) do
-    case DbResilience.with_database("background job runner renew claim", fn ->
-           now = database_now!()
-           Repo.update_all(owned_claim(job), set: [claimed_at: now, updated_at: now])
-         end) do
-      {:ok, {1, _rows}} -> :ok
-      {:ok, {0, _rows}} -> :lost
+  defp renew_claim(%BackgroundJob{} = job, coordination, ttl_ms, renew_job_writer) do
+    result =
+      DbResilience.with_database("background job runner renew claim", fn ->
+        Repo.transaction(fn ->
+          if coordination do
+            case TaskClaims.renew(coordination.assignment, ttl_ms) do
+              {:ok, _renewed} -> :ok
+              _ -> Repo.rollback(:task_authority_lost)
+            end
+          end
+
+          now = database_now!()
+
+          renewal_result =
+            if is_function(renew_job_writer, 2),
+              do: renew_job_writer.(job, now),
+              else: renew_job_claim(job, now)
+
+          case renewal_result do
+            {1, _rows} -> :renewed
+            {0, _rows} -> Repo.rollback(:claim_lost)
+          end
+        end)
+      end)
+
+    case result do
+      {:ok, {:ok, :renewed}} -> :ok
+      {:ok, {:error, :claim_lost}} -> :lost
+      {:ok, {:error, :task_authority_lost}} -> :lost
+      {:ok, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp renew_job_claim(%BackgroundJob{} = job, now) do
+    Repo.update_all(owned_claim(job), set: [claimed_at: now, updated_at: now])
   end
 
   defp fetch_pending_jobs(limit) do
@@ -576,27 +722,92 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     |> Repo.one()
   end
 
-  defp execute_job_async(%BackgroundJob{} = job, handler) do
+  defp execute_job_async(%BackgroundJob{} = job, handler, nil) do
     parent = self()
 
     Task.Supervisor.async_nolink(Maraithon.Runtime.BackgroundJobTaskSupervisor, fn ->
-      result = execute_handler(job, handler)
+      finish_executed_job(parent, job, execute_handler(job, handler), nil)
+    end)
+  end
 
-      case GenServer.call(
-             parent,
-             {:background_job_finishing, job.id, job.claim_token},
-             :infinity
-           ) do
-        :ok ->
-          outcome = persist_job_result(job, result)
-          send(parent, {:background_job_done, job.id, job.claim_token, outcome})
+  defp execute_job_async(%BackgroundJob{} = job, handler, %{
+         assignment: assignment,
+         identity: identity
+       }) do
+    parent = self()
 
-        :claim_lost ->
+    Task.Supervisor.async_nolink(TaskSupervisor.task_supervisor(), fn ->
+      :ok = TaskSupervisor.register_current!(identity)
+
+      case FairScheduler.activate_job(job, assignment) do
+        {:ok, {active_job, active_assignment}} ->
+          case TaskClaims.mark_provider_entered(active_assignment) do
+            {:ok, entered_assignment} ->
+              finish_executed_job(
+                parent,
+                active_job,
+                execute_handler(active_job, handler),
+                entered_assignment
+              )
+
+            _ ->
+              :ok
+          end
+
+        _ ->
           :ok
       end
-
-      :ok
     end)
+  end
+
+  defp finish_executed_job(parent, job, result, assignment) do
+    case GenServer.call(parent, {:background_job_finishing, job.id, job.claim_token}, :infinity) do
+      :ok ->
+        outcome =
+          if assignment,
+            do: persist_coordinated_job_result(job, assignment, result),
+            else: persist_job_result(job, result)
+
+        send(parent, {:background_job_done, job.id, job.claim_token, outcome})
+
+      :claim_lost ->
+        :ok
+    end
+
+    :ok
+  end
+
+  defp persist_coordinated_job_result(job, assignment, handler_result) do
+    outcome = coordinated_outcome(job, handler_result)
+
+    case Repo.transaction(fn ->
+           _settled = TaskClaims.settle_in_transaction(assignment, outcome)
+
+           case persist_job_result(job, handler_result) do
+             {:error, reason} when reason in [:claim_lost, :persistence_deferred] ->
+               Repo.rollback(reason)
+
+             result ->
+               result
+           end
+         end) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp coordinated_outcome(_job, {:ok, _}), do: "completed"
+
+  defp coordinated_outcome(job, {:error, {:retry_after, seconds, _}})
+       when is_integer(seconds) and seconds >= 0 do
+    if retry_after_count(job) + 1 > @max_retry_after_reschedules and
+         job.attempts + 1 >= job.max_attempts,
+       do: "failed",
+       else: "retry_scheduled"
+  end
+
+  defp coordinated_outcome(job, {:error, _}) do
+    if job.attempts + 1 < job.max_attempts, do: "retry_scheduled", else: "failed"
   end
 
   defp release_crashed_job(%BackgroundJob{} = job, reason) do
