@@ -220,6 +220,7 @@ defmodule Maraithon.Agents do
   def start_agent_run(%Agent{} = agent, attrs \\ %{}) when is_map(attrs) do
     with :ok <-
            reject_immutable_update(attrs, @run_identity_fields, :immutable_agent_run_identity),
+         {:ok, attrs} <- canonicalize_run_attrs(attrs),
          :ok <- validate_creation_status(attrs, "running", :invalid_agent_run_status) do
       Repo.transaction(fn ->
         {persisted_agent, operation} = lock_lifecycle_prefix!(agent.id)
@@ -250,6 +251,7 @@ defmodule Maraithon.Agents do
   def start_runtime_agent_run(%Agent{} = agent, attrs \\ %{}) when is_map(attrs) do
     with :ok <-
            reject_immutable_update(attrs, @run_identity_fields, :immutable_agent_run_identity),
+         {:ok, attrs} <- canonicalize_run_attrs(attrs),
          :ok <- validate_creation_status(attrs, "running", :invalid_agent_run_status) do
       Repo.transaction(fn ->
         {persisted_agent, operation} = lock_lifecycle_prefix!(agent.id)
@@ -287,14 +289,28 @@ defmodule Maraithon.Agents do
   end
 
   def complete_agent_run(run_id, attrs \\ %{}) when is_binary(run_id) and is_map(attrs) do
-    status = attrs[:status] || attrs["status"] || "completed"
-    attrs = attrs |> Map.delete("status") |> Map.put(:status, status)
-    update_agent_run(run_id, attrs)
+    with :ok <-
+           reject_immutable_update(
+             attrs,
+             @immutable_run_update_fields,
+             :immutable_agent_run_identity
+           ),
+         {:ok, attrs} <- canonicalize_run_attrs(attrs) do
+      status = attrs["status"] || "completed"
+      do_update_agent_run(run_id, Map.put(attrs, "status", status))
+    end
   end
 
   def fail_agent_run(run_id, attrs \\ %{}) when is_binary(run_id) and is_map(attrs) do
-    attrs = attrs |> Map.delete("status") |> Map.put(:status, "failed")
-    update_agent_run(run_id, attrs)
+    with :ok <-
+           reject_immutable_update(
+             attrs,
+             @immutable_run_update_fields,
+             :immutable_agent_run_identity
+           ),
+         {:ok, attrs} <- canonicalize_run_attrs(attrs) do
+      do_update_agent_run(run_id, Map.put(attrs, "status", "failed"))
+    end
   end
 
   @doc """
@@ -331,9 +347,9 @@ defmodule Maraithon.Agents do
               run =
                 run
                 |> AgentRun.changeset(%{
-                  status: "cancelled",
-                  error: run.error || reason,
-                  completed_at: now
+                  "status" => "cancelled",
+                  "error" => run.error || reason,
+                  "completed_at" => now
                 })
                 |> update_or_rollback()
 
@@ -361,55 +377,59 @@ defmodule Maraithon.Agents do
              attrs,
              @immutable_run_update_fields,
              :immutable_agent_run_identity
-           ) do
-      status = attrs[:status] || attrs["status"]
+           ),
+         {:ok, attrs} <- canonicalize_run_attrs(attrs) do
+      do_update_agent_run(run_id, attrs)
+    end
+  end
 
-      Repo.transaction(fn ->
-        agent_id =
-          Repo.one(from(run in AgentRun, where: run.id == ^run_id, select: run.agent_id)) ||
-            Repo.rollback(:run_not_found)
+  defp do_update_agent_run(run_id, attrs) do
+    status = attrs["status"]
 
-        {_agent, _operation} = lock_lifecycle_prefix!(agent_id, :run_not_found)
-        now = DatabaseClock.now!()
+    Repo.transaction(fn ->
+      agent_id =
+        Repo.one(from(run in AgentRun, where: run.id == ^run_id, select: run.agent_id)) ||
+          Repo.rollback(:run_not_found)
 
-        attrs =
+      {_agent, _operation} = lock_lifecycle_prefix!(agent_id, :run_not_found)
+      now = DatabaseClock.now!()
+
+      attrs =
+        if status in ["completed", "failed", "cancelled"] do
+          attrs
+          |> Map.put("status", status)
+          |> Map.put("completed_at", now)
+        else
+          attrs
+        end
+
+      run =
+        AgentRun
+        |> where([run], run.id == ^run_id and run.agent_id == ^agent_id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case run do
+        nil ->
+          Repo.rollback(:run_not_found)
+
+        %AgentRun{status: "running"} = run ->
           if status in ["completed", "failed", "cancelled"] do
-            attrs
-            |> Map.delete("status")
-            |> Map.put(:status, status)
-            |> Map.put(:completed_at, now)
-          else
-            attrs
+            close_requested_run_steps(run.id, @closed_step_reason, now)
           end
 
-        run =
-          AgentRun
-          |> where([run], run.id == ^run_id and run.agent_id == ^agent_id)
-          |> lock("FOR UPDATE")
-          |> Repo.one()
+          updated_run = run |> AgentRun.changeset(attrs) |> update_or_rollback()
 
-        case run do
-          nil ->
-            Repo.rollback(:run_not_found)
+          if status in ["completed", "failed", "cancelled"] do
+            clear_active_run_pointer(run.agent_id, run.id, now)
+          end
 
-          %AgentRun{status: "running"} = run ->
-            if status in ["completed", "failed", "cancelled"] do
-              close_requested_run_steps(run.id, @closed_step_reason, now)
-            end
+          updated_run
 
-            updated_run = run |> AgentRun.changeset(attrs) |> update_or_rollback()
-
-            if status in ["completed", "failed", "cancelled"] do
-              clear_active_run_pointer(run.agent_id, run.id, now)
-            end
-
-            updated_run
-
-          %AgentRun{} = run ->
-            Repo.rollback({:run_not_running, run.status})
-        end
-      end)
-    end
+        %AgentRun{} = run ->
+          Repo.rollback({:run_not_running, run.status})
+      end
+    end)
   end
 
   def list_agent_runs(agent_id, opts \\ []) when is_binary(agent_id) do
@@ -432,6 +452,7 @@ defmodule Maraithon.Agents do
              @step_identity_fields,
              :immutable_agent_run_step_identity
            ),
+         {:ok, attrs} <- canonicalize_run_step_attrs(attrs),
          :ok <-
            validate_creation_status(attrs, "requested", :invalid_agent_run_step_status) do
       Repo.transaction(fn ->
@@ -450,20 +471,15 @@ defmodule Maraithon.Agents do
             Repo.rollback(:run_not_found)
 
           %AgentRun{status: "running"} ->
-            sequence = attrs[:sequence] || attrs["sequence"] || next_run_step_sequence(run_id)
+            sequence = attrs["sequence"] || next_run_step_sequence(run_id)
 
             attrs =
               attrs
-              |> Map.new()
-              |> Map.put(:agent_run_id, run_id)
-              |> Map.put(:agent_id, agent_id)
-              |> Map.delete(:sequence)
-              |> Map.delete("sequence")
-              |> Map.put(:sequence, sequence)
-              |> Map.delete(:status)
-              |> Map.delete("status")
-              |> Map.put(:status, "requested")
-              |> Map.put(:started_at, now)
+              |> Map.put("agent_run_id", run_id)
+              |> Map.put("agent_id", agent_id)
+              |> Map.put("sequence", sequence)
+              |> Map.put("status", "requested")
+              |> Map.put("started_at", now)
 
             case %AgentRunStep{} |> AgentRunStep.changeset(attrs) |> Repo.insert() do
               {:ok, step} -> step
@@ -486,12 +502,12 @@ defmodule Maraithon.Agents do
              status in ["completed", "failed"] do
     attrs =
       if status == "completed" do
-        %{status: "completed", response_payload: effect.result || %{}}
+        %{"status" => "completed", "response_payload" => effect.result || %{}}
       else
         %{
-          status: "failed",
-          error: effect.error || "effect_failed",
-          response_payload: %{"error" => effect.error || "effect_failed"}
+          "status" => "failed",
+          "error" => effect.error || "effect_failed",
+          "response_payload" => %{"error" => effect.error || "effect_failed"}
         }
       end
 
@@ -531,8 +547,9 @@ defmodule Maraithon.Agents do
              attrs,
              @immutable_step_update_fields,
              :immutable_agent_run_step_identity
-           ) do
-      status = attrs[:status] || attrs["status"]
+           ),
+         {:ok, attrs} <- canonicalize_run_step_attrs(attrs) do
+      status = attrs["status"]
 
       Repo.transaction(fn ->
         hint =
@@ -554,9 +571,8 @@ defmodule Maraithon.Agents do
         attrs =
           if status in ["completed", "failed"] do
             attrs
-            |> Map.delete("status")
-            |> Map.put(:status, status)
-            |> Map.put(:completed_at, now)
+            |> Map.put("status", status)
+            |> Map.put("completed_at", now)
           else
             attrs
           end
@@ -1184,6 +1200,40 @@ defmodule Maraithon.Agents do
     update_agent(agent, %{status: "degraded"})
   end
 
+  defp canonicalize_run_attrs(attrs),
+    do: canonicalize_top_level_attr_keys(attrs, :invalid_agent_run_attributes)
+
+  defp canonicalize_run_step_attrs(attrs),
+    do: canonicalize_top_level_attr_keys(attrs, :invalid_agent_run_step_attributes)
+
+  defp canonicalize_top_level_attr_keys(attrs, reason) do
+    Enum.reduce_while(attrs, {:ok, %{}}, fn {key, value}, {:ok, canonical_attrs} ->
+      canonical_key =
+        cond do
+          is_atom(key) -> Atom.to_string(key)
+          is_binary(key) -> key
+          true -> nil
+        end
+
+      case canonical_key do
+        nil ->
+          {:halt, {:error, reason}}
+
+        canonical_key ->
+          case Map.fetch(canonical_attrs, canonical_key) do
+            :error ->
+              {:cont, {:ok, Map.put(canonical_attrs, canonical_key, value)}}
+
+            {:ok, existing_value} when existing_value === value ->
+              {:cont, {:ok, canonical_attrs}}
+
+            {:ok, _existing_value} ->
+              {:halt, {:error, reason}}
+          end
+      end
+    end)
+  end
+
   defp validate_creation_status(attrs, expected, reason) do
     values =
       [:status, "status"]
@@ -1279,17 +1329,14 @@ defmodule Maraithon.Agents do
 
   defp agent_run_attrs(%Agent{} = agent, attrs, now) do
     attrs
-    |> Map.new()
-    |> Map.put(:agent_id, agent.id)
-    |> Map.put(:user_id, agent.user_id)
-    |> Map.put(:project_id, agent.project_id)
-    |> Map.put(:behavior, agent.behavior)
-    |> Map.put(:agent_package_id, agent.agent_package_id)
-    |> Map.put(:agent_package_version_id, agent.agent_package_version_id)
-    |> Map.delete(:status)
-    |> Map.delete("status")
-    |> Map.put(:status, "running")
-    |> Map.put(:started_at, now)
+    |> Map.put("agent_id", agent.id)
+    |> Map.put("user_id", agent.user_id)
+    |> Map.put("project_id", agent.project_id)
+    |> Map.put("behavior", agent.behavior)
+    |> Map.put("agent_package_id", agent.agent_package_id)
+    |> Map.put("agent_package_version_id", agent.agent_package_version_id)
+    |> Map.put("status", "running")
+    |> Map.put("started_at", now)
   end
 
   defp insert_or_rollback(changeset) do

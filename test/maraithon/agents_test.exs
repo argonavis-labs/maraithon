@@ -390,6 +390,272 @@ defmodule Maraithon.AgentsTest do
       assert step_id == step.id
     end
 
+    test "canonicalizes string and agreeing mixed keys for Run and RunStep creation" do
+      {:ok, string_agent} = Agents.create_agent(@valid_attrs)
+
+      assert {:ok, string_run} =
+               Agents.start_agent_run(string_agent, %{
+                 "status" => "running",
+                 "trigger_type" => "message",
+                 "generation_mode" => "llm",
+                 "unknown_provider_fact" => "ignored"
+               })
+
+      assert string_run.status == "running"
+      assert string_run.trigger_type == "message"
+      assert string_run.generation_mode == "llm"
+
+      assert {:ok, string_step} =
+               Agents.record_agent_run_step(string_run.id, string_agent.id, %{
+                 "sequence" => 7,
+                 "step_type" => "llm_call",
+                 "status" => "requested",
+                 "generation_mode" => "llm"
+               })
+
+      assert string_step.sequence == 7
+      assert string_step.status == "requested"
+      assert string_step.generation_mode == "llm"
+
+      {:ok, mixed_agent} = Agents.create_agent(@valid_attrs)
+
+      assert {:ok, mixed_run} =
+               Agents.start_agent_run(mixed_agent, %{
+                 :status => "running",
+                 "status" => "running",
+                 :trigger_type => "schedule",
+                 "resolved_model" => "gpt-5.4"
+               })
+
+      assert mixed_run.status == "running"
+      assert mixed_run.trigger_type == "schedule"
+      assert mixed_run.resolved_model == "gpt-5.4"
+
+      assert {:ok, mixed_step} =
+               Agents.record_agent_run_step(mixed_run.id, mixed_agent.id, %{
+                 :status => "requested",
+                 "status" => "requested",
+                 :step_type => "llm_call",
+                 "generation_mode" => "llm"
+               })
+
+      assert mixed_step.status == "requested"
+      assert mixed_step.step_type == "llm_call"
+      assert mixed_step.generation_mode == "llm"
+
+      {:ok, runtime_agent} =
+        Agents.create_agent(Map.merge(@valid_attrs, %{status: "running"}))
+
+      assert {:ok, runtime_run} =
+               Agents.start_runtime_agent_run(runtime_agent, %{
+                 :status => "running",
+                 "status" => "running",
+                 "trigger_type" => "runtime"
+               })
+
+      assert runtime_run.status == "running"
+      assert runtime_run.trigger_type == "runtime"
+    end
+
+    test "settles string and agreeing mixed Run and RunStep terminal attrs" do
+      new_run = fn ->
+        {:ok, agent} = Agents.create_agent(@valid_attrs)
+        {:ok, run} = Agents.start_agent_run(agent)
+        {agent, run}
+      end
+
+      {complete_agent, complete_run} = new_run.()
+
+      {:ok, complete_step} =
+        Agents.record_agent_run_step(complete_run.id, complete_agent.id, %{
+          "step_type" => "llm_call"
+        })
+
+      {fail_agent, fail_run} = new_run.()
+
+      {:ok, fail_step} =
+        Agents.record_agent_run_step(fail_run.id, fail_agent.id, %{
+          "step_type" => "llm_call"
+        })
+
+      {_direct_agent, direct_run} = new_run.()
+      {mixed_agent, mixed_run} = new_run.()
+
+      {:ok, mixed_step} =
+        Agents.record_agent_run_step(mixed_run.id, mixed_agent.id, %{
+          "step_type" => "llm_call"
+        })
+
+      %{rows: [[window_start]]} = Repo.query!("SELECT clock_timestamp()")
+
+      assert {:ok, completed_step} =
+               Agents.update_agent_run_step(complete_step.id, %{
+                 "status" => "completed",
+                 "finish_reason" => "stop",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, completed_run} =
+               Agents.complete_agent_run(complete_run.id, %{
+                 "finish_reason" => "stop",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, failed_step} =
+               Agents.update_agent_run_step(fail_step.id, fail_agent.id, fail_run.id, %{
+                 "status" => "failed",
+                 "error" => "provider_failed",
+                 "finish_reason" => "error"
+               })
+
+      assert {:ok, failed_run} =
+               Agents.fail_agent_run(fail_run.id, %{
+                 "status" => "completed",
+                 "error" => "provider_failed",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, direct_completed_run} =
+               Agents.update_agent_run(direct_run.id, %{
+                 "status" => "completed",
+                 "finish_reason" => "stop",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, mixed_completed_step} =
+               Agents.update_agent_run_step(mixed_step.id, %{
+                 :status => "completed",
+                 "status" => "completed",
+                 :finish_reason => "stop",
+                 "generation_mode" => "llm"
+               })
+
+      assert {:ok, mixed_cancelled_run} =
+               Agents.complete_agent_run(mixed_run.id, %{
+                 :status => "cancelled",
+                 "status" => "cancelled",
+                 :finish_reason => "cancelled",
+                 "generation_mode" => "llm"
+               })
+
+      %{rows: [[window_end]]} = Repo.query!("SELECT clock_timestamp()")
+
+      assert completed_run.status == "completed"
+      assert completed_run.finish_reason == "stop"
+      assert completed_run.generation_mode == "llm"
+      assert failed_run.status == "failed"
+      assert failed_run.error == "provider_failed"
+      assert failed_run.generation_mode == "llm"
+      assert direct_completed_run.status == "completed"
+      assert direct_completed_run.finish_reason == "stop"
+      assert mixed_cancelled_run.status == "cancelled"
+      assert mixed_cancelled_run.finish_reason == "cancelled"
+      assert completed_step.finish_reason == "stop"
+      assert completed_step.generation_mode == "llm"
+      assert failed_step.status == "failed"
+      assert failed_step.error == "provider_failed"
+      assert mixed_completed_step.finish_reason == "stop"
+
+      for terminal <- [
+            completed_step,
+            completed_run,
+            failed_step,
+            failed_run,
+            direct_completed_run,
+            mixed_completed_step,
+            mixed_cancelled_run
+          ] do
+        assert DateTime.compare(terminal.completed_at, window_start) in [:eq, :gt]
+        assert DateTime.compare(terminal.completed_at, window_end) in [:eq, :lt]
+      end
+
+      assert {:error, {:run_step_not_requested, "completed"}} =
+               Agents.update_agent_run_step(complete_step.id, %{
+                 "status" => "failed",
+                 "finish_reason" => "late"
+               })
+
+      assert {:error, {:run_not_running, "completed"}} =
+               Agents.complete_agent_run(complete_run.id, %{"finish_reason" => "late"})
+
+      persisted_step = Repo.get!(AgentRunStep, complete_step.id)
+      persisted_run = Repo.get!(AgentRun, complete_run.id)
+      assert persisted_step.finish_reason == "stop"
+      assert persisted_step.generation_mode == "llm"
+      assert persisted_step.updated_at == completed_step.updated_at
+      assert persisted_step.completed_at == completed_step.completed_at
+      assert persisted_run.finish_reason == "stop"
+      assert persisted_run.generation_mode == "llm"
+      assert persisted_run.updated_at == completed_run.updated_at
+      assert persisted_run.completed_at == completed_run.completed_at
+    end
+
+    test "rejects conflicting or invalid top-level Run and RunStep keys without mutation" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.start_agent_run(agent, %{:status => "running", "status" => "completed"})
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.start_agent_run(agent, %{42 => "invalid", "status" => "running"})
+
+      assert Repo.aggregate(AgentRun, :count) == 0
+      {:ok, run} = Agents.start_agent_run(agent)
+
+      assert {:error, :invalid_agent_run_step_attributes} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 :status => "requested",
+                 "status" => "completed",
+                 "step_type" => "llm_call"
+               })
+
+      assert {:error, :invalid_agent_run_step_attributes} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 {"invalid", :key} => true,
+                 "step_type" => "llm_call"
+               })
+
+      assert Repo.aggregate(AgentRunStep, :count) == 0
+
+      {:ok, step} =
+        Agents.record_agent_run_step(run.id, agent.id, %{"step_type" => "llm_call"})
+
+      stored_run = Repo.get!(AgentRun, run.id)
+      stored_step = Repo.get!(AgentRunStep, step.id)
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.complete_agent_run(run.id, %{
+                 :finish_reason => "stop",
+                 "finish_reason" => "length"
+               })
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.fail_agent_run(run.id, %{42 => "invalid", "error" => "failed"})
+
+      assert {:error, :invalid_agent_run_attributes} =
+               Agents.update_agent_run(run.id, %{
+                 :status => "completed",
+                 "status" => "failed"
+               })
+
+      assert {:error, :invalid_agent_run_step_attributes} =
+               Agents.update_agent_run_step(step.id, %{
+                 :status => "completed",
+                 "status" => "failed"
+               })
+
+      assert {:error, :invalid_agent_run_step_attributes} =
+               Agents.update_agent_run_step(step.id, agent.id, run.id, %{
+                 42 => "invalid",
+                 "status" => "completed"
+               })
+
+      assert Repo.get!(AgentRun, run.id) == stored_run
+      assert Repo.get!(AgentRunStep, step.id) == stored_step
+      assert Repo.aggregate(AgentRun, :count) == 1
+      assert Repo.aggregate(AgentRunStep, :count) == 1
+    end
+
     test "creation only admits running Runs and requested RunSteps" do
       {:ok, agent} = Agents.create_agent(@valid_attrs)
 
@@ -418,6 +684,19 @@ defmodule Maraithon.AgentsTest do
       assert {:error, :immutable_agent_run_identity} =
                Agents.start_agent_run(agent, %{"completed_at" => forged_completed_at})
 
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.start_agent_run(agent, %{
+                 :completed_at => forged_completed_at,
+                 "completed_at" => DateTime.add(forged_completed_at, 1, :second),
+                 42 => "invalid"
+               })
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.start_runtime_agent_run(agent, %{
+                 :completed_at => forged_completed_at,
+                 "completed_at" => forged_completed_at
+               })
+
       assert Repo.aggregate(AgentRun, :count) == 0
       assert {:ok, run} = Agents.start_agent_run(agent)
 
@@ -431,6 +710,14 @@ defmodule Maraithon.AgentsTest do
                Agents.record_agent_run_step(run.id, agent.id, %{
                  "step_type" => "llm_call",
                  "completed_at" => forged_completed_at
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 :completed_at => forged_completed_at,
+                 "completed_at" => DateTime.add(forged_completed_at, 1, :second),
+                 42 => "invalid",
+                 "step_type" => "llm_call"
                })
 
       assert Repo.aggregate(AgentRunStep, :count) == 0
@@ -447,6 +734,8 @@ defmodule Maraithon.AgentsTest do
         })
 
       forged_completed_at = ~U[2001-02-03 04:05:06.000000Z]
+      stored_run = Repo.get!(AgentRun, run.id)
+      stored_step = Repo.get!(AgentRunStep, step.id)
 
       assert {:error, :immutable_agent_run_identity} =
                Agents.update_agent_run(run.id, %{
@@ -472,6 +761,21 @@ defmodule Maraithon.AgentsTest do
       assert {:error, :immutable_agent_run_identity} =
                Agents.fail_agent_run(run.id, %{"completed_at" => forged_completed_at})
 
+      mixed_run_forgery = %{
+        :completed_at => forged_completed_at,
+        "completed_at" => DateTime.add(forged_completed_at, 1, :second),
+        42 => "invalid",
+        "status" => "completed"
+      }
+
+      for update <- [
+            &Agents.update_agent_run(run.id, &1),
+            &Agents.complete_agent_run(run.id, &1),
+            &Agents.fail_agent_run(run.id, &1)
+          ] do
+        assert {:error, :immutable_agent_run_identity} = update.(mixed_run_forgery)
+      end
+
       assert {:error, :immutable_agent_run_step_identity} =
                Agents.update_agent_run_step(step.id, %{
                  completed_at: forged_completed_at,
@@ -494,10 +798,26 @@ defmodule Maraithon.AgentsTest do
                  "completed_at" => forged_completed_at
                })
 
-      assert %{status: "running", completed_at: nil, error: nil} = Repo.get!(AgentRun, run.id)
+      mixed_step_forgery = %{
+        :completed_at => forged_completed_at,
+        "completed_at" => DateTime.add(forged_completed_at, 1, :second),
+        42 => "invalid",
+        "status" => "completed"
+      }
 
-      assert %{status: "requested", completed_at: nil, error: nil} =
-               Repo.get!(AgentRunStep, step.id)
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, mixed_step_forgery)
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(
+                 step.id,
+                 agent.id,
+                 run.id,
+                 mixed_step_forgery
+               )
+
+      assert Repo.get!(AgentRun, run.id) == stored_run
+      assert Repo.get!(AgentRunStep, step.id) == stored_step
 
       %{rows: [[step_window_start]]} = Repo.query!("SELECT clock_timestamp()")
 
