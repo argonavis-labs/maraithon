@@ -142,6 +142,8 @@ defmodule MaraithonWeb.Router do
     pipe_through [:api, :mobile_api_auth]
 
     get "/me", MobileAuthController, :me
+    post "/account-erasure", MobileAccountErasureController, :create
+    get "/account-erasure", MobileAccountErasureController, :show
     delete "/session", MobileAuthController, :delete
     post "/push/devices", MobilePushDeviceController, :create
     delete "/push/devices/:device_token", MobilePushDeviceController, :delete
