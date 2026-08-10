@@ -21,6 +21,7 @@ defmodule Maraithon.Runtime.Snapshot do
   import Ecto.Changeset
   import Ecto.Query
 
+  alias Maraithon.DurablePayload
   alias Maraithon.Repo
   alias Maraithon.Runtime.SnapshotFormat
 
@@ -30,14 +31,32 @@ defmodule Maraithon.Runtime.Snapshot do
     field :agent_id, :binary_id
     field :sequence_num, :integer
     field :state_name, :string
-    field :state_data, :map
-    field :budget, :map
+    field :state_data, Maraithon.Encrypted.Map, source: :state_data_ciphertext, redact: true
+    field :legacy_state_data, :map, source: :state_data, default: %{}, redact: true
+    field :budget, Maraithon.Encrypted.Map, source: :budget_ciphertext, redact: true
+    field :legacy_budget, :map, source: :budget, default: %{}, redact: true
     field :schema_version, :integer
+    field :payload_encryption_version, :integer
+    field :payload_binding_version, :integer
+    field :payload_binding_key_tag, :string
+    field :payload_binding_mac, :binary, redact: true
+    field :payload_purged_at, :utc_datetime_usec
 
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
   @required ~w(agent_id sequence_num state_name state_data budget schema_version)a
+
+  @doc false
+  def payload_binding_spec do
+    %{
+      table: "snapshots",
+      identity_fields: [:id],
+      scope_fields: [:agent_id, :sequence_num, :schema_version, :state_name],
+      fields: [:state_data, :budget],
+      purge_field: :payload_purged_at
+    }
+  end
 
   def changeset(snapshot, attrs) do
     snapshot
@@ -56,6 +75,10 @@ defmodule Maraithon.Runtime.Snapshot do
       name: :snapshots_tagged_v1_payloads,
       message: "does not match the tagged snapshot format"
     )
+    |> mirror_legacy_payloads()
+    |> put_payload_encryption_version()
+    |> DurablePayload.put_binding(payload_binding_spec())
+    |> DurablePayload.require_current_mutation()
   end
 
   @doc """
@@ -72,8 +95,15 @@ defmodule Maraithon.Runtime.Snapshot do
          true <- state_bytes + budget_bytes <= SnapshotFormat.max_encoded_bytes() do
       result =
         Repo.transaction(fn ->
+          %{rows: [[snapshot_id]]} =
+            Repo.query!(
+              "SELECT nextval(pg_get_serial_sequence('public.snapshots', 'id'))",
+              [],
+              log: false
+            )
+
           changeset =
-            changeset(%__MODULE__{}, %{
+            changeset(%__MODULE__{id: snapshot_id}, %{
               agent_id: agent_id,
               sequence_num: sequence_num,
               state_name: to_string(state_name),
@@ -153,7 +183,7 @@ defmodule Maraithon.Runtime.Snapshot do
           | nil
   def latest(agent_id) do
     from(snapshot in __MODULE__,
-      where: snapshot.agent_id == ^agent_id,
+      where: snapshot.agent_id == ^agent_id and is_nil(snapshot.payload_purged_at),
       order_by: [desc: snapshot.sequence_num, desc: snapshot.id],
       limit: @keep_snapshots
     )
@@ -187,8 +217,10 @@ defmodule Maraithon.Runtime.Snapshot do
       SELECT DISTINCT ON (s.agent_id)
         s.agent_id,
         s.inserted_at,
-        pg_column_size(s.state_data) + pg_column_size(s.budget) AS encoded_bytes
+        COALESCE(octet_length(s.state_data_ciphertext), pg_column_size(s.state_data), 0) +
+          COALESCE(octet_length(s.budget_ciphertext), pg_column_size(s.budget), 0) AS encoded_bytes
       FROM snapshots AS s
+      WHERE s.payload_purged_at IS NULL
       ORDER BY s.agent_id, s.sequence_num DESC, s.id DESC
     ),
     active AS (
@@ -199,8 +231,10 @@ defmodule Maraithon.Runtime.Snapshot do
     )
     SELECT
       (SELECT count(*)::bigint FROM snapshots) AS retained_snapshot_count,
-      (SELECT COALESCE(sum(pg_column_size(state_data) + pg_column_size(budget)), 0)::bigint
-         FROM snapshots) AS retained_encoded_bytes,
+      (SELECT COALESCE(sum(
+           COALESCE(octet_length(state_data_ciphertext), pg_column_size(state_data), 0) +
+           COALESCE(octet_length(budget_ciphertext), pg_column_size(budget), 0)
+         ), 0)::bigint FROM snapshots) AS retained_encoded_bytes,
       count(active.id)::bigint AS active_agent_count,
       count(active.id) FILTER (WHERE latest.agent_id IS NULL)::bigint
         AS active_agents_without_snapshot,
@@ -237,7 +271,11 @@ defmodule Maraithon.Runtime.Snapshot do
     end
   end
 
+  defp decode_snapshot(%__MODULE__{payload_purged_at: %DateTime{}}), do: nil
+
   defp decode_snapshot(%__MODULE__{} = snapshot) do
+    snapshot = hydrate_payloads!(snapshot)
+
     with {:ok, behavior_state} <- unwrap_term(snapshot.state_data),
          {:ok, budget} <- unwrap_term(snapshot.budget) do
       %{
@@ -263,6 +301,54 @@ defmodule Maraithon.Runtime.Snapshot do
 
         nil
     end
+  end
+
+  @doc false
+  def hydrate_payloads!(%__MODULE__{} = snapshot, mode \\ DurablePayload.mode!()) do
+    :ok = DurablePayload.verify_binding!(snapshot, payload_binding_spec(), mode)
+
+    {state_data, budget} =
+      case mode do
+        :legacy ->
+          {snapshot.state_data || snapshot.legacy_state_data,
+           snapshot.budget || snapshot.legacy_budget}
+
+        :exact ->
+          if snapshot.payload_encryption_version == 1 and is_map(snapshot.state_data) and
+               is_map(snapshot.budget) and snapshot.legacy_state_data == %{} and
+               snapshot.legacy_budget == %{} do
+            {snapshot.state_data, snapshot.budget}
+          else
+            raise ArgumentError, "exact Snapshot payload is not ciphertext-only"
+          end
+      end
+
+    %{snapshot | state_data: state_data, budget: budget}
+  end
+
+  defp mirror_legacy_payloads(changeset) do
+    if DurablePayload.legacy_write?() do
+      changeset
+      |> mirror_legacy(:state_data, :legacy_state_data)
+      |> mirror_legacy(:budget, :legacy_budget)
+    else
+      changeset
+      |> Ecto.Changeset.put_change(:legacy_state_data, %{})
+      |> Ecto.Changeset.put_change(:legacy_budget, %{})
+    end
+  end
+
+  defp mirror_legacy(changeset, field, legacy_field) do
+    case Ecto.Changeset.fetch_change(changeset, field) do
+      {:ok, value} -> Ecto.Changeset.put_change(changeset, legacy_field, value)
+      :error -> changeset
+    end
+  end
+
+  defp put_payload_encryption_version(changeset) do
+    if Map.has_key?(changeset.changes, :state_data) or Map.has_key?(changeset.changes, :budget),
+      do: Ecto.Changeset.put_change(changeset, :payload_encryption_version, 1),
+      else: changeset
   end
 
   defp unwrap_term(stored) do

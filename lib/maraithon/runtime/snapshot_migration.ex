@@ -417,7 +417,9 @@ defmodule Maraithon.Runtime.SnapshotMigration do
           count =
             Snapshot
             |> where([snapshot], snapshot.id == ^row.id)
-            |> repo.update_all(set: [state_data: encoded.state_data, budget: encoded.budget])
+            |> repo.update_all(
+              set: [legacy_state_data: encoded.state_data, legacy_budget: encoded.budget]
+            )
             |> elem(0)
 
           if count != 1, do: repo.rollback(:snapshot_migration_update_lost)

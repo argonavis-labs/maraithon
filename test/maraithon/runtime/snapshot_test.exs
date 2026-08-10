@@ -65,8 +65,8 @@ defmodule Maraithon.Runtime.SnapshotTest do
           agent_id: agent.id,
           sequence_num: 5,
           state_name: "idle",
-          state_data: %{"legacy" => true},
-          budget: %{"llm_calls" => 1},
+          legacy_state_data: %{"legacy" => true},
+          legacy_budget: %{"llm_calls" => 1},
           inserted_at: DateTime.utc_now()
         }
       ])
@@ -108,12 +108,12 @@ defmodule Maraithon.Runtime.SnapshotTest do
           agent_id: agent.id,
           sequence_num: 2,
           state_name: "idle",
-          state_data: %{
+          legacy_state_data: %{
             "format" => SnapshotFormat.format(),
             "format_version" => 999,
             "value" => %{}
           },
-          budget: %{},
+          legacy_budget: %{},
           schema_version: 0,
           inserted_at: DateTime.utc_now()
         }
@@ -136,8 +136,8 @@ defmodule Maraithon.Runtime.SnapshotTest do
           agent_id: agent.id,
           sequence_num: 1,
           state_name: "idle",
-          state_data: %{"format" => "etf_base64", "data" => Base.encode64(compressed)},
-          budget: %{"format" => "etf_base64", "data" => Base.encode64(compressed)},
+          legacy_state_data: %{"format" => "etf_base64", "data" => Base.encode64(compressed)},
+          legacy_budget: %{"format" => "etf_base64", "data" => Base.encode64(compressed)},
           schema_version: 0,
           inserted_at: DateTime.utc_now()
         }

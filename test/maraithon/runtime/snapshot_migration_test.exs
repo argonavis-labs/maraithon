@@ -46,7 +46,7 @@ defmodule Maraithon.Runtime.SnapshotMigrationTest do
     refute batch.pass_complete
 
     migrated_first = Repo.get!(Snapshot, first.id)
-    assert migrated_first.state_data["format"] == SnapshotFormat.format()
+    assert migrated_first.legacy_state_data["format"] == SnapshotFormat.format()
 
     assert {:ok, batch} =
              SnapshotMigration.migrate_batch(batch_size: 1, after_id: batch.next_cursor)
@@ -257,7 +257,11 @@ defmodule Maraithon.Runtime.SnapshotMigrationTest do
       schema_version: 0
     }
 
-    assert {:error, changeset} = Snapshot.changeset(%Snapshot{}, attrs) |> Repo.insert()
+    %{rows: [[snapshot_id]]} =
+      Repo.query!("SELECT nextval(pg_get_serial_sequence('public.snapshots', 'id'))")
+
+    assert {:error, changeset} =
+             Snapshot.changeset(%Snapshot{id: snapshot_id}, attrs) |> Repo.insert()
 
     assert "does not match the tagged snapshot format" in errors_on(changeset).state_data
   end
@@ -267,8 +271,8 @@ defmodule Maraithon.Runtime.SnapshotMigrationTest do
       agent_id: agent_id,
       sequence_num: sequence_num,
       state_name: "idle",
-      state_data: Keyword.fetch!(opts, :state_data),
-      budget: Keyword.fetch!(opts, :budget),
+      legacy_state_data: Keyword.fetch!(opts, :state_data),
+      legacy_budget: Keyword.fetch!(opts, :budget),
       schema_version: Keyword.get(opts, :schema_version, 0),
       inserted_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
     }
@@ -282,8 +286,8 @@ defmodule Maraithon.Runtime.SnapshotMigrationTest do
       agent_id: agent_id,
       sequence_num: sequence_num,
       state_name: "idle",
-      state_data: tagged(state),
-      budget: tagged(%{}),
+      legacy_state_data: tagged(state),
+      legacy_budget: tagged(%{}),
       schema_version: 0,
       inserted_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
     }
