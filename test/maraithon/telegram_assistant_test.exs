@@ -38,6 +38,11 @@ defmodule Maraithon.TelegramAssistantTest do
     original_user_memory = Application.get_env(:maraithon, :user_memory, [])
     original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
 
+    # These tests exercise delivery payloads, not the wall-clock quiet-hours gate.
+    # Put the one-hour quiet window immediately after the default local hour so
+    # the fixture remains deterministic regardless of when the suite runs.
+    test_local_hour = DateTime.add(DateTime.utc_now(), -5, :hour).hour
+
     Application.put_env(
       :maraithon,
       :insights,
@@ -61,6 +66,8 @@ defmodule Maraithon.TelegramAssistantTest do
         telegram_unified_push_enabled: true,
         telegram_liveness_enabled: true,
         proactive_delivery_planner_enabled: false,
+        quiet_hours_start_local: rem(test_local_hour + 1, 24),
+        quiet_hours_end_local: rem(test_local_hour + 2, 24),
         typing_initial_delay_ms: 10_000,
         typing_refresh_ms: 4_000,
         contextual_progress_delay_ms: 20_000,
