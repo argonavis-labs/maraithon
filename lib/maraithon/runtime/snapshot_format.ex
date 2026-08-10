@@ -8,8 +8,13 @@ defmodule Maraithon.Runtime.SnapshotFormat do
   """
 
   @format "maraithon.agent_snapshot"
+  @legacy_format "etf_base64"
   @format_version 1
   @max_encoded_bytes 1_048_576
+  # The historical writer emitted uncompressed ETF. Keep the temporary reader
+  # byte-bounded before `binary_to_term/2`; the closed v1 encoder then enforces
+  # the stricter depth/node/type grammar before a legacy value is accepted.
+  @max_legacy_etf_bytes @max_encoded_bytes
   @max_scalar_bytes 65_536
   @max_depth 24
   @max_nodes 50_000
@@ -68,9 +73,94 @@ defmodule Maraithon.Runtime.SnapshotFormat do
   def decode(%{"format" => @format}), do: {:error, :unknown_snapshot_format_version}
   def decode(_other), do: {:error, :invalid_snapshot_format}
 
+  @doc """
+  Decode one value as stored in a snapshot JSONB column.
+
+  Tagged v1 is the only write format. The two `:legacy_*` results exist solely
+  for the bounded online migration and can be removed after the tagged-v1
+  constraint is validated in production.
+  """
+  @spec decode_stored(term()) ::
+          {:ok, term(), :tagged_v1 | :legacy_etf | :legacy_json} | {:error, atom()}
+  def decode_stored(%{"format" => @format} = envelope) do
+    with {:ok, term} <- decode(envelope) do
+      {:ok, term, :tagged_v1}
+    end
+  end
+
+  def decode_stored(%{"format" => @legacy_format, "data" => data} = envelope)
+      when map_size(envelope) == 2 and is_binary(data) do
+    decode_legacy_etf(data)
+  end
+
+  # The legacy and current wrapper names are reserved. A malformed wrapper
+  # must fail closed rather than being mistaken for a pre-wrapper plain-JSON
+  # behavior state.
+  def decode_stored(%{"format" => format}) when format in [@format, @legacy_format],
+    do: {:error, :invalid_snapshot_format}
+
+  def decode_stored(other) do
+    with true <-
+           Maraithon.BoundedJSON.valid?(other, @max_encoded_bytes,
+             max_binary_bytes: @max_scalar_bytes,
+             max_depth: @max_depth,
+             max_nodes: @max_nodes,
+             max_map_entries: @max_map_entries,
+             max_list_items: @max_collection_items
+           ),
+         {:ok, json} <- Jason.encode(other),
+         true <- byte_size(json) <= @max_encoded_bytes,
+         {:ok, _envelope, _bytes} <- encode(other) do
+      {:ok, other, :legacy_json}
+    else
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      _other -> {:error, :invalid_legacy_snapshot}
+    end
+  rescue
+    _error -> {:error, :invalid_legacy_snapshot}
+  end
+
   def format, do: @format
   def version, do: @format_version
   def max_encoded_bytes, do: @max_encoded_bytes
+
+  # Includes base64 expansion and the small JSON wrapper overhead. Database
+  # batch readers use this to avoid transferring an unbounded legacy JSONB
+  # value into the BEAM before the decoder can reject it.
+  def max_legacy_stored_bytes,
+    do: div((@max_legacy_etf_bytes + 2) * 4, 3) + 128
+
+  defp decode_legacy_etf(data) do
+    max_base64_bytes = div((@max_legacy_etf_bytes + 2) * 4, 3)
+
+    with true <- byte_size(data) <= max_base64_bytes,
+         {:ok, binary} <- Base.decode64(data),
+         true <- byte_size(binary) <= @max_legacy_etf_bytes,
+         :ok <- uncompressed_etf(binary),
+         {:ok, term} <- safe_binary_to_term(binary),
+         {:ok, _envelope, _bytes} <- encode(term) do
+      {:ok, term, :legacy_etf}
+    else
+      false -> {:error, :legacy_snapshot_too_large}
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      _other -> {:error, :invalid_legacy_snapshot}
+    end
+  end
+
+  defp uncompressed_etf(<<131, 80, _rest::binary>>),
+    do: {:error, :compressed_legacy_snapshot}
+
+  defp uncompressed_etf(<<131, _rest::binary>>), do: :ok
+  defp uncompressed_etf(_binary), do: {:error, :invalid_legacy_snapshot}
+
+  defp safe_binary_to_term(binary) do
+    case :erlang.binary_to_term(binary, [:safe, :used]) do
+      {term, used} when used == byte_size(binary) -> {:ok, term}
+      _other -> {:error, :invalid_legacy_snapshot}
+    end
+  rescue
+    _error -> {:error, :invalid_legacy_snapshot}
+  end
 
   defp encode_node(_term, depth, _nodes) when depth > @max_depth,
     do: {:error, :snapshot_too_deep}

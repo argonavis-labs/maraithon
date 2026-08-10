@@ -9,9 +9,11 @@ defmodule Maraithon.Runtime.Snapshot do
   behavior handlers would re-run their side effects.
 
   `behavior_state` and `budget` use a bounded, tagged JSON format that preserves
-  atoms, tuples, arbitrary map keys, structs, and binary values without storing
-  executable ETF. Legacy ETF rows remain read-only compatible while fresh
-  checkpoints age them out under the bounded retention policy.
+  atoms, tuples, typed map keys, ISO calendar values, and arbitrary bytes
+  without storing executable ETF. The closed grammar deliberately rejects
+  arbitrary structs, processes, functions, references, and other runtime-only
+  terms. A bounded legacy ETF/plain-JSON reader remains temporarily available
+  for migration; tagged v1 is the only write format.
   """
 
   use Ecto.Schema
@@ -50,6 +52,10 @@ defmodule Maraithon.Runtime.Snapshot do
     |> check_constraint(:schema_version, name: :snapshots_schema_version_range)
     |> check_constraint(:state_data, name: :snapshots_payload_objects)
     |> check_constraint(:state_data, name: :snapshots_payload_storage_bound)
+    |> check_constraint(:state_data,
+      name: :snapshots_tagged_v1_payloads,
+      message: "does not match the tagged snapshot format"
+    )
   end
 
   @doc """
@@ -259,52 +265,9 @@ defmodule Maraithon.Runtime.Snapshot do
     end
   end
 
-  defp unwrap_term(%{"format" => format} = envelope)
-       when format == "maraithon.agent_snapshot" do
-    SnapshotFormat.decode(envelope)
-  end
-
-  # Read-only compatibility for checkpoints written before format version 1.
-  # The old writer never compressed ETF, so compressed payloads are rejected to
-  # avoid decompression bombs. Fresh writes can never produce this shape.
-  defp unwrap_term(%{"format" => "etf_base64", "data" => data}) when is_binary(data) do
-    max_etf_bytes = SnapshotFormat.max_encoded_bytes()
-    max_base64_bytes = div((max_etf_bytes + 2) * 4, 3)
-
-    with true <- byte_size(data) <= max_base64_bytes,
-         {:ok, binary} <- Base.decode64(data),
-         true <- byte_size(binary) <= max_etf_bytes,
-         false <- compressed_etf?(binary),
-         term <- :erlang.binary_to_term(binary, [:safe]),
-         {:ok, _envelope, _bytes} <- SnapshotFormat.encode(term) do
+  defp unwrap_term(stored) do
+    with {:ok, term, _storage_kind} <- SnapshotFormat.decode_stored(stored) do
       {:ok, term}
-    else
-      _other -> {:error, :invalid_legacy_snapshot}
-    end
-  rescue
-    _error -> {:error, :invalid_legacy_snapshot}
-  end
-
-  # Rows predating the original ETF wrapper were plain JSON. Keep that
-  # migration path bounded, but do not treat a known future format as plain
-  # state.
-  defp unwrap_term(other) do
-    with true <-
-           Maraithon.BoundedJSON.valid?(other, SnapshotFormat.max_encoded_bytes(),
-             max_binary_bytes: 262_144,
-             max_depth: 32,
-             max_nodes: 100_000,
-             max_map_entries: 20_000,
-             max_list_items: 20_000
-           ),
-         {:ok, encoded} <- Jason.encode(other),
-         true <- byte_size(encoded) <= SnapshotFormat.max_encoded_bytes() do
-      {:ok, other}
-    else
-      _other -> {:error, :invalid_legacy_snapshot}
     end
   end
-
-  defp compressed_etf?(<<131, 80, _rest::binary>>), do: true
-  defp compressed_etf?(_binary), do: false
 end

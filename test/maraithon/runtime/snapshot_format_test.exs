@@ -116,4 +116,78 @@ defmodule Maraithon.Runtime.SnapshotFormatTest do
 
     assert {:error, :duplicate_snapshot_map_key} = SnapshotFormat.decode(duplicate_map)
   end
+
+  test "bounded legacy storage decoding accepts only safe uncompressed ETF and plain JSON" do
+    term = %{mode: :scanning, tuple: {:ok, [1, 2, 3]}}
+    legacy = %{"format" => "etf_base64", "data" => Base.encode64(:erlang.term_to_binary(term))}
+
+    assert {:ok, ^term, :legacy_etf} = SnapshotFormat.decode_stored(legacy)
+
+    assert {:ok, %{"plain" => [1, 2, 3]}, :legacy_json} =
+             SnapshotFormat.decode_stored(%{"plain" => [1, 2, 3]})
+
+    compressed =
+      :erlang.term_to_binary(%{unsafe: String.duplicate("compressed", 10_000)}, compressed: 9)
+
+    assert <<131, 80, _rest::binary>> = compressed
+
+    assert {:error, :compressed_legacy_snapshot} =
+             SnapshotFormat.decode_stored(%{
+               "format" => "etf_base64",
+               "data" => Base.encode64(compressed)
+             })
+
+    unknown_atom = "snapshot_atom_that_does_not_exist_1d8bca56"
+    atom_etf = <<131, 119, byte_size(unknown_atom), unknown_atom::binary>>
+
+    assert {:error, :invalid_legacy_snapshot} =
+             SnapshotFormat.decode_stored(%{
+               "format" => "etf_base64",
+               "data" => Base.encode64(atom_etf)
+             })
+
+    assert {:error, :invalid_snapshot_format} =
+             SnapshotFormat.decode_stored(%{"format" => "etf_base64", "data" => 123})
+
+    too_deep = Enum.reduce(1..26, :ok, fn _index, value -> [value] end)
+
+    assert {:error, :snapshot_too_deep} =
+             SnapshotFormat.decode_stored(%{
+               "format" => "etf_base64",
+               "data" => Base.encode64(:erlang.term_to_binary(too_deep))
+             })
+
+    too_many_nodes = List.duplicate(Enum.to_list(1..10), 5_000)
+
+    assert {:error, :snapshot_too_many_nodes} =
+             SnapshotFormat.decode_stored(%{
+               "format" => "etf_base64",
+               "data" => Base.encode64(:erlang.term_to_binary(too_many_nodes))
+             })
+  end
+
+  @tag :tmp_dir
+  test "initial state corpus for every installed Behavior fits the closed grammar", %{
+    tmp_dir: tmp_dir
+  } do
+    config = %{
+      "user_id" => "snapshot-corpus@example.com",
+      "name" => "snapshot-corpus",
+      "codebase_path" => tmp_dir,
+      "output_path" => Path.join(tmp_dir, "output")
+    }
+
+    assert Maraithon.Behaviors.list() != []
+
+    Enum.each(Maraithon.Behaviors.list(), fn behavior ->
+      module = Maraithon.Behaviors.get!(behavior)
+      state = module.init(config)
+
+      assert {:ok, envelope, bytes} = SnapshotFormat.encode(state),
+             "#{behavior} init/1 returned an unsupported snapshot state"
+
+      assert bytes <= SnapshotFormat.max_encoded_bytes()
+      assert {:ok, ^state} = SnapshotFormat.decode(envelope)
+    end)
+  end
 end
