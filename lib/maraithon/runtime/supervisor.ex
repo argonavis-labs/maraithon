@@ -31,7 +31,7 @@ defmodule Maraithon.Runtime.Supervisor do
       Maraithon.Runtime.EffectTaskSupervisor,
       {Task.Supervisor, name: Maraithon.Runtime.ToolCallSupervisor},
       Maraithon.Runtime.Effects.LLMRateLimiter,
-      {Task.Supervisor, name: Maraithon.Runtime.BackgroundJobTaskSupervisor},
+      Maraithon.Runtime.Coordination.TaskSupervisor,
       {Task.Supervisor, name: Maraithon.Runtime.AgentRecoveryTaskSupervisor}
     ]
 
@@ -85,7 +85,10 @@ defmodule Maraithon.Runtime.Supervisor do
             # queue or every lane runner wedges, putting its reporter/alarm in
             # that same queue would silence the only signal about the failure.
             Maraithon.Runtime.HealthReporter,
-            Maraithon.Runtime.StuckStateWatchdog
+            Maraithon.Runtime.StuckStateWatchdog,
+            # Supervised last so graceful shutdown revokes PostgreSQL readiness
+            # before any scoped worker or exact task supervisor stops locally.
+            Maraithon.Runtime.Coordination.Session
           ]
       else
         # Exact starts are still exercised in focused tests. Keep the mandatory

@@ -41,6 +41,12 @@ defmodule Maraithon.Runtime.ScheduledJob do
     field :attempts, :integer, default: 0
     field :dispatched_at, :utc_datetime_usec
     field :delivered_at, :utc_datetime_usec
+    field :tenant_key, :string
+    field :partition_id, :integer
+    field :dispatch_token, Ecto.UUID
+    field :coordination_activation_epoch, Ecto.UUID
+    field :coordination_partition_epoch, :integer
+    field :coordination_node_incarnation_id, Ecto.UUID
 
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end

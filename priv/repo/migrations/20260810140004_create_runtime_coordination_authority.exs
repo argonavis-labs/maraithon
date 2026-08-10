@@ -1,0 +1,1989 @@
+defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
+  use Ecto.Migration
+
+  @disable_ddl_transaction true
+  @disable_migration_lock true
+  @partition_count 64
+
+  # This protocol is intentionally expansion-only. Production activation is a
+  # separate, stopped-fleet operator transaction; there is no rollback path.
+  def up do
+    create table(:runtime_coordination_protocols, primary_key: false) do
+      add :name, :string, primary_key: true
+      add :mode, :string, null: false, default: "dark"
+      add :partition_count, :smallint, null: false, default: @partition_count
+      add :activation_epoch, :uuid
+      add :activated_at, :utc_datetime_usec
+      add :activation_evidence_id, :string
+      add :activation_evidence_digest, :binary
+      add :activated_by, :string
+      add :exact_revision, :string
+      add :manifest_digest, :binary, null: false
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create constraint(:runtime_coordination_protocols, :runtime_coordination_protocol_shape,
+             check: """
+             name = 'runtime' AND partition_count = #{@partition_count} AND
+             ((mode = 'dark' AND activation_epoch IS NULL AND activated_at IS NULL AND
+                activation_evidence_id IS NULL AND activation_evidence_digest IS NULL AND
+                activated_by IS NULL AND exact_revision IS NULL) OR
+              (mode = 'partition_fenced_v1' AND activation_epoch IS NOT NULL AND
+               activated_at IS NOT NULL AND
+               octet_length(activation_evidence_id) BETWEEN 1 AND 256 AND
+               octet_length(activation_evidence_digest) = 32 AND
+               octet_length(activated_by) BETWEEN 1 AND 320 AND
+               octet_length(exact_revision) BETWEEN 7 AND 255)) AND
+             octet_length(manifest_digest) = 32
+             """
+           )
+
+    create table(:runtime_coordination_manifests, primary_key: false) do
+      add :name, :string, primary_key: true
+      add :constraint_fingerprints, :map, null: false
+      add :function_fingerprints, :map, null: false
+      add :trigger_fingerprints, :map, null: false
+      add :index_fingerprints, :map, null: false
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create constraint(:runtime_coordination_manifests, :runtime_coordination_manifest_singleton,
+             check: "name = 'runtime'"
+           )
+
+    alter table(:effect_execution_protocols) do
+      add_if_not_exists :activation_evidence_id, :string
+      add_if_not_exists :activation_evidence_digest, :binary
+      add_if_not_exists :activated_by, :string
+      add_if_not_exists :exact_revision, :string
+    end
+
+    create constraint(:effect_execution_protocols, :effect_activation_evidence_shape,
+             check: """
+             (activation_evidence_id IS NULL AND activation_evidence_digest IS NULL AND
+              activated_by IS NULL AND exact_revision IS NULL) OR
+             (octet_length(activation_evidence_id) BETWEEN 1 AND 256 AND
+              octet_length(activation_evidence_digest) = 32 AND
+              octet_length(activated_by) BETWEEN 1 AND 320 AND
+              octet_length(exact_revision) BETWEEN 7 AND 255)
+             """
+           )
+
+    create table(:runtime_node_incarnations, primary_key: false) do
+      add :id, :uuid, primary_key: true
+      add :activation_epoch, :uuid, null: false
+      add :node_name, :string, null: false
+      add :revision, :string, null: false
+      add :state, :string, null: false
+      add :lease_expires_at, :utc_datetime_usec, null: false
+      add :ready_at, :utc_datetime_usec
+      add :draining_at, :utc_datetime_usec
+      add :revoked_at, :utc_datetime_usec
+      add :metadata, :map, null: false, default: %{}
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create constraint(:runtime_node_incarnations, :runtime_node_incarnations_shape,
+             check: """
+             octet_length(node_name) BETWEEN 1 AND 255 AND
+             octet_length(revision) BETWEEN 1 AND 255 AND
+             state IN ('joining', 'ready', 'draining', 'revoked') AND
+             ((state = 'joining' AND ready_at IS NULL AND draining_at IS NULL AND revoked_at IS NULL) OR
+              (state = 'ready' AND ready_at IS NOT NULL AND draining_at IS NULL AND revoked_at IS NULL) OR
+              (state = 'draining' AND ready_at IS NULL AND draining_at IS NOT NULL AND revoked_at IS NULL) OR
+              (state = 'revoked' AND ready_at IS NULL AND revoked_at IS NOT NULL))
+             """
+           )
+
+    create index(:runtime_node_incarnations, [:state, :lease_expires_at])
+    create index(:runtime_node_incarnations, [:node_name, :inserted_at])
+
+    create table(:runtime_leader_authorities, primary_key: false) do
+      add :role, :string, primary_key: true
+      add :activation_epoch, :uuid
+      add :leader_epoch, :bigint, null: false, default: 0
+      add :node_incarnation_id, :uuid
+      add :action_token, :uuid
+      add :state, :string, null: false, default: "unassigned"
+      add :lease_expires_at, :utc_datetime_usec
+      add :ready_at, :utc_datetime_usec
+      add :draining_at, :utc_datetime_usec
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create constraint(:runtime_leader_authorities, :runtime_leader_authorities_shape,
+             check: """
+             role = 'partition_planner' AND leader_epoch >= 0 AND
+             ((state = 'unassigned' AND node_incarnation_id IS NULL AND action_token IS NULL AND
+               lease_expires_at IS NULL AND ready_at IS NULL AND draining_at IS NULL) OR
+              (state = 'preparing' AND activation_epoch IS NOT NULL AND
+               node_incarnation_id IS NOT NULL AND action_token IS NOT NULL AND
+               lease_expires_at IS NOT NULL AND ready_at IS NULL AND draining_at IS NULL) OR
+              (state = 'ready' AND activation_epoch IS NOT NULL AND
+               node_incarnation_id IS NOT NULL AND action_token IS NOT NULL AND
+               lease_expires_at IS NOT NULL AND ready_at IS NOT NULL AND draining_at IS NULL) OR
+              (state = 'draining' AND activation_epoch IS NOT NULL AND
+               node_incarnation_id IS NOT NULL AND action_token IS NOT NULL AND
+               lease_expires_at IS NOT NULL AND ready_at IS NULL AND draining_at IS NOT NULL))
+             """
+           )
+
+    create table(:runtime_partitions, primary_key: false) do
+      add :partition_id, :smallint, primary_key: true
+      add :activation_epoch, :uuid
+      add :ownership_epoch, :bigint, null: false, default: 0
+      add :owner_node_incarnation_id, :uuid
+      add :transition_id, :uuid
+      add :state, :string, null: false, default: "unassigned"
+      add :lease_expires_at, :utc_datetime_usec
+      add :ready_at, :utc_datetime_usec
+      add :draining_at, :utc_datetime_usec
+      add :last_moved_at, :utc_datetime_usec
+      add :fair_sequence, :bigint, null: false, default: 0
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create constraint(:runtime_partitions, :runtime_partitions_shape,
+             check: """
+             partition_id >= 0 AND partition_id < #{@partition_count} AND
+             ownership_epoch >= 0 AND fair_sequence >= 0 AND
+             ((state = 'unassigned' AND owner_node_incarnation_id IS NULL AND
+               transition_id IS NULL AND lease_expires_at IS NULL AND ready_at IS NULL AND
+               draining_at IS NULL) OR
+              (state = 'preparing' AND activation_epoch IS NOT NULL AND ownership_epoch > 0 AND
+               owner_node_incarnation_id IS NOT NULL AND transition_id IS NOT NULL AND
+               lease_expires_at IS NOT NULL AND ready_at IS NULL AND draining_at IS NULL) OR
+              (state = 'ready' AND activation_epoch IS NOT NULL AND ownership_epoch > 0 AND
+               owner_node_incarnation_id IS NOT NULL AND transition_id IS NOT NULL AND
+               lease_expires_at IS NOT NULL AND ready_at IS NOT NULL AND draining_at IS NULL) OR
+              (state IN ('draining', 'blocked') AND activation_epoch IS NOT NULL AND
+               ownership_epoch > 0 AND owner_node_incarnation_id IS NOT NULL AND
+               transition_id IS NOT NULL AND ready_at IS NULL AND draining_at IS NOT NULL))
+             """
+           )
+
+    create index(:runtime_partitions, [:state, :lease_expires_at])
+    create index(:runtime_partitions, [:owner_node_incarnation_id, :state])
+
+    create table(:runtime_partition_transitions, primary_key: false) do
+      add :id, :uuid, primary_key: true
+      add :activation_epoch, :uuid, null: false
+      add :partition_id, :smallint, null: false
+      add :partition_epoch, :bigint, null: false
+      add :from_node_incarnation_id, :uuid
+      add :to_node_incarnation_id, :uuid
+      add :kind, :string, null: false
+      add :state, :string, null: false
+      add :leader_node_incarnation_id, :uuid, null: false
+      add :leader_epoch, :bigint, null: false
+      add :leader_action_token, :uuid, null: false
+      add :requested_at, :utc_datetime_usec, null: false
+      add :ready_at, :utc_datetime_usec
+      add :completed_at, :utc_datetime_usec
+      add :blocked_reason, :string
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create constraint(:runtime_partition_transitions, :runtime_partition_transitions_shape,
+             check: """
+             partition_id >= 0 AND partition_id < #{@partition_count} AND partition_epoch > 0 AND
+             kind IN ('assign', 'rebalance', 'steal', 'shutdown', 'lease_expired') AND
+             state IN ('preparing', 'ready', 'draining', 'blocked', 'completed') AND
+             leader_epoch > 0 AND
+             ((state = 'preparing' AND ready_at IS NULL AND completed_at IS NULL AND blocked_reason IS NULL) OR
+              (state = 'ready' AND ready_at IS NOT NULL AND completed_at IS NULL AND blocked_reason IS NULL) OR
+              (state = 'draining' AND completed_at IS NULL AND blocked_reason IS NULL) OR
+              (state = 'blocked' AND completed_at IS NULL AND blocked_reason IS NOT NULL) OR
+              (state = 'completed' AND completed_at IS NOT NULL))
+             """
+           )
+
+    create index(:runtime_partition_transitions, [:partition_id, :partition_epoch])
+    create index(:runtime_partition_transitions, [:state, :requested_at])
+
+    create table(:runtime_task_assignments, primary_key: false) do
+      add :id, :uuid, primary_key: true
+      add :activation_epoch, :uuid, null: false
+      add :work_kind, :string, null: false
+      add :work_id, :uuid, null: false
+      add :claim_token, :uuid, null: false
+      add :partition_id, :smallint, null: false
+      add :partition_epoch, :bigint, null: false
+      add :node_incarnation_id, :uuid, null: false
+      add :supervisor_id, :uuid, null: false
+      add :local_task_id, :uuid, null: false
+      add :state, :string, null: false
+      add :provider_boundary, :string, null: false, default: "not_entered"
+      add :lease_expires_at, :utc_datetime_usec, null: false
+      add :ready_at, :utc_datetime_usec
+      add :termination_requested_at, :utc_datetime_usec
+      add :termination_proven_at, :utc_datetime_usec
+      add :settled_at, :utc_datetime_usec
+      add :outcome, :string
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create constraint(:runtime_task_assignments, :runtime_task_assignments_shape,
+             check: """
+             work_kind IN ('background_job', 'effect') AND
+             partition_id >= 0 AND partition_id < #{@partition_count} AND partition_epoch > 0 AND
+             state IN ('reserved', 'running', 'termination_requested', 'termination_proven',
+                       'settled', 'outcome_ambiguous') AND
+             provider_boundary IN ('not_entered', 'entered', 'outcome_known', 'outcome_unknown') AND
+             ((state = 'reserved' AND ready_at IS NULL AND termination_requested_at IS NULL AND
+               termination_proven_at IS NULL AND settled_at IS NULL AND outcome IS NULL) OR
+              (state = 'running' AND ready_at IS NOT NULL AND termination_requested_at IS NULL AND
+               termination_proven_at IS NULL AND settled_at IS NULL AND outcome IS NULL) OR
+              (state = 'termination_requested' AND termination_requested_at IS NOT NULL AND
+               termination_proven_at IS NULL AND settled_at IS NULL AND outcome IS NULL) OR
+              (state = 'termination_proven' AND termination_requested_at IS NOT NULL AND
+               termination_proven_at IS NOT NULL AND settled_at IS NULL AND outcome IS NULL) OR
+              (state IN ('settled', 'outcome_ambiguous') AND settled_at IS NOT NULL AND
+               outcome IS NOT NULL))
+             """
+           )
+
+    create unique_index(:runtime_task_assignments, [:claim_token],
+             name: :runtime_task_assignments_claim_token_index
+           )
+
+    create unique_index(
+             :runtime_task_assignments,
+             [:node_incarnation_id, :supervisor_id, :local_task_id],
+             name: :runtime_task_assignments_physical_identity_index
+           )
+
+    create unique_index(:runtime_task_assignments, [:work_kind, :work_id],
+             where:
+               "state IN ('reserved', 'running', 'termination_requested', 'termination_proven')",
+             name: :runtime_task_assignments_active_work_index
+           )
+
+    create index(:runtime_task_assignments, [:partition_id, :partition_epoch, :state])
+    create index(:runtime_task_assignments, [:state, :lease_expires_at])
+
+    create table(:runtime_task_outcome_evidence, primary_key: false) do
+      add :id, :uuid, primary_key: true
+      add :assignment_id, :uuid, null: false
+      add :activation_epoch, :uuid, null: false
+      add :claim_token, :uuid, null: false
+      add :node_incarnation_id, :uuid, null: false
+      add :supervisor_id, :uuid, null: false
+      add :local_task_id, :uuid, null: false
+      add :outcome, :string, null: false
+      add :recorded_at, :utc_datetime_usec, null: false
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:runtime_task_outcome_evidence, [:assignment_id],
+             name: :runtime_task_outcome_evidence_assignment_index
+           )
+
+    create constraint(:runtime_task_outcome_evidence, :runtime_task_outcome_evidence_shape,
+             check: "octet_length(outcome) BETWEEN 1 AND 255"
+           )
+
+    create table(:runtime_task_termination_proofs, primary_key: false) do
+      add :id, :uuid, primary_key: true
+      add :assignment_id, :uuid, null: false
+      add :activation_epoch, :uuid, null: false
+      add :claim_token, :uuid, null: false
+      add :node_incarnation_id, :uuid, null: false
+      add :supervisor_id, :uuid, null: false
+      add :local_task_id, :uuid, null: false
+      add :proof_kind, :string, null: false
+      add :evidence_id, :string, null: false
+      add :evidence_digest, :binary, null: false
+      add :proved_by, :string, null: false
+      add :proved_at, :utc_datetime_usec, null: false
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:runtime_task_termination_proofs, [:assignment_id],
+             name: :runtime_task_termination_proofs_assignment_index
+           )
+
+    create constraint(:runtime_task_termination_proofs, :runtime_task_termination_proofs_shape,
+             check: """
+             proof_kind IN ('supervisor_down', 'external_destroyed') AND
+             octet_length(evidence_id) BETWEEN 1 AND 256 AND
+             octet_length(evidence_digest) = 32 AND
+             octet_length(proved_by) BETWEEN 1 AND 320
+             """
+           )
+
+    create table(:runtime_tenant_fairness, primary_key: false) do
+      add :tenant_key, :string, primary_key: true
+      add :partition_id, :smallint, null: false
+      add :max_concurrency, :smallint, null: false, default: 1
+      add :rate_per_minute, :integer, null: false, default: 60
+      add :burst, :integer, null: false, default: 10
+      add :available_microunits, :bigint, null: false, default: 10_000_000
+      add :refilled_at, :utc_datetime_usec, null: false
+      add :last_served_sequence, :bigint, null: false, default: 0
+      add :served_count, :bigint, null: false, default: 0
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create constraint(:runtime_tenant_fairness, :runtime_tenant_fairness_bounds,
+             check: """
+             octet_length(tenant_key) BETWEEN 1 AND 512 AND
+             partition_id >= 0 AND partition_id < #{@partition_count} AND
+             max_concurrency BETWEEN 1 AND 64 AND rate_per_minute BETWEEN 1 AND 100000 AND
+             burst BETWEEN 1 AND 10000 AND available_microunits >= 0 AND
+             last_served_sequence >= 0 AND served_count >= 0
+             """
+           )
+
+    create index(:runtime_tenant_fairness, [:partition_id, :last_served_sequence, :tenant_key])
+
+    create table(:runtime_partition_rebalance_requests, primary_key: false) do
+      add :id, :uuid, primary_key: true
+      add :activation_epoch, :uuid, null: false
+      add :partition_id, :smallint, null: false
+      add :partition_epoch, :bigint, null: false
+      add :requester_node_incarnation_id, :uuid, null: false
+      add :request_token, :uuid, null: false
+      add :target_node_incarnation_id, :uuid
+      add :reason, :string, null: false
+      add :state, :string, null: false, default: "pending"
+      add :requested_at, :utc_datetime_usec, null: false
+      add :resolved_at, :utc_datetime_usec
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:runtime_partition_rebalance_requests, [:partition_id],
+             where: "state = 'pending'",
+             name: :runtime_partition_rebalance_requests_pending_partition_index
+           )
+
+    create constraint(
+             :runtime_partition_rebalance_requests,
+             :runtime_partition_rebalance_requests_shape,
+             check: """
+             partition_id >= 0 AND partition_id < #{@partition_count} AND partition_epoch > 0 AND
+             octet_length(reason) BETWEEN 1 AND 255 AND
+             state IN ('pending', 'accepted', 'rejected') AND
+             ((state = 'pending' AND resolved_at IS NULL) OR
+              (state IN ('accepted', 'rejected') AND resolved_at IS NOT NULL))
+             """
+           )
+
+    alter table(:background_jobs) do
+      add :tenant_key, :string
+      add :partition_id, :smallint
+      add :coordination_activation_epoch, :uuid
+      add :coordination_partition_epoch, :bigint
+      add :coordination_node_incarnation_id, :uuid
+      add :coordination_task_assignment_id, :uuid
+      add :coordination_task_supervisor_id, :uuid
+      add :coordination_local_task_id, :uuid
+    end
+
+    alter table(:scheduled_jobs) do
+      add :tenant_key, :string
+      add :partition_id, :smallint
+      add :dispatch_token, :uuid
+      add :coordination_activation_epoch, :uuid
+      add :coordination_partition_epoch, :bigint
+      add :coordination_node_incarnation_id, :uuid
+    end
+
+    alter table(:agent_runtime_leases) do
+      add :coordination_activation_epoch, :uuid
+      add :coordination_partition_id, :smallint
+      add :coordination_partition_epoch, :bigint
+      add :coordination_node_incarnation_id, :uuid
+    end
+
+    alter table(:effects) do
+      add :coordination_activation_epoch, :uuid
+      add :coordination_partition_id, :smallint
+      add :coordination_partition_epoch, :bigint
+      add :coordination_node_incarnation_id, :uuid
+      add :coordination_task_assignment_id, :uuid
+    end
+
+    create index(:background_jobs, [:partition_id, :status, :scheduled_at],
+             name: :background_jobs_partition_due_index,
+             where: "status = 'pending'",
+             concurrently: true
+           )
+
+    create index(:background_jobs, [:tenant_key, :status],
+             name: :background_jobs_tenant_active_index,
+             where: "status IN ('pending', 'running')",
+             concurrently: true
+           )
+
+    create index(:scheduled_jobs, [:partition_id, :status, :fire_at],
+             name: :scheduled_jobs_partition_due_index,
+             where: "status = 'pending'",
+             concurrently: true
+           )
+
+    create index(:agent_runtime_leases, [:coordination_partition_id, :lease_until],
+             name: :agent_runtime_leases_coordination_partition_index,
+             concurrently: true
+           )
+
+    create index(:effects, [:coordination_partition_id, :status, :retry_after],
+             name: :effects_coordination_partition_pending_index,
+             where: "status = 'pending'",
+             concurrently: true
+           )
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.runtime_partition_for(tenant text)
+    RETURNS smallint
+    LANGUAGE sql
+    IMMUTABLE
+    STRICT
+    SET search_path = pg_catalog, public
+    AS $function$
+      SELECT mod((('x' || substr(md5(tenant), 1, 8))::bit(32)::bigint),
+                 #{@partition_count})::smallint
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.populate_runtime_work_partition()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      resolved_tenant text;
+    BEGIN
+      IF TG_TABLE_NAME = 'background_jobs' THEN
+        resolved_tenant := COALESCE(NULLIF(btrim(NEW.tenant_key), ''),
+          CASE
+            WHEN NEW.user_id IS NOT NULL AND btrim(NEW.user_id) <> ''
+              THEN 'user:' || NEW.user_id
+            WHEN NEW.telegram_bot_id IS NOT NULL AND btrim(NEW.telegram_bot_id) <> ''
+              THEN 'telegram:' || NEW.telegram_bot_id
+            ELSE 'system:' || COALESCE(NULLIF(btrim(NEW.queue), ''), 'default')
+          END);
+        NEW.tenant_key := resolved_tenant;
+        NEW.partition_id := public.runtime_partition_for(resolved_tenant);
+      ELSIF TG_TABLE_NAME = 'scheduled_jobs' THEN
+        IF NEW.tenant_key IS NULL OR btrim(NEW.tenant_key) = '' THEN
+          SELECT 'user:' || agent.user_id INTO resolved_tenant
+          FROM public.agents AS agent
+          WHERE agent.id = NEW.agent_id AND agent.user_id IS NOT NULL;
+          IF resolved_tenant IS NULL THEN
+            RAISE EXCEPTION 'scheduled job tenant is unavailable'
+              USING ERRCODE = 'check_violation';
+          END IF;
+          NEW.tenant_key := resolved_tenant;
+        ELSE
+          resolved_tenant := NEW.tenant_key;
+        END IF;
+        NEW.partition_id := public.runtime_partition_for(resolved_tenant);
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER populate_background_job_partition_trigger
+      BEFORE INSERT OR UPDATE OF user_id, queue, telegram_bot_id, tenant_key
+      ON public.background_jobs
+      FOR EACH ROW EXECUTE FUNCTION public.populate_runtime_work_partition()
+    """)
+
+    execute("""
+    CREATE TRIGGER populate_scheduled_job_partition_trigger
+      BEFORE INSERT OR UPDATE OF agent_id, tenant_key
+      ON public.scheduled_jobs
+      FOR EACH ROW EXECUTE FUNCTION public.populate_runtime_work_partition()
+    """)
+
+    # Existing rows remain nullable during the expansion. A bounded operator
+    # backfill uses SKIP LOCKED; activation repeats the zero-null proof while
+    # holding the work tables in SHARE mode. No migration-time table rewrite.
+    execute("""
+    ALTER TABLE public.background_jobs
+      ADD CONSTRAINT background_jobs_partition_shape CHECK (
+        (tenant_key IS NULL AND partition_id IS NULL) OR
+        (octet_length(tenant_key) BETWEEN 1 AND 512 AND
+         partition_id >= 0 AND partition_id < #{@partition_count})
+      ) NOT VALID
+    """)
+
+    execute("""
+    ALTER TABLE public.scheduled_jobs
+      ADD CONSTRAINT scheduled_jobs_partition_shape CHECK (
+        (tenant_key IS NULL AND partition_id IS NULL) OR
+        (octet_length(tenant_key) BETWEEN 1 AND 512 AND
+         partition_id >= 0 AND partition_id < #{@partition_count})
+      ) NOT VALID
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_effect_activation_evidence()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      IF OLD.activation_evidence_digest IS NOT NULL AND (
+        NEW.activation_evidence_id IS DISTINCT FROM OLD.activation_evidence_id OR
+        NEW.activation_evidence_digest IS DISTINCT FROM OLD.activation_evidence_digest OR
+        NEW.activated_by IS DISTINCT FROM OLD.activated_by OR
+        NEW.exact_revision IS DISTINCT FROM OLD.exact_revision
+      ) THEN
+        RAISE EXCEPTION 'Effect activation evidence is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      IF OLD.activation_evidence_digest IS NULL AND NEW.activation_evidence_digest IS NOT NULL AND
+         current_setting('maraithon.effect_activation_evidence', true)
+           IS DISTINCT FROM 'ATTEST_STOPPED_FLEET_EVIDENCE' THEN
+        RAISE EXCEPTION 'Effect activation evidence requires operator attestation'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_effect_activation_evidence_trigger
+      BEFORE UPDATE ON public.effect_execution_protocols
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_effect_activation_evidence()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_runtime_coordination_protocol()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      effect_evidence_id text;
+      effect_evidence_digest bytea;
+      effect_activated_by text;
+      effect_exact_revision text;
+    BEGIN
+      IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
+        RAISE EXCEPTION 'runtime coordination protocol is irreversible'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_OP = 'INSERT' AND NEW.name <> 'runtime' THEN
+        RAISE EXCEPTION 'invalid runtime coordination singleton'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_OP = 'UPDATE' THEN
+        IF NEW.name IS DISTINCT FROM OLD.name OR
+           NEW.partition_count IS DISTINCT FROM OLD.partition_count OR
+           NEW.manifest_digest IS DISTINCT FROM OLD.manifest_digest OR
+           (OLD.mode = 'partition_fenced_v1' AND
+            (NEW.mode IS DISTINCT FROM OLD.mode OR
+             NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch OR
+             NEW.activated_at IS DISTINCT FROM OLD.activated_at OR
+             NEW.activation_evidence_id IS DISTINCT FROM OLD.activation_evidence_id OR
+             NEW.activation_evidence_digest IS DISTINCT FROM OLD.activation_evidence_digest OR
+             NEW.activated_by IS DISTINCT FROM OLD.activated_by OR
+             NEW.exact_revision IS DISTINCT FROM OLD.exact_revision)) THEN
+          RAISE EXCEPTION 'runtime coordination authority is immutable'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF OLD.mode = 'dark' AND NEW.mode = 'partition_fenced_v1' THEN
+          IF current_setting('maraithon.runtime_coordination_activation', true)
+               IS DISTINCT FROM 'ACTIVATE_PARTITION_FENCED_V1' THEN
+            RAISE EXCEPTION 'runtime coordination activation requires stopped-fleet confirmation'
+              USING ERRCODE = 'check_violation';
+          END IF;
+          IF NEW.activation_epoch IS NULL OR NEW.activation_evidence_id IS NULL OR
+             NEW.activation_evidence_digest IS NULL OR NEW.activated_by IS NULL OR
+             NEW.exact_revision IS NULL THEN
+            RAISE EXCEPTION 'runtime coordination activation identity and evidence are required'
+              USING ERRCODE = 'check_violation';
+          END IF;
+
+          -- The trigger repeats the full cutover proof. An application
+          -- preflight or custom GUC is never activation authority by itself.
+          -- Consistent lock order after the already-locked coordination row:
+          -- Effect protocol, then durable work roots, then coordination roots.
+          SELECT activation_evidence_id, activation_evidence_digest, activated_by,
+                 exact_revision
+          INTO effect_evidence_id, effect_evidence_digest, effect_activated_by,
+               effect_exact_revision
+          FROM public.effect_execution_protocols
+          WHERE name = 'effects' AND mode = 'generation_fenced_v1'
+          FOR SHARE;
+          IF NOT FOUND OR effect_evidence_digest IS NULL OR
+             effect_evidence_id IS DISTINCT FROM NEW.activation_evidence_id OR
+             effect_evidence_digest IS DISTINCT FROM NEW.activation_evidence_digest OR
+             effect_activated_by IS DISTINCT FROM NEW.activated_by OR
+             effect_exact_revision IS DISTINCT FROM NEW.exact_revision THEN
+            RAISE EXCEPTION 'coordination evidence must match exact Effect stopped-fleet evidence'
+              USING ERRCODE = 'check_violation';
+          END IF;
+
+          LOCK TABLE public.effects IN SHARE MODE;
+          LOCK TABLE public.agent_runtime_leases IN SHARE MODE;
+          LOCK TABLE public.agent_directives IN SHARE MODE;
+          LOCK TABLE public.agent_runs IN SHARE MODE;
+          LOCK TABLE public.agent_run_steps IN SHARE MODE;
+          LOCK TABLE public.background_jobs IN SHARE MODE;
+          LOCK TABLE public.scheduled_jobs IN SHARE MODE;
+          LOCK TABLE public.runtime_node_incarnations IN SHARE MODE;
+          LOCK TABLE public.runtime_task_assignments IN SHARE MODE;
+
+          IF (SELECT count(*) FROM public.schema_migrations
+              WHERE version = 20260810140004) <> 1 OR
+             public.runtime_coordination_catalog_ready_count() <> 65 OR
+             NEW.manifest_digest IS DISTINCT FROM (
+               SELECT decode(
+                 md5(manifest.constraint_fingerprints::text ||
+                     manifest.function_fingerprints::text ||
+                     manifest.trigger_fingerprints::text || manifest.index_fingerprints::text) ||
+                 md5('v1:' || manifest.constraint_fingerprints::text ||
+                     manifest.function_fingerprints::text ||
+                     manifest.trigger_fingerprints::text || manifest.index_fingerprints::text), 'hex')
+               FROM public.runtime_coordination_manifests AS manifest
+               WHERE manifest.name = 'runtime'
+             ) THEN
+            RAISE EXCEPTION 'runtime coordination catalog attestation failed'
+              USING ERRCODE = 'check_violation';
+          END IF;
+
+          IF EXISTS (SELECT 1 FROM public.background_jobs
+                     WHERE tenant_key IS NULL OR partition_id IS NULL) OR
+             EXISTS (SELECT 1 FROM public.scheduled_jobs
+                     WHERE tenant_key IS NULL OR partition_id IS NULL) THEN
+            RAISE EXCEPTION 'bounded runtime partition backfill is incomplete'
+              USING ERRCODE = 'check_violation';
+          END IF;
+
+          IF EXISTS (SELECT 1 FROM public.agent_runtime_leases) OR
+             EXISTS (SELECT 1 FROM public.agent_directives WHERE status = 'processing') OR
+             EXISTS (SELECT 1 FROM public.agent_runs WHERE status = 'running') OR
+             EXISTS (SELECT 1 FROM public.agent_run_steps WHERE status = 'requested') OR
+             EXISTS (SELECT 1 FROM public.effects
+                     WHERE status IN ('pending', 'claimed', 'cancelling')) OR
+             EXISTS (SELECT 1 FROM public.background_jobs WHERE status = 'running') OR
+             EXISTS (SELECT 1 FROM public.scheduled_jobs WHERE status = 'dispatched') OR
+             EXISTS (SELECT 1 FROM public.runtime_node_incarnations WHERE state <> 'revoked') OR
+             EXISTS (SELECT 1 FROM public.runtime_task_assignments
+                     WHERE state IN ('reserved', 'running', 'termination_requested',
+                                     'termination_proven')) THEN
+            RAISE EXCEPTION 'runtime coordination activation requires a quiescent stopped fleet'
+              USING ERRCODE = 'check_violation';
+          END IF;
+
+          NEW.activated_at := timezone('UTC', clock_timestamp());
+        ELSIF NEW.mode IS DISTINCT FROM OLD.mode OR
+              NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch OR
+              NEW.activated_at IS DISTINCT FROM OLD.activated_at THEN
+          RAISE EXCEPTION 'invalid runtime coordination protocol transition'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_runtime_coordination_protocol_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_coordination_protocols
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_coordination_protocol()
+    """)
+
+    execute("""
+    CREATE TRIGGER reject_runtime_coordination_protocol_truncate_trigger
+      BEFORE TRUNCATE ON public.runtime_coordination_protocols
+      FOR EACH STATEMENT EXECUTE FUNCTION public.enforce_runtime_coordination_protocol()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.reject_runtime_coordination_evidence_mutation()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      RAISE EXCEPTION 'runtime coordination evidence is append-only'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    for table <- [
+          "runtime_coordination_manifests",
+          "runtime_task_termination_proofs"
+        ] do
+      execute("""
+      CREATE TRIGGER reject_#{table}_mutation_trigger
+        BEFORE UPDATE OR DELETE ON public.#{table}
+        FOR EACH ROW EXECUTE FUNCTION public.reject_runtime_coordination_evidence_mutation()
+      """)
+
+      execute("""
+      CREATE TRIGGER reject_#{table}_truncate_trigger
+        BEFORE TRUNCATE ON public.#{table}
+        FOR EACH STATEMENT EXECUTE FUNCTION public.reject_runtime_coordination_evidence_mutation()
+      """)
+    end
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_runtime_partition_transition()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'runtime partition transition history is irreversible'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      IF NEW.id IS DISTINCT FROM OLD.id OR
+         NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch OR
+         NEW.partition_id IS DISTINCT FROM OLD.partition_id OR
+         NEW.partition_epoch IS DISTINCT FROM OLD.partition_epoch OR
+         NEW.from_node_incarnation_id IS DISTINCT FROM OLD.from_node_incarnation_id OR
+         NEW.to_node_incarnation_id IS DISTINCT FROM OLD.to_node_incarnation_id OR
+         NEW.kind IS DISTINCT FROM OLD.kind OR
+         NEW.leader_node_incarnation_id IS DISTINCT FROM OLD.leader_node_incarnation_id OR
+         NEW.leader_epoch IS DISTINCT FROM OLD.leader_epoch OR
+         NEW.leader_action_token IS DISTINCT FROM OLD.leader_action_token OR
+         NEW.requested_at IS DISTINCT FROM OLD.requested_at OR
+         (OLD.state = 'preparing' AND NEW.state NOT IN ('preparing', 'ready', 'draining', 'blocked')) OR
+         (OLD.state = 'ready' AND NEW.state NOT IN ('ready', 'draining', 'blocked')) OR
+         (OLD.state = 'draining' AND NEW.state NOT IN ('draining', 'blocked', 'completed')) OR
+         (OLD.state = 'blocked' AND NEW.state NOT IN ('blocked', 'completed')) OR
+         (OLD.state = 'completed' AND NEW IS DISTINCT FROM OLD) THEN
+        RAISE EXCEPTION 'runtime partition transition is stale or non-monotone'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_runtime_partition_transition_trigger
+      BEFORE UPDATE OR DELETE ON public.runtime_partition_transitions
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_partition_transition()
+    """)
+
+    execute("""
+    CREATE TRIGGER reject_runtime_partition_transitions_truncate_trigger
+      BEFORE TRUNCATE ON public.runtime_partition_transitions
+      FOR EACH STATEMENT EXECUTE FUNCTION public.reject_runtime_coordination_evidence_mutation()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_runtime_node_incarnation()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      requested_id uuid;
+      leader_authorized boolean;
+    BEGIN
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'runtime node incarnation history is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      BEGIN
+        requested_id := nullif(current_setting('maraithon.runtime_node_action', true), '')::uuid;
+      EXCEPTION WHEN invalid_text_representation THEN
+        requested_id := NULL;
+      END;
+
+      SELECT EXISTS (
+        SELECT 1 FROM public.runtime_leader_authorities AS leader
+        WHERE leader.role = 'partition_planner' AND leader.state = 'ready'
+          AND leader.action_token::text =
+                current_setting('maraithon.runtime_leader_action', true)
+          AND leader.lease_expires_at > timezone('UTC', clock_timestamp())
+      ) INTO leader_authorized;
+
+      IF requested_id IS DISTINCT FROM NEW.id AND NOT leader_authorized THEN
+        RAISE EXCEPTION 'runtime node mutation requires its exact incarnation token'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_OP = 'INSERT' THEN
+        IF NOT EXISTS (
+          SELECT 1 FROM public.runtime_coordination_protocols AS protocol
+          WHERE protocol.name = 'runtime' AND protocol.mode = 'partition_fenced_v1'
+            AND protocol.activation_epoch = NEW.activation_epoch
+        ) THEN
+          RAISE EXCEPTION 'runtime node cannot join an inactive protocol'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSE
+        IF NEW.id IS DISTINCT FROM OLD.id OR
+           NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch OR
+           NEW.node_name IS DISTINCT FROM OLD.node_name OR
+           NEW.revision IS DISTINCT FROM OLD.revision OR
+           NEW.metadata IS DISTINCT FROM OLD.metadata OR
+           NEW.lease_expires_at < OLD.lease_expires_at OR
+           (OLD.state = 'revoked' AND NEW IS DISTINCT FROM OLD) OR
+           (OLD.state = 'draining' AND NEW.state NOT IN ('draining', 'revoked')) OR
+           (OLD.state = 'ready' AND NEW.state NOT IN ('ready', 'draining', 'revoked')) OR
+           (OLD.state = 'joining' AND NEW.state NOT IN ('joining', 'ready', 'draining', 'revoked')) THEN
+          RAISE EXCEPTION 'stale or non-monotone runtime node incarnation mutation'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        IF OLD.lease_expires_at <= timezone('UTC', clock_timestamp()) AND
+           NEW.lease_expires_at > OLD.lease_expires_at THEN
+          RAISE EXCEPTION 'expired runtime node incarnation cannot be revived'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_runtime_node_incarnation_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_node_incarnations
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_node_incarnation()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_runtime_leader_authority()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE node_valid boolean;
+    BEGIN
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'runtime leader authority is irreversible'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      IF NEW.role IS DISTINCT FROM OLD.role OR NEW.leader_epoch < OLD.leader_epoch THEN
+        RAISE EXCEPTION 'runtime leader epoch is monotone'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      IF NEW.state <> 'unassigned' THEN
+        IF current_setting('maraithon.runtime_leader_action', true)
+             IS DISTINCT FROM NEW.action_token::text THEN
+          RAISE EXCEPTION 'runtime leader action token is required'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        SELECT EXISTS (
+          SELECT 1 FROM public.runtime_node_incarnations AS node
+          WHERE node.id = NEW.node_incarnation_id
+            AND node.activation_epoch = NEW.activation_epoch
+            AND node.state = 'ready' AND node.ready_at IS NOT NULL
+            AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+        ) INTO node_valid;
+        IF NOT node_valid THEN
+          RAISE EXCEPTION 'runtime leader requires a ready node incarnation'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+      IF OLD.state = 'ready' AND OLD.lease_expires_at <= timezone('UTC', clock_timestamp()) AND
+         NEW.node_incarnation_id = OLD.node_incarnation_id THEN
+        RAISE EXCEPTION 'expired leader incarnation cannot be revived'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      IF NEW.node_incarnation_id IS DISTINCT FROM OLD.node_incarnation_id AND
+         NEW.leader_epoch <> OLD.leader_epoch + 1 THEN
+        RAISE EXCEPTION 'leader takeover must advance its epoch exactly once'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_runtime_leader_authority_trigger
+      BEFORE UPDATE OR DELETE ON public.runtime_leader_authorities
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_leader_authority()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_runtime_partition_authority()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      leader_valid boolean;
+      node_valid boolean;
+      unresolved_tasks bigint;
+      live_agents bigint;
+    BEGIN
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'runtime partition authority is irreversible'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      IF NEW.partition_id IS DISTINCT FROM OLD.partition_id OR
+         NEW.ownership_epoch < OLD.ownership_epoch OR NEW.fair_sequence < OLD.fair_sequence THEN
+        RAISE EXCEPTION 'runtime partition epochs are monotone'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      SELECT EXISTS (
+        SELECT 1 FROM public.runtime_leader_authorities AS leader
+        WHERE leader.role = 'partition_planner' AND leader.state = 'ready'
+          AND leader.action_token::text = current_setting('maraithon.runtime_leader_action', true)
+          AND leader.lease_expires_at > timezone('UTC', clock_timestamp())
+      ) INTO leader_valid;
+
+      SELECT EXISTS (
+        SELECT 1 FROM public.runtime_node_incarnations AS node
+        WHERE node.id = COALESCE(NEW.owner_node_incarnation_id, OLD.owner_node_incarnation_id)
+          AND node.state IN ('ready', 'draining')
+          AND node.id::text = current_setting('maraithon.runtime_node_action', true)
+          AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+      ) INTO node_valid;
+
+      IF OLD.state = 'unassigned' AND NEW.state = 'preparing' THEN
+        IF NOT leader_valid OR NEW.ownership_epoch <> OLD.ownership_epoch + 1 THEN
+          RAISE EXCEPTION 'partition assignment requires exact ready leader epoch'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSIF OLD.state = 'preparing' AND NEW.state = 'ready' THEN
+        IF NOT node_valid OR NEW.ownership_epoch <> OLD.ownership_epoch THEN
+          RAISE EXCEPTION 'partition readiness must be published by its target incarnation last'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSIF OLD.state = 'ready' AND NEW.state IN ('draining', 'blocked') THEN
+        IF NOT (leader_valid OR node_valid) THEN
+          RAISE EXCEPTION 'partition drain requires exact leader or owner incarnation'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSIF OLD.state IN ('draining', 'blocked') AND NEW.state = 'unassigned' THEN
+        IF NOT leader_valid THEN
+          RAISE EXCEPTION 'partition release requires exact ready leader'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        SELECT count(*) INTO unresolved_tasks
+        FROM public.runtime_task_assignments AS assignment
+        WHERE assignment.partition_id = OLD.partition_id
+          AND assignment.partition_epoch = OLD.ownership_epoch
+          AND assignment.state IN ('reserved', 'running', 'termination_requested', 'termination_proven');
+        SELECT count(*) INTO live_agents
+        FROM public.agent_runtime_leases AS lease
+        WHERE lease.coordination_partition_id = OLD.partition_id
+          AND lease.coordination_partition_epoch = OLD.ownership_epoch
+          AND lease.lease_until > timezone('UTC', clock_timestamp());
+        IF unresolved_tasks <> 0 OR live_agents <> 0 THEN
+          RAISE EXCEPTION 'partition cannot move before exact task proof and Agent lease drain'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSIF NEW.owner_node_incarnation_id IS DISTINCT FROM OLD.owner_node_incarnation_id OR
+            NEW.ownership_epoch IS DISTINCT FROM OLD.ownership_epoch OR
+            NEW.transition_id IS DISTINCT FROM OLD.transition_id OR
+            NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch THEN
+        RAISE EXCEPTION 'partition ownership can change only through a serialized transition'
+          USING ERRCODE = 'check_violation';
+      ELSIF NEW.lease_expires_at > OLD.lease_expires_at AND NOT node_valid THEN
+        RAISE EXCEPTION 'partition renewal requires exact owner incarnation'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF OLD.lease_expires_at IS NOT NULL AND
+         OLD.lease_expires_at <= timezone('UTC', clock_timestamp()) AND
+         NEW.lease_expires_at > OLD.lease_expires_at AND NEW.state <> 'unassigned' THEN
+        RAISE EXCEPTION 'expired partition epoch cannot be revived'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_runtime_partition_authority_trigger
+      BEFORE UPDATE OR DELETE ON public.runtime_partitions
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_partition_authority()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_runtime_task_outcome_evidence()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      assignment_row public.runtime_task_assignments%ROWTYPE;
+    BEGIN
+      IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'runtime task outcome evidence is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      IF current_setting('maraithon.runtime_task_action', true)
+           IS DISTINCT FROM NEW.assignment_id::text THEN
+        RAISE EXCEPTION 'runtime task outcome evidence requires exact task action'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      SELECT * INTO assignment_row FROM public.runtime_task_assignments
+      WHERE id = NEW.assignment_id FOR UPDATE;
+      IF NOT FOUND OR assignment_row.state <> 'running' OR
+         assignment_row.provider_boundary <> 'entered' OR
+         assignment_row.activation_epoch IS DISTINCT FROM NEW.activation_epoch OR
+         assignment_row.claim_token IS DISTINCT FROM NEW.claim_token OR
+         assignment_row.node_incarnation_id IS DISTINCT FROM NEW.node_incarnation_id OR
+         assignment_row.supervisor_id IS DISTINCT FROM NEW.supervisor_id OR
+         assignment_row.local_task_id IS DISTINCT FROM NEW.local_task_id OR
+         assignment_row.lease_expires_at <= timezone('UTC', clock_timestamp()) OR
+         NOT public.runtime_task_authority_valid(
+           assignment_row.id, assignment_row.activation_epoch, assignment_row.partition_id,
+           assignment_row.partition_epoch, assignment_row.node_incarnation_id,
+           assignment_row.claim_token) THEN
+        RAISE EXCEPTION 'runtime task outcome evidence lacks live exact authority'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      UPDATE public.runtime_task_assignments
+      SET provider_boundary = 'outcome_known',
+          updated_at = timezone('UTC', clock_timestamp())
+      WHERE id = NEW.assignment_id AND state = 'running' AND provider_boundary = 'entered';
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'runtime task provider boundary changed while recording outcome'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_runtime_task_outcome_evidence_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_task_outcome_evidence
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_task_outcome_evidence()
+    """)
+
+    execute("""
+    CREATE TRIGGER reject_runtime_task_outcome_evidence_truncate_trigger
+      BEFORE TRUNCATE ON public.runtime_task_outcome_evidence
+      FOR EACH STATEMENT EXECUTE FUNCTION public.reject_runtime_coordination_evidence_mutation()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_runtime_task_assignment()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      authority_valid boolean;
+      proof_valid boolean;
+      outcome_evidence_valid boolean;
+    BEGIN
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'runtime task assignment history is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF current_setting('maraithon.runtime_task_action', true)
+           IS DISTINCT FROM COALESCE(NEW.id, OLD.id)::text THEN
+        RAISE EXCEPTION 'runtime task action requires its exact assignment incarnation'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_OP = 'INSERT' THEN
+        SELECT EXISTS (
+          SELECT 1
+          FROM public.runtime_coordination_protocols AS protocol
+          JOIN public.runtime_node_incarnations AS node
+            ON node.id = NEW.node_incarnation_id
+           AND node.activation_epoch = protocol.activation_epoch
+           AND node.state = 'ready' AND node.ready_at IS NOT NULL
+           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+          JOIN public.runtime_partitions AS partition
+            ON partition.partition_id = NEW.partition_id
+           AND partition.activation_epoch = protocol.activation_epoch
+           AND partition.ownership_epoch = NEW.partition_epoch
+           AND partition.owner_node_incarnation_id = NEW.node_incarnation_id
+           AND partition.state = 'ready' AND partition.ready_at IS NOT NULL
+           AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+          WHERE protocol.name = 'runtime' AND protocol.mode = 'partition_fenced_v1'
+            AND protocol.activation_epoch = NEW.activation_epoch
+        ) INTO authority_valid;
+        IF NOT authority_valid THEN
+          RAISE EXCEPTION 'runtime task reservation lacks ready partition authority'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSE
+        IF NEW.id IS DISTINCT FROM OLD.id OR
+           NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch OR
+           NEW.work_kind IS DISTINCT FROM OLD.work_kind OR
+           NEW.work_id IS DISTINCT FROM OLD.work_id OR
+           NEW.claim_token IS DISTINCT FROM OLD.claim_token OR
+           NEW.partition_id IS DISTINCT FROM OLD.partition_id OR
+           NEW.partition_epoch IS DISTINCT FROM OLD.partition_epoch OR
+           NEW.node_incarnation_id IS DISTINCT FROM OLD.node_incarnation_id OR
+           NEW.supervisor_id IS DISTINCT FROM OLD.supervisor_id OR
+           NEW.local_task_id IS DISTINCT FROM OLD.local_task_id OR
+           NEW.ready_at IS DISTINCT FROM OLD.ready_at AND OLD.ready_at IS NOT NULL OR
+           (OLD.provider_boundary = 'not_entered' AND
+            NEW.provider_boundary NOT IN ('not_entered', 'entered')) OR
+           (OLD.provider_boundary = 'entered' AND
+            NEW.provider_boundary NOT IN ('entered', 'outcome_known', 'outcome_unknown')) OR
+           (OLD.provider_boundary IN ('outcome_known', 'outcome_unknown') AND
+            NEW.provider_boundary IS DISTINCT FROM OLD.provider_boundary) THEN
+          RAISE EXCEPTION 'runtime task incarnation identity is immutable'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF OLD.state = 'reserved' AND NEW.state NOT IN ('reserved', 'running', 'termination_requested', 'settled') OR
+           OLD.state = 'running' AND NEW.state NOT IN ('running', 'termination_requested', 'settled') OR
+           OLD.state = 'termination_requested' AND
+             NEW.state NOT IN ('termination_requested', 'termination_proven') OR
+           OLD.state = 'termination_proven' AND
+             NEW.state NOT IN ('termination_proven', 'settled', 'outcome_ambiguous') OR
+           OLD.state IN ('settled', 'outcome_ambiguous') AND NEW IS DISTINCT FROM OLD THEN
+          RAISE EXCEPTION 'runtime task assignment transition is not monotone'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF OLD.provider_boundary = 'not_entered' AND NEW.provider_boundary = 'entered' AND
+           NEW.state <> 'running' THEN
+          RAISE EXCEPTION 'provider entry requires a running exact task'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF OLD.provider_boundary = 'entered' AND NEW.provider_boundary = 'outcome_known' THEN
+          SELECT EXISTS (
+            SELECT 1 FROM public.runtime_task_outcome_evidence AS evidence
+            WHERE evidence.assignment_id = OLD.id
+              AND evidence.activation_epoch = OLD.activation_epoch
+              AND evidence.claim_token = OLD.claim_token
+              AND evidence.node_incarnation_id = OLD.node_incarnation_id
+              AND evidence.supervisor_id = OLD.supervisor_id
+              AND evidence.local_task_id = OLD.local_task_id
+          ) INTO outcome_evidence_valid;
+          -- The evidence BEFORE trigger advances this boundary before its row is
+          -- visible, so only that trigger is allowed to make this same-state step.
+          IF NOT outcome_evidence_valid AND pg_trigger_depth() = 1 THEN
+            RAISE EXCEPTION 'provider outcome boundary requires exact durable evidence'
+              USING ERRCODE = 'check_violation';
+          END IF;
+        END IF;
+
+        IF NEW.state = 'settled' AND NEW.state IS DISTINCT FROM OLD.state THEN
+          IF NEW.provider_boundary = 'not_entered' THEN
+            IF NEW.outcome IS DISTINCT FROM 'cancelled_before_provider' THEN
+              RAISE EXCEPTION 'pre-provider settlement has a fixed cancellation outcome'
+                USING ERRCODE = 'check_violation';
+            END IF;
+          ELSIF NEW.provider_boundary = 'outcome_known' THEN
+            SELECT EXISTS (
+              SELECT 1 FROM public.runtime_task_outcome_evidence AS evidence
+              WHERE evidence.assignment_id = NEW.id
+                AND evidence.activation_epoch = NEW.activation_epoch
+                AND evidence.claim_token = NEW.claim_token
+                AND evidence.node_incarnation_id = NEW.node_incarnation_id
+                AND evidence.supervisor_id = NEW.supervisor_id
+                AND evidence.local_task_id = NEW.local_task_id
+                AND evidence.outcome = NEW.outcome
+            ) INTO outcome_evidence_valid;
+            IF NOT outcome_evidence_valid THEN
+              RAISE EXCEPTION 'provider settlement requires matching exact outcome evidence'
+                USING ERRCODE = 'check_violation';
+            END IF;
+          ELSE
+            RAISE EXCEPTION 'unknown provider outcome cannot be settled'
+              USING ERRCODE = 'check_violation';
+          END IF;
+        END IF;
+
+        IF NEW.state = 'outcome_ambiguous' AND NEW.state IS DISTINCT FROM OLD.state AND
+           (NEW.provider_boundary NOT IN ('entered', 'outcome_unknown') OR
+            NEW.outcome IS DISTINCT FROM 'provider_outcome_ambiguous') THEN
+          RAISE EXCEPTION 'termination proof can only record content-free provider ambiguity'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF (NEW.state = 'running' AND NEW.state IS DISTINCT FROM OLD.state) OR
+           (OLD.state = 'running' AND NEW.state = 'settled') OR
+           (OLD.provider_boundary = 'not_entered' AND NEW.provider_boundary = 'entered') OR
+           (OLD.provider_boundary = 'entered' AND NEW.provider_boundary = 'outcome_known') OR
+           NEW.lease_expires_at > OLD.lease_expires_at THEN
+          SELECT EXISTS (
+            SELECT 1 FROM public.runtime_partitions AS partition
+            JOIN public.runtime_node_incarnations AS node
+              ON node.id = NEW.node_incarnation_id
+             AND node.activation_epoch = NEW.activation_epoch
+             AND node.state IN ('ready', 'draining')
+             AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+            WHERE partition.partition_id = NEW.partition_id
+              AND partition.activation_epoch = NEW.activation_epoch
+              AND partition.ownership_epoch = NEW.partition_epoch
+              AND partition.owner_node_incarnation_id = NEW.node_incarnation_id
+              AND partition.state IN ('ready', 'draining')
+              AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+          ) INTO authority_valid;
+          IF NOT authority_valid THEN
+            RAISE EXCEPTION 'stale runtime task cannot activate or settle'
+              USING ERRCODE = 'check_violation';
+          END IF;
+        END IF;
+
+        IF OLD.lease_expires_at <= timezone('UTC', clock_timestamp()) AND
+           NEW.lease_expires_at > OLD.lease_expires_at THEN
+          RAISE EXCEPTION 'expired task incarnation cannot be revived'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF NEW.state = 'termination_proven' AND OLD.state <> 'termination_proven' THEN
+          SELECT EXISTS (
+            SELECT 1 FROM public.runtime_task_termination_proofs AS proof
+            WHERE proof.assignment_id = OLD.id
+              AND proof.activation_epoch = OLD.activation_epoch
+              AND proof.claim_token = OLD.claim_token
+              AND proof.node_incarnation_id = OLD.node_incarnation_id
+              AND proof.supervisor_id = OLD.supervisor_id
+              AND proof.local_task_id = OLD.local_task_id
+          ) INTO proof_valid;
+          IF NOT proof_valid THEN
+            RAISE EXCEPTION 'runtime task termination requires exact physical proof'
+              USING ERRCODE = 'check_violation';
+          END IF;
+        END IF;
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_runtime_task_assignment_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_task_assignments
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_task_assignment()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_runtime_task_termination_proof()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      proof_valid boolean;
+      confirmation text;
+    BEGIN
+      confirmation := current_setting('maraithon.runtime_task_termination_proof', true);
+      IF NEW.proof_kind = 'supervisor_down' THEN
+        IF confirmation IS DISTINCT FROM 'LOCAL_TASK_SUPERVISOR_PROOF' THEN
+          RAISE EXCEPTION 'local task termination proof confirmation is required'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSIF confirmation IS DISTINCT FROM 'PHYSICAL_TASK_TERMINATED' THEN
+        RAISE EXCEPTION 'external task termination proof confirmation is required'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      SELECT EXISTS (
+        SELECT 1 FROM public.runtime_task_assignments AS assignment
+        WHERE assignment.id = NEW.assignment_id
+          AND assignment.state = 'termination_requested'
+          AND assignment.activation_epoch = NEW.activation_epoch
+          AND assignment.claim_token = NEW.claim_token
+          AND assignment.node_incarnation_id = NEW.node_incarnation_id
+          AND assignment.supervisor_id = NEW.supervisor_id
+          AND assignment.local_task_id = NEW.local_task_id
+        FOR SHARE
+      ) INTO proof_valid;
+      IF NOT proof_valid THEN
+        RAISE EXCEPTION 'task termination proof does not match a fenced incarnation'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      NEW.proved_at := timezone('UTC', clock_timestamp());
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_runtime_task_termination_proof_trigger
+      BEFORE INSERT ON public.runtime_task_termination_proofs
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_task_termination_proof()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.runtime_task_authority_valid(
+      requested_assignment uuid,
+      requested_activation uuid,
+      requested_partition smallint,
+      requested_epoch bigint,
+      requested_node uuid,
+      requested_claim uuid
+    ) RETURNS boolean
+    LANGUAGE sql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+      SELECT EXISTS (
+        SELECT 1
+        FROM public.runtime_task_assignments AS assignment
+        JOIN public.runtime_partitions AS partition
+          ON partition.partition_id = assignment.partition_id
+         AND partition.activation_epoch = assignment.activation_epoch
+         AND partition.ownership_epoch = assignment.partition_epoch
+         AND partition.owner_node_incarnation_id = assignment.node_incarnation_id
+         AND partition.state IN ('ready', 'draining')
+         AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+        JOIN public.runtime_node_incarnations AS node
+          ON node.id = assignment.node_incarnation_id
+         AND node.activation_epoch = assignment.activation_epoch
+         AND node.state IN ('ready', 'draining')
+         AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+        WHERE assignment.id = requested_assignment
+          AND assignment.activation_epoch = requested_activation
+          AND assignment.partition_id = requested_partition
+          AND assignment.partition_epoch = requested_epoch
+          AND assignment.node_incarnation_id = requested_node
+          AND assignment.claim_token = requested_claim
+          AND assignment.state = 'running'
+          AND assignment.lease_expires_at > timezone('UTC', clock_timestamp())
+      )
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_coordinated_background_job()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      protocol_mode text;
+      terminal_valid boolean;
+      terminal_state text;
+      terminal_outcome text;
+    BEGIN
+      SELECT mode INTO STRICT protocol_mode
+      FROM public.runtime_coordination_protocols WHERE name = 'runtime';
+      IF protocol_mode = 'dark' THEN RETURN NEW; END IF;
+      IF protocol_mode <> 'partition_fenced_v1' THEN
+        RAISE EXCEPTION 'unknown runtime coordination protocol'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF NEW.status = 'running' THEN
+        IF NEW.claim_token IS NULL OR NEW.coordination_activation_epoch IS NULL OR
+           NEW.coordination_partition_epoch IS NULL OR
+           NEW.coordination_node_incarnation_id IS NULL OR
+           NEW.coordination_task_assignment_id IS NULL OR
+           NEW.coordination_task_supervisor_id IS NULL OR
+           NEW.coordination_local_task_id IS NULL THEN
+          RAISE EXCEPTION 'coordinated background job requires exact task incarnation'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+
+      IF OLD.status <> 'running' AND NEW.status = 'running' THEN
+        IF NOT public.runtime_task_authority_valid(
+          NEW.coordination_task_assignment_id, NEW.coordination_activation_epoch,
+          NEW.partition_id, NEW.coordination_partition_epoch,
+          NEW.coordination_node_incarnation_id, NEW.claim_token) THEN
+          RAISE EXCEPTION 'background job activation requires ready task and partition authority'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+
+      IF OLD.status = 'running' AND NEW.status IS DISTINCT FROM OLD.status THEN
+        SELECT assignment.state, assignment.outcome,
+          assignment.activation_epoch = OLD.coordination_activation_epoch AND
+          assignment.claim_token = OLD.claim_token AND
+          assignment.node_incarnation_id = OLD.coordination_node_incarnation_id AND
+          assignment.supervisor_id = OLD.coordination_task_supervisor_id AND
+          assignment.local_task_id = OLD.coordination_local_task_id AND
+          assignment.partition_id = OLD.partition_id AND
+          assignment.partition_epoch = OLD.coordination_partition_epoch AND
+          assignment.state IN ('settled', 'outcome_ambiguous')
+        INTO terminal_state, terminal_outcome, terminal_valid
+        FROM public.runtime_task_assignments AS assignment
+        WHERE assignment.id = OLD.coordination_task_assignment_id;
+
+        IF NOT COALESCE(terminal_valid, false) OR
+           current_setting('maraithon.runtime_task_action', true)
+             IS DISTINCT FROM OLD.coordination_task_assignment_id::text THEN
+          RAISE EXCEPTION 'background terminal mutation requires exact terminal task evidence'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        IF terminal_state = 'settled' AND (
+             (NEW.status = 'completed' AND terminal_outcome <> 'completed') OR
+             (NEW.status = 'pending' AND terminal_outcome NOT IN
+               ('retry_scheduled', 'cancelled_before_provider')) OR
+             (NEW.status = 'failed' AND terminal_outcome <> 'failed')
+           ) THEN
+          RAISE EXCEPTION 'background terminal row does not match durable task outcome'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        IF terminal_state = 'outcome_ambiguous' AND
+           (NEW.status <> 'failed' OR terminal_outcome <> 'provider_outcome_ambiguous' OR
+            NEW.last_error <> 'provider_outcome_ambiguous') THEN
+          RAISE EXCEPTION 'ambiguous provider outcome is content-free and non-retryable'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+
+      IF OLD.status = 'running' AND NEW.status = 'running' AND (
+        NEW.claim_token IS DISTINCT FROM OLD.claim_token OR
+        NEW.coordination_activation_epoch IS DISTINCT FROM OLD.coordination_activation_epoch OR
+        NEW.coordination_partition_epoch IS DISTINCT FROM OLD.coordination_partition_epoch OR
+        NEW.coordination_node_incarnation_id IS DISTINCT FROM OLD.coordination_node_incarnation_id OR
+        NEW.coordination_task_assignment_id IS DISTINCT FROM OLD.coordination_task_assignment_id OR
+        NEW.coordination_task_supervisor_id IS DISTINCT FROM OLD.coordination_task_supervisor_id OR
+        NEW.coordination_local_task_id IS DISTINCT FROM OLD.coordination_local_task_id
+      ) THEN
+        RAISE EXCEPTION 'background task incarnation identity is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'runtime coordination protocol row is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_coordinated_background_job_trigger
+      BEFORE UPDATE ON public.background_jobs
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_background_job()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_coordinated_scheduled_job()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE protocol_mode text; authority_valid boolean;
+    BEGIN
+      SELECT mode INTO STRICT protocol_mode
+      FROM public.runtime_coordination_protocols WHERE name = 'runtime';
+      IF protocol_mode = 'dark' THEN RETURN NEW; END IF;
+
+      IF OLD.dispatch_token IS NOT NULL AND NEW.dispatch_token IS DISTINCT FROM OLD.dispatch_token THEN
+        RAISE EXCEPTION 'scheduled dispatch incarnation is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF NEW.status IS DISTINCT FROM OLD.status AND
+         (OLD.status IN ('pending', 'dispatched') OR NEW.status = 'delivered') THEN
+        IF NEW.dispatch_token IS NULL OR
+           current_setting('maraithon.runtime_schedule_action', true)
+             IS DISTINCT FROM NEW.dispatch_token::text OR
+           NEW.coordination_activation_epoch IS NULL OR
+           NEW.coordination_partition_epoch IS NULL OR
+           NEW.coordination_node_incarnation_id IS NULL THEN
+          RAISE EXCEPTION 'scheduled action requires exact dispatch and partition incarnation'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        SELECT EXISTS (
+          SELECT 1 FROM public.runtime_partitions AS partition
+          JOIN public.runtime_node_incarnations AS node
+            ON node.id = NEW.coordination_node_incarnation_id
+           AND node.activation_epoch = NEW.coordination_activation_epoch
+           AND node.state = 'ready' AND node.ready_at IS NOT NULL
+           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+          WHERE partition.partition_id = NEW.partition_id
+            AND partition.activation_epoch = NEW.coordination_activation_epoch
+            AND partition.ownership_epoch = NEW.coordination_partition_epoch
+            AND partition.owner_node_incarnation_id = NEW.coordination_node_incarnation_id
+            AND partition.state = 'ready' AND partition.ready_at IS NOT NULL
+            AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+        ) INTO authority_valid;
+        IF NOT authority_valid THEN
+          RAISE EXCEPTION 'stale scheduler action cannot mutate after partition epoch loss'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+      RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'runtime coordination protocol row is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_coordinated_scheduled_job_trigger
+      BEFORE UPDATE ON public.scheduled_jobs
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_scheduled_job()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_coordinated_agent_directive()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE protocol_mode text; authority_valid boolean;
+    BEGIN
+      SELECT mode INTO STRICT protocol_mode
+      FROM public.runtime_coordination_protocols WHERE name = 'runtime';
+      IF protocol_mode = 'dark' OR TG_OP = 'INSERT' OR TG_OP = 'DELETE' THEN
+        RETURN COALESCE(NEW, OLD);
+      END IF;
+
+      IF OLD.status = 'processing' OR NEW.status = 'processing' THEN
+        SELECT EXISTS (
+          SELECT 1 FROM public.agent_runtime_leases AS lease
+          JOIN public.runtime_partitions AS partition
+            ON partition.partition_id = lease.coordination_partition_id
+           AND partition.activation_epoch = lease.coordination_activation_epoch
+           AND partition.ownership_epoch = lease.coordination_partition_epoch
+           AND partition.owner_node_incarnation_id = lease.coordination_node_incarnation_id
+           AND partition.state IN ('ready', 'draining')
+           AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+          WHERE lease.agent_id = NEW.agent_id
+            AND lease.owner_token = COALESCE(NEW.claimed_by_generation,
+                                             OLD.claimed_by_generation)
+            AND lease.lease_until > timezone('UTC', clock_timestamp())
+        ) INTO authority_valid;
+        IF NOT authority_valid THEN
+          RAISE EXCEPTION 'stale Agent Directive owner cannot mutate after partition epoch loss'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+      RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'runtime coordination protocol row is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_coordinated_agent_directive_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.agent_directives
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_agent_directive()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_coordinated_agent_lease()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      protocol_mode text;
+      authority_valid boolean;
+    BEGIN
+      SELECT mode INTO STRICT protocol_mode
+      FROM public.runtime_coordination_protocols WHERE name = 'runtime';
+      IF protocol_mode = 'dark' THEN RETURN COALESCE(NEW, OLD); END IF;
+      IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+
+      IF NEW.coordination_activation_epoch IS NULL OR
+         NEW.coordination_partition_id IS NULL OR
+         NEW.coordination_partition_epoch IS NULL OR
+         NEW.coordination_node_incarnation_id IS NULL THEN
+        RAISE EXCEPTION 'exact Agent lease requires partition incarnation authority'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      SELECT EXISTS (
+        SELECT 1 FROM public.runtime_partitions AS partition
+        JOIN public.runtime_node_incarnations AS node
+          ON node.id = NEW.coordination_node_incarnation_id
+         AND node.activation_epoch = NEW.coordination_activation_epoch
+         AND node.state IN ('ready', 'draining')
+         AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+        WHERE partition.partition_id = NEW.coordination_partition_id
+          AND partition.activation_epoch = NEW.coordination_activation_epoch
+          AND partition.ownership_epoch = NEW.coordination_partition_epoch
+          AND partition.owner_node_incarnation_id = NEW.coordination_node_incarnation_id
+          AND partition.state IN ('ready', 'draining')
+          AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+      ) INTO authority_valid;
+      IF NOT authority_valid THEN
+        RAISE EXCEPTION 'stale partition cannot mutate Agent lease'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_OP = 'UPDATE' AND (
+        NEW.coordination_activation_epoch IS DISTINCT FROM OLD.coordination_activation_epoch OR
+        NEW.coordination_partition_id IS DISTINCT FROM OLD.coordination_partition_id OR
+        NEW.coordination_partition_epoch IS DISTINCT FROM OLD.coordination_partition_epoch OR
+        NEW.coordination_node_incarnation_id IS DISTINCT FROM OLD.coordination_node_incarnation_id
+      ) THEN
+        RAISE EXCEPTION 'Agent lease partition incarnation is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'runtime coordination protocol row is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_coordinated_agent_lease_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.agent_runtime_leases
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_agent_lease()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_coordinated_effect()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      protocol_mode text;
+      reservation_valid boolean;
+    BEGIN
+      SELECT mode INTO STRICT protocol_mode
+      FROM public.runtime_coordination_protocols WHERE name = 'runtime';
+      IF protocol_mode = 'dark' THEN RETURN NEW; END IF;
+      IF NEW.runtime_owner_generation IS NULL THEN RETURN NEW; END IF;
+
+      IF NEW.coordination_activation_epoch IS NULL OR
+         NEW.coordination_partition_id IS NULL OR
+         NEW.coordination_partition_epoch IS NULL OR
+         NEW.coordination_node_incarnation_id IS NULL THEN
+        RAISE EXCEPTION 'exact Effect requires partition incarnation authority'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_OP = 'UPDATE' AND OLD.status = 'pending' AND NEW.status = 'claimed' THEN
+        SELECT EXISTS (
+          SELECT 1 FROM public.runtime_task_assignments AS assignment
+          JOIN public.runtime_partitions AS partition
+            ON partition.partition_id = assignment.partition_id
+           AND partition.activation_epoch = assignment.activation_epoch
+           AND partition.ownership_epoch = assignment.partition_epoch
+           AND partition.owner_node_incarnation_id = assignment.node_incarnation_id
+           AND partition.state = 'ready' AND partition.ready_at IS NOT NULL
+           AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+          WHERE assignment.id = NEW.coordination_task_assignment_id
+            AND assignment.work_kind = 'effect' AND assignment.work_id = NEW.id
+            AND assignment.claim_token = NEW.claim_token
+            AND assignment.activation_epoch = NEW.coordination_activation_epoch
+            AND assignment.partition_id = NEW.coordination_partition_id
+            AND assignment.partition_epoch = NEW.coordination_partition_epoch
+            AND assignment.node_incarnation_id = NEW.coordination_node_incarnation_id
+            AND assignment.supervisor_id = NEW.claim_supervisor_id
+            AND assignment.local_task_id = NEW.claim_task_id
+            AND assignment.state = 'reserved'
+        ) INTO reservation_valid;
+        IF NOT reservation_valid THEN
+          RAISE EXCEPTION 'Effect claim is not coupled to an exact supervised task reservation'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSIF TG_OP = 'UPDATE' AND OLD.status = 'claimed' AND
+            NEW.status IN ('pending', 'completed', 'failed') THEN
+        IF NOT public.runtime_task_authority_valid(
+          OLD.coordination_task_assignment_id, OLD.coordination_activation_epoch,
+          OLD.coordination_partition_id, OLD.coordination_partition_epoch,
+          OLD.coordination_node_incarnation_id, OLD.claim_token) THEN
+          RAISE EXCEPTION 'stale Effect task cannot mutate after partition epoch loss'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+
+      IF TG_OP = 'UPDATE' AND OLD.coordination_activation_epoch IS NOT NULL AND (
+        NEW.coordination_activation_epoch IS DISTINCT FROM OLD.coordination_activation_epoch OR
+        NEW.coordination_partition_id IS DISTINCT FROM OLD.coordination_partition_id OR
+        NEW.coordination_partition_epoch IS DISTINCT FROM OLD.coordination_partition_epoch OR
+        NEW.coordination_node_incarnation_id IS DISTINCT FROM OLD.coordination_node_incarnation_id OR
+        (OLD.coordination_task_assignment_id IS NOT NULL AND
+         NEW.coordination_task_assignment_id IS DISTINCT FROM OLD.coordination_task_assignment_id)
+      ) THEN
+        RAISE EXCEPTION 'Effect coordination incarnation is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'runtime coordination protocol row is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE TRIGGER enforce_coordinated_effect_trigger
+      BEFORE INSERT OR UPDATE ON public.effects
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_effect()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.runtime_coordination_catalog_ready_count()
+    RETURNS bigint
+    LANGUAGE sql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+      WITH required_functions(function_id) AS (
+        VALUES
+          ('public.runtime_partition_for(text)'::regprocedure),
+          ('public.populate_runtime_work_partition()'::regprocedure),
+          ('public.enforce_effect_activation_evidence()'::regprocedure),
+          ('public.enforce_runtime_coordination_protocol()'::regprocedure),
+          ('public.reject_runtime_coordination_evidence_mutation()'::regprocedure),
+          ('public.enforce_runtime_partition_transition()'::regprocedure),
+          ('public.enforce_runtime_node_incarnation()'::regprocedure),
+          ('public.enforce_runtime_leader_authority()'::regprocedure),
+          ('public.enforce_runtime_partition_authority()'::regprocedure),
+          ('public.enforce_runtime_task_assignment()'::regprocedure),
+          ('public.enforce_runtime_task_outcome_evidence()'::regprocedure),
+          ('public.enforce_runtime_task_termination_proof()'::regprocedure),
+          ('public.runtime_task_authority_valid(uuid,uuid,smallint,bigint,uuid,uuid)'::regprocedure),
+          ('public.enforce_coordinated_background_job()'::regprocedure),
+          ('public.enforce_coordinated_scheduled_job()'::regprocedure),
+          ('public.enforce_coordinated_agent_directive()'::regprocedure),
+          ('public.enforce_coordinated_agent_lease()'::regprocedure),
+          ('public.enforce_coordinated_effect()'::regprocedure),
+          ('public.runtime_coordination_catalog_ready_count()'::regprocedure)
+      ), function_matches AS (
+        SELECT count(*) AS count
+        FROM required_functions AS required
+        JOIN pg_catalog.pg_proc AS function_row ON function_row.oid = required.function_id
+        JOIN pg_catalog.pg_language AS language_row ON language_row.oid = function_row.prolang
+        JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = 'runtime'
+        WHERE NOT function_row.prosecdef
+          AND function_row.proconfig = ARRAY['search_path=pg_catalog, public']::text[]
+          AND language_row.lanname IN ('sql', 'plpgsql')
+          AND manifest.function_fingerprints ->> function_row.proname = md5(function_row.prosrc)
+      ), required_constraints(relation_id, constraint_name) AS (
+        VALUES
+          ('public.runtime_coordination_protocols'::regclass, 'runtime_coordination_protocol_shape'),
+          ('public.runtime_coordination_manifests'::regclass, 'runtime_coordination_manifest_singleton'),
+          ('public.effect_execution_protocols'::regclass, 'effect_activation_evidence_shape'),
+          ('public.runtime_node_incarnations'::regclass, 'runtime_node_incarnations_shape'),
+          ('public.runtime_leader_authorities'::regclass, 'runtime_leader_authorities_shape'),
+          ('public.runtime_partitions'::regclass, 'runtime_partitions_shape'),
+          ('public.runtime_partition_transitions'::regclass, 'runtime_partition_transitions_shape'),
+          ('public.runtime_task_assignments'::regclass, 'runtime_task_assignments_shape'),
+          ('public.runtime_task_outcome_evidence'::regclass, 'runtime_task_outcome_evidence_shape'),
+          ('public.runtime_task_termination_proofs'::regclass, 'runtime_task_termination_proofs_shape'),
+          ('public.runtime_tenant_fairness'::regclass, 'runtime_tenant_fairness_bounds'),
+          ('public.runtime_partition_rebalance_requests'::regclass, 'runtime_partition_rebalance_requests_shape'),
+          ('public.background_jobs'::regclass, 'background_jobs_partition_shape'),
+          ('public.scheduled_jobs'::regclass, 'scheduled_jobs_partition_shape')
+      ), constraint_matches AS (
+        SELECT count(*) AS count
+        FROM required_constraints AS required
+        JOIN pg_catalog.pg_constraint AS constraint_row
+          ON constraint_row.conrelid = required.relation_id
+         AND constraint_row.conname = required.constraint_name
+         AND constraint_row.contype = 'c' AND constraint_row.convalidated
+        JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = 'runtime'
+        WHERE manifest.constraint_fingerprints ->> required.constraint_name =
+              md5(pg_catalog.pg_get_constraintdef(constraint_row.oid, true))
+      ), required_triggers(relation_id, trigger_name) AS (
+        VALUES
+          ('public.runtime_coordination_protocols'::regclass, 'enforce_runtime_coordination_protocol_trigger'),
+          ('public.runtime_coordination_protocols'::regclass, 'reject_runtime_coordination_protocol_truncate_trigger'),
+          ('public.effect_execution_protocols'::regclass, 'enforce_effect_activation_evidence_trigger'),
+          ('public.runtime_coordination_manifests'::regclass, 'reject_runtime_coordination_manifests_mutation_trigger'),
+          ('public.runtime_coordination_manifests'::regclass, 'reject_runtime_coordination_manifests_truncate_trigger'),
+          ('public.runtime_task_termination_proofs'::regclass, 'reject_runtime_task_termination_proofs_mutation_trigger'),
+          ('public.runtime_task_termination_proofs'::regclass, 'reject_runtime_task_termination_proofs_truncate_trigger'),
+          ('public.runtime_partition_transitions'::regclass, 'enforce_runtime_partition_transition_trigger'),
+          ('public.runtime_partition_transitions'::regclass, 'reject_runtime_partition_transitions_truncate_trigger'),
+          ('public.runtime_node_incarnations'::regclass, 'enforce_runtime_node_incarnation_trigger'),
+          ('public.runtime_leader_authorities'::regclass, 'enforce_runtime_leader_authority_trigger'),
+          ('public.runtime_partitions'::regclass, 'enforce_runtime_partition_authority_trigger'),
+          ('public.runtime_task_assignments'::regclass, 'enforce_runtime_task_assignment_trigger'),
+          ('public.runtime_task_outcome_evidence'::regclass, 'enforce_runtime_task_outcome_evidence_trigger'),
+          ('public.runtime_task_outcome_evidence'::regclass, 'reject_runtime_task_outcome_evidence_truncate_trigger'),
+          ('public.runtime_task_termination_proofs'::regclass, 'enforce_runtime_task_termination_proof_trigger'),
+          ('public.background_jobs'::regclass, 'enforce_coordinated_background_job_trigger'),
+          ('public.scheduled_jobs'::regclass, 'enforce_coordinated_scheduled_job_trigger'),
+          ('public.agent_directives'::regclass, 'enforce_coordinated_agent_directive_trigger'),
+          ('public.agent_runtime_leases'::regclass, 'enforce_coordinated_agent_lease_trigger'),
+          ('public.effects'::regclass, 'enforce_coordinated_effect_trigger')
+      ), trigger_matches AS (
+        SELECT count(*) AS count
+        FROM required_triggers AS required
+        JOIN pg_catalog.pg_trigger AS trigger_row
+          ON trigger_row.tgrelid = required.relation_id
+         AND trigger_row.tgname = required.trigger_name
+         AND NOT trigger_row.tgisinternal AND trigger_row.tgenabled IN ('O', 'A')
+        JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = 'runtime'
+        WHERE manifest.trigger_fingerprints ->> required.trigger_name =
+              md5(pg_catalog.pg_get_triggerdef(trigger_row.oid, true))
+      ), required_indexes(index_name) AS (
+        VALUES
+          ('runtime_task_assignments_claim_token_index'),
+          ('runtime_task_assignments_physical_identity_index'),
+          ('runtime_task_assignments_active_work_index'),
+          ('runtime_task_outcome_evidence_assignment_index'),
+          ('runtime_task_termination_proofs_assignment_index'),
+          ('runtime_partition_rebalance_requests_pending_partition_index'),
+          ('background_jobs_partition_due_index'),
+          ('background_jobs_tenant_active_index'),
+          ('scheduled_jobs_partition_due_index'),
+          ('agent_runtime_leases_coordination_partition_index'),
+          ('effects_coordination_partition_pending_index')
+      ), index_matches AS (
+        SELECT count(*) AS count
+        FROM required_indexes AS required
+        JOIN pg_catalog.pg_class AS index_relation ON index_relation.relname = required.index_name
+        JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = index_relation.relnamespace
+          AND namespace.nspname = 'public'
+        JOIN pg_catalog.pg_index AS index_row ON index_row.indexrelid = index_relation.oid
+          AND index_row.indisvalid AND index_row.indisready AND index_row.indislive
+        JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = 'runtime'
+        WHERE manifest.index_fingerprints ->> required.index_name =
+              md5(pg_catalog.pg_get_indexdef(index_relation.oid))
+      )
+      SELECT function_matches.count + constraint_matches.count + trigger_matches.count +
+             index_matches.count
+      FROM function_matches, constraint_matches, trigger_matches, index_matches
+    $function$;
+    """)
+
+    execute("""
+    INSERT INTO public.runtime_coordination_manifests
+      (name, constraint_fingerprints, function_fingerprints, trigger_fingerprints,
+       index_fingerprints, inserted_at, updated_at)
+    WITH required_functions(function_id) AS (
+      VALUES
+        ('public.runtime_partition_for(text)'::regprocedure),
+        ('public.populate_runtime_work_partition()'::regprocedure),
+        ('public.enforce_effect_activation_evidence()'::regprocedure),
+        ('public.enforce_runtime_coordination_protocol()'::regprocedure),
+        ('public.reject_runtime_coordination_evidence_mutation()'::regprocedure),
+        ('public.enforce_runtime_partition_transition()'::regprocedure),
+        ('public.enforce_runtime_node_incarnation()'::regprocedure),
+        ('public.enforce_runtime_leader_authority()'::regprocedure),
+        ('public.enforce_runtime_partition_authority()'::regprocedure),
+        ('public.enforce_runtime_task_assignment()'::regprocedure),
+        ('public.enforce_runtime_task_outcome_evidence()'::regprocedure),
+        ('public.enforce_runtime_task_termination_proof()'::regprocedure),
+        ('public.runtime_task_authority_valid(uuid,uuid,smallint,bigint,uuid,uuid)'::regprocedure),
+        ('public.enforce_coordinated_background_job()'::regprocedure),
+        ('public.enforce_coordinated_scheduled_job()'::regprocedure),
+        ('public.enforce_coordinated_agent_directive()'::regprocedure),
+        ('public.enforce_coordinated_agent_lease()'::regprocedure),
+        ('public.enforce_coordinated_effect()'::regprocedure),
+        ('public.runtime_coordination_catalog_ready_count()'::regprocedure)
+    ), functions AS (
+      SELECT jsonb_object_agg(function_row.proname, md5(function_row.prosrc)) AS value
+      FROM required_functions AS required
+      JOIN pg_catalog.pg_proc AS function_row ON function_row.oid = required.function_id
+    ), required_constraints(relation_id, constraint_name) AS (
+      VALUES
+        ('public.runtime_coordination_protocols'::regclass, 'runtime_coordination_protocol_shape'),
+        ('public.runtime_coordination_manifests'::regclass, 'runtime_coordination_manifest_singleton'),
+        ('public.effect_execution_protocols'::regclass, 'effect_activation_evidence_shape'),
+        ('public.runtime_node_incarnations'::regclass, 'runtime_node_incarnations_shape'),
+        ('public.runtime_leader_authorities'::regclass, 'runtime_leader_authorities_shape'),
+        ('public.runtime_partitions'::regclass, 'runtime_partitions_shape'),
+        ('public.runtime_partition_transitions'::regclass, 'runtime_partition_transitions_shape'),
+        ('public.runtime_task_assignments'::regclass, 'runtime_task_assignments_shape'),
+        ('public.runtime_task_outcome_evidence'::regclass, 'runtime_task_outcome_evidence_shape'),
+        ('public.runtime_task_termination_proofs'::regclass, 'runtime_task_termination_proofs_shape'),
+        ('public.runtime_tenant_fairness'::regclass, 'runtime_tenant_fairness_bounds'),
+        ('public.runtime_partition_rebalance_requests'::regclass, 'runtime_partition_rebalance_requests_shape'),
+        ('public.background_jobs'::regclass, 'background_jobs_partition_shape'),
+        ('public.scheduled_jobs'::regclass, 'scheduled_jobs_partition_shape')
+    ), constraints AS (
+      SELECT jsonb_object_agg(required.constraint_name,
+               md5(pg_catalog.pg_get_constraintdef(constraint_row.oid, true))) AS value
+      FROM required_constraints AS required
+      JOIN pg_catalog.pg_constraint AS constraint_row
+        ON constraint_row.conrelid = required.relation_id
+       AND constraint_row.conname = required.constraint_name
+    ), required_triggers(relation_id, trigger_name) AS (
+      VALUES
+        ('public.runtime_coordination_protocols'::regclass, 'enforce_runtime_coordination_protocol_trigger'),
+        ('public.runtime_coordination_protocols'::regclass, 'reject_runtime_coordination_protocol_truncate_trigger'),
+        ('public.effect_execution_protocols'::regclass, 'enforce_effect_activation_evidence_trigger'),
+        ('public.runtime_coordination_manifests'::regclass, 'reject_runtime_coordination_manifests_mutation_trigger'),
+        ('public.runtime_coordination_manifests'::regclass, 'reject_runtime_coordination_manifests_truncate_trigger'),
+        ('public.runtime_task_termination_proofs'::regclass, 'reject_runtime_task_termination_proofs_mutation_trigger'),
+        ('public.runtime_task_termination_proofs'::regclass, 'reject_runtime_task_termination_proofs_truncate_trigger'),
+        ('public.runtime_partition_transitions'::regclass, 'enforce_runtime_partition_transition_trigger'),
+        ('public.runtime_partition_transitions'::regclass, 'reject_runtime_partition_transitions_truncate_trigger'),
+        ('public.runtime_node_incarnations'::regclass, 'enforce_runtime_node_incarnation_trigger'),
+        ('public.runtime_leader_authorities'::regclass, 'enforce_runtime_leader_authority_trigger'),
+        ('public.runtime_partitions'::regclass, 'enforce_runtime_partition_authority_trigger'),
+        ('public.runtime_task_assignments'::regclass, 'enforce_runtime_task_assignment_trigger'),
+        ('public.runtime_task_outcome_evidence'::regclass, 'enforce_runtime_task_outcome_evidence_trigger'),
+        ('public.runtime_task_outcome_evidence'::regclass, 'reject_runtime_task_outcome_evidence_truncate_trigger'),
+        ('public.runtime_task_termination_proofs'::regclass, 'enforce_runtime_task_termination_proof_trigger'),
+        ('public.background_jobs'::regclass, 'enforce_coordinated_background_job_trigger'),
+        ('public.scheduled_jobs'::regclass, 'enforce_coordinated_scheduled_job_trigger'),
+        ('public.agent_directives'::regclass, 'enforce_coordinated_agent_directive_trigger'),
+        ('public.agent_runtime_leases'::regclass, 'enforce_coordinated_agent_lease_trigger'),
+        ('public.effects'::regclass, 'enforce_coordinated_effect_trigger')
+    ), triggers AS (
+      SELECT jsonb_object_agg(required.trigger_name,
+               md5(pg_catalog.pg_get_triggerdef(trigger_row.oid, true))) AS value
+      FROM required_triggers AS required
+      JOIN pg_catalog.pg_trigger AS trigger_row
+        ON trigger_row.tgrelid = required.relation_id
+       AND trigger_row.tgname = required.trigger_name
+       AND NOT trigger_row.tgisinternal
+    ), required_indexes(index_name) AS (
+      VALUES
+        ('runtime_task_assignments_claim_token_index'),
+        ('runtime_task_assignments_physical_identity_index'),
+        ('runtime_task_assignments_active_work_index'),
+        ('runtime_task_outcome_evidence_assignment_index'),
+        ('runtime_task_termination_proofs_assignment_index'),
+        ('runtime_partition_rebalance_requests_pending_partition_index'),
+        ('background_jobs_partition_due_index'),
+        ('background_jobs_tenant_active_index'),
+        ('scheduled_jobs_partition_due_index'),
+        ('agent_runtime_leases_coordination_partition_index'),
+        ('effects_coordination_partition_pending_index')
+    ), indexes AS (
+      SELECT jsonb_object_agg(required.index_name,
+               md5(pg_catalog.pg_get_indexdef(index_relation.oid))) AS value
+      FROM required_indexes AS required
+      JOIN pg_catalog.pg_class AS index_relation ON index_relation.relname = required.index_name
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = index_relation.relnamespace
+       AND namespace.nspname = 'public'
+    )
+    SELECT 'runtime', constraints.value, functions.value, triggers.value, indexes.value,
+           timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp())
+    FROM constraints, functions, triggers, indexes
+    """)
+
+    execute("""
+    INSERT INTO public.runtime_coordination_protocols
+      (name, mode, partition_count, activation_epoch, activated_at,
+       activation_evidence_id, activation_evidence_digest, activated_by, exact_revision,
+       manifest_digest, inserted_at, updated_at)
+    SELECT 'runtime', 'dark', #{@partition_count}, NULL, NULL, NULL, NULL, NULL, NULL,
+       decode(
+         md5(manifest.constraint_fingerprints::text || manifest.function_fingerprints::text ||
+             manifest.trigger_fingerprints::text || manifest.index_fingerprints::text) ||
+         md5('v1:' || manifest.constraint_fingerprints::text ||
+             manifest.function_fingerprints::text || manifest.trigger_fingerprints::text ||
+             manifest.index_fingerprints::text),
+         'hex'
+       ),
+       timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp())
+    FROM public.runtime_coordination_manifests AS manifest
+    WHERE manifest.name = 'runtime'
+    ON CONFLICT (name) DO NOTHING
+    """)
+
+    execute("""
+    INSERT INTO public.runtime_leader_authorities
+      (role, leader_epoch, state, inserted_at, updated_at)
+    VALUES ('partition_planner', 0, 'unassigned',
+            timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp()))
+    ON CONFLICT (role) DO NOTHING
+    """)
+
+    execute("""
+    INSERT INTO public.runtime_partitions
+      (partition_id, ownership_epoch, state, fair_sequence, inserted_at, updated_at)
+    SELECT partition_id, 0, 'unassigned', 0,
+           timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp())
+    FROM generate_series(0, #{@partition_count - 1}) AS partition_id
+    ON CONFLICT (partition_id) DO NOTHING
+    """)
+  end
+end

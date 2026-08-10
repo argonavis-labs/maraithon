@@ -56,6 +56,14 @@ defmodule Maraithon.Runtime.BackgroundJob do
     field :result, Maraithon.Encrypted.Map, source: :result_ciphertext, redact: true
     field :legacy_result, :map, source: :result, default: %{}, redact: true
     field :last_error, :string
+    field :tenant_key, :string
+    field :partition_id, :integer
+    field :coordination_activation_epoch, Ecto.UUID
+    field :coordination_partition_epoch, :integer
+    field :coordination_node_incarnation_id, Ecto.UUID
+    field :coordination_task_assignment_id, Ecto.UUID
+    field :coordination_task_supervisor_id, Ecto.UUID
+    field :coordination_local_task_id, Ecto.UUID
 
     timestamps(type: :utc_datetime_usec)
   end
