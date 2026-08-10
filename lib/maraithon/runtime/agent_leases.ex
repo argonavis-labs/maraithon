@@ -18,6 +18,7 @@ defmodule Maraithon.Runtime.AgentLeases do
   alias Maraithon.Runtime.AgentLifecycleOperation
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
+  alias Maraithon.Runtime.AgentTerminationIncident
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, Protocol, Scope}
@@ -44,9 +45,11 @@ defmodule Maraithon.Runtime.AgentLeases do
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
         operation = lock_operation(agent_id)
+        termination_incident = lock_open_termination_incident(agent_id)
         {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
         ensure_no_lifecycle_operation!(operation)
+        ensure_no_open_termination_incident!(termination_incident)
         ensure_runnable!(agent)
         ensure_binding_matches!(agent, binding)
         ensure_initial_guard_allows_claim!(guard, now)
@@ -78,9 +81,11 @@ defmodule Maraithon.Runtime.AgentLeases do
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
         operation = lock_operation(agent_id)
+        termination_incident = lock_open_termination_incident(agent_id)
         {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
         ensure_no_lifecycle_operation!(operation)
+        ensure_no_open_termination_incident!(termination_incident)
         ensure_runnable!(agent)
         ensure_binding_matches!(agent, binding)
         ensure_due_recovery_guard!(guard, guard_generation, now)
@@ -338,25 +343,11 @@ defmodule Maraithon.Runtime.AgentLeases do
     end
   end
 
+  @doc "Lease removal is reserved for proof-gated physical termination reconciliation."
   def release(agent_id, owner_token) do
-    with {:ok, agent_id} <- cast_uuid(agent_id),
-         {:ok, owner_token} <- cast_uuid(owner_token) do
-      Repo.transaction(fn ->
-        scope = prelock_existing_lease!(agent_id, :owner, :settlement)
-        agent = lock_agent!(agent_id)
-        ensure_scope_agent!(agent, scope)
-        _binding = lock_binding(agent)
-        _guard = lock_guard(agent_id)
-
-        lease = lock_lease(agent_id)
-        _operation = lock_operation(agent_id)
-        now = DatabaseClock.now!()
-        ensure_exact_live_lease!(lease, owner_token, now)
-        ensure_coordination_lease!(lease, :owner)
-        ensure_no_processing_directive!(agent_id, :runtime_work_in_progress)
-        Repo.delete!(lease)
-        :released
-      end)
+    with {:ok, _agent_id} <- cast_uuid(agent_id),
+         {:ok, _owner_token} <- cast_uuid(owner_token) do
+      {:error, :termination_proof_required}
     end
   end
 
@@ -449,10 +440,13 @@ defmodule Maraithon.Runtime.AgentLeases do
       on: guard.agent_id == agent.id,
       left_join: operation in AgentLifecycleOperation,
       on: operation.agent_id == agent.id,
+      left_join: termination in AgentTerminationIncident,
+      on: termination.agent_id == agent.id and termination.status in ["requested", "proven"],
       where: agent.status in ^@runnable_statuses,
       where: agent.install_status == "enabled",
       where: is_nil(lease.agent_id),
       where: is_nil(operation.agent_id),
+      where: is_nil(termination.id),
       where:
         is_nil(guard.agent_id) or
           (guard.tripped == false and guard.needs_recovery == false and
@@ -743,6 +737,16 @@ defmodule Maraithon.Runtime.AgentLeases do
     )
   end
 
+  defp lock_open_termination_incident(agent_id) do
+    Repo.one(
+      from(incident in AgentTerminationIncident,
+        where: incident.agent_id == ^agent_id,
+        where: incident.status in ["requested", "proven"],
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
   defp lock_operation(agent_id) do
     Repo.one(
       from(operation in AgentLifecycleOperation,
@@ -751,6 +755,11 @@ defmodule Maraithon.Runtime.AgentLeases do
       )
     )
   end
+
+  defp ensure_no_open_termination_incident!(nil), do: :ok
+
+  defp ensure_no_open_termination_incident!(_incident),
+    do: Repo.rollback(:agent_termination_unproven)
 
   defp ensure_no_lifecycle_operation!(nil), do: :ok
   defp ensure_no_lifecycle_operation!(_operation), do: Repo.rollback(:agent_drain_pending)

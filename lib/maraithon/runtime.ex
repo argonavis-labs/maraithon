@@ -768,15 +768,10 @@ defmodule Maraithon.Runtime do
          ) do
       {:error, {:expired_lease_requires_reconciliation, expired_lease}} ->
         case AgentRestartGuards.record_expired(id, expired_lease.owner_token) do
-          result when elem(result, 0) in [:recorded, :duplicate] ->
-            begin_lifecycle(
-              id,
-              kind,
-              request,
-              planner,
-              requires_external_drain,
-              attempts_remaining - 1
-            )
+          {status, _incident} when status in [:requested, :duplicate] ->
+            # The incident is a durable replacement fence, not loss proof.
+            # Keep the expired lease and lifecycle mutation blocked.
+            {:error, :agent_stop_reconciliation_pending}
 
           {:ignored, :lease_renewed} ->
             begin_lifecycle(

@@ -3315,13 +3315,9 @@ defmodule Maraithon.Runtime.Agent do
 
       # Durable schedules/subscriptions are cancelled only by the caller-owned
       # lifecycle finalization transaction after the lease and work rows quiesce.
-      data =
-        if cleanup_complete? do
-          release_exact_owner(data)
-        else
-          data
-        end
-
+      # Even a clean callback is not physical-termination proof. The stable
+      # watcher owns the exact monitor and removes this lease only after DOWN.
+      _cleanup_complete? = cleanup_complete?
       {:stop, :normal, data}
     else
       # Without an exact draining fence this process may already be stale. It
@@ -3373,21 +3369,6 @@ defmodule Maraithon.Runtime.Agent do
         )
 
         false
-    end
-  end
-
-  defp release_exact_owner(data) do
-    case AgentLeases.release(data.agent_id, data.owner_token) do
-      {:ok, :released} ->
-        %{data | clean_shutdown?: true}
-
-      {:error, reason} ->
-        Logger.warning("Exact Agent lease release deferred to Watcher",
-          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
-
-        data
     end
   end
 

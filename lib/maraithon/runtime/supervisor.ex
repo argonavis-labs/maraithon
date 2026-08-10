@@ -42,10 +42,10 @@ defmodule Maraithon.Runtime.Supervisor do
             # Agent supervisor means Agents terminate and fence their outbox
             # work while the runner is still alive during reverse-order stop.
             Maraithon.Runtime.EffectRunner,
+            # AgentWatcher is supervised above Runtime.Supervisor so this whole
+            # subtree (including AgentSupervisor) can restart or stop while the
+            # exact PID monitors remain alive.
             agent_supervisor,
-            # Exact owners are temporary children. The watcher must be online
-            # before Bootstrap or any producer can spawn an Agent.
-            Maraithon.Runtime.AgentWatcher,
             Maraithon.Runtime.WakeCoordinator,
             Maraithon.Runtime.Bootstrap,
             # Deliberately non-fair: this heterogeneous runner owns ordered
@@ -90,9 +90,9 @@ defmodule Maraithon.Runtime.Supervisor do
             Maraithon.Runtime.Coordination.Session
           ]
       else
-        # Exact starts are still exercised in focused tests. Keep the mandatory
-        # monitor online even when periodic/background producers are disabled.
-        dependency_children ++ [agent_supervisor, Maraithon.Runtime.AgentWatcher]
+        # The mandatory watcher is a parent-level application child. Exact
+        # starts remain available while periodic/background producers are off.
+        dependency_children ++ [agent_supervisor]
       end
 
     Supervisor.init(children,
