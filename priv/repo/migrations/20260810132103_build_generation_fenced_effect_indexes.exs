@@ -2,7 +2,6 @@ defmodule Maraithon.Repo.Migrations.BuildGenerationFencedEffectIndexes do
   use Ecto.Migration
 
   @disable_ddl_transaction true
-  @disable_migration_lock true
 
   def up do
     repo().checkout(
@@ -41,7 +40,7 @@ defmodule Maraithon.Repo.Migrations.BuildGenerationFencedEffectIndexes do
           ensure_index("effects_exact_claim_expiry_index", """
           CREATE INDEX CONCURRENTLY effects_exact_claim_expiry_index
             ON public.effects (claim_expires_at, id)
-            WHERE status = 'claimed' AND runtime_owner_generation IS NOT NULL AND
+            WHERE status IN ('claimed', 'executing') AND runtime_owner_generation IS NOT NULL AND
                   claim_token IS NOT NULL
           """)
 
