@@ -335,6 +335,7 @@ defmodule Maraithon.Agents do
          valid_database_text?(reason) do
       Repo.transaction(
         fn ->
+          :ok = DurablePayload.require_current_mutation!()
           {_agent, _operation} = lock_lifecycle_prefix!(agent_id, :run_not_found)
           now = DatabaseClock.now!()
 
@@ -394,6 +395,8 @@ defmodule Maraithon.Agents do
     status = attrs["status"]
 
     Repo.transaction(fn ->
+      :ok = DurablePayload.require_current_mutation!()
+
       agent_id =
         Repo.one(from(run in AgentRun, where: run.id == ^run_id, select: run.agent_id)) ||
           Repo.rollback(:run_not_found)
@@ -627,6 +630,7 @@ defmodule Maraithon.Agents do
          :ok <-
            validate_creation_status(attrs, "requested", :invalid_agent_run_step_status) do
       Repo.transaction(fn ->
+        :ok = DurablePayload.require_current_mutation!()
         {_agent, operation} = lock_lifecycle_prefix!(agent_id)
         if operation, do: Repo.rollback(:agent_drain_pending)
         now = DatabaseClock.now!()
@@ -819,6 +823,8 @@ defmodule Maraithon.Agents do
       status = attrs["status"]
 
       Repo.transaction(fn ->
+        :ok = DurablePayload.require_current_mutation!()
+
         hint =
           Repo.one(
             from(step in AgentRunStep,

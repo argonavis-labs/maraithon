@@ -18,20 +18,22 @@ defmodule Maraithon.Events do
   Append an event to the log.
   """
   def append(agent_id, event_type, payload, opts \\ []) do
-    sequence_num = opts[:sequence_num] || next_sequence_num(agent_id)
-    idempotency_key = opts[:idempotency_key]
+    Repo.transaction(fn ->
+      :ok = Maraithon.DurablePayload.require_current_mutation!()
 
-    attrs = %{
-      agent_id: agent_id,
-      sequence_num: sequence_num,
-      event_type: event_type,
-      payload: payload,
-      idempotency_key: idempotency_key
-    }
+      attrs = %{
+        agent_id: agent_id,
+        sequence_num: opts[:sequence_num] || next_sequence_num(agent_id),
+        event_type: event_type,
+        payload: payload,
+        idempotency_key: opts[:idempotency_key]
+      }
 
-    %Event{}
-    |> Event.changeset(attrs)
-    |> Repo.insert()
+      case %Event{} |> Event.changeset(attrs) |> Repo.insert() do
+        {:ok, event} -> event
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   @doc """
