@@ -925,12 +925,26 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
                WHERE oid = 'public.durable_payload_verifications'::regclass)
           AND (SELECT relowner = owner.oid FROM pg_catalog.pg_class
                WHERE oid = 'public.durable_payload_verification_failures'::regclass)
-          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'SELECT,INSERT,DELETE')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'UPDATE,TRUNCATE,REFERENCES,TRIGGER')
-          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'SELECT,INSERT,DELETE')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'UPDATE,TRUNCATE,REFERENCES,TRIGGER')
-          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verifications', 'INSERT,UPDATE,TRUNCATE')
-          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verification_failures', 'INSERT,UPDATE,TRUNCATE')
+          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'SELECT')
+          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'INSERT')
+          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'DELETE')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'UPDATE')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'TRUNCATE')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'REFERENCES')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'TRIGGER')
+          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'SELECT')
+          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'INSERT')
+          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'DELETE')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'UPDATE')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'TRUNCATE')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'REFERENCES')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'TRIGGER')
+          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verifications', 'INSERT')
+          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verifications', 'UPDATE')
+          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verifications', 'TRUNCATE')
+          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verification_failures', 'INSERT')
+          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verification_failures', 'UPDATE')
+          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verification_failures', 'TRUNCATE')
           AND has_function_privilege(runtime.rolname, 'public.delete_durable_payload_verification(text,text)', 'EXECUTE')
           AND has_function_privilege(verifier.rolname, 'public.delete_durable_payload_verification(text,text)', 'EXECUTE')
           AND NOT EXISTS (
@@ -953,11 +967,15 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
                 ('telegram_prepared_actions'), ('agent_runs'), ('operator_events'),
                 ('user_memory_profiles'), ('operator_memory_summaries'),
                 ('background_jobs'), ('scheduled_jobs'),
-                ('runtime_ingress_receipts'), ('agent_work_results')
+                ('runtime_ingress_receipts'), ('agent_work_results'), ('snapshots')
             ) AS source(table_name)
             WHERE NOT has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'SELECT')
-               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name,
-                                      'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'INSERT')
+               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'UPDATE')
+               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'DELETE')
+               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'TRUNCATE')
+               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'REFERENCES')
+               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'TRIGGER')
           )
           AND NOT EXISTS (
             SELECT 1
