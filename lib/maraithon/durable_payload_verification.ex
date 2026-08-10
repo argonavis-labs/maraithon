@@ -141,8 +141,8 @@ defmodule Maraithon.DurablePayloadVerification do
   # report id, stable identity, ciphertexts/projections, encryption version,
   # purge marker, row context, and persisted binding.
   defp validate_row("effects", [
-         _id,
-         row_identity,
+         id,
+         _row_identity,
          params,
          result,
          projection,
@@ -164,8 +164,8 @@ defmodule Maraithon.DurablePayloadVerification do
          {:ok, binding} <-
            verify_or_prepare_binding(
              "effects",
-             row_identity,
-             nonempty(owner_user_id) || agent_id,
+             DurablePayload.context_identity([id]),
+             DurablePayload.context_identity([owner_user_id, agent_id]),
              [{"params", params_map}, {"result", result_map}],
              binding_version,
              binding_key_tag,
@@ -185,8 +185,8 @@ defmodule Maraithon.DurablePayloadVerification do
   defp validate_row("effects", _row), do: {:error, :encryption_version_mismatch}
 
   defp validate_row("agent_directives", [
-         _id,
-         row_identity,
+         id,
+         _row_identity,
          ciphertext,
          projection,
          1,
@@ -211,8 +211,8 @@ defmodule Maraithon.DurablePayloadVerification do
          {:ok, binding} <-
            verify_or_prepare_binding(
              "agent_directives",
-             row_identity,
-             nonempty(user_id) || agent_id,
+             DurablePayload.context_identity([id]),
+             DurablePayload.context_identity([user_id, agent_id]),
              [{"payload", payload}],
              binding_version,
              binding_key_tag,
@@ -229,8 +229,8 @@ defmodule Maraithon.DurablePayloadVerification do
     do: {:error, :encryption_version_mismatch}
 
   defp validate_row("events", [
-         _id,
-         row_identity,
+         sequence_num,
+         _row_identity,
          ciphertext,
          projection,
          1,
@@ -253,8 +253,8 @@ defmodule Maraithon.DurablePayloadVerification do
          {:ok, binding} <-
            verify_or_prepare_binding(
              "events",
-             row_identity,
-             agent_id,
+             DurablePayload.context_identity([agent_id, sequence_num]),
+             DurablePayload.context_identity([agent_id]),
              [{"payload", payload}],
              binding_version,
              binding_key_tag,
@@ -270,8 +270,8 @@ defmodule Maraithon.DurablePayloadVerification do
   defp validate_row("events", _row), do: {:error, :encryption_version_mismatch}
 
   defp validate_row("agent_run_steps", [
-         _id,
-         row_identity,
+         id,
+         _row_identity,
          request,
          response,
          request_projection,
@@ -279,6 +279,7 @@ defmodule Maraithon.DurablePayloadVerification do
          1,
          nil,
          agent_id,
+         agent_run_id,
          binding_version,
          binding_key_tag,
          binding_mac
@@ -305,8 +306,8 @@ defmodule Maraithon.DurablePayloadVerification do
          {:ok, binding} <-
            verify_or_prepare_binding(
              "agent_run_steps",
-             row_identity,
-             agent_id,
+             DurablePayload.context_identity([id]),
+             DurablePayload.context_identity([agent_id, agent_run_id]),
              [{"request_payload", request_map}, {"response_payload", response_map}],
              binding_version,
              binding_key_tag,
@@ -333,9 +334,8 @@ defmodule Maraithon.DurablePayloadVerification do
     end
   end
 
-  defp verify_or_prepare_binding(table, row_identity, scope, fields, nil, nil, nil) do
-    {:ok, DurablePayloadBinding.sign(table, row_identity, scope, fields)}
-  end
+  defp verify_or_prepare_binding(_table, _row_identity, _scope, _fields, nil, nil, nil),
+    do: {:error, :binding_missing}
 
   defp verify_or_prepare_binding(
          table,
@@ -363,9 +363,6 @@ defmodule Maraithon.DurablePayloadVerification do
 
   defp verify_or_prepare_binding(_table, _row_identity, _scope, _fields, _version, _tag, _mac),
     do: {:error, :binding_incomplete}
-
-  defp nonempty(value) when is_binary(value) and value != "", do: value
-  defp nonempty(_value), do: nil
 
   defp validate_effect_purge(nil, _params, _result), do: :ok
 
@@ -538,10 +535,10 @@ defmodule Maraithon.DurablePayloadVerification do
     do:
       candidate_sql_for(
         "events",
-        "source.agent_id::text || ':' || source.sequence_num::text",
+        "'[' || to_json(source.agent_id::text)::text || ',' || to_json(source.sequence_num::text)::text || ']'",
         """
           source.id::text,
-          source.agent_id::text || ':' || source.sequence_num::text,
+          '[' || to_json(source.agent_id::text)::text || ',' || to_json(source.sequence_num::text)::text || ']',
           source.payload_ciphertext,
           source.payload,
           source.payload_encryption_version,
@@ -570,6 +567,7 @@ defmodule Maraithon.DurablePayloadVerification do
           source.payload_encryption_version,
           source.payload_purged_at,
           source.agent_id::text,
+          source.agent_run_id::text,
           source.payload_binding_version,
           source.payload_binding_key_tag,
           source.payload_binding_mac

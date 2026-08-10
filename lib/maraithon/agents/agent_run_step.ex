@@ -13,7 +13,6 @@ defmodule Maraithon.Agents.AgentRunStep do
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentRun
   alias Maraithon.DurablePayload
-  alias Maraithon.DurablePayloadBinding
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -81,6 +80,17 @@ defmodule Maraithon.Agents.AgentRunStep do
     :completed_at
   ]
 
+  @doc false
+  def payload_binding_spec do
+    %{
+      table: "agent_run_steps",
+      identity_fields: [:id],
+      scope_fields: [:agent_id, :agent_run_id],
+      fields: [:request_payload, :response_payload],
+      purge_field: :payload_purged_at
+    }
+  end
+
   def changeset(step, attrs) do
     attrs = put_new_payload_defaults(step, attrs || %{})
     step = ensure_row_identity(step)
@@ -108,46 +118,12 @@ defmodule Maraithon.Agents.AgentRunStep do
     |> foreign_key_constraint(:agent_run_id)
     |> foreign_key_constraint(:agent_id)
     |> unique_constraint([:agent_run_id, :sequence])
-    |> put_payload_binding()
+    |> DurablePayload.put_binding(payload_binding_spec())
+    |> DurablePayload.require_current_mutation()
   end
 
   defp ensure_row_identity(%__MODULE__{id: nil} = step), do: %{step | id: Ecto.UUID.generate()}
   defp ensure_row_identity(%__MODULE__{} = step), do: step
-
-  defp put_payload_binding(%Ecto.Changeset{valid?: false} = changeset), do: changeset
-
-  defp put_payload_binding(changeset) do
-    id = get_field(changeset, :id)
-    agent_id = get_field(changeset, :agent_id)
-    request = get_field(changeset, :request_payload)
-    response = get_field(changeset, :response_payload)
-    purged_at = get_field(changeset, :payload_purged_at)
-
-    cond do
-      not is_nil(purged_at) and is_nil(request) and is_nil(response) ->
-        changeset
-        |> put_change(:payload_binding_version, nil)
-        |> put_change(:payload_binding_key_tag, nil)
-        |> put_change(:payload_binding_mac, nil)
-
-      is_binary(id) and is_binary(agent_id) and is_map(request) and is_map(response) ->
-        binding =
-          DurablePayloadBinding.sign(
-            "agent_run_steps",
-            id,
-            agent_id,
-            [{"request_payload", request}, {"response_payload", response}]
-          )
-
-        changeset
-        |> put_change(:payload_binding_version, binding.version)
-        |> put_change(:payload_binding_key_tag, binding.key_tag)
-        |> put_change(:payload_binding_mac, binding.mac)
-
-      true ->
-        changeset
-    end
-  end
 
   defp mirror_legacy_payload(changeset, payload_field, legacy_field) do
     case fetch_change(changeset, payload_field) do
@@ -199,6 +175,8 @@ defmodule Maraithon.Agents.AgentRunStep do
 
   @doc false
   def read_payloads!(%__MODULE__{} = step) do
+    :ok = DurablePayload.verify_binding!(step, payload_binding_spec())
+
     case {
       step.payload_purged_at,
       step.request_payload,

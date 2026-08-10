@@ -7,6 +7,7 @@ defmodule Maraithon.Application do
 
   @impl true
   def start(_type, _args) do
+    :ok = Maraithon.Vault.validate_config!()
     :ok = Maraithon.DurablePayloadBinding.validate_config!()
 
     # OpenTelemetry auto-instrumentation. Must run before the supervisor starts
