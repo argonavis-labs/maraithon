@@ -13,6 +13,7 @@ defmodule Maraithon.Agents do
   alias Maraithon.DurablePayload
   alias Maraithon.Effects.Effect
   alias Maraithon.Projects
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentLifecycleOperation
@@ -107,6 +108,9 @@ defmodule Maraithon.Agents do
   """
   def create_agent(attrs \\ %{}) do
     Repo.transaction(fn ->
+      user_id = attrs[:user_id] || attrs["user_id"]
+      if is_binary(user_id), do: WriteFence.lock_user_writable!(user_id)
+
       with {:ok, agent} <-
              %Agent{}
              |> Agent.changeset(attrs)

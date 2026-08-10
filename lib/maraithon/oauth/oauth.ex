@@ -7,6 +7,7 @@ defmodule Maraithon.OAuth do
 
   import Ecto.Query
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
   alias Maraithon.OAuth.Token
 
@@ -25,47 +26,52 @@ defmodule Maraithon.OAuth do
   If a token already exists for this user/provider, it will be updated.
   """
   def store_tokens(user_id, provider, %{} = token_data) do
-    existing = get_exact_token(user_id, provider)
+    Repo.transaction(fn ->
+      _user = WriteFence.lock_user_writable!(user_id)
+      existing = get_exact_token(user_id, provider)
 
-    attrs = %{
-      user_id: user_id,
-      provider: provider,
-      access_token: token_field(token_data, :access_token),
-      refresh_token: merge_refresh_token(token_data, existing),
-      expires_at: calculate_expiry(token_data) || existing_field(existing, :expires_at),
-      scopes: merge_scopes(token_data, existing),
-      metadata: merge_metadata(token_data, existing)
-    }
+      attrs = %{
+        user_id: user_id,
+        provider: provider,
+        access_token: token_field(token_data, :access_token),
+        refresh_token: merge_refresh_token(token_data, existing),
+        expires_at: calculate_expiry(token_data) || existing_field(existing, :expires_at),
+        scopes: merge_scopes(token_data, existing),
+        metadata: merge_metadata(token_data, existing)
+      }
 
-    result =
-      case existing do
-        nil ->
-          %Token{}
-          |> Token.changeset(attrs)
-          |> Repo.insert()
+      token =
+        case existing do
+          nil ->
+            %Token{}
+            |> Token.changeset(attrs)
+            |> Repo.insert()
 
-        existing ->
-          existing
-          |> Token.changeset(attrs)
-          |> Repo.update()
+          existing ->
+            existing
+            |> Token.changeset(attrs)
+            |> Repo.update()
+        end
+        |> case do
+          {:ok, token} -> token
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      case ConnectedAccounts.upsert_from_oauth(user_id, provider, %{
+             access_token: token.access_token,
+             refresh_token: token.refresh_token,
+             expires_at: token.expires_at,
+             scopes: token.scopes,
+             metadata: token.metadata,
+             external_account_id: token_field(token_data, :external_account_id)
+           }) do
+        {:ok, _account} -> token
+        {:error, reason} -> Repo.rollback(reason)
       end
-
-    case result do
-      {:ok, token} = ok ->
-        _ =
-          ConnectedAccounts.upsert_from_oauth(user_id, provider, %{
-            access_token: token.access_token,
-            refresh_token: token.refresh_token,
-            expires_at: token.expires_at,
-            scopes: token.scopes,
-            metadata: token.metadata,
-            external_account_id: token_field(token_data, :external_account_id)
-          })
-
-        ok
-
-      error ->
-        error
+    end)
+    |> case do
+      {:ok, token} -> {:ok, token}
+      {:error, reason} -> {:error, reason}
     end
   end
 

@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   import Ecto.Query
 
   alias Maraithon.{BoundedJSON, DurablePayload, Redaction, Repo}
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
@@ -339,6 +340,27 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   defp enqueue_job(job_type, attrs) do
     attrs = normalize_attrs(job_type, attrs)
 
+    case attrs["user_id"] do
+      user_id when is_binary(user_id) ->
+        Repo.transaction(fn ->
+          _user = WriteFence.lock_user_writable!(user_id)
+
+          case do_enqueue_job(attrs) do
+            {:ok, job} -> job
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+        |> case do
+          {:ok, job} -> {:ok, job}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _no_user ->
+        do_enqueue_job(attrs)
+    end
+  end
+
+  defp do_enqueue_job(attrs) do
     case existing_active(attrs) do
       %BackgroundJob{} = job ->
         {:ok, job}

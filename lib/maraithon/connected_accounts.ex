@@ -9,6 +9,7 @@ defmodule Maraithon.ConnectedAccounts do
   alias Maraithon.EmailDelivery
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Token
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
   alias Maraithon.SourceLabels
   alias Maraithon.Tools.ToolErrorCopy
@@ -87,6 +88,10 @@ defmodule Maraithon.ConnectedAccounts do
 
   def upsert_from_oauth(user_id, provider, token_data)
       when is_binary(user_id) and is_binary(provider) do
+    with_writable_user(user_id, fn -> do_upsert_from_oauth(user_id, provider, token_data) end)
+  end
+
+  defp do_upsert_from_oauth(user_id, provider, token_data) do
     now = DateTime.utc_now()
     previous_account = get(user_id, provider)
 
@@ -131,6 +136,10 @@ defmodule Maraithon.ConnectedAccounts do
 
   def upsert_manual(user_id, provider, attrs \\ %{})
       when is_binary(user_id) and is_binary(provider) and is_map(attrs) do
+    with_writable_user(user_id, fn -> do_upsert_manual(user_id, provider, attrs) end)
+  end
+
+  defp do_upsert_manual(user_id, provider, attrs) do
     now = DateTime.utc_now()
 
     merged_attrs =
@@ -423,6 +432,22 @@ defmodule Maraithon.ConnectedAccounts do
       scopes: token.scopes,
       metadata: token.metadata
     })
+  end
+
+  defp with_writable_user(user_id, fun) when is_function(fun, 0) do
+    Repo.transaction(fn ->
+      _user = WriteFence.lock_user_writable!(user_id)
+
+      case fun.() do
+        {:ok, value} -> value
+        {:error, reason} -> Repo.rollback(reason)
+        value -> value
+      end
+    end)
+    |> case do
+      {:ok, value} -> {:ok, value}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp normalize_scopes(scopes) when is_list(scopes), do: scopes

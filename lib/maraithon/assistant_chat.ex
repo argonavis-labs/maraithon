@@ -6,6 +6,7 @@ defmodule Maraithon.AssistantChat do
   import Ecto.Query
 
   alias Maraithon.Repo
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.AssistantChat.{DirectIntent, SecretRequestGuard, ThreadNaming, TodoThreadPrimer}
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ModelRouting
@@ -38,13 +39,20 @@ defmodule Maraithon.AssistantChat do
   end
 
   def create_thread(user_id, attrs \\ %{}) when is_binary(user_id) and is_map(attrs) do
-    with {:ok, title} <- thread_title(attrs, default: ThreadNaming.default_title()) do
+    with :ok <- WriteFence.check_user(user_id),
+         {:ok, title} <- thread_title(attrs, default: ThreadNaming.default_title()) do
       TelegramConversations.create_mobile_thread(user_id, Map.put(attrs, "title", title))
     end
   end
 
   def get_or_create_todo_thread(user_id, todo_id)
       when is_binary(user_id) and is_binary(todo_id) do
+    with :ok <- WriteFence.check_user(user_id) do
+      do_get_or_create_todo_thread(user_id, todo_id)
+    end
+  end
+
+  defp do_get_or_create_todo_thread(user_id, todo_id) do
     case Todos.get_for_user(user_id, todo_id) do
       nil ->
         {:error, :not_found}
@@ -122,7 +130,8 @@ defmodule Maraithon.AssistantChat do
 
   def send_message(user_id, thread_id, attrs)
       when is_binary(user_id) and is_binary(thread_id) and is_map(attrs) do
-    with %Conversation{} = conversation <-
+    with :ok <- WriteFence.check_user(user_id),
+         %Conversation{} = conversation <-
            TelegramConversations.get_mobile_thread(user_id, thread_id),
          {:ok, body} <- message_body(attrs),
          {:ok, client_message_id} <- client_message_id(attrs) do
@@ -162,7 +171,8 @@ defmodule Maraithon.AssistantChat do
       when is_binary(user_id) and is_binary(prepared_action_id) and is_map(attrs) do
     normalized_decision = normalize_decision(decision)
 
-    with decision when decision in [:confirm, :reject] <- normalized_decision,
+    with :ok <- WriteFence.check_user(user_id),
+         decision when decision in [:confirm, :reject] <- normalized_decision,
          %PreparedAction{} = prepared_action <-
            PreparedAction
            |> Repo.get_by(id: prepared_action_id, user_id: user_id, surface: "mobile")
@@ -190,6 +200,7 @@ defmodule Maraithon.AssistantChat do
         user_turn_id: user_turn_id
       }) do
     with %Run{} = run <- run_id |> then(&Repo.get(Run, &1)) |> Run.hydrate_payloads(),
+         :ok <- WriteFence.check_user(run.user_id),
          %Conversation{} = conversation <-
            conversation_id |> then(&Repo.get(Conversation, &1)) |> Conversation.hydrate(),
          %Turn{} = user_turn <- user_turn_id |> then(&Repo.get(Turn, &1)) |> Turn.hydrate() do
