@@ -6,6 +6,8 @@ defmodule Maraithon.Effects.Effect do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias Maraithon.DurablePayloadBinding
+
   @primary_key {:id, :binary_id, autogenerate: false}
   @foreign_key_type :binary_id
 
@@ -14,10 +16,13 @@ defmodule Maraithon.Effects.Effect do
     field :owner_user_id, :string
     field :idempotency_key, :binary_id
     field :effect_type, :string
-    field :params, Maraithon.Encrypted.Map, source: :params_ciphertext
+    field :params, Maraithon.Encrypted.Map, source: :params_ciphertext, redact: true
     field :legacy_params, :map, source: :params, default: %{}
     field :effect_protocol_version, :integer
     field :payload_encryption_version, :integer
+    field :payload_binding_version, :integer
+    field :payload_binding_key_tag, :string
+    field :payload_binding_mac, :binary, redact: true
     field :execution_lane, :string
     field :payload_purged_at, :utc_datetime_usec
     field :status, :string, default: "pending"
@@ -57,7 +62,7 @@ defmodule Maraithon.Effects.Effect do
     field :last_failure_code, :string
     field :last_failure_attempt, :integer
     field :retry_after, :utc_datetime_usec
-    field :result, Maraithon.Encrypted.Map, source: :result_ciphertext
+    field :result, Maraithon.Encrypted.Map, source: :result_ciphertext, redact: true
     field :legacy_result, :map, source: :result
     field :error, :string
 
@@ -132,6 +137,7 @@ defmodule Maraithon.Effects.Effect do
     effect
     |> cast(attrs, @required_fields ++ @admission_fields)
     |> validate()
+    |> put_payload_binding()
   end
 
   @doc false
@@ -141,6 +147,7 @@ defmodule Maraithon.Effects.Effect do
     effect
     |> cast(attrs, @required_fields ++ @protocol_fields)
     |> validate()
+    |> put_payload_binding()
   end
 
   defp put_protocol_metadata(attrs) when is_map(attrs) do
@@ -228,5 +235,41 @@ defmodule Maraithon.Effects.Effect do
     |> check_constraint(:runtime_owner_generation,
       name: :effects_generation_fenced_shape_check
     )
+  end
+
+  defp put_payload_binding(%Ecto.Changeset{valid?: false} = changeset), do: changeset
+
+  defp put_payload_binding(changeset) do
+    id = get_field(changeset, :id)
+    agent_id = get_field(changeset, :agent_id)
+    owner_user_id = get_field(changeset, :owner_user_id)
+    params = get_field(changeset, :params)
+    result = get_field(changeset, :result)
+    purged_at = get_field(changeset, :payload_purged_at)
+
+    cond do
+      not is_nil(purged_at) and is_nil(params) and is_nil(result) ->
+        changeset
+        |> put_change(:payload_binding_version, nil)
+        |> put_change(:payload_binding_key_tag, nil)
+        |> put_change(:payload_binding_mac, nil)
+
+      is_binary(id) and is_binary(agent_id) and is_map(params) ->
+        binding =
+          DurablePayloadBinding.sign(
+            "effects",
+            id,
+            owner_user_id || agent_id,
+            [{"params", params}, {"result", result}]
+          )
+
+        changeset
+        |> put_change(:payload_binding_version, binding.version)
+        |> put_change(:payload_binding_key_tag, binding.key_tag)
+        |> put_change(:payload_binding_mac, binding.mac)
+
+      true ->
+        changeset
+    end
   end
 end

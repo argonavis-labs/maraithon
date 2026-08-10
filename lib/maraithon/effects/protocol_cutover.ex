@@ -128,6 +128,9 @@ defmodule Maraithon.Effects.ProtocolCutover do
         with :ok <- ensure_no_runtime_leases(),
              :ok <- ensure_durable_work_graph_drained(),
              :ok <- ensure_legacy_work_drained(),
+             :ok <- ensure_effect_payloads_encrypted(),
+             :ok <- ensure_directive_payloads_encrypted(),
+             :ok <- ensure_durable_payload_proofs(),
              :ok <- ensure_exact_storage_ready() do
           :ok
         end
@@ -195,12 +198,20 @@ defmodule Maraithon.Effects.ProtocolCutover do
               SQL.query!(Repo, "LOCK TABLE public.agent_directives IN SHARE MODE", [])
               SQL.query!(Repo, "LOCK TABLE public.agent_runs IN SHARE MODE", [])
               SQL.query!(Repo, "LOCK TABLE public.agent_run_steps IN SHARE MODE", [])
+              SQL.query!(Repo, "LOCK TABLE public.events IN SHARE MODE", [])
+
+              SQL.query!(
+                Repo,
+                "LOCK TABLE public.durable_payload_verifications IN SHARE MODE",
+                []
+              )
 
               :ok = ensure_no_runtime_leases!()
               :ok = ensure_durable_work_graph_drained!()
               :ok = ensure_legacy_work_drained!()
               :ok = ensure_effect_payloads_encrypted!()
               :ok = ensure_directive_payloads_encrypted!()
+              :ok = ensure_durable_payload_proofs!()
               :ok = ensure_exact_storage_ready!()
 
               SQL.query!(
@@ -327,9 +338,25 @@ defmodule Maraithon.Effects.ProtocolCutover do
     end
   end
 
+  defp ensure_durable_payload_proofs do
+    case SQL.query(Repo, "SELECT public.durable_payload_proof_failures()", [], log: false) do
+      {:ok, %{rows: [[0]]}} -> :ok
+      {:ok, %{rows: [[count]]}} -> {:error, {:durable_payload_proof_required, count}}
+      {:error, _reason} -> {:error, :durable_payload_proof_unavailable}
+    end
+  end
+
+  defp ensure_durable_payload_proofs! do
+    case ensure_durable_payload_proofs() do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
   defp ensure_exact_storage_ready do
     with :ok <- ensure_exact_migrations_recorded(),
          :ok <- ensure_exact_catalog_helpers_ready(),
+         :ok <- ensure_payload_roles_ready(),
          :ok <- ensure_exact_indexes_ready(),
          :ok <- ensure_exact_constraints_ready(),
          :ok <- ensure_exact_triggers_ready() do
@@ -340,6 +367,7 @@ defmodule Maraithon.Effects.ProtocolCutover do
   defp ensure_exact_storage_ready! do
     :ok = ensure_exact_migrations_recorded!()
     :ok = ensure_exact_catalog_helpers_ready!()
+    :ok = ensure_payload_roles_ready!()
     :ok = ensure_exact_indexes_ready!()
     :ok = ensure_exact_constraints_ready!()
     :ok = ensure_exact_triggers_ready!()
@@ -348,10 +376,10 @@ defmodule Maraithon.Effects.ProtocolCutover do
   defp ensure_exact_migrations_recorded do
     case SQL.query(
            Repo,
-           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000)",
+           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140005)",
            []
          ) do
-      {:ok, %{rows: [[3]]}} -> :ok
+      {:ok, %{rows: [[5]]}} -> :ok
       {:ok, _missing} -> {:error, :effect_protocol_migrations_not_recorded}
       {:error, _reason} -> {:error, :effect_protocol_unavailable}
     end
@@ -360,17 +388,17 @@ defmodule Maraithon.Effects.ProtocolCutover do
   defp ensure_exact_migrations_recorded! do
     case SQL.query!(
            Repo,
-           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000)",
+           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140005)",
            []
          ).rows do
-      [[3]] -> :ok
+      [[5]] -> :ok
       _missing -> Repo.rollback(:effect_protocol_migrations_not_recorded)
     end
   end
 
   defp ensure_exact_catalog_helpers_ready do
     case SQL.query(Repo, exact_catalog_helpers_ready_sql(), []) do
-      {:ok, %{rows: [[2]]}} -> :ok
+      {:ok, %{rows: [[7]]}} -> :ok
       {:ok, %{rows: [[count]]}} -> {:error, {:effect_protocol_catalog_helpers_not_ready, count}}
       {:error, _reason} -> {:error, :effect_protocol_unavailable}
     end
@@ -378,24 +406,34 @@ defmodule Maraithon.Effects.ProtocolCutover do
 
   defp ensure_exact_catalog_helpers_ready! do
     case SQL.query!(Repo, exact_catalog_helpers_ready_sql(), []).rows do
-      [[2]] -> :ok
+      [[7]] -> :ok
       [[count]] -> Repo.rollback({:effect_protocol_catalog_helpers_not_ready, count})
     end
   end
 
   defp exact_catalog_helpers_ready_sql do
     """
-    WITH required(function_id, expected_volatility, expected_language) AS (
+    WITH required(
+      function_id,
+      expected_volatility,
+      expected_language,
+      expected_security_definer
+    ) AS (
       VALUES
-        ('public.generation_fenced_effect_index_matches(text)'::regprocedure, 's'::"char", 'sql'),
-        ('public.generation_fenced_effect_indexes_ready_count()'::regprocedure, 's'::"char", 'sql')
+        ('public.generation_fenced_effect_index_matches(text)'::regprocedure, 's'::"char", 'sql', false),
+        ('public.generation_fenced_effect_indexes_ready_count()'::regprocedure, 's'::"char", 'sql', false),
+        ('public.durable_payload_row_identity(text,text)'::regprocedure, 'i'::"char", 'sql', false),
+        ('public.durable_payload_digest_part(text,jsonb,text)'::regprocedure, 'i'::"char", 'sql', false),
+        ('public.durable_payload_proof_failures()'::regprocedure, 's'::"char", 'plpgsql', false),
+        ('public.durable_payload_roles_ready()'::regprocedure, 's'::"char", 'plpgsql', false),
+        ('public.delete_durable_payload_verification(text,uuid)'::regprocedure, 'v'::"char", 'plpgsql', true)
     )
     SELECT COUNT(*)
     FROM required
     JOIN pg_catalog.pg_proc AS function_row
       ON function_row.oid = required.function_id
      AND function_row.provolatile = required.expected_volatility
-     AND NOT function_row.prosecdef
+     AND function_row.prosecdef = required.expected_security_definer
      AND function_row.proconfig = ARRAY['search_path=pg_catalog, public']::text[]
     JOIN pg_catalog.pg_language AS language_row
       ON language_row.oid = function_row.prolang
@@ -404,6 +442,21 @@ defmodule Maraithon.Effects.ProtocolCutover do
       ON manifest.name = 'effects'
      AND manifest.function_fingerprints ->> function_row.proname = md5(function_row.prosrc)
     """
+  end
+
+  defp ensure_payload_roles_ready do
+    case SQL.query(Repo, "SELECT public.durable_payload_roles_ready()", [], log: false) do
+      {:ok, %{rows: [[true]]}} -> :ok
+      {:ok, _not_ready} -> {:error, :durable_payload_verifier_privileges_not_ready}
+      {:error, _reason} -> {:error, :effect_protocol_unavailable}
+    end
+  end
+
+  defp ensure_payload_roles_ready! do
+    case ensure_payload_roles_ready() do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
   end
 
   defp ensure_exact_indexes_ready do
@@ -470,7 +523,7 @@ defmodule Maraithon.Effects.ProtocolCutover do
 
   defp ensure_exact_triggers_ready do
     case SQL.query(Repo, exact_triggers_ready_sql(), []) do
-      {:ok, %{rows: [[9]]}} -> :ok
+      {:ok, %{rows: [[19]]}} -> :ok
       {:ok, %{rows: [[count]]}} -> {:error, {:effect_protocol_triggers_not_ready, count}}
       {:error, _reason} -> {:error, :effect_protocol_unavailable}
     end
@@ -478,7 +531,7 @@ defmodule Maraithon.Effects.ProtocolCutover do
 
   defp ensure_exact_triggers_ready! do
     case SQL.query!(Repo, exact_triggers_ready_sql(), []).rows do
-      [[9]] -> :ok
+      [[19]] -> :ok
       [[count]] -> Repo.rollback({:effect_protocol_triggers_not_ready, count})
     end
   end
@@ -508,6 +561,30 @@ defmodule Maraithon.Effects.ProtocolCutover do
         ('reject_effect_protocol_truncate_trigger', 'public.effect_execution_protocols'::regclass,
          'public.reject_durable_effect_truncate()'::regprocedure, 34),
         ('reject_effects_truncate_trigger', 'public.effects'::regclass,
+         'public.reject_durable_effect_truncate()'::regprocedure, 34),
+        ('guard_durable_payload_verification_write_trigger',
+         'public.durable_payload_verifications'::regclass,
+         'public.guard_durable_payload_verification_write()'::regprocedure, 23),
+        ('guard_durable_payload_verification_failure_write_trigger',
+         'public.durable_payload_verification_failures'::regclass,
+         'public.guard_durable_payload_verification_failure_write()'::regprocedure, 23),
+        ('enforce_durable_history_payload_protocol_trigger', 'public.events'::regclass,
+         'public.enforce_durable_history_payload_protocol()'::regprocedure, 31),
+        ('enforce_durable_history_payload_protocol_trigger', 'public.agent_run_steps'::regclass,
+         'public.enforce_durable_history_payload_protocol()'::regprocedure, 31),
+        ('invalidate_durable_payload_verification_trigger', 'public.effects'::regclass,
+         'public.invalidate_durable_payload_verification()'::regprocedure, 29),
+        ('invalidate_durable_payload_verification_trigger', 'public.agent_directives'::regclass,
+         'public.invalidate_durable_payload_verification()'::regprocedure, 29),
+        ('invalidate_durable_payload_verification_trigger', 'public.events'::regclass,
+         'public.invalidate_durable_payload_verification()'::regprocedure, 29),
+        ('invalidate_durable_payload_verification_trigger', 'public.agent_run_steps'::regclass,
+         'public.invalidate_durable_payload_verification()'::regprocedure, 29),
+        ('reject_durable_payload_verifications_truncate_trigger',
+         'public.durable_payload_verifications'::regclass,
+         'public.reject_durable_effect_truncate()'::regprocedure, 34),
+        ('reject_durable_payload_verification_failures_truncate_trigger',
+         'public.durable_payload_verification_failures'::regclass,
          'public.reject_durable_effect_truncate()'::regprocedure, 34)
     )
     SELECT COUNT(*)
