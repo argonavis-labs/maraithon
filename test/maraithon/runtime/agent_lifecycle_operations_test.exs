@@ -137,6 +137,62 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     assert AgentLifecycleOperations.get(agent.id) == nil
   end
 
+  test "terminal corrupt Effect ciphertext is metadata-deleted but active authority stays blocked" do
+    terminal_agent = running_consented_agent("corrupt-terminal-delete")
+    terminal_effect = pending_effect(terminal_agent.id)
+
+    terminal_effect
+    |> Ecto.Changeset.change(status: "cancelled")
+    |> Repo.update!()
+
+    Repo.query!(
+      "UPDATE effects SET params_ciphertext = $1 WHERE id = $2",
+      [<<0, 1, 2, 3>>, Ecto.UUID.dump!(terminal_effect.id)]
+    )
+
+    assert {:ok, terminal_fence} =
+             AgentLifecycleOperations.begin(
+               terminal_agent.id,
+               :delete,
+               %{"delete" => true},
+               fn _agent -> %{"action" => "delete"} end
+             )
+
+    assert {:ok, %{status: :finalized, action: :deleted}} =
+             AgentLifecycleOperations.finalize(
+               terminal_agent.id,
+               terminal_fence.operation_token
+             )
+
+    refute Repo.get(Effect, terminal_effect.id)
+
+    active_agent = running_consented_agent("corrupt-active-block")
+    active_effect = pending_effect(active_agent.id)
+
+    Repo.query!(
+      "UPDATE effects SET params_ciphertext = $1 WHERE id = $2",
+      [<<0, 1, 2, 3>>, Ecto.UUID.dump!(active_effect.id)]
+    )
+
+    assert {:ok, active_fence} =
+             AgentLifecycleOperations.begin(
+               active_agent.id,
+               :delete,
+               %{"delete" => true},
+               fn _agent -> %{"action" => "delete"} end
+             )
+
+    assert {:ok, %{status: :reconciliation_pending, reason: :active_effect}} =
+             AgentLifecycleOperations.finalize(active_agent.id, active_fence.operation_token)
+
+    assert Agents.get_agent(active_agent.id, include_removed: true)
+
+    assert %{rows: [["pending"]]} =
+             Repo.query!("SELECT status FROM effects WHERE id = $1", [
+               Ecto.UUID.dump!(active_effect.id)
+             ])
+  end
+
   test "expired lease loss is adopted into the marker and its matching guard is cleared" do
     agent = running_consented_agent("expired-guard")
     {:ok, lease} = AgentLeases.claim(agent.id)

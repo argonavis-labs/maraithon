@@ -41,6 +41,93 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   @max_batch 500
   @active_effect_statuses ~w(pending claimed cancelling)
   @terminal_effect_statuses ~w(completed failed cancelled)
+
+  # Lifecycle authority must remain operable even when an encrypted payload is
+  # corrupt. These projections intentionally omit every encrypted and legacy
+  # content column; only the exceptional requested-step projection reloads the
+  # exact terminal Effect payload and fails closed when it cannot decode.
+  @directive_authority_fields [
+    :id,
+    :agent_id,
+    :user_id,
+    :kind,
+    :dedupe_key,
+    :request_fingerprint,
+    :status,
+    :available_at,
+    :attempts,
+    :max_attempts,
+    :claim_token,
+    :claimed_by_generation,
+    :claimed_at,
+    :claim_expires_at,
+    :processing_started_at,
+    :terminal_at,
+    :terminal_acknowledged_at,
+    :terminal_claim_token,
+    :terminal_by_generation,
+    :last_error_code,
+    :active_run_id,
+    :effect_admitted_at,
+    :effect_count,
+    :ambiguity_code,
+    :payload_encryption_version,
+    :payload_purged_at,
+    :inserted_at,
+    :updated_at
+  ]
+  @run_authority_fields [
+    :id,
+    :agent_id,
+    :user_id,
+    :behavior,
+    :status,
+    :started_at,
+    :completed_at,
+    :error,
+    :inserted_at,
+    :updated_at
+  ]
+  @step_authority_fields [
+    :id,
+    :agent_run_id,
+    :agent_id,
+    :sequence,
+    :step_type,
+    :status,
+    :error,
+    :started_at,
+    :completed_at,
+    :payload_purged_at,
+    :inserted_at,
+    :updated_at
+  ]
+  @effect_authority_fields [
+    :id,
+    :agent_id,
+    :owner_user_id,
+    :status,
+    :runtime_owner_generation,
+    :claim_token,
+    :claim_owner_node,
+    :claim_heartbeat_at,
+    :claim_expires_at,
+    :claim_supervisor_id,
+    :claim_task_id,
+    :cancellation_state,
+    :cancellation_requested_at,
+    :cancellation_target_claim_token,
+    :cancellation_settled_at,
+    :agent_run_id,
+    :agent_run_step_id,
+    :result_envelope,
+    :result_acknowledged_at,
+    :payload_purged_at,
+    :error,
+    :inserted_at,
+    :updated_at
+  ]
+
   @reconcilable_work_reasons [
     :active_run_pointer,
     :processing_directive,
@@ -547,14 +634,29 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     :exit, reason -> {:error, reason}
   end
 
-  defp settle_orphaned_work!(agent, operation, directives, runs, _steps, effects, now) do
-    projected_effects =
-      Enum.filter(effects, fn effect ->
+  defp settle_orphaned_work!(agent, operation, directives, runs, steps, effects, now) do
+    requested_step_ids =
+      steps
+      |> Enum.filter(&(&1.status == "requested"))
+      |> MapSet.new(& &1.id)
+
+    projected_effect_ids =
+      effects
+      |> Enum.filter(fn effect ->
         effect.status in ["completed", "failed"] and
           is_map(effect.result_envelope) and
           is_binary(effect.agent_run_id) and
-          is_binary(effect.agent_run_step_id)
+          is_binary(effect.agent_run_step_id) and
+          MapSet.member?(requested_step_ids, effect.agent_run_step_id)
       end)
+      |> Enum.map(& &1.id)
+
+    # Only an actually requested step needs result projection. Loading those
+    # few exact payloads preserves normal recovery semantics; corrupt content
+    # raises and rolls back, leaving requested authority durably blocked for
+    # operator proof instead of inventing an outcome. Already-terminal rows
+    # remain metadata-only and can be erased without any decrypt.
+    projected_effects = load_projectable_effects!(projected_effect_ids)
 
     case Agents.reconcile_terminal_effect_steps_in_transaction(projected_effects) do
       :ok -> :ok
@@ -990,6 +1092,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
       from(directive in AgentDirective,
         where: directive.agent_id == ^agent_id,
         order_by: [asc: directive.inserted_at, asc: directive.id],
+        select: struct(directive, ^@directive_authority_fields),
         lock: "FOR UPDATE"
       )
     )
@@ -1000,6 +1103,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
       from(run in AgentRun,
         where: run.agent_id == ^agent_id,
         order_by: [asc: run.inserted_at, asc: run.id],
+        select: struct(run, ^@run_authority_fields),
         lock: "FOR UPDATE"
       )
     )
@@ -1010,6 +1114,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
       from(step in AgentRunStep,
         where: step.agent_id == ^agent_id,
         order_by: [asc: step.inserted_at, asc: step.id],
+        select: struct(step, ^@step_authority_fields),
         lock: "FOR UPDATE"
       )
     )
@@ -1020,9 +1125,23 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
       from(effect in Effect,
         where: effect.agent_id == ^agent_id,
         order_by: [asc: effect.inserted_at, asc: effect.id],
+        select: struct(effect, ^@effect_authority_fields),
         lock: "FOR UPDATE"
       )
     )
+  end
+
+  defp load_projectable_effects!([]), do: []
+
+  defp load_projectable_effects!(ids) do
+    Repo.all(
+      from(effect in Effect,
+        where: effect.id in ^ids,
+        order_by: [asc: effect.inserted_at, asc: effect.id]
+      )
+    )
+  rescue
+    _error -> Repo.rollback(:terminal_effect_payload_unreadable)
   end
 
   defp lock_scheduled_jobs(agent_id) do
