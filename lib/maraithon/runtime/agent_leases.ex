@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.AgentLeases do
 
   import Ecto.Query
 
+  alias Ecto.Adapters.SQL
   alias Maraithon.AgentIsolation.Binding
   alias Maraithon.Agents.Agent
   alias Maraithon.Repo
@@ -19,7 +20,7 @@ defmodule Maraithon.Runtime.AgentLeases do
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Config, as: RuntimeConfig
-  alias Maraithon.Runtime.Coordination.{Protocol, Scope}
+  alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, Protocol, Scope}
 
   @default_ttl_ms 60_000
   @min_ttl_ms 1_000
@@ -36,7 +37,9 @@ defmodule Maraithon.Runtime.AgentLeases do
       owner_token = Ecto.UUID.generate()
 
       Repo.transaction(fn ->
+        coordination = prelock_new_agent!(agent_id, :admission)
         agent = lock_agent!(agent_id)
+        ensure_scope_agent!(agent, coordination)
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -49,7 +52,6 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_initial_guard_allows_claim!(guard, now)
         ensure_no_existing_lease!(lease, now)
         ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
-        coordination = coordination_scope!(agent.user_id)
 
         insert_lease!(agent_id, owner_token, owner_node, now, lease_until, coordination)
       end)
@@ -69,7 +71,9 @@ defmodule Maraithon.Runtime.AgentLeases do
       owner_token = Ecto.UUID.generate()
 
       Repo.transaction(fn ->
+        coordination = prelock_new_agent!(agent_id, :admission)
         agent = lock_agent!(agent_id)
+        ensure_scope_agent!(agent, coordination)
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -82,7 +86,6 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_due_recovery_guard!(guard, guard_generation, now)
         ensure_no_existing_lease!(lease, now)
         ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
-        coordination = coordination_scope!(agent.user_id)
 
         insert_lease!(agent_id, owner_token, owner_node, now, lease_until, coordination)
       end)
@@ -100,7 +103,9 @@ defmodule Maraithon.Runtime.AgentLeases do
          {:ok, owner_token} <- cast_uuid(owner_token),
          {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms]) do
       Repo.transaction(fn ->
+        scope = prelock_existing_lease!(agent_id, :ready, :admission)
         agent = lock_agent!(agent_id)
+        ensure_scope_agent!(agent, scope)
         binding = lock_binding(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -148,7 +153,9 @@ defmodule Maraithon.Runtime.AgentLeases do
          {:ok, guard_generation} <- cast_uuid(guard_generation),
          {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms]) do
       Repo.transaction(fn ->
+        scope = prelock_existing_lease!(agent_id, :ready, :admission)
         agent = lock_agent!(agent_id)
+        ensure_scope_agent!(agent, scope)
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -179,7 +186,9 @@ defmodule Maraithon.Runtime.AgentLeases do
          {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
       Repo.transaction(fn ->
+        scope = prelock_existing_lease!(agent_id, :ready, :admission)
         agent = lock_agent!(agent_id)
+        ensure_scope_agent!(agent, scope)
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -205,7 +214,9 @@ defmodule Maraithon.Runtime.AgentLeases do
          {:ok, owner_token} <- cast_uuid(owner_token),
          {:ok, guard_generation} <- cast_uuid(guard_generation) do
       Repo.transaction(fn ->
+        scope = prelock_existing_lease!(agent_id, :ready, :admission)
         agent = lock_agent!(agent_id)
+        ensure_scope_agent!(agent, scope)
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -246,7 +257,9 @@ defmodule Maraithon.Runtime.AgentLeases do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms]) do
       Repo.transaction(fn ->
+        scope = prelock_existing_or_new!(agent_id, :owner, :settlement)
         agent = lock_agent!(agent_id)
+        ensure_scope_agent!(agent, scope)
         _binding = lock_binding(agent)
         _guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -304,7 +317,9 @@ defmodule Maraithon.Runtime.AgentLeases do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
       Repo.transaction(fn ->
+        scope = prelock_existing_lease!(agent_id, :owner, :settlement)
         agent = lock_agent!(agent_id)
+        ensure_scope_agent!(agent, scope)
         _binding = lock_binding(agent)
         _guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -327,7 +342,9 @@ defmodule Maraithon.Runtime.AgentLeases do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
       Repo.transaction(fn ->
+        scope = prelock_existing_lease!(agent_id, :owner, :settlement)
         agent = lock_agent!(agent_id)
+        ensure_scope_agent!(agent, scope)
         _binding = lock_binding(agent)
         _guard = lock_guard(agent_id)
 
@@ -372,7 +389,9 @@ defmodule Maraithon.Runtime.AgentLeases do
 
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
+      scope = prelock_existing_lease!(agent_id, :owner, :settlement)
       agent = lock_agent!(agent_id)
+      ensure_scope_agent!(agent, scope)
       _binding = lock_binding(agent)
       _guard = lock_guard(agent_id)
       lease = lock_lease(agent_id)
@@ -393,7 +412,9 @@ defmodule Maraithon.Runtime.AgentLeases do
 
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
+      scope = prelock_existing_lease!(agent_id, :ready, :admission)
       agent = lock_agent!(agent_id)
+      ensure_scope_agent!(agent, scope)
       binding = lock_active_binding!(agent)
       guard = lock_guard(agent_id)
       lease = lock_lease(agent_id)
@@ -563,6 +584,96 @@ defmodule Maraithon.Runtime.AgentLeases do
     )
     |> Repo.insert!()
   end
+
+  defp prelock_new_agent!(agent_id, privacy_mode) do
+    user_id =
+      case Repo.one(from(agent in Agent, where: agent.id == ^agent_id, select: agent.user_id)) do
+        user_id when is_binary(user_id) -> user_id
+        _ -> Repo.rollback(:agent_not_found)
+      end
+
+    coordination = coordination_scope!(user_id)
+
+    Authority.fence_partition!(
+      coordination.session,
+      coordination.partition.partition_id,
+      coordination.partition.ownership_epoch,
+      :ready
+    )
+
+    lock_user_privacy!(user_id, privacy_mode)
+    Map.put(coordination, :user_id, user_id)
+  end
+
+  defp prelock_existing_or_new!(agent_id, authority_mode, privacy_mode) do
+    case Repo.get(AgentRuntimeLease, agent_id) do
+      nil -> prelock_new_agent!(agent_id, privacy_mode)
+      _lease -> prelock_existing_lease!(agent_id, authority_mode, privacy_mode)
+    end
+  end
+
+  defp prelock_existing_lease!(agent_id, authority_mode, privacy_mode)
+       when authority_mode in [:ready, :owner] do
+    user_id =
+      case Repo.one(from(agent in Agent, where: agent.id == ^agent_id, select: agent.user_id)) do
+        user_id when is_binary(user_id) -> user_id
+        _ -> Repo.rollback(:agent_not_found)
+      end
+
+    lease =
+      case Repo.get(AgentRuntimeLease, agent_id) do
+        %AgentRuntimeLease{} = lease -> lease
+        nil -> Repo.rollback(:runtime_lease_lost)
+      end
+
+    if is_nil(lease.coordination_activation_epoch) or
+         is_nil(lease.coordination_partition_id) or
+         is_nil(lease.coordination_partition_epoch) or
+         is_nil(lease.coordination_node_incarnation_id),
+       do: Repo.rollback(:partition_authority_lost)
+
+    session = %NodeIncarnation{
+      id: lease.coordination_node_incarnation_id,
+      activation_epoch: lease.coordination_activation_epoch
+    }
+
+    Authority.fence_partition!(
+      session,
+      lease.coordination_partition_id,
+      lease.coordination_partition_epoch,
+      authority_mode
+    )
+
+    lock_user_privacy!(user_id, privacy_mode)
+
+    %{
+      session: session,
+      partition: %{
+        partition_id: lease.coordination_partition_id,
+        ownership_epoch: lease.coordination_partition_epoch
+      },
+      user_id: user_id
+    }
+  end
+
+  defp lock_user_privacy!(user_id, privacy_mode) do
+    case SQL.query!(
+           Repo,
+           """
+           SELECT to_jsonb(user_row) ->> 'privacy_erasure_requested_at'
+           FROM public.users AS user_row WHERE id = $1 FOR UPDATE
+           """,
+           [user_id]
+         ).rows do
+      [[nil]] -> :ok
+      [[_requested_at]] when privacy_mode == :settlement -> :ok
+      [[_requested_at]] -> Repo.rollback(:privacy_erasure_requested)
+      [] -> Repo.rollback(:agent_user_missing)
+    end
+  end
+
+  defp ensure_scope_agent!(%Agent{user_id: user_id}, %{user_id: user_id}), do: :ok
+  defp ensure_scope_agent!(_agent, _scope), do: Repo.rollback(:agent_authority_changed)
 
   defp coordination_scope!(user_id) do
     case Protocol.mode() do

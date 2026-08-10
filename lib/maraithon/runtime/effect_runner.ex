@@ -28,6 +28,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   alias Maraithon.Runtime.EffectTaskSupervisor
   alias Maraithon.Runtime.Effects.CommandFactory
   alias Maraithon.Runtime.Effects.LLMRateLimiter
+  alias Maraithon.Runtime.Coordination.{Protocol, Scope, TaskClaims}
 
   require Logger
 
@@ -708,11 +709,56 @@ defmodule Maraithon.Runtime.EffectRunner do
               e.runtime_owner_generation
             )
         )
+        |> coordinated_effect_query()
 
       :legacy ->
         legacy_protocol_rows(query)
 
       _draining_or_blocked ->
+        where(query, [e], false)
+    end
+  end
+
+  defp coordinated_effect_query(query) do
+    case Protocol.mode() do
+      :dark ->
+        query
+
+      :active ->
+        case Scope.current() do
+          {:ok, session} ->
+            from(e in query,
+              where:
+                fragment(
+                  """
+                  EXISTS (
+                    SELECT 1 FROM public.agent_runtime_leases AS scoped_lease
+                    JOIN public.runtime_partitions AS scoped_partition
+                      ON scoped_partition.partition_id = scoped_lease.coordination_partition_id
+                     AND scoped_partition.activation_epoch = scoped_lease.coordination_activation_epoch
+                     AND scoped_partition.ownership_epoch = scoped_lease.coordination_partition_epoch
+                     AND scoped_partition.owner_node_incarnation_id = scoped_lease.coordination_node_incarnation_id
+                     AND scoped_partition.state = 'ready' AND scoped_partition.ready_at IS NOT NULL
+                     AND scoped_partition.lease_expires_at > timezone('UTC', clock_timestamp())
+                    WHERE scoped_lease.agent_id = ? AND scoped_lease.owner_token = ?
+                      AND scoped_lease.coordination_activation_epoch = ?::uuid
+                      AND scoped_lease.coordination_node_incarnation_id = ?::uuid
+                      AND scoped_lease.ready_at IS NOT NULL AND scoped_lease.draining_at IS NULL
+                      AND scoped_lease.lease_until > timezone('UTC', clock_timestamp())
+                  )
+                  """,
+                  e.agent_id,
+                  e.runtime_owner_generation,
+                  ^session.activation_epoch,
+                  ^session.id
+                )
+            )
+
+          _ ->
+            where(query, [e], false)
+        end
+
+      _ ->
         where(query, [e], false)
     end
   end
@@ -914,77 +960,99 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp claim_effect_exact(effect, claim_liveness_ttl_ms) do
+    case Protocol.mode() do
+      :active -> claim_effect_coordinated(effect, claim_liveness_ttl_ms)
+      blocked -> {:error, {:runtime_coordination_blocked, blocked}}
+    end
+  end
+
+  defp claim_effect_coordinated(effect, claim_liveness_ttl_ms) do
     claim_token = Ecto.UUID.generate()
 
-    case EffectTaskSupervisor.reserve(effect.id, effect.agent_id, claim_token) do
-      {:ok, identity} ->
-        node_id = Atom.to_string(node())
-        ttl_ms = min(max(claim_liveness_ttl_ms, 1), 300_000)
+    with {:ok, session, partition} <-
+           Scope.partition_for_agent_owner(effect.agent_id, effect.runtime_owner_generation),
+         {:ok, physical} <- EffectTaskSupervisor.reserve(effect.id, effect.agent_id, claim_token) do
+      assignment_id = Ecto.UUID.generate()
 
-        outcome =
-          DbResilience.with_database("effect runner claim effect", fn ->
-            Repo.transaction(fn ->
-              Cancellation.fence_effect_admission!(
-                effect.agent_id,
-                effect.runtime_owner_generation
+      identity = %{
+        work_kind: "effect",
+        work_id: effect.id,
+        claim_token: claim_token,
+        assignment_id: assignment_id,
+        supervisor_id: physical.supervisor_id,
+        local_task_id: physical.task_id
+      }
+
+      node_id = Atom.to_string(node())
+      ttl_ms = min(max(claim_liveness_ttl_ms, 1_000), 300_000)
+
+      outcome =
+        DbResilience.with_database("effect runner coordinated claim", fn ->
+          Repo.transaction(fn ->
+            Cancellation.fence_effect_admission!(effect.agent_id, effect.runtime_owner_generation)
+
+            assignment =
+              case TaskClaims.reserve(session, partition, identity, ttl_ms: ttl_ms) do
+                {:ok, value} -> value
+                {:error, reason} -> Repo.rollback(reason)
+              end
+
+            {now, expires_at} = Maraithon.Runtime.DatabaseClock.window!(ttl_ms)
+
+            query =
+              from(e in Effect,
+                where: e.id == ^effect.id and e.status == "pending" and is_nil(e.claim_token),
+                where: is_nil(e.cancellation_state),
+                where:
+                  is_nil(e.retry_after) or
+                    e.retry_after <= fragment("timezone('UTC', clock_timestamp())"),
+                update: [
+                  set: [
+                    status: "claimed",
+                    claimed_by: ^node_id,
+                    claimed_at: ^now,
+                    claim_token: ^claim_token,
+                    claim_owner_node: ^node_id,
+                    claim_heartbeat_at: ^now,
+                    claim_expires_at: ^expires_at,
+                    claim_supervisor_id: ^physical.supervisor_id,
+                    claim_task_id: ^physical.task_id,
+                    coordination_activation_epoch: ^session.activation_epoch,
+                    coordination_partition_id: ^partition.partition_id,
+                    coordination_partition_epoch: ^partition.ownership_epoch,
+                    coordination_node_incarnation_id: ^session.id,
+                    coordination_task_assignment_id: ^assignment.id,
+                    updated_at: ^now
+                  ]
+                ],
+                select: e
               )
+              |> fence_runtime_owner_lineage(effect)
 
-              {now, expires_at} = Maraithon.Runtime.DatabaseClock.window!(ttl_ms)
-
-              query =
-                from(e in Effect,
-                  where: e.id == ^effect.id,
-                  where: e.status == "pending",
-                  where: is_nil(e.claim_token),
-                  where: is_nil(e.cancellation_state),
-                  where:
-                    is_nil(e.retry_after) or
-                      e.retry_after <= fragment("timezone('UTC', clock_timestamp())"),
-                  update: [
-                    set: [
-                      status: "claimed",
-                      claimed_by: ^node_id,
-                      claimed_at: ^now,
-                      claim_token: ^claim_token,
-                      claim_owner_node: ^node_id,
-                      claim_heartbeat_at: ^now,
-                      claim_expires_at: ^expires_at,
-                      claim_supervisor_id: ^identity.supervisor_id,
-                      claim_task_id: ^identity.task_id,
-                      updated_at: ^now
-                    ]
-                  ],
-                  select: e
-                )
-                |> fence_runtime_owner_lineage(effect)
-
-              Repo.update_all(query, [])
-            end)
+            case Repo.update_all(query, []) do
+              {1, [%Effect{} = claimed]} -> claimed
+              {0, _} -> Repo.rollback(:already_claimed)
+              _ -> Repo.rollback(:unexpected_claim_result)
+            end
           end)
+        end)
 
-        case outcome do
-          {:ok, {:ok, {1, [%Effect{} = claimed]}}} ->
-            {:ok, claimed}
+      case outcome do
+        {:ok, {:ok, %Effect{} = claimed}} ->
+          {:ok, claimed}
 
-          {:ok, {:ok, {0, _rows}}} ->
-            release_task_identity(identity)
-            :already_claimed
+        {:ok, {:error, :already_claimed}} ->
+          release_task_identity(physical)
+          :already_claimed
 
-          {:ok, {:ok, {_count, _rows}}} ->
-            release_task_identity(identity)
-            {:error, :unexpected_claim_result}
+        {:ok, {:error, reason}} ->
+          release_task_identity(physical)
+          {:error, reason}
 
-          {:ok, {:error, reason}} ->
-            release_task_identity(identity)
-            {:error, reason}
-
-          {:error, reason} ->
-            release_task_identity(identity)
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          release_task_identity(physical)
+          {:error, reason}
+      end
     end
   end
 
@@ -1064,10 +1132,28 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp release_task_reservation(%Effect{claim_token: claim_token} = effect)
        when is_binary(claim_token) do
-    effect |> task_identity() |> release_task_identity()
+    case effect |> task_identity() |> release_task_identity() do
+      :ok -> abort_coordination_reservation(effect)
+      error -> error
+    end
   end
 
   defp release_task_reservation(%Effect{}), do: :ok
+
+  defp abort_coordination_reservation(%Effect{coordination_task_assignment_id: nil}), do: :ok
+
+  defp abort_coordination_reservation(%Effect{} = effect) do
+    case TaskClaims.get(effect.coordination_task_assignment_id) do
+      nil ->
+        {:error, :coordination_assignment_missing}
+
+      assignment ->
+        case TaskClaims.abort_reserved(assignment) do
+          {:ok, _} -> :ok
+          other -> other
+        end
+    end
+  end
 
   defp release_task_identity(identity), do: EffectTaskSupervisor.release(identity)
 
@@ -1109,7 +1195,17 @@ defmodule Maraithon.Runtime.EffectRunner do
       effect_task_supervisor(effect),
       fn ->
         register_effect_task!(effect)
-        result = execute_effect(effect, completion_writer, completion_sleeper)
+
+        result =
+          case activate_coordinated_effect_task(effect) do
+            {:ok, assignment} ->
+              result = execute_effect(effect, completion_writer, completion_sleeper)
+              if assignment, do: settle_coordinated_effect_task(assignment, effect)
+              result
+
+            {:error, _reason} ->
+              {:error, :coordination_task_authority_lost}
+          end
 
         send(
           parent,
@@ -1127,6 +1223,44 @@ defmodule Maraithon.Runtime.EffectRunner do
       end,
       shutdown: :brutal_kill
     )
+  end
+
+  defp activate_coordinated_effect_task(%Effect{coordination_task_assignment_id: nil}),
+    do: {:ok, nil}
+
+  defp activate_coordinated_effect_task(%Effect{} = effect) do
+    with %{} = assignment <- TaskClaims.get(effect.coordination_task_assignment_id),
+         true <-
+           assignment.work_kind == "effect" and assignment.work_id == effect.id and
+             assignment.claim_token == effect.claim_token and
+             assignment.supervisor_id == effect.claim_supervisor_id and
+             assignment.local_task_id == effect.claim_task_id,
+         {:ok, active} <- TaskClaims.activate(assignment),
+         {:ok, entered} <- TaskClaims.mark_provider_entered(active) do
+      {:ok, entered}
+    else
+      _ -> {:error, :coordination_task_authority_lost}
+    end
+  end
+
+  defp settle_coordinated_effect_task(assignment, effect) do
+    case Repo.transaction(fn ->
+           fresh = Repo.get!(Effect, effect.id)
+
+           outcome =
+             case fresh.status do
+               "completed" -> "completed"
+               "pending" -> "retry_scheduled"
+               "failed" -> "failed"
+               "cancelled" -> "failed"
+               _ -> Repo.rollback(:effect_outcome_not_durable)
+             end
+
+           TaskClaims.settle_in_transaction(assignment, outcome)
+         end) do
+      {:ok, _} -> :ok
+      _ -> :unsettled
+    end
   end
 
   defp execute_effect(effect, completion_writer, completion_sleeper) do

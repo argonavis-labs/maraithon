@@ -516,7 +516,8 @@ defmodule Maraithon.Runtime.SchedulerTest do
     Verifies the Scheduler fires jobs when receiving {:fire, job_id}.
     The job should transition from "pending" to "dispatched".
     """
-    test "handles {:fire, job_id} message", %{agent: agent} do
+    test "delivers through the legacy path while coordination is dark", %{agent: agent} do
+      assert Maraithon.Runtime.Coordination.Protocol.mode() == :dark
       # Stop existing scheduler if running
       case Process.whereis(Scheduler) do
         nil -> :ok
@@ -530,11 +531,12 @@ defmodule Maraithon.Runtime.SchedulerTest do
       fire_at = DateTime.utc_now()
       {:ok, job_id} = Scheduler.schedule_at(agent.id, "fire_test", fire_at)
 
-      # Fire the job
+      # Fire the job. The synchronous call is a mailbox barrier ordered after
+      # :fire; the assertion does not depend on a timing sleep.
       send(pid, {:fire, job_id})
-      Process.sleep(100)
+      :ok = GenServer.call(pid, :clear_in_flight)
 
-      # Job should be dispatched and await ack
+      # Dark expansion preserves the legacy dispatched/receipt flow.
       job = Repo.get(ScheduledJob, job_id)
       assert job.status == "dispatched"
 
