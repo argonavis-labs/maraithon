@@ -3,14 +3,11 @@ defmodule Maraithon.Runtime.EffectTaskAuthority do
 
   use GenServer
 
-  alias Maraithon.Runtime.EffectTaskSupervisor
+  alias Maraithon.Runtime.TaskGuardian
 
-  @registry Maraithon.Runtime.EffectTaskRegistry
   @task_supervisor Maraithon.Runtime.ExactEffectTaskSupervisor
   @call_timeout 5_000
   @termination_proof_timeout 2_000
-  @supervisor_history_key {__MODULE__, :local_supervisor_history}
-  @max_supervisor_history 256
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -55,28 +52,23 @@ defmodule Maraithon.Runtime.EffectTaskAuthority do
 
   @impl true
   def init(_opts) do
-    # A successful new Authority incarnation is proof-bearing only when the
-    # coupled Task.Supervisor is already absent. Normal :one_for_all recovery
-    # guarantees that ordering; an administrative Authority-only restart does
-    # not and is rejected rather than manufacturing absence proof.
-    if is_nil(Process.whereis(@task_supervisor)) do
-      supervisor_id = Ecto.UUID.generate()
-      predecessor_ids = :persistent_term.get(@supervisor_history_key, [])
-
-      :persistent_term.put(
-        @supervisor_history_key,
-        [supervisor_id | Enum.take(predecessor_ids, @max_supervisor_history - 1)]
-      )
+    with guardian_pid when is_pid(guardian_pid) <- Process.whereis(TaskGuardian),
+         supervisor_pid when is_pid(supervisor_pid) <- Process.whereis(@task_supervisor),
+         {:ok, guardian} <-
+           TaskGuardian.open_generation(guardian_pid, :effect, supervisor_pid) do
+      guardian_ref = Process.monitor(guardian_pid)
 
       {:ok,
        %{
-         supervisor_id: supervisor_id,
-         proven_predecessor_ids: MapSet.new(predecessor_ids),
+         supervisor_id: guardian.supervisor_id,
+         supervisor_pid: supervisor_pid,
+         guardian: guardian,
+         guardian_ref: guardian_ref,
          reservations: %{},
          monitor_index: %{}
        }}
     else
-      {:stop, :effect_task_supervisor_predecessor_still_running}
+      _ -> {:stop, :effect_task_guardian_unavailable}
     end
   end
 
@@ -86,64 +78,64 @@ defmodule Maraithon.Runtime.EffectTaskAuthority do
   end
 
   def handle_call(:active_identities, _from, state) do
-    identities =
-      state.reservations
-      |> Map.values()
-      |> Enum.filter(fn reservation ->
-        is_pid(reservation.task_pid) and Process.alive?(reservation.task_pid) and
-          supervised_child?(reservation.task_pid)
-      end)
-      |> Enum.map(
-        &Map.take(&1, [
-          :effect_id,
-          :agent_id,
-          :claim_token,
-          :supervisor_id,
-          :task_id
-        ])
-      )
-
-    {:reply, {:ok, identities}, state}
+    case TaskGuardian.tracked_active_identities(state.guardian) do
+      {:ok, identities} -> {:reply, {:ok, identities}, state}
+      {:error, reason} -> {:stop, {:effect_task_guardian_lost, reason}, state}
+    end
   end
 
   def handle_call({:reserve, effect_id, agent_id, claim_token}, {owner, _tag}, state) do
     task_id = Ecto.UUID.generate()
-    owner_ref = Process.monitor(owner)
 
-    reservation = %{
+    identity = %{
       effect_id: effect_id,
       agent_id: agent_id,
       claim_token: claim_token,
       supervisor_id: state.supervisor_id,
-      task_id: task_id,
-      reserved_by: owner,
-      owner_ref: owner_ref,
-      task_pid: nil,
-      task_ref: nil
+      task_id: task_id
     }
 
-    identity =
-      Map.take(reservation, [
-        :effect_id,
-        :agent_id,
-        :claim_token,
-        :supervisor_id,
-        :task_id
-      ])
+    case TaskGuardian.reserve(state.guardian, identity) do
+      :ok ->
+        owner_ref = Process.monitor(owner)
 
-    state = %{
-      state
-      | reservations: Map.put(state.reservations, task_id, reservation),
-        monitor_index: Map.put(state.monitor_index, owner_ref, {:owner, task_id})
-    }
+        reservation =
+          Map.merge(identity, %{
+            reserved_by: owner,
+            owner_ref: owner_ref,
+            task_pid: nil,
+            task_ref: nil
+          })
 
-    {:reply, {:ok, identity}, state}
+        state = %{
+          state
+          | reservations: Map.put(state.reservations, task_id, reservation),
+            monitor_index: Map.put(state.monitor_index, owner_ref, {:owner, task_id})
+        }
+
+        {:reply, {:ok, identity}, state}
+
+      {:error, :task_guardian_access_lost} = error ->
+        {:stop, :effect_task_guardian_lost, error, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call({:release, identity}, {caller, _tag}, state) do
     case exact_reservation(state, identity) do
       %{reserved_by: ^caller, task_pid: nil} = reservation ->
-        {:reply, :ok, delete_reservation(state, reservation)}
+        case TaskGuardian.release(state.guardian, identity) do
+          :ok ->
+            {:reply, :ok, delete_reservation(state, reservation)}
+
+          {:error, :task_guardian_access_lost} = error ->
+            {:stop, :effect_task_guardian_lost, error, state}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
 
       _active_lost_or_foreign ->
         {:reply, {:error, :effect_task_reservation_lost}, state}
@@ -153,19 +145,25 @@ defmodule Maraithon.Runtime.EffectTaskAuthority do
   def handle_call({:activate, identity}, {task_pid, _tag}, state) do
     case exact_reservation(state, identity) do
       %{task_pid: nil} = reservation ->
-        if supervised_child?(task_pid) do
-          task_ref = Process.monitor(task_pid)
-          reservation = %{reservation | task_pid: task_pid, task_ref: task_ref}
+        case TaskGuardian.activate(state.guardian, identity, task_pid) do
+          :ok ->
+            task_ref = Process.monitor(task_pid)
+            reservation = %{reservation | task_pid: task_pid, task_ref: task_ref}
 
-          state = %{
-            state
-            | reservations: Map.put(state.reservations, reservation.task_id, reservation),
-              monitor_index: Map.put(state.monitor_index, task_ref, {:task, reservation.task_id})
-          }
+            state = %{
+              state
+              | reservations: Map.put(state.reservations, reservation.task_id, reservation),
+                monitor_index:
+                  Map.put(state.monitor_index, task_ref, {:task, reservation.task_id})
+            }
 
-          {:reply, :ok, state}
-        else
-          {:reply, {:error, :effect_task_not_supervised}, state}
+            {:reply, :ok, state}
+
+          {:error, :task_guardian_access_lost} = error ->
+            {:stop, :effect_task_guardian_lost, error, state}
+
+          {:error, _reason} ->
+            {:reply, {:error, :effect_task_reservation_lost}, state}
         end
 
       %{task_pid: ^task_pid} ->
@@ -177,25 +175,23 @@ defmodule Maraithon.Runtime.EffectTaskAuthority do
   end
 
   def handle_call({:terminate_exact, claim}, _from, state) do
-    cond do
-      claim.supervisor_id == state.supervisor_id ->
-        terminate_current_supervisor_claim(claim, state)
+    case exact_reservation(state, claim) do
+      %{task_pid: nil} = reservation ->
+        cancel_reserved(claim, reservation, state)
 
-      MapSet.member?(state.proven_predecessor_ids, claim.supervisor_id) ->
-        # Registry -> authority -> Task.Supervisor are :one_for_all. The local
-        # predecessor history survives group restarts in this BEAM only, so it
-        # proves the matching older Task.Supervisor was synchronously stopped.
-        {:reply, {:ok, :supervisor_restarted}, state}
+      %{task_pid: task_pid} = reservation when is_pid(task_pid) ->
+        terminate_current_task(claim, reservation, state)
 
-      true ->
-        # A fresh VM may reuse the same distributed node name while an isolated
-        # predecessor is still alive. Registry emptiness or an arbitrary UUID
-        # mismatch on that new incarnation is never absence proof.
-        {:reply, {:unknown, :effect_task_owner_incarnation_unproven}, state}
+      nil ->
+        reply_from_guardian_proof(claim, state)
     end
   end
 
   @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{guardian_ref: ref} = state) do
+    {:stop, :effect_task_guardian_lost, state}
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     case Map.get(state.monitor_index, ref) do
       {:owner, task_id} ->
@@ -215,101 +211,73 @@ defmodule Maraithon.Runtime.EffectTaskAuthority do
   defp handle_owner_down(task_id, state) do
     case Map.get(state.reservations, task_id) do
       %{task_pid: task_pid} = reservation when is_pid(task_pid) ->
-        _termination_attempt = terminate_child(task_pid)
+        _termination_attempt = terminate_child(state.supervisor_pid, task_pid)
 
-        # Retain the exact reservation until its task monitor delivers DOWN.
-        # Task.Supervisor return values and child-list absence are not physical
-        # termination proof on their own.
+        # The reservation remains until its exact task monitor delivers DOWN.
         {:noreply, detach_dead_owner(state, reservation)}
 
       %{} = reservation ->
-        # The runner died before a supervised task activated. No command could
-        # have crossed its authorization boundary.
-        {:noreply, delete_reservation(state, reservation)}
+        case TaskGuardian.cancel_reserved(state.guardian, public_identity(reservation)) do
+          :ok -> {:noreply, delete_reservation(state, reservation)}
+          {:error, _reason} -> {:stop, :effect_task_guardian_lost, state}
+        end
 
       nil ->
         {:noreply, state}
     end
   end
 
-  defp terminate_current_supervisor_claim(claim, state) do
-    case Map.get(state.reservations, claim.task_id) do
-      %{} = reservation ->
-        if reservation_matches?(reservation, claim) do
-          case reservation.task_pid do
-            nil ->
-              # Cancellation won before Authority activation. Atomically remove
-              # the reservation so a later Registry registration cannot
-              # activate and cross the command boundary. The Effect still
-              # settles ambiguous because this in-memory proof is not a durable
-              # provider pre-entry ledger.
-              {:reply, {:ok, :authority_absence}, delete_reservation(state, reservation)}
+  defp cancel_reserved(claim, reservation, state) do
+    case TaskGuardian.cancel_reserved(state.guardian, claim) do
+      :ok ->
+        {:reply, {:ok, :never_activated}, delete_reservation(state, reservation)}
 
-            pid when is_pid(pid) ->
-              terminate_known_pid(pid, reservation, state)
-          end
-        else
-          {:reply, {:unknown, :effect_task_identity_mismatch}, state}
-        end
+      {:error, :task_guardian_access_lost} = error ->
+        {:stop, :effect_task_guardian_lost, error, state}
 
-      nil ->
-        case exact_registry_pid(claim) do
-          {:ok, nil} ->
-            # This is the same authority incarnation that reserved the identity.
-            # A reservation can disappear only before activation or after its
-            # monitored exact task ended. This is not Registry-only proof.
-            {:reply, {:ok, :authority_absence}, state}
-
-          {:ok, pid} ->
-            if supervised_child?(pid) do
-              terminate_known_pid(pid, nil, state)
-            else
-              {:reply, {:unknown, :effect_task_identity_mismatch}, state}
-            end
-
-          {:error, _reason} ->
-            {:reply, {:unknown, :effect_task_registry_unavailable}, state}
-        end
+      {:error, _reason} ->
+        {:reply, {:unknown, :effect_task_termination_unproven}, state}
     end
   end
 
-  defp terminate_known_pid(pid, reservation, state) do
-    {task_ref, temporary_ref?} = termination_monitor(pid, reservation)
-    termination_result = terminate_child(pid)
+  defp terminate_current_task(claim, reservation, state) do
+    _termination_attempt = terminate_child(state.supervisor_pid, reservation.task_pid)
 
-    case await_task_down(task_ref, pid) do
-      :down ->
-        state = if reservation, do: delete_reservation(state, reservation), else: state
+    case TaskGuardian.await_proof(
+           state.guardian,
+           claim,
+           @termination_proof_timeout
+         ) do
+      {:ok, {:task_down, _proof}} ->
+        {:reply, {:ok, :terminated}, delete_reservation(state, reservation)}
 
-        proof =
-          if termination_result == {:error, :not_found},
-            do: :authority_absence,
-            else: :terminated
+      {:error, :task_guardian_access_lost} = error ->
+        {:stop, :effect_task_guardian_lost, error, state}
 
-        {:reply, {:ok, proof}, state}
-
-      :timeout ->
-        if temporary_ref?, do: Process.demonitor(task_ref, [:flush])
-
-        reason =
-          if termination_result in [:ok, {:error, :not_found}],
-            do: :effect_task_termination_unproven,
-            else: :effect_task_termination_failed
-
-        {:reply, {:unknown, reason}, state}
+      _pending_or_unknown ->
+        {:reply, {:unknown, :effect_task_termination_unproven}, state}
     end
   end
 
-  defp termination_monitor(_pid, %{task_ref: task_ref}) when is_reference(task_ref),
-    do: {task_ref, false}
+  defp reply_from_guardian_proof(claim, state) do
+    case TaskGuardian.await_proof(state.guardian, claim, @termination_proof_timeout) do
+      {:ok, {:task_down, _proof}} ->
+        {:reply, {:ok, :terminated}, state}
 
-  defp termination_monitor(pid, _reservation), do: {Process.monitor(pid), true}
+      {:ok, {:supervisor_down_before_activation, _proof}} ->
+        {:reply, {:ok, :supervisor_down}, state}
 
-  defp await_task_down(task_ref, pid) do
-    receive do
-      {:DOWN, ^task_ref, :process, ^pid, _reason} -> :down
-    after
-      @termination_proof_timeout -> :timeout
+      {:ok, :activation_cancelled} ->
+        {:reply, {:ok, :never_activated}, state}
+
+      {:error, :task_guardian_access_lost} = error ->
+        {:stop, :effect_task_guardian_lost, error, state}
+
+      {:unknown, :task_identity_mismatch} ->
+        {:reply, {:unknown, :effect_task_identity_mismatch}, state}
+
+      _pending_untracked_or_evicted ->
+        {:reply, {:unknown, :effect_task_owner_incarnation_unproven}, state}
     end
   end
 
@@ -321,54 +289,21 @@ defmodule Maraithon.Runtime.EffectTaskAuthority do
   end
 
   defp reservation_matches?(reservation, identity) do
-    reservation.effect_id == identity.effect_id and
-      reservation.agent_id == identity.agent_id and
-      reservation.claim_token == identity.claim_token and
-      reservation.supervisor_id == identity.supervisor_id and
-      reservation.task_id == identity.task_id
+    public_identity(reservation) == identity
   end
 
-  defp exact_registry_pid(claim) do
-    key = EffectTaskSupervisor.registry_key(claim)
-
-    case Registry.lookup(@registry, key) do
-      [] ->
-        {:ok, nil}
-
-      [{pid, metadata}] when is_pid(pid) ->
-        if metadata_matches?(metadata, claim),
-          do: {:ok, pid},
-          else: {:error, :effect_task_identity_mismatch}
-
-      _unexpected ->
-        {:error, :effect_task_identity_mismatch}
-    end
-  rescue
-    _error -> {:error, :effect_task_registry_unavailable}
-  catch
-    :exit, _reason -> {:error, :effect_task_registry_unavailable}
+  defp public_identity(reservation) do
+    Map.take(reservation, [
+      :effect_id,
+      :agent_id,
+      :claim_token,
+      :supervisor_id,
+      :task_id
+    ])
   end
 
-  defp metadata_matches?(metadata, claim) when is_map(metadata) do
-    metadata.agent_id == claim.agent_id and
-      metadata.effect_id == claim.effect_id and
-      metadata.claim_token == claim.claim_token and
-      metadata.supervisor_id == claim.supervisor_id and
-      metadata.task_id == claim.task_id
-  end
-
-  defp metadata_matches?(_metadata, _claim), do: false
-
-  defp supervised_child?(pid) when is_pid(pid) do
-    pid in Task.Supervisor.children(@task_supervisor)
-  rescue
-    _error -> false
-  catch
-    :exit, _reason -> false
-  end
-
-  defp terminate_child(pid) do
-    Task.Supervisor.terminate_child(@task_supervisor, pid)
+  defp terminate_child(supervisor_pid, task_pid) do
+    Task.Supervisor.terminate_child(supervisor_pid, task_pid)
   rescue
     _error -> {:error, :supervisor_unavailable}
   catch

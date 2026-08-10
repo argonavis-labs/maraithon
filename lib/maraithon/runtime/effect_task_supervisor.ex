@@ -3,9 +3,8 @@ defmodule Maraithon.Runtime.EffectTaskSupervisor do
   Couples exact Effect task identity to Task.Supervisor lifetime.
 
   Registry, authority, Task.Supervisor, and renewer use `:one_for_all` coupling.
-  Any child failure therefore terminates every exact Effect task before a fresh
-  authority identity can prove predecessor-supervisor absence. Registry contents
-  alone are never absence proof.
+  A stable guardian outside this group monitors the exact physical supervisor
+  and task PIDs. Registry contents and group restarts are never absence proof.
   """
 
   use Supervisor
@@ -36,6 +35,9 @@ defmodule Maraithon.Runtime.EffectTaskSupervisor do
   end
 
   def register_current!(identity) when is_map(identity) do
+    # Guardian registration is the activation boundary. Registry publication is
+    # operational discovery only and cannot authorize provider entry.
+    :ok = EffectTaskAuthority.activate(identity)
     key = registry_key(identity)
 
     {:ok, _owner} =
@@ -47,7 +49,6 @@ defmodule Maraithon.Runtime.EffectTaskSupervisor do
         task_id: identity.task_id
       })
 
-    :ok = EffectTaskAuthority.activate(identity)
     :ok
   end
 
@@ -82,8 +83,8 @@ defmodule Maraithon.Runtime.EffectTaskSupervisor do
   def init(_opts) do
     children = [
       {Maraithon.Runtime.EffectTaskRegistry, []},
-      {EffectTaskAuthority, []},
       {Task.Supervisor, name: @task_supervisor},
+      {EffectTaskAuthority, []},
       Maraithon.Runtime.EffectClaimRenewer
     ]
 
