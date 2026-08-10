@@ -54,6 +54,47 @@ defmodule Maraithon.Runtime.BlockingClaimTestHandler do
   end
 end
 
+defmodule Maraithon.Runtime.TelegramCompletionTestHandler do
+  @moduledoc false
+
+  def execute(%Maraithon.Runtime.BackgroundJob{job_type: "telegram_webhook_event"}) do
+    {:ok, %{source: "telegram_webhook", processed: true}}
+  end
+end
+
+defmodule Maraithon.Runtime.TelegramFailureTestHandler do
+  @moduledoc false
+
+  def execute(%Maraithon.Runtime.BackgroundJob{job_type: "telegram_webhook_event"}) do
+    {:error, :temporary_telegram_failure}
+  end
+end
+
+defmodule Maraithon.Runtime.OrderedTelegramTestHandler do
+  @moduledoc false
+
+  def execute(%Maraithon.Runtime.BackgroundJob{job_type: "telegram_webhook_event"} = job) do
+    observer = Process.whereis(:background_job_claim_test_observer)
+    event = job.payload["event"] || %{}
+
+    send(observer, {
+      :telegram_order_started,
+      self(),
+      job.id,
+      job.claim_token,
+      job.telegram_bot_id,
+      job.telegram_update_id,
+      event["type"]
+    })
+
+    receive do
+      {:release_telegram_order, token, result} when token == job.claim_token -> result
+    after
+      10_000 -> {:error, :telegram_order_test_timeout}
+    end
+  end
+end
+
 defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
   use Maraithon.DataCase, async: false
 
@@ -74,6 +115,383 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     user_id = "background-runner-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
     %{user_id: user_id}
+  end
+
+  test "successful Telegram jobs scrub payload while retaining the permanent tombstone" do
+    assert {:ok, job} =
+             BackgroundJobs.enqueue_telegram_webhook_event("123456", 70_001, %{
+               type: "ignored_update",
+               source: "telegram",
+               data: %{}
+             })
+
+    pid =
+      start_supervised!(
+        {BackgroundJobRunner,
+         [
+           name: :background_job_runner_telegram_completion_test,
+           handler: Maraithon.Runtime.TelegramCompletionTestHandler,
+           poll_interval_ms: 60_000,
+           batch_size: 1
+         ]}
+      )
+
+    job_id = job.id
+
+    assert {:ok, [{^job_id, {:ok, %{source: "telegram_webhook", processed: true}}}]} =
+             BackgroundJobRunner.drain_once(pid)
+
+    stored = Repo.get!(BackgroundJob, job.id)
+    assert stored.status == "completed"
+    assert stored.payload == %{}
+    assert stored.dedupe_key == "telegram-webhook:123456:70001"
+    assert stored.telegram_bot_id == "123456"
+    assert stored.telegram_update_id == 70_001
+    assert stored.result == %{"processed" => true, "source" => "telegram_webhook"}
+  end
+
+  test "failed Telegram jobs keep their sanitized retry payload" do
+    assert {:ok, job} =
+             BackgroundJobs.enqueue_telegram_webhook_event("123456", 70_002, %{
+               type: "unknown",
+               raw: "never-store",
+               data: %{raw: %{secret: "never-store"}, safe: "retry-me"}
+             })
+
+    pid =
+      start_supervised!(
+        {BackgroundJobRunner,
+         [
+           name: :background_job_runner_telegram_failure_test,
+           handler: Maraithon.Runtime.TelegramFailureTestHandler,
+           poll_interval_ms: 60_000,
+           batch_size: 1
+         ]}
+      )
+
+    job_id = job.id
+
+    assert {:ok, [{^job_id, {:error, :temporary_telegram_failure}}]} =
+             BackgroundJobRunner.drain_once(pid)
+
+    stored = Repo.get!(BackgroundJob, job.id)
+    assert stored.status == "pending"
+
+    assert stored.payload == %{
+             "event" => %{"data" => %{"safe" => "retry-me"}, "type" => "unknown"}
+           }
+
+    refute inspect(stored.payload) =~ "never-store"
+  end
+
+  test "terminal Telegram failure scrubs the payload" do
+    assert {:ok, job} =
+             BackgroundJobs.enqueue_telegram_webhook_event("123456", 70_003, %{
+               type: "message",
+               source: "telegram",
+               data: %{text: "terminal"}
+             })
+
+    job |> Ecto.Changeset.change(max_attempts: 1) |> Repo.update!()
+
+    pid =
+      start_supervised!(
+        {BackgroundJobRunner,
+         [
+           name: :background_job_runner_telegram_terminal_failure_test,
+           handler: Maraithon.Runtime.TelegramFailureTestHandler,
+           poll_interval_ms: 60_000,
+           batch_size: 1
+         ]}
+      )
+
+    assert {:ok, [{job_id, {:error, :temporary_telegram_failure}}]} =
+             BackgroundJobRunner.drain_once(pid)
+
+    assert job_id == job.id
+    stored = Repo.get!(BackgroundJob, job.id)
+    assert stored.status == "failed"
+    assert stored.payload == %{}
+  end
+
+  test "two runners execute each bot's active Telegram head in update-id order" do
+    register_claim_observer!()
+
+    events = [
+      {104, %{type: "callback_query", source: "telegram", data: %{data: "button"}}},
+      {101, %{type: "message", source: "telegram", data: %{text: "/start"}}},
+      {103, %{type: "edited_message", source: "telegram", data: %{text: "edit"}}},
+      {102, %{type: "message", source: "telegram", data: %{text: "message"}}}
+    ]
+
+    for {update_id, event} <- events do
+      assert {:ok, _job} =
+               BackgroundJobs.enqueue_telegram_webhook_event("88001", update_id, event)
+    end
+
+    runners = [
+      start_ordered_telegram_runner(:telegram_order_runner_one),
+      start_ordered_telegram_runner(:telegram_order_runner_two)
+    ]
+
+    expected = [
+      {101, "message"},
+      {102, "message"},
+      {103, "edited_message"},
+      {104, "callback_query"}
+    ]
+
+    for {expected_update_id, expected_type} <- expected do
+      Enum.each(runners, &send(&1, :poll))
+
+      assert_receive {
+                       :telegram_order_started,
+                       task,
+                       _job_id,
+                       claim_token,
+                       "88001",
+                       ^expected_update_id,
+                       ^expected_type
+                     },
+                     1_000
+
+      refute_receive {:telegram_order_started, _task, _job_id, _token, "88001", _later, _type},
+                     100
+
+      task_ref = Process.monitor(task)
+      send(task, {:release_telegram_order, claim_token, {:ok, %{update: expected_update_id}}})
+      assert_receive {:DOWN, ^task_ref, :process, ^task, :normal}, 1_000
+      Enum.each(runners, &:sys.get_state/1)
+    end
+
+    assert Repo.all(
+             from(job in BackgroundJob,
+               where: job.job_type == "telegram_webhook_event",
+               where: job.telegram_bot_id == "88001",
+               order_by: job.telegram_update_id,
+               select: {job.telegram_update_id, job.status}
+             )
+           ) == Enum.map(expected, fn {update_id, _type} -> {update_id, "completed"} end)
+  end
+
+  test "ordering grace prevents a visible higher update from running before a concurrent lower arrival" do
+    register_claim_observer!()
+
+    original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      Keyword.put(original_runtime, :telegram_ingress_ordering_grace_ms, 5_000)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, Maraithon.Runtime, original_runtime) end)
+
+    # Enqueue the higher update first to model the request whose transaction
+    # wins an overlapping ingress race.
+    bot_id = "445566"
+
+    assert {:ok, higher} =
+             BackgroundJobs.enqueue_telegram_webhook_event(bot_id, 102, %{
+               type: "message",
+               source: "telegram",
+               data: %{text: "higher"}
+             })
+
+    runner = start_ordered_telegram_runner(:telegram_ordering_grace_runner)
+
+    # The higher row is visible, but the bounded ingress grace keeps it out of
+    # the claim set while an overlapping lower request can commit.
+    assert {:ok, []} = BackgroundJobRunner.drain_once(runner)
+    assert Repo.get!(BackgroundJob, higher.id).status == "pending"
+
+    assert {:ok, lower} =
+             BackgroundJobs.enqueue_telegram_webhook_event(bot_id, 101, %{
+               type: "callback_query",
+               source: "telegram",
+               data: %{data: "lower"}
+             })
+
+    due_at = DateTime.add(DateTime.utc_now(), -1, :second)
+
+    from(job in BackgroundJob, where: job.id in ^[higher.id, lower.id])
+    |> Repo.update_all(set: [scheduled_at: due_at])
+
+    lower_drain = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+    lower_id = lower.id
+
+    assert_receive {
+                     :telegram_order_started,
+                     lower_task,
+                     ^lower_id,
+                     lower_token,
+                     ^bot_id,
+                     101,
+                     "callback_query"
+                   },
+                   1_000
+
+    refute_received {:telegram_order_started, _task, _id, _token, ^bot_id, 102, _type}
+    send(lower_task, {:release_telegram_order, lower_token, {:ok, %{processed: 101}}})
+    assert {:ok, [{^lower_id, {:ok, %{processed: 101}}}]} = Task.await(lower_drain, 1_000)
+
+    higher_drain = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+    higher_id = higher.id
+
+    assert_receive {
+                     :telegram_order_started,
+                     higher_task,
+                     ^higher_id,
+                     higher_token,
+                     ^bot_id,
+                     102,
+                     "message"
+                   },
+                   1_000
+
+    send(higher_task, {:release_telegram_order, higher_token, {:ok, %{processed: 102}}})
+    assert {:ok, [{^higher_id, {:ok, %{processed: 102}}}]} = Task.await(higher_drain, 1_000)
+  end
+
+  test "different Telegram bots can execute concurrently" do
+    register_claim_observer!()
+
+    for {bot_id, update_id} <- [{"88011", 301}, {"88012", 401}] do
+      assert {:ok, _job} =
+               BackgroundJobs.enqueue_telegram_webhook_event(bot_id, update_id, %{
+                 type: "message",
+                 source: "telegram",
+                 data: %{text: bot_id}
+               })
+    end
+
+    runner = start_ordered_telegram_runner(:telegram_cross_bot_runner)
+    send(runner, :poll)
+
+    assert_receive {
+                     :telegram_order_started,
+                     first_task,
+                     _first_job_id,
+                     first_token,
+                     first_bot,
+                     first_update,
+                     "message"
+                   },
+                   1_000
+
+    assert_receive {
+                     :telegram_order_started,
+                     second_task,
+                     _second_job_id,
+                     second_token,
+                     second_bot,
+                     second_update,
+                     "message"
+                   },
+                   1_000
+
+    assert MapSet.new([{first_bot, first_update}, {second_bot, second_update}]) ==
+             MapSet.new([{"88011", 301}, {"88012", 401}])
+
+    refute first_task == second_task
+
+    first_ref = Process.monitor(first_task)
+    second_ref = Process.monitor(second_task)
+    send(first_task, {:release_telegram_order, first_token, {:ok, %{bot: first_bot}}})
+    send(second_task, {:release_telegram_order, second_token, {:ok, %{bot: second_bot}}})
+    assert_receive {:DOWN, ^first_ref, :process, ^first_task, :normal}, 1_000
+    assert_receive {:DOWN, ^second_ref, :process, ^second_task, :normal}, 1_000
+    _ = :sys.get_state(runner)
+  end
+
+  test "a retry-backoff Telegram head blocks its successor until terminal failure" do
+    register_claim_observer!()
+
+    assert {:ok, head} =
+             BackgroundJobs.enqueue_telegram_webhook_event("88002", 201, %{
+               type: "message",
+               source: "telegram",
+               data: %{text: "head"}
+             })
+
+    assert {:ok, successor} =
+             BackgroundJobs.enqueue_telegram_webhook_event("88002", 202, %{
+               type: "callback_query",
+               source: "telegram",
+               data: %{data: "successor"}
+             })
+
+    head |> Ecto.Changeset.change(max_attempts: 2) |> Repo.update!()
+    runner = start_ordered_telegram_runner(:telegram_backoff_order_runner)
+
+    send(runner, :poll)
+
+    assert_receive {
+                     :telegram_order_started,
+                     first_task,
+                     head_id,
+                     first_token,
+                     "88002",
+                     201,
+                     "message"
+                   },
+                   1_000
+
+    assert head_id == head.id
+    first_ref = Process.monitor(first_task)
+    send(first_task, {:release_telegram_order, first_token, {:error, :temporary}})
+    assert_receive {:DOWN, ^first_ref, :process, ^first_task, :normal}, 1_000
+    _ = :sys.get_state(runner)
+
+    retried = Repo.get!(BackgroundJob, head.id)
+    assert retried.status == "pending"
+    assert retried.attempts == 1
+
+    send(runner, :poll)
+    refute_receive {:telegram_order_started, _task, _id, _token, "88002", 202, _type}, 100
+
+    retried
+    |> Ecto.Changeset.change(scheduled_at: DateTime.add(DateTime.utc_now(), -1, :second))
+    |> Repo.update!()
+
+    send(runner, :poll)
+
+    assert_receive {
+                     :telegram_order_started,
+                     second_task,
+                     ^head_id,
+                     second_token,
+                     "88002",
+                     201,
+                     "message"
+                   },
+                   1_000
+
+    second_ref = Process.monitor(second_task)
+    send(second_task, {:release_telegram_order, second_token, {:error, :terminal}})
+    assert_receive {:DOWN, ^second_ref, :process, ^second_task, :normal}, 1_000
+    _ = :sys.get_state(runner)
+    assert Repo.get!(BackgroundJob, head.id).status == "failed"
+
+    send(runner, :poll)
+
+    assert_receive {
+                     :telegram_order_started,
+                     successor_task,
+                     successor_id,
+                     successor_token,
+                     "88002",
+                     202,
+                     "callback_query"
+                   },
+                   1_000
+
+    assert successor_id == successor.id
+    successor_ref = Process.monitor(successor_task)
+    send(successor_task, {:release_telegram_order, successor_token, {:ok, %{done: true}}})
+    assert_receive {:DOWN, ^successor_ref, :process, ^successor_task, :normal}, 1_000
+    _ = :sys.get_state(runner)
+    assert Repo.get!(BackgroundJob, successor.id).status == "completed"
   end
 
   test "drain_once claims and completes pending jobs without request-path execution", %{
@@ -510,6 +928,136 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
              Task.await(drain_call, 1_000)
   end
 
+  test "deferred Telegram terminal write stops renewal, blocks its successor, and recovers stale" do
+    register_claim_observer!()
+    bot_id = "778899"
+
+    assert {:ok, head} =
+             BackgroundJobs.enqueue_telegram_webhook_event(bot_id, 501, %{
+               type: "message",
+               source: "telegram",
+               data: %{text: "head"}
+             })
+
+    assert {:ok, successor} =
+             BackgroundJobs.enqueue_telegram_webhook_event(bot_id, 502, %{
+               type: "message",
+               source: "telegram",
+               data: %{text: "successor"}
+             })
+
+    Repo.query!("""
+    CREATE FUNCTION maraithon_test_fail_telegram_terminal_write()
+    RETURNS trigger AS $$
+    BEGIN
+      IF OLD.id = '#{head.id}'
+         AND OLD.status = 'running'
+         AND NEW.status <> 'running' THEN
+        RAISE EXCEPTION 'injected Telegram terminal write failure';
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER maraithon_test_fail_telegram_terminal_write
+    BEFORE UPDATE ON background_jobs
+    FOR EACH ROW
+    EXECUTE FUNCTION maraithon_test_fail_telegram_terminal_write()
+    """)
+
+    runner = start_ordered_telegram_runner(:telegram_terminal_deferral_runner)
+    first_drain = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+    head_id = head.id
+
+    assert_receive {
+                     :telegram_order_started,
+                     first_task,
+                     ^head_id,
+                     first_token,
+                     ^bot_id,
+                     501,
+                     "message"
+                   },
+                   1_000
+
+    first_task_ref = Process.monitor(first_task)
+    send(first_task, {:release_telegram_order, first_token, {:ok, %{processed: 501}}})
+    assert_receive {:DOWN, ^first_task_ref, :process, ^first_task, :normal}, 1_000
+
+    assert {:ok, [{^head_id, {:error, :persistence_deferred}}]} =
+             Task.await(first_drain, 1_000)
+
+    deferred = Repo.get!(BackgroundJob, head.id)
+    assert deferred.status == "running"
+    assert deferred.claim_token == first_token
+    assert :sys.get_state(runner).running == %{}
+
+    claimed_at = deferred.claimed_at
+    send(runner, :renew_claims)
+    _ = :sys.get_state(runner)
+    assert Repo.get!(BackgroundJob, head.id).claimed_at == claimed_at
+
+    # The still-running lower head remains ordering-active even though the
+    # runner no longer owns or renews it.
+    assert {:ok, []} = BackgroundJobRunner.drain_once(runner)
+    assert Repo.get!(BackgroundJob, successor.id).status == "pending"
+    refute_received {:telegram_order_started, _task, _id, _token, ^bot_id, 502, _type}
+
+    Repo.query!("DROP TRIGGER maraithon_test_fail_telegram_terminal_write ON background_jobs")
+    Repo.query!("DROP FUNCTION maraithon_test_fail_telegram_terminal_write()")
+
+    stale_at = DateTime.add(DateTime.utc_now(), -120, :second)
+
+    from(job in BackgroundJob, where: job.id == ^head.id)
+    |> Repo.update_all(set: [claimed_at: stale_at])
+
+    recovery_drain = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+
+    assert_receive {
+                     :telegram_order_started,
+                     recovery_task,
+                     ^head_id,
+                     recovery_token,
+                     ^bot_id,
+                     501,
+                     "message"
+                   },
+                   1_000
+
+    assert recovery_task != first_task
+    assert recovery_token != first_token
+    refute_received {:telegram_order_started, _task, _id, _token, ^bot_id, 502, _type}
+
+    send(recovery_task, {:release_telegram_order, recovery_token, {:ok, %{processed: 501}}})
+
+    assert {:ok, [{^head_id, {:ok, %{processed: 501}}}]} =
+             Task.await(recovery_drain, 1_000)
+
+    successor_drain = Task.async(fn -> BackgroundJobRunner.drain_once(runner) end)
+    successor_id = successor.id
+
+    assert_receive {
+                     :telegram_order_started,
+                     successor_task,
+                     ^successor_id,
+                     successor_token,
+                     ^bot_id,
+                     502,
+                     "message"
+                   },
+                   1_000
+
+    send(successor_task, {:release_telegram_order, successor_token, {:ok, %{processed: 502}}})
+
+    assert {:ok, [{^successor_id, {:ok, %{processed: 502}}}]} =
+             Task.await(successor_drain, 1_000)
+
+    assert Repo.get!(BackgroundJob, head.id).status == "completed"
+    assert Repo.get!(BackgroundJob, successor.id).status == "completed"
+  end
+
   test "supervisor shutdown kills a blocked drain task and resolves its caller", %{
     user_id: user_id
   } do
@@ -718,6 +1266,39 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     assert unchanged.result == %{}
   end
 
+  test "cancelled Telegram jobs scrub payload and fence late completion" do
+    register_claim_observer!()
+
+    assert {:ok, job} =
+             BackgroundJobs.enqueue_telegram_webhook_event("123456", 70_004, %{
+               type: "message",
+               source: "telegram",
+               data: %{text: "cancel me"}
+             })
+
+    runner = start_claim_runner(:background_job_telegram_cancel_runner)
+    send(runner, :poll)
+
+    assert_receive {:background_job_claim_started, task, job_id, claim_token}, 1_000
+    assert job_id == job.id
+    task_ref = Process.monitor(task)
+
+    assert {:ok, :cancelled} = BackgroundJobs.cancel(job.id)
+    cancelled = Repo.get!(BackgroundJob, job.id)
+    assert cancelled.status == "cancelled"
+    assert cancelled.payload == %{}
+    assert cancelled.claim_token == nil
+
+    send(task, {:release_background_job_claim, claim_token, {:ok, %{late: true}}})
+    assert_receive {:DOWN, ^task_ref, :process, ^task, :normal}, 1_000
+    await_claim_removed(runner, {job.id, claim_token})
+
+    unchanged = Repo.get!(BackgroundJob, job.id)
+    assert unchanged.status == "cancelled"
+    assert unchanged.payload == %{}
+    assert unchanged.result == %{}
+  end
+
   test "stale generations cannot complete, retry, fail, or rate-limit a reclaimed job", %{
     user_id: user_id
   } do
@@ -867,6 +1448,26 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     assert completed.status == "completed"
     assert completed.claim_token == nil
     assert completed.result == %{"winner" => spec.suffix}
+  end
+
+  defp start_ordered_telegram_runner(name) do
+    start_supervised!(%{
+      id: name,
+      start:
+        {BackgroundJobRunner, :start_link,
+         [
+           [
+             name: name,
+             handler: Maraithon.Runtime.OrderedTelegramTestHandler,
+             poll_interval_ms: 60_000,
+             claim_timeout_ms: 60_000,
+             batch_size: 10,
+             max_concurrency: 4
+           ]
+         ]},
+      restart: :temporary,
+      type: :worker
+    })
   end
 
   defp start_claim_runner(name, overrides \\ []) do

@@ -22,6 +22,8 @@ defmodule Maraithon.Runtime.BackgroundJob do
     field :payload, :map, default: %{}
     field :status, :string, default: "pending"
     field :dedupe_key, :string
+    field :telegram_bot_id, :string
+    field :telegram_update_id, :integer
     field :attempts, :integer, default: 0
     field :max_attempts, :integer, default: 3
     field :scheduled_at, :utc_datetime_usec
@@ -43,6 +45,8 @@ defmodule Maraithon.Runtime.BackgroundJob do
     :payload,
     :status,
     :dedupe_key,
+    :telegram_bot_id,
+    :telegram_update_id,
     :attempts,
     :max_attempts,
     :claimed_by,
@@ -60,15 +64,22 @@ defmodule Maraithon.Runtime.BackgroundJob do
     |> validate_required(@required_fields)
     |> validate_inclusion(:status, @statuses)
     |> validate_number(:attempts, greater_than_or_equal_to: 0)
+    |> validate_number(:telegram_update_id, greater_than_or_equal_to: 0)
     |> validate_number(:max_attempts, greater_than: 0, less_than_or_equal_to: 25)
     |> normalize_string(:queue)
     |> normalize_string(:job_type)
     |> normalize_string(:user_id)
     |> normalize_string(:dedupe_key)
+    |> normalize_string(:telegram_bot_id)
+    |> check_constraint(:telegram_update_id, name: :background_jobs_telegram_order_fields)
     |> foreign_key_constraint(:user_id, name: :background_jobs_user_id_fkey)
     |> unique_constraint(:dedupe_key,
       name: :background_jobs_dedupe_key_index,
       message: "already has an active background job"
+    )
+    |> unique_constraint(:dedupe_key,
+      name: :background_jobs_telegram_webhook_dedupe_index,
+      message: "already accepted this Telegram update"
     )
   end
 

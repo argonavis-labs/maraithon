@@ -15,6 +15,10 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   still leave handler work in flight, so recovery relies on token fencing,
   stale-claim recovery, and idempotent handlers. Claim tokens do not provide
   exactly-once side effects.
+
+  Telegram ordering applies to committed, visible receipt rows. Production also
+  enforces Telegram's provider-side `max_connections: 1` contract and a bounded
+  ingress grace; a head query alone cannot make claims about an unseen update.
   """
 
   use GenServer
@@ -432,56 +436,144 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   end
 
   defp fetch_pending_jobs(limit) do
+    ordered_head_id =
+      from(head in BackgroundJob,
+        where: head.job_type == "telegram_webhook_event",
+        where: head.telegram_bot_id == parent_as(:candidate).telegram_bot_id,
+        where: head.status in ["pending", "running"],
+        order_by: [
+          desc: fragment("? = 'running'", head.status),
+          asc: head.telegram_update_id
+        ],
+        select: head.id,
+        limit: 1
+      )
+
     BackgroundJob
-    |> where([job], job.status == "pending")
-    |> where([job], job.scheduled_at <= fragment("timezone('UTC', clock_timestamp())"))
-    |> order_by([job], asc: job.scheduled_at, asc: job.inserted_at)
+    |> from(as: :candidate)
+    |> where([candidate], candidate.status == "pending")
+    |> where(
+      [candidate],
+      candidate.scheduled_at <= fragment("timezone('UTC', clock_timestamp())")
+    )
+    |> where(
+      [candidate],
+      candidate.job_type != "telegram_webhook_event" or
+        candidate.id == subquery(ordered_head_id)
+    )
+    |> order_by([candidate], asc: candidate.scheduled_at, asc: candidate.inserted_at)
     |> limit(^limit)
     |> Repo.all()
   end
 
-  defp claim_job(%BackgroundJob{} = job) do
-    node_id = node() |> to_string()
-    claim_token = Ecto.UUID.generate()
+  defp claim_job(%BackgroundJob{job_type: "telegram_webhook_event"} = job),
+    do: claim_ordered_telegram_job(job)
 
-    case DbResilience.with_database("background job runner claim job", fn ->
-           Repo.transaction(fn ->
-             now = database_now!()
+  defp claim_job(%BackgroundJob{} = job), do: claim_unordered_job(job)
 
-             # A pending row can retain a token after a rollback or legacy
-             # transition. The status CAS claims it and atomically replaces that
-             # stale generation with this runner's fresh token.
-             case Repo.update_all(
-                    from(candidate in BackgroundJob,
-                      where: candidate.id == ^job.id,
-                      where: candidate.status == "pending"
-                    ),
-                    set: [
-                      status: "running",
-                      claimed_by: node_id,
-                      claimed_at: now,
-                      claim_token: claim_token,
-                      updated_at: now
-                    ]
-                  ) do
-               {1, _rows} ->
-                 Repo.one!(
-                   from(candidate in BackgroundJob,
-                     where: candidate.id == ^job.id,
-                     where: candidate.status == "running",
-                     where: candidate.claim_token == ^claim_token
-                   )
-                 )
+  defp claim_unordered_job(%BackgroundJob{} = job) do
+    claim_with_transaction("background job runner claim job", fn ->
+      claim_pending_job(job)
+    end)
+  end
 
-               {0, _rows} ->
-                 Repo.rollback(:already_claimed)
-             end
-           end)
-         end) do
+  defp claim_ordered_telegram_job(%BackgroundJob{telegram_bot_id: bot_id} = job)
+       when is_binary(bot_id) and bot_id != "" do
+    claim_with_transaction("background job runner claim ordered Telegram job", fn ->
+      with true <- take_telegram_order_lock(bot_id),
+           %BackgroundJob{id: head_id, status: "pending"} when head_id == job.id <-
+             lock_telegram_head(bot_id) do
+        claim_pending_job(job, require_due?: true)
+      else
+        _not_current_claimable_head -> Repo.rollback(:already_claimed)
+      end
+    end)
+  end
+
+  defp claim_ordered_telegram_job(%BackgroundJob{}), do: :already_claimed
+
+  defp claim_with_transaction(operation, transaction_fun) do
+    case DbResilience.with_database(operation, fn -> Repo.transaction(transaction_fun) end) do
       {:ok, {:ok, %BackgroundJob{} = claimed}} -> {:ok, claimed}
       {:ok, {:error, :already_claimed}} -> :already_claimed
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp claim_pending_job(%BackgroundJob{} = job, opts \\ []) do
+    node_id = node() |> to_string()
+    claim_token = Ecto.UUID.generate()
+    now = database_now!()
+
+    claim_query =
+      from(candidate in BackgroundJob,
+        where: candidate.id == ^job.id,
+        where: candidate.status == "pending"
+      )
+
+    claim_query =
+      if Keyword.get(opts, :require_due?, false) do
+        where(
+          claim_query,
+          [candidate],
+          candidate.scheduled_at <= fragment("timezone('UTC', clock_timestamp())")
+        )
+      else
+        claim_query
+      end
+
+    # A pending row can retain a token after a rollback or legacy transition.
+    # The status CAS atomically replaces that stale generation with a fresh UUID.
+    case Repo.update_all(claim_query,
+           set: [
+             status: "running",
+             claimed_by: node_id,
+             claimed_at: now,
+             claim_token: claim_token,
+             updated_at: now
+           ]
+         ) do
+      {1, _rows} ->
+        Repo.one!(
+          from(candidate in BackgroundJob,
+            where: candidate.id == ^job.id,
+            where: candidate.status == "running",
+            where: candidate.claim_token == ^claim_token
+          )
+        )
+
+      {0, _rows} ->
+        Repo.rollback(:already_claimed)
+    end
+  end
+
+  defp take_telegram_order_lock(bot_id) do
+    case Repo.query!(
+           """
+           SELECT pg_try_advisory_xact_lock(
+             hashtextextended('maraithon:telegram-webhook:' || $1, 0)
+           )
+           """,
+           [bot_id],
+           log: false
+         ).rows do
+      [[true]] -> true
+      _lock_unavailable -> false
+    end
+  end
+
+  defp lock_telegram_head(bot_id) do
+    BackgroundJob
+    |> where([head], head.job_type == "telegram_webhook_event")
+    |> where([head], head.telegram_bot_id == ^bot_id)
+    |> where([head], head.status in ["pending", "running"])
+    |> order_by([head],
+      desc: fragment("? = 'running'", head.status),
+      asc: head.telegram_update_id
+    )
+    |> limit(1)
+    |> lock("FOR UPDATE")
+    |> Repo.one()
   end
 
   defp execute_job_async(%BackgroundJob{} = job, handler) do
@@ -588,6 +680,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
         set: [
           status: "completed",
           result: normalize_result(result),
+          payload: completed_payload(job),
           completed_at: now,
           claimed_by: nil,
           claimed_at: nil,
@@ -598,6 +691,9 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       )
     end)
   end
+
+  defp completed_payload(%BackgroundJob{job_type: "telegram_webhook_event"}), do: %{}
+  defp completed_payload(%BackgroundJob{payload: payload}), do: payload || %{}
 
   # Clamps the provider-requested delay to `@max_retry_after_delay_seconds`
   # and counts the reschedule against `@max_retry_after_reschedules`
@@ -689,6 +785,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
         set: [
           status: "failed",
           attempts: attempts,
+          payload: terminal_payload(job),
           failed_at: now,
           claimed_by: nil,
           claimed_at: nil,
@@ -699,6 +796,9 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       )
     end)
   end
+
+  defp terminal_payload(%BackgroundJob{job_type: "telegram_webhook_event"}), do: %{}
+  defp terminal_payload(%BackgroundJob{payload: payload}), do: payload || %{}
 
   defp reclaim_stale_jobs(claim_timeout_ms) do
     %{rows: [[count]]} =

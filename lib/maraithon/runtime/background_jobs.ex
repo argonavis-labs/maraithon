@@ -9,27 +9,76 @@ defmodule Maraithon.Runtime.BackgroundJobs do
 
   import Ecto.Query
 
-  alias Maraithon.Repo
+  alias Maraithon.{BoundedJSON, Redaction, Repo}
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
 
   @default_max_attempts 3
   @default_limit 50
+  @telegram_webhook_job_type "telegram_webhook_event"
+  @max_telegram_update_id 9_223_372_036_854_775_807
+  @telegram_event_max_bytes 600_000
+  @default_telegram_ingress_ordering_grace_ms 1_000
+  @telegram_event_bounds [
+    max_binary_bytes: 64_000,
+    max_depth: 16,
+    max_nodes: 10_000,
+    max_map_entries: 1_000,
+    max_list_items: 1_000
+  ]
 
-  def enqueue(job_type, attrs \\ %{}) when is_binary(job_type) do
-    attrs = normalize_attrs(job_type, attrs)
+  def enqueue(job_type, attrs \\ %{})
 
-    case existing_active(attrs) do
-      %BackgroundJob{} = job ->
-        {:ok, job}
+  def enqueue(job_type, attrs) when is_binary(job_type) do
+    case String.trim(job_type) do
+      @telegram_webhook_job_type ->
+        {:error, :telegram_webhook_event_requires_dedicated_enqueue}
 
-      nil ->
-        %BackgroundJob{}
-        |> BackgroundJob.changeset(attrs)
-        |> Repo.insert()
-        |> handle_dedupe_conflict(attrs)
+      normalized_job_type ->
+        enqueue_job(normalized_job_type, attrs)
     end
   end
+
+  @doc """
+  Durably accepts one normalized Telegram webhook update.
+
+  Unlike ordinary background-job dedupe, the `(bot_id, update_id)` identity is
+  permanent across terminal states. Replays return the original job row and
+  never create fresh work.
+  """
+  def enqueue_telegram_webhook_event(bot_id, update_id, event)
+      when is_binary(bot_id) and is_integer(update_id) and is_map(event) do
+    bot_id = String.trim(bot_id)
+
+    cond do
+      not valid_telegram_identity?(bot_id, update_id) ->
+        {:error, :invalid_telegram_webhook_identity}
+
+      not bounded_telegram_event?(event) ->
+        {:error, :telegram_webhook_event_out_of_bounds}
+
+      true ->
+        sanitized_event = event |> normalize_value() |> scrub_raw_fields() |> Redaction.redact()
+
+        if bounded_telegram_event?(sanitized_event) do
+          enqueue_job(@telegram_webhook_job_type, %{
+            queue: "ingress",
+            dedupe_key: "telegram-webhook:#{bot_id}:#{update_id}",
+            telegram_bot_id: bot_id,
+            telegram_update_id: update_id,
+            max_attempts: 5,
+            scheduled_at: telegram_ingress_scheduled_at(),
+            payload: %{"event" => sanitized_event}
+          })
+        else
+          {:error, :telegram_webhook_event_out_of_bounds}
+        end
+    end
+  end
+
+  def enqueue_telegram_webhook_event(_bot_id, _update_id, _event),
+    do: {:error, :invalid_telegram_webhook_identity}
 
   def enqueue_email_processing(user_id, attrs \\ %{}) when is_binary(user_id) do
     attrs =
@@ -254,6 +303,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
            cancellable_claim(job),
            set: [
              status: "cancelled",
+             payload: cancelled_payload(job),
              cancelled_at: now,
              claimed_by: nil,
              claimed_at: nil,
@@ -265,6 +315,9 @@ defmodule Maraithon.Runtime.BackgroundJobs do
       {0, _rows} -> Repo.rollback(:not_found_or_not_cancellable)
     end
   end
+
+  defp cancelled_payload(%BackgroundJob{job_type: @telegram_webhook_job_type}), do: %{}
+  defp cancelled_payload(%BackgroundJob{payload: payload}), do: payload || %{}
 
   defp cancellable_claim(%BackgroundJob{id: id, status: status, claim_token: claim_token})
        when is_binary(claim_token) do
@@ -283,6 +336,34 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     )
   end
 
+  defp telegram_ingress_scheduled_at do
+    grace_ms =
+      case RuntimeConfig.get(
+             :telegram_ingress_ordering_grace_ms,
+             @default_telegram_ingress_ordering_grace_ms
+           ) do
+        value when is_integer(value) and value >= 0 -> value
+        _invalid -> @default_telegram_ingress_ordering_grace_ms
+      end
+
+    DateTime.add(DateTime.utc_now(), grace_ms, :millisecond)
+  end
+
+  defp enqueue_job(job_type, attrs) do
+    attrs = normalize_attrs(job_type, attrs)
+
+    case existing_active(attrs) do
+      %BackgroundJob{} = job ->
+        {:ok, job}
+
+      nil ->
+        %BackgroundJob{}
+        |> BackgroundJob.changeset(attrs)
+        |> Repo.insert()
+        |> handle_dedupe_conflict(attrs)
+    end
+  end
+
   def normalize_attrs(job_type, attrs) when is_binary(job_type) do
     attrs = normalize_map(attrs)
     payload = read_map(attrs, "payload")
@@ -294,6 +375,8 @@ defmodule Maraithon.Runtime.BackgroundJobs do
       "payload" => payload,
       "status" => read_string(attrs, "status", "pending"),
       "dedupe_key" => read_string(attrs, "dedupe_key"),
+      "telegram_bot_id" => read_string(attrs, "telegram_bot_id"),
+      "telegram_update_id" => read_integer(attrs, "telegram_update_id", nil),
       "attempts" => read_integer(attrs, "attempts", 0),
       "max_attempts" => read_integer(attrs, "max_attempts", @default_max_attempts),
       "scheduled_at" => read_datetime(attrs, "scheduled_at") || DateTime.utc_now(),
@@ -309,6 +392,8 @@ defmodule Maraithon.Runtime.BackgroundJobs do
       job_type: job.job_type,
       status: job.status,
       dedupe_key: job.dedupe_key,
+      telegram_bot_id: job.telegram_bot_id,
+      telegram_update_id: job.telegram_update_id,
       attempts: job.attempts,
       max_attempts: job.max_attempts,
       scheduled_at: job.scheduled_at,
@@ -320,6 +405,21 @@ defmodule Maraithon.Runtime.BackgroundJobs do
       result: job.result || %{},
       last_error: job.last_error
     }
+  end
+
+  defp existing_active(%{
+         "job_type" => @telegram_webhook_job_type,
+         "dedupe_key" => dedupe_key
+       })
+       when is_binary(dedupe_key) do
+    Repo.one(
+      from(job in BackgroundJob,
+        where: job.job_type == @telegram_webhook_job_type,
+        where: job.dedupe_key == ^dedupe_key,
+        order_by: [desc: job.inserted_at],
+        limit: 1
+      )
+    )
   end
 
   defp existing_active(%{"dedupe_key" => dedupe_key}) when is_binary(dedupe_key) do
@@ -337,9 +437,12 @@ defmodule Maraithon.Runtime.BackgroundJobs do
 
   defp handle_dedupe_conflict({:ok, %BackgroundJob{} = job}, _attrs), do: {:ok, job}
 
-  defp handle_dedupe_conflict({:error, changeset}, %{"dedupe_key" => dedupe_key})
+  defp handle_dedupe_conflict(
+         {:error, changeset},
+         %{"dedupe_key" => dedupe_key} = attrs
+       )
        when is_binary(dedupe_key) do
-    case existing_active(%{"dedupe_key" => dedupe_key}) do
+    case existing_active(attrs) do
       %BackgroundJob{} = job -> {:ok, job}
       nil -> {:error, changeset}
     end
@@ -358,6 +461,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     end)
   end
 
+  defp default_queue(@telegram_webhook_job_type), do: "ingress"
   defp default_queue("email_processing"), do: "email"
   defp default_queue("relationship_learning"), do: "relationships"
   defp default_queue("relationship_ingestion"), do: "relationships"
@@ -398,6 +502,28 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     end
   end
 
+  defp bounded_telegram_event?(event) do
+    BoundedJSON.valid?(event, @telegram_event_max_bytes, @telegram_event_bounds)
+  end
+
+  defp valid_telegram_identity?(bot_id, update_id) do
+    bot_id != "" and byte_size(bot_id) <= 32 and String.valid?(bot_id) and
+      Regex.match?(~r/^\d+$/, bot_id) and update_id >= 0 and
+      update_id <= @max_telegram_update_id
+  end
+
+  defp scrub_raw_fields(value) when is_map(value) do
+    Enum.reduce(value, %{}, fn
+      {key, _nested}, acc when key in [:raw, "raw"] ->
+        acc
+
+      {key, nested}, acc ->
+        Map.put(acc, key, scrub_raw_fields(nested))
+    end)
+  end
+
+  defp scrub_raw_fields(value) when is_list(value), do: Enum.map(value, &scrub_raw_fields/1)
+  defp scrub_raw_fields(value), do: value
   defp maybe_filter(query, _field, nil), do: query
   defp maybe_filter(query, _field, ""), do: query
 
