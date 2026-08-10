@@ -1581,6 +1581,64 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     refute message["body"] =~ "thread-123"
   end
 
+  test "mobile prepared-action expiry remains gone on replay", %{conn: conn} do
+    {_conn, user_id} = authenticated_mobile_conn(conn, "mobile-expired-action@example.com")
+
+    {:ok, thread} =
+      TelegramConversations.create_mobile_thread(user_id, %{
+        "client_thread_id" => Ecto.UUID.generate()
+      })
+
+    now = DateTime.utc_now()
+
+    {:ok, run} =
+      TelegramAssistant.start_run(%{
+        user_id: user_id,
+        chat_id: thread.chat_id,
+        conversation_id: thread.id,
+        surface: "mobile",
+        trigger_type: "inbound_message",
+        status: "completed",
+        model_provider: "test",
+        model_name: "test",
+        prompt_snapshot: %{},
+        result_summary: %{},
+        started_at: now,
+        finished_at: now
+      })
+
+    {:ok, prepared_action} =
+      TelegramAssistant.create_prepared_action(%{
+        user_id: user_id,
+        chat_id: thread.chat_id,
+        conversation_id: thread.id,
+        run_id: run.id,
+        surface: "mobile",
+        action_type: "project_create",
+        target_type: "project",
+        payload: %{
+          "user_id" => user_id,
+          "attrs" => %{"name" => "Must not be created"}
+        },
+        preview_text: "Create an expired project",
+        status: "awaiting_confirmation",
+        expires_at: DateTime.add(now, -60, :second)
+      })
+
+    for _attempt <- 1..2 do
+      response =
+        build_mobile_conn(user_id)
+        |> post(~p"/api/mobile/chat/prepared-actions/#{prepared_action.id}/decision", %{
+          "decision" => "confirm",
+          "client_message_id" => Ecto.UUID.generate()
+        })
+        |> json_response(410)
+
+      assert response["error"] == "prepared_action_expired"
+      assert get_in(response, ["prepared_action", "status"]) == "expired"
+    end
+  end
+
   defp authenticated_mobile_conn(conn, email \\ "mobile-chat@example.com") do
     {:ok, user} = Accounts.get_or_create_user_by_email(email)
     {:ok, %{token: token}} = Accounts.create_session_for_user(user)

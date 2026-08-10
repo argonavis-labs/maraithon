@@ -39,8 +39,13 @@ defmodule Maraithon.Tools.SlackHelpers do
   def normalize_error({:slack_error, _error}),
     do: {:error, ToolErrorCopy.connected_source(:temporary_failure, slack_error_opts())}
 
-  def normalize_error(reason),
-    do: {:error, ToolErrorCopy.connected_source(reason, slack_error_opts())}
+  def normalize_error(reason) do
+    Maraithon.Tools.provider_error(
+      :slack,
+      reason,
+      ToolErrorCopy.connected_source(reason, slack_error_opts())
+    )
+  end
 
   defp resolve_from_candidates(user_id, candidates, preference, required_scopes) do
     initial_error =

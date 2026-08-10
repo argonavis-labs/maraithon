@@ -491,7 +491,7 @@ defmodule Maraithon.AssistantChat do
         {:error, :prepared_action_expired, expired_action, reload_thread(conversation)}
 
       {:error, updated_action, reason, failure_state}
-      when failure_state in [:already_failed, :permanent_failure] ->
+      when failure_state in [:already_failed, :permanent_failure, :manual_reconciliation] ->
         if TelegramAssistant.prepared_action_result_delivered?(updated_action) do
           {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
         else
@@ -527,35 +527,33 @@ defmodule Maraithon.AssistantChat do
          conversation,
          _client_message_id
        ) do
-    todo_completion = maybe_mark_linked_todo_done(updated_action, conversation)
+    deliver_reserved_mobile_prepared_action_result(
+      updated_action,
+      conversation,
+      fn reserved_action ->
+        todo_completion = maybe_mark_linked_todo_done(reserved_action, conversation)
 
-    _ = TelegramConversations.reopen(conversation)
-    _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+        structured_data =
+          %{
+            "surface" => "mobile",
+            "prepared_action_id" => reserved_action.id,
+            "decision" => "confirm",
+            "result" => serialize_result(result)
+          }
+          |> Map.merge(todo_completion_structured_data(todo_completion))
 
-    structured_data =
-      %{
-        "surface" => "mobile",
-        "prepared_action_id" => updated_action.id,
-        "decision" => "confirm",
-        "result" => serialize_result(result)
-      }
-      |> Map.merge(todo_completion_structured_data(todo_completion))
-
-    with {:ok, _conversation, _turn, _delivery} <-
-           Maraithon.AssistantChat.MobileDelivery.deliver_turn(
-             conversation,
-             updated_action.chat_id,
-             prepared_action_result_text(updated_action, result),
-             client_message_id: prepared_action_result_client_message_id(updated_action),
-             turn_kind: "action_result",
-             origin_type: "prepared_action",
-             origin_id: updated_action.id,
-             structured_data: structured_data
-           ),
-         {:ok, checkpointed_action} <-
-           TelegramAssistant.mark_prepared_action_result_delivered(updated_action) do
-      {:ok, %{prepared_action: checkpointed_action, thread: reload_thread(conversation)}}
-    end
+        Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+          conversation,
+          reserved_action.chat_id,
+          prepared_action_result_text(reserved_action, result),
+          client_message_id: prepared_action_result_client_message_id(reserved_action),
+          turn_kind: "action_result",
+          origin_type: "prepared_action",
+          origin_id: reserved_action.id,
+          structured_data: structured_data
+        )
+      end
+    )
   end
 
   defp deliver_mobile_prepared_action_failure(
@@ -564,28 +562,87 @@ defmodule Maraithon.AssistantChat do
          conversation,
          _client_message_id
        ) do
-    _ = TelegramConversations.reopen(conversation)
-    _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+    terminal_status =
+      if updated_action.status == "execution_unknown", do: "execution_unknown", else: "failed"
 
-    with {:ok, _conversation, _turn, _delivery} <-
-           Maraithon.AssistantChat.MobileDelivery.deliver_turn(
-             conversation,
-             updated_action.chat_id,
-             prepared_action_failure_text(updated_action, reason),
-             client_message_id: prepared_action_result_client_message_id(updated_action),
-             turn_kind: "action_result",
-             origin_type: "prepared_action",
-             origin_id: updated_action.id,
-             structured_data: %{
-               "surface" => "mobile",
-               "prepared_action_id" => updated_action.id,
-               "decision" => "confirm",
-               "error" => normalize_error(reason)
-             }
-           ),
-         {:ok, checkpointed_action} <-
-           TelegramAssistant.mark_prepared_action_result_delivered(updated_action) do
-      {:ok, %{prepared_action: checkpointed_action, thread: reload_thread(conversation)}}
+    deliver_reserved_mobile_prepared_action_result(
+      updated_action,
+      conversation,
+      fn reserved_action ->
+        Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+          conversation,
+          reserved_action.chat_id,
+          prepared_action_failure_text(reserved_action, reason),
+          client_message_id: prepared_action_result_client_message_id(reserved_action),
+          turn_kind: "action_result",
+          origin_type: "prepared_action",
+          origin_id: reserved_action.id,
+          structured_data: %{
+            "surface" => "mobile",
+            "prepared_action_id" => reserved_action.id,
+            "decision" => "confirm",
+            "status" => terminal_status,
+            "error" => Maraithon.Redaction.error_summary(reason)
+          }
+        )
+      end
+    )
+  end
+
+  defp deliver_reserved_mobile_prepared_action_result(action, conversation, deliver) do
+    case TelegramAssistant.reserve_prepared_action_result_delivery(action) do
+      {:ok, reserved_action, token} when is_binary(token) ->
+        _ = TelegramConversations.reopen(conversation)
+        _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+
+        case deliver.(reserved_action) do
+          {:ok, _conversation, _turn, _delivery} ->
+            with {:ok, checkpointed_action} <-
+                   TelegramAssistant.complete_prepared_action_result_delivery(
+                     reserved_action,
+                     token
+                   ) do
+              {:ok,
+               %{
+                 prepared_action: checkpointed_action,
+                 thread: reload_thread(conversation)
+               }}
+            end
+
+          {:error, reason} = error ->
+            _ =
+              TelegramAssistant.fail_prepared_action_result_delivery(
+                reserved_action,
+                token,
+                reason,
+                :retryable
+              )
+
+            error
+
+          other ->
+            _ =
+              TelegramAssistant.fail_prepared_action_result_delivery(
+                reserved_action,
+                token,
+                {:invalid_mobile_prepared_action_delivery_result, other},
+                :retryable
+              )
+
+            {:error, :prepared_action_delivery_failed}
+        end
+
+      {:ok, delivered_action, :already_delivered} ->
+        {:ok, %{prepared_action: delivered_action, thread: reload_thread(conversation)}}
+
+      {:error, _action, :prepared_action_result_delivery_in_progress} ->
+        {:error, {:prepared_action_execution_retryable, :transient}}
+
+      {:error, _action, :prepared_action_result_delivery_unknown} ->
+        {:error, :prepared_action_delivery_unknown}
+
+      {:error, _action, reason} ->
+        {:error, reason}
     end
   end
 
@@ -877,10 +934,23 @@ defmodule Maraithon.AssistantChat do
     end
   end
 
+  defp prepared_action_failure_text(
+         %PreparedAction{status: "execution_unknown", action_type: action_type},
+         _reason
+       ) do
+    "Maraithon could not verify whether #{prepared_action_uncertain_label(action_type)}. " <>
+      "Check the connected service before trying again."
+  end
+
   defp prepared_action_failure_text(%PreparedAction{} = prepared_action, reason) do
     "Maraithon could not #{prepared_action_failure_label(prepared_action.action_type)}. " <>
       prepared_action_failure_detail(reason)
   end
+
+  defp prepared_action_uncertain_label("gmail_send"), do: "the Gmail message was sent"
+  defp prepared_action_uncertain_label("gmail_draft_send"), do: "the Gmail draft was sent"
+  defp prepared_action_uncertain_label("slack_post"), do: "the Slack message was posted"
+  defp prepared_action_uncertain_label(_action_type), do: "the confirmed action completed"
 
   defp prepared_action_label("gmail_send"), do: "the Gmail message"
   defp prepared_action_label("gmail_draft_send"), do: "the Gmail draft"

@@ -26,12 +26,41 @@ defmodule Maraithon.Tools do
         tool_metadata: policy_metadata_for(name)
       })
 
-    ToolPolicy.enforce(context, fn ->
-      case fetch(name) do
-        {:ok, module} -> module.execute(args)
-        {:error, reason} -> {:error, reason}
-      end
+    preserve_provider_errors? = Map.get(context, :preserve_provider_errors, false) == true
+
+    with_provider_error_mode(preserve_provider_errors?, fn ->
+      ToolPolicy.enforce(context, fn ->
+        case fetch(name) do
+          {:ok, module} -> module.execute(args)
+          {:error, reason} -> {:error, reason}
+        end
+      end)
     end)
+  end
+
+  @doc false
+  def provider_error(provider, raw_reason, safe_reason) do
+    if Process.get(:maraithon_preserve_provider_errors, false) do
+      {:error, {:provider_error, provider, raw_reason, safe_reason}}
+    else
+      {:error, safe_reason}
+    end
+  end
+
+  defp with_provider_error_mode(false, callback), do: callback.()
+
+  defp with_provider_error_mode(true, callback) do
+    previous = Process.get(:maraithon_preserve_provider_errors, :missing)
+    Process.put(:maraithon_preserve_provider_errors, true)
+
+    try do
+      callback.()
+    after
+      case previous do
+        :missing -> Process.delete(:maraithon_preserve_provider_errors)
+        value -> Process.put(:maraithon_preserve_provider_errors, value)
+      end
+    end
   end
 
   @doc """

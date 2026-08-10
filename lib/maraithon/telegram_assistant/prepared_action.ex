@@ -13,7 +13,7 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses ~w(awaiting_confirmation confirmed executed rejected expired failed)
+  @statuses ~w(awaiting_confirmation confirmed executed execution_unknown rejected expired failed)
   @surfaces ~w(telegram mobile)
 
   schema "telegram_prepared_actions" do

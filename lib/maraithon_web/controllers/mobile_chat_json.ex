@@ -492,6 +492,9 @@ defmodule MaraithonWeb.MobileChatJSON do
   defp prepared_action_state_title(%PreparedAction{status: "failed"}, label),
     do: "#{label} failed"
 
+  defp prepared_action_state_title(%PreparedAction{status: "execution_unknown"}, label),
+    do: "#{label} needs review"
+
   defp prepared_action_state_title(%PreparedAction{status: "rejected"}, label),
     do: "#{label} cancelled"
 
@@ -521,6 +524,10 @@ defmodule MaraithonWeb.MobileChatJSON do
   defp prepared_action_status_label(%PreparedAction{status: "executed"}), do: "Sent"
   defp prepared_action_status_label(%PreparedAction{status: "confirmed"}), do: "Sending"
   defp prepared_action_status_label(%PreparedAction{status: "failed"}), do: "Could not send"
+
+  defp prepared_action_status_label(%PreparedAction{status: "execution_unknown"}),
+    do: "Check before retrying"
+
   defp prepared_action_status_label(%PreparedAction{status: "rejected"}), do: "Cancelled"
   defp prepared_action_status_label(%PreparedAction{status: "expired"}), do: "Expired"
 

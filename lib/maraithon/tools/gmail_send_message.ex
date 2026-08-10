@@ -30,14 +30,21 @@ defmodule Maraithon.Tools.GmailSendMessage do
         {:error, "google_account_reauth_required"}
 
       {:error, message} when is_binary(message) ->
-        {:error,
-         ToolErrorCopy.safe_message(
-           message,
-           ToolErrorCopy.action_failed("Gmail", "send that message")
-         )}
+        Maraithon.Tools.provider_error(
+          :gmail,
+          message,
+          ToolErrorCopy.safe_message(
+            message,
+            ToolErrorCopy.action_failed("Gmail", "send that message")
+          )
+        )
 
       {:error, reason} ->
-        {:error, ToolErrorCopy.connected_source(reason, google_error_opts())}
+        Maraithon.Tools.provider_error(
+          :gmail,
+          reason,
+          ToolErrorCopy.connected_source(reason, google_error_opts())
+        )
     end
   end
 

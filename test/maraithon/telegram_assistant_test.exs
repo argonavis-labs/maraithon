@@ -889,12 +889,6 @@ defmodule Maraithon.TelegramAssistantTest do
         expires_at: DateTime.add(DateTime.utc_now(), 600, :second)
       })
 
-    {:ok, confirmed_action} =
-      Maraithon.TelegramAssistant.update_prepared_action(prepared_action, %{
-        status: "confirmed",
-        confirmed_at: DateTime.utc_now()
-      })
-
     Repo.query!("""
     CREATE FUNCTION maraithon_test_fail_prepared_action_executed_write()
     RETURNS trigger AS $$
@@ -915,11 +909,16 @@ defmodule Maraithon.TelegramAssistantTest do
     """)
 
     assert {:error, failed_checkpoint, :prepared_action_persistence_failed} =
-             Maraithon.TelegramAssistant.confirm_and_execute(confirmed_action, durable: true)
+             Maraithon.TelegramAssistant.confirm_and_execute(prepared_action, durable: true)
 
     assert failed_checkpoint.status == "confirmed"
-    assert Repo.get!(PreparedAction, prepared_action.id).status == "confirmed"
-    assert Projects.get_project_by_slug_for_user("confirmed-recovery-project", user_id) == nil
+    first_checkpoint = Repo.get!(PreparedAction, prepared_action.id)
+    assert first_checkpoint.status == "confirmed"
+    assert first_checkpoint.payload["_maraithon_execution_attempts"] == 1
+    refute Map.has_key?(first_checkpoint.payload, "_maraithon_execution_token")
+
+    assert %Maraithon.Projects.Project{} =
+             Projects.get_project_by_slug_for_user("confirmed-recovery-project", user_id)
 
     Repo.query!(
       "DROP TRIGGER maraithon_test_fail_prepared_action_executed_write ON telegram_prepared_actions"
@@ -928,9 +927,10 @@ defmodule Maraithon.TelegramAssistantTest do
     Repo.query!("DROP FUNCTION maraithon_test_fail_prepared_action_executed_write()")
 
     assert {:ok, executed_action, result} =
-             Maraithon.TelegramAssistant.confirm_and_execute(confirmed_action, durable: true)
+             Maraithon.TelegramAssistant.confirm_and_execute(prepared_action, durable: true)
 
     assert executed_action.status == "executed"
+    assert executed_action.payload["_maraithon_execution_attempts"] == 2
     assert result["message"] == "Created the project."
 
     assert Repo.aggregate(

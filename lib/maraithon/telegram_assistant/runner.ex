@@ -15,6 +15,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.Memory
   alias Maraithon.OperatorEvents
   alias Maraithon.Projects
+  alias Maraithon.Projects.Project
   alias Maraithon.PromptBudget
   alias Maraithon.Repo
   alias Maraithon.Runtime
@@ -447,8 +448,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
         end
 
       "project_create" ->
-        Projects.create_project(Map.fetch!(payload, "user_id"), Map.fetch!(payload, "attrs"))
-        |> map_project_result("Created the project.")
+        execute_project_create(payload, prepared_action)
 
       "project_update" ->
         case Projects.get_project(Map.fetch!(payload, "project_id")) do
@@ -2279,6 +2279,48 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp conversation_id(%Conversation{id: id}), do: id
   defp conversation_id(_conversation), do: nil
 
+  defp execute_project_create(payload, prepared_action) do
+    user_id = Map.fetch!(payload, "user_id")
+    attrs = Map.fetch!(payload, "attrs")
+
+    case project_created_for_prepared_action(user_id, prepared_action.id) do
+      %Project{} = project ->
+        map_project_result({:ok, project}, "Created the project.")
+
+      nil ->
+        metadata =
+          case Map.get(attrs, "metadata") || Map.get(attrs, :metadata) do
+            %{} = metadata -> metadata
+            _ -> %{}
+          end
+
+        attrs =
+          attrs
+          |> Map.put(
+            "metadata",
+            Map.put(metadata, "_maraithon_prepared_action_id", prepared_action.id)
+          )
+
+        Projects.create_project(user_id, attrs)
+        |> map_project_result("Created the project.")
+    end
+  end
+
+  defp project_created_for_prepared_action(user_id, prepared_action_id) do
+    Project
+    |> where(
+      [project],
+      project.user_id == ^user_id and
+        fragment(
+          "?->>'_maraithon_prepared_action_id' = ?",
+          project.metadata,
+          ^prepared_action_id
+        )
+    )
+    |> limit(1)
+    |> Repo.one()
+  end
+
   defp execute_external_action(action_type, payload, prepared_action, frozen_payload) do
     case action_type do
       "gmail_send" ->
@@ -2494,7 +2536,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
       surface: Map.get(prepared_action, :surface) || "telegram",
       user_id: Map.get(payload, "user_id") || Map.get(payload, :user_id),
       confirmed?: true,
-      confirmation_state: "confirmed"
+      confirmation_state: "confirmed",
+      preserve_provider_errors: true
     }
 
     case Tools.execute(tool_name, payload, policy_context) do

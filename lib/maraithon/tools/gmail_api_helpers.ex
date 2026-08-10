@@ -105,12 +105,21 @@ defmodule Maraithon.Tools.GmailApiHelpers do
   def normalize_error(:reauth_required), do: {:error, "google_account_reauth_required"}
   def normalize_error(:no_refresh_token), do: {:error, "google_account_reconnect_required"}
 
-  def normalize_error({:http_status, status, body}) when status in [401, 403],
-    do:
-      {:error, ToolErrorCopy.connected_source({:http_status, status, body}, google_error_opts())}
+  def normalize_error({:http_status, status, body} = reason) when status in [401, 403] do
+    Maraithon.Tools.provider_error(
+      :gmail,
+      reason,
+      ToolErrorCopy.connected_source({:http_status, status, body}, google_error_opts())
+    )
+  end
 
-  def normalize_error(reason),
-    do: {:error, ToolErrorCopy.connected_source(reason, google_error_opts())}
+  def normalize_error(reason) do
+    Maraithon.Tools.provider_error(
+      :gmail,
+      reason,
+      ToolErrorCopy.connected_source(reason, google_error_opts())
+    )
+  end
 
   def optional_bool(args, key) do
     case ActionHelpers.optional_string(args, key) do
