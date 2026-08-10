@@ -109,6 +109,11 @@ defmodule MaraithonWeb.Router do
 
     get "/admin", AdminPageController, :index
     get "/admin/companion-devices", AdminPageController, :companion_devices
+
+    get "/admin/runtime/agent-termination-incidents/:id",
+        AgentTerminationIncidentController,
+        :show
+
     get "/settings", SettingsController, :index
     post "/settings/calendar-links", SettingsController, :update_calendar_links
   end

@@ -162,3 +162,51 @@ Reconciliation then settles the Effect as
 `failed/effect_outcome_ambiguous`; it does **not** invent provider success or
 failure. Wrong or stale identities fail closed. Keep the incident record and
 external evidence according to the security retention policy.
+
+
+## Ambiguous exact Agent termination
+
+An expired Agent lease, node-down event, RPC timeout, Registry miss, supervisor
+restart, or `:not_found` result is only an authority fence. It creates or
+refreshes an `agent_termination_incidents` row and continues to block successor
+claims and partition release. Never delete that lease by hand.
+
+The application runtime role may request incidents and insert only
+`local_down` proofs from its stable watcher's exact monitor. It may read, but
+cannot manufacture, `external_node_destroyed` evidence. The separately scoped
+`maraithon_incident_operator` role can read/update the incident and insert the
+external proof, but has no lease-delete privilege. The database trigger checks
+the proof kind against `current_user`; neither role owns the evidence tables or
+functions, and PUBLIC has no privileges.
+
+For a permanently destroyed node, first verify durable provider evidence for
+the incident's exact activation epoch, node incarnation, partition epoch,
+Agent ID, and lease token. Sign the canonical bytes returned by
+`AgentTerminations.attestation_payload/4` with the offline Ed25519 attestation
+key. Then use the incident-role database credential (kept outside the repo):
+
+    DATABASE_URL="$MARAITHON_INCIDENT_DATABASE_URL" \
+    AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY="$AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY" \
+    mix maraithon.agents.attest_terminated \
+      --incident-id INCIDENT_UUID \
+      --evidence-id PROVIDER_DESTRUCTION_REFERENCE \
+      --evidence-digest-hex SHA256_HEX \
+      --signature-base64 ED25519_SIGNATURE_BASE64 \
+      --proved-by OPERATOR_ID
+
+The command only commits immutable evidence and changes the incident from
+`requested` to `proven`. It intentionally does not use the incident credential
+to remove the lease. The bounded runtime watcher/reconciler then consumes the
+proof, writes the restart guard, removes only the matching lease in the same
+transaction, and marks the incident `reconciled`. To force one reviewed pass
+with the normal runtime credential:
+
+    DATABASE_URL="$MARAITHON_RUNTIME_DATABASE_URL" \
+    mix run -e 'IO.inspect(Maraithon.Runtime.AgentTerminations.reconcile_due(100))'
+
+Production must provide the public key as a 32-byte hex or Base64 value in
+`AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY`. Keep the private signing key,
+incident/runtime database URLs, provider receipts, and bearer credentials out
+of Fly secrets shared with the ordinary web process and out of logs. The admin
+incident detail URL is `/admin/runtime/agent-termination-incidents/:id` and is
+restricted by the existing admin browser pipeline.
