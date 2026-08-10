@@ -163,7 +163,7 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
     execute("""
     ALTER TABLE public.effects
       ADD CONSTRAINT effects_execution_status_check
-        CHECK (status IN ('pending', 'claimed', 'cancelling', 'completed', 'failed', 'cancelled'))
+        CHECK (status IN ('pending', 'claimed', 'executing', 'cancelling', 'completed', 'failed', 'cancelled'))
         NOT VALID
     """)
 
@@ -210,7 +210,7 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
                   cancellation_last_attempt_at IS NULL AND
                   cancellation_last_error IS NULL AND cancellation_settled_at IS NULL
                 ) OR (
-                  status = 'claimed' AND payload_purged_at IS NULL AND
+                  status IN ('claimed', 'executing') AND payload_purged_at IS NULL AND
                   claimed_by IS NOT NULL AND claimed_at IS NOT NULL AND
                   claim_token IS NOT NULL AND claim_owner_node = claimed_by AND
                   claim_heartbeat_at IS NOT NULL AND claim_expires_at IS NOT NULL AND
@@ -370,7 +370,10 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
 
       IF TG_OP = 'UPDATE' AND OLD.cancellation_target_claim_token IS NOT NULL AND
          NEW.cancellation_target_claim_token IS DISTINCT FROM
-           OLD.cancellation_target_claim_token THEN
+           OLD.cancellation_target_claim_token AND NOT (
+           OLD.status = 'cancelling' AND NEW.status IN ('pending', 'cancelled') AND
+           NEW.cancellation_target_claim_token IS NULL
+         ) THEN
         RAISE EXCEPTION 'Effect cancellation target is immutable'
           USING ERRCODE = 'check_violation';
       END IF;
@@ -471,17 +474,19 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
 
       IF TG_OP = 'UPDATE' AND OLD.claim_token IS NOT NULL AND
          NEW.claim_token IS NULL AND NOT (
-           OLD.runtime_owner_generation IS NOT NULL AND
-           OLD.status = 'claimed' AND NEW.status = 'pending' AND
-           OLD.cancellation_target_claim_token IS NULL
+           OLD.runtime_owner_generation IS NOT NULL AND (
+             (OLD.status IN ('claimed', 'executing', 'cancelling') AND
+              NEW.status = 'pending') OR
+             (OLD.status = 'cancelling' AND NEW.status = 'cancelled')
+           )
          ) THEN
-        RAISE EXCEPTION 'Effect claim token can only be cleared by a known-safe retry'
+        RAISE EXCEPTION 'Effect claim token can only be cleared by a proven pre-provider outcome'
           USING ERRCODE = 'check_violation';
       END IF;
 
       IF TG_OP = 'UPDATE' AND OLD.cancellation_target_claim_token IS NULL AND
          NEW.cancellation_target_claim_token IS NOT NULL AND NOT (
-           OLD.status = 'claimed' AND NEW.status = 'cancelling' AND
+           OLD.status IN ('claimed', 'executing') AND NEW.status = 'cancelling' AND
            NEW.cancellation_target_claim_token = NEW.claim_token
          ) THEN
         RAISE EXCEPTION 'Effect cancellation target can only fence the active exact claim'
@@ -779,7 +784,7 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
             ARRAY['claim_expires_at', 'id']::text[],
             ARRAY[0, 0]::integer[],
             ARRAY['timestamp_ops', 'uuid_ops']::text[],
-            $predicate$status::text = 'claimed'::text AND runtime_owner_generation IS NOT NULL AND claim_token IS NOT NULL$predicate$
+            $predicate$(status::text = ANY (ARRAY['claimed'::character varying, 'executing'::character varying]::text[])) AND runtime_owner_generation IS NOT NULL AND claim_token IS NOT NULL$predicate$
           ),
           (
             'effects_exact_pending_llm_lane_index',
