@@ -13,6 +13,9 @@ defmodule Maraithon.Accounts.User do
     field :email, :string
     field :is_admin, :boolean, default: false
     field :confirmed_at, :utc_datetime_usec
+    # System-owned fence: new sessions, Agents, and credentials are refused
+    # once a durable user erasure request exists.
+    field :privacy_erasure_requested_at, :utc_datetime_usec
 
     timestamps(type: :utc_datetime_usec)
   end
