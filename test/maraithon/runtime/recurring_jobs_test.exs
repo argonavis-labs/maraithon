@@ -177,4 +177,17 @@ defmodule Maraithon.Runtime.RecurringJobsTest do
              :count
            ) == 1
   end
+
+  test "retention and erasure discovery have stable durable schedules" do
+    specs = RecurringJobs.specs()
+
+    for name <- ["privacy_retention", "privacy_erasure_discovery"] do
+      spec = Enum.find(specs, &(&1.name == name))
+      assert spec.job_type == RecurringJobs.job_type(name)
+      assert spec.dedupe_key == RecurringJobs.dedupe_key(name)
+      assert {:interval, interval_ms} = spec.schedule
+      assert interval_ms > 0
+      assert spec.initial_delay_ms > 0
+    end
+  end
 end
