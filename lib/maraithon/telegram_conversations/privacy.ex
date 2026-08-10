@@ -133,9 +133,11 @@ defmodule Maraithon.TelegramConversations.Privacy do
     with {:ok, config} <- backfill_config(opts) do
       Repo.transaction(
         fn ->
-          # Protocol marker is always the first database lock in the mutation.
+          Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
+          :ok = lock_and_verify_contraction_evidence!(config)
           :ok = DurablePayload.require_legacy_mutation!()
           :ok = assert_stopped_fleet!()
+          :ok = assert_durable_work_drained!()
 
           {migrated, blocked, remaining} =
             Enum.reduce(@families, {%{}, %{}, config.batch_size}, fn
@@ -206,6 +208,9 @@ defmodule Maraithon.TelegramConversations.Privacy do
            batch_size: config.batch_size,
            max_batches: 1,
            confirmation: config.confirmation,
+           evidence_id: config.evidence_id,
+           evidence_digest: config.evidence_digest,
+           revision: config.revision,
            excluded: state.excluded
          ) do
       {:ok, batch} ->
@@ -260,19 +265,73 @@ defmodule Maraithon.TelegramConversations.Privacy do
     max_batches = opts |> Keyword.get(:max_batches, @default_max_batches) |> bounded_max_batches()
     confirmation = Keyword.get(opts, :confirmation)
     excluded = Keyword.get(opts, :excluded, %{})
+    evidence_id = Keyword.get(opts, :evidence_id)
+    evidence_digest = Keyword.get(opts, :evidence_digest)
+    revision = Keyword.get(opts, :revision)
 
     if Keyword.keyword?(opts) and confirmation == ProtocolCutover.activation_confirmation() and
-         is_map(excluded) do
+         is_map(excluded) and is_binary(evidence_id) and byte_size(evidence_id) in 1..256 and
+         is_binary(evidence_digest) and byte_size(evidence_digest) == 32 and
+         is_binary(revision) and Regex.match?(~r/^[0-9a-f]{40}([0-9a-f]{24})?$/, revision) do
       {:ok,
        %{
          batch_size: batch_size,
          max_batches: max_batches,
          confirmation: confirmation,
+         evidence_id: evidence_id,
+         evidence_digest: evidence_digest,
+         revision: revision,
          excluded: excluded
        }}
     else
-      {:error, :stopped_fleet_confirmation_required}
+      {:error, :stopped_fleet_evidence_required}
     end
+  end
+
+  defp lock_and_verify_contraction_evidence!(config) do
+    case Repo.query!(
+           """
+           SELECT mode, activation_evidence_id, activation_evidence_digest, exact_revision
+           FROM public.effect_execution_protocols
+           WHERE name = 'effects'
+           FOR UPDATE
+           """,
+           [],
+           log: false
+         ).rows do
+      [["legacy", id, digest, revision]]
+      when id == config.evidence_id and digest == config.evidence_digest and
+             revision == config.revision ->
+        :ok
+
+      _invalid ->
+        Repo.rollback(:stopped_fleet_evidence_mismatch)
+    end
+
+    for table <- Maraithon.DurablePayloadRegistry.tables() do
+      Repo.query!("LOCK TABLE public.#{table} IN SHARE ROW EXCLUSIVE MODE", [], log: false)
+    end
+
+    Repo.query!("LOCK TABLE public.agent_runtime_leases IN SHARE MODE", [], log: false)
+    :ok
+  end
+
+  defp assert_durable_work_drained! do
+    %{rows: [[directives, runs, steps]]} =
+      Repo.query!(
+        """
+        SELECT
+          (SELECT COUNT(*) FROM public.agent_directives WHERE status = 'processing'),
+          (SELECT COUNT(*) FROM public.agent_runs WHERE status = 'running'),
+          (SELECT COUNT(*) FROM public.agent_run_steps WHERE status = 'requested')
+        """,
+        [],
+        log: false
+      )
+
+    if directives == 0 and runs == 0 and steps == 0,
+      do: :ok,
+      else: Repo.rollback({:durable_work_requires_drain, directives + runs + steps})
   end
 
   defp assert_stopped_fleet! do

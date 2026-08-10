@@ -172,7 +172,7 @@ defmodule Maraithon.DurablePayload do
       |> Enum.map(fn field ->
         case getter.(field) do
           value when is_binary(value) and value != "" -> value
-          value when is_integer(value) and value > 0 -> Integer.to_string(value)
+          value when is_integer(value) and value > 0 -> value
           _missing -> raise ArgumentError, "durable payload stable identity is missing"
         end
       end)
@@ -226,10 +226,13 @@ defmodule Maraithon.DurablePayload do
   defp getter(%Ecto.Changeset{} = changeset), do: &get_field(changeset, &1)
   defp getter(row) when is_map(row), do: &Map.get(row, &1)
 
-  defp context_value!(nil), do: ""
+  defp context_value!(nil), do: nil
   defp context_value!(value) when is_binary(value), do: value
-  defp context_value!(value) when is_integer(value), do: Integer.to_string(value)
-  defp context_value!(value), do: to_string(value)
+  defp context_value!(value) when is_integer(value), do: value
+
+  defp context_value!(_unsupported) do
+    raise ArgumentError, "durable payload context values must be nil, strings, or integers"
+  end
 
   @doc false
   def context_identity(values) when is_list(values) do
@@ -238,6 +241,13 @@ defmodule Maraithon.DurablePayload do
     |> encode_context!()
   end
 
-  defp encode_context!([]), do: ""
-  defp encode_context!(values), do: Jason.encode!(values)
+  defp encode_context!(values) do
+    values
+    |> Enum.map(fn
+      nil -> ["nil"]
+      value when is_binary(value) -> ["string", value]
+      value when is_integer(value) -> ["integer", Integer.to_string(value)]
+    end)
+    |> Jason.encode!()
+  end
 end

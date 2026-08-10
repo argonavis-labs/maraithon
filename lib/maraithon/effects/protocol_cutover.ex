@@ -14,6 +14,7 @@ defmodule Maraithon.Effects.ProtocolCutover do
   """
 
   alias Ecto.Adapters.SQL
+  alias Maraithon.DurablePayloadRegistry
   alias Maraithon.Repo
 
   @name "effects"
@@ -159,8 +160,9 @@ defmodule Maraithon.Effects.ProtocolCutover do
     case Keyword.get(opts, :confirmation) do
       @confirmation ->
         with {:ok, activation_epoch} <- activation_epoch(Keyword.get(opts, :activation_epoch)),
-             {:ok, lock_timeout_ms} <- activation_lock_timeout(opts) do
-          activate_with_locks(activation_epoch, lock_timeout_ms)
+             {:ok, lock_timeout_ms} <- activation_lock_timeout(opts),
+             {:ok, evidence} <- activation_evidence(opts) do
+          activate_with_locks(activation_epoch, lock_timeout_ms, evidence)
         end
 
       _invalid_confirmation ->
@@ -172,10 +174,12 @@ defmodule Maraithon.Effects.ProtocolCutover do
 
   def activation_confirmation, do: @confirmation
 
-  defp activate_with_locks(activation_epoch, lock_timeout_ms) do
+  defp activate_with_locks(activation_epoch, lock_timeout_ms, evidence) do
     try do
       Repo.transaction(
         fn ->
+          SQL.query!(Repo, "SET LOCAL ROLE maraithon_activation_operator", [])
+
           SQL.query!(
             Repo,
             "SELECT set_config('lock_timeout', $1, true)",
@@ -186,10 +190,13 @@ defmodule Maraithon.Effects.ProtocolCutover do
 
           case current do
             @exact ->
+              :ok = ensure_activation_evidence_matches!(evidence)
               :ok = ensure_exact_storage_ready!()
               :already_active
 
             @legacy ->
+              :ok = ensure_activation_evidence_matches!(evidence)
+
               # Consistent order: protocol row, Effect table, lease table.
               # SHARE blocks writers and DDL while preserving read-only
               # observability during a cutover attempt.
@@ -200,9 +207,21 @@ defmodule Maraithon.Effects.ProtocolCutover do
               SQL.query!(Repo, "LOCK TABLE public.agent_run_steps IN SHARE MODE", [])
               SQL.query!(Repo, "LOCK TABLE public.events IN SHARE MODE", [])
 
+              for table <-
+                    DurablePayloadRegistry.tables() --
+                      ~w(effects agent_directives events agent_run_steps) do
+                SQL.query!(Repo, "LOCK TABLE public.#{table} IN SHARE MODE", [])
+              end
+
               SQL.query!(
                 Repo,
                 "LOCK TABLE public.durable_payload_verifications IN SHARE MODE",
+                []
+              )
+
+              SQL.query!(
+                Repo,
+                "LOCK TABLE public.durable_payload_verification_failures IN SHARE MODE",
                 []
               )
 
@@ -708,6 +727,40 @@ defmodule Maraithon.Effects.ProtocolCutover do
       )
     FROM public.effects
     """
+  end
+
+  defp activation_evidence(opts) do
+    id = Keyword.get(opts, :evidence_id)
+    digest = Keyword.get(opts, :evidence_digest)
+    revision = Keyword.get(opts, :revision)
+
+    if is_binary(id) and byte_size(id) in 1..128 and
+         Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/, id) and
+         is_binary(digest) and byte_size(digest) == 32 and
+         is_binary(revision) and Regex.match?(~r/^[0-9a-f]{40}([0-9a-f]{24})?$/, revision) do
+      {:ok, %{id: id, digest: digest, revision: revision}}
+    else
+      {:error, :effect_protocol_activation_evidence_required}
+    end
+  end
+
+  defp ensure_activation_evidence_matches!(evidence) do
+    case SQL.query!(
+           Repo,
+           """
+           SELECT activation_evidence_id, activation_evidence_digest, exact_revision
+           FROM public.effect_execution_protocols
+           WHERE name = $1
+           """,
+           [@name]
+         ).rows do
+      [[id, digest, revision]]
+      when id == evidence.id and digest == evidence.digest and revision == evidence.revision ->
+        :ok
+
+      _mismatch ->
+        Repo.rollback(:effect_protocol_activation_evidence_mismatch)
+    end
   end
 
   defp activation_epoch(nil), do: {:ok, Ecto.UUID.generate()}

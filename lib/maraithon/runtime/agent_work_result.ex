@@ -65,6 +65,13 @@ defmodule Maraithon.Runtime.AgentWorkResult do
       :result,
       :committed_at
     ])
+    |> DurablePayload.put_bounded_map(:result, 128_000,
+      max_binary_bytes: 100_000,
+      max_depth: 12,
+      max_nodes: 20_000,
+      max_map_entries: 2_000,
+      max_list_items: 5_000
+    )
     |> mirror_legacy_result()
     |> put_payload_encryption_version()
     |> reactivate_result()
@@ -143,6 +150,8 @@ defmodule Maraithon.Runtime.AgentWorkResult do
       raise ArgumentError, "exact AgentWorkResult is not ciphertext-only"
     end
   end
+
+  defp put_authority_digest(%Ecto.Changeset{valid?: false} = changeset), do: changeset
 
   defp put_authority_digest(changeset) do
     with true <- Map.has_key?(changeset.changes, :result),

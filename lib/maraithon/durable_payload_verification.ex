@@ -2,10 +2,12 @@ defmodule Maraithon.DurablePayloadVerification do
   @moduledoc """
   Bounded, resumable authenticated verification of encrypted durable payloads.
 
-  Candidate rows are selected with `FOR UPDATE SKIP LOCKED`. Ciphertext is
-  decrypted and schema/bounds checked through `Maraithon.Vault`; only then does
-  PostgreSQL compute and store content-free ciphertext, projection, version,
-  and purge digests while the source row lock is still held. Results contain
+  Candidate rows are guarded by transaction-scoped advisory locks. Ciphertext
+  is decrypted and schema/bounds checked through `Maraithon.Vault`; only then
+  does PostgreSQL compare source digests and store content-free ciphertext,
+  projection, version, and purge proofs. Source mutation triggers take the same
+  advisory lock before invalidating proofs, closing the compare-and-swap race.
+  Results contain
   row identity and closed failure classes only.
 
   New durable-copy tables extend this module with one fixed SQL candidate/store
@@ -15,11 +17,12 @@ defmodule Maraithon.DurablePayloadVerification do
 
   alias Maraithon.DurablePayload
   alias Maraithon.DurablePayloadBinding
+  alias Maraithon.DurablePayloadRegistry
   alias Maraithon.Effects
   alias Maraithon.Repo
   alias Maraithon.Vault
 
-  @tables ~w(effects agent_directives events agent_run_steps)
+  @tables DurablePayloadRegistry.tables()
   @default_limit 25
   @max_limit 100
 
@@ -45,7 +48,15 @@ defmodule Maraithon.DurablePayloadVerification do
       when payload_table in @tables and is_list(opts) do
     with {:ok, limit} <- limit(opts) do
       case Repo.transaction(
-             fn -> verify_locked_batch(payload_table, limit) end,
+             fn ->
+               assume_verifier_role!()
+
+               try do
+                 verify_locked_batch(payload_table, limit)
+               after
+                 reset_verifier_role!()
+               end
+             end,
              timeout: 60_000
            ) do
         {:ok, result} -> {:ok, result}
@@ -100,7 +111,7 @@ defmodule Maraithon.DurablePayloadVerification do
             failures: acc.failures ++ batch.failures
           }
 
-          {:cont, {:ok, next, progressed + batch.verified}}
+          {:cont, {:ok, next, progressed + batch.verified + length(batch.failures)}}
 
         {:error, _reason} = error ->
           {:halt, error}
@@ -109,21 +120,77 @@ defmodule Maraithon.DurablePayloadVerification do
   end
 
   defp verify_locked_batch(payload_table, limit) do
-    rows = Repo.query!(candidate_sql(payload_table), [limit], log: false).rows
+    oversized = Repo.query!(oversized_candidate_sql(payload_table), [limit], log: false).rows
 
-    Enum.reduce(rows, %{table: payload_table, verified: 0, failures: []}, fn row, acc ->
+    oversized_result =
+      Enum.reduce(oversized, %{table: payload_table, verified: 0, failures: []}, fn
+        [
+          id,
+          row_identity,
+          advisory_identity,
+          ciphertext_digest,
+          projection_digest,
+          version_digest,
+          purge_digest
+        ],
+        acc ->
+          digests = [ciphertext_digest, projection_digest, version_digest, purge_digest]
+
+          result =
+            if row_identity == advisory_identity,
+              do: store_failure!(payload_table, row_identity, :oversized, digests),
+              else: :source_changed
+
+          failure = if result == :ok, do: :oversized, else: :source_changed
+          %{acc | failures: [%{id: id, failure: failure} | acc.failures]}
+      end)
+
+    remaining = limit - length(oversized)
+
+    rows =
+      if remaining > 0,
+        do: Repo.query!(candidate_sql(payload_table), [remaining], log: false).rows,
+        else: []
+
+    rows
+    |> Enum.reduce(oversized_result, fn enveloped_row, acc ->
+      {row,
+       [advisory_identity, ciphertext_digest, projection_digest, version_digest, purge_digest]} =
+        Enum.split(enveloped_row, length(enveloped_row) - 5)
+
       id = hd(row)
       row_identity = Enum.at(row, 1)
+      candidate_digests = [ciphertext_digest, projection_digest, version_digest, purge_digest]
 
-      case safely_validate_row(payload_table, row) do
-        {:ok, verification} ->
-          maybe_store_binding!(payload_table, id, verification.binding)
-          store_proof!(payload_table, id, row_identity, verification.key_tags)
-          %{acc | verified: acc.verified + 1}
+      # The canonical identity returned in the source projection must be the
+      # same value used for the advisory lock and compare-and-swap.
+      if row_identity != advisory_identity do
+        %{acc | failures: [%{id: id, failure: :source_changed} | acc.failures]}
+      else
+        case safely_validate_row(payload_table, row) do
+          {:ok, verification} ->
+            case store_proof!(
+                   payload_table,
+                   row_identity,
+                   verification.key_tags,
+                   candidate_digests
+                 ) do
+              :ok ->
+                %{acc | verified: acc.verified + 1}
 
-        {:error, failure} ->
-          store_failure!(payload_table, row_identity, failure)
-          %{acc | failures: [%{id: id, failure: failure} | acc.failures]}
+              :source_changed ->
+                %{acc | failures: [%{id: id, failure: :source_changed} | acc.failures]}
+            end
+
+          {:error, failure} ->
+            case store_failure!(payload_table, row_identity, failure, candidate_digests) do
+              :ok ->
+                %{acc | failures: [%{id: id, failure: failure} | acc.failures]}
+
+              :source_changed ->
+                %{acc | failures: [%{id: id, failure: :source_changed} | acc.failures]}
+            end
+        end
       end
     end)
     |> Map.update!(:failures, &Enum.reverse/1)
@@ -229,13 +296,14 @@ defmodule Maraithon.DurablePayloadVerification do
     do: {:error, :encryption_version_mismatch}
 
   defp validate_row("events", [
-         sequence_num,
+         _id,
          _row_identity,
          ciphertext,
          projection,
          1,
          nil,
          agent_id,
+         sequence_num,
          binding_version,
          binding_key_tag,
          binding_mac
@@ -323,6 +391,347 @@ defmodule Maraithon.DurablePayloadVerification do
   defp validate_row("agent_run_steps", _row),
     do: {:error, :encryption_version_mismatch}
 
+  defp validate_row(payload_table, row) do
+    with {:ok, source} <- DurablePayloadRegistry.fetch(payload_table),
+         {:ok, parsed} <- parse_registered_row(source, row),
+         true <- parsed.version == 1,
+         true <- is_nil(parsed.purged_at),
+         :ok <- validate_registered_projection(payload_table, parsed.projections),
+         {:ok, values, key_tags} <- decrypt_registered_fields(source.fields, parsed.ciphertexts),
+         :ok <- validate_registered_semantics(source.table, values),
+         :ok <-
+           verify_registered_binding(
+             source,
+             parsed.identity_values,
+             parsed.scope_values,
+             values,
+             parsed.binding
+           ),
+         :ok <- validate_registered_authority(source, parsed, values) do
+      {:ok, %{key_tags: Enum.uniq(key_tags) |> Enum.sort(), binding: nil}}
+    else
+      false -> {:error, :encryption_version_mismatch}
+      :error -> {:error, :unsupported_payload_table}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp parse_registered_row(source, [id, row_identity | values]) do
+    field_count = length(source.fields)
+    identity_count = length(source.identity)
+    scope_count = length(source.scope)
+    {ciphertexts, values} = Enum.split(values, field_count)
+    {projections, values} = Enum.split(values, field_count)
+
+    case values do
+      [version, purged_at | context_and_binding] ->
+        {identity_values, context_and_binding} = Enum.split(context_and_binding, identity_count)
+        {scope_values, context_and_binding} = Enum.split(context_and_binding, scope_count)
+
+        case context_and_binding do
+          [binding_version, binding_key_tag, binding_mac | authority] ->
+            {:ok,
+             %{
+               id: id,
+               row_identity: row_identity,
+               ciphertexts: ciphertexts,
+               projections: projections,
+               version: version,
+               purged_at: purged_at,
+               identity_values: identity_values,
+               scope_values: scope_values,
+               binding: {binding_version, binding_key_tag, binding_mac},
+               authority: authority
+             }}
+
+          _invalid ->
+            {:error, :payload_schema_invalid}
+        end
+
+      _invalid ->
+        {:error, :payload_schema_invalid}
+    end
+  end
+
+  defp parse_registered_row(_source, _row), do: {:error, :payload_schema_invalid}
+
+  defp decrypt_registered_fields(fields, ciphertexts) do
+    fields
+    |> Enum.zip(ciphertexts)
+    |> Enum.reduce_while({:ok, [], []}, fn
+      {{name, _column, _type, _max_bytes, false}, nil}, {:ok, values, tags} ->
+        {:cont, {:ok, [{Atom.to_string(name), nil} | values], tags}}
+
+      {{_name, _column, _type, _max_bytes, true}, nil}, _acc ->
+        {:halt, {:error, :ciphertext_missing}}
+
+      {{name, _column, :map, _raw_max_bytes, _required}, ciphertext}, {:ok, values, tags} ->
+        case decrypt_map(ciphertext) do
+          {:ok, value, tag} ->
+            {:cont, {:ok, [{Atom.to_string(name), value} | values], [tag | tags]}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
+
+      {{name, _column, :binary, _raw_max_bytes, _required}, ciphertext}, {:ok, values, tags} ->
+        with {:ok, value} <- decrypt_authenticated(ciphertext),
+             true <- String.valid?(value),
+             :nomatch <- :binary.match(value, <<0>>),
+             {:ok, tag} <- ciphertext_tag(ciphertext) do
+          {:cont, {:ok, [{Atom.to_string(name), value} | values], [tag | tags]}}
+        else
+          {:error, reason} -> {:halt, {:error, reason}}
+          _invalid -> {:halt, {:error, :payload_schema_invalid}}
+        end
+    end)
+    |> case do
+      {:ok, values, tags} -> {:ok, Enum.reverse(values), Enum.reverse(tags)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_registered_semantics("telegram_conversation_turns", fields) do
+    with {:ok, text} <- field(fields, "text"),
+         true <-
+           is_binary(text) and String.valid?(text) and
+             byte_size(text) <= Maraithon.TelegramConversations.Turn.max_text_bytes(),
+         {:ok, data} <- field(fields, "structured_data"),
+         true <-
+           Maraithon.BoundedJSON.valid?(
+             data,
+             Maraithon.TelegramConversations.Turn.max_structured_data_bytes(),
+             Maraithon.TelegramConversations.Turn.structured_data_bounds()
+           ) do
+      :ok
+    else
+      _invalid -> {:error, :payload_schema_invalid}
+    end
+  end
+
+  defp validate_registered_semantics("telegram_conversations", fields) do
+    with {:ok, summary} <- field(fields, "summary"),
+         {:ok, historical} <- field(fields, "historical_summary"),
+         true <-
+           optional_utf8?(
+             summary,
+             Maraithon.TelegramConversations.Conversation.max_summary_bytes()
+           ),
+         true <-
+           optional_utf8?(
+             historical,
+             Maraithon.TelegramConversations.Conversation.max_summary_bytes()
+           ) do
+      :ok
+    else
+      _invalid -> {:error, :payload_schema_invalid}
+    end
+  end
+
+  defp validate_registered_semantics(table, fields)
+       when table in ["telegram_assistant_runs", "telegram_assistant_steps", "background_jobs"] do
+    {limits, bounds} =
+      case table do
+        "telegram_assistant_runs" ->
+          {%{
+             "prompt_snapshot" => Maraithon.TelegramAssistant.Run.max_prompt_snapshot_bytes(),
+             "result_summary" => Maraithon.TelegramAssistant.Run.max_result_summary_bytes()
+           }, Maraithon.TelegramAssistant.Run.payload_bounds()}
+
+        "telegram_assistant_steps" ->
+          {%{
+             "request_payload" => Maraithon.TelegramAssistant.Step.max_request_payload_bytes(),
+             "response_payload" => Maraithon.TelegramAssistant.Step.max_response_payload_bytes()
+           }, Maraithon.TelegramAssistant.Step.payload_bounds()}
+
+        "background_jobs" ->
+          {%{
+             "payload" => Maraithon.Runtime.BackgroundJob.max_payload_bytes(),
+             "result" => Maraithon.Runtime.BackgroundJob.max_result_bytes()
+           }, Maraithon.Runtime.BackgroundJob.payload_bounds()}
+      end
+
+    validate_maps(fields, limits, bounds)
+  end
+
+  defp validate_registered_semantics("telegram_prepared_actions", fields) do
+    with :ok <-
+           validate_maps(
+             fields,
+             %{"payload" => Maraithon.TelegramAssistant.PreparedAction.max_payload_bytes()},
+             Maraithon.TelegramAssistant.PreparedAction.payload_bounds()
+           ),
+         {:ok, preview} <- field(fields, "preview_text"),
+         true <-
+           is_binary(preview) and preview != "" and String.valid?(preview) and
+             byte_size(preview) <= Maraithon.TelegramAssistant.PreparedAction.max_preview_bytes() do
+      :ok
+    else
+      _invalid -> {:error, :payload_schema_invalid}
+    end
+  end
+
+  defp validate_registered_semantics(table, fields)
+       when table in ["agent_runs", "operator_events"] do
+    {limits, bounds} =
+      case table do
+        "agent_runs" ->
+          {%{
+             "trigger" => Maraithon.Agents.AgentRun.max_trigger_bytes(),
+             "metadata" => Maraithon.Agents.AgentRun.max_metadata_bytes()
+           }, Maraithon.Agents.AgentRun.payload_bounds()}
+
+        "operator_events" ->
+          {%{
+             "payload" => Maraithon.OperatorEvents.OperatorEvent.max_payload_bytes(),
+             "metadata" => Maraithon.OperatorEvents.OperatorEvent.max_metadata_bytes()
+           }, Maraithon.OperatorEvents.OperatorEvent.payload_bounds()}
+      end
+
+    validate_maps(fields, limits, bounds)
+  end
+
+  defp validate_registered_semantics("user_memory_profiles", fields) do
+    with {:ok, summary} <- field(fields, "summary"),
+         true <-
+           is_binary(summary) and String.valid?(summary) and String.length(summary) >= 4 and
+             byte_size(summary) <= Maraithon.UserMemory.Profile.max_summary_bytes(),
+         :ok <-
+           validate_maps(
+             fields,
+             %{"profile" => Maraithon.UserMemory.Profile.max_profile_bytes()},
+             Maraithon.UserMemory.Profile.profile_bounds()
+           ) do
+      :ok
+    else
+      _invalid -> {:error, :payload_schema_invalid}
+    end
+  end
+
+  defp validate_registered_semantics("operator_memory_summaries", fields) do
+    with {:ok, content} <- field(fields, "content"),
+         true <-
+           is_binary(content) and String.valid?(content) and
+             byte_size(content) <= Maraithon.OperatorMemory.Summary.max_content_bytes() do
+      :ok
+    else
+      _invalid -> {:error, :payload_schema_invalid}
+    end
+  end
+
+  defp validate_registered_semantics("scheduled_jobs", fields) do
+    validate_maps(
+      fields,
+      %{"payload" => Maraithon.Runtime.ScheduledJob.max_payload_bytes()},
+      Maraithon.Runtime.ScheduledJob.payload_bounds()
+    )
+  end
+
+  defp validate_registered_semantics(table, fields)
+       when table in ["runtime_ingress_receipts", "agent_work_results"] do
+    max_bytes = if table == "runtime_ingress_receipts", do: 160_000, else: 128_000
+
+    validate_maps(
+      fields,
+      %{if(table == "runtime_ingress_receipts", do: "payload", else: "result") => max_bytes},
+      max_binary_bytes: max_bytes,
+      max_depth: 16,
+      max_nodes: 25_000,
+      max_map_entries: 5_000,
+      max_list_items: 5_000
+    )
+  end
+
+  defp validate_registered_semantics("snapshots", fields) do
+    with {:ok, state_data} <- field(fields, "state_data"),
+         {:ok, budget} <- field(fields, "budget"),
+         {:ok, _state, _} <- Maraithon.Runtime.SnapshotFormat.decode_stored(state_data),
+         {:ok, _budget, _} <- Maraithon.Runtime.SnapshotFormat.decode_stored(budget),
+         {:ok, state_json} <- Jason.encode(state_data),
+         {:ok, budget_json} <- Jason.encode(budget),
+         true <-
+           byte_size(state_json) + byte_size(budget_json) <=
+             Maraithon.Runtime.SnapshotFormat.max_encoded_bytes() do
+      :ok
+    else
+      _invalid -> {:error, :payload_schema_invalid}
+    end
+  end
+
+  defp validate_maps(fields, limits, bounds) do
+    Enum.reduce_while(limits, :ok, fn {name, max_bytes}, :ok ->
+      with {:ok, value} <- field(fields, name),
+           {:ok, _canonical} <- DurablePayload.prepare_map(value, max_bytes, bounds) do
+        {:cont, :ok}
+      else
+        _invalid -> {:halt, {:error, :payload_schema_invalid}}
+      end
+    end)
+  end
+
+  defp field(fields, name) do
+    case List.keyfind(fields, name, 0) do
+      {^name, value} -> {:ok, value}
+      nil -> {:error, :payload_schema_invalid}
+    end
+  end
+
+  defp optional_utf8?(nil, _max_bytes), do: true
+
+  defp optional_utf8?(value, max_bytes),
+    do: is_binary(value) and String.valid?(value) and byte_size(value) <= max_bytes
+
+  defp verify_registered_binding(source, identity_values, scope_values, fields, binding) do
+    {version, key_tag, mac} = binding
+
+    DurablePayloadBinding.verify(
+      source.table,
+      DurablePayload.context_identity(identity_values),
+      DurablePayload.context_identity(scope_values),
+      fields,
+      version,
+      key_tag,
+      mac
+    )
+  end
+
+  defp validate_registered_authority(%{table: "agent_work_results"}, parsed, fields) do
+    case parsed.authority do
+      [version, key_tag, mac] ->
+        DurablePayloadBinding.verify(
+          "agent_work_result_authority",
+          List.first(parsed.identity_values),
+          DurablePayload.context_identity(parsed.scope_values),
+          fields,
+          version,
+          key_tag,
+          mac
+        )
+
+      _invalid ->
+        {:error, :authority_digest_missing}
+    end
+  end
+
+  defp validate_registered_authority(_source, %{authority: []}, _fields), do: :ok
+
+  defp validate_registered_authority(_source, _parsed, _fields),
+    do: {:error, :payload_schema_invalid}
+
+  defp validate_registered_projection(table, projections) do
+    expected =
+      case table do
+        "telegram_conversation_turns" -> ["[encrypted]", %{}]
+        "telegram_conversations" -> [nil, nil]
+        "telegram_prepared_actions" -> [%{}, nil]
+        "user_memory_profiles" -> ["[encrypted]", %{}]
+        "operator_memory_summaries" -> ["[encrypted]"]
+        _table -> Enum.map(projections, fn _projection -> %{} end)
+      end
+
+    if projections == expected, do: :ok, else: {:error, :projection_mismatch}
+  end
+
   defp validate_optional_effect_result(nil), do: {:ok, nil, nil}
 
   defp validate_optional_effect_result(ciphertext) do
@@ -398,82 +807,53 @@ defmodule Maraithon.DurablePayloadVerification do
     _error -> {:error, :authentication_failed}
   end
 
-  defp ciphertext_tag(ciphertext) do
-    case Cloak.Tags.Decoder.decode(ciphertext) do
-      %{tag: tag} when is_binary(tag) and byte_size(tag) in 1..64 -> {:ok, tag}
-      _invalid -> {:error, :ciphertext_invalid}
+  defp ciphertext_tag(ciphertext), do: Vault.ciphertext_key_tag(ciphertext)
+
+  defp store_proof!(payload_table, row_identity, key_tags, candidate_digests) do
+    set_verifier_marker!()
+
+    case Repo.query!(
+           store_sql(payload_table),
+           [row_identity, key_tags | candidate_digests],
+           log: false
+         ).num_rows do
+      1 ->
+        Repo.query!(
+          """
+          DELETE FROM public.durable_payload_verification_failures
+          WHERE payload_table = $1 AND row_identity = $2
+          """,
+          [payload_table, row_identity],
+          log: false
+        )
+
+        :ok
+
+      0 ->
+        :source_changed
     end
-  rescue
-    _error -> {:error, :ciphertext_invalid}
   end
 
-  defp maybe_store_binding!(_payload_table, _source_id, nil), do: :ok
+  defp store_failure!(payload_table, row_identity, failure, candidate_digests) do
+    set_verifier_marker!()
 
-  defp maybe_store_binding!(payload_table, source_id, binding) do
-    Repo.query!(
-      "SELECT set_config('maraithon.effect_writer_protocol', 'generation_fenced_v1', true)",
-      [],
-      log: false
-    )
+    case Repo.query!(
+           failure_store_sql(payload_table),
+           [row_identity, Atom.to_string(failure) | candidate_digests],
+           log: false
+         ).num_rows do
+      1 -> :ok
+      0 -> :source_changed
+    end
+  end
 
-    id_cast = if payload_table == "events", do: "bigint", else: "uuid"
-
-    %{num_rows: 1} =
-      Repo.query!(
-        """
-        UPDATE public.#{payload_table}
-        SET payload_binding_version = $2,
-            payload_binding_key_tag = $3,
-            payload_binding_mac = $4
-        WHERE id = $1::#{id_cast}
-          AND payload_binding_version IS NULL
-          AND payload_binding_key_tag IS NULL
-          AND payload_binding_mac IS NULL
-        """,
-        [source_id, binding.version, binding.key_tag, binding.mac],
-        log: false
-      )
-
+  defp assume_verifier_role! do
+    Repo.query!("SET LOCAL ROLE maraithon_payload_verifier", [], log: false)
     :ok
   end
 
-  defp store_proof!(payload_table, source_id, row_identity, key_tags) do
-    set_verifier_marker!()
-
-    Repo.query!(
-      """
-      DELETE FROM public.durable_payload_verifications
-      WHERE payload_table = $1
-        AND row_identity = public.durable_payload_row_identity($1, $2)
-      """,
-      [payload_table, row_identity],
-      log: false
-    )
-
-    Repo.query!(store_sql(payload_table), [source_id, key_tags], log: false)
-    :ok
-  end
-
-  defp store_failure!(payload_table, row_identity, failure) do
-    set_verifier_marker!()
-
-    Repo.query!(
-      """
-      INSERT INTO public.durable_payload_verification_failures (
-        payload_table, row_identity, failure_class, failed_at
-      )
-      VALUES (
-        $1,
-        public.durable_payload_row_identity($1, $2),
-        $3,
-        timezone('UTC', clock_timestamp())
-      )
-      ON CONFLICT (payload_table, row_identity) DO NOTHING
-      """,
-      [payload_table, row_identity, Atom.to_string(failure)],
-      log: false
-    )
-
+  defp reset_verifier_role! do
+    Repo.query!("RESET ROLE", [], log: false)
     :ok
   end
 
@@ -483,6 +863,47 @@ defmodule Maraithon.DurablePayloadVerification do
       [],
       log: false
     )
+  end
+
+  defp oversized_candidate_sql(table) do
+    {:ok, source} = DurablePayloadRegistry.fetch(table)
+    identity_expression = source.identity_sql
+
+    oversized =
+      source.fields
+      |> Enum.map(fn {_field, column, _type, max_bytes, _required} ->
+        "octet_length(source.#{column}) > #{max_bytes}"
+      end)
+      |> Enum.join(" OR ")
+
+    """
+    WITH candidates AS MATERIALIZED (
+      SELECT #{source.report_sql} AS report_id,
+             public.durable_payload_row_identity('#{table}', #{identity_expression}) AS row_identity,
+             public.durable_payload_row_identity('#{table}', #{identity_expression}) AS advisory_identity,
+             public.durable_payload_digest_part('#{table}', to_jsonb(source), 'ciphertext') AS ciphertext_digest,
+             public.durable_payload_digest_part('#{table}', to_jsonb(source), 'projection') AS projection_digest,
+             public.durable_payload_digest_part('#{table}', to_jsonb(source), 'version') AS version_digest,
+             public.durable_payload_digest_part('#{table}', to_jsonb(source), 'purge') AS purge_digest
+      FROM public.#{table} AS source
+      LEFT JOIN public.durable_payload_verification_failures AS failure
+        ON failure.payload_table = '#{table}'
+       AND failure.row_identity = public.durable_payload_row_identity('#{table}', #{identity_expression})
+       AND failure.ciphertext_digest = public.durable_payload_digest_part('#{table}', to_jsonb(source), 'ciphertext')
+       AND failure.projection_digest = public.durable_payload_digest_part('#{table}', to_jsonb(source), 'projection')
+       AND failure.version_digest = public.durable_payload_digest_part('#{table}', to_jsonb(source), 'version')
+       AND failure.purge_digest = public.durable_payload_digest_part('#{table}', to_jsonb(source), 'purge')
+      WHERE failure.row_identity IS NULL
+        AND source.#{source.purge} IS NULL
+        AND (#{oversized})
+      ORDER BY #{source.order_sql}
+      LIMIT $1
+    )
+    SELECT * FROM candidates
+    WHERE pg_catalog.pg_try_advisory_xact_lock(
+      pg_catalog.hashtextextended('#{table}:' || advisory_identity, 0)
+    )
+    """
   end
 
   defp candidate_sql("effects"),
@@ -500,12 +921,12 @@ defmodule Maraithon.DurablePayloadVerification do
           source.payload_encryption_version,
           source.payload_purged_at,
           source.agent_id::text,
-          COALESCE(source.owner_user_id, ''),
+          source.owner_user_id,
           source.payload_binding_version,
           source.payload_binding_key_tag,
           source.payload_binding_mac
         """,
-        "source.payload_purged_at IS NULL OR source.params_ciphertext IS NOT NULL OR source.result_ciphertext IS NOT NULL",
+        "(source.payload_purged_at IS NULL OR source.params_ciphertext IS NOT NULL OR source.result_ciphertext IS NOT NULL) AND (source.params_ciphertext IS NULL OR octet_length(source.params_ciphertext) <= 200000) AND (source.result_ciphertext IS NULL OR octet_length(source.result_ciphertext) <= 600000)",
         "source.id"
       )
 
@@ -527,7 +948,7 @@ defmodule Maraithon.DurablePayloadVerification do
           source.payload_binding_key_tag,
           source.payload_binding_mac
         """,
-        "source.payload_purged_at IS NULL OR source.payload_ciphertext IS NOT NULL",
+        "(source.payload_purged_at IS NULL OR source.payload_ciphertext IS NOT NULL) AND (source.payload_ciphertext IS NULL OR octet_length(source.payload_ciphertext) <= 180000)",
         "source.id"
       )
 
@@ -544,11 +965,12 @@ defmodule Maraithon.DurablePayloadVerification do
           source.payload_encryption_version,
           source.payload_purged_at,
           source.agent_id::text,
+          source.sequence_num,
           source.payload_binding_version,
           source.payload_binding_key_tag,
           source.payload_binding_mac
         """,
-        "source.payload_purged_at IS NULL",
+        "source.payload_purged_at IS NULL AND octet_length(source.payload_ciphertext) <= 700000",
         "source.inserted_at, source.id"
       )
 
@@ -572,73 +994,199 @@ defmodule Maraithon.DurablePayloadVerification do
           source.payload_binding_key_tag,
           source.payload_binding_mac
         """,
-        "source.payload_purged_at IS NULL",
+        "source.payload_purged_at IS NULL AND octet_length(source.request_payload_ciphertext) <= 300000 AND octet_length(source.response_payload_ciphertext) <= 700000",
         "source.inserted_at, source.id"
       )
 
+  defp candidate_sql(table) do
+    {:ok, source} = DurablePayloadRegistry.fetch(table)
+    identity_expression = source.identity_sql
+
+    ciphertexts =
+      Enum.map(source.fields, fn {_field, column, _type, _max_bytes, _required} ->
+        "source.#{column}"
+      end)
+
+    projections = registered_projection_sql(table, source)
+    identity_values = Enum.map(source.identity, &registered_context_sql(table, &1))
+    scope_values = Enum.map(source.scope, &registered_context_sql(table, &1))
+
+    authority =
+      if table == "agent_work_results" do
+        ["source.result_digest_version", "source.result_digest_key_tag", "source.result_digest"]
+      else
+        []
+      end
+
+    select =
+      [
+        source.report_sql,
+        identity_expression
+        | ciphertexts ++
+            projections ++
+            ["source.#{source.version}", "source.#{source.purge}"] ++
+            identity_values ++
+            scope_values ++
+            [
+              "source.payload_binding_version",
+              "source.payload_binding_key_tag",
+              "source.payload_binding_mac"
+            ] ++ authority
+      ]
+      |> Enum.join(",\n          ")
+
+    raw_size_filter =
+      source.fields
+      |> Enum.map(fn {_field, column, _type, max_bytes, required} ->
+        null_clause = if required, do: "source.#{column} IS NOT NULL", else: "true"
+
+        "(#{null_clause} AND (source.#{column} IS NULL OR octet_length(source.#{column}) <= #{max_bytes}))"
+      end)
+      |> Enum.join(" AND ")
+
+    candidate_sql_for(
+      table,
+      identity_expression,
+      "          " <> select,
+      "source.#{source.purge} IS NULL AND #{raw_size_filter}",
+      source.order_sql
+    )
+  end
+
+  defp registered_context_sql("snapshots", field)
+       when field in [:id, :sequence_num, :schema_version],
+       do: "source.#{field}"
+
+  defp registered_context_sql(_table, field), do: "source.#{field}::text"
+
+  defp registered_projection_sql("telegram_conversations", _source),
+    do: ["source.summary", "source.metadata -> 'historical_summary'"]
+
+  defp registered_projection_sql(_table, source) do
+    Enum.map(source.fields, fn {field, _column, _type, _max_bytes, _required} ->
+      "source.#{field}"
+    end)
+  end
+
   defp candidate_sql_for(table, identity_expression, select, eligible, order) do
     """
-    SELECT #{select}
-    FROM public.#{table} AS source
-    LEFT JOIN public.durable_payload_verifications AS proof
-      ON proof.payload_table = '#{table}'
-     AND proof.row_identity = public.durable_payload_row_identity(
-       '#{table}', #{identity_expression}
-     )
-    LEFT JOIN public.durable_payload_verification_failures AS failure
-      ON failure.payload_table = '#{table}'
-     AND failure.row_identity = public.durable_payload_row_identity(
-       '#{table}', #{identity_expression}
-     )
-    WHERE failure.row_identity IS NULL
-      AND (#{eligible})
-      AND (
-        proof.row_identity IS NULL OR
-        proof.ciphertext_digest IS DISTINCT FROM
-          public.durable_payload_digest_part('#{table}', to_jsonb(source), 'ciphertext') OR
-        proof.projection_digest IS DISTINCT FROM
-          public.durable_payload_digest_part('#{table}', to_jsonb(source), 'projection') OR
-        proof.version_digest IS DISTINCT FROM
-          public.durable_payload_digest_part('#{table}', to_jsonb(source), 'version') OR
-        proof.purge_digest IS DISTINCT FROM
-          public.durable_payload_digest_part('#{table}', to_jsonb(source), 'purge')
-      )
-    ORDER BY #{order}
-    LIMIT $1
-    FOR UPDATE OF source SKIP LOCKED
+    WITH candidates AS MATERIALIZED (
+      SELECT #{select},
+             public.durable_payload_row_identity(
+               '#{table}', #{identity_expression}
+             ) AS advisory_identity,
+             public.durable_payload_digest_part(
+               '#{table}', to_jsonb(source), 'ciphertext'
+             ) AS candidate_ciphertext_digest,
+             public.durable_payload_digest_part(
+               '#{table}', to_jsonb(source), 'projection'
+             ) AS candidate_projection_digest,
+             public.durable_payload_digest_part(
+               '#{table}', to_jsonb(source), 'version'
+             ) AS candidate_version_digest,
+             public.durable_payload_digest_part(
+               '#{table}', to_jsonb(source), 'purge'
+             ) AS candidate_purge_digest
+      FROM public.#{table} AS source
+      LEFT JOIN public.durable_payload_verifications AS proof
+        ON proof.payload_table = '#{table}'
+       AND proof.row_identity = public.durable_payload_row_identity(
+         '#{table}', #{identity_expression}
+       )
+      LEFT JOIN public.durable_payload_verification_failures AS failure
+        ON failure.payload_table = '#{table}'
+       AND failure.row_identity = public.durable_payload_row_identity(
+         '#{table}', #{identity_expression}
+       )
+       AND failure.ciphertext_digest = public.durable_payload_digest_part('#{table}', to_jsonb(source), 'ciphertext')
+       AND failure.projection_digest = public.durable_payload_digest_part('#{table}', to_jsonb(source), 'projection')
+       AND failure.version_digest = public.durable_payload_digest_part('#{table}', to_jsonb(source), 'version')
+       AND failure.purge_digest = public.durable_payload_digest_part('#{table}', to_jsonb(source), 'purge')
+      WHERE failure.row_identity IS NULL
+        AND (#{eligible})
+        AND (
+          proof.row_identity IS NULL OR
+          proof.ciphertext_digest IS DISTINCT FROM
+            public.durable_payload_digest_part('#{table}', to_jsonb(source), 'ciphertext') OR
+          proof.projection_digest IS DISTINCT FROM
+            public.durable_payload_digest_part('#{table}', to_jsonb(source), 'projection') OR
+          proof.version_digest IS DISTINCT FROM
+            public.durable_payload_digest_part('#{table}', to_jsonb(source), 'version') OR
+          proof.purge_digest IS DISTINCT FROM
+            public.durable_payload_digest_part('#{table}', to_jsonb(source), 'purge')
+        )
+      ORDER BY #{order}
+      LIMIT $1
+    )
+    SELECT *
+    FROM candidates
+    WHERE pg_catalog.pg_try_advisory_xact_lock(
+      pg_catalog.hashtextextended('#{table}:' || advisory_identity, 0)
+    )
     """
   end
 
   defp store_sql(table) do
-    id_cast = if table == "events", do: "bigint", else: "uuid"
-
-    identity_expression =
-      if table == "events",
-        do: "source.agent_id::text || ':' || source.sequence_num::text",
-        else: "source.id::text"
+    {:ok, source} = DurablePayloadRegistry.fetch(table)
+    identity_expression = source.identity_sql
 
     """
+    WITH current_source AS MATERIALIZED (
+      SELECT
+        public.durable_payload_row_identity('#{table}', #{identity_expression}) AS row_identity
+      FROM public.#{table} AS source
+      WHERE public.durable_payload_row_identity('#{table}', #{identity_expression}) = $1
+        AND public.durable_payload_digest_part('#{table}', to_jsonb(source), 'ciphertext') = $3::bytea
+        AND public.durable_payload_digest_part('#{table}', to_jsonb(source), 'projection') = $4::bytea
+        AND public.durable_payload_digest_part('#{table}', to_jsonb(source), 'version') = $5::bytea
+        AND public.durable_payload_digest_part('#{table}', to_jsonb(source), 'purge') = $6::bytea
+    ), deleted AS (
+      DELETE FROM public.durable_payload_verifications AS proof
+      USING current_source
+      WHERE proof.payload_table = '#{table}'
+        AND proof.row_identity = current_source.row_identity
+    )
     INSERT INTO public.durable_payload_verifications (
-      payload_table,
-      row_identity,
-      ciphertext_digest,
-      projection_digest,
-      version_digest,
-      purge_digest,
-      key_tags,
-      verified_at
+      payload_table, row_identity, ciphertext_digest, projection_digest,
+      version_digest, purge_digest, key_tags, verified_at
     )
     SELECT
-      '#{table}',
-      public.durable_payload_row_identity('#{table}', #{identity_expression}),
-      public.durable_payload_digest_part('#{table}', to_jsonb(source), 'ciphertext'),
-      public.durable_payload_digest_part('#{table}', to_jsonb(source), 'projection'),
-      public.durable_payload_digest_part('#{table}', to_jsonb(source), 'version'),
-      public.durable_payload_digest_part('#{table}', to_jsonb(source), 'purge'),
-      $2::text[],
+      '#{table}', row_identity, $3::bytea, $4::bytea, $5::bytea, $6::bytea,
+      $2::text[], timezone('UTC', clock_timestamp())
+    FROM current_source
+    """
+  end
+
+  defp failure_store_sql(table) do
+    {:ok, source} = DurablePayloadRegistry.fetch(table)
+    identity_expression = source.identity_sql
+
+    """
+    WITH current_source AS MATERIALIZED (
+      SELECT
+        public.durable_payload_row_identity('#{table}', #{identity_expression}) AS row_identity
+      FROM public.#{table} AS source
+      WHERE public.durable_payload_row_identity('#{table}', #{identity_expression}) = $1
+        AND public.durable_payload_digest_part('#{table}', to_jsonb(source), 'ciphertext') = $3::bytea
+        AND public.durable_payload_digest_part('#{table}', to_jsonb(source), 'projection') = $4::bytea
+        AND public.durable_payload_digest_part('#{table}', to_jsonb(source), 'version') = $5::bytea
+        AND public.durable_payload_digest_part('#{table}', to_jsonb(source), 'purge') = $6::bytea
+    )
+    INSERT INTO public.durable_payload_verification_failures (
+      payload_table, row_identity, failure_class, ciphertext_digest,
+      projection_digest, version_digest, purge_digest, failed_at
+    )
+    SELECT
+      '#{table}', row_identity, $2, $3::bytea, $4::bytea, $5::bytea, $6::bytea,
       timezone('UTC', clock_timestamp())
-    FROM public.#{table} AS source
-    WHERE source.id = $1::#{id_cast}
+    FROM current_source
+    ON CONFLICT (payload_table, row_identity) DO UPDATE SET
+      failure_class = EXCLUDED.failure_class,
+      ciphertext_digest = EXCLUDED.ciphertext_digest,
+      projection_digest = EXCLUDED.projection_digest,
+      version_digest = EXCLUDED.version_digest,
+      purge_digest = EXCLUDED.purge_digest,
+      failed_at = EXCLUDED.failed_at
     """
   end
 

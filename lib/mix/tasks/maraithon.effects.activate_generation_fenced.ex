@@ -9,7 +9,10 @@ defmodule Mix.Tasks.Maraithon.Effects.ActivateGenerationFenced do
   Performs the stopped-fleet, database-authoritative Effect protocol cutover:
 
       mix maraithon.effects.activate_generation_fenced \
-        --confirm NON_ROLLING_FLEET_DRAINED
+        --confirm NON_ROLLING_FLEET_DRAINED \
+        --evidence-id drain-2026-08-10 \
+        --evidence-sha256 <64-lowercase-hex> \
+        --revision <exact-release-git-sha>
 
   This canonical task starts only Ecto migration dependencies and
   `Maraithon.Repo`—never `Maraithon.Application` or its runtime workers. The
@@ -24,7 +27,13 @@ defmodule Mix.Tasks.Maraithon.Effects.ActivateGenerationFenced do
   def run(args) do
     {opts, rest, invalid} =
       OptionParser.parse(args,
-        strict: [confirm: :string, lock_timeout_ms: :integer],
+        strict: [
+          confirm: :string,
+          lock_timeout_ms: :integer,
+          evidence_id: :string,
+          evidence_sha256: :string,
+          revision: :string
+        ],
         aliases: [c: :confirm]
       )
 
@@ -35,6 +44,9 @@ defmodule Mix.Tasks.Maraithon.Effects.ActivateGenerationFenced do
     activation_opts =
       [confirmation: opts[:confirm]]
       |> maybe_put(:lock_timeout_ms, opts[:lock_timeout_ms])
+      |> maybe_put(:evidence_id, opts[:evidence_id])
+      |> maybe_put(:evidence_digest, decode_sha256(opts[:evidence_sha256]))
+      |> maybe_put(:revision, opts[:revision])
 
     result =
       case Ecto.Migrator.with_repo(Maraithon.Repo, fn _repo ->
@@ -53,6 +65,18 @@ defmodule Mix.Tasks.Maraithon.Effects.ActivateGenerationFenced do
 
       {:error, reason} ->
         Mix.raise("Effect protocol activation refused: #{inspect(reason)}")
+    end
+  end
+
+  defp decode_sha256(nil), do: nil
+
+  defp decode_sha256(value) when is_binary(value) do
+    case Base.decode16(value, case: :lower) do
+      {:ok, digest} when byte_size(digest) == 32 ->
+        digest
+
+      _invalid ->
+        Mix.raise("--evidence-sha256 must be exactly 64 lowercase hexadecimal characters")
     end
   end
 
