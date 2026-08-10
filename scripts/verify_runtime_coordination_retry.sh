@@ -55,7 +55,7 @@ SELECT
 SQL
 )"
 
-if [[ "$result" != "1|1|1|64|1|t|t|95" ]]; then
+if [[ "$result" != "1|1|1|64|1|t|t|117" ]]; then
   echo "partial expansion retry verification failed: $result" >&2
   exit 1
 fi

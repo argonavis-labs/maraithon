@@ -7,6 +7,30 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
   # This protocol is intentionally expansion-only. Production activation is a
   # separate, stopped-fleet operator transaction; there is no rollback path.
   def up do
+    repo().checkout(
+      fn ->
+        repo().query!(
+          "SELECT pg_catalog.pg_advisory_lock(20260810, 140004)",
+          [],
+          timeout: :infinity
+        )
+
+        try do
+          migrate()
+          flush()
+        after
+          repo().query!(
+            "SELECT pg_catalog.pg_advisory_unlock(20260810, 140004)",
+            [],
+            timeout: :infinity
+          )
+        end
+      end,
+      timeout: :infinity
+    )
+  end
+
+  defp migrate do
     execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
     execute("""
@@ -824,7 +848,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         'enforce_runtime_work_role()',
         'enforce_coordinated_background_job()', 'enforce_coordinated_scheduled_job()',
         'enforce_coordinated_agent_directive()', 'enforce_coordinated_agent_lease()',
-        'enforce_coordinated_effect()', 'enforce_agent_termination_incident()',
+        'enforce_coordinated_effect()', 'enforce_effect_assignment_final_pair()',
+        'enforce_agent_termination_incident()',
         'enforce_agent_termination_proof()',
         'enforce_agent_termination_partition_release()',
         'runtime_coordination_catalog_ready_count()'
@@ -1285,7 +1310,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
 
           IF (SELECT count(*) FROM public.schema_migrations
               WHERE version = 20260810140004) <> 1 OR
-             public.runtime_coordination_catalog_ready_count() <> 114 OR
+             public.runtime_coordination_catalog_ready_count() <> 117 OR
              NOT public.runtime_coordination_roles_ready() OR
              NOT public.runtime_coordination_acl_ready() OR
              NEW.manifest_digest IS DISTINCT FROM (
@@ -1804,10 +1829,26 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       proof_valid boolean;
       outcome_evidence_valid boolean;
       ready_authority_required boolean;
+      runtime_protocol_mode text;
+      effect_protocol_mode text;
     BEGIN
       IF current_user NOT IN ('maraithon_runtime', 'maraithon_incident_operator') THEN
         RAISE EXCEPTION 'runtime task assignment mutation requires an authorized exact role'
           USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      SELECT mode INTO STRICT runtime_protocol_mode
+      FROM public.runtime_coordination_protocols
+      WHERE name = 'runtime';
+
+      SELECT mode INTO STRICT effect_protocol_mode
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects';
+
+      IF runtime_protocol_mode <> 'partition_fenced_v1' OR
+         effect_protocol_mode <> 'generation_fenced_v1' THEN
+        RAISE EXCEPTION 'runtime task assignment requires the active exact protocol pair'
+          USING ERRCODE = 'check_violation';
       END IF;
 
       IF current_user = 'maraithon_incident_operator' AND
@@ -1824,6 +1865,12 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       IF current_setting('maraithon.runtime_task_action', true)
            IS DISTINCT FROM COALESCE(NEW.id, OLD.id)::text THEN
         RAISE EXCEPTION 'runtime task action requires its exact assignment incarnation'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_OP = 'INSERT' AND NEW.work_kind = 'effect' AND
+         (NEW.state <> 'reserved' OR NEW.provider_boundary <> 'not_entered') THEN
+        RAISE EXCEPTION 'Effect task assignments must begin reserved before provider entry'
           USING ERRCODE = 'check_violation';
       END IF;
 
@@ -2588,9 +2635,11 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     SET search_path = pg_catalog, public
     AS $function$
     DECLARE
-      protocol_mode text;
+      runtime_protocol_mode text;
+      effect_protocol_mode text;
       pending_authority_valid boolean;
       reservation_valid boolean;
+      entry_valid boolean;
     BEGIN
       IF current_user IS DISTINCT FROM 'maraithon_runtime' AND NOT (
         current_user = 'maraithon_migrator' AND EXISTS (
@@ -2601,10 +2650,33 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         RAISE EXCEPTION 'coordinated work mutation requires executor role'
           USING ERRCODE = 'insufficient_privilege';
       END IF;
-      SELECT mode INTO STRICT protocol_mode
-      FROM public.runtime_coordination_protocols WHERE name = 'runtime';
-      IF protocol_mode = 'dark' THEN RETURN NEW; END IF;
-      IF NEW.runtime_owner_generation IS NULL THEN RETURN NEW; END IF;
+
+      -- Fact validation follows the canonical protocol order. Callers acquire
+      -- the authoritative row locks before DML; this trigger never introduces
+      -- an assignment-to-protocol lock inversion.
+      SELECT mode INTO STRICT runtime_protocol_mode
+      FROM public.runtime_coordination_protocols
+      WHERE name = 'runtime';
+
+      SELECT mode INTO STRICT effect_protocol_mode
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects';
+
+      IF runtime_protocol_mode = 'dark' AND effect_protocol_mode = 'legacy' THEN
+        RETURN NEW;
+      ELSIF runtime_protocol_mode <> 'partition_fenced_v1' OR
+            effect_protocol_mode <> 'generation_fenced_v1' THEN
+        RAISE EXCEPTION 'Effect mutation requires a canonical runtime and Effect protocol pair'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF NEW.runtime_owner_generation IS NULL THEN
+        IF NEW.status IN ('pending', 'claimed', 'executing', 'cancelling') THEN
+          RAISE EXCEPTION 'active exact Effect requires durable runtime ownership'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+      END IF;
 
       IF NEW.coordination_activation_epoch IS NULL OR
          NEW.coordination_partition_id IS NULL OR
@@ -2680,14 +2752,57 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
             AND assignment.supervisor_id = NEW.claim_supervisor_id
             AND assignment.local_task_id = NEW.claim_task_id
             AND assignment.state = 'reserved'
+            AND assignment.provider_boundary = 'not_entered'
             AND assignment.lease_expires_at > timezone('UTC', clock_timestamp())
         ) INTO reservation_valid;
         IF NOT reservation_valid THEN
           RAISE EXCEPTION 'Effect claim is not coupled to an exact supervised task reservation'
             USING ERRCODE = 'check_violation';
         END IF;
-      ELSIF TG_OP = 'UPDATE' AND OLD.status = 'claimed' AND
-            NEW.status IN ('claimed', 'pending', 'completed', 'failed', 'cancelled') THEN
+      ELSIF TG_OP = 'UPDATE' AND OLD.status = 'claimed' AND NEW.status = 'executing' THEN
+        SELECT EXISTS (
+          SELECT 1 FROM public.runtime_task_assignments AS assignment
+          JOIN public.runtime_partitions AS partition
+            ON partition.partition_id = assignment.partition_id
+           AND partition.activation_epoch = assignment.activation_epoch
+           AND partition.ownership_epoch = assignment.partition_epoch
+           AND partition.owner_node_incarnation_id = assignment.node_incarnation_id
+           AND partition.state = 'ready' AND partition.ready_at IS NOT NULL
+           AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+          JOIN public.runtime_node_incarnations AS node
+            ON node.id = assignment.node_incarnation_id
+           AND node.activation_epoch = assignment.activation_epoch
+           AND node.state = 'ready' AND node.ready_at IS NOT NULL
+           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+          JOIN public.agent_runtime_leases AS lease
+            ON lease.agent_id = NEW.agent_id
+           AND lease.owner_token = NEW.runtime_owner_generation
+           AND lease.ready_at IS NOT NULL AND lease.draining_at IS NULL
+           AND lease.lease_until > timezone('UTC', clock_timestamp())
+           AND lease.coordination_activation_epoch = assignment.activation_epoch
+           AND lease.coordination_partition_id = assignment.partition_id
+           AND lease.coordination_partition_epoch = assignment.partition_epoch
+           AND lease.coordination_node_incarnation_id = assignment.node_incarnation_id
+          WHERE assignment.id = NEW.coordination_task_assignment_id
+            AND assignment.work_kind = 'effect' AND assignment.work_id = NEW.id
+            AND assignment.claim_token = NEW.claim_token
+            AND assignment.activation_epoch = NEW.coordination_activation_epoch
+            AND assignment.partition_id = NEW.coordination_partition_id
+            AND assignment.partition_epoch = NEW.coordination_partition_epoch
+            AND assignment.node_incarnation_id = NEW.coordination_node_incarnation_id
+            AND assignment.supervisor_id = NEW.claim_supervisor_id
+            AND assignment.local_task_id = NEW.claim_task_id
+            AND assignment.state = 'running'
+            AND assignment.provider_boundary = 'entered'
+            AND assignment.lease_expires_at > timezone('UTC', clock_timestamp())
+        ) INTO entry_valid;
+        IF NOT entry_valid THEN
+          RAISE EXCEPTION 'Effect provider entry lacks a ready running exact task'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSIF TG_OP = 'UPDATE' AND OLD.status IN ('claimed', 'executing', 'cancelling') AND
+            NEW.status IN ('claimed', 'executing', 'cancelling', 'pending',
+                           'completed', 'failed', 'cancelled') THEN
         IF NOT public.runtime_task_authority_valid(
           OLD.coordination_task_assignment_id, OLD.coordination_activation_epoch,
           OLD.coordination_partition_id, OLD.coordination_partition_epoch,
@@ -2706,21 +2821,27 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         END IF;
       END IF;
 
-      IF TG_OP = 'UPDATE' AND OLD.coordination_activation_epoch IS NOT NULL AND
-         NOT (OLD.status = 'pending' AND NEW.status = 'claimed') AND (
+      IF TG_OP = 'UPDATE' AND OLD.coordination_activation_epoch IS NOT NULL AND (
         NEW.coordination_activation_epoch IS DISTINCT FROM OLD.coordination_activation_epoch OR
         NEW.coordination_partition_id IS DISTINCT FROM OLD.coordination_partition_id OR
         NEW.coordination_partition_epoch IS DISTINCT FROM OLD.coordination_partition_epoch OR
-        NEW.coordination_node_incarnation_id IS DISTINCT FROM OLD.coordination_node_incarnation_id OR
-        (OLD.coordination_task_assignment_id IS NOT NULL AND
-         NEW.coordination_task_assignment_id IS DISTINCT FROM OLD.coordination_task_assignment_id)
+        NEW.coordination_node_incarnation_id IS DISTINCT FROM OLD.coordination_node_incarnation_id
       ) THEN
         RAISE EXCEPTION 'Effect coordination incarnation is immutable'
           USING ERRCODE = 'check_violation';
       END IF;
+
+      IF TG_OP = 'UPDATE' AND OLD.coordination_task_assignment_id IS NOT NULL AND
+         NEW.coordination_task_assignment_id IS DISTINCT FROM OLD.coordination_task_assignment_id AND
+         NOT (OLD.status IN ('claimed', 'executing', 'cancelling') AND NEW.status = 'pending' AND
+              NEW.coordination_task_assignment_id IS NULL) THEN
+        RAISE EXCEPTION 'Effect task assignment incarnation is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
       RETURN NEW;
     EXCEPTION WHEN no_data_found THEN
-      RAISE EXCEPTION 'runtime coordination protocol row is missing'
+      RAISE EXCEPTION 'runtime or Effect protocol row is missing'
         USING ERRCODE = 'check_violation';
     END;
     $function$;
@@ -2732,6 +2853,189 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     CREATE TRIGGER enforce_coordinated_effect_trigger
       BEFORE INSERT OR UPDATE ON public.effects
       FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_effect()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_effect_assignment_final_pair()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      runtime_protocol_mode text;
+      effect_protocol_mode text;
+      effect_id uuid;
+      effect_row record;
+      assignment_row record;
+      pair_valid boolean;
+    BEGIN
+      SELECT mode INTO STRICT runtime_protocol_mode
+      FROM public.runtime_coordination_protocols
+      WHERE name = 'runtime';
+
+      SELECT mode INTO STRICT effect_protocol_mode
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects';
+
+      IF runtime_protocol_mode = 'dark' AND effect_protocol_mode = 'legacy' THEN
+        RETURN NEW;
+      ELSIF runtime_protocol_mode <> 'partition_fenced_v1' OR
+            effect_protocol_mode <> 'generation_fenced_v1' THEN
+        RAISE EXCEPTION 'Effect assignment proof requires a canonical protocol pair'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_RELID = 'public.runtime_task_assignments'::regclass AND
+         NEW.work_kind <> 'effect' THEN
+        RETURN NEW;
+      END IF;
+
+      effect_id := CASE
+        WHEN TG_RELID = 'public.effects'::regclass THEN NEW.id
+        ELSE NEW.work_id
+      END;
+
+      SELECT * INTO effect_row
+      FROM public.effects
+      WHERE id = effect_id;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Effect assignment final proof is missing its Effect'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF effect_row.runtime_owner_generation IS NULL THEN
+        IF EXISTS (
+          SELECT 1 FROM public.runtime_task_assignments AS active_assignment
+          WHERE active_assignment.work_kind = 'effect'
+            AND active_assignment.work_id = effect_row.id
+            AND active_assignment.state IN (
+              'reserved', 'running', 'termination_requested', 'termination_proven'
+            )
+        ) THEN
+          RAISE EXCEPTION 'uncoordinated Effect cannot retain active task authority'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+      END IF;
+
+      IF effect_row.status = 'pending' THEN
+        IF effect_row.coordination_task_assignment_id IS NOT NULL OR EXISTS (
+          SELECT 1 FROM public.runtime_task_assignments AS active_assignment
+          WHERE active_assignment.work_kind = 'effect'
+            AND active_assignment.work_id = effect_row.id
+            AND active_assignment.state IN (
+              'reserved', 'running', 'termination_requested', 'termination_proven'
+            )
+        ) THEN
+          RAISE EXCEPTION 'pending Effect cannot retain active task authority'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF TG_RELID = 'public.runtime_task_assignments'::regclass AND
+           NEW.state NOT IN ('settled', 'outcome_ambiguous') THEN
+          RAISE EXCEPTION 'active Effect assignment must be linked by its Effect'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+      END IF;
+
+      IF effect_row.coordination_task_assignment_id IS NULL THEN
+        RAISE EXCEPTION 'active or terminal coordinated Effect is missing its assignment'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      SELECT * INTO assignment_row
+      FROM public.runtime_task_assignments
+      WHERE id = effect_row.coordination_task_assignment_id;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Effect assignment final proof is missing its task assignment'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF assignment_row.work_kind <> 'effect' OR
+         assignment_row.work_id IS DISTINCT FROM effect_row.id OR
+         assignment_row.claim_token IS DISTINCT FROM effect_row.claim_token OR
+         assignment_row.activation_epoch IS DISTINCT FROM effect_row.coordination_activation_epoch OR
+         assignment_row.partition_id IS DISTINCT FROM effect_row.coordination_partition_id OR
+         assignment_row.partition_epoch IS DISTINCT FROM effect_row.coordination_partition_epoch OR
+         assignment_row.node_incarnation_id IS DISTINCT FROM effect_row.coordination_node_incarnation_id OR
+         assignment_row.supervisor_id IS DISTINCT FROM effect_row.claim_supervisor_id OR
+         assignment_row.local_task_id IS DISTINCT FROM effect_row.claim_task_id THEN
+        RAISE EXCEPTION 'Effect and task assignment identities do not match'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      pair_valid := CASE effect_row.status
+        WHEN 'claimed' THEN
+          assignment_row.state IN ('reserved', 'running') AND
+          assignment_row.provider_boundary = 'not_entered'
+        WHEN 'executing' THEN
+          assignment_row.state = 'running' AND
+          assignment_row.provider_boundary = 'entered'
+        WHEN 'cancelling' THEN
+          assignment_row.state IN ('termination_requested', 'termination_proven') AND
+          assignment_row.provider_boundary IN ('not_entered', 'entered', 'outcome_unknown')
+        WHEN 'completed' THEN
+          assignment_row.state = 'settled' AND
+          assignment_row.provider_boundary = 'outcome_known' AND
+          assignment_row.outcome = 'completed'
+        WHEN 'failed' THEN
+          CASE
+            WHEN effect_row.error = 'effect_outcome_ambiguous' THEN
+              assignment_row.state = 'outcome_ambiguous' AND
+              assignment_row.provider_boundary = 'outcome_unknown' AND
+              assignment_row.outcome = 'provider_outcome_ambiguous'
+            ELSE
+              assignment_row.state = 'settled' AND (
+                (assignment_row.provider_boundary = 'outcome_known' AND
+                 assignment_row.outcome = 'failed') OR
+                (assignment_row.provider_boundary = 'not_entered' AND
+                 assignment_row.outcome = 'cancelled_before_provider')
+              )
+          END
+        WHEN 'cancelled' THEN
+          assignment_row.state = 'settled' AND
+          assignment_row.provider_boundary = 'not_entered' AND
+          assignment_row.outcome = 'cancelled_before_provider'
+        ELSE false
+      END;
+
+      IF pair_valid IS NOT TRUE THEN
+        RAISE EXCEPTION 'Effect and task assignment final states are inconsistent'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'runtime or Effect protocol row is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_effect_assignment_final_pair_effect_trigger ON public.effects"
+    )
+
+    execute("""
+    CREATE CONSTRAINT TRIGGER enforce_effect_assignment_final_pair_effect_trigger
+      AFTER INSERT OR UPDATE ON public.effects
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_effect_assignment_final_pair()
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_effect_assignment_final_pair_assignment_trigger " <>
+        "ON public.runtime_task_assignments"
+    )
+
+    execute("""
+    CREATE CONSTRAINT TRIGGER enforce_effect_assignment_final_pair_assignment_trigger
+      AFTER INSERT OR UPDATE ON public.runtime_task_assignments
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_effect_assignment_final_pair()
     """)
 
     # Physical Agent termination is a durable evidence protocol. Expiry and
@@ -3235,6 +3539,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           ('public.enforce_coordinated_agent_directive()'::regprocedure),
           ('public.enforce_coordinated_agent_lease()'::regprocedure),
           ('public.enforce_coordinated_effect()'::regprocedure),
+          ('public.enforce_effect_assignment_final_pair()'::regprocedure),
           ('public.enforce_agent_termination_incident()'::regprocedure),
           ('public.enforce_agent_termination_proof()'::regprocedure),
           ('public.enforce_agent_termination_partition_release()'::regprocedure),
@@ -3308,6 +3613,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.agent_directives'::regclass, 'enforce_coordinated_agent_directive_trigger'),
           ('public.agent_runtime_leases'::regclass, 'enforce_coordinated_agent_lease_trigger'),
           ('public.effects'::regclass, 'enforce_coordinated_effect_trigger'),
+          ('public.effects'::regclass, 'enforce_effect_assignment_final_pair_effect_trigger'),
+          ('public.runtime_task_assignments'::regclass,
+           'enforce_effect_assignment_final_pair_assignment_trigger'),
           ('public.agent_termination_incidents'::regclass, 'enforce_agent_termination_incident_trigger'),
           ('public.agent_termination_incidents'::regclass, 'reject_agent_termination_incidents_truncate_trigger'),
           ('public.agent_termination_proofs'::regclass, 'enforce_agent_termination_proof_trigger'),
@@ -3610,6 +3918,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           'enforce_runtime_work_role()', 'enforce_coordinated_background_job()',
           'enforce_coordinated_scheduled_job()', 'enforce_coordinated_agent_directive()',
           'enforce_coordinated_agent_lease()', 'enforce_coordinated_effect()',
+          'enforce_effect_assignment_final_pair()',
           'enforce_agent_termination_incident()', 'enforce_agent_termination_proof()',
           'enforce_agent_termination_partition_release()',
           'runtime_coordination_catalog_ready_count()'
@@ -3667,6 +3976,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.enforce_coordinated_agent_directive()'::regprocedure),
         ('public.enforce_coordinated_agent_lease()'::regprocedure),
         ('public.enforce_coordinated_effect()'::regprocedure),
+        ('public.enforce_effect_assignment_final_pair()'::regprocedure),
         ('public.enforce_agent_termination_incident()'::regprocedure),
         ('public.enforce_agent_termination_proof()'::regprocedure),
         ('public.enforce_agent_termination_partition_release()'::regprocedure),
@@ -3731,6 +4041,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.agent_directives'::regclass, 'enforce_coordinated_agent_directive_trigger'),
         ('public.agent_runtime_leases'::regclass, 'enforce_coordinated_agent_lease_trigger'),
         ('public.effects'::regclass, 'enforce_coordinated_effect_trigger'),
+        ('public.effects'::regclass, 'enforce_effect_assignment_final_pair_effect_trigger'),
+        ('public.runtime_task_assignments'::regclass,
+         'enforce_effect_assignment_final_pair_assignment_trigger'),
         ('public.agent_termination_incidents'::regclass, 'enforce_agent_termination_incident_trigger'),
         ('public.agent_termination_incidents'::regclass, 'reject_agent_termination_incidents_truncate_trigger'),
         ('public.agent_termination_proofs'::regclass, 'enforce_agent_termination_proof_trigger'),
