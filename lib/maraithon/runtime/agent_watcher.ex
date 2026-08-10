@@ -18,6 +18,7 @@ defmodule Maraithon.Runtime.AgentWatcher do
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentSupervisor
+  alias Maraithon.Runtime.AgentTerminations
   alias Maraithon.Runtime.Config
   alias Maraithon.Runtime.IncidentLog
 
@@ -28,6 +29,7 @@ defmodule Maraithon.Runtime.AgentWatcher do
   @default_crash_loop_max 3
   @default_crash_loop_window_ms 600_000
   @default_reresume_backoffs [5_000, 15_000, 30_000]
+  @shutdown_down_barrier_ms 25_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, @name))
@@ -55,9 +57,10 @@ defmodule Maraithon.Runtime.AgentWatcher do
   def track(_server, _pid, _agent_id, _owner_token), do: {:error, :invalid_agent_owner}
 
   @doc """
-  Reconciles a token loss through the same guard-first path as a monitor DOWN.
+  Persists an ambiguous owner-loss request without claiming physical DOWN.
 
-  The launcher uses this only for ambiguous start failures after preclaim.
+  This compatibility entry point is intentionally non-proving.  Only the
+  monitor message handled by this GenServer can create local DOWN proof.
   """
   def record_owner_down(server, agent_id, owner_token, pid, reason)
       when is_binary(agent_id) and is_binary(owner_token) and is_pid(pid) do
@@ -105,11 +108,26 @@ defmodule Maraithon.Runtime.AgentWatcher do
       reresume_backoffs:
         opts
         |> Keyword.get(:reresume_backoffs, configured_backoffs())
-        |> normalize_backoffs()
+        |> normalize_backoffs(),
+      shutdown_down_barrier_ms:
+        opts
+        |> Keyword.get(:shutdown_down_barrier_ms, @shutdown_down_barrier_ms)
+        |> max(0)
+        |> min(30_000)
     }
 
     if state.reconcile?, do: send(self(), :reconcile)
     {:ok, state}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    # Runtime.Supervisor stops its Agent children before the application stops
+    # this parent-level guardian. Consume their real monitor signals and commit
+    # proofs while Repo is still online; a timeout remains ambiguous.
+    deadline = System.monotonic_time(:millisecond) + state.shutdown_down_barrier_ms
+    drain_shutdown_downs(state, deadline)
+    :ok
   end
 
   @impl true
@@ -129,13 +147,13 @@ defmodule Maraithon.Runtime.AgentWatcher do
   end
 
   def handle_call(
-        {:record_owner_down, agent_id, owner_token, pid, reason},
+        {:record_owner_down, agent_id, owner_token, _pid, reason},
         _from,
         state
       ) do
     case validate_exact_owner(agent_id, owner_token) do
       :ok ->
-        {result, state} = handle_agent_down(agent_id, owner_token, pid, reason, state)
+        result = AgentTerminations.request_ambiguous(agent_id, owner_token, reason)
         {:reply, {:ok, result}, state}
 
       {:error, error} ->
@@ -146,6 +164,12 @@ defmodule Maraithon.Runtime.AgentWatcher do
   @impl true
   def handle_info(:reconcile, state) do
     state = reconcile_agents(state)
+
+    if Application.get_env(:maraithon, :start_background_workers, true) do
+      _requested = AgentTerminations.request_expired_batch(100)
+      _reconciled = AgentTerminations.reconcile_due(100)
+    end
+
     schedule_reconcile(state.poll_interval_ms)
     {:noreply, state}
   end
@@ -155,8 +179,21 @@ defmodule Maraithon.Runtime.AgentWatcher do
 
     state =
       case monitor do
-        %{agent_id: agent_id, owner_token: owner_token} ->
-          {_result, state} = handle_agent_down(agent_id, owner_token, pid, reason, state)
+        %{
+          agent_id: agent_id,
+          owner_token: owner_token,
+          started_at: monitor_started_at
+        } ->
+          {_result, state} =
+            handle_agent_down(
+              agent_id,
+              owner_token,
+              pid,
+              reason,
+              monitor_started_at,
+              state
+            )
+
           state
 
         nil ->
@@ -371,20 +408,37 @@ defmodule Maraithon.Runtime.AgentWatcher do
      }}
   end
 
-  defp handle_agent_down(agent_id, owner_token, pid, reason, state) do
+  defp handle_agent_down(
+         agent_id,
+         owner_token,
+         pid,
+         reason,
+         monitor_started_at,
+         state
+       ) do
     guard_opts = [
       window_ms: state.crash_loop_window_ms,
       max_crashes: state.crash_loop_max,
       backoffs_ms: state.reresume_backoffs
     ]
 
-    case safe_record_crash(agent_id, owner_token, reason, guard_opts) do
+    case safe_record_down(
+           agent_id,
+           owner_token,
+           pid,
+           reason,
+           monitor_started_at,
+           guard_opts
+         ) do
       {:recorded, guard} = result ->
         state = record_exact_crash(agent_id, owner_token, pid, reason, guard, state)
         {result, state}
 
       {:duplicate, guard} = result ->
         {result, recover_and_schedule(agent_id, owner_token, guard, state)}
+
+      {:reconciled_without_loss, _incident} = result ->
+        {result, state}
 
       {:ignored, :stale_owner} = result ->
         {result, state}
@@ -465,8 +519,15 @@ defmodule Maraithon.Runtime.AgentWatcher do
     end
   end
 
-  defp safe_record_crash(agent_id, owner_token, reason, opts) do
-    AgentRestartGuards.record_crash(agent_id, owner_token, reason, opts)
+  defp safe_record_down(agent_id, owner_token, pid, reason, monitor_started_at, opts) do
+    AgentTerminations.record_local_down(
+      agent_id,
+      owner_token,
+      pid,
+      reason,
+      monitor_started_at,
+      opts
+    )
   rescue
     error -> {:error, error}
   catch
@@ -531,6 +592,44 @@ defmodule Maraithon.Runtime.AgentWatcher do
   end
 
   defp normalize_backoffs(_other), do: @default_reresume_backoffs
+
+  defp drain_shutdown_downs(%{monitors: monitors} = state, _deadline)
+       when map_size(monitors) == 0,
+       do: state
+
+  defp drain_shutdown_downs(state, deadline) do
+    remaining = max(0, deadline - System.monotonic_time(:millisecond))
+
+    receive do
+      {:DOWN, ref, :process, pid, reason} ->
+        {monitor, state} = pop_monitor(state, ref, pid)
+
+        state =
+          case monitor do
+            %{agent_id: agent_id, owner_token: owner_token, started_at: started_at} ->
+              _ =
+                safe_record_down(
+                  agent_id,
+                  owner_token,
+                  pid,
+                  reason,
+                  started_at,
+                  window_ms: state.crash_loop_window_ms,
+                  max_crashes: state.crash_loop_max,
+                  backoffs_ms: state.reresume_backoffs
+                )
+
+              state
+
+            nil ->
+              state
+          end
+
+        drain_shutdown_downs(state, deadline)
+    after
+      remaining -> state
+    end
+  end
 
   defp schedule_reconcile(delay_ms), do: Process.send_after(self(), :reconcile, delay_ms)
 end

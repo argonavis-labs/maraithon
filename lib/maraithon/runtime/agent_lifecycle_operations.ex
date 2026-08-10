@@ -32,6 +32,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   alias Maraithon.Runtime.AgentLifecycleOperation
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
+  alias Maraithon.Runtime.AgentTerminationIncident
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Coordination.Scope
   alias Maraithon.Runtime.EffectRunner
@@ -75,7 +76,10 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
         operation = lock_operation(agent_id)
+        termination_incident = lock_open_termination_incident(agent_id)
         now = DatabaseClock.now!()
+
+        if termination_incident, do: Repo.rollback(:agent_termination_unproven)
 
         case operation do
           %AgentLifecycleOperation{} = existing ->
@@ -322,6 +326,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     guard = lock_guard(agent_id)
     lease = lock_lease(agent_id)
     operation = lock_operation(agent_id) || Repo.rollback(:lifecycle_operation_not_found)
+    termination_incident = lock_open_termination_incident(agent_id)
     now = DatabaseClock.now!()
 
     validate_operation!(operation, operation_token)
@@ -333,6 +338,9 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
       operation.requires_external_drain and is_nil(operation.external_drain_confirmed_at) ->
         {:pending, :external_fleet_drain_required, touch!(operation, now)}
+
+      not is_nil(termination_incident) ->
+        {:pending, :agent_termination_unproven, touch!(operation, now)}
 
       live_lease?(lease, now) ->
         {:pending, :runtime_lease_owned, touch!(operation, now)}
@@ -985,6 +993,16 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     Repo.one(
       from(lease in AgentRuntimeLease,
         where: lease.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_open_termination_incident(agent_id) do
+    Repo.one(
+      from(incident in AgentTerminationIncident,
+        where: incident.agent_id == ^agent_id,
+        where: incident.status in ["requested", "proven"],
         lock: "FOR UPDATE"
       )
     )
