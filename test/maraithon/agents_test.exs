@@ -154,6 +154,8 @@ defmodule Maraithon.AgentsTest do
       assert agent.agent_package_id == package.id
       assert agent.agent_package_version_id == package.latest_version.id
       assert agent.config["prompt"] == "Use the model for every semantic decision."
+      assert agent.install_status == "setup_required"
+      assert agent.status == "stopped"
 
       assert [%Agent{id: installed_id}] = Agents.list_agents(user_id: user_id)
       assert installed_id == agent.id
@@ -194,6 +196,8 @@ defmodule Maraithon.AgentsTest do
       assert {:ok, agent} = Agents.install_agent_package("manifest@example.com", slug)
       assert agent.behavior == "manifest_agent"
       assert agent.config["agent_package_version_id"] == package.latest_version.id
+      assert agent.install_status == "setup_required"
+      assert agent.status == "stopped"
     end
 
     test "accepts atom-keyed package manifests" do
@@ -385,6 +389,85 @@ defmodule Maraithon.AgentsTest do
       assert [%{id: step_id}] = listed.steps
       assert step_id == step.id
     end
+
+    test "creation only admits running Runs and requested RunSteps" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+
+      assert {:error, :invalid_agent_run_status} =
+               Agents.start_agent_run(agent, %{status: "completed"})
+
+      assert Repo.aggregate(AgentRun, :count) == 0
+      assert {:ok, run} = Agents.start_agent_run(agent)
+
+      assert {:error, :invalid_agent_run_step_status} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 step_type: "llm_call",
+                 status: "completed"
+               })
+
+      assert Repo.aggregate(AgentRunStep, :count) == 0
+    end
+
+    test "rejects Run and RunStep reparenting while preserving terminal provider fields" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      {:ok, other_agent} = Agents.create_agent(@valid_attrs)
+      {:ok, run} = Agents.start_agent_run(agent)
+      {:ok, other_run} = Agents.start_agent_run(other_agent)
+
+      {:ok, step} =
+        Agents.record_agent_run_step(run.id, agent.id, %{
+          step_type: "llm_call",
+          status: "requested"
+        })
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.update_agent_run(run.id, %{
+                 "agent_id" => other_agent.id,
+                 "status" => "completed",
+                 "finish_reason" => "forged"
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, %{
+                 agent_run_id: other_run.id,
+                 status: "completed",
+                 finish_reason: "forged"
+               })
+
+      assert {:error, :run_step_not_owned} =
+               Agents.update_agent_run_step(
+                 step.id,
+                 other_agent.id,
+                 other_run.id,
+                 %{status: "completed", finish_reason: "forged"}
+               )
+
+      assert {:ok, completed_step} =
+               Agents.update_agent_run_step(step.id, %{
+                 status: "completed",
+                 resolved_model: "gpt-5.4",
+                 intelligence: "high",
+                 finish_reason: "stop",
+                 generation_mode: "llm"
+               })
+
+      assert completed_step.agent_id == agent.id
+      assert completed_step.agent_run_id == run.id
+      assert completed_step.sequence == step.sequence
+      assert completed_step.finish_reason == "stop"
+
+      assert {:ok, completed_run} =
+               Agents.complete_agent_run(run.id, %{
+                 resolved_model: "gpt-5.4",
+                 intelligence: "high",
+                 finish_reason: "stop",
+                 generation_mode: "llm"
+               })
+
+      assert completed_run.agent_id == agent.id
+      assert completed_run.finish_reason == "stop"
+      assert completed_run.generation_mode == "llm"
+    end
   end
 
   describe "count_by_status/1" do
@@ -437,7 +520,7 @@ defmodule Maraithon.AgentsTest do
       {:ok, agent} =
         Agents.create_agent(Map.merge(@valid_attrs, %{status: "stopped", user_id: user_id}))
 
-      {:ok, _binding} = AgentIsolation.upsert_binding(agent)
+      {:ok, _binding} = AgentIsolation.grant_binding_consent(agent, binding_consent(agent))
 
       assert {:ok, claimed} = Agents.claim_agent_start(agent.id)
       assert claimed.status == "running"

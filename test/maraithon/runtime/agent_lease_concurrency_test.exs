@@ -31,7 +31,9 @@ defmodule Maraithon.Runtime.AgentLeaseConcurrencyTest do
             status: "running"
           })
 
-        {:ok, binding} = AgentIsolation.upsert_binding(agent)
+        {:ok, binding} =
+          AgentIsolation.grant_binding_consent(agent, Maraithon.DataCase.binding_consent(agent))
+
         {agent, binding}
       end)
 

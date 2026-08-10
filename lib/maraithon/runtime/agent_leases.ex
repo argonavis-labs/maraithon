@@ -4,8 +4,8 @@ defmodule Maraithon.Runtime.AgentLeases do
 
   Registry, PID, node name, and `agents.status` are never ownership proof. The
   immutable UUID token plus a live database lease is lifecycle authority;
-  workload authority additionally requires readiness and current desired-state
-  and Binding consent.
+  workload authority additionally requires readiness, current desired-state,
+  Binding consent, an open exact-runtime gate, and no lifecycle marker.
   """
 
   import Ecto.Query
@@ -14,9 +14,11 @@ defmodule Maraithon.Runtime.AgentLeases do
   alias Maraithon.Agents.Agent
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirective
+  alias Maraithon.Runtime.AgentLifecycleOperation
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
 
   @default_ttl_ms 60_000
   @min_ttl_ms 1_000
@@ -26,7 +28,8 @@ defmodule Maraithon.Runtime.AgentLeases do
   def claim(agent_id, opts \\ [])
 
   def claim(agent_id, opts) when is_list(opts) do
-    with {:ok, agent_id} <- cast_uuid(agent_id),
+    with :ok <- exact_runtime_enabled(),
+         {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_node} <- owner_node(opts),
          {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms, :owner_node]) do
       owner_token = Ecto.UUID.generate()
@@ -36,8 +39,10 @@ defmodule Maraithon.Runtime.AgentLeases do
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
         {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
+        ensure_no_lifecycle_operation!(operation)
         ensure_runnable!(agent)
         ensure_binding_matches!(agent, binding)
         ensure_initial_guard_allows_claim!(guard, now)
@@ -54,7 +59,8 @@ defmodule Maraithon.Runtime.AgentLeases do
   def claim_recovery(agent_id, guard_generation, opts \\ [])
 
   def claim_recovery(agent_id, guard_generation, opts) when is_list(opts) do
-    with {:ok, agent_id} <- cast_uuid(agent_id),
+    with :ok <- exact_runtime_enabled(),
+         {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, guard_generation} <- cast_uuid(guard_generation),
          {:ok, owner_node} <- owner_node(opts),
          {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms, :owner_node]) do
@@ -65,8 +71,10 @@ defmodule Maraithon.Runtime.AgentLeases do
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
         {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
+        ensure_no_lifecycle_operation!(operation)
         ensure_runnable!(agent)
         ensure_binding_matches!(agent, binding)
         ensure_due_recovery_guard!(guard, guard_generation, now)
@@ -84,7 +92,8 @@ defmodule Maraithon.Runtime.AgentLeases do
   def renew(agent_id, owner_token, opts \\ [])
 
   def renew(agent_id, owner_token, opts) when is_list(opts) do
-    with {:ok, agent_id} <- cast_uuid(agent_id),
+    with :ok <- exact_runtime_enabled(),
+         {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token),
          {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms]) do
       Repo.transaction(fn ->
@@ -92,12 +101,13 @@ defmodule Maraithon.Runtime.AgentLeases do
         binding = lock_binding(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
         {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
         ensure_exact_live_lease!(lease, owner_token, now)
 
         runnable? =
-          runnable?(agent) and binding_matches?(agent, binding) and
+          is_nil(operation) and runnable?(agent) and binding_matches?(agent, binding) and
             guard_allows_ready?(guard, now)
 
         updates =
@@ -128,7 +138,8 @@ defmodule Maraithon.Runtime.AgentLeases do
   def renew_recovery(agent_id, owner_token, guard_generation, opts \\ [])
 
   def renew_recovery(agent_id, owner_token, guard_generation, opts) when is_list(opts) do
-    with {:ok, agent_id} <- cast_uuid(agent_id),
+    with :ok <- exact_runtime_enabled(),
+         {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token),
          {:ok, guard_generation} <- cast_uuid(guard_generation),
          {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms]) do
@@ -137,8 +148,10 @@ defmodule Maraithon.Runtime.AgentLeases do
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
         {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
+        ensure_no_lifecycle_operation!(operation)
         ensure_runnable!(agent)
         ensure_binding_matches!(agent, binding)
         ensure_due_recovery_guard!(guard, guard_generation, now)
@@ -157,15 +170,18 @@ defmodule Maraithon.Runtime.AgentLeases do
     do: {:error, :invalid_runtime_lease}
 
   def mark_ready(agent_id, owner_token) do
-    with {:ok, agent_id} <- cast_uuid(agent_id),
+    with :ok <- exact_runtime_enabled(),
+         {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
       Repo.transaction(fn ->
         agent = lock_agent!(agent_id)
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
         now = DatabaseClock.now!()
 
+        ensure_no_lifecycle_operation!(operation)
         ensure_runnable!(agent)
         ensure_binding_matches!(agent, binding)
         ensure_initial_guard_allows_claim!(guard, now)
@@ -178,7 +194,8 @@ defmodule Maraithon.Runtime.AgentLeases do
   end
 
   def finish_recovery(agent_id, owner_token, guard_generation) do
-    with {:ok, agent_id} <- cast_uuid(agent_id),
+    with :ok <- exact_runtime_enabled(),
+         {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token),
          {:ok, guard_generation} <- cast_uuid(guard_generation) do
       Repo.transaction(fn ->
@@ -186,8 +203,10 @@ defmodule Maraithon.Runtime.AgentLeases do
         binding = lock_active_binding!(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
         now = DatabaseClock.now!()
 
+        ensure_no_lifecycle_operation!(operation)
         ensure_runnable!(agent)
         ensure_binding_matches!(agent, binding)
         ensure_due_recovery_guard!(guard, guard_generation, now)
@@ -224,7 +243,9 @@ defmodule Maraithon.Runtime.AgentLeases do
         _binding = lock_binding(agent)
         _guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
         {now, drain_until} = DatabaseClock.window!(ttl_ms)
+        ensure_no_lifecycle_operation!(operation)
 
         {lease_state, fenced_lease} =
           cond do
@@ -280,6 +301,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         _binding = lock_binding(agent)
         _guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        _operation = lock_operation(agent_id)
         now = DatabaseClock.now!()
 
         ensure_exact_live_lease!(lease, owner_token, now)
@@ -302,6 +324,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         _guard = lock_guard(agent_id)
 
         lease = lock_lease(agent_id)
+        _operation = lock_operation(agent_id)
         now = DatabaseClock.now!()
         ensure_exact_live_lease!(lease, owner_token, now)
         ensure_no_processing_directive!(agent_id, :runtime_work_in_progress)
@@ -327,16 +350,18 @@ defmodule Maraithon.Runtime.AgentLeases do
   end
 
   def ready?(agent_id, owner_token) do
-    with {:ok, agent_id} <- cast_uuid(agent_id),
+    with :ok <- exact_runtime_enabled(),
+         {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
       Repo.exists?(ready_query(agent_id, owner_token))
     else
-      _invalid -> false
+      _invalid_or_disabled -> false
     end
   end
 
   def fence_owner!(agent_id, owner_token) do
     require_transaction!()
+    ensure_exact_runtime_enabled!()
 
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
@@ -344,6 +369,7 @@ defmodule Maraithon.Runtime.AgentLeases do
       _binding = lock_binding(agent)
       _guard = lock_guard(agent_id)
       lease = lock_lease(agent_id)
+      _operation = lock_operation(agent_id)
       now = DatabaseClock.now!()
 
       ensure_exact_live_lease!(lease, owner_token, now)
@@ -355,6 +381,7 @@ defmodule Maraithon.Runtime.AgentLeases do
 
   def fence_ready!(agent_id, owner_token) do
     require_transaction!()
+    ensure_exact_runtime_enabled!()
 
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
@@ -362,8 +389,10 @@ defmodule Maraithon.Runtime.AgentLeases do
       binding = lock_active_binding!(agent)
       guard = lock_guard(agent_id)
       lease = lock_lease(agent_id)
+      operation = lock_operation(agent_id)
       now = DatabaseClock.now!()
 
+      ensure_no_lifecycle_operation!(operation)
       ensure_runnable!(agent)
       ensure_binding_matches!(agent, binding)
       ensure_initial_guard_allows_claim!(guard, now)
@@ -389,6 +418,8 @@ defmodule Maraithon.Runtime.AgentLeases do
       on: binding.agent_id == agent.id and binding.user_id == agent.user_id,
       left_join: guard in AgentRestartGuard,
       on: guard.agent_id == agent.id,
+      left_join: operation in AgentLifecycleOperation,
+      on: operation.agent_id == agent.id,
       where: lease.agent_id == ^agent_id,
       where: lease.owner_token == ^owner_token,
       where: lease.lease_until > fragment("timezone('UTC', clock_timestamp())"),
@@ -398,6 +429,7 @@ defmodule Maraithon.Runtime.AgentLeases do
       where: agent.status in ^@runnable_statuses,
       where: not is_nil(agent.user_id),
       where: binding.status == "active",
+      where: is_nil(operation.agent_id),
       where:
         is_nil(guard.agent_id) or
           (guard.tripped == false and guard.needs_recovery == false and
@@ -469,6 +501,31 @@ defmodule Maraithon.Runtime.AgentLeases do
         lock: "FOR UPDATE"
       )
     )
+  end
+
+  defp lock_operation(agent_id) do
+    Repo.one(
+      from(operation in AgentLifecycleOperation,
+        where: operation.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp ensure_no_lifecycle_operation!(nil), do: :ok
+  defp ensure_no_lifecycle_operation!(_operation), do: Repo.rollback(:agent_drain_pending)
+
+  defp ensure_exact_runtime_enabled! do
+    case exact_runtime_enabled() do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp exact_runtime_enabled do
+    if RuntimeConfig.exact_agent_runtime_enabled?(),
+      do: :ok,
+      else: {:error, :exact_runtime_disabled}
   end
 
   defp ensure_runnable!(agent) do

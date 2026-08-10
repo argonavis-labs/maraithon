@@ -40,7 +40,7 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     :ok
   end
 
-  test "fresh user connects requirements, creates a project, and installs enabled Chief of Staff",
+  test "explicit same-user Chief consent enables the installation and records exact grants",
        %{conn: conn} do
     user_id = "self-serve-enabled-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -70,6 +70,7 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
       view
       |> form("#chief-of-staff-install-form",
         project_id: project.id,
+        binding_consent: %{acknowledged: "true"},
         schedule: %{
           morning_brief_hour_local: "9",
           timezone: "America/Los_Angeles"
@@ -85,6 +86,15 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     assert agent.project_id == project.id
     assert agent.install_status == "enabled"
     assert agent.status == "running"
+
+    binding = Maraithon.AgentIsolation.get_binding(agent.id)
+    assert binding.status == "active"
+    assert binding.user_id == user_id
+    assert binding.consent_token != nil
+    assert binding.memory_scope == %{"project_id" => project.id}
+    assert binding.connector_scope["google"]["services"] == ["calendar", "gmail"]
+    assert binding.connector_scope["telegram"]["services"] == ["delivery"]
+    assert "telegram.send" in binding.tool_policy["allowed_tools"]
     assert agent.delivery_policy == %{"telegram" => "enabled"}
     assert agent.config["source_behavior"] == "ai_chief_of_staff"
     assert agent.config["morning_brief_hour_local"] == 9
@@ -219,28 +229,16 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
 
     agent = Agents.get_agent!(redirect_id |> String.split("&") |> List.first())
     assert agent.id == setup_agent.id
-    assert agent.install_status == "enabled"
-    assert agent.status == "running"
-    assert agent.config["morning_brief_hour_local"] == 10
-    assert agent.config["timezone"] == "America/Toronto"
-    assert agent.config["timezone_offset_hours"] == -5
-
-    assert get_in(agent.config, ["skill_configs", "morning_briefing", "morning_brief_hour_local"]) ==
-             10
-
-    assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone"]) ==
-             "America/Toronto"
-
-    assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone_offset_hours"]) ==
-             -5
+    assert agent.install_status == "setup_required"
+    assert agent.status == "stopped"
+    assert Maraithon.AgentIsolation.get_binding(agent.id) == nil
+    # OAuth readiness and a repeat install submit are not a consent envelope;
+    # even config/install mutation stays fail-closed.
+    assert agent.config["morning_brief_hour_local"] == 7
+    assert agent.config["timezone_offset_hours"] == 1
 
     due_agents = BriefingSchedules.list_due_morning_agents(~U[2026-05-08 14:05:00Z])
-    due_agent = Enum.find(due_agents, &(&1.agent_id == agent.id))
-    assert due_agent
-    assert due_agent.timezone_name == "America/Toronto"
-    assert due_agent.timezone_offset_hours == -4
-
-    stop_agent_process(agent.id)
+    refute Enum.any?(due_agents, &(&1.agent_id == agent.id))
   end
 
   test "default marketplace bootstrap does not install for a connected non-admin user" do

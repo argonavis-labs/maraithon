@@ -31,6 +31,17 @@ defmodule Maraithon.Runtime.Config do
   end
 
   @doc """
+  Returns whether this revision may participate in the exact Agent runtime.
+
+  This is deliberately fail-closed. Production must enable it only after the
+  externally verified non-rolling legacy fleet drain described in the rollout
+  runbook; process registries and BootGate are not fleet-absence proof.
+  """
+  def exact_agent_runtime_enabled? do
+    get(:exact_agent_runtime_enabled, false) == true
+  end
+
+  @doc """
   Returns absolute allowed tool root directories.
   """
   def tool_allowed_paths do

@@ -32,6 +32,8 @@ config :maraithon, allow_insecure_vault: true
 config :maraithon, start_background_workers: false
 
 config :maraithon, Maraithon.Runtime,
+  # Exact-runtime suites opt in explicitly; production defaults false.
+  exact_agent_runtime_enabled: true,
   llm_provider: Maraithon.LLM.MockProvider,
   llm_provider_name: "mock",
   llm_model: "mock-v1",

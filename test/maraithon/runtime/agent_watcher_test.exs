@@ -142,7 +142,7 @@ defmodule Maraithon.Runtime.AgentWatcherTest do
              started_at: DateTime.utc_now(),
              config: %{"name" => name}
            }),
-         {:ok, _binding} <- AgentIsolation.upsert_binding(agent) do
+         {:ok, _binding} <- AgentIsolation.grant_binding_consent(agent, binding_consent(agent)) do
       {:ok, agent}
     end
   end

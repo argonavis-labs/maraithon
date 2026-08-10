@@ -40,6 +40,22 @@ defmodule Maraithon.DataCase do
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
   end
 
+  @doc "Returns a complete explicit same-user Binding consent envelope for tests."
+  def binding_consent(agent, overrides \\ %{}) when is_map(overrides) do
+    %{
+      "actor_id" => agent.user_id,
+      "user_id" => agent.user_id,
+      "identity_key" => "agent:#{agent.id}",
+      "credential_refs" => %{},
+      "connector_scope" => agent.connector_grants || %{},
+      "memory_scope" => agent.memory_scope || %{},
+      "tool_policy" => %{},
+      "routing_bindings" => %{},
+      "metadata" => %{"source" => "test_explicit_consent"}
+    }
+    |> Map.merge(Maraithon.Normalization.stringify_keys(overrides))
+  end
+
   @doc """
   A helper that transforms changeset errors into a map of messages.
 

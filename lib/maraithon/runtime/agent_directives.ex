@@ -6,7 +6,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
   schedule early. Claim is a workload-entry operation and therefore requires a
   live ready lease. Renew/terminal settlement use the exact live owner fence so
   a draining owner can durably finish already-started work. Every mutating path
-  follows Agent -> same-user Binding -> Guard -> Lease -> Directive lock order.
+  follows Agent -> same-user Binding -> Guard -> Lease -> LifecycleOperation
+  -> Directive lock order.
   """
 
   import Ecto.Query
@@ -17,6 +18,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentLeases
+  alias Maraithon.Runtime.AgentLifecycleOperation
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentRuntimeLease
@@ -48,6 +50,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
         binding = lock_binding(agent)
         _guard = lock_guard(agent_id)
         _lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
+        if operation, do: Repo.rollback(:agent_drain_pending)
         ensure_runnable_owner!(agent, user_id, binding)
         now = DatabaseClock.now!()
 
@@ -244,6 +248,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
         _binding = lock_binding(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        _operation = lock_operation(agent_id)
 
         ensure_recorded_generation!(guard, lease, owner_generation)
 
@@ -391,6 +396,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
         on: lease.agent_id == agent.id,
         left_join: guard in AgentRestartGuard,
         on: guard.agent_id == agent.id,
+        left_join: operation in AgentLifecycleOperation,
+        on: operation.agent_id == agent.id,
         where: directive.status == "pending",
         where: directive.available_at <= fragment("timezone('UTC', clock_timestamp())"),
         where: directive.attempts < directive.max_attempts,
@@ -398,6 +405,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
         where: agent.status in ^@runnable_statuses,
         where: binding.status == "active",
         where: is_nil(lease.agent_id),
+        where: is_nil(operation.agent_id),
         where:
           is_nil(guard.agent_id) or
             (guard.tripped == false and guard.needs_recovery == false and
@@ -424,6 +432,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
         on: binding.agent_id == agent.id and binding.user_id == agent.user_id,
         left_join: lease in AgentRuntimeLease,
         on: lease.agent_id == agent.id,
+        left_join: operation in AgentLifecycleOperation,
+        on: operation.agent_id == agent.id,
         where: guard.needs_recovery == true,
         where: guard.tripped == false,
         where:
@@ -433,6 +443,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
         where: agent.status in ^@runnable_statuses,
         where: binding.status == "active",
         where: is_nil(lease.agent_id),
+        where: is_nil(operation.agent_id),
         order_by: [asc: guard.blocked_until, asc: guard.updated_at, asc: agent.id],
         limit: ^limit,
         select: agent.id
@@ -521,6 +532,15 @@ defmodule Maraithon.Runtime.AgentDirectives do
     Repo.one(
       from(lease in AgentRuntimeLease,
         where: lease.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_operation(agent_id) do
+    Repo.one(
+      from(operation in AgentLifecycleOperation,
+        where: operation.agent_id == ^agent_id,
         lock: "FOR UPDATE"
       )
     )

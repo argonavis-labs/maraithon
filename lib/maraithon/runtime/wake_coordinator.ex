@@ -11,6 +11,7 @@ defmodule Maraithon.Runtime.WakeCoordinator do
 
   alias Maraithon.Agents
   alias Maraithon.Runtime.AgentDirectives
+  alias Maraithon.Runtime.AgentLifecycleOperations
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentWatcher
@@ -38,6 +39,16 @@ defmodule Maraithon.Runtime.WakeCoordinator do
   def reconcile_once(opts \\ [])
 
   def reconcile_once(opts) when is_list(opts) do
+    if Config.exact_agent_runtime_enabled?() do
+      do_reconcile_once(opts)
+    else
+      {:ok, %{ownership: [], recorded: [], lifecycle: [], recoveries: [], gate: :closed}}
+    end
+  end
+
+  def reconcile_once(_opts), do: {:error, :invalid_reconciliation_options}
+
+  defp do_reconcile_once(opts) do
     with :ok <- validate_options(opts),
          {:ok, limit} <- reconciliation_limit(opts),
          ownership when is_list(ownership) <-
@@ -49,6 +60,8 @@ defmodule Maraithon.Runtime.WakeCoordinator do
          recorded when is_list(recorded) <-
            AgentDirectives.reconcile_recorded_generations(limit),
          :ok <- validate_recorded(recorded) do
+      lifecycle = reconcile_lifecycle_operations(limit)
+
       recoveries =
         if Keyword.get(opts, :admit_recoveries, BootGate.open?()) do
           start_due_recoveries(limit, opts)
@@ -56,7 +69,14 @@ defmodule Maraithon.Runtime.WakeCoordinator do
           []
         end
 
-      {:ok, %{ownership: ownership, recorded: recorded, recoveries: recoveries}}
+      {:ok,
+       %{
+         ownership: ownership,
+         recorded: recorded,
+         lifecycle: lifecycle,
+         recoveries: recoveries,
+         gate: :open
+       }}
     else
       {:error, reason} -> {:error, reason}
       unexpected -> {:error, {:unexpected_ownership_reconciliation, unexpected}}
@@ -66,8 +86,6 @@ defmodule Maraithon.Runtime.WakeCoordinator do
   catch
     :exit, reason -> {:error, reason}
   end
-
-  def reconcile_once(_opts), do: {:error, :invalid_reconciliation_options}
 
   @impl true
   def init(opts) do
@@ -94,6 +112,25 @@ defmodule Maraithon.Runtime.WakeCoordinator do
 
     Process.send_after(self(), :reconcile, state.interval_ms)
     {:noreply, state}
+  end
+
+  defp reconcile_lifecycle_operations(limit) do
+    limit
+    |> AgentLifecycleOperations.list_pending_ids()
+    |> Enum.map(fn agent_id ->
+      result = AgentLifecycleOperations.finalize(agent_id)
+
+      start_result =
+        case result do
+          {:ok, %{status: :finalized, resume_after: true}} ->
+            Maraithon.Runtime.resume_finalized_lifecycle(agent_id, admission: :recovery)
+
+          _pending_or_failed ->
+            :not_started
+        end
+
+      {agent_id, result, start_result}
+    end)
   end
 
   defp start_due_recoveries(limit, opts) do

@@ -3,6 +3,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
   Durable, exact-owner restart backoff and crash-loop fencing.
 
   The guard is written before the matching lease is removed in one transaction.
+  Its lock prefix includes LifecycleOperation after Lease and before Directive.
   A replacement token or a duplicate delayed `:DOWN` can therefore never be
   counted against the current incarnation.
   """
@@ -13,6 +14,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
   alias Maraithon.Agents.Agent
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirective
+  alias Maraithon.Runtime.AgentLifecycleOperation
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
@@ -56,6 +58,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
         _binding = lock_binding(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        _operation = lock_operation(agent_id)
         now = DatabaseClock.now!()
 
         case matching_owner(lease, guard, owner_token) do
@@ -116,8 +119,10 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
         _binding = lock_binding(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
         now = DatabaseClock.now!()
 
+        if operation, do: Repo.rollback(:agent_drain_pending)
         if lease, do: Repo.rollback(:runtime_lease_owned)
         ensure_no_processing_directive!(agent_id)
 
@@ -239,6 +244,15 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
     Repo.one(
       from(lease in AgentRuntimeLease,
         where: lease.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_operation(agent_id) do
+    Repo.one(
+      from(operation in AgentLifecycleOperation,
+        where: operation.agent_id == ^agent_id,
         lock: "FOR UPDATE"
       )
     )

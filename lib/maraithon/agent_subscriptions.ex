@@ -5,9 +5,14 @@ defmodule Maraithon.AgentSubscriptions do
 
   import Ecto.Query
 
+  alias Maraithon.AgentIsolation.Binding
   alias Maraithon.Agents.Agent
   alias Maraithon.AgentSubscriptions.AgentSubscription
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentLifecycleOperation
+  alias Maraithon.Runtime.AgentRestartGuard
+  alias Maraithon.Runtime.AgentRuntimeLease
+  alias Maraithon.Runtime.DatabaseClock
 
   def list_for_agent(agent_id, opts \\ [])
 
@@ -79,37 +84,126 @@ defmodule Maraithon.AgentSubscriptions do
 
   def deactivate_for_agent(_agent_id), do: {0, nil}
 
-  def sync_for_agent(%Agent{} = agent) do
-    desired_topics = normalized_topics(get_in(agent.config || %{}, ["subscribe"]))
-    now = DateTime.utc_now()
-    metadata = %{"source" => "agent_config", "synced_from" => "config.subscribe"}
-
-    Repo.transaction(fn ->
-      case upsert_desired_topics(agent, desired_topics, metadata, now) do
-        :ok ->
-          agent.id
-          |> list_for_agent(status: nil)
-          |> Enum.each(fn subscription ->
-            if subscription.topic in desired_topics do
-              :ok
-            else
-              subscription
-              |> Ecto.Changeset.change(status: "inactive", updated_at: now)
-              |> Repo.update!()
-            end
-          end)
-
-          list_for_agent(agent.id, status: nil)
-
-        {:error, reason} ->
-          Repo.rollback(reason)
-      end
-    end)
+  def sync_for_agent(%Agent{id: agent_id}) when is_binary(agent_id) do
+    Repo.transaction(fn -> lock_and_sync!(agent_id) end)
     |> case do
       {:ok, subscriptions} -> {:ok, subscriptions}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  def sync_for_agent(_agent), do: {:error, :invalid_agent}
+
+  @doc false
+  def sync_for_agent_locked(%Agent{id: agent_id}) when is_binary(agent_id) do
+    if Repo.in_transaction?() do
+      {:ok, lock_and_sync!(agent_id)}
+    else
+      {:error, :transaction_required}
+    end
+  end
+
+  defp lock_and_sync!(agent_id) do
+    agent =
+      Repo.one(from(agent in Agent, where: agent.id == ^agent_id, lock: "FOR UPDATE")) ||
+        Repo.rollback(:agent_not_found)
+
+    binding = lock_same_user_binding(agent)
+    _guard = lock_guard(agent_id)
+    _lease = lock_lease(agent_id)
+    operation = lock_operation(agent_id)
+    sync_locked!(agent, binding, operation)
+  end
+
+  defp sync_locked!(agent, binding, operation) do
+    now = DatabaseClock.now!()
+    metadata = %{"source" => "agent_config", "synced_from" => "config.subscribe"}
+
+    desired_topics =
+      if delivery_authorized?(agent, binding, operation),
+        do: normalized_topics(get_in(agent.config || %{}, ["subscribe"])),
+        else: []
+
+    case upsert_desired_topics(agent, desired_topics, metadata, now) do
+      :ok ->
+        agent.id
+        |> list_for_agent(status: nil)
+        |> Enum.each(fn subscription ->
+          if subscription.topic in desired_topics do
+            :ok
+          else
+            subscription
+            |> Ecto.Changeset.change(status: "inactive", updated_at: now)
+            |> Repo.update!()
+          end
+        end)
+
+        list_for_agent(agent.id, status: nil)
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
+  end
+
+  defp lock_same_user_binding(%Agent{id: agent_id, user_id: user_id})
+       when is_binary(user_id) do
+    Repo.one(
+      from(binding in Binding,
+        where: binding.agent_id == ^agent_id,
+        where: binding.user_id == ^user_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_same_user_binding(_agent), do: nil
+
+  defp lock_guard(agent_id) do
+    Repo.one(
+      from(guard in AgentRestartGuard,
+        where: guard.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_lease(agent_id) do
+    Repo.one(
+      from(lease in AgentRuntimeLease,
+        where: lease.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_operation(agent_id) do
+    Repo.one(
+      from(operation in AgentLifecycleOperation,
+        where: operation.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp delivery_authorized?(
+         %Agent{
+           id: agent_id,
+           user_id: user_id,
+           status: status,
+           install_status: "enabled"
+         },
+         %Binding{
+           agent_id: binding_agent_id,
+           user_id: binding_user_id,
+           status: "active"
+         },
+         nil
+       )
+       when is_binary(user_id) and status in ["running", "degraded"] and
+              binding_agent_id == agent_id and binding_user_id == user_id,
+       do: true
+
+  defp delivery_authorized?(_agent, _binding, _operation), do: false
 
   defp upsert_desired_topics(agent, desired_topics, metadata, now) do
     Enum.reduce_while(desired_topics, :ok, fn topic, :ok ->

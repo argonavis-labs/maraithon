@@ -51,6 +51,21 @@ defmodule Maraithon.Runtime.AgentSupervisor do
 
   def start_agent(_agent, _opts), do: {:error, :invalid_agent_start}
 
+  @doc "Fail-closed static/process admission check used before durable creation."
+  def preflight(opts \\ [])
+
+  def preflight(opts) when is_list(opts) do
+    with :ok <- validate_start_options(opts),
+         :ok <- ensure_admission(opts),
+         {:ok, launch_config} <- launch_config(opts),
+         :ok <- AgentWatcher.ensure_available(launch_config.watcher),
+         :ok <- ensure_supervisor_available(launch_config.supervisor) do
+      :ok
+    end
+  end
+
+  def preflight(_opts), do: {:error, :invalid_agent_start}
+
   @doc "Stops an Agent through its explicit drain-and-release control path."
   def stop_agent(pid, reason \\ "manual_stop")
 
@@ -123,6 +138,7 @@ defmodule Maraithon.Runtime.AgentSupervisor do
     background_workers? = Application.get_env(:maraithon, :start_background_workers, true)
 
     cond do
+      not RuntimeConfig.exact_agent_runtime_enabled?() -> {:error, :exact_runtime_disabled}
       admission in [:bootstrap, :recovery] -> :ok
       admission != :normal -> {:error, :invalid_agent_start}
       not background_workers? -> :ok
@@ -130,6 +146,16 @@ defmodule Maraithon.Runtime.AgentSupervisor do
       true -> {:error, :runtime_admission_closed}
     end
   end
+
+  defp ensure_supervisor_available(supervisor) when is_pid(supervisor) do
+    if Process.alive?(supervisor), do: :ok, else: {:error, :agent_supervisor_unavailable}
+  end
+
+  defp ensure_supervisor_available(supervisor) when is_atom(supervisor) do
+    if Process.whereis(supervisor), do: :ok, else: {:error, :agent_supervisor_unavailable}
+  end
+
+  defp ensure_supervisor_available(_supervisor), do: {:error, :agent_supervisor_unavailable}
 
   defp launch_config(opts) do
     ttl_ms =

@@ -1642,11 +1642,18 @@ defmodule Maraithon.Runtime.Agent do
       metadata: %{
         "package_manifest" => data.agent_package_version_id != nil,
         "started_by_runtime_at" => DateTime.to_iso8601(now)
-      },
-      started_at: now
+      }
     }
 
-    case Agents.start_runtime_agent_run(agent, attrs) do
+    run_result =
+      if is_binary(data.owner_token) do
+        Agents.start_exact_runtime_agent_run(agent, data.owner_token, attrs)
+      else
+        # Compatibility-only unfenced launches are never used by AgentSupervisor.
+        Agents.start_runtime_agent_run(agent, attrs)
+      end
+
+    case run_result do
       {:ok, run} ->
         %{data | current_run_id: run.id}
 
@@ -2409,8 +2416,9 @@ defmodule Maraithon.Runtime.Agent do
     if begin_exact_draining(data) do
       {data, cleanup_complete?} = clean_stopped_work(data)
       data = safely_emit_stop_event(data, reason)
-      safely_cancel_schedules(data.agent_id)
 
+      # Durable schedules/subscriptions are cancelled only by the caller-owned
+      # lifecycle finalization transaction after the lease and work rows quiesce.
       data =
         if cleanup_complete? do
           release_exact_owner(data)

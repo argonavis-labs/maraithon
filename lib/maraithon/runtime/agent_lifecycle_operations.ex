@@ -1,0 +1,833 @@
+defmodule Maraithon.Runtime.AgentLifecycleOperations do
+  @moduledoc """
+  Durable composite Agent lifecycle transitions.
+
+  Every transition first takes the global Agent lock order
+  `Agent -> same-user Binding -> Guard -> Lease -> LifecycleOperation`, stores
+  an immutable operation token/canonical plan, revokes readiness, and commits a
+  stopped desired-state fence. Process routing and waits happen only after that
+  transaction. Finalization is a second short caller-owned transaction which
+  repeats the prefix, then locks `Directive -> Run -> RunStep -> Effect` before
+  changing delivery/config/install state. An unresolved row leaves the marker
+  and every requested mutation untouched.
+  """
+
+  import Ecto.Query
+
+  alias Maraithon.AgentIsolation.Binding
+  alias Maraithon.AgentSubscriptions
+  alias Maraithon.AgentSubscriptions.AgentSubscription
+  alias Maraithon.Agents.Agent
+  alias Maraithon.Agents.AgentRun
+  alias Maraithon.Agents.AgentRunStep
+  alias Maraithon.BoundedJSON
+  alias Maraithon.Effects.Effect
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentDirective
+  alias Maraithon.Runtime.AgentLifecycleOperation
+  alias Maraithon.Runtime.AgentRestartGuard
+  alias Maraithon.Runtime.AgentRuntimeLease
+  alias Maraithon.Runtime.DatabaseClock
+  alias Maraithon.Runtime.ScheduledJob
+
+  @max_payload_bytes 128_000
+  @default_drain_ttl_ms 60_000
+  @max_batch 500
+  @active_effect_statuses ~w(pending claimed cancelling)
+
+  @doc """
+  Establishes or idempotently adopts one exact lifecycle operation.
+
+  `planner` runs only for a fresh marker while the Agent row is locked. It must
+  return the complete JSON-safe mutation plan (or `{:error, reason}`). A retry
+  with the same kind and canonical request adopts the stored plan; a different
+  request cannot replace an in-flight operation.
+  """
+  def begin(agent_id, kind, request, planner, opts \\ [])
+
+  def begin(agent_id, kind, request, planner, opts)
+      when is_binary(agent_id) and is_atom(kind) and is_map(request) and
+             is_function(planner, 1) and is_list(opts) do
+    with {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, kind} <- kind(kind),
+         {:ok, request} <- canonical_payload(request),
+         {:ok, drain_ttl_ms, requires_external_drain} <- begin_options(opts) do
+      request_digest = digest(request)
+
+      Repo.transaction(fn ->
+        agent = lock_agent!(agent_id)
+        _binding = lock_binding(agent)
+        guard = lock_guard(agent_id)
+        lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id)
+        now = DatabaseClock.now!()
+
+        case operation do
+          %AgentLifecycleOperation{} = existing ->
+            adopt!(existing, kind, request_digest, now, agent, lease)
+
+          nil ->
+            mutation = plan!(planner, agent)
+            resume_after = resume_after?(kind, agent)
+            final_status = final_status(kind, agent, resume_after)
+
+            fenced_lease = fence_lease!(lease, now, drain_ttl_ms)
+            operation_token = Ecto.UUID.generate()
+            expected_owner_token = owner_token(fenced_lease) || expected_guard_owner(guard)
+
+            stopped_agent =
+              agent
+              |> Ecto.Changeset.change(%{
+                status: "stopped",
+                stopped_at: stopped_at(agent, now),
+                updated_at: now
+              })
+              |> Repo.update!()
+
+            payload =
+              %{
+                "version" => 1,
+                "kind" => kind,
+                "request" => request,
+                "mutation" => mutation,
+                "resume_after" => resume_after,
+                "final_status" => final_status,
+                "guard" => guard_snapshot(guard),
+                "operation_token" => operation_token,
+                "expected_owner_token" => expected_owner_token,
+                "requires_external_drain" => requires_external_drain
+              }
+              |> canonical_payload!()
+
+            operation =
+              %AgentLifecycleOperation{inserted_at: now, updated_at: now}
+              |> AgentLifecycleOperation.changeset(%{
+                agent_id: agent_id,
+                operation_token: operation_token,
+                kind: kind,
+                state: "draining",
+                request_digest: request_digest,
+                payload_digest: digest(payload),
+                payload: payload,
+                expected_owner_token: expected_owner_token,
+                requires_external_drain: requires_external_drain,
+                initiated_at: now,
+                last_attempted_at: now
+              })
+              |> Repo.insert!()
+
+            lifecycle_fence(operation, stopped_agent, fenced_lease, :created)
+        end
+      end)
+    end
+  end
+
+  def begin(_agent_id, _kind, _request, _planner, _opts),
+    do: {:error, :invalid_lifecycle_operation}
+
+  @doc """
+  Records explicit external proof for a marker that observed an unfenced local
+  legacy process. This never infers fleet absence from Registry or node lists.
+  """
+  def confirm_external_drain(agent_id, operation_token, evidence)
+      when is_binary(agent_id) and is_binary(operation_token) and is_map(evidence) do
+    with {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, operation_token} <- cast_uuid(operation_token),
+         {:ok, evidence} <- external_drain_evidence(evidence) do
+      evidence_digest = digest(evidence)
+
+      Repo.transaction(fn ->
+        agent = lock_agent!(agent_id)
+        _binding = lock_binding(agent)
+        _guard = lock_guard(agent_id)
+        _lease = lock_lease(agent_id)
+        operation = lock_operation(agent_id) || Repo.rollback(:lifecycle_operation_not_found)
+        validate_operation!(operation, operation_token)
+        validate_payload!(operation)
+
+        cond do
+          not operation.requires_external_drain ->
+            Repo.rollback(:external_drain_confirmation_not_required)
+
+          is_nil(operation.external_drain_confirmed_at) ->
+            now = DatabaseClock.now!()
+
+            operation
+            |> Ecto.Changeset.change(%{
+              external_drain_confirmed_at: now,
+              external_drain_evidence_digest: evidence_digest,
+              last_attempted_at: now,
+              updated_at: now
+            })
+            |> Repo.update!()
+
+          operation.external_drain_evidence_digest == evidence_digest ->
+            operation
+
+          true ->
+            Repo.rollback(:external_drain_confirmation_conflict)
+        end
+      end)
+    end
+  end
+
+  def confirm_external_drain(_agent_id, _operation_token, _evidence),
+    do: {:error, :invalid_external_drain_evidence}
+
+  @doc """
+  Finishes one operation only after exact ownership and durable work quiesce.
+
+  A pending result is a successful, read-only finalization attempt: the marker
+  remains durable and no directive/delivery/config/install mutation is applied.
+  """
+  def finalize(agent_id, operation_token \\ nil)
+
+  def finalize(agent_id, operation_token) when is_binary(agent_id) do
+    with {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, operation_token} <- optional_uuid(operation_token) do
+      Repo.transaction(fn -> finalize_locked(agent_id, operation_token) end)
+      |> case do
+        {:ok, {:pending, reason, operation}} ->
+          {:ok,
+           %{
+             status: :reconciliation_pending,
+             reason: reason,
+             operation: operation,
+             operation_token: operation.operation_token
+           }}
+
+        {:ok, {:finalized, result}} ->
+          {:ok, Map.put(result, :status, :finalized)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  def finalize(_agent_id, _operation_token), do: {:error, :invalid_lifecycle_operation}
+
+  @doc "Returns a bounded oldest-first set of stranded operation IDs."
+  def list_pending_ids(limit \\ 50)
+
+  def list_pending_ids(limit) when is_integer(limit) and limit in 1..@max_batch do
+    Repo.all(
+      from(operation in AgentLifecycleOperation,
+        order_by: [asc: operation.initiated_at, asc: operation.agent_id],
+        limit: ^limit,
+        select: operation.agent_id
+      )
+    )
+  end
+
+  def list_pending_ids(_limit), do: []
+
+  def get(agent_id) when is_binary(agent_id) do
+    case Ecto.UUID.cast(agent_id) do
+      {:ok, id} -> Repo.get(AgentLifecycleOperation, id)
+      :error -> nil
+    end
+  end
+
+  def get(_agent_id), do: nil
+
+  @doc false
+  def canonical_payload(payload) when is_map(payload) and not is_struct(payload) do
+    if BoundedJSON.valid?(payload, @max_payload_bytes,
+         max_binary_bytes: @max_payload_bytes,
+         max_depth: 12,
+         max_nodes: 20_000,
+         max_map_entries: 2_000,
+         max_list_items: 2_000
+       ) do
+      with {:ok, encoded} <- Jason.encode(payload),
+           true <- byte_size(encoded) <= @max_payload_bytes,
+           {:ok, decoded} when is_map(decoded) <- Jason.decode(encoded) do
+        {:ok, decoded}
+      else
+        _invalid -> {:error, :invalid_lifecycle_payload}
+      end
+    else
+      {:error, :invalid_lifecycle_payload}
+    end
+  rescue
+    _error -> {:error, :invalid_lifecycle_payload}
+  end
+
+  def canonical_payload(_payload), do: {:error, :invalid_lifecycle_payload}
+
+  @doc false
+  def digest(payload) when is_map(payload) do
+    payload
+    |> canonical_term()
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+  end
+
+  defp finalize_locked(agent_id, operation_token) do
+    agent = lock_agent!(agent_id)
+    binding = lock_binding(agent)
+    guard = lock_guard(agent_id)
+    lease = lock_lease(agent_id)
+    operation = lock_operation(agent_id) || Repo.rollback(:lifecycle_operation_not_found)
+    now = DatabaseClock.now!()
+
+    validate_operation!(operation, operation_token)
+    validate_payload!(operation)
+
+    cond do
+      agent.status != "stopped" ->
+        Repo.rollback(:lifecycle_operation_fence_lost)
+
+      operation.requires_external_drain and is_nil(operation.external_drain_confirmed_at) ->
+        {:pending, :external_fleet_drain_required, touch!(operation, now)}
+
+      live_lease?(lease, now) ->
+        {:pending, :runtime_lease_owned, touch!(operation, now)}
+
+      not is_nil(lease) ->
+        {:pending, :expired_lease_requires_reconciliation, touch!(operation, now)}
+
+      not guard_finalizable?(guard, operation) ->
+        {:pending, :restart_guard_requires_reconciliation, touch!(operation, now)}
+
+      true ->
+        # This order is part of the runtime locking contract. Do not reorder it.
+        directives = lock_directives(agent_id)
+        runs = lock_runs(agent_id)
+        steps = lock_steps(agent_id)
+        effects = lock_effects(agent_id)
+
+        case unresolved_work(agent, directives, runs, steps, effects) do
+          nil -> finalize_quiesced!(agent, binding, guard, operation, directives, now)
+          reason -> {:pending, reason, touch!(operation, now)}
+        end
+    end
+  end
+
+  defp finalize_quiesced!(agent, binding, guard, operation, directives, now) do
+    scheduled_jobs = lock_scheduled_jobs(agent.id)
+    subscriptions = lock_subscriptions(agent.id)
+
+    cancel_pending_directives!(directives, now)
+    cancel_scheduled_jobs!(scheduled_jobs)
+    deactivate_subscriptions!(subscriptions, now)
+    clear_expected_guard!(guard, operation)
+
+    case apply_mutation!(agent, binding, operation, now) do
+      {:deleted, deleted_id} ->
+        # The Agent delete cascade removes the operation marker in this commit.
+        {:finalized,
+         %{
+           action: :deleted,
+           agent: nil,
+           agent_id: deleted_id,
+           operation_token: operation.operation_token,
+           resume_after: false
+         }}
+
+      {:updated, updated_agent} ->
+        # Delete the marker before deriving delivery authority. The row locks
+        # remain held until commit, and any sync failure rolls this delete back.
+        Repo.delete!(operation)
+        maybe_sync_subscriptions!(updated_agent)
+
+        {:finalized,
+         %{
+           action: :updated,
+           agent: updated_agent,
+           agent_id: updated_agent.id,
+           operation_token: operation.operation_token,
+           resume_after: operation.payload["resume_after"] == true
+         }}
+    end
+  end
+
+  defp apply_mutation!(agent, binding, operation, now) do
+    mutation = operation.payload["mutation"] || %{}
+    action = mutation["action"]
+    final_status = operation.payload["final_status"] || "stopped"
+
+    case action do
+      "delete" ->
+        Repo.delete!(agent)
+        {:deleted, agent.id}
+
+      "pause" ->
+        pause_binding!(binding, now)
+
+        {:updated,
+         update_agent!(
+           agent,
+           %{install_status: "paused", status: "stopped", stopped_at: now},
+           now
+         )}
+
+      "remove" ->
+        revoke_binding!(binding, now)
+
+        {:updated,
+         update_agent!(
+           agent,
+           %{
+             install_status: "removed",
+             status: "stopped",
+             stopped_at: now,
+             removed_at: now
+           },
+           now
+         )}
+
+      action when action in ["update", "upgrade"] ->
+        attrs = mutation["attrs"] || %{}
+        attrs = with_final_status(attrs, final_status, now)
+        {:updated, update_agent!(agent, attrs, now)}
+
+      "stop" ->
+        {:updated,
+         update_agent!(agent, %{status: "stopped", stopped_at: agent.stopped_at || now}, now)}
+
+      _other ->
+        Repo.rollback(:invalid_lifecycle_payload)
+    end
+  end
+
+  defp pause_binding!(nil, _now), do: :ok
+
+  defp pause_binding!(binding, now) do
+    binding
+    |> Ecto.Changeset.change(status: "paused", updated_at: now)
+    |> Repo.update!()
+  end
+
+  defp revoke_binding!(nil, _now), do: :ok
+
+  defp revoke_binding!(binding, now) do
+    binding
+    |> Ecto.Changeset.change(status: "revoked", updated_at: now)
+    |> Repo.update!()
+  end
+
+  defp with_final_status(attrs, "running", now) do
+    attrs
+    |> Map.put("status", "running")
+    |> Map.put("started_at", now)
+    |> Map.put("stopped_at", nil)
+  end
+
+  defp with_final_status(attrs, "terminated", now) do
+    attrs
+    |> Map.put("status", "terminated")
+    |> Map.put("stopped_at", now)
+  end
+
+  defp with_final_status(attrs, _status, now) do
+    attrs
+    |> Map.put("status", "stopped")
+    |> Map.put("stopped_at", now)
+  end
+
+  defp update_agent!(agent, attrs, now) do
+    agent
+    |> Agent.changeset(attrs)
+    |> Ecto.Changeset.change(updated_at: now)
+    |> Repo.update!()
+  end
+
+  defp maybe_sync_subscriptions!(%Agent{status: status, install_status: "enabled"} = agent)
+       when status in ["running", "degraded"] do
+    case AgentSubscriptions.sync_for_agent_locked(agent) do
+      {:ok, _subscriptions} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp maybe_sync_subscriptions!(_agent), do: :ok
+
+  defp unresolved_work(agent, directives, runs, steps, effects) do
+    cond do
+      is_binary(agent.active_run_id) -> :active_run_pointer
+      Enum.any?(directives, &(&1.status == "processing")) -> :processing_directive
+      Enum.any?(runs, &(&1.status == "running")) -> :running_agent_run
+      Enum.any?(steps, &(&1.status == "requested")) -> :requested_agent_run_step
+      Enum.any?(effects, &(&1.status in @active_effect_statuses)) -> :active_effect
+      true -> nil
+    end
+  end
+
+  defp cancel_pending_directives!(directives, now) do
+    directives
+    |> Enum.filter(&(&1.status == "pending"))
+    |> Enum.each(fn directive ->
+      directive
+      |> Ecto.Changeset.change(%{
+        status: "cancelled",
+        terminal_at: now,
+        claim_token: nil,
+        claimed_by_generation: nil,
+        claimed_at: nil,
+        claim_expires_at: nil,
+        processing_started_at: nil,
+        terminal_claim_token: nil,
+        terminal_by_generation: nil,
+        last_error_code: "cancelled",
+        updated_at: now
+      })
+      |> Repo.update!()
+    end)
+  end
+
+  defp cancel_scheduled_jobs!(jobs) do
+    Enum.each(jobs, fn job ->
+      job
+      |> Ecto.Changeset.change(%{
+        status: "cancelled",
+        claimed_by: nil,
+        claimed_at: nil,
+        dispatched_at: nil
+      })
+      |> Repo.update!()
+    end)
+  end
+
+  defp deactivate_subscriptions!(subscriptions, now) do
+    Enum.each(subscriptions, fn subscription ->
+      subscription
+      |> Ecto.Changeset.change(status: "inactive", updated_at: now)
+      |> Repo.update!()
+    end)
+  end
+
+  defp clear_expected_guard!(nil, _operation), do: :ok
+
+  defp clear_expected_guard!(%AgentRestartGuard{} = guard, operation) do
+    if guard.needs_recovery or guard.tripped do
+      if guard_matches_operation?(guard, operation) do
+        Repo.delete!(guard)
+      else
+        Repo.rollback(:restart_guard_requires_reconciliation)
+      end
+    end
+
+    :ok
+  end
+
+  defp guard_finalizable?(nil, _operation), do: true
+
+  defp guard_finalizable?(%AgentRestartGuard{} = guard, operation) do
+    not (guard.needs_recovery or guard.tripped) or guard_matches_operation?(guard, operation)
+  end
+
+  defp guard_matches_operation?(guard, operation) do
+    expected_owner = operation.expected_owner_token
+
+    is_binary(expected_owner) and guard.last_owner_token == expected_owner
+  end
+
+  defp adopt!(operation, kind, request_digest, now, agent, lease) do
+    validate_payload!(operation)
+
+    if operation.kind == kind and operation.request_digest == request_digest do
+      touched = touch!(operation, now)
+      lifecycle_fence(touched, agent, lease, :adopted)
+    else
+      Repo.rollback(:agent_drain_pending)
+    end
+  end
+
+  defp lifecycle_fence(operation, agent, lease, disposition) do
+    %{
+      operation: operation,
+      operation_token: operation.operation_token,
+      agent: agent,
+      lease: lease,
+      lease_state: if(lease, do: :live, else: :none),
+      disposition: disposition
+    }
+  end
+
+  defp validate_operation!(operation, nil), do: operation
+
+  defp validate_operation!(operation, operation_token) do
+    if operation.operation_token == operation_token,
+      do: operation,
+      else: Repo.rollback(:lifecycle_operation_token_mismatch)
+  end
+
+  defp validate_payload!(operation) do
+    with {:ok, payload} <- canonical_payload(operation.payload),
+         true <- payload == operation.payload,
+         true <- digest(payload) == operation.payload_digest,
+         request when is_map(request) <- payload["request"],
+         true <- digest(request) == operation.request_digest,
+         true <- payload["kind"] == operation.kind,
+         true <- payload["operation_token"] == operation.operation_token,
+         true <- payload["expected_owner_token"] == operation.expected_owner_token,
+         true <- payload["requires_external_drain"] == operation.requires_external_drain,
+         1 <- payload["version"] do
+      operation
+    else
+      _invalid -> Repo.rollback(:invalid_lifecycle_payload)
+    end
+  end
+
+  defp touch!(operation, now) do
+    operation
+    |> Ecto.Changeset.change(last_attempted_at: now, updated_at: now)
+    |> Repo.update!()
+  end
+
+  defp fence_lease!(nil, _now, _ttl_ms), do: nil
+
+  defp fence_lease!(%AgentRuntimeLease{} = lease, now, ttl_ms) do
+    if DateTime.compare(lease.lease_until, now) == :gt do
+      drain_until = DateTime.add(now, ttl_ms, :millisecond)
+
+      lease
+      |> Ecto.Changeset.change(%{
+        ready_at: nil,
+        draining_at: lease.draining_at || now,
+        lease_until: later_datetime(lease.lease_until, drain_until),
+        updated_at: now
+      })
+      |> Repo.update!()
+    else
+      Repo.rollback(
+        {:expired_lease_requires_reconciliation,
+         %{owner_token: lease.owner_token, owner_node: lease.owner_node}}
+      )
+    end
+  end
+
+  defp live_lease?(nil, _now), do: false
+
+  defp live_lease?(lease, now),
+    do: DateTime.compare(lease.lease_until, now) == :gt
+
+  defp stopped_at(%Agent{status: "stopped", stopped_at: %DateTime{} = stopped_at}, _now),
+    do: stopped_at
+
+  defp stopped_at(_agent, now), do: now
+
+  defp resume_after?(kind, agent),
+    do: kind in ["update", "upgrade"] and agent.status in ["recovering", "running", "degraded"]
+
+  defp final_status(kind, _agent, true) when kind in ["update", "upgrade"], do: "running"
+
+  defp final_status(kind, %{status: "terminated"}, false) when kind in ["update", "upgrade"],
+    do: "terminated"
+
+  defp final_status(_kind, _agent, _resume_after), do: "stopped"
+
+  defp plan!(planner, agent) do
+    case planner.(agent) do
+      {:ok, mutation} when is_map(mutation) -> canonical_payload!(mutation)
+      mutation when is_map(mutation) -> canonical_payload!(mutation)
+      {:error, reason} -> Repo.rollback(reason)
+      _invalid -> Repo.rollback(:invalid_lifecycle_payload)
+    end
+  end
+
+  defp canonical_payload!(payload) do
+    case canonical_payload(payload) do
+      {:ok, canonical} -> canonical
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp guard_snapshot(nil), do: nil
+
+  defp guard_snapshot(guard) do
+    %{
+      "generation" => guard.generation,
+      "last_owner_token" => guard.last_owner_token,
+      "needs_recovery" => guard.needs_recovery,
+      "tripped" => guard.tripped
+    }
+  end
+
+  defp owner_token(nil), do: nil
+  defp owner_token(lease), do: lease.owner_token
+
+  defp expected_guard_owner(%AgentRestartGuard{last_owner_token: token} = guard)
+       when is_binary(token) do
+    if guard.needs_recovery or guard.tripped, do: token, else: nil
+  end
+
+  defp expected_guard_owner(_guard), do: nil
+
+  defp lock_agent!(agent_id) do
+    case Repo.one(from(agent in Agent, where: agent.id == ^agent_id, lock: "FOR UPDATE")) do
+      %Agent{} = agent -> agent
+      nil -> Repo.rollback(:not_found)
+    end
+  end
+
+  defp lock_binding(%Agent{id: agent_id, user_id: user_id}) when is_binary(user_id) do
+    Repo.one(
+      from(binding in Binding,
+        where: binding.agent_id == ^agent_id,
+        where: binding.user_id == ^user_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_binding(_agent), do: nil
+
+  defp lock_guard(agent_id) do
+    Repo.one(
+      from(guard in AgentRestartGuard,
+        where: guard.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_lease(agent_id) do
+    Repo.one(
+      from(lease in AgentRuntimeLease,
+        where: lease.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_operation(agent_id) do
+    Repo.one(
+      from(operation in AgentLifecycleOperation,
+        where: operation.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_directives(agent_id) do
+    Repo.all(
+      from(directive in AgentDirective,
+        where: directive.agent_id == ^agent_id,
+        order_by: [asc: directive.inserted_at, asc: directive.id],
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_runs(agent_id) do
+    Repo.all(
+      from(run in AgentRun,
+        where: run.agent_id == ^agent_id,
+        order_by: [asc: run.inserted_at, asc: run.id],
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_steps(agent_id) do
+    Repo.all(
+      from(step in AgentRunStep,
+        where: step.agent_id == ^agent_id,
+        order_by: [asc: step.inserted_at, asc: step.id],
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_effects(agent_id) do
+    Repo.all(
+      from(effect in Effect,
+        where: effect.agent_id == ^agent_id,
+        order_by: [asc: effect.inserted_at, asc: effect.id],
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_scheduled_jobs(agent_id) do
+    Repo.all(
+      from(job in ScheduledJob,
+        where: job.agent_id == ^agent_id,
+        where: job.status in ["pending", "dispatched"],
+        order_by: [asc: job.inserted_at, asc: job.id],
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_subscriptions(agent_id) do
+    Repo.all(
+      from(subscription in AgentSubscription,
+        where: subscription.agent_id == ^agent_id,
+        where: subscription.status == "active",
+        order_by: [asc: subscription.inserted_at, asc: subscription.id],
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp later_datetime(left, right) do
+    if DateTime.compare(left, right) == :lt, do: right, else: left
+  end
+
+  defp kind(value) do
+    kind = to_string(value)
+
+    if kind in AgentLifecycleOperation.kinds(),
+      do: {:ok, kind},
+      else: {:error, :invalid_lifecycle_operation}
+  end
+
+  defp begin_options(opts) do
+    allowed = [:drain_ttl_ms, :requires_external_drain]
+
+    if Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 in allowed)) do
+      ttl_ms = Keyword.get(opts, :drain_ttl_ms, @default_drain_ttl_ms)
+      requires_external_drain = Keyword.get(opts, :requires_external_drain, false)
+
+      if is_integer(ttl_ms) and ttl_ms in 1_000..300_000 and
+           is_boolean(requires_external_drain) do
+        {:ok, ttl_ms, requires_external_drain}
+      else
+        {:error, :invalid_lifecycle_operation}
+      end
+    else
+      {:error, :invalid_lifecycle_operation}
+    end
+  end
+
+  defp external_drain_evidence(evidence) do
+    with {:ok, evidence} <- canonical_payload(evidence),
+         true <- evidence["non_rolling"] == true,
+         proof_id when is_binary(proof_id) and byte_size(proof_id) in 1..256 <-
+           evidence["proof_id"],
+         confirmer when is_binary(confirmer) and byte_size(confirmer) in 1..320 <-
+           evidence["confirmed_by"],
+         revision when is_binary(revision) and byte_size(revision) in 1..128 <-
+           evidence["legacy_revision"] do
+      {:ok, evidence}
+    else
+      _invalid -> {:error, :invalid_external_drain_evidence}
+    end
+  end
+
+  defp optional_uuid(nil), do: {:ok, nil}
+  defp optional_uuid(value), do: cast_uuid(value)
+
+  defp cast_uuid(value) when is_binary(value) do
+    case Ecto.UUID.cast(value) do
+      {:ok, uuid} -> {:ok, uuid}
+      :error -> {:error, :invalid_lifecycle_operation}
+    end
+  end
+
+  defp cast_uuid(_value), do: {:error, :invalid_lifecycle_operation}
+
+  defp canonical_term(map) when is_map(map) do
+    map
+    |> Enum.map(fn {key, value} -> {to_string(key), canonical_term(value)} end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> then(&{:map, &1})
+  end
+
+  defp canonical_term(list) when is_list(list), do: {:list, Enum.map(list, &canonical_term/1)}
+  defp canonical_term(value), do: value
+end

@@ -41,6 +41,15 @@ defmodule Maraithon.Runtime.Bootstrap do
 
   @impl true
   def handle_info(:bootstrap, state) do
+    if RuntimeConfig.exact_agent_runtime_enabled?() do
+      do_bootstrap(state)
+    else
+      Logger.warning("Exact Agent runtime is dark; bootstrap remains closed")
+      {:stop, :normal, state}
+    end
+  end
+
+  defp do_bootstrap(state) do
     Logger.info("Bootstrapping runtime")
 
     case DbResilience.with_database("runtime bootstrap", fn ->

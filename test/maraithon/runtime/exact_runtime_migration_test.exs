@@ -22,7 +22,10 @@ defmodule Maraithon.Runtime.ExactRuntimeMigrationTest do
     proven = agent(owner_id, "proven", "recovering")
 
     {:ok, proven_binding} =
-      AgentIsolation.upsert_binding(proven, %{metadata: %{proof: "explicit"}})
+      AgentIsolation.grant_binding_consent(
+        proven,
+        binding_consent(proven, %{metadata: %{proof: "explicit"}})
+      )
 
     missing = agent(owner_id, "missing", "recovering")
 
@@ -36,7 +39,9 @@ defmodule Maraithon.Runtime.ExactRuntimeMigrationTest do
     mismatched_binding = insert_mismatched_binding(mismatched, other_id)
 
     paused_install = agent(owner_id, "paused-install", "running", "paused")
-    {:ok, paused_install_binding} = AgentIsolation.upsert_binding(paused_install)
+
+    {:ok, paused_install_binding} =
+      AgentIsolation.grant_binding_consent(paused_install, binding_consent(paused_install))
 
     Repo.query!(PrepareExactAgentRuntime.normalize_proven_recovery_sql())
     Repo.query!(PrepareExactAgentRuntime.quarantine_unproven_runtime_sql())
@@ -101,7 +106,11 @@ defmodule Maraithon.Runtime.ExactRuntimeMigrationTest do
       identity_key: "mismatch:#{agent.id}",
       status: "active",
       connector_scope: %{"persisted" => true},
-      metadata: %{"proof" => "wrong-user"}
+      metadata: %{"proof" => "wrong-user"},
+      consent_token: Ecto.UUID.generate(),
+      consent_actor_id: other_user_id,
+      consented_at: DateTime.utc_now(),
+      consent_digest: :crypto.hash(:sha256, "wrong-user-test-proof")
     })
     |> Repo.insert!()
   end

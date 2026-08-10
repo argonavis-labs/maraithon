@@ -10,7 +10,7 @@ defmodule MaraithonWeb.AgentController do
   require Logger
 
   def create(conn, params) do
-    Logger.info("Creating agent", agent_params: params)
+    Logger.info("Creating agent", behavior: params["behavior"] || params[:behavior])
 
     case Runtime.start_agent(params) do
       {:ok, agent} ->
@@ -221,6 +221,11 @@ defmodule MaraithonWeb.AgentController do
         conn
         |> put_status(:not_found)
         |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
+
+      {:error, reason} ->
+        conn
+        |> put_status(:conflict)
+        |> json(%{error: "delete_pending", details: format_errors(reason)})
     end
   end
 

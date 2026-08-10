@@ -189,7 +189,7 @@ defmodule Maraithon.Runtime.BriefingCronTest do
     assert job.payload["dedupe_key"] == "morning_briefing:2026-05-08"
   end
 
-  test "schedules manifest-installed Chief of Staff packages" do
+  test "does not schedule an unconsented default Chief installation" do
     user_id = "manifest-briefing-cron-#{System.unique_integer([:positive])}@example.com"
     previous_primary_admin = System.get_env("PRIMARY_ADMIN_EMAIL")
     System.put_env("PRIMARY_ADMIN_EMAIL", user_id)
@@ -214,13 +214,9 @@ defmodule Maraithon.Runtime.BriefingCronTest do
     assert %{scheduled: scheduled} = BriefingCron.schedule_due_morning_briefings(now)
     assert scheduled >= 1
 
-    assert [job] =
+    assert [] =
              ScheduledJob
              |> where([j], j.agent_id == ^agent.id and j.job_type == "wakeup")
              |> Repo.all()
-
-    assert job.payload["source"] == "briefing_cron"
-    assert job.payload["cadence"] == "morning"
-    assert job.payload["dedupe_key"] == "morning_briefing:2026-05-08"
   end
 end

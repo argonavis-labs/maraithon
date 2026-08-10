@@ -4,24 +4,21 @@ defmodule Maraithon.Runtime do
   Provides the main API for starting, stopping, and interacting with agents.
   """
 
-  import Ecto.Query
-
+  alias Maraithon.AgentIsolation
   alias Maraithon.Agents
-  alias Maraithon.Agents.AgentRun
-  alias Maraithon.Agents.AgentRunStep
-  alias Maraithon.Effects.Effect
+  alias Maraithon.Agents.Agent
+  alias Maraithon.Agents.AgentPackageVersion
   alias Maraithon.Repo
-  alias Maraithon.AgentSubscriptions
-  alias Maraithon.Runtime.AgentDirective
-  alias Maraithon.Runtime.AgentLeases
+  alias Maraithon.Runtime.AgentLifecycleOperations
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentRegistry
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Events
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.IncidentLog
   alias Maraithon.Runtime.AgentRestartGuards
-  alias Maraithon.Runtime.Scheduler
 
   require Logger
 
@@ -51,15 +48,18 @@ defmodule Maraithon.Runtime do
   @doc """
   Start a new agent with the given parameters.
   """
-  def start_agent(params) do
+  def start_agent(params) when is_map(params) do
+    user_id = params["user_id"] || params[:user_id]
+    binding_consent = params["binding_consent"] || params[:binding_consent]
+
     attrs = %{
-      user_id: params["user_id"] || params[:user_id],
+      user_id: user_id,
       project_id: normalize_optional_string(params["project_id"] || params[:project_id]),
       behavior: params["behavior"] || params[:behavior],
       config: params["config"] || params[:config] || %{},
       status: "running",
       started_at: DateTime.utc_now(),
-      install_status: params["install_status"] || params[:install_status] || "enabled",
+      install_status: "enabled",
       installed_at: params["installed_at"] || params[:installed_at] || DateTime.utc_now(),
       agent_package_id: params["agent_package_id"] || params[:agent_package_id],
       agent_package_version_id:
@@ -70,7 +70,6 @@ defmodule Maraithon.Runtime do
       memory_scope: params["memory_scope"] || params[:memory_scope] || %{}
     }
 
-    # Add budget to config if provided
     attrs =
       if budget = params["budget"] || params[:budget] do
         put_in(attrs, [:config, "budget"], budget)
@@ -78,8 +77,11 @@ defmodule Maraithon.Runtime do
         put_in(attrs, [:config, "budget"], default_budget())
       end
 
-    with {:ok, agent} <- Agents.create_agent(attrs),
-         {:ok, _pid} <- start_agent_process(agent) do
+    with :ok <- exact_runtime_enabled(),
+         :ok <- AgentSupervisor.preflight(admission: :normal),
+         :ok <- AgentIsolation.validate_binding_consent_input(user_id, binding_consent),
+         {:ok, agent} <- create_consented_running_agent(attrs, binding_consent),
+         {:ok, _pid} <- start_with_failure_fence(agent) do
       Logger.info("Started agent #{agent.id}", agent_id: agent.id, behavior: agent.behavior)
       {:ok, agent}
     else
@@ -89,26 +91,43 @@ defmodule Maraithon.Runtime do
     end
   end
 
+  def start_agent(_params), do: {:error, :invalid_agent_start}
+
   @doc """
   Install the latest package version for a user and start its runtime process.
   """
   def install_agent_package(user_id, package_slug, opts \\ [])
-      when is_binary(user_id) and is_binary(package_slug) do
-    opts =
-      opts
-      |> Keyword.put_new(:runtime_status, "running")
-      |> Keyword.put_new(:install_status, "enabled")
+      when is_binary(user_id) and is_binary(package_slug) and is_list(opts) do
+    consent = Keyword.get(opts, :binding_consent)
 
-    with {:ok, agent} <- Agents.install_agent_package(user_id, package_slug, opts),
-         {:ok, _pid_or_status} <- maybe_start_installed_agent(agent) do
-      Logger.info("Installed package agent #{agent.id}",
-        agent_id: agent.id,
-        package_slug: package_slug,
-        behavior: agent.behavior
-      )
+    result =
+      if is_map(consent) do
+        with :ok <- exact_runtime_enabled(),
+             :ok <- AgentSupervisor.preflight(admission: :normal),
+             :ok <- AgentIsolation.validate_binding_consent_input(user_id, consent),
+             {:ok, agent} <-
+               install_consented_package(user_id, package_slug, opts, consent) do
+          with {:ok, _pid_or_status} <- maybe_start_installed_agent(agent) do
+            {:ok, agent}
+          end
+        end
+      else
+        # Deliberately ignore caller-supplied runnable statuses. The Agents
+        # context persists a stopped/setup-required installation.
+        Agents.install_agent_package(user_id, package_slug, opts)
+      end
 
-      {:ok, agent}
-    else
+    case result do
+      {:ok, agent} ->
+        Logger.info("Installed package agent #{agent.id}",
+          agent_id: agent.id,
+          package_slug: package_slug,
+          behavior: agent.behavior,
+          install_status: agent.install_status
+        )
+
+        {:ok, agent}
+
       {:error, reason} = error ->
         Logger.error("Failed to install package #{package_slug}: #{inspect(reason)}")
         error
@@ -118,10 +137,20 @@ defmodule Maraithon.Runtime do
   @doc """
   Installs the Chief of Staff package and starts it only when setup is complete.
   """
-  def install_chief_of_staff(user_id, opts \\ []) when is_binary(user_id) do
-    with {:ok, agent} <- Agents.install_chief_of_staff(user_id, opts),
-         {:ok, _pid_or_status} <- maybe_start_installed_agent(agent) do
-      {:ok, agent}
+  def install_chief_of_staff(user_id, opts \\ [])
+      when is_binary(user_id) and is_list(opts) do
+    consent = Keyword.get(opts, :binding_consent)
+
+    if is_map(consent) do
+      with :ok <- exact_runtime_enabled(),
+           :ok <- AgentSupervisor.preflight(admission: :normal),
+           :ok <- AgentIsolation.validate_binding_consent_input(user_id, consent),
+           {:ok, agent} <- install_consented_chief(user_id, opts, consent),
+           {:ok, _pid_or_status} <- maybe_start_installed_agent(agent) do
+        {:ok, agent}
+      end
+    else
+      Agents.install_chief_of_staff(user_id, opts)
     end
   end
 
@@ -129,7 +158,10 @@ defmodule Maraithon.Runtime do
   Start an existing persisted agent by ID.
   """
   def start_existing_agent(id) when is_binary(id) do
-    with_agent_lifecycle_lock(id, fn -> do_start_existing_agent(id) end)
+    with :ok <- exact_runtime_enabled(),
+         :ok <- AgentSupervisor.preflight(admission: :normal) do
+      with_agent_lifecycle_lock(id, fn -> do_start_existing_agent(id) end)
+    end
   end
 
   defp do_start_existing_agent(id) do
@@ -186,91 +218,63 @@ defmodule Maraithon.Runtime do
   @doc """
   Stop an agent by ID.
   """
-  def stop_agent(id, reason \\ "manual_stop") do
-    with_agent_lifecycle_lock(id, fn -> do_stop_agent(id, reason) end)
-  end
+  def stop_agent(id, reason \\ "manual_stop")
 
-  defp do_stop_agent(id, reason) do
-    case Agents.get_agent(id) do
-      nil ->
-        {:error, :not_found}
+  def stop_agent(id, reason) when is_binary(id) do
+    request = %{"reason" => lifecycle_reason(reason, "manual_stop")}
 
-      agent ->
-        with {:ok, %{agent: stopped_agent} = stop_fence} <- fence_agent_for_stop(agent),
-             {:ok, drain_status} <- stop_running_agent(stop_fence, reason),
-             :ok <- fence_future_agent_delivery(stopped_agent.id) do
-          Logger.info("Persisted Agent stop intent",
-            agent_reference: Maraithon.Redaction.fingerprint(id),
-            status: "stopped",
-            drain_status: drain_status
-          )
+    case execute_lifecycle(id, :stop, request, fn _agent -> %{"action" => "stop"} end) do
+      {:ok, %{status: :finalized, agent: agent}} ->
+        Logger.info("Finalized Agent stop", agent_id: id, status: "stopped")
+        {:ok, %{stopped_at: agent.stopped_at, drain_status: :quiesced}}
 
-          {:ok, %{stopped_at: stopped_agent.stopped_at, drain_status: drain_status}}
-        end
+      {:ok, %{status: :reconciliation_pending, agent: agent}} ->
+        {:ok, %{stopped_at: agent.stopped_at, drain_status: :reconciliation_pending}}
+
+      {:error, _reason} = error ->
+        error
     end
   end
+
+  def stop_agent(_id, _reason), do: {:error, :invalid_agent_id}
 
   @doc """
   Update an existing agent definition. Running agents are stopped, updated, and restarted.
   """
-  def update_agent(id, params) when is_binary(id) do
-    with_agent_lifecycle_lock(id, fn -> do_update_agent(id, params) end)
-  end
+  def update_agent(id, params) when is_binary(id) and is_map(params) do
+    request = %{"params" => params}
 
-  defp do_update_agent(id, params) do
-    case Agents.get_agent(id) do
-      nil ->
-        {:error, :not_found}
+    planner = fn agent ->
+      with {:ok, attrs} <- planned_agent_update(agent, params) do
+        %{"action" => "update", "attrs" => attrs}
+      end
+    end
 
-      agent ->
-        was_running = agent.status in ["recovering", "running", "degraded"]
-
-        with {:ok, stopped_agent} <- stop_for_update(agent, was_running),
-             {:ok, updated_agent} <- apply_agent_update(stopped_agent, params),
-             {:ok, final_agent} <- maybe_restart(updated_agent, was_running) do
-          Logger.info("Updated agent #{id}", agent_id: id, behavior: final_agent.behavior)
-          {:ok, final_agent}
-        else
-          {:error, reason} = error ->
-            Logger.error("Failed to update agent #{id}: #{inspect(reason)}", agent_id: id)
-            error
-        end
+    with {:ok, result} <- execute_lifecycle(id, :update, request, planner),
+         {:ok, agent} <- require_finalized_agent(result),
+         {:ok, final_agent} <- maybe_start_finalized_agent(agent, result.resume_after) do
+      Logger.info("Updated agent #{id}", agent_id: id, behavior: final_agent.behavior)
+      {:ok, final_agent}
     end
   end
+
+  def update_agent(_id, _params), do: {:error, :invalid_agent_update}
 
   @doc """
   Delete an agent and all dependent runtime records.
   """
   def delete_agent(id) when is_binary(id) do
-    with_agent_lifecycle_lock(id, fn -> do_delete_agent(id) end)
-  end
+    request = %{"delete" => true}
 
-  defp do_delete_agent(id) do
-    case Agents.get_agent(id) do
-      nil ->
-        {:error, :not_found}
+    with {:ok, result} <-
+           execute_lifecycle(id, :delete, request, fn _agent -> %{"action" => "delete"} end),
+         :ok <- require_finalized_delete(result) do
+      Logger.info("Deleted agent",
+        agent_reference: Maraithon.Redaction.fingerprint(id),
+        status: "deleted"
+      )
 
-      agent ->
-        with {:ok, %{agent: stopped_agent} = stop_fence} <- fence_agent_for_stop(agent),
-             {:ok, drain_status} <- stop_running_agent(stop_fence, "deleted_from_admin"),
-             :ok <- fence_future_agent_delivery(stopped_agent.id),
-             :ok <- require_agent_quiesced(drain_status),
-             {:ok, _deleted_agent} <- Agents.delete_agent(stopped_agent) do
-          Logger.info("Deleted agent",
-            agent_reference: Maraithon.Redaction.fingerprint(id),
-            status: "deleted"
-          )
-
-          :ok
-        else
-          {:error, reason} = error ->
-            Logger.error("Failed to delete agent",
-              agent_reference: Maraithon.Redaction.fingerprint(id),
-              failure_code: Maraithon.Redaction.error_class(reason)
-            )
-
-            error
-        end
+      :ok
     end
   end
 
@@ -278,25 +282,12 @@ defmodule Maraithon.Runtime do
   Soft-remove an installed agent from the user's marketplace workspace.
   """
   def remove_agent_installation(id) when is_binary(id) do
-    with_agent_lifecycle_lock(id, fn -> do_remove_agent_installation(id) end)
-  end
+    request = %{"remove" => true}
 
-  defp do_remove_agent_installation(id) do
-    case Agents.get_agent(id) do
-      nil ->
-        {:error, :not_found}
-
-      agent ->
-        with {:ok, stopped_agent} <-
-               deactivate_agent_installation(agent, "removed_from_marketplace"),
-             {:ok, _agent} <- Agents.remove_agent_installation(stopped_agent) do
-          Logger.info("Removed agent installation",
-            agent_reference: Maraithon.Redaction.fingerprint(id),
-            status: "removed"
-          )
-
-          :ok
-        end
+    with {:ok, result} <-
+           execute_lifecycle(id, :remove, request, fn _agent -> %{"action" => "remove"} end),
+         {:ok, _agent} <- require_finalized_agent(result) do
+      :ok
     end
   end
 
@@ -304,71 +295,77 @@ defmodule Maraithon.Runtime do
   Pause an installed marketplace agent and cancel all scheduled work.
   """
   def pause_agent_installation(id) when is_binary(id) do
-    with_agent_lifecycle_lock(id, fn -> do_pause_agent_installation(id) end)
-  end
+    request = %{"pause" => true}
 
-  defp do_pause_agent_installation(id) do
-    case Agents.get_agent(id) do
-      nil ->
-        {:error, :not_found}
-
-      %{install_status: "removed"} ->
-        {:error, :agent_removed}
-
-      agent ->
-        with {:ok, stopped_agent} <-
-               deactivate_agent_installation(agent, "paused_from_marketplace") do
-          Agents.pause_agent_installation(stopped_agent)
-        end
+    with {:ok, result} <-
+           execute_lifecycle(id, :pause, request, fn
+             %Agent{install_status: "removed"} -> {:error, :agent_removed}
+             _agent -> %{"action" => "pause"}
+           end),
+         {:ok, agent} <- require_finalized_agent(result) do
+      {:ok, agent}
     end
   end
 
   @doc """
   Resume a paused installed marketplace agent and start its runtime process.
   """
-  def resume_agent_installation(id) when is_binary(id) do
-    with_agent_lifecycle_lock(id, fn -> do_resume_agent_installation(id) end)
-  end
+  def resume_agent_installation(id, binding_consent \\ nil)
 
-  defp do_resume_agent_installation(id) do
-    case Agents.get_agent(id, include_removed: true) do
-      nil ->
-        {:error, :not_found}
-
-      %{install_status: "removed"} ->
-        {:error, :agent_removed}
-
-      agent ->
-        with {:ok, enabled_agent} <- Agents.resume_agent_installation(agent),
-             {:ok, running_agent} <- do_start_existing_agent(enabled_agent.id) do
-          {:ok, running_agent}
-        end
+  def resume_agent_installation(id, binding_consent)
+      when is_binary(id) and is_map(binding_consent) do
+    with :ok <- exact_runtime_enabled(),
+         :ok <- AgentSupervisor.preflight(admission: :normal),
+         %Agent{} = agent <- Agents.get_agent(id, include_removed: true),
+         true <- agent.install_status != "removed" || {:error, :agent_removed},
+         :ok <- AgentIsolation.validate_binding_consent_input(agent.user_id, binding_consent),
+         {:ok, enabled_agent} <- consent_and_enable_agent(agent, binding_consent),
+         {:ok, _pid} <- start_with_failure_fence(enabled_agent) do
+      {:ok, enabled_agent}
+    else
+      nil -> {:error, :not_found}
+      {:error, _reason} = error -> error
+      true -> {:error, :agent_removed}
     end
   end
+
+  def resume_agent_installation(id, nil) when is_binary(id),
+    do: {:error, :binding_consent_required}
+
+  def resume_agent_installation(_id, _binding_consent),
+    do: {:error, :binding_consent_required}
 
   @doc """
   Upgrade an installed marketplace agent to a newer package version.
   """
   def upgrade_agent_installation(id, version_id \\ :latest) when is_binary(id) do
-    with_agent_lifecycle_lock(id, fn -> do_upgrade_agent_installation(id, version_id) end)
-  end
+    request = %{"version_id" => if(version_id == :latest, do: "latest", else: version_id)}
 
-  defp do_upgrade_agent_installation(id, version_id) do
-    case Agents.get_agent(id, preload: [:agent_package]) do
-      nil ->
-        {:error, :not_found}
-
-      %{install_status: "removed"} ->
+    planner = fn
+      %Agent{install_status: "removed"} ->
         {:error, :agent_removed}
 
       agent ->
-        was_running = agent.status in ["recovering", "running", "degraded"]
+        with {:ok, version} <- resolve_upgrade_version(agent, version_id),
+             true <-
+               version.agent_package_id == agent.agent_package_id || {:error, :package_mismatch} do
+          config = (agent.config || %{}) |> Map.put("agent_package_version_id", version.id)
 
-        with {:ok, stopped_agent} <- stop_for_update(agent, was_running),
-             {:ok, upgraded_agent} <- upgrade_agent_version(stopped_agent, version_id),
-             {:ok, final_agent} <- maybe_restart(upgraded_agent, was_running) do
-          {:ok, final_agent}
+          %{
+            "action" => "upgrade",
+            "attrs" => %{
+              "behavior" => version.behavior,
+              "agent_package_version_id" => version.id,
+              "config" => config
+            }
+          }
         end
+    end
+
+    with {:ok, result} <- execute_lifecycle(id, :upgrade, request, planner),
+         {:ok, agent} <- require_finalized_agent(result),
+         {:ok, final_agent} <- maybe_start_finalized_agent(agent, result.resume_after) do
+      {:ok, final_agent}
     end
   end
 
@@ -445,12 +442,14 @@ defmodule Maraithon.Runtime do
   Called during application startup.
   """
   def resume_all_agents do
-    agents = Agents.list_resumable_agents()
-    Logger.info("Resuming #{length(agents)} agents")
+    with :ok <- exact_runtime_enabled() do
+      agents = Agents.list_resumable_agents()
+      Logger.info("Resuming #{length(agents)} agents")
 
-    case start_resumable_agents(agents) do
-      {:ok, _pids} -> :ok
-      {:error, _reason} = error -> error
+      case start_resumable_agents(agents) do
+        {:ok, _pids} -> :ok
+        {:error, _reason} = error -> error
+      end
     end
   end
 
@@ -491,6 +490,30 @@ defmodule Maraithon.Runtime do
       end
     end)
   end
+
+  @doc false
+  def resume_finalized_lifecycle(id, opts \\ [])
+
+  def resume_finalized_lifecycle(id, opts) when is_binary(id) and is_list(opts) do
+    admission = Keyword.get(opts, :admission, :normal)
+
+    with true <- admission in [:normal, :bootstrap, :recovery] || {:error, :invalid_agent_start},
+         :ok <- exact_runtime_enabled(),
+         %Agent{status: status, install_status: "enabled"} = agent <-
+           Agents.get_agent(id, include_removed: true),
+         true <- status in ["running", "degraded"] || {:error, :agent_not_resumable} do
+      case start_with_failure_fence(agent, admission: admission) do
+        {:error, :runtime_lease_owned} -> {:ok, :already_owned}
+        result -> result
+      end
+    else
+      nil -> {:error, :not_found}
+      {:error, _reason} = error -> error
+      _inactive -> {:error, :agent_not_resumable}
+    end
+  end
+
+  def resume_finalized_lifecycle(_id, _opts), do: {:error, :invalid_agent_start}
 
   @doc """
   Resume a persisted agent after AgentWatcher detects an abnormal process exit.
@@ -560,11 +583,93 @@ defmodule Maraithon.Runtime do
     end
   end
 
+  defp create_consented_running_agent(attrs, consent) do
+    Repo.transaction(fn ->
+      now = DatabaseClock.now!()
+      attrs = Map.merge(attrs, %{status: "running", install_status: "enabled", started_at: now})
+
+      with {:ok, agent} <- Agents.create_agent(attrs),
+           {:ok, _binding} <- AgentIsolation.grant_binding_consent(agent, consent) do
+        agent
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp install_consented_package(user_id, package_slug, opts, consent) do
+    Repo.transaction(fn ->
+      with {:ok, agent} <-
+             Agents.install_agent_package(
+               user_id,
+               package_slug,
+               Keyword.delete(opts, :binding_consent)
+             ),
+           {:ok, _binding} <- AgentIsolation.grant_binding_consent(agent, consent),
+           {:ok, enabled} <- enable_consented_installation(agent) do
+        enabled
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp install_consented_chief(user_id, opts, consent) do
+    Repo.transaction(fn ->
+      with {:ok, agent} <-
+             Agents.install_chief_of_staff(user_id, Keyword.delete(opts, :binding_consent)),
+           {:ok, _binding} <- AgentIsolation.grant_binding_consent(agent, consent),
+           {:ok, enabled} <- enable_consented_installation(agent) do
+        enabled
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp consent_and_enable_agent(agent, consent) do
+    Repo.transaction(fn ->
+      with {:ok, _binding} <- AgentIsolation.grant_binding_consent(agent, consent),
+           {:ok, enabled} <- enable_consented_installation(agent) do
+        enabled
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp enable_consented_installation(agent) do
+    now = DatabaseClock.now!()
+
+    Agents.update_agent(agent, %{
+      install_status: "enabled",
+      status: "running",
+      removed_at: nil,
+      started_at: now,
+      stopped_at: nil
+    })
+  end
+
   defp maybe_start_installed_agent(%{install_status: "enabled", status: "running"} = agent) do
-    start_agent_process(agent)
+    start_with_failure_fence(agent)
   end
 
   defp maybe_start_installed_agent(_agent), do: {:ok, :not_started}
+
+  defp start_with_failure_fence(agent, opts \\ []) do
+    case start_agent_process(agent, opts) do
+      {:ok, _pid} = success ->
+        success
+
+      {:error, :runtime_lease_owned} = owned ->
+        # A live exact owner is not a stranded desired state.
+        owned
+
+      {:error, _reason} = error ->
+        _ = Agents.fail_agent_start_intent(agent.id)
+        error
+    end
+  end
 
   defp start_agent_process(agent, opts \\ []) do
     opts = put_recorded_recovery_generation(agent.id, opts)
@@ -586,136 +691,109 @@ defmodule Maraithon.Runtime do
 
   defp start_admission(opts) do
     cond do
-      Keyword.has_key?(opts, :recovery_generation) -> :recovery
-      Keyword.get(opts, :resume_trigger) == "node_boot" -> :bootstrap
-      true -> :normal
+      Keyword.get(opts, :admission) in [:normal, :bootstrap, :recovery] ->
+        Keyword.fetch!(opts, :admission)
+
+      Keyword.has_key?(opts, :recovery_generation) ->
+        :recovery
+
+      Keyword.get(opts, :resume_trigger) == "node_boot" ->
+        :bootstrap
+
+      true ->
+        :normal
     end
   end
 
-  defp deactivate_agent_installation(agent, reason) do
-    with {:ok, %{agent: stopped_agent} = stop_fence} <- fence_agent_for_stop(agent),
-         {:ok, _drain_status} <- stop_running_agent(stop_fence, reason),
-         :ok <- fence_future_agent_delivery(stopped_agent.id) do
-      {:ok, stopped_agent}
+  defp execute_lifecycle(id, kind, request, planner) do
+    requires_external_drain = unfenced_local_agent_present?(id)
+
+    with :ok <- exact_runtime_enabled(),
+         {:ok, fence} <-
+           begin_lifecycle(id, kind, request, planner, requires_external_drain, 3) do
+      _route_result = route_lifecycle_fence(fence, lifecycle_route_reason(kind, request))
+
+      case AgentLifecycleOperations.finalize(id, fence.operation_token) do
+        {:ok, %{status: :reconciliation_pending} = pending} ->
+          {:ok, Map.put(pending, :agent, Agents.get_agent(id, include_removed: true))}
+
+        {:ok, finalized} ->
+          {:ok, finalized}
+
+        {:error, :lifecycle_operation_not_found} ->
+          {:error, :agent_drain_pending}
+
+        {:error, _reason} = error ->
+          error
+      end
     end
   end
 
-  defp fence_future_agent_delivery(agent_id) do
-    case Scheduler.cancel_all(agent_id) do
-      {count, _rows} when is_integer(count) ->
-        case AgentSubscriptions.deactivate_for_agent(agent_id) do
-          {deactivated_count, _subscriptions} when is_integer(deactivated_count) -> :ok
-          _unexpected -> {:error, :agent_delivery_fence_failed}
+  defp begin_lifecycle(_id, _kind, _request, _planner, _requires_external_drain, 0),
+    do: {:error, :agent_stop_reconciliation_pending}
+
+  defp begin_lifecycle(
+         id,
+         kind,
+         request,
+         planner,
+         requires_external_drain,
+         attempts_remaining
+       ) do
+    case AgentLifecycleOperations.begin(id, kind, request, planner,
+           requires_external_drain: requires_external_drain
+         ) do
+      {:error, {:expired_lease_requires_reconciliation, expired_lease}} ->
+        case AgentRestartGuards.record_expired(id, expired_lease.owner_token) do
+          result when elem(result, 0) in [:recorded, :duplicate] ->
+            begin_lifecycle(
+              id,
+              kind,
+              request,
+              planner,
+              requires_external_drain,
+              attempts_remaining - 1
+            )
+
+          {:ignored, :lease_renewed} ->
+            begin_lifecycle(
+              id,
+              kind,
+              request,
+              planner,
+              requires_external_drain,
+              attempts_remaining - 1
+            )
+
+          {:ignored, _reason} ->
+            {:error, :agent_stop_reconciliation_pending}
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
-      {:error, reason} ->
-        {:error, reason}
-
-      _unexpected ->
-        {:error, :agent_delivery_fence_failed}
+      result ->
+        result
     end
-  rescue
-    _error -> {:error, :agent_delivery_fence_failed}
+  end
+
+  defp unfenced_local_agent_present?(agent_id) do
+    case Registry.lookup(AgentRegistry, agent_id) do
+      [{pid, routing_metadata}] when is_pid(pid) ->
+        match?(:error, Ecto.UUID.cast(routing_metadata))
+
+      _no_single_local_process ->
+        false
+    end
   catch
-    :exit, _reason -> {:error, :agent_delivery_fence_failed}
+    :exit, _reason -> true
   end
 
-  # Desired state and exact readiness were committed before this function. It
-  # may route/wait only after the transaction has ended, and it never performs
-  # unfenced broad Effect/run cleanup on behalf of a remote or lost owner.
-  defp stop_running_agent(
-         %{agent: agent, lease: nil, lost_lease: lost_lease},
-         reason
-       ) do
-    _route_result = route_fenced_agent_stop(agent.id, lost_lease, reason)
-    {:ok, :reconciliation_pending}
+  defp route_lifecycle_fence(%{lease: nil}, _reason), do: :not_routed
+
+  defp route_lifecycle_fence(%{agent: agent, lease: lease}, reason) do
+    route_fenced_agent_stop(agent.id, lease, reason)
   end
-
-  defp stop_running_agent(%{agent: agent, lease: nil}, _reason) do
-    case lookup_agent_process(agent.id) do
-      {:ok, _unfenced_local_pid} ->
-        # A rolling legacy/stale PID is not ownership proof. Do not send an
-        # unqualified stop that a successor could consume, and do not claim
-        # quiescence without an explicit bridge/fleet-drain operation.
-        {:ok, :reconciliation_pending}
-
-      :not_running ->
-        if exact_work_quiesced?(agent.id),
-          do: {:ok, :quiesced},
-          else: {:ok, :reconciliation_pending}
-    end
-  end
-
-  defp stop_running_agent(%{agent: agent, lease: lease}, reason) do
-    _route_result = route_fenced_agent_stop(agent.id, lease, reason)
-
-    case AgentLeases.get(agent.id) do
-      nil ->
-        if exact_work_quiesced?(agent.id),
-          do: {:ok, :quiesced},
-          else: {:ok, :reconciliation_pending}
-
-      _owned_or_reconciling ->
-        {:ok, :reconciliation_pending}
-    end
-  end
-
-  defp exact_work_quiesced?(agent_id) do
-    active_run_pointer? =
-      case Agents.get_agent(agent_id, include_removed: true) do
-        %{active_run_id: active_run_id} when is_binary(active_run_id) -> true
-        _no_active_run -> false
-      end
-
-    running_run? =
-      Repo.exists?(
-        from(run in AgentRun,
-          where: run.agent_id == ^agent_id,
-          where: run.status == "running"
-        )
-      )
-
-    requested_run_step? =
-      Repo.exists?(
-        from(step in AgentRunStep,
-          where: step.agent_id == ^agent_id,
-          where: step.status == "requested"
-        )
-      )
-
-    active_effect? =
-      Repo.exists?(
-        from(effect in Effect,
-          where: effect.agent_id == ^agent_id,
-          where: effect.status in ["pending", "claimed", "cancelling"]
-        )
-      )
-
-    processing_directive? =
-      Repo.exists?(
-        from(directive in AgentDirective,
-          where: directive.agent_id == ^agent_id,
-          where: directive.status == "processing"
-        )
-      )
-
-    unresolved_generation? =
-      case AgentRestartGuards.get(agent_id) do
-        %{needs_recovery: true} -> true
-        %{tripped: true} -> true
-        _settled_or_absent -> false
-      end
-
-    not active_run_pointer? and not running_run? and not requested_run_step? and
-      not active_effect? and not processing_directive? and not unresolved_generation?
-  rescue
-    _error -> false
-  catch
-    :exit, _reason -> false
-  end
-
-  defp require_agent_quiesced(:quiesced), do: :ok
-  defp require_agent_quiesced(:reconciliation_pending), do: {:error, :agent_drain_pending}
 
   defp route_fenced_agent_stop(agent_id, lease, reason) do
     local_node = Atom.to_string(node())
@@ -736,48 +814,47 @@ defmodule Maraithon.Runtime do
   end
 
   defp dispatch_fenced_agent_stop(agent_id, owner_token, reason) do
-    # The immutable token prevents a delayed cross-node stop from killing a
-    # successor incarnation after desired state changes again.
+    # A delayed cross-node stop can address only the generation captured in the
+    # durable operation marker; a successor cannot consume it.
     Dispatch.dispatch(agent_id, {:control, :stop, reason, owner_token})
   end
 
-  defp fence_agent_for_stop(agent), do: fence_agent_for_stop(agent, 3, nil)
+  defp lifecycle_route_reason(:stop, %{"reason" => reason}), do: reason
+  defp lifecycle_route_reason(:delete, _request), do: "deleted_from_admin"
+  defp lifecycle_route_reason(:pause, _request), do: "paused_from_marketplace"
+  defp lifecycle_route_reason(:remove, _request), do: "removed_from_marketplace"
+  defp lifecycle_route_reason(:update, _request), do: "restarting_with_updated_config"
+  defp lifecycle_route_reason(:upgrade, _request), do: "restarting_with_upgraded_package"
 
-  defp fence_agent_for_stop(_agent, 0, _lost_lease),
-    do: {:error, :agent_stop_reconciliation_pending}
-
-  defp fence_agent_for_stop(agent, attempts_remaining, lost_lease) do
-    case AgentLeases.fence_for_stop(agent.id) do
-      {:ok, stop_fence} ->
-        stop_fence =
-          if lost_lease, do: Map.put(stop_fence, :lost_lease, lost_lease), else: stop_fence
-
-        {:ok, stop_fence}
-
-      {:error, {:expired_lease_requires_reconciliation, expired_lease}} ->
-        # Expired ownership is recorded before desired state is changed. A
-        # concurrent renewal or reconciler is benign; retry the exact fence.
-        case AgentRestartGuards.record_expired(agent.id, expired_lease.owner_token) do
-          {:recorded, _guard} ->
-            fence_agent_for_stop(agent, attempts_remaining - 1, expired_lease)
-
-          {:duplicate, _guard} ->
-            fence_agent_for_stop(agent, attempts_remaining - 1, expired_lease)
-
-          {:ignored, :lease_renewed} ->
-            fence_agent_for_stop(agent, attempts_remaining - 1, nil)
-
-          {:ignored, _reason} ->
-            fence_agent_for_stop(agent, attempts_remaining - 1, expired_lease)
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+  defp lifecycle_reason(reason, fallback)
+       when is_binary(reason) and byte_size(reason) in 1..255 do
+    if String.valid?(reason) and :binary.match(reason, <<0>>) == :nomatch,
+      do: reason,
+      else: fallback
   end
+
+  defp lifecycle_reason(_reason, fallback), do: fallback
+
+  defp require_finalized_agent(%{status: :finalized, agent: %Agent{} = agent}),
+    do: {:ok, agent}
+
+  defp require_finalized_agent(%{status: :reconciliation_pending}),
+    do: {:error, :agent_drain_pending}
+
+  defp require_finalized_agent(_result), do: {:error, :agent_lifecycle_incomplete}
+
+  defp require_finalized_delete(%{status: :finalized, action: :deleted}), do: :ok
+
+  defp require_finalized_delete(%{status: :reconciliation_pending}),
+    do: {:error, :agent_drain_pending}
+
+  defp require_finalized_delete(_result), do: {:error, :agent_lifecycle_incomplete}
+
+  defp maybe_start_finalized_agent(agent, true) do
+    with {:ok, _pid} <- start_with_failure_fence(agent), do: {:ok, agent}
+  end
+
+  defp maybe_start_finalized_agent(agent, false), do: {:ok, agent}
 
   defp lookup_agent_process(id) do
     case Registry.lookup(AgentRegistry, id) do
@@ -856,19 +933,7 @@ defmodule Maraithon.Runtime do
     end
   end
 
-  defp stop_for_update(%{status: "terminated"} = agent, false), do: {:ok, agent}
-
-  defp stop_for_update(agent, _was_running) do
-    with {:ok, %{agent: stopped_agent} = stop_fence} <- fence_agent_for_stop(agent),
-         {:ok, drain_status} <-
-           stop_running_agent(stop_fence, "restarting_with_updated_config"),
-         :ok <- fence_future_agent_delivery(stopped_agent.id),
-         :ok <- require_agent_quiesced(drain_status) do
-      {:ok, stopped_agent}
-    end
-  end
-
-  defp apply_agent_update(agent, params) do
+  defp planned_agent_update(agent, params) do
     existing_config = agent.config || %{}
     incoming_config = params["config"] || params[:config] || %{}
     behavior = params["behavior"] || params[:behavior] || agent.behavior
@@ -879,44 +944,56 @@ defmodule Maraithon.Runtime do
         _ -> existing_config
       end
 
-    attrs = %{
-      behavior: behavior,
-      config: config
-    }
+    with :ok <- validate_unchanged_binding_owner(agent, params) do
+      attrs = %{"behavior" => behavior, "config" => config}
 
-    attrs =
-      case fetch_optional_param(params, "user_id") do
-        :missing -> attrs
-        value -> Map.put(attrs, :user_id, normalize_optional_string(value))
-      end
+      attrs =
+        case fetch_optional_param(params, "project_id") do
+          :missing -> attrs
+          value -> Map.put(attrs, "project_id", normalize_optional_string(value))
+        end
 
-    attrs =
-      case fetch_optional_param(params, "project_id") do
-        :missing -> attrs
-        value -> Map.put(attrs, :project_id, normalize_optional_string(value))
-      end
+      budget = params["budget"] || params[:budget] || Map.get(existing_config, "budget")
 
-    budget = params["budget"] || params[:budget] || Map.get(existing_config, "budget")
+      attrs =
+        if is_map(budget),
+          do: put_in(attrs, ["config", "budget"], budget),
+          else: attrs
 
-    attrs =
-      if is_map(budget) do
-        put_in(attrs, [:config, "budget"], budget)
-      else
-        attrs
-      end
-
-    Agents.update_agent(agent, attrs)
+      {:ok, attrs}
+    end
   end
 
-  defp maybe_restart(agent, false), do: {:ok, agent}
+  defp validate_unchanged_binding_owner(agent, params) do
+    case fetch_optional_param(params, "user_id") do
+      :missing ->
+        :ok
 
-  defp maybe_restart(agent, true), do: do_start_existing_agent(agent.id)
+      value ->
+        if normalize_optional_string(value) == agent.user_id,
+          do: :ok,
+          else: {:error, :binding_user_mismatch}
+    end
+  end
 
-  defp upgrade_agent_version(agent, :latest),
-    do: Agents.upgrade_agent_installation_to_latest(agent)
+  defp resolve_upgrade_version(agent, :latest) do
+    case Agents.get_agent(agent.id,
+           include_removed: true,
+           preload: [agent_package: [:latest_version]]
+         ) do
+      %{agent_package: %{latest_version: %AgentPackageVersion{} = version}} -> {:ok, version}
+      _missing -> {:error, :package_not_found}
+    end
+  end
 
-  defp upgrade_agent_version(agent, version_id) when is_binary(version_id),
-    do: Agents.upgrade_agent_installation(agent, version_id)
+  defp resolve_upgrade_version(_agent, version_id) when is_binary(version_id) do
+    case Agents.get_agent_package_version(version_id) do
+      %AgentPackageVersion{} = version -> {:ok, version}
+      nil -> {:error, :version_not_found}
+    end
+  end
+
+  defp resolve_upgrade_version(_agent, _version_id), do: {:error, :version_not_found}
 
   defp wait_for_agent_response(
          id,
@@ -1020,6 +1097,12 @@ defmodule Maraithon.Runtime do
       key == "project_id" and Map.has_key?(params, :project_id) -> Map.get(params, :project_id)
       true -> :missing
     end
+  end
+
+  defp exact_runtime_enabled do
+    if RuntimeConfig.exact_agent_runtime_enabled?(),
+      do: :ok,
+      else: {:error, :exact_runtime_disabled}
   end
 
   defp normalize_optional_string(nil), do: nil

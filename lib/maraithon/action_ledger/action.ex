@@ -25,6 +25,7 @@ defmodule Maraithon.ActionLedger.Action do
     model.uncertainty
     scheduled_task.changed
     agent_isolation.changed
+    agent_isolation.consent_granted
     mobile_node.changed
     secret_ref.checked
     held_interruption_expired

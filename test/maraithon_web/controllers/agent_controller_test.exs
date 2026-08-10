@@ -417,15 +417,43 @@ defmodule MaraithonWeb.AgentControllerTest do
   # ============================================================================
 
   describe "POST /api/v1/agents" do
-    @doc """
-    Verifies that creating an agent returns the new agent with running status.
-    The agent should be immediately started after creation.
-    """
-    test "creates an agent", %{conn: conn} do
+    test "rejects missing explicit Binding consent without persisting an Agent", %{conn: conn} do
+      before_count = Repo.aggregate(Agent, :count, :id)
+
       conn =
         post(conn, "/api/v1/agents", %{
+          "user_id" => "missing-consent@example.com",
           "behavior" => "watchdog_summarizer",
           "config" => %{"key" => "value"}
+        })
+
+      response = json_response(conn, 400)
+      assert response["error"] == "invalid_params"
+      assert response["details"] =~ "binding_consent_required"
+      assert Repo.aggregate(Agent, :count, :id) == before_count
+    end
+
+    test "creates an Agent and active Binding from explicit same-user consent", %{conn: conn} do
+      user_id = "controller-consent-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      consent = %{
+        "actor_id" => user_id,
+        "user_id" => user_id,
+        "identity_key" => "api:#{System.unique_integer([:positive])}",
+        "credential_refs" => %{},
+        "connector_scope" => %{"manual" => %{"granted" => true}},
+        "memory_scope" => %{"workspace" => "default"},
+        "tool_policy" => %{"allowed_tools" => []},
+        "routing_bindings" => %{}
+      }
+
+      conn =
+        post(conn, "/api/v1/agents", %{
+          "user_id" => user_id,
+          "behavior" => "watchdog_summarizer",
+          "config" => %{"key" => "value"},
+          "binding_consent" => consent
         })
 
       response = json_response(conn, 201)
@@ -433,9 +461,13 @@ defmodule MaraithonWeb.AgentControllerTest do
       assert response["status"] == "running"
       assert response["id"] != nil
 
-      # Clean up: wait briefly and stop the agent to avoid orphaned processes
-      Process.sleep(50)
-      Maraithon.Runtime.stop_agent(response["id"])
+      binding = Maraithon.AgentIsolation.get_binding(response["id"])
+      assert binding.status == "active"
+      assert binding.user_id == user_id
+      assert binding.connector_scope == %{"manual" => %{"granted" => true}}
+      assert binding.consent_token != nil
+
+      assert {:ok, _result} = Maraithon.Runtime.stop_agent(response["id"])
     end
   end
 
@@ -501,14 +533,24 @@ defmodule MaraithonWeb.AgentControllerTest do
   end
 
   describe "POST /api/v1/agents/:id/start - existing agent" do
-    test "starts a stopped agent", %{conn: conn} do
+    test "starts a stopped agent with active same-user Binding consent", %{conn: conn} do
+      user_id = "controller-start-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
       {:ok, agent} =
         Agents.create_agent(%{
+          user_id: user_id,
           behavior: "watchdog_summarizer",
           config: %{},
           status: "stopped",
           stopped_at: DateTime.utc_now()
         })
+
+      assert {:ok, _binding} =
+               Maraithon.AgentIsolation.grant_binding_consent(
+                 agent,
+                 Maraithon.DataCase.binding_consent(agent)
+               )
 
       conn = post(conn, "/api/v1/agents/#{agent.id}/start", %{})
 
@@ -545,6 +587,7 @@ defmodule MaraithonWeb.AgentControllerTest do
 
       {:ok, agent} =
         Agents.create_agent(%{
+          user_id: "chief@example.com",
           behavior: "prompt_agent",
           config: %{"name" => "before-update", "subscribe" => ["email:old@example.com"]},
           status: "stopped"
@@ -574,12 +617,10 @@ defmodule MaraithonWeb.AgentControllerTest do
       updated_agent = Agents.get_agent(agent.id)
       assert updated_agent.user_id == "chief@example.com"
 
-      assert AgentSubscriptions.list_for_agent(agent.id)
-             |> Enum.map(&{&1.user_id, &1.topic})
-             |> Enum.sort() == [
-               {"chief@example.com", "email:kent@example.com"},
-               {"chief@example.com", "slack:T123"}
-             ]
+      # A stopped update persists the future routing plan but must not create
+      # active delivery subscriptions before a consented runtime start.
+      assert AgentSubscriptions.list_for_agent(agent.id) == []
+      assert updated_agent.config["subscribe"] == ["email:kent@example.com", "slack:T123"]
     end
   end
 

@@ -8,6 +8,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Agents
   alias Maraithon.Behaviors
   alias Maraithon.BriefingSchedules
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connections
   alias Maraithon.Insights.Detail
   alias Maraithon.Insights
@@ -358,16 +359,29 @@ defmodule MaraithonWeb.DashboardLive do
     project_id = Map.get(params, "project_id") || first_project_id(socket.assigns.projects)
     schedule_config = chief_of_staff_install_config(params)
 
+    binding_consent =
+      chief_of_staff_binding_consent(
+        params,
+        user_id,
+        project_id,
+        socket.assigns.chief_of_staff_package,
+        socket.assigns.chief_of_staff_readiness
+      )
+
     cond do
       is_nil(project_id) ->
         {:noreply, put_flash(socket, :error, "Create a project before installing Chief of Staff")}
 
       true ->
-        case Runtime.install_chief_of_staff(user_id,
-               project_id: project_id,
-               delivery_policy: %{"telegram" => "enabled"},
-               config: schedule_config
-             ) do
+        install_opts =
+          [
+            project_id: project_id,
+            delivery_policy: %{"telegram" => "enabled"},
+            config: schedule_config
+          ]
+          |> maybe_put_binding_consent(binding_consent)
+
+        case Runtime.install_chief_of_staff(user_id, install_opts) do
           {:ok, %{install_status: "setup_required"} = agent} ->
             {:noreply,
              socket
@@ -1149,6 +1163,24 @@ defmodule MaraithonWeb.DashboardLive do
                         </option>
                       </.c_select>
                     </.field>
+                    <label
+                      :if={chief_of_staff_missing_readiness(@chief_of_staff_readiness) == []}
+                      class="col-span-2 flex max-w-xl items-start gap-2 text-xs/5 text-zinc-600 sm:col-span-3"
+                    >
+                      <input
+                        id="chief-of-staff-binding-consent"
+                        type="checkbox"
+                        name="binding_consent[acknowledged]"
+                        value="true"
+                        required
+                        class="mt-0.5 size-4 rounded border-zinc-300 text-zinc-950"
+                      />
+                      <span>
+                        Allow Chief of Staff to use Gmail, Google Calendar, Telegram
+                        delivery, this project's memory, and the package's listed tools
+                        for briefs and follow-through.
+                      </span>
+                    </label>
                     <.button
                       type="submit"
                       phx-disable-with="Installing..."
@@ -2617,7 +2649,9 @@ defmodule MaraithonWeb.DashboardLive do
     required_connectors = AgentMarketplace.required_connectors_for("ai_chief_of_staff")
 
     readiness =
-      Connections.connector_readiness(user_id, required_connectors, return_to: "/dashboard")
+      user_id
+      |> Connections.connector_readiness(required_connectors, return_to: "/dashboard")
+      |> include_chief_of_staff_telegram_readiness(user_id)
 
     assign(socket,
       chief_of_staff_package: package,
@@ -2627,6 +2661,37 @@ defmodule MaraithonWeb.DashboardLive do
       chief_of_staff_schedule: BriefingSchedules.summarize_for_prompt(user_id)
     )
   end
+
+  defp include_chief_of_staff_telegram_readiness(readiness, user_id)
+       when is_list(readiness) and is_binary(user_id) do
+    if Enum.any?(readiness, &(&1.provider == "telegram")) do
+      readiness
+    else
+      account = ConnectedAccounts.get(user_id, "telegram")
+
+      status =
+        case account do
+          %{status: "connected"} -> :connected
+          %{status: "error"} -> :needs_refresh
+          _account -> :disconnected
+        end
+
+      readiness ++
+        [
+          %{
+            provider: "telegram",
+            service: "delivery",
+            label: "Telegram",
+            status: status,
+            connected?: status == :connected,
+            connect_path: "/connectors/telegram?return_to=%2Fdashboard",
+            details: "Needed to deliver Chief of Staff briefs and follow-through."
+          }
+        ]
+    end
+  end
+
+  defp include_chief_of_staff_telegram_readiness(readiness, _user_id), do: readiness
 
   defp chief_of_staff_package do
     case Agents.get_agent_package_by_slug("ai_chief_of_staff", preload: [:latest_version]) do
@@ -3072,6 +3137,59 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp chief_of_staff_missing_readiness(_readiness), do: []
+
+  defp chief_of_staff_binding_consent(
+         %{"binding_consent" => %{"acknowledged" => "true"}},
+         user_id,
+         project_id,
+         %{latest_version: version},
+         readiness
+       )
+       when is_binary(user_id) and is_binary(project_id) and is_list(readiness) do
+    if chief_of_staff_missing_readiness(readiness) == [] and
+         Ecto.assoc_loaded?(version) and not is_nil(version) do
+      connector_scope =
+        readiness
+        |> Enum.group_by(&to_string(&1.provider), fn item ->
+          if is_binary(item.service), do: item.service, else: "provider"
+        end)
+        |> Map.new(fn {provider, services} ->
+          {provider, %{"services" => services |> Enum.uniq() |> Enum.sort()}}
+        end)
+        |> Map.put("telegram", %{"services" => ["delivery"]})
+
+      credential_refs =
+        Map.new(connector_scope, fn {provider, _scope} ->
+          {provider, "connected-account:#{user_id}:#{provider}"}
+        end)
+
+      %{
+        "actor_id" => user_id,
+        "user_id" => user_id,
+        "identity_key" => "chief-of-staff:#{user_id}:#{project_id}",
+        "credential_refs" => credential_refs,
+        "connector_scope" => connector_scope,
+        "memory_scope" => %{"project_id" => project_id},
+        "tool_policy" => %{
+          "allowed_tools" => version.tool_allowlist || [],
+          "allowed_mcp_servers" => version.mcp_allowlist || []
+        },
+        "routing_bindings" => %{"telegram" => "project:#{project_id}"},
+        "metadata" => %{
+          "source" => "dashboard_explicit_consent",
+          "agent_package_version_id" => version.id
+        }
+      }
+    end
+  end
+
+  defp chief_of_staff_binding_consent(_params, _user_id, _project_id, _package, _readiness),
+    do: nil
+
+  defp maybe_put_binding_consent(opts, consent) when is_map(consent),
+    do: Keyword.put(opts, :binding_consent, consent)
+
+  defp maybe_put_binding_consent(opts, _consent), do: opts
 
   defp chief_of_staff_install_config(params) when is_map(params) do
     schedule = Map.get(params, "schedule") || %{}

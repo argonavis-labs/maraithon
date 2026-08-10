@@ -23,7 +23,7 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
         status: "running"
       })
 
-    {:ok, binding} = AgentIsolation.upsert_binding(agent)
+    {:ok, binding} = AgentIsolation.grant_binding_consent(agent, binding_consent(agent))
     %{agent: agent, binding: binding}
   end
 

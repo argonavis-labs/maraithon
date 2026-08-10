@@ -414,7 +414,7 @@ defmodule Maraithon.Runtime.AgentExactLifecycleTest do
         }
       })
 
-    {:ok, _binding} = AgentIsolation.upsert_binding(agent)
+    {:ok, _binding} = AgentIsolation.grant_binding_consent(agent, binding_consent(agent))
     agent
   end
 

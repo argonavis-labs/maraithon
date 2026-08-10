@@ -69,7 +69,7 @@ defmodule Maraithon.Runtime.WakeCoordinatorTest do
         config: %{}
       })
 
-    {:ok, _binding} = AgentIsolation.upsert_binding(agent)
+    {:ok, _binding} = AgentIsolation.grant_binding_consent(agent, binding_consent(agent))
     {agent, user_id}
   end
 

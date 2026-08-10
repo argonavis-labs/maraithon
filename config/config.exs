@@ -46,6 +46,8 @@ config :maraithon, Maraithon.Repo,
 
 # Maraithon runtime configuration
 config :maraithon, Maraithon.Runtime,
+  # Fail closed until the mandatory non-rolling exact-runtime cutover.
+  exact_agent_runtime_enabled: false,
   # Intervals
   heartbeat_interval_ms: :timer.minutes(15),
   checkpoint_interval_ms: :timer.minutes(10),

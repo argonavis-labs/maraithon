@@ -413,7 +413,20 @@ tool_allowed_paths =
   |> Enum.map(&String.trim/1)
   |> Enum.reject(&(&1 == ""))
 
+# A capable production revision remains dark unless the operator deliberately
+# enables the second, non-rolling cutover deployment.
+exact_agent_runtime_enabled =
+  if config_env() == :prod do
+    System.get_env("EXACT_AGENT_RUNTIME_ENABLED", "false")
+    |> String.trim()
+    |> String.downcase()
+    |> Kernel.==("true")
+  else
+    config_env() == :test
+  end
+
 config :maraithon, Maraithon.Runtime,
+  exact_agent_runtime_enabled: exact_agent_runtime_enabled,
   # LLM settings
   llm_provider_name: llm_provider_name,
   llm_provider: llm_provider,
