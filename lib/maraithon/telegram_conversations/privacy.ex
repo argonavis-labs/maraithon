@@ -442,7 +442,7 @@ defmodule Maraithon.TelegramConversations.Privacy do
              (SELECT count(*) FROM public.agents WHERE user_id = $1),
              (SELECT count(*)
               FROM public.privacy_erasure_agent_targets
-              WHERE request_id = $2::uuid AND state <> 'deleted')
+              WHERE request_id = $2::uuid AND state <> 'drained')
            """,
            [user_id, request_id],
            log: false
