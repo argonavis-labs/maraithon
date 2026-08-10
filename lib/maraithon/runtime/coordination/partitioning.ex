@@ -1,6 +1,5 @@
 defmodule Maraithon.Runtime.Coordination.Partitioning do
   @moduledoc "Stable tenant-to-partition mapping shared with PostgreSQL."
-  use Bitwise
   @count 64
 
   def count, do: @count

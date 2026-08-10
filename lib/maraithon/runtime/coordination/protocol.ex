@@ -85,7 +85,9 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
     end
   end
 
-  def activate(opts \\ []) when is_list(opts) do
+  def activate(opts \\ [])
+
+  def activate(opts) when is_list(opts) do
     with @confirmation <- Keyword.get(opts, :confirmation),
          {:ok, epoch} <- cast_epoch(Keyword.get(opts, :activation_epoch, Ecto.UUID.generate())),
          {:ok, timeout} <- lock_timeout(Keyword.get(opts, :lock_timeout_ms, 15_000)),
@@ -188,6 +190,8 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
               [@name]
             ).rows
 
+          effect_mode = EffectProtocol.locked_mode!()
+
           case mode do
             @active ->
               if {evidence_id, evidence_digest, activated_by, exact_revision} ==
@@ -199,13 +203,13 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
               # These locks serialize against every old admission/claim path. The
               # repeated quiescence check, not operator timing, closes the race.
               Enum.each(
-                ~w(agent_runtime_leases agent_directives agent_runs agent_run_steps effects background_jobs scheduled_jobs runtime_node_incarnations runtime_task_assignments),
+                ~w(effects agent_runtime_leases agent_directives agent_runs agent_run_steps background_jobs scheduled_jobs runtime_node_incarnations runtime_task_assignments),
                 fn table ->
                   SQL.query!(Repo, "LOCK TABLE public.#{table} IN SHARE MODE", [])
                 end
               )
 
-              case activation_preconditions_locked() do
+              case activation_preconditions_locked(effect_mode) do
                 :ok -> :ok
                 {:error, reason} -> Repo.rollback(reason)
               end
@@ -254,8 +258,8 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
     end
   end
 
-  defp activation_preconditions_locked do
-    if EffectProtocol.locked_mode!() != :exact do
+  defp activation_preconditions_locked(effect_mode) do
+    if effect_mode != :exact do
       {:error, :exact_effect_protocol_required}
     else
       case SQL.query!(Repo, quiescence_sql(), []).rows do
@@ -274,7 +278,7 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
       (SELECT count(*) FROM public.agent_runtime_leases),
       (SELECT count(*) FROM public.background_jobs WHERE status = 'running'),
       (SELECT count(*) FROM public.scheduled_jobs WHERE status = 'dispatched'),
-      (SELECT count(*) FROM public.effects WHERE status IN ('claimed', 'cancelling')),
+      (SELECT count(*) FROM public.effects WHERE status IN ('pending', 'claimed', 'cancelling')),
       (SELECT count(*) FROM public.runtime_node_incarnations WHERE state <> 'revoked'),
       (SELECT count(*) FROM public.runtime_task_assignments
        WHERE state IN ('reserved', 'running', 'termination_requested', 'termination_proven'))
@@ -287,19 +291,20 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
            """
            SELECT
              (SELECT count(*) FROM public.schema_migrations WHERE version = #{@migration}) = 1 AND
-             public.runtime_coordination_catalog_ready_count() = 65 AND
+             public.runtime_coordination_catalog_ready_count() = 95 AND
+             public.runtime_coordination_roles_ready() AND
+             public.runtime_coordination_acl_ready() AND
              EXISTS (
                SELECT 1
                FROM public.runtime_coordination_protocols AS protocol
                JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = protocol.name
-               WHERE protocol.name = 'runtime' AND protocol.manifest_digest = decode(
-                 md5(manifest.constraint_fingerprints::text || manifest.function_fingerprints::text ||
-                     manifest.trigger_fingerprints::text || manifest.index_fingerprints::text) ||
-                 md5('v1:' || manifest.constraint_fingerprints::text ||
-                     manifest.function_fingerprints::text || manifest.trigger_fingerprints::text ||
-                     manifest.index_fingerprints::text),
-                 'hex'
-               )
+               WHERE protocol.name = 'runtime' AND protocol.manifest_digest = public.digest(convert_to(pg_catalog.jsonb_build_object(
+                 'constraints', manifest.constraint_fingerprints,
+                 'functions', manifest.function_fingerprints,
+                 'triggers', manifest.trigger_fingerprints,
+                 'indexes', manifest.index_fingerprints,
+                 'catalogs', manifest.catalog_fingerprints
+               )::text, 'UTF8'), 'sha256')
              )
            """,
            []
