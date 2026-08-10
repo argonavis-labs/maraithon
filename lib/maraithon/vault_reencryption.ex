@@ -8,6 +8,7 @@ defmodule Maraithon.VaultReencryption do
   SHA-256 row-reference digest.
   """
 
+  alias Maraithon.DurablePayloadBindingLifecycle, as: BindingLifecycle
   alias Maraithon.KeyRetirement
   alias Maraithon.Repo
   alias Maraithon.Vault
@@ -133,6 +134,8 @@ defmodule Maraithon.VaultReencryption do
 
     %{rows: [["maraithon_incident_operator"]]} =
       Repo.query!("SELECT current_user", [], log: false)
+
+    _evidence = BindingLifecycle.lock_exact_protocol!()
 
     Repo.query!(
       "SELECT set_config('maraithon.vault_reencryption', 'VAULT_REENCRYPT_V1', true)",

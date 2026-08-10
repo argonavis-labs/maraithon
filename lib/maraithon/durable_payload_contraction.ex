@@ -18,11 +18,11 @@ defmodule Maraithon.DurablePayloadContraction do
   @max_timeout 180_000
 
   @coordination_tables ~w(
-    agent_runtime_leases
-    runtime_node_incarnations
     runtime_leader_authorities
+    runtime_node_incarnations
     runtime_partitions
     runtime_partition_transitions
+    agent_runtime_leases
     runtime_task_assignments
     runtime_partition_rebalance_requests
   )
@@ -34,8 +34,8 @@ defmodule Maraithon.DurablePayloadContraction do
              fn ->
                assume_activation_role!()
                lock_and_verify_evidence!(evidence)
-               lock_payload_registry!()
                lock_coordination_authority!()
+               lock_payload_registry!()
                assert_stopped_fleet!()
                assert_work_drained!()
                set_marker!()
@@ -109,6 +109,15 @@ defmodule Maraithon.DurablePayloadContraction do
   end
 
   defp lock_and_verify_evidence!(evidence) do
+    case Repo.query!(
+           "SELECT mode FROM public.runtime_coordination_protocols WHERE name = 'runtime' FOR UPDATE",
+           [],
+           log: false
+         ).rows do
+      [["dark"]] -> :ok
+      _invalid -> Repo.rollback(:stopped_fleet_requires_dark_runtime_protocol)
+    end
+
     case Repo.query!(
            """
            SELECT mode, activation_evidence_id, activation_evidence_digest,
@@ -191,7 +200,7 @@ defmodule Maraithon.DurablePayloadContraction do
        WHERE status IN ('pending', 'processing')),
       (SELECT COUNT(*) FROM public.agent_run_steps WHERE status = 'requested'),
       (SELECT COUNT(*) FROM public.effects
-       WHERE status IN ('pending', 'claimed', 'cancelling')),
+       WHERE status IN ('pending', 'claimed', 'executing', 'cancelling')),
       (SELECT COUNT(*) FROM public.agent_runs WHERE status = 'running'),
       (SELECT COUNT(*) FROM public.telegram_assistant_runs
        WHERE status IN ('queued', 'running', 'waiting_confirmation')),
