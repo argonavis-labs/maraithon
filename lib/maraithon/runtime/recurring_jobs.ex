@@ -13,6 +13,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
 
   alias Maraithon.AssistantChat.RunRecovery
   alias Maraithon.PrivacyErasure
+  alias Maraithon.PrivacyRetention
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobs
@@ -104,6 +105,11 @@ defmodule Maraithon.Runtime.RecurringJobs do
         "privacy_erasure_discovery",
         Config.positive_integer(:privacy_erasure_discovery_interval_ms, :timer.minutes(1)),
         Config.positive_integer(:privacy_erasure_discovery_initial_delay_ms, :timer.seconds(10))
+      ),
+      interval_spec(
+        "privacy_retention",
+        Config.positive_integer(:privacy_retention_interval_ms, :timer.minutes(15)),
+        Config.positive_integer(:privacy_retention_initial_delay_ms, :timer.seconds(20))
       )
     ]
   end
@@ -332,6 +338,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
   defp run_cycle("assistant_run_recovery"), do: RunRecovery.run_once()
   defp run_cycle("telegram_run_reaper"), do: RunReaper.run_once()
   defp run_cycle("privacy_erasure_discovery"), do: PrivacyErasure.discover_missing_jobs(50)
+  defp run_cycle("privacy_retention"), do: PrivacyRetention.run_cycle()
   defp run_cycle(name), do: PeriodicJobs.schedule(name)
 
   defp take_advisory_authority! do
