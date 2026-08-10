@@ -3,44 +3,23 @@ defmodule Maraithon.Runtime.BriefingCron do
   Database-driven cron for recurring operator briefings.
 
   The actual briefing work stays inside the Chief of Staff morning briefing
-  skill. This process only scans persisted agent configuration and ensures a
-  due morning briefing wakeup is queued once per local day per user.
+  skill. Each durable recurring cycle scans persisted agent configuration and
+  ensures a due morning briefing wakeup is queued once per local day per user.
   """
-
-  use GenServer
 
   alias Maraithon.BriefingSchedules
   alias Maraithon.EmailDelivery
   alias Maraithon.OperatorEvents
-  alias Maraithon.Runtime.Config
   alias Maraithon.Runtime.Scheduler
 
   require Logger
-
-  @name __MODULE__
-
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: @name)
-  end
 
   # If the briefing still has not landed this long after its scheduled
   # time, tell the user by email instead of leaving an empty inbox.
   @late_alert_after_minutes 60
 
-  @impl true
-  def init(_opts) do
-    state = %{
-      interval_ms: Config.positive_integer(:briefing_cron_interval_ms, 60_000),
-      alerted_keys: MapSet.new()
-    }
-
-    schedule_tick(5_000)
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_info(:tick, state) do
-    now = DateTime.utc_now()
+  @doc "Runs one briefing scheduling and late-alert cycle."
+  def run_once(now \\ DateTime.utc_now()) do
     result = schedule_due_morning_briefings(now)
 
     if result.scheduled > 0 or result.skipped > 0 do
@@ -50,15 +29,8 @@ defmodule Maraithon.Runtime.BriefingCron do
       )
     end
 
-    state = alert_late_briefings(now, state)
-
-    schedule_tick(state.interval_ms)
-    {:noreply, state}
-  rescue
-    error ->
-      Logger.warning("Briefing cron cycle failed", reason: Exception.message(error))
-      schedule_tick(state.interval_ms)
-      {:noreply, state}
+    _state = alert_late_briefings(now)
+    result
   end
 
   @doc false
@@ -213,10 +185,6 @@ defmodule Maraithon.Runtime.BriefingCron do
         end
       end
     end)
-  end
-
-  defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
-    Process.send_after(self(), :tick, delay_ms)
   end
 
   # A briefing run can legitimately take many minutes (large prompt, long

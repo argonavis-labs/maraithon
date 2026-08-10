@@ -1,7 +1,9 @@
 defmodule Maraithon.TelegramAssistant.RunReaper do
   @moduledoc """
-  Periodically marks Telegram assistant runs that are stuck in `running` as
-  `degraded`.
+  Marks Telegram assistant runs that are stuck in `running` as `degraded`.
+
+  `Maraithon.Runtime.RecurringJobs` supplies the durable cadence; this module
+  owns only one bounded recovery pass.
 
   A run only gets stuck if the process executing it died mid-flight — a node
   restart, a crash in the runner, or an OOM. Nothing else reclaims
@@ -13,8 +15,6 @@ defmodule Maraithon.TelegramAssistant.RunReaper do
   only ever catches genuinely orphaned runs, never slow ones.
   """
 
-  use GenServer
-
   import Ecto.Query
 
   require Logger
@@ -24,37 +24,20 @@ defmodule Maraithon.TelegramAssistant.RunReaper do
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.TelegramAssistant.Run
 
-  @default_poll_interval_ms 60_000
   # A real run finishes in well under a minute. Ten minutes without completion
   # means the executing process is gone and is never coming back.
   @default_stale_run_timeout_ms 600_000
 
-  def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-  end
-
-  @impl true
-  def init(_opts) do
-    poll_interval_ms =
-      RuntimeConfig.positive_integer(:run_reaper_poll_interval_ms, @default_poll_interval_ms)
-
+  def run_once do
     stale_timeout_ms =
       RuntimeConfig.positive_integer(:run_reaper_stale_timeout_ms, @default_stale_run_timeout_ms)
 
-    schedule_poll(poll_interval_ms)
-
-    {:ok, %{poll_interval_ms: poll_interval_ms, stale_timeout_ms: stale_timeout_ms}}
-  end
-
-  @impl true
-  def handle_info(:poll, state) do
-    _ =
-      DbResilience.with_database("telegram run reaper", fn ->
-        reap_stale_runs(state.stale_timeout_ms)
-      end)
-
-    schedule_poll(state.poll_interval_ms)
-    {:noreply, state}
+    case DbResilience.with_database("telegram run reaper", fn ->
+           reap_stale_runs(stale_timeout_ms)
+         end) do
+      {:ok, count} -> %{reaped: count}
+      {:error, reason} -> raise "telegram run reaper database failure: #{inspect(reason)}"
+    end
   end
 
   @doc """
@@ -88,9 +71,5 @@ defmodule Maraithon.TelegramAssistant.RunReaper do
     end
 
     count
-  end
-
-  defp schedule_poll(interval_ms) do
-    Process.send_after(self(), :poll, interval_ms)
   end
 end

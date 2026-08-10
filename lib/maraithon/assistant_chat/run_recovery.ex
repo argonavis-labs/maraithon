@@ -2,15 +2,15 @@ defmodule Maraithon.AssistantChat.RunRecovery do
   @moduledoc """
   Recovers mobile assistant runs stranded by restarts.
 
-  Queued runs are dispatched as in-memory casts to per-conversation
-  workers; a deploy between enqueue and execution loses the cast while the
-  queued run row survives. This sweeper re-dispatches stale queued runs
+  `Maraithon.Runtime.RecurringJobs` supplies the durable cadence; this module
+  owns only one bounded recovery pass. Queued runs are dispatched as in-memory
+  casts to per-conversation workers. A deploy between enqueue and execution
+  loses the cast while the queued run row survives. This pass re-dispatches
+  stale queued runs
   (idempotently — `run_queued_request` skips runs that already advanced)
   and fails runs stuck "running" far past every server-side wall clock so
   conversations never wedge.
   """
-
-  use GenServer
 
   import Ecto.Query
 
@@ -22,7 +22,6 @@ defmodule Maraithon.AssistantChat.RunRecovery do
 
   require Logger
 
-  @sweep_interval :timer.seconds(60)
   # Old enough that the original cast is certainly gone, young enough that
   # a late answer is still the answer the user asked for.
   @queued_grace_seconds 90
@@ -30,24 +29,9 @@ defmodule Maraithon.AssistantChat.RunRecovery do
   # Every in-run wall clock is well under this.
   @running_timeout_minutes 15
 
-  def start_link(_opts) do
-    GenServer.start_link(__MODULE__, [], name: __MODULE__)
-  end
+  @doc "Runs one recovery pass. Exposed for ops use and durable recurring jobs."
+  def run_once, do: sweep()
 
-  @impl true
-  def init(_args) do
-    schedule_sweep()
-    {:ok, %{}}
-  end
-
-  @impl true
-  def handle_info(:sweep, state) do
-    _ = sweep()
-    schedule_sweep()
-    {:noreply, state}
-  end
-
-  @doc "Runs one recovery pass. Exposed for ops use."
   def sweep do
     recovered = recover_stale_queued_runs()
     expired = expire_ancient_queued_runs()
@@ -144,9 +128,5 @@ defmodule Maraithon.AssistantChat.RunRecovery do
 
   defp seconds_ago(seconds) do
     DateTime.add(DateTime.utc_now(), -seconds, :second)
-  end
-
-  defp schedule_sweep do
-    Process.send_after(self(), :sweep, @sweep_interval)
   end
 end

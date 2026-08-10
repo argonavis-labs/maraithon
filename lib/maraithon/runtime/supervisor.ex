@@ -51,10 +51,7 @@ defmodule Maraithon.Runtime.Supervisor do
             Maraithon.Runtime.Scheduler,
             Maraithon.Runtime.ShutdownReporter,
             Maraithon.Runtime.HealthReporter,
-            Maraithon.Runtime.InsightNotifier,
-            Maraithon.Runtime.BriefingCron,
             Maraithon.Runtime.DogfoodDigest,
-            Maraithon.Runtime.BriefNotifier,
             Maraithon.Runtime.ProactiveCheckIn,
             Maraithon.Runtime.TodoCompletionSweep,
             Maraithon.Runtime.NudgeSweep,
@@ -62,8 +59,7 @@ defmodule Maraithon.Runtime.Supervisor do
             Maraithon.Runtime.TokenRefresher,
             Maraithon.Runtime.WatchRenewer,
             Maraithon.Runtime.FreshnessSweep,
-            Maraithon.Runtime.StuckStateWatchdog,
-            Maraithon.TelegramAssistant.RunReaper
+            Maraithon.Runtime.StuckStateWatchdog
           ]
       else
         # Exact starts are still exercised in focused tests. Keep the mandatory

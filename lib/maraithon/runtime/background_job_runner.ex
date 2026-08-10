@@ -16,6 +16,10 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   stale-claim recovery, and idempotent handlers. Claim tokens do not provide
   exactly-once side effects.
 
+  Durable recurring handlers return an internal reschedule instruction. The
+  runner atomically moves the exactly claimed row back to `pending` at a
+  database-clock deadline instead of completing it and arming a process timer.
+
   Telegram ordering applies to committed, visible receipt rows. Production also
   enforces Telegram's provider-side `max_connections: 1` contract and a bounded
   ingress grace; a head query alone cannot make claims about an unseen update.
@@ -30,6 +34,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   alias Maraithon.Runtime.BackgroundJobHandler
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
+  alias Maraithon.Runtime.RecurringJobs
 
   require Logger
 
@@ -37,6 +42,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   @default_claim_timeout_ms 300_000
   @default_batch_size 10
   @default_max_concurrency 5
+  @default_recurring_reconcile_interval_ms :timer.minutes(1)
   # A `{:retry_after, seconds, reason}` error (e.g. HTTP 429 + Retry-After)
   # reschedules without burning an attempt, so it needs its own ceiling and
   # cap independent of `attempts`/`max_attempts` — otherwise a persistent
@@ -95,6 +101,22 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
     renew_interval_ms = renewal_interval_ms(claim_timeout_ms)
 
+    default_recurring_reconcile_interval_ms =
+      RuntimeConfig.positive_integer(
+        :recurring_job_reconcile_interval_ms,
+        @default_recurring_reconcile_interval_ms
+      )
+
+    recurring_reconcile_interval_ms =
+      case Keyword.get(
+             opts,
+             :recurring_reconcile_interval_ms,
+             default_recurring_reconcile_interval_ms
+           ) do
+        value when is_integer(value) and value > 0 -> value
+        _invalid -> default_recurring_reconcile_interval_ms
+      end
+
     schedule_poll(poll_interval_ms)
     renew_timer = schedule_renewal(renew_interval_ms)
 
@@ -110,6 +132,14 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
        batch_size: batch_size,
        max_concurrency: max_concurrency,
        poll_retry_attempts: 0,
+       reconcile_recurring_jobs?:
+         Keyword.get(
+           opts,
+           :reconcile_recurring_jobs?,
+           Application.get_env(:maraithon, :start_background_workers, true)
+         ),
+       recurring_reconcile_interval_ms: recurring_reconcile_interval_ms,
+       next_recurring_reconcile_at_ms: nil,
        handler: Keyword.get(opts, :handler, handler_module())
      }}
   end
@@ -125,6 +155,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   @impl true
   def handle_info(:poll, state) do
+    state = maybe_reconcile_recurring_jobs(state)
     available_slots = max(state.max_concurrency - map_size(state.running), 0)
 
     if available_slots == 0 do
@@ -624,6 +655,10 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp persist_job_result(%BackgroundJob{} = job, handler_result) do
     transition_result =
       case handler_result do
+        {:ok, data, {:reschedule_in, delay_ms}}
+        when is_integer(delay_ms) and delay_ms > 0 ->
+          mark_rescheduled(job, data, delay_ms)
+
         {:ok, data} ->
           mark_completed(job, data)
 
@@ -669,6 +704,28 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     else
       mark_failed(job, reason, attempts)
     end
+  end
+
+  defp mark_rescheduled(%BackgroundJob{} = job, result, delay_ms) do
+    DbResilience.with_database("background job runner self-reschedule", fn ->
+      now = database_now!()
+      scheduled_at = DateTime.add(now, delay_ms, :millisecond)
+
+      Repo.update_all(
+        owned_claim(job),
+        set: [
+          status: "pending",
+          attempts: 0,
+          scheduled_at: scheduled_at,
+          result: normalize_result(result),
+          claimed_by: nil,
+          claimed_at: nil,
+          claim_token: nil,
+          last_error: nil,
+          updated_at: now
+        ]
+      )
+    end)
   end
 
   defp mark_completed(%BackgroundJob{} = job, result) do
@@ -892,6 +949,38 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp renewal_interval_ms(claim_timeout_ms) do
     raise ArgumentError,
           "background job claim timeout must be an integer greater than 1ms, got: #{inspect(claim_timeout_ms)}"
+  end
+
+  defp maybe_reconcile_recurring_jobs(%{reconcile_recurring_jobs?: false} = state),
+    do: state
+
+  defp maybe_reconcile_recurring_jobs(state) do
+    now_ms = System.monotonic_time(:millisecond)
+
+    if is_nil(state.next_recurring_reconcile_at_ms) or
+         now_ms >= state.next_recurring_reconcile_at_ms do
+      retry_in_ms =
+        case reconcile_recurring_jobs_safely() do
+          {:ok, _result} ->
+            state.recurring_reconcile_interval_ms
+
+          {:error, reason} ->
+            Logger.warning("Recurring background job reconcile failed", reason: inspect(reason))
+            min(state.recurring_reconcile_interval_ms, :timer.seconds(5))
+        end
+
+      %{state | next_recurring_reconcile_at_ms: now_ms + retry_in_ms}
+    else
+      state
+    end
+  end
+
+  defp reconcile_recurring_jobs_safely do
+    RecurringJobs.reconcile()
+  rescue
+    error -> {:error, {:reconcile_exception, error.__struct__}}
+  catch
+    kind, _reason -> {:error, {:reconcile_exit, kind}}
   end
 
   defp schedule_poll(ms), do: Process.send_after(self(), :poll, ms)

@@ -23,6 +23,7 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   alias Maraithon.RelationshipIntelligence
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.RecurringJobs
 
   require Logger
 
@@ -298,6 +299,9 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
       _other -> {:error, :invalid_local_contact_ids}
     end
   end
+
+  def execute(%BackgroundJob{queue: "runtime_recurring"} = job),
+    do: RecurringJobs.execute(job)
 
   def execute(%BackgroundJob{job_type: job_type}),
     do: {:error, {:unknown_background_job, job_type}}
