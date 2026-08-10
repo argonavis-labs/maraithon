@@ -25,6 +25,24 @@ defmodule Maraithon.DatabaseTLS do
     :ok
   end
 
+  @doc "Refuses an operator URL that reuses the runtime database role."
+  def require_distinct_credentials!(operator_url, runtime_url, env_name)
+      when is_binary(operator_url) and is_binary(runtime_url) and is_binary(env_name) do
+    operator_role = database_role!(operator_url, env_name)
+    runtime_role = database_role!(runtime_url, "DATABASE_URL")
+
+    if Plug.Crypto.secure_compare(operator_role, runtime_role) do
+      raise "#{env_name} must use a database role distinct from DATABASE_URL"
+    end
+
+    :ok
+  end
+
+  def require_distinct_credentials!(_operator_url, _runtime_url, env_name)
+      when is_binary(env_name) do
+    raise "#{env_name} and DATABASE_URL are required to prove distinct database roles"
+  end
+
   @doc "Returns URL-scoped PostgreSQL TLS options under the audited production policy."
   def repo_options!(url, env_name) when is_binary(url) and is_binary(env_name) do
     case Application.get_env(:maraithon, :database_tls_audit) do
@@ -79,6 +97,25 @@ defmodule Maraithon.DatabaseTLS do
     end
 
     uri
+  end
+
+  defp database_role!(url, env_name) do
+    case URI.parse(url).userinfo do
+      userinfo when is_binary(userinfo) and userinfo != "" ->
+        userinfo
+        |> String.split(":", parts: 2)
+        |> hd()
+        |> URI.decode()
+        |> case do
+          "" -> raise "#{env_name} must identify a database role"
+          role -> role
+        end
+
+      _missing ->
+        raise "#{env_name} must identify a database role"
+    end
+  rescue
+    _error -> raise "#{env_name} must identify a valid database role"
   end
 
   defp ca_options! do
