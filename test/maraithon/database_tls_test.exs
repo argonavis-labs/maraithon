@@ -51,6 +51,33 @@ defmodule Maraithon.DatabaseTLSTest do
     end
   end
 
+  test "operator credentials must use a distinct database role" do
+    assert :ok =
+             DatabaseTLS.require_distinct_credentials!(
+               "ecto://maraithon_incident_operator:operator-secret@db.example/app",
+               "ecto://maraithon_runtime:runtime-secret@db.example/app",
+               "MARAITHON_INCIDENT_DATABASE_URL"
+             )
+
+    assert_raise RuntimeError, ~r/database role distinct/, fn ->
+      DatabaseTLS.require_distinct_credentials!(
+        "ecto://maraithon_runtime:other-secret@other-db.example/app",
+        "ecto://maraithon_runtime:runtime-secret@db.example/app",
+        "MARAITHON_INCIDENT_DATABASE_URL"
+      )
+    end
+  end
+
+  test "credential comparison normalizes escaped role names" do
+    assert_raise RuntimeError, ~r/database role distinct/, fn ->
+      DatabaseTLS.require_distinct_credentials!(
+        "ecto://maraithon%5Fruntime:operator-secret@other-db.example/app",
+        "ecto://maraithon_runtime:runtime-secret@db.example/app",
+        "MARAITHON_ACTIVATION_DATABASE_URL"
+      )
+    end
+  end
+
   test "configuring an operator URL drops stale runtime transport options" do
     Application.put_env(:maraithon, :database_tls_audit, %{mode: :insecure_override})
 
