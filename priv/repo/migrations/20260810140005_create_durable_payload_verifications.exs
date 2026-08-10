@@ -1,7 +1,35 @@
 defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
   use Ecto.Migration
 
+  @disable_ddl_transaction true
+
   def up do
+    repo().checkout(
+      fn ->
+        repo().query!(
+          "SELECT pg_catalog.pg_advisory_lock(" <>
+            "pg_catalog.hashtextextended('maraithon:durable-payload-verifications:v2', 0))",
+          [],
+          timeout: :infinity
+        )
+
+        try do
+          migrate()
+          flush()
+        after
+          repo().query!(
+            "SELECT pg_catalog.pg_advisory_unlock(" <>
+              "pg_catalog.hashtextextended('maraithon:durable-payload-verifications:v2', 0))",
+            [],
+            timeout: :infinity
+          )
+        end
+      end,
+      timeout: :infinity
+    )
+  end
+
+  defp migrate do
     execute("CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public")
 
     execute("ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS state_data_ciphertext bytea")
@@ -113,7 +141,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       "payload_encryption_version IS NULL OR payload_encryption_version = 1"
     )
 
-    create table(:durable_payload_verifications, primary_key: false) do
+    create_if_not_exists table(:durable_payload_verifications, primary_key: false) do
       add :payload_table, :string, null: false
       add :row_identity, :text, null: false
       add :ciphertext_digest, :binary, null: false
@@ -124,40 +152,51 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       add :verified_at, :utc_datetime_usec, null: false
     end
 
-    create unique_index(:durable_payload_verifications, [:payload_table, :row_identity],
-             name: :durable_payload_verifications_pkey
-           )
+    ensure_index(
+      "durable_payload_verifications",
+      "durable_payload_verifications_pkey",
+      ~w(payload_table row_identity),
+      true
+    )
 
-    create index(:durable_payload_verifications, [:payload_table, :verified_at],
-             name: :durable_payload_verifications_verified_at_index
-           )
+    ensure_index(
+      "durable_payload_verifications",
+      "durable_payload_verifications_verified_at_index",
+      ~w(payload_table verified_at),
+      false
+    )
 
-    create constraint(:durable_payload_verifications, :durable_payload_verifications_table_check,
-             check:
-               "payload_table ~ '^[a-z][a-z0-9_]{0,62}$' AND octet_length(row_identity) BETWEEN 1 AND 255"
-           )
+    add_valid_constraint(
+      "durable_payload_verifications",
+      "durable_payload_verifications_table_check",
+      "payload_table ~ '^[a-z][a-z0-9_]{0,62}$' AND octet_length(row_identity) BETWEEN 1 AND 255"
+    )
 
-    create constraint(:durable_payload_verifications, :durable_payload_verifications_digest_check,
-             check: """
-             octet_length(ciphertext_digest) = 32
-             AND octet_length(projection_digest) = 32
-             AND octet_length(version_digest) = 32
-             AND octet_length(purge_digest) = 32
-             """
-           )
+    add_valid_constraint(
+      "durable_payload_verifications",
+      "durable_payload_verifications_digest_check",
+      """
+      octet_length(ciphertext_digest) = 32
+      AND octet_length(projection_digest) = 32
+      AND octet_length(version_digest) = 32
+      AND octet_length(purge_digest) = 32
+      """
+    )
 
-    create constraint(:durable_payload_verifications, :durable_payload_verifications_tags_check,
-             check: """
-             cardinality(key_tags) <= 8
-             AND (
-               cardinality(key_tags) = 0 OR
-               array_to_string(key_tags, ',') ~
-                 '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}(,[A-Za-z0-9][A-Za-z0-9._:-]{0,63})*$'
-             )
-             """
-           )
+    add_valid_constraint(
+      "durable_payload_verifications",
+      "durable_payload_verifications_tags_check",
+      """
+      cardinality(key_tags) <= 8
+      AND (
+        cardinality(key_tags) = 0 OR
+        array_to_string(key_tags, ',') ~
+          '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}(,[A-Za-z0-9][A-Za-z0-9._:-]{0,63})*$'
+      )
+      """
+    )
 
-    create table(:durable_payload_verification_failures, primary_key: false) do
+    create_if_not_exists table(:durable_payload_verification_failures, primary_key: false) do
       add :payload_table, :string, null: false
       add :row_identity, :text, null: false
       add :failure_class, :string, null: false
@@ -168,29 +207,35 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       add :failed_at, :utc_datetime_usec, null: false
     end
 
-    create unique_index(:durable_payload_verification_failures, [:payload_table, :row_identity],
-             name: :durable_payload_verification_failures_pkey
-           )
+    ensure_index(
+      "durable_payload_verification_failures",
+      "durable_payload_verification_failures_pkey",
+      ~w(payload_table row_identity),
+      true
+    )
 
-    create index(:durable_payload_verification_failures, [:failed_at],
-             name: :durable_payload_verification_failures_failed_at_index
-           )
+    ensure_index(
+      "durable_payload_verification_failures",
+      "durable_payload_verification_failures_failed_at_index",
+      ~w(failed_at),
+      false
+    )
 
-    create constraint(
-             :durable_payload_verification_failures,
-             :durable_payload_verification_failures_shape_check,
-             check: """
-             payload_table ~ '^[a-z][a-z0-9_]{0,62}$'
-             AND octet_length(row_identity) BETWEEN 1 AND 255
-             AND failure_class ~ '^[a-z][a-z0-9_]{0,62}$'
-             AND octet_length(ciphertext_digest) = 32
-             AND octet_length(projection_digest) = 32
-             AND octet_length(version_digest) = 32
-             AND octet_length(purge_digest) = 32
-             """
-           )
+    add_valid_constraint(
+      "durable_payload_verification_failures",
+      "durable_payload_verification_failures_shape_check",
+      """
+      payload_table ~ '^[a-z][a-z0-9_]{0,62}$'
+      AND octet_length(row_identity) BETWEEN 1 AND 255
+      AND failure_class ~ '^[a-z][a-z0-9_]{0,62}$'
+      AND octet_length(ciphertext_digest) = 32
+      AND octet_length(projection_digest) = 32
+      AND octet_length(version_digest) = 32
+      AND octet_length(purge_digest) = 32
+      """
+    )
 
-    create table(:vault_backup_retirement_evidence, primary_key: false) do
+    create_if_not_exists table(:vault_backup_retirement_evidence, primary_key: false) do
       add :old_tag, :string, null: false
       add :evidence_id, :string, null: false
       add :evidence_digest, :binary, null: false
@@ -201,22 +246,20 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       add :attested_at, :utc_datetime_usec, null: false
     end
 
-    create unique_index(:vault_backup_retirement_evidence, [:old_tag, :evidence_id],
-             name: :vault_backup_retirement_evidence_pkey
-           )
+    add_valid_constraint(
+      "vault_backup_retirement_evidence",
+      "vault_backup_retirement_evidence_shape",
+      """
+      old_tag ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+      AND octet_length(evidence_id) BETWEEN 1 AND 256
+      AND octet_length(evidence_digest) = 32
+      AND octet_length(evidence_operator) BETWEEN 1 AND 320
+      AND exact_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'
+      AND evidence_expires_at > oldest_recoverable_at
+      """
+    )
 
-    create constraint(:vault_backup_retirement_evidence, :vault_backup_retirement_evidence_shape,
-             check: """
-             old_tag ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
-             AND octet_length(evidence_id) BETWEEN 1 AND 256
-             AND octet_length(evidence_digest) = 32
-             AND octet_length(evidence_operator) BETWEEN 1 AND 320
-             AND exact_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'
-             AND evidence_expires_at > oldest_recoverable_at
-             """
-           )
-
-    create table(:vault_reencryption_failures, primary_key: false) do
+    create_if_not_exists table(:vault_reencryption_failures, primary_key: false) do
       add :payload_table, :string, null: false
       add :payload_column, :string, null: false
       add :row_identity, :text, null: false
@@ -225,22 +268,232 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       add :failed_at, :utc_datetime_usec, null: false
     end
 
-    create unique_index(
-             :vault_reencryption_failures,
-             [:payload_table, :payload_column, :row_identity],
-             name: :vault_reencryption_failures_pkey
-           )
+    ensure_index(
+      "vault_reencryption_failures",
+      "vault_reencryption_failures_pkey",
+      ~w(payload_table payload_column row_identity),
+      true
+    )
 
-    create constraint(:vault_reencryption_failures, :vault_reencryption_failures_shape_check,
-             check: """
-             payload_table ~ '^[a-z][a-z0-9_]{0,62}$'
-             AND payload_column ~ '^[a-z][a-z0-9_]{0,62}$'
-             AND octet_length(row_identity) BETWEEN 1 AND 255
-             AND octet_length(ciphertext_digest) = 32
-             AND failure_class IN ('oversized', 'authentication_failed',
-                                   'plaintext_oversized', 'key_tag_mismatch')
-             """
-           )
+    add_valid_constraint(
+      "vault_reencryption_failures",
+      "vault_reencryption_failures_shape_check",
+      """
+      payload_table ~ '^[a-z][a-z0-9_]{0,62}$'
+      AND payload_column ~ '^[a-z][a-z0-9_]{0,62}$'
+      AND octet_length(row_identity) BETWEEN 1 AND 255
+      AND octet_length(ciphertext_digest) = 32
+      AND failure_class IN ('oversized', 'authentication_failed',
+                            'plaintext_oversized', 'key_tag_mismatch')
+      """
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS key_kind varchar(16) NOT NULL DEFAULT 'vault'"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS backup_catalog_digest bytea"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS backup_catalog_captured_at timestamp(6) without time zone"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS backup_oldest_recoverable_at timestamp(6) without time zone"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS wal_catalog_digest bytea"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS wal_catalog_captured_at timestamp(6) without time zone"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS wal_oldest_recoverable_at timestamp(6) without time zone"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS pitr_catalog_digest bytea"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS pitr_catalog_captured_at timestamp(6) without time zone"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS pitr_oldest_recoverable_at timestamp(6) without time zone"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS restore_drill_digest bytea"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS restore_drill_completed_at timestamp(6) without time zone"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS restore_drill_recovered_through_at timestamp(6) without time zone"
+    )
+
+    execute(
+      "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS zero_proof_id uuid"
+    )
+
+    ensure_index(
+      "vault_backup_retirement_evidence",
+      "vault_backup_retirement_evidence_pkey",
+      ~w(key_kind old_tag zero_proof_id evidence_id),
+      true
+    )
+
+    ensure_index(
+      "vault_backup_retirement_evidence",
+      "vault_backup_retirement_evidence_kind_index",
+      ~w(key_kind old_tag attested_at),
+      false
+    )
+
+    add_not_valid_constraint(
+      "vault_backup_retirement_evidence",
+      "vault_backup_retirement_evidence_recovery_shape_v2",
+      """
+      key_kind IN ('vault', 'binding')
+      AND old_tag ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+      AND octet_length(evidence_id) BETWEEN 1 AND 256
+      AND octet_length(evidence_digest) = 32
+      AND octet_length(evidence_operator) BETWEEN 1 AND 320
+      AND exact_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'
+      AND octet_length(backup_catalog_digest) = 32
+      AND octet_length(wal_catalog_digest) = 32
+      AND octet_length(pitr_catalog_digest) = 32
+      AND octet_length(restore_drill_digest) = 32
+      AND zero_proof_id IS NOT NULL
+      AND backup_catalog_captured_at IS NOT NULL
+      AND backup_oldest_recoverable_at IS NOT NULL
+      AND wal_catalog_captured_at IS NOT NULL
+      AND wal_oldest_recoverable_at IS NOT NULL
+      AND pitr_catalog_captured_at IS NOT NULL
+      AND pitr_oldest_recoverable_at IS NOT NULL
+      AND restore_drill_completed_at IS NOT NULL
+      AND restore_drill_recovered_through_at IS NOT NULL
+      AND oldest_recoverable_at = LEAST(backup_oldest_recoverable_at,
+                                        wal_oldest_recoverable_at,
+                                        pitr_oldest_recoverable_at)
+      AND evidence_expires_at > restore_drill_completed_at
+      """
+    )
+
+    create_if_not_exists table(:durable_payload_binding_operations, primary_key: false) do
+      add :operation_kind, :string, null: false
+      add :payload_table, :string, null: false
+      add :binding_name, :string, null: false, default: "payload"
+      add :row_identity, :text, null: false
+      add :source_digest, :binary, null: false
+      add :target_key_tag, :string, null: false
+      add :status, :string, null: false
+      add :failure_class, :string
+      add :evidence_id, :string, null: false
+      add :evidence_digest, :binary, null: false
+      add :evidence_operator, :string, null: false
+      add :exact_revision, :string, null: false
+      add :attempted_at, :utc_datetime_usec, null: false
+    end
+
+    execute(
+      "ALTER TABLE public.durable_payload_binding_operations " <>
+        "ADD COLUMN IF NOT EXISTS binding_name varchar(255) NOT NULL DEFAULT 'payload'"
+    )
+
+    ensure_index(
+      "durable_payload_binding_operations",
+      "durable_payload_binding_operations_pkey",
+      ~w(operation_kind payload_table binding_name row_identity target_key_tag),
+      true
+    )
+
+    ensure_index(
+      "durable_payload_binding_operations",
+      "durable_payload_binding_operations_progress_index",
+      ~w(operation_kind status attempted_at),
+      false
+    )
+
+    add_not_valid_constraint(
+      "durable_payload_binding_operations",
+      "durable_payload_binding_operations_shape",
+      """
+      operation_kind IN ('legacy_context_rebind_v1', 'binding_key_rotation_v1')
+      AND payload_table IN (
+        'effects', 'agent_directives', 'events', 'agent_run_steps',
+        'telegram_conversation_turns', 'telegram_conversations',
+        'telegram_assistant_runs', 'telegram_assistant_steps',
+        'telegram_prepared_actions', 'agent_runs', 'operator_events',
+        'user_memory_profiles', 'operator_memory_summaries', 'background_jobs',
+        'scheduled_jobs', 'runtime_ingress_receipts', 'snapshots', 'agent_work_results'
+      )
+      AND binding_name IN ('payload', 'authority')
+      AND (binding_name = 'payload' OR payload_table = 'agent_work_results')
+      AND octet_length(row_identity) BETWEEN 1 AND 255
+      AND octet_length(source_digest) = 32
+      AND target_key_tag ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+      AND status IN ('migrated', 'already_current', 'failed')
+      AND ((status = 'failed' AND failure_class IN (
+             'oversized', 'ciphertext_missing', 'authentication_failed',
+             'payload_schema_invalid', 'binding_incomplete', 'binding_mismatch',
+             'binding_key_unavailable', 'source_changed',
+             'purge_marker_inconsistent'
+           )) OR (status <> 'failed' AND failure_class IS NULL))
+      AND octet_length(evidence_id) BETWEEN 1 AND 256
+      AND octet_length(evidence_digest) = 32
+      AND octet_length(evidence_operator) BETWEEN 1 AND 320
+      AND exact_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'
+      """
+    )
+
+    create_if_not_exists table(:key_retirement_zero_proofs, primary_key: false) do
+      add :key_kind, :string, null: false
+      add :old_tag, :string, null: false
+      add :proof_id, :uuid, null: false
+      add :source_digest, :binary, null: false
+      add :evidence_id, :string, null: false
+      add :evidence_digest, :binary, null: false
+      add :evidence_operator, :string, null: false
+      add :exact_revision, :string, null: false
+      add :proved_at, :utc_datetime_usec, null: false
+    end
+
+    ensure_index(
+      "key_retirement_zero_proofs",
+      "key_retirement_zero_proofs_pkey",
+      ~w(key_kind old_tag proof_id),
+      true
+    )
+
+    ensure_index(
+      "key_retirement_zero_proofs",
+      "key_retirement_zero_proofs_latest_index",
+      ~w(key_kind old_tag proved_at),
+      false
+    )
+
+    add_not_valid_constraint(
+      "key_retirement_zero_proofs",
+      "key_retirement_zero_proofs_shape",
+      """
+      key_kind IN ('vault', 'binding')
+      AND old_tag ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+      AND octet_length(source_digest) = 32
+      AND octet_length(evidence_id) BETWEEN 1 AND 256
+      AND octet_length(evidence_digest) = 32
+      AND octet_length(evidence_operator) BETWEEN 1 AND 320
+      AND exact_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'
+      """
+    )
 
     execute("""
     CREATE OR REPLACE FUNCTION public.durable_payload_row_identity(
@@ -1120,6 +1373,122 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     """)
 
     execute("""
+    CREATE OR REPLACE FUNCTION public.guard_durable_payload_binding_operation()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Durable payload binding progress cannot be deleted'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF NEW.operation_kind = 'legacy_context_rebind_v1' THEN
+        IF current_user IS DISTINCT FROM 'maraithon_activation_operator' OR
+           current_setting('maraithon.payload_contraction', true)
+             IS DISTINCT FROM 'STOPPED_FLEET_EVIDENCE_V1' THEN
+          RAISE EXCEPTION 'Legacy binding context promotion requires stopped-fleet activation authority'
+            USING ERRCODE = 'insufficient_privilege';
+        END IF;
+      ELSIF NEW.operation_kind = 'binding_key_rotation_v1' THEN
+        IF current_user IS DISTINCT FROM 'maraithon_incident_operator' OR
+           current_setting('maraithon.binding_key_rotation', true)
+             IS DISTINCT FROM 'BINDING_KEY_ROTATION_V1' THEN
+          RAISE EXCEPTION 'Binding key rotation progress requires incident authority'
+            USING ERRCODE = 'insufficient_privilege';
+        END IF;
+      ELSE
+        RAISE EXCEPTION 'Unknown durable payload binding operation'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_OP = 'UPDATE' AND (
+        NEW.operation_kind IS DISTINCT FROM OLD.operation_kind OR
+        NEW.payload_table IS DISTINCT FROM OLD.payload_table OR
+        NEW.row_identity IS DISTINCT FROM OLD.row_identity OR
+        NEW.target_key_tag IS DISTINCT FROM OLD.target_key_tag
+      ) THEN
+        RAISE EXCEPTION 'Durable payload binding progress identity is immutable'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      NEW.attempted_at := timezone('UTC', clock_timestamp());
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS guard_durable_payload_binding_operation_trigger " <>
+        "ON public.durable_payload_binding_operations"
+    )
+
+    execute("""
+    CREATE TRIGGER guard_durable_payload_binding_operation_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.durable_payload_binding_operations
+      FOR EACH ROW EXECUTE FUNCTION public.guard_durable_payload_binding_operation()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.guard_key_retirement_zero_proof()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Key retirement zero proofs are append-only'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF current_user IS DISTINCT FROM 'maraithon_incident_operator' OR
+         current_setting('maraithon.key_retirement_zero_proof', true)
+           IS DISTINCT FROM 'LIVE_ZERO_PROOF_V1' THEN
+        RAISE EXCEPTION 'Key retirement zero proof requires incident authority'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      NEW.proved_at := timezone('UTC', clock_timestamp());
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS guard_key_retirement_zero_proof_trigger " <>
+        "ON public.key_retirement_zero_proofs"
+    )
+
+    execute("""
+    CREATE TRIGGER guard_key_retirement_zero_proof_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.key_retirement_zero_proofs
+      FOR EACH ROW EXECUTE FUNCTION public.guard_key_retirement_zero_proof()
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_durable_payload_binding_operations_truncate_trigger " <>
+        "ON public.durable_payload_binding_operations"
+    )
+
+    execute("""
+    CREATE TRIGGER reject_durable_payload_binding_operations_truncate_trigger
+      BEFORE TRUNCATE ON public.durable_payload_binding_operations
+      FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_key_retirement_zero_proofs_truncate_trigger " <>
+        "ON public.key_retirement_zero_proofs"
+    )
+
+    execute("""
+    CREATE TRIGGER reject_key_retirement_zero_proofs_truncate_trigger
+      BEFORE TRUNCATE ON public.key_retirement_zero_proofs
+      FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
+    """)
+
+    execute("""
     CREATE OR REPLACE FUNCTION public.guard_vault_backup_retirement_evidence()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1144,11 +1513,19 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS guard_vault_backup_retirement_evidence_trigger ON public.vault_backup_retirement_evidence"
+    )
+
     execute("""
     CREATE TRIGGER guard_vault_backup_retirement_evidence_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.vault_backup_retirement_evidence
       FOR EACH ROW EXECUTE FUNCTION public.guard_vault_backup_retirement_evidence()
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_vault_backup_retirement_evidence_truncate_trigger ON public.vault_backup_retirement_evidence"
+    )
 
     execute("""
     CREATE TRIGGER reject_vault_backup_retirement_evidence_truncate_trigger
@@ -1175,6 +1552,10 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     END;
     $function$;
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS guard_vault_reencryption_failure_write_trigger ON public.vault_reencryption_failures"
+    )
 
     execute("""
     CREATE TRIGGER guard_vault_reencryption_failure_write_trigger
@@ -1272,6 +1653,10 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS guard_durable_payload_verification_failure_write_trigger ON public.durable_payload_verification_failures"
+    )
+
     execute("""
     CREATE TRIGGER guard_durable_payload_verification_failure_write_trigger
       BEFORE INSERT OR UPDATE ON public.durable_payload_verification_failures
@@ -1302,6 +1687,10 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     END;
     $function$;
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS guard_durable_payload_verification_write_trigger ON public.durable_payload_verifications"
+    )
 
     execute("""
     CREATE TRIGGER guard_durable_payload_verification_write_trigger
@@ -1443,17 +1832,29 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       """)
     end
 
+    execute(
+      "DROP TRIGGER IF EXISTS reject_durable_payload_verifications_truncate_trigger ON public.durable_payload_verifications"
+    )
+
     execute("""
     CREATE TRIGGER reject_durable_payload_verifications_truncate_trigger
       BEFORE TRUNCATE ON public.durable_payload_verifications
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS reject_durable_payload_verification_failures_truncate_trigger ON public.durable_payload_verification_failures"
+    )
+
     execute("""
     CREATE TRIGGER reject_durable_payload_verification_failures_truncate_trigger
       BEFORE TRUNCATE ON public.durable_payload_verification_failures
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_vault_reencryption_failures_truncate_trigger ON public.vault_reencryption_failures"
+    )
 
     execute("""
     CREATE TRIGGER reject_vault_reencryption_failures_truncate_trigger
@@ -1664,21 +2065,102 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
   end
 
   defp add_not_valid_constraint(table, name, expression) do
+    ensure_constraint(table, name, expression, false)
+  end
+
+  defp add_valid_constraint(table, name, expression) do
+    ensure_constraint(table, name, expression, true)
+  end
+
+  defp ensure_constraint(table, name, expression, validate?) do
+    fingerprint =
+      :crypto.hash(:sha256, "#{table}:#{name}:#{expression}")
+      |> Base.encode16(case: :lower)
+
     execute("""
     DO $constraint$
+    DECLARE
+      constraint_oid oid;
+      recorded_fingerprint text;
     BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_catalog.pg_constraint
-        WHERE conrelid = 'public.#{table}'::regclass
-          AND conname = '#{name}'
-      ) THEN
+      SELECT constraint_row.oid,
+             pg_catalog.obj_description(constraint_row.oid, 'pg_constraint')
+      INTO constraint_oid, recorded_fingerprint
+      FROM pg_catalog.pg_constraint AS constraint_row
+      WHERE constraint_row.conrelid = 'public.#{table}'::regclass
+        AND constraint_row.conname = '#{name}';
+
+      IF constraint_oid IS NOT NULL AND
+         recorded_fingerprint IS DISTINCT FROM 'maraithon:#{fingerprint}' THEN
+        ALTER TABLE public.#{table} DROP CONSTRAINT #{name};
+        constraint_oid := NULL;
+      END IF;
+
+      IF constraint_oid IS NULL THEN
         ALTER TABLE public.#{table}
-        ADD CONSTRAINT #{name} CHECK (#{expression}) NOT VALID;
+          ADD CONSTRAINT #{name} CHECK (#{expression}) NOT VALID;
+        COMMENT ON CONSTRAINT #{name} ON public.#{table}
+          IS 'maraithon:#{fingerprint}';
       END IF;
     END
-    $constraint$
+    $constraint$;
     """)
+
+    if validate? do
+      execute("ALTER TABLE public.#{table} VALIDATE CONSTRAINT #{name}")
+    end
+  end
+
+  defp ensure_index(table, name, columns, unique?) do
+    columns_sql = Enum.join(columns, ", ")
+    uniqueness = if unique?, do: "UNIQUE ", else: ""
+
+    fingerprint =
+      :crypto.hash(:sha256, "#{table}:#{name}:#{columns_sql}:#{unique?}")
+      |> Base.encode16(case: :lower)
+
+    execute("""
+    DO $index$
+    DECLARE
+      index_oid oid;
+      index_valid boolean;
+      recorded_fingerprint text;
+      owning_constraint text;
+    BEGIN
+      SELECT index_row.indexrelid,
+             index_row.indisvalid AND index_row.indisready,
+             pg_catalog.obj_description(index_row.indexrelid, 'pg_class')
+      INTO index_oid, index_valid, recorded_fingerprint
+      FROM pg_catalog.pg_index AS index_row
+      WHERE index_row.indexrelid = pg_catalog.to_regclass('public.#{name}');
+
+      IF index_oid IS NOT NULL AND
+         (NOT index_valid OR
+          recorded_fingerprint IS DISTINCT FROM 'maraithon:#{fingerprint}') THEN
+        SELECT constraint_row.conname
+        INTO owning_constraint
+        FROM pg_catalog.pg_constraint AS constraint_row
+        WHERE constraint_row.conindid = index_oid;
+
+        IF owning_constraint IS NOT NULL THEN
+          EXECUTE pg_catalog.format(
+            'ALTER TABLE public.#{table} DROP CONSTRAINT %I',
+            owning_constraint
+          );
+        ELSE
+          DROP INDEX public.#{name};
+        END IF;
+      END IF;
+    END
+    $index$;
+    """)
+
+    execute(
+      "CREATE #{uniqueness}INDEX IF NOT EXISTS #{name} " <>
+        "ON public.#{table} (#{columns_sql})"
+    )
+
+    execute("COMMENT ON INDEX public.#{name} IS 'maraithon:#{fingerprint}'")
   end
 
   def down do
