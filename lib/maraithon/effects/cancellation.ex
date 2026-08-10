@@ -32,7 +32,7 @@ defmodule Maraithon.Effects.Cancellation do
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.EffectTaskSupervisor
-  alias Maraithon.Runtime.Coordination.{TaskAssignment, TaskClaims}
+  alias Maraithon.Runtime.Coordination.{Protocol, TaskAssignment, TaskClaims}
 
   @default_plan_limit 32
   @max_plan_limit 100
@@ -58,7 +58,7 @@ defmodule Maraithon.Effects.Cancellation do
 
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, runtime_owner_generation} <- cast_uuid(runtime_owner_generation) do
-      ProtocolCutover.require_exact_write!()
+      require_active_effect_pair!()
       AgentLeases.fence_ready!(agent_id, runtime_owner_generation)
     else
       {:error, reason} -> Repo.rollback(reason)
@@ -75,7 +75,7 @@ defmodule Maraithon.Effects.Cancellation do
       when is_binary(node_incarnation_id) and is_integer(partition_id) and
              is_integer(partition_epoch) and is_binary(reason) do
     require_transaction!()
-    ProtocolCutover.require_exact_reconciliation!()
+    require_active_effect_pair!()
     now = DatabaseClock.now!()
 
     effects =
@@ -121,7 +121,7 @@ defmodule Maraithon.Effects.Cancellation do
       )
       when is_binary(evidence_id) and byte_size(evidence_id) in 1..256 do
     Repo.transaction(fn ->
-      ProtocolCutover.require_exact_reconciliation!()
+      require_active_effect_pair!()
 
       effect =
         case Repo.one(
@@ -204,7 +204,7 @@ defmodule Maraithon.Effects.Cancellation do
          true <- Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 == :limit)),
          {:ok, limit} <- plan_limit(Keyword.get(opts, :limit, @default_plan_limit)) do
       Repo.transaction(fn ->
-        ProtocolCutover.require_exact_reconciliation!()
+        require_active_effect_pair!()
         _effects = lock_effects_for_cancellation!(agent_id)
         agent = lock_agent!(agent_id)
         _binding = lock_optional_same_user_binding!(agent)
@@ -249,7 +249,7 @@ defmodule Maraithon.Effects.Cancellation do
          {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, reason} <- cancellation_reason(reason),
          {:ok, parsed_opts} <- normalize_agent_prepared_opts(opts) do
-      ProtocolCutover.require_exact_reconciliation!()
+      require_active_effect_pair!()
       _effects = lock_effects_for_cancellation!(agent_id)
       agent = lock_agent!(agent_id)
       binding = lock_same_user_binding!(agent)
@@ -287,7 +287,7 @@ defmodule Maraithon.Effects.Cancellation do
          true <- length(references) <= @max_plan_limit,
          {:ok, parsed_opts} <- prepare_opts(opts) do
       Repo.transaction(fn ->
-        ProtocolCutover.require_exact_reconciliation!()
+        require_active_effect_pair!()
         _effects = lock_referenced_effects!(agent_id, references)
         agent = lock_agent!(agent_id)
         binding = lock_same_user_binding!(agent)
@@ -594,7 +594,7 @@ defmodule Maraithon.Effects.Cancellation do
 
   defp prepare_expired_claim(agent_id, effect_id, claim_token) do
     Repo.transaction(fn ->
-      ProtocolCutover.require_exact_reconciliation!()
+      require_active_effect_pair!()
       effect = lock_effect!(agent_id, effect_id)
       agent = lock_agent!(agent_id)
       _binding = lock_optional_same_user_binding!(agent)
@@ -772,7 +772,7 @@ defmodule Maraithon.Effects.Cancellation do
               :operator_attestation
             ] do
     Repo.transaction(fn ->
-      ProtocolCutover.require_exact_reconciliation!()
+      require_active_effect_pair!()
       effect = lock_effect!(claim.agent_id, claim.effect_id)
       agent = lock_agent!(claim.agent_id)
       lock_plan_authority!(plan, agent)
@@ -1088,7 +1088,7 @@ defmodule Maraithon.Effects.Cancellation do
 
   defp persist_unknown(%CancellationPlan{} = plan, claim, reason) do
     Repo.transaction(fn ->
-      ProtocolCutover.require_exact_reconciliation!()
+      require_active_effect_pair!()
       _effect = lock_effect!(claim.agent_id, claim.effect_id)
       agent = lock_agent!(claim.agent_id)
       lock_plan_authority!(plan, agent)
@@ -1464,7 +1464,7 @@ defmodule Maraithon.Effects.Cancellation do
 
   defp authorize_plan_execution(%CancellationPlan{} = plan) do
     case Repo.transaction(fn ->
-           ProtocolCutover.require_exact_reconciliation!()
+           require_active_effect_pair!()
            agent = lock_agent!(plan.agent_id)
            lock_plan_authority!(plan, agent)
            :ok
@@ -1766,6 +1766,13 @@ defmodule Maraithon.Effects.Cancellation do
       :exact -> :ok
       {:blocked, reason} -> {:error, {:effect_protocol_mismatch, reason}}
       _legacy -> {:error, :durable_effect_cancellation_disabled}
+    end
+  end
+
+  defp require_active_effect_pair! do
+    case Protocol.lock_effect_pair!() do
+      {:active, _epoch} -> :ok
+      other -> Repo.rollback({:runtime_effect_protocol_pair_mismatch, other})
     end
   end
 

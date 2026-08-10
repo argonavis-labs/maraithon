@@ -1040,6 +1040,9 @@ defmodule Maraithon.Runtime.EffectRunner do
       outcome =
         DbResilience.with_database("effect runner coordinated claim", fn ->
           Repo.transaction(fn ->
+            unless Protocol.lock_effect_pair!() == {:active, session.activation_epoch},
+              do: Repo.rollback(:coordination_task_authority_lost)
+
             locked = lock_pending_effect_for_claim!(effect)
             ensure_pending_coordination_scope!(locked, session, partition)
             Cancellation.fence_effect_admission!(locked.agent_id, locked.runtime_owner_generation)
@@ -1149,7 +1152,7 @@ defmodule Maraithon.Runtime.EffectRunner do
 
     case DbResilience.with_database("effect runner claim effect", fn ->
            Repo.transaction(fn ->
-             ProtocolCutover.require_legacy_admission!()
+             require_legacy_protocol_pair!()
 
              query =
                from(e in Effect,
@@ -1263,7 +1266,10 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp abort_never_activated_effect_claim(%Effect{} = effect, assignment) do
     case Repo.transaction(fn ->
-           ProtocolCutover.require_exact_write!()
+           unless Protocol.lock_effect_pair!() ==
+                    {:active, effect.coordination_activation_epoch},
+                  do: Repo.rollback(:coordination_task_authority_lost)
+
            locked = lock_exact_effect_claim_in_transaction!(effect, ["claimed"])
 
            case TaskClaims.abort_effect_reserved_in_transaction!(
@@ -1410,12 +1416,11 @@ defmodule Maraithon.Runtime.EffectRunner do
 
       {:active, {:ok, assignment}} ->
         case Repo.transaction(fn ->
-               ProtocolCutover.require_exact_write!()
-               _locked_effect = lock_exact_effect_claim_in_transaction!(effect, ["claimed"])
-               activation_epoch = Protocol.locked_active!()
+               unless Protocol.lock_effect_pair!() ==
+                        {:active, effect.coordination_activation_epoch},
+                      do: Repo.rollback(:coordination_task_authority_lost)
 
-               unless activation_epoch == effect.coordination_activation_epoch,
-                 do: Repo.rollback(:coordination_task_authority_lost)
+               _locked_effect = lock_exact_effect_claim_in_transaction!(effect, ["claimed"])
 
                TaskClaims.activate_effect_in_transaction!(
                  assignment,
@@ -1805,15 +1810,21 @@ defmodule Maraithon.Runtime.EffectRunner do
     # serialize with lifecycle/crash revocation on the canonical lock prefix
     # before the final Effect CAS.
     case Repo.transaction(fn ->
-           ProtocolCutover.require_current_mutation!()
+           protocol_pair = Protocol.lock_effect_pair!()
 
            {now, entry_updates} =
-             if legacy_effect_struct?(effect) do
-               {Maraithon.Runtime.DatabaseClock.now!(), []}
-             else
-               locked = lock_exact_effect_claim_in_transaction!(effect, ["claimed"])
-               now = lock_exact_command_authority!(locked)
-               {now, enter_coordination_provider_boundary!(locked)}
+             case {legacy_effect_struct?(effect), protocol_pair} do
+               {true, :legacy} ->
+                 {Maraithon.Runtime.DatabaseClock.now!(), []}
+
+               {false, {:active, epoch}}
+               when epoch == effect.coordination_activation_epoch ->
+                 locked = lock_exact_effect_claim_in_transaction!(effect, ["claimed"])
+                 now = lock_exact_command_authority!(locked)
+                 {now, enter_coordination_provider_boundary!(locked)}
+
+               _mismatched_pair ->
+                 Repo.rollback(:coordination_task_authority_lost)
              end
 
            Repo.update_all(query, set: Keyword.put(entry_updates, :updated_at, now))
@@ -1828,16 +1839,8 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp enter_coordination_provider_boundary!(%Effect{} = effect) do
-    case {Protocol.mode(), coordination_assignment(effect)} do
-      {:dark, :uncoordinated} ->
-        []
-
-      {:active, {:ok, assignment}} ->
-        activation_epoch = Protocol.locked_active!()
-
-        unless activation_epoch == effect.coordination_activation_epoch,
-          do: Repo.rollback(:coordination_task_authority_lost)
-
+    case coordination_assignment(effect) do
+      {:ok, assignment} ->
         case TaskClaims.enter_effect_provider_in_transaction!(
                assignment,
                effect.agent_id,
@@ -1856,7 +1859,7 @@ defmodule Maraithon.Runtime.EffectRunner do
             Repo.rollback(:coordination_task_authority_lost)
         end
 
-      _mode_or_identity_mismatch ->
+      _uncoordinated_or_mismatched ->
         Repo.rollback(:coordination_task_authority_lost)
     end
   end
@@ -2228,7 +2231,10 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp reconcile_effect_after_task_down(%Effect{} = expected) do
     case Repo.transaction(fn ->
-           ProtocolCutover.require_exact_reconciliation!()
+           unless Protocol.lock_effect_pair!() ==
+                    {:active, expected.coordination_activation_epoch},
+                  do: Repo.rollback(:coordination_task_authority_lost)
+
            stored = lock_effect_after_task_down(expected)
 
            case stored.status do
@@ -2277,11 +2283,6 @@ defmodule Maraithon.Runtime.EffectRunner do
         :ok
 
       {:active, {:ok, assignment}, {:settled, outcome}} ->
-        activation_epoch = Protocol.locked_active!()
-
-        unless activation_epoch == effect.coordination_activation_epoch,
-          do: Repo.rollback(:coordination_task_authority_lost)
-
         case TaskClaims.settle_effect_in_transaction(
                assignment,
                effect.agent_id,
@@ -2304,11 +2305,6 @@ defmodule Maraithon.Runtime.EffectRunner do
         end
 
       {:active, {:ok, assignment}, :outcome_ambiguous} ->
-        activation_epoch = Protocol.locked_active!()
-
-        unless activation_epoch == effect.coordination_activation_epoch,
-          do: Repo.rollback(:coordination_task_authority_lost)
-
         case TaskClaims.lock_effect_assignment_in_transaction!(assignment) do
           %TaskAssignment{
             state: "outcome_ambiguous",
@@ -2374,12 +2370,7 @@ defmodule Maraithon.Runtime.EffectRunner do
        when is_binary(claimed_by) and not is_nil(claimed_at) do
     case DbResilience.with_database("effect runner #{operation}", fn ->
            Repo.transaction(fn ->
-             if legacy_effect_struct?(effect) do
-               ProtocolCutover.require_legacy_admission!()
-             else
-               ProtocolCutover.require_exact_write!()
-             end
-
+             require_effect_protocol_pair!(effect)
              locked = lock_effect_before_outcome!(effect)
              settle_coordinated_effect_in_transaction!(locked, "retry_scheduled")
 
@@ -2433,12 +2424,7 @@ defmodule Maraithon.Runtime.EffectRunner do
        when is_binary(claimed_by) and not is_nil(claimed_at) do
     case DbResilience.with_database("effect runner #{operation}", fn ->
            Repo.transaction(fn ->
-             if legacy_effect_struct?(effect) do
-               ProtocolCutover.require_legacy_mutation!()
-             else
-               ProtocolCutover.require_exact_write!()
-             end
-
+             require_effect_protocol_pair!(effect)
              locked = lock_effect_before_outcome!(effect)
              outcome = terminal_coordination_outcome!(updates)
              settle_coordinated_effect_in_transaction!(locked, outcome)
@@ -2485,6 +2471,21 @@ defmodule Maraithon.Runtime.EffectRunner do
     :claim_lost
   end
 
+  defp require_effect_protocol_pair!(%Effect{} = effect) do
+    case {legacy_effect_struct?(effect), Protocol.lock_effect_pair!()} do
+      {true, :legacy} -> :ok
+      {false, {:active, epoch}} when epoch == effect.coordination_activation_epoch -> :ok
+      _mismatch -> Repo.rollback(:coordination_task_authority_lost)
+    end
+  end
+
+  defp require_legacy_protocol_pair! do
+    unless Protocol.lock_effect_pair!() == :legacy,
+      do: Repo.rollback(:effect_protocol_pair_mismatch)
+
+    :ok
+  end
+
   defp lock_effect_before_outcome!(%Effect{} = effect) do
     if legacy_effect_struct?(effect) do
       effect
@@ -2510,16 +2511,11 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp settle_coordinated_effect_in_transaction!(%Effect{} = effect, outcome) do
-    case {Protocol.mode(), coordination_assignment(effect)} do
-      {:dark, :uncoordinated} ->
+    case coordination_assignment(effect) do
+      :uncoordinated ->
         :ok
 
-      {:active, {:ok, assignment}} ->
-        activation_epoch = Protocol.locked_active!()
-
-        unless activation_epoch == effect.coordination_activation_epoch,
-          do: Repo.rollback(:coordination_task_authority_lost)
-
+      {:ok, assignment} ->
         case TaskClaims.settle_effect_in_transaction(
                assignment,
                effect.agent_id,
@@ -2538,7 +2534,7 @@ defmodule Maraithon.Runtime.EffectRunner do
             Repo.rollback(:coordination_task_settlement_lost)
         end
 
-      _mode_or_identity_mismatch ->
+      :mismatched ->
         Repo.rollback(:coordination_task_authority_lost)
     end
   end
@@ -2737,7 +2733,7 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp finalize_stale_effects(claim_timeout_ms) do
     Repo.transaction(fn ->
-      ProtocolCutover.require_legacy_mutation!()
+      require_legacy_protocol_pair!()
 
       stale_before =
         dynamic(
@@ -3314,7 +3310,7 @@ defmodule Maraithon.Runtime.EffectRunner do
       |> legacy_protocol_rows()
 
     case Repo.transaction(fn ->
-           ProtocolCutover.require_legacy_mutation!()
+           require_legacy_protocol_pair!()
 
            case Repo.update_all(query,
                   set: [status: "cancelling", updated_at: DateTime.utc_now()]
