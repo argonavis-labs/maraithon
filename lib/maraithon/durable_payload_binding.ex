@@ -198,7 +198,9 @@ defmodule Maraithon.DurablePayloadBinding do
   defp decode_key!(encoded) do
     case Base.decode64(encoded) do
       {:ok, key} when byte_size(key) == 32 ->
-        key
+        if Base.encode64(key) == encoded,
+          do: key,
+          else: raise("key must use canonical base64 encoding")
 
       _invalid ->
         raise "durable payload binding keys must be strict base64-encoded 32-byte values"

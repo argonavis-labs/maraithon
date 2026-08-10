@@ -11,7 +11,6 @@ defmodule Maraithon.Events.Event do
   import Ecto.Changeset
 
   alias Maraithon.DurablePayload
-  alias Maraithon.DurablePayloadBinding
 
   @foreign_key_type :binary_id
 
@@ -48,6 +47,17 @@ defmodule Maraithon.Events.Event do
   @required_fields [:agent_id, :sequence_num, :event_type]
   @optional_fields [:payload, :idempotency_key]
 
+  @doc false
+  def payload_binding_spec do
+    %{
+      table: "events",
+      identity_fields: [:agent_id, :sequence_num],
+      scope_fields: [:agent_id],
+      fields: [:payload],
+      purge_field: :payload_purged_at
+    }
+  end
+
   def changeset(event, attrs) do
     attrs = put_new_payload_default(event, attrs || %{})
 
@@ -63,11 +73,14 @@ defmodule Maraithon.Events.Event do
     )
     |> mirror_legacy_payload()
     |> put_spend_facts()
-    |> put_payload_binding()
+    |> DurablePayload.put_binding(payload_binding_spec())
+    |> DurablePayload.require_current_mutation()
   end
 
   @doc false
   def read_payload!(%__MODULE__{} = event) do
+    :ok = DurablePayload.verify_binding!(event, payload_binding_spec())
+
     case {event.payload_purged_at, event.payload, event.legacy_payload} do
       {%DateTime{}, nil, legacy} when legacy == %{} ->
         %{}
@@ -109,42 +122,6 @@ defmodule Maraithon.Events.Event do
   end
 
   defp put_new_payload_default(_event, attrs), do: attrs
-
-  defp put_payload_binding(%Ecto.Changeset{valid?: false} = changeset), do: changeset
-
-  defp put_payload_binding(changeset) do
-    agent_id = get_field(changeset, :agent_id)
-    sequence_num = get_field(changeset, :sequence_num)
-    payload = get_field(changeset, :payload)
-    purged_at = get_field(changeset, :payload_purged_at)
-
-    cond do
-      not is_nil(purged_at) and is_nil(payload) ->
-        changeset
-        |> put_change(:payload_binding_version, nil)
-        |> put_change(:payload_binding_key_tag, nil)
-        |> put_change(:payload_binding_mac, nil)
-
-      is_binary(agent_id) and is_integer(sequence_num) and is_map(payload) ->
-        row_identity = agent_id <> ":" <> Integer.to_string(sequence_num)
-
-        binding =
-          DurablePayloadBinding.sign(
-            "events",
-            row_identity,
-            agent_id,
-            [{"payload", payload}]
-          )
-
-        changeset
-        |> put_change(:payload_binding_version, binding.version)
-        |> put_change(:payload_binding_key_tag, binding.key_tag)
-        |> put_change(:payload_binding_mac, binding.mac)
-
-      true ->
-        changeset
-    end
-  end
 
   defp put_spend_facts(changeset) do
     facts = spend_facts(get_field(changeset, :event_type), get_field(changeset, :payload))

@@ -7,7 +7,7 @@ defmodule Maraithon.Runtime.AgentDirective do
   import Ecto.Changeset
 
   alias Maraithon.Agents.Agent
-  alias Maraithon.DurablePayloadBinding
+  alias Maraithon.DurablePayload
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -52,6 +52,17 @@ defmodule Maraithon.Runtime.AgentDirective do
 
   def kinds, do: @kinds
   def statuses, do: @statuses
+
+  @doc false
+  def payload_binding_spec do
+    %{
+      table: "agent_directives",
+      identity_fields: [:id],
+      scope_fields: [:user_id, :agent_id],
+      fields: [:payload],
+      purge_field: :payload_purged_at
+    }
+  end
 
   def changeset(directive, attrs) do
     attrs = put_payload_encryption_metadata(attrs)
@@ -139,7 +150,8 @@ defmodule Maraithon.Runtime.AgentDirective do
     |> check_constraint(:ambiguity_code,
       name: :agent_directives_ambiguity_code_check
     )
-    |> put_payload_binding()
+    |> DurablePayload.put_binding(payload_binding_spec())
+    |> DurablePayload.require_current_mutation()
   end
 
   defp ensure_row_identity(%__MODULE__{id: nil} = directive),
@@ -147,34 +159,9 @@ defmodule Maraithon.Runtime.AgentDirective do
 
   defp ensure_row_identity(%__MODULE__{} = directive), do: directive
 
-  defp put_payload_binding(%Ecto.Changeset{valid?: false} = changeset), do: changeset
-
-  defp put_payload_binding(changeset) do
-    id = get_field(changeset, :id)
-    agent_id = get_field(changeset, :agent_id)
-    user_id = get_field(changeset, :user_id)
-    payload = get_field(changeset, :payload)
-
-    if is_binary(id) and is_binary(agent_id) and is_map(payload) do
-      binding =
-        DurablePayloadBinding.sign(
-          "agent_directives",
-          id,
-          user_id || agent_id,
-          [{"payload", payload}]
-        )
-
-      changeset
-      |> put_change(:payload_binding_version, binding.version)
-      |> put_change(:payload_binding_key_tag, binding.key_tag)
-      |> put_change(:payload_binding_mac, binding.mac)
-    else
-      changeset
-    end
-  end
-
   @doc false
   def materialize_legacy_payload(%__MODULE__{} = directive) do
+    :ok = DurablePayload.verify_binding!(directive, payload_binding_spec())
     %{directive | payload: directive.payload || directive.legacy_payload}
   end
 
