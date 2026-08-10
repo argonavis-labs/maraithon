@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.AgentDirective do
   import Ecto.Changeset
 
   alias Maraithon.Agents.Agent
+  alias Maraithon.DurablePayloadBinding
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -18,9 +19,12 @@ defmodule Maraithon.Runtime.AgentDirective do
     belongs_to :agent, Agent
     field :user_id, :string
     field :kind, :string
-    field :payload, Maraithon.Encrypted.Map, source: :payload_ciphertext
+    field :payload, Maraithon.Encrypted.Map, source: :payload_ciphertext, redact: true
     field :legacy_payload, :map, source: :payload, default: %{}
     field :payload_encryption_version, :integer
+    field :payload_binding_version, :integer
+    field :payload_binding_key_tag, :string
+    field :payload_binding_mac, :binary, redact: true
     field :payload_purged_at, :utc_datetime_usec
     field :dedupe_key, :string
     field :request_fingerprint, :binary
@@ -51,6 +55,7 @@ defmodule Maraithon.Runtime.AgentDirective do
 
   def changeset(directive, attrs) do
     attrs = put_payload_encryption_metadata(attrs)
+    directive = ensure_row_identity(directive)
 
     directive
     |> cast(attrs, [
@@ -134,6 +139,38 @@ defmodule Maraithon.Runtime.AgentDirective do
     |> check_constraint(:ambiguity_code,
       name: :agent_directives_ambiguity_code_check
     )
+    |> put_payload_binding()
+  end
+
+  defp ensure_row_identity(%__MODULE__{id: nil} = directive),
+    do: %{directive | id: Ecto.UUID.generate()}
+
+  defp ensure_row_identity(%__MODULE__{} = directive), do: directive
+
+  defp put_payload_binding(%Ecto.Changeset{valid?: false} = changeset), do: changeset
+
+  defp put_payload_binding(changeset) do
+    id = get_field(changeset, :id)
+    agent_id = get_field(changeset, :agent_id)
+    user_id = get_field(changeset, :user_id)
+    payload = get_field(changeset, :payload)
+
+    if is_binary(id) and is_binary(agent_id) and is_map(payload) do
+      binding =
+        DurablePayloadBinding.sign(
+          "agent_directives",
+          id,
+          user_id || agent_id,
+          [{"payload", payload}]
+        )
+
+      changeset
+      |> put_change(:payload_binding_version, binding.version)
+      |> put_change(:payload_binding_key_tag, binding.key_tag)
+      |> put_change(:payload_binding_mac, binding.mac)
+    else
+      changeset
+    end
   end
 
   @doc false
