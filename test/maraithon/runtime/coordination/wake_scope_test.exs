@@ -9,9 +9,12 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
   alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
+  alias Maraithon.Runtime.AgentLifecycleOperations
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentRuntimeLease
+  alias Maraithon.Runtime.AgentTerminations
+  alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.WakeCoordinator
 
@@ -76,6 +79,69 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
     assert summary.gate == :closed
     assert summary.ownership == []
     assert summary.admissions == []
+  end
+
+  test "proof-bound lifecycle DOWN converges every intentional action without crash recovery" do
+    {user_a, user_b} = distinct_partition_users("expected-lifecycle")
+    %{node_a: node_a} = active_two_node_authority!(user_a, user_b)
+    put_session!(node_a)
+    watcher = lifecycle_watcher!()
+
+    Enum.each([:stop, :pause, :update, :upgrade, :remove, :delete], fn kind ->
+      agent = create_bound_agent!(user_a)
+      lease = AgentLeases.claim(agent.id, ttl_ms: 300_000) |> ok!()
+      _ready = AgentLeases.mark_ready(agent.id, lease.owner_token) |> ok!()
+      pid = parked_process()
+
+      assert :ok = AgentWatcher.track(watcher, pid, agent.id, lease.owner_token)
+
+      assert {:ok, fence} =
+               AgentLifecycleOperations.begin(
+                 agent.id,
+                 kind,
+                 %{"test_action" => Atom.to_string(kind)},
+                 fn locked -> lifecycle_mutation(locked, kind) end
+               )
+
+      assert fence.operation.expected_owner_token == lease.owner_token
+      down_ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^down_ref, :process, ^pid, :killed}, 1_000
+
+      # This system call is a mailbox barrier behind the Watcher's exact DOWN
+      # proof, proof-gated lease deletion, and closed-admission Wake pass.
+      watcher_state = :sys.get_state(watcher)
+      assert MapSet.size(watcher_state.recoveries) == 0
+
+      assert AgentLeases.get(agent.id) == nil
+      assert AgentRestartGuards.get(agent.id) == nil
+      assert AgentLifecycleOperations.get(agent.id) == nil
+
+      incident = AgentTerminations.get_by_lease(lease.owner_token)
+      assert incident.status == "reconciled"
+      assert AgentTerminations.proof_for(incident.id).proof_kind == "local_down"
+
+      case kind do
+        :delete ->
+          assert Agents.get_agent(agent.id, include_removed: true) == nil
+
+        :pause ->
+          assert %{status: "stopped", install_status: "paused"} =
+                   Agents.get_agent(agent.id, include_removed: true)
+
+        :remove ->
+          assert %{status: "stopped", install_status: "removed"} =
+                   Agents.get_agent(agent.id, include_removed: true)
+
+        resumed when resumed in [:update, :upgrade] ->
+          assert %{status: "running"} = Agents.get_agent(agent.id, include_removed: true)
+          # The proof handler's Wake pass is explicitly closed to admission.
+          assert AgentLeases.get(agent.id) == nil
+
+        :stop ->
+          assert %{status: "stopped"} = Agents.get_agent(agent.id, include_removed: true)
+      end
+    end)
   end
 
   test "two ready nodes select disjoint due, recovery, and bootstrap work before LIMIT" do
@@ -453,6 +519,41 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
 
     {first, second}
   end
+
+  defp lifecycle_watcher! do
+    name = String.to_atom("wake_scope_lifecycle_watcher_#{System.unique_integer([:positive])}")
+
+    start_supervised!(
+      {AgentWatcher,
+       name: name,
+       reconcile?: false,
+       recover?: false,
+       poll_interval_ms: 60_000,
+       reresume_backoffs: [0]}
+    )
+
+    name
+  end
+
+  defp parked_process do
+    spawn(fn ->
+      receive do
+        :stop -> :ok
+      end
+    end)
+  end
+
+  defp lifecycle_mutation(agent, kind) when kind in [:update, :upgrade] do
+    %{
+      "action" => Atom.to_string(kind),
+      "attrs" => %{
+        "behavior" => agent.behavior,
+        "config" => Map.put(agent.config || %{}, "lifecycle_test", Atom.to_string(kind))
+      }
+    }
+  end
+
+  defp lifecycle_mutation(_agent, kind), do: %{"action" => Atom.to_string(kind)}
 
   defp set_role!(role)
        when role in ["maraithon_runtime", "maraithon_activation_operator"] do
