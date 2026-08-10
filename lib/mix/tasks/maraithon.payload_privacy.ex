@@ -74,19 +74,10 @@ defmodule Mix.Tasks.Maraithon.PayloadPrivacy do
   end
 
   defp configure_activation_url! do
-    url = System.get_env("MARAITHON_ACTIVATION_DATABASE_URL")
-
-    if Mix.env() == :prod and (is_nil(url) or String.trim(url) == "") do
-      Mix.raise("MARAITHON_ACTIVATION_DATABASE_URL is required in production")
-    end
-
-    if is_binary(url) and String.trim(url) != "" do
-      if url == System.get_env("DATABASE_URL") do
-        Mix.raise("MARAITHON_ACTIVATION_DATABASE_URL must be distinct from runtime DATABASE_URL")
-      end
-
-      :ok = Maraithon.DatabaseTLS.configure_repo!(url, "MARAITHON_ACTIVATION_DATABASE_URL")
-    end
+    Maraithon.DatabaseTLS.configure_operator_repo_from_env!(
+      "MARAITHON_ACTIVATION_DATABASE_URL",
+      Mix.env() == :prod
+    )
   end
 
   defp decode_sha256(nil), do: nil
