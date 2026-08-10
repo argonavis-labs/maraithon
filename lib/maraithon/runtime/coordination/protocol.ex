@@ -382,6 +382,8 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
              public.runtime_coordination_catalog_ready_count() = 117 AND
              public.runtime_coordination_roles_ready() AND
              public.runtime_coordination_acl_ready() AND
+             public.durable_payload_roles_ready() AND
+             public.durable_payload_catalog_ready() AND
              EXISTS (
                SELECT 1
                FROM public.runtime_coordination_protocols AS protocol
