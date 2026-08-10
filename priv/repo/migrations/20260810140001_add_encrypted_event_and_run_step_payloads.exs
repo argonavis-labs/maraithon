@@ -5,7 +5,6 @@ defmodule Maraithon.Repo.Migrations.AddEncryptedEventAndRunStepPayloads do
   # the retention indexes online so this migration never rewrites either
   # durable history table or holds a transaction open while indexing it.
   @disable_ddl_transaction true
-  @disable_migration_lock true
 
   def up do
     execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS payload_ciphertext bytea")
