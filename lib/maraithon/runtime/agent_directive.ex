@@ -34,6 +34,7 @@ defmodule Maraithon.Runtime.AgentDirective do
     field :claim_expires_at, :utc_datetime_usec
     field :processing_started_at, :utc_datetime_usec
     field :terminal_at, :utc_datetime_usec
+    field :terminal_acknowledged_at, :utc_datetime_usec
     field :terminal_claim_token, Ecto.UUID
     field :terminal_by_generation, Ecto.UUID
     field :last_error_code, :string
@@ -73,6 +74,7 @@ defmodule Maraithon.Runtime.AgentDirective do
       :claim_expires_at,
       :processing_started_at,
       :terminal_at,
+      :terminal_acknowledged_at,
       :terminal_claim_token,
       :terminal_by_generation,
       :last_error_code,
