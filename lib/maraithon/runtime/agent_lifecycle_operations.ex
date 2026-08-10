@@ -33,6 +33,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
+  alias Maraithon.Runtime.Coordination.Scope
   alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Runtime.ScheduledJob
 
@@ -291,13 +292,25 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   """
   def finalize(agent_id, operation_token)
 
-  def finalize(agent_id, operation_token) when is_binary(agent_id) do
+  def finalize(agent_id, operation_token) when is_binary(agent_id),
+    do: do_finalize(agent_id, operation_token, false)
+
+  def finalize(_agent_id, _operation_token), do: {:error, :invalid_lifecycle_operation}
+
+  @doc false
+  def finalize_for_reconciliation(agent_id, operation_token) when is_binary(agent_id),
+    do: do_finalize(agent_id, operation_token, true)
+
+  def finalize_for_reconciliation(_agent_id, _operation_token),
+    do: {:error, :invalid_lifecycle_operation}
+
+  defp do_finalize(agent_id, operation_token, scoped?) do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, operation_token} <- optional_uuid(operation_token) do
       transaction_result =
         Repo.transaction(fn ->
           ProtocolCutover.require_current_mutation!()
-          finalize_locked(agent_id, operation_token)
+          finalize_locked(agent_id, operation_token, scoped?)
         end)
 
       case transaction_result do
@@ -326,23 +339,23 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     end
   end
 
-  def finalize(_agent_id, _operation_token), do: {:error, :invalid_lifecycle_operation}
-
   @doc "Returns a bounded oldest-first set of stranded operation IDs."
   def list_pending_ids(limit \\ 50)
 
   def list_pending_ids(limit) when is_integer(limit) and limit in 1..@max_batch do
-    Repo.all(
-      from(operation in AgentLifecycleOperation,
-        order_by: [
-          asc: operation.last_attempted_at,
-          asc: operation.initiated_at,
-          asc: operation.agent_id
-        ],
-        limit: ^limit,
-        select: operation.agent_id
-      )
+    from(operation in AgentLifecycleOperation,
+      join: agent in Agent,
+      as: :agent,
+      on: agent.id == operation.agent_id,
+      order_by: [
+        asc: operation.last_attempted_at,
+        asc: operation.initiated_at,
+        asc: operation.agent_id
+      ],
+      limit: ^limit,
+      select: operation.agent_id
     )
+    |> Scope.all_ready_agent()
   end
 
   def list_pending_ids(_limit), do: []
@@ -389,8 +402,9 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     |> then(&:crypto.hash(:sha256, &1))
   end
 
-  defp finalize_locked(agent_id, operation_token) do
+  defp finalize_locked(agent_id, operation_token, scoped?) do
     agent = lock_agent!(agent_id)
+    _coordination = if scoped?, do: Scope.authorize_reconciliation!(agent), else: :legacy
     binding = lock_binding(agent)
     guard = lock_guard(agent_id)
     lease = lock_lease(agent_id)

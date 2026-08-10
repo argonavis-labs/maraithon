@@ -20,6 +20,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
+  alias Maraithon.Runtime.Coordination.Scope
 
   @default_window_ms 600_000
   @default_max_crashes 3
@@ -61,6 +62,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
         if protocol_mode == :exact, do: ProtocolCutover.require_exact_reconciliation!()
 
         agent = lock_agent!(agent_id)
+        coordination = Scope.authorize_reconciliation!(agent)
         _binding = lock_binding(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -109,7 +111,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
               end
 
               if tripped and protocol_mode == :exact do
-                cancel_pending_for_tripped_agent!(agent_id, now)
+                cancel_pending_for_tripped_agent!(agent_id, now, coordination)
               end
 
               # Guard evidence and pending-work settlement are durable before the
@@ -132,23 +134,26 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
         {:ok, 0}
 
       :exact ->
-        AgentRestartGuard
-        |> join(:inner, [guard], effect in Effect,
+        from(guard in AgentRestartGuard,
+          join: agent in Agent,
+          as: :agent,
+          on: agent.id == guard.agent_id,
+          join: effect in Effect,
           on:
             effect.agent_id == guard.agent_id and effect.status == "pending" and
               not is_nil(effect.runtime_owner_generation) and is_nil(effect.claimed_by) and
               is_nil(effect.claimed_at) and is_nil(effect.claim_token) and
               is_nil(effect.claim_owner_node) and is_nil(effect.claim_heartbeat_at) and
               is_nil(effect.claim_expires_at) and is_nil(effect.claim_supervisor_id) and
-              is_nil(effect.claim_task_id)
+              is_nil(effect.claim_task_id),
+          where: guard.tripped and guard.needs_recovery,
+          where: not is_nil(guard.last_owner_token),
+          group_by: [guard.agent_id, guard.generation],
+          order_by: [asc: min(effect.inserted_at), asc: guard.agent_id],
+          limit: ^limit,
+          select: {guard.agent_id, guard.generation}
         )
-        |> where([guard, _effect], guard.tripped and guard.needs_recovery)
-        |> where([guard, _effect], not is_nil(guard.last_owner_token))
-        |> group_by([guard, _effect], [guard.agent_id, guard.generation])
-        |> order_by([guard, effect], asc: min(effect.inserted_at), asc: guard.agent_id)
-        |> limit(^limit)
-        |> select([guard, _effect], {guard.agent_id, guard.generation})
-        |> Repo.all()
+        |> Scope.all_ready_agent()
         |> Enum.reduce_while({:ok, 0}, fn {agent_id, generation}, {:ok, total} ->
           case reconcile_tripped_generation(agent_id, generation) do
             {:ok, count} -> {:cont, {:ok, total + count}}
@@ -258,6 +263,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
     Repo.transaction(fn ->
       ProtocolCutover.require_exact_reconciliation!()
       agent = lock_agent!(agent_id)
+      coordination = Scope.authorize_reconciliation!(agent)
       _binding = lock_binding(agent)
       guard = lock_guard(agent_id)
       lease = lock_lease(agent_id)
@@ -278,7 +284,11 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
 
         true ->
           {count, _rows} =
-            cancel_pending_for_tripped_agent!(agent_id, DatabaseClock.now!())
+            cancel_pending_for_tripped_agent!(
+              agent_id,
+              DatabaseClock.now!(),
+              coordination
+            )
 
           count
       end
@@ -289,8 +299,8 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
     end
   end
 
-  defp cancel_pending_for_tripped_agent!(agent_id, now) do
-    Repo.update_all(
+  defp cancel_pending_for_tripped_agent!(agent_id, now, coordination) do
+    query =
       from(effect in Effect,
         where: effect.agent_id == ^agent_id,
         where: not is_nil(effect.runtime_owner_generation),
@@ -303,7 +313,11 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
         where: is_nil(effect.claim_expires_at),
         where: is_nil(effect.claim_supervisor_id),
         where: is_nil(effect.claim_task_id)
-      ),
+      )
+      |> Scope.scope_reconciliation_mutation(coordination)
+
+    Repo.update_all(
+      query,
       set: [
         status: "cancelled",
         cancellation_state: "settled",

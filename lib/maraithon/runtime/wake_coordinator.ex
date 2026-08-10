@@ -18,6 +18,7 @@ defmodule Maraithon.Runtime.WakeCoordinator do
   alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.BootGate
   alias Maraithon.Runtime.Config
+  alias Maraithon.Runtime.Coordination.Scope
 
   require Logger
 
@@ -40,19 +41,10 @@ defmodule Maraithon.Runtime.WakeCoordinator do
   def reconcile_once(opts \\ [])
 
   def reconcile_once(opts) when is_list(opts) do
-    if Config.exact_agent_runtime_ready?() do
+    if Config.exact_agent_runtime_ready?() and match?({:ok, _session}, Scope.current()) do
       do_reconcile_once(opts)
     else
-      {:ok,
-       %{
-         ownership: [],
-         recorded: [],
-         tripped_effects: 0,
-         lifecycle: [],
-         recoveries: [],
-         admissions: [],
-         gate: :closed
-       }}
+      no_work_summary()
     end
   end
 
@@ -135,7 +127,7 @@ defmodule Maraithon.Runtime.WakeCoordinator do
       result =
         case AgentLifecycleOperations.get(agent_id) do
           %{operation_token: operation_token} ->
-            AgentLifecycleOperations.finalize(agent_id, operation_token)
+            AgentLifecycleOperations.finalize_for_reconciliation(agent_id, operation_token)
 
           nil ->
             {:error, :lifecycle_operation_not_found}
@@ -243,6 +235,19 @@ defmodule Maraithon.Runtime.WakeCoordinator do
       nil -> :ok
       failure -> {:error, {:recorded_generation_reconciliation_failed, failure}}
     end
+  end
+
+  defp no_work_summary do
+    {:ok,
+     %{
+       ownership: [],
+       recorded: [],
+       tripped_effects: 0,
+       lifecycle: [],
+       recoveries: [],
+       admissions: [],
+       gate: :closed
+     }}
   end
 
   defp configured_batch_size do

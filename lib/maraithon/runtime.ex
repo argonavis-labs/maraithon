@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime do
   alias Maraithon.Agents.AgentPackageVersion
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirectives
+  alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentLifecycleOperations
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentRegistry
@@ -463,7 +464,7 @@ defmodule Maraithon.Runtime do
   """
   def resume_all_agents do
     with :ok <- exact_runtime_enabled() do
-      agents = Agents.list_resumable_agents()
+      agents = AgentLeases.list_bootstrap_agents()
       Logger.info("Resuming #{length(agents)} agents")
 
       case start_resumable_agents(agents) do
@@ -488,6 +489,8 @@ defmodule Maraithon.Runtime do
         {:error, reason}
         when reason in [
                :runtime_lease_owned,
+               :partition_not_owned,
+               :partition_authority_lost,
                :agent_restart_backoff,
                :agent_lifecycle_busy,
                :agent_binding_not_active,

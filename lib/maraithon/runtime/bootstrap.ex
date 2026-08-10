@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.Bootstrap do
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.IncidentLog
   alias Maraithon.Runtime.WakeCoordinator
+  alias Maraithon.Runtime.Coordination.{Protocol, Scope}
 
   require Logger
 
@@ -41,11 +42,24 @@ defmodule Maraithon.Runtime.Bootstrap do
 
   @impl true
   def handle_info(:bootstrap, state) do
-    if RuntimeConfig.exact_agent_runtime_ready?() do
-      do_bootstrap(state)
-    else
-      Logger.warning("Exact Agent runtime is dark; bootstrap remains closed")
-      {:stop, :normal, state}
+    case Protocol.mode() do
+      :dark ->
+        # Coordination dark mode preserves legacy application behavior, but it
+        # is never sufficient authority for generation-fenced exact admission.
+        Logger.warning("Exact Agent runtime coordination is dark; bootstrap remains closed")
+        {:stop, :normal, state}
+
+      :active ->
+        if RuntimeConfig.exact_agent_runtime_ready?() and
+             Scope.ensure_ready_or_legacy() == :ok do
+          do_bootstrap(state)
+        else
+          # Session is supervised last and publishes PostgreSQL readiness last.
+          retry_bootstrap(:runtime_coordination_not_ready, state)
+        end
+
+      blocked ->
+        retry_bootstrap({:runtime_coordination_blocked, blocked}, state)
     end
   end
 
@@ -63,11 +77,13 @@ defmodule Maraithon.Runtime.Bootstrap do
 
            with {:ok, _installations} <-
                   Maraithon.AgentMarketplace.ensure_default_installations(),
-                {:ok, _reconciliation} <- WakeCoordinator.reconcile_once() do
-             # BootGate remains closed until expired/staged ownership evidence is
-             # reconciled and every resident desired Agent has taken the exact
-             # preclaim path.
-             Maraithon.Runtime.resume_all_agents()
+                {:ok, _reconciliation} <- WakeCoordinator.reconcile_once(),
+                # BootGate remains closed until expired/staged ownership evidence is
+                # reconciled and every resident desired Agent selected by this exact
+                # ready partition scope has taken the preclaim path.
+                :ok <- Maraithon.Runtime.resume_all_agents(),
+                :ok <- Scope.ensure_ready_or_legacy() do
+             :ok
            end
          end) do
       {:ok, {:error, reason}} ->
