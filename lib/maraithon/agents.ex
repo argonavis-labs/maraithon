@@ -1728,10 +1728,11 @@ defmodule Maraithon.Agents do
   end
 
   defp hydrate_run_step_payloads!(%AgentRun{steps: steps} = run) when is_list(steps) do
+    run = AgentRun.hydrate_private_payloads(run)
     %{run | steps: Enum.map(steps, &AgentRunStep.hydrate_payloads!/1)}
   end
 
-  defp hydrate_run_step_payloads!(%AgentRun{} = run), do: run
+  defp hydrate_run_step_payloads!(%AgentRun{} = run), do: AgentRun.hydrate_private_payloads(run)
 
   defp valid_database_text?(value) do
     String.valid?(value) and :binary.match(value, <<0>>) == :nomatch

@@ -31,9 +31,12 @@ defmodule Maraithon.UserMemory do
   @empty_profile_guidance "Use current context and confirmed preferences until a long-term user profile is ready."
 
   def prompt_context(user_id) when is_binary(user_id) do
-    case Repo.get_by(Profile, user_id: user_id) do
-      %Profile{} = profile ->
+    case get_profile(user_id) do
+      %Profile{content_erased_at: nil} = profile ->
         serialize_profile(profile)
+
+      %Profile{content_erased_at: %DateTime{}} ->
+        empty_prompt_context()
 
       nil ->
         fallback_prompt_context(user_id)
@@ -47,7 +50,7 @@ defmodule Maraithon.UserMemory do
   def refresh_if_stale(user_id, opts) when is_binary(user_id) do
     max_age_seconds = Keyword.get(opts, :max_age_seconds, @default_max_age_seconds)
     force? = Keyword.get(opts, :force, false)
-    profile = Repo.get_by(Profile, user_id: user_id)
+    profile = get_profile(user_id)
 
     cond do
       force? ->
@@ -55,6 +58,9 @@ defmodule Maraithon.UserMemory do
 
       is_nil(profile) ->
         refresh_profile(user_id, opts)
+
+      match?(%Profile{content_erased_at: %DateTime{}}, profile) ->
+        {:ok, empty_prompt_context()}
 
       stale_profile?(profile, max_age_seconds) ->
         refresh_profile(user_id, opts)
@@ -433,7 +439,7 @@ defmodule Maraithon.UserMemory do
   defp profile_field_value(_value, _field), do: nil
 
   defp upsert_profile(attrs) do
-    case Repo.get_by(Profile, user_id: Map.fetch!(attrs, :user_id)) do
+    case get_profile(Map.fetch!(attrs, :user_id)) do
       nil ->
         %Profile{}
         |> Profile.changeset(attrs)
@@ -444,6 +450,12 @@ defmodule Maraithon.UserMemory do
         |> Profile.changeset(attrs)
         |> Repo.update()
     end
+  end
+
+  defp get_profile(user_id) when is_binary(user_id) do
+    Profile
+    |> Repo.get_by(user_id: user_id)
+    |> Profile.hydrate_content()
   end
 
   defp serialize_profile(%Profile{} = profile) do

@@ -285,7 +285,8 @@ defmodule Maraithon.TelegramAssistant do
       _ = Maraithon.TelegramAssistant.RunStreamPreview.delete(run.id)
 
       run
-      |> Ecto.Changeset.change(%{
+      |> Run.hydrate_payloads()
+      |> Run.changeset(%{
         status: Map.get(attrs, :status) || Map.get(attrs, "status") || "completed",
         result_summary:
           Map.get(attrs, :result_summary) || Map.get(attrs, "result_summary") || %{},
@@ -293,6 +294,7 @@ defmodule Maraithon.TelegramAssistant do
         error: Map.get(attrs, :error) || Map.get(attrs, "error")
       })
       |> Repo.update()
+      |> hydrate_run_result()
     end
   end
 
@@ -309,8 +311,10 @@ defmodule Maraithon.TelegramAssistant do
 
   def update_run(%Run{} = run, attrs) when is_map(attrs) do
     run
+    |> Run.hydrate_payloads()
     |> Run.changeset(attrs)
     |> Repo.update()
+    |> hydrate_run_result()
   end
 
   def resumable_delivery_run(conversation_id, source_message_id)
@@ -320,15 +324,19 @@ defmodule Maraithon.TelegramAssistant do
     |> where([run], run.status in ["running", "degraded", "failed"])
     |> where(
       [run],
-      fragment(
-        "?->'delivery_checkpoint'->>'source_message_id' = ?",
-        run.result_summary,
-        ^source_message_id
-      )
+      run.delivery_checkpoint_source_message_id == ^source_message_id or
+        (is_nil(run.delivery_checkpoint_source_message_id) and
+           is_nil(run.result_summary) and
+           fragment(
+             "?->'delivery_checkpoint'->>'source_message_id' = ?",
+             run.legacy_result_summary,
+             ^source_message_id
+           ))
     )
     |> order_by([run], desc: run.started_at)
     |> limit(1)
     |> Repo.one()
+    |> Run.hydrate_payloads()
   end
 
   def resumable_delivery_run(_conversation_id, _source_message_id), do: nil
@@ -389,7 +397,8 @@ defmodule Maraithon.TelegramAssistant do
 
   def complete_step(%Step{} = step, attrs \\ %{}) do
     step
-    |> Ecto.Changeset.change(%{
+    |> Step.hydrate_payloads()
+    |> Step.changeset(%{
       status: Map.get(attrs, :status) || Map.get(attrs, "status") || "completed",
       response_payload:
         Map.get(attrs, :response_payload) || Map.get(attrs, "response_payload") || %{},
@@ -398,21 +407,38 @@ defmodule Maraithon.TelegramAssistant do
       error: Map.get(attrs, :error) || Map.get(attrs, "error")
     })
     |> Repo.update()
+    |> hydrate_step_result()
   end
+
+  defp hydrate_run_result({:ok, %Run{} = run}), do: {:ok, Run.hydrate_payloads(run)}
+  defp hydrate_run_result(other), do: other
+
+  defp hydrate_step_result({:ok, %Step{} = step}), do: {:ok, Step.hydrate_payloads(step)}
+  defp hydrate_step_result(other), do: other
+
+  defp hydrate_prepared_action_result({:ok, %PreparedAction{} = action}),
+    do: {:ok, PreparedAction.hydrate_payload(action)}
+
+  defp hydrate_prepared_action_result(other), do: other
 
   def create_prepared_action(attrs) when is_map(attrs) do
     %PreparedAction{}
     |> PreparedAction.changeset(attrs)
     |> Repo.insert()
+    |> hydrate_prepared_action_result()
   end
 
   def update_prepared_action(%PreparedAction{} = prepared_action, attrs) when is_map(attrs) do
     prepared_action
+    |> PreparedAction.hydrate_payload()
     |> PreparedAction.changeset(attrs)
     |> Repo.update()
+    |> hydrate_prepared_action_result()
   end
 
-  def get_prepared_action(id) when is_binary(id), do: Repo.get(PreparedAction, id)
+  def get_prepared_action(id) when is_binary(id),
+    do: id |> then(&Repo.get(PreparedAction, &1)) |> PreparedAction.hydrate_payload()
+
   def get_prepared_action(_id), do: nil
 
   @doc """
@@ -502,11 +528,14 @@ defmodule Maraithon.TelegramAssistant do
       prepared_action.user_id == ^user_id and
         prepared_action.status == "awaiting_confirmation" and
         prepared_action.expires_at > ^now and
-        fragment("?->>'todo_id' = ?", prepared_action.payload, ^todo_id)
+        (prepared_action.payload_todo_id == ^todo_id or
+           (is_nil(prepared_action.payload_encryption_version) and
+              fragment("?->>'todo_id' = ?", prepared_action.legacy_payload, ^todo_id)))
     )
     |> order_by([prepared_action], desc: prepared_action.inserted_at)
     |> limit(1)
     |> Repo.one()
+    |> PreparedAction.hydrate_payload()
   end
 
   def find_awaiting_prepared_action_for_todo(_user_id, _todo_id), do: nil
@@ -530,11 +559,14 @@ defmodule Maraithon.TelegramAssistant do
       prepared_action.user_id == ^user_id and
         prepared_action.action_type == ^action_type and
         prepared_action.status == "awaiting_confirmation" and
-        fragment("?->>'todo_id' = ?", prepared_action.payload, ^todo_id)
+        (prepared_action.payload_todo_id == ^todo_id or
+           (is_nil(prepared_action.payload_encryption_version) and
+              fragment("?->>'todo_id' = ?", prepared_action.legacy_payload, ^todo_id)))
     )
     |> order_by([prepared_action], desc: prepared_action.inserted_at)
     |> limit(1)
     |> Repo.one()
+    |> PreparedAction.hydrate_payload()
   end
 
   def find_awaiting_prepared_action_for_todo_ignoring_expiry(_user_id, _action_type, _todo_id),
@@ -549,14 +581,18 @@ defmodule Maraithon.TelegramAssistant do
   expired.
   """
   def expire_stale_prepared_actions(now \\ DateTime.utc_now()) do
-    {count, _} =
-      Repo.update_all(
-        from(prepared_action in PreparedAction,
-          where: prepared_action.status == "awaiting_confirmation",
-          where: prepared_action.expires_at < ^now
-        ),
-        set: [status: "expired", error: "confirmation_expired", updated_at: now]
-      )
+    {:ok, {count, _}} =
+      Repo.transaction(fn ->
+        :ok = Maraithon.DurablePayload.require_current_mutation!()
+
+        Repo.update_all(
+          from(prepared_action in PreparedAction,
+            where: prepared_action.status == "awaiting_confirmation",
+            where: prepared_action.expires_at < ^now
+          ),
+          set: [status: "expired", error: "confirmation_expired", updated_at: now]
+        )
+      end)
 
     count
   end
@@ -608,7 +644,7 @@ defmodule Maraithon.TelegramAssistant do
 
     cond do
       is_binary(prepared_action_id) ->
-        case Repo.get(PreparedAction, prepared_action_id) do
+        case get_prepared_action(prepared_action_id) do
           %PreparedAction{status: "awaiting_confirmation"} = prepared_action ->
             if prepared_action_expired?(prepared_action) do
               expire_prepared_action(prepared_action)
@@ -631,6 +667,7 @@ defmodule Maraithon.TelegramAssistant do
         |> order_by([prepared_action], desc: prepared_action.inserted_at)
         |> limit(1)
         |> Repo.one()
+        |> PreparedAction.hydrate_payload()
     end
   end
 
@@ -986,7 +1023,7 @@ defmodule Maraithon.TelegramAssistant do
          callback_id,
          opts
        ) do
-    case Repo.get(PreparedAction, prepared_action_id) do
+    case get_prepared_action(prepared_action_id) do
       %PreparedAction{} = prepared_action ->
         if prepared_action_chat_authorized?(prepared_action, chat_id) do
           conversation =
@@ -2304,7 +2341,7 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp current_prepared_action_or(%PreparedAction{} = prepared_action) do
-    Repo.get(PreparedAction, prepared_action.id) || prepared_action
+    get_prepared_action(prepared_action.id) || PreparedAction.hydrate_payload(prepared_action)
   rescue
     _reason -> prepared_action
   catch
@@ -2322,8 +2359,11 @@ defmodule Maraithon.TelegramAssistant do
        when is_function(callback, 1) do
     case Repo.transaction(
            fn ->
+             :ok = Maraithon.DurablePayload.require_current_mutation!()
+
              prepared_action
              |> lock_prepared_action!()
+             |> PreparedAction.hydrate_payload()
              |> callback.()
            end,
            timeout: prepared_persistence_timeout_ms()

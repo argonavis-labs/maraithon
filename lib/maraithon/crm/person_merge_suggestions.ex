@@ -252,10 +252,19 @@ defmodule Maraithon.Crm.PersonMergeSuggestions do
     )
     |> where(
       [prepared_action],
-      (fragment("?->>'surviving_person_id' = ?", prepared_action.payload, ^left.id) and
-         fragment("?->>'merged_person_id' = ?", prepared_action.payload, ^right.id)) or
-        (fragment("?->>'surviving_person_id' = ?", prepared_action.payload, ^right.id) and
-           fragment("?->>'merged_person_id' = ?", prepared_action.payload, ^left.id))
+      (prepared_action.payload_surviving_person_id == ^left.id and
+         prepared_action.payload_merged_person_id == ^right.id) or
+        (prepared_action.payload_surviving_person_id == ^right.id and
+           prepared_action.payload_merged_person_id == ^left.id) or
+        (is_nil(prepared_action.payload_encryption_version) and
+           ((fragment("?->>'surviving_person_id' = ?", prepared_action.legacy_payload, ^left.id) and
+               fragment("?->>'merged_person_id' = ?", prepared_action.legacy_payload, ^right.id)) or
+              (fragment(
+                 "?->>'surviving_person_id' = ?",
+                 prepared_action.legacy_payload,
+                 ^right.id
+               ) and
+                 fragment("?->>'merged_person_id' = ?", prepared_action.legacy_payload, ^left.id))))
     )
     |> Repo.exists?()
   end

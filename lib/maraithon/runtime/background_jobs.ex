@@ -9,7 +9,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
 
   import Ecto.Query
 
-  alias Maraithon.{BoundedJSON, Redaction, Repo}
+  alias Maraithon.{BoundedJSON, DurablePayload, Redaction, Repo}
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
@@ -263,6 +263,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     |> order_by([job], asc: job.scheduled_at, desc: job.inserted_at)
     |> limit(^limit)
     |> Repo.all()
+    |> Enum.map(&BackgroundJob.hydrate_payloads/1)
   end
 
   def count_by_status(opts \\ []) do
@@ -279,6 +280,8 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   def cancel(id) when is_binary(id) do
     case DbResilience.with_database("background jobs cancel", fn ->
            Repo.transaction(fn ->
+             :ok = DurablePayload.require_current_mutation!()
+
              job =
                BackgroundJob
                |> where([candidate], candidate.id == ^id)
@@ -286,7 +289,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
                |> lock("FOR UPDATE")
                |> Repo.one()
 
-             cancel_locked(job)
+             cancel_locked(BackgroundJob.hydrate_payloads(job))
            end)
          end) do
       {:ok, result} -> result
@@ -299,42 +302,26 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   defp cancel_locked(%BackgroundJob{} = job) do
     now = database_now!()
 
-    case Repo.update_all(
-           cancellable_claim(job),
-           set: [
-             status: "cancelled",
-             payload: cancelled_payload(job),
-             cancelled_at: now,
-             claimed_by: nil,
-             claimed_at: nil,
-             claim_token: nil,
-             updated_at: now
-           ]
-         ) do
-      {1, _rows} -> :cancelled
-      {0, _rows} -> Repo.rollback(:not_found_or_not_cancellable)
+    changeset =
+      job
+      |> BackgroundJob.changeset(%{
+        status: "cancelled",
+        payload: cancelled_payload(job),
+        cancelled_at: now,
+        claimed_by: nil,
+        claimed_at: nil
+      })
+      |> Ecto.Changeset.force_change(:claim_token, nil)
+      |> Ecto.Changeset.force_change(:updated_at, now)
+
+    case Repo.update(changeset) do
+      {:ok, _job} -> :cancelled
+      {:error, changeset} -> Repo.rollback(changeset)
     end
   end
 
   defp cancelled_payload(%BackgroundJob{job_type: @telegram_webhook_job_type}), do: %{}
   defp cancelled_payload(%BackgroundJob{payload: payload}), do: payload || %{}
-
-  defp cancellable_claim(%BackgroundJob{id: id, status: status, claim_token: claim_token})
-       when is_binary(claim_token) do
-    from(candidate in BackgroundJob,
-      where: candidate.id == ^id,
-      where: candidate.status == ^status,
-      where: candidate.claim_token == ^claim_token
-    )
-  end
-
-  defp cancellable_claim(%BackgroundJob{id: id, status: status, claim_token: nil}) do
-    from(candidate in BackgroundJob,
-      where: candidate.id == ^id,
-      where: candidate.status == ^status,
-      where: is_nil(candidate.claim_token)
-    )
-  end
 
   defp telegram_ingress_scheduled_at do
     grace_ms =
@@ -385,6 +372,8 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   end
 
   def serialize(%BackgroundJob{} = job) do
+    job = BackgroundJob.hydrate_payloads(job)
+
     %{
       id: job.id,
       user_id: job.user_id,
@@ -420,6 +409,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
         limit: 1
       )
     )
+    |> BackgroundJob.hydrate_payloads()
   end
 
   defp existing_active(%{"dedupe_key" => dedupe_key}) when is_binary(dedupe_key) do
@@ -431,11 +421,13 @@ defmodule Maraithon.Runtime.BackgroundJobs do
         limit: 1
       )
     )
+    |> BackgroundJob.hydrate_payloads()
   end
 
   defp existing_active(_attrs), do: nil
 
-  defp handle_dedupe_conflict({:ok, %BackgroundJob{} = job}, _attrs), do: {:ok, job}
+  defp handle_dedupe_conflict({:ok, %BackgroundJob{} = job}, _attrs),
+    do: {:ok, BackgroundJob.hydrate_payloads(job)}
 
   defp handle_dedupe_conflict(
          {:error, changeset},

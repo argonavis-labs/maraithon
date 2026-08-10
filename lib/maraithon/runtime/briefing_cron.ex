@@ -202,7 +202,9 @@ defmodule Maraithon.Runtime.BriefingCron do
       from(j in Maraithon.Runtime.ScheduledJob,
         where:
           j.agent_id == ^agent_id and j.job_type == "wakeup" and
-            fragment("?->>? = ?", j.payload, "dedupe_key", ^dedupe_key) and
+            (j.payload_dedupe_key == ^dedupe_key or
+               (is_nil(j.payload_encryption_version) and
+                  fragment("?->>? = ?", j.legacy_payload, "dedupe_key", ^dedupe_key))) and
             j.inserted_at >= ^cutoff
       )
     )

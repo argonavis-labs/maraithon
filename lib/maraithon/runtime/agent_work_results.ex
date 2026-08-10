@@ -17,6 +17,8 @@ defmodule Maraithon.Runtime.AgentWorkResults do
   alias Ecto.Multi
   alias Maraithon.Agents.AgentRun
   alias Maraithon.ChiefOfStaff.AcquisitionRun
+  alias Maraithon.DurablePayload
+  alias Maraithon.DurablePayloadBinding
   alias Maraithon.Lineage.Canonical
   alias Maraithon.Lineage.Transaction
   alias Maraithon.Repo
@@ -52,6 +54,7 @@ defmodule Maraithon.Runtime.AgentWorkResults do
       when is_map(attrs) and is_list(acquisitions) and
              length(acquisitions) in 1..@max_acquisitions do
     with :ok <- Transaction.require(),
+         :ok <- DurablePayload.require_current_mutation!(),
          {:ok, proof} <- exact_proof(attrs),
          :ok <- AgentLeases.fence_owner!(proof.agent_id, proof.claim_generation),
          %AgentDirective{} = directive <- lock_exact_active_directive(proof),
@@ -61,7 +64,7 @@ defmodule Maraithon.Runtime.AgentWorkResults do
          {:ok, terminal_event} <-
            Canonical.string(value(attrs, :terminal_event), 80, allow_whitespace: false),
          true <- Regex.match?(~r/^[a-z0-9_]+$/, terminal_event),
-         {:ok, result, _encoded, result_digest} <-
+         {:ok, result, _encoded, _legacy_result_digest} <-
            Canonical.object(value(attrs, :result, %{}), @max_result_bytes,
              max_binary_bytes: 100_000,
              max_depth: 12,
@@ -72,7 +75,26 @@ defmodule Maraithon.Runtime.AgentWorkResults do
          {:ok, result_key} <- result_key(directive, acquisitions, outcome, terminal_event) do
       now = DatabaseClock.now!()
 
+      id = Ecto.UUID.generate()
+
+      scope =
+        DurablePayload.context_identity([
+          directive.user_id,
+          directive.agent_id,
+          directive.id,
+          run.id
+        ])
+
+      digest =
+        DurablePayloadBinding.sign(
+          "agent_work_result_authority",
+          id,
+          scope,
+          [{"result", result}]
+        )
+
       prepared = %{
+        id: id,
         result_key: result_key,
         agent_directive_id: directive.id,
         agent_id: directive.agent_id,
@@ -84,7 +106,9 @@ defmodule Maraithon.Runtime.AgentWorkResults do
         outcome: outcome,
         terminal_event: terminal_event,
         result: result,
-        result_digest: result_digest,
+        result_digest: digest.mac,
+        result_digest_version: digest.version,
+        result_digest_key_tag: digest.key_tag,
         provisional_at: now,
         committed_at: nil,
         inserted_at: now,
@@ -112,14 +136,15 @@ defmodule Maraithon.Runtime.AgentWorkResults do
 
   def finalize_in_transaction(result_or_id) do
     with :ok <- Transaction.require(),
+         :ok <- DurablePayload.require_current_mutation!(),
          {:ok, result_id} <- schema_id(result_or_id, AgentWorkResult),
          %AgentWorkResult{status: "provisional"} = result <-
-           Repo.one(
-             from(result in AgentWorkResult,
-               where: result.id == ^result_id,
-               lock: "FOR UPDATE"
-             )
-           ) do
+           from(result in AgentWorkResult,
+             where: result.id == ^result_id,
+             lock: "FOR UPDATE"
+           )
+           |> Repo.one()
+           |> AgentWorkResult.hydrate_result() do
       now = DatabaseClock.now!()
 
       case result
@@ -141,8 +166,13 @@ defmodule Maraithon.Runtime.AgentWorkResults do
 
   def get_for_directive(directive_id) do
     case uuid(directive_id) do
-      {:ok, id} -> Repo.get_by(AgentWorkResult, agent_directive_id: id)
-      _error -> nil
+      {:ok, id} ->
+        AgentWorkResult
+        |> Repo.get_by(agent_directive_id: id)
+        |> AgentWorkResult.hydrate_result()
+
+      _error ->
+        nil
     end
   end
 

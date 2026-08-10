@@ -198,6 +198,13 @@ defmodule Maraithon.DurablePayload do
   defp context_value!(value) when is_integer(value), do: Integer.to_string(value)
   defp context_value!(value), do: to_string(value)
 
+  @doc false
+  def context_identity(values) when is_list(values) do
+    values
+    |> Enum.map(&context_value!/1)
+    |> encode_context!()
+  end
+
   defp encode_context!([]), do: ""
   defp encode_context!(values), do: Jason.encode!(values)
 end

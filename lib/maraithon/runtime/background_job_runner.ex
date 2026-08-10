@@ -30,6 +30,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   import Ecto.Query
 
   alias Maraithon.Repo
+  alias Maraithon.DurablePayload
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobHandler
   alias Maraithon.Runtime.Config, as: RuntimeConfig
@@ -458,7 +459,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp renew_claim(%BackgroundJob{} = job) do
     case DbResilience.with_database("background job runner renew claim", fn ->
            now = database_now!()
-           Repo.update_all(owned_claim(job), set: [claimed_at: now, updated_at: now])
+           private_update_all(owned_claim(job), set: [claimed_at: now, updated_at: now])
          end) do
       {:ok, {1, _rows}} -> :ok
       {:ok, {0, _rows}} -> :lost
@@ -495,6 +496,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     |> order_by([candidate], asc: candidate.scheduled_at, asc: candidate.inserted_at)
     |> limit(^limit)
     |> Repo.all()
+    |> Enum.map(&BackgroundJob.hydrate_payloads/1)
   end
 
   defp claim_job(%BackgroundJob{job_type: "telegram_webhook_event"} = job),
@@ -555,7 +557,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
     # A pending row can retain a token after a rollback or legacy transition.
     # The status CAS atomically replaces that stale generation with a fresh UUID.
-    case Repo.update_all(claim_query,
+    case private_update_all(claim_query,
            set: [
              status: "running",
              claimed_by: node_id,
@@ -572,6 +574,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
             where: candidate.claim_token == ^claim_token
           )
         )
+        |> BackgroundJob.hydrate_payloads()
 
       {0, _rows} ->
         Repo.rollback(:already_claimed)
@@ -711,19 +714,21 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       now = database_now!()
       scheduled_at = DateTime.add(now, delay_ms, :millisecond)
 
-      Repo.update_all(
+      durable_result = normalize_result(result)
+
+      private_update_all(
         owned_claim(job),
-        set: [
-          status: "pending",
-          attempts: 0,
-          scheduled_at: scheduled_at,
-          result: normalize_result(result),
-          claimed_by: nil,
-          claimed_at: nil,
-          claim_token: nil,
-          last_error: nil,
-          updated_at: now
-        ]
+        set:
+          [
+            status: "pending",
+            attempts: 0,
+            scheduled_at: scheduled_at,
+            claimed_by: nil,
+            claimed_at: nil,
+            claim_token: nil,
+            last_error: nil,
+            updated_at: now
+          ] ++ result_payload_updates(job, durable_result)
       )
     end)
   end
@@ -732,19 +737,21 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     DbResilience.with_database("background job runner mark completed", fn ->
       now = database_now!()
 
-      Repo.update_all(
+      durable_result = normalize_result(result)
+      durable_payload = completed_payload(job)
+
+      private_update_all(
         owned_claim(job),
-        set: [
-          status: "completed",
-          result: normalize_result(result),
-          payload: completed_payload(job),
-          completed_at: now,
-          claimed_by: nil,
-          claimed_at: nil,
-          claim_token: nil,
-          last_error: nil,
-          updated_at: now
-        ]
+        set:
+          [
+            status: "completed",
+            completed_at: now,
+            claimed_by: nil,
+            claimed_at: nil,
+            claim_token: nil,
+            last_error: nil,
+            updated_at: now
+          ] ++ payload_and_result_updates(job, durable_payload, durable_result)
       )
     end)
   end
@@ -794,18 +801,20 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       now = database_now!()
       retry_at = DateTime.add(now, retry_after_seconds, :second)
 
-      Repo.update_all(
+      durable_result = Map.put(job.result || %{}, "retry_after_count", retry_after_count)
+
+      private_update_all(
         owned_claim(job),
-        set: [
-          status: "pending",
-          scheduled_at: retry_at,
-          claimed_by: nil,
-          claimed_at: nil,
-          claim_token: nil,
-          last_error: error_text(reason),
-          result: Map.put(job.result || %{}, "retry_after_count", retry_after_count),
-          updated_at: now
-        ]
+        set:
+          [
+            status: "pending",
+            scheduled_at: retry_at,
+            claimed_by: nil,
+            claimed_at: nil,
+            claim_token: nil,
+            last_error: error_text(reason),
+            updated_at: now
+          ] ++ result_payload_updates(job, durable_result)
       )
     end)
   end
@@ -817,7 +826,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       now = database_now!()
       retry_at = DateTime.add(now, backoff_ms, :millisecond)
 
-      Repo.update_all(
+      private_update_all(
         owned_claim(job),
         set: [
           status: "pending",
@@ -837,19 +846,21 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     DbResilience.with_database("background job runner mark failed", fn ->
       now = database_now!()
 
-      Repo.update_all(
+      durable_payload = terminal_payload(job)
+
+      private_update_all(
         owned_claim(job),
-        set: [
-          status: "failed",
-          attempts: attempts,
-          payload: terminal_payload(job),
-          failed_at: now,
-          claimed_by: nil,
-          claimed_at: nil,
-          claim_token: nil,
-          last_error: error_text(reason),
-          updated_at: now
-        ]
+        set:
+          [
+            status: "failed",
+            attempts: attempts,
+            failed_at: now,
+            claimed_by: nil,
+            claimed_at: nil,
+            claim_token: nil,
+            last_error: error_text(reason),
+            updated_at: now
+          ] ++ request_payload_updates(job, durable_payload)
       )
     end)
   end
@@ -859,7 +870,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp reclaim_stale_jobs(claim_timeout_ms) do
     %{rows: [[count]]} =
-      Repo.query!(
+      private_query!(
         """
         WITH stale_claims AS (
           SELECT id, claim_token, claimed_by, claimed_at
@@ -912,6 +923,67 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   catch
     kind, reason ->
       Logger.warning("CRM ingest window sweep crashed: #{kind} #{inspect(reason)}")
+  end
+
+  defp request_payload_updates(%BackgroundJob{} = job, payload) do
+    updated = %{job | payload: payload}
+
+    [
+      payload: payload,
+      legacy_payload: if(DurablePayload.legacy_write?(), do: payload, else: %{}),
+      payload_encryption_version: 1
+    ] ++ binding_updates(updated)
+  end
+
+  defp result_payload_updates(%BackgroundJob{} = job, result) do
+    updated = %{job | result: result}
+
+    [
+      result: result,
+      legacy_result: if(DurablePayload.legacy_write?(), do: result, else: %{}),
+      payload_encryption_version: 1
+    ] ++ binding_updates(updated)
+  end
+
+  defp payload_and_result_updates(%BackgroundJob{} = job, payload, result) do
+    updated = %{job | payload: payload, result: result}
+
+    [
+      payload: payload,
+      legacy_payload: if(DurablePayload.legacy_write?(), do: payload, else: %{}),
+      result: result,
+      legacy_result: if(DurablePayload.legacy_write?(), do: result, else: %{}),
+      payload_encryption_version: 1
+    ] ++ binding_updates(updated)
+  end
+
+  defp binding_updates(job) do
+    job
+    |> DurablePayload.binding_attrs!(BackgroundJob.payload_binding_spec())
+    |> Map.to_list()
+  end
+
+  defp private_update_all(query, updates) do
+    private_mutation(fn -> Repo.update_all(query, updates) end)
+  end
+
+  defp private_query!(statement, params, opts \\ []) do
+    private_mutation(fn -> Repo.query!(statement, params, opts) end)
+  end
+
+  defp private_mutation(fun) when is_function(fun, 0) do
+    if Repo.in_transaction?() do
+      :ok = DurablePayload.require_current_mutation!()
+      fun.()
+    else
+      case Repo.transaction(fn ->
+             :ok = DurablePayload.require_current_mutation!()
+             fun.()
+           end) do
+        {:ok, result} -> result
+        {:error, reason} -> raise "private BackgroundJob mutation failed: #{inspect(reason)}"
+      end
+    end
   end
 
   defp claim_key(%BackgroundJob{id: id, claim_token: claim_token})

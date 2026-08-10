@@ -153,7 +153,7 @@ defmodule Maraithon.AssistantChat do
 
   def get_run(user_id, run_id) when is_binary(user_id) and is_binary(run_id) do
     case Repo.get_by(Run, id: run_id, user_id: user_id, surface: "mobile") do
-      %Run{} = run -> {:ok, run}
+      %Run{} = run -> {:ok, Run.hydrate_payloads(run)}
       nil -> {:error, :not_found}
     end
   end
@@ -164,11 +164,9 @@ defmodule Maraithon.AssistantChat do
 
     with decision when decision in [:confirm, :reject] <- normalized_decision,
          %PreparedAction{} = prepared_action <-
-           Repo.get_by(PreparedAction,
-             id: prepared_action_id,
-             user_id: user_id,
-             surface: "mobile"
-           ),
+           PreparedAction
+           |> Repo.get_by(id: prepared_action_id, user_id: user_id, surface: "mobile")
+           |> PreparedAction.hydrate_payload(),
          %Conversation{} = conversation <-
            Repo.get(Conversation, prepared_action.conversation_id),
          {:ok, client_message_id} <- optional_client_message_id(attrs) do
@@ -191,7 +189,7 @@ defmodule Maraithon.AssistantChat do
         conversation_id: conversation_id,
         user_turn_id: user_turn_id
       }) do
-    with %Run{} = run <- Repo.get(Run, run_id),
+    with %Run{} = run <- run_id |> then(&Repo.get(Run, &1)) |> Run.hydrate_payloads(),
          %Conversation{} = conversation <-
            conversation_id |> then(&Repo.get(Conversation, &1)) |> Conversation.hydrate(),
          %Turn{} = user_turn <- user_turn_id |> then(&Repo.get(Turn, &1)) |> Turn.hydrate() do
@@ -218,7 +216,7 @@ defmodule Maraithon.AssistantChat do
     end
   rescue
     error ->
-      if run = Repo.get(Run, run_id) do
+      if run = run_id |> then(&Repo.get(Run, &1)) |> Run.hydrate_payloads() do
         {:ok, _run} = TelegramAssistant.fail_run(run, Exception.message(error), "failed")
       end
 
@@ -350,7 +348,7 @@ defmodule Maraithon.AssistantChat do
              conversation_id: conversation.id,
              user_turn_id: user_turn.id
            }) do
-      {:ok, Repo.get(Run, run.id)}
+      {:ok, run.id |> then(&Repo.get(Run, &1)) |> Run.hydrate_payloads()}
     end
   end
 
