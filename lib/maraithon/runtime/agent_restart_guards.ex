@@ -12,6 +12,8 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
 
   alias Maraithon.AgentIsolation.Binding
   alias Maraithon.Agents.Agent
+  alias Maraithon.Effects.Effect
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentLifecycleOperation
@@ -50,10 +52,14 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
     do: {:error, :invalid_restart_guard}
 
   defp record_loss(agent_id, owner_token, reason, opts, require_expired?) do
+    protocol_mode = ProtocolCutover.mode()
+
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token),
          {:ok, policy} <- policy(opts) do
       Repo.transaction(fn ->
+        if protocol_mode == :exact, do: ProtocolCutover.require_exact_reconciliation!()
+
         agent = lock_agent!(agent_id)
         _binding = lock_binding(agent)
         guard = lock_guard(agent_id)
@@ -102,7 +108,12 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
                 |> Repo.update!()
               end
 
-              # Guard evidence is durable before the exact matching lease vanishes.
+              if tripped and protocol_mode == :exact do
+                cancel_pending_for_tripped_agent!(agent_id, now)
+              end
+
+              # Guard evidence and pending-work settlement are durable before the
+              # exact matching lease vanishes.
               Repo.delete!(exact_lease)
               {:recorded, stored_guard}
             end
@@ -111,6 +122,50 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
       |> unwrap_transaction()
     end
   end
+
+  @doc "Settles pending exact work left behind by tripped crash-loop guards."
+  def reconcile_tripped_pending(limit \\ 100)
+
+  def reconcile_tripped_pending(limit) when is_integer(limit) and limit in 1..500 do
+    case ProtocolCutover.mode() do
+      :legacy ->
+        {:ok, 0}
+
+      :exact ->
+        AgentRestartGuard
+        |> join(:inner, [guard], effect in Effect,
+          on:
+            effect.agent_id == guard.agent_id and effect.status == "pending" and
+              not is_nil(effect.runtime_owner_generation) and is_nil(effect.claimed_by) and
+              is_nil(effect.claimed_at) and is_nil(effect.claim_token) and
+              is_nil(effect.claim_owner_node) and is_nil(effect.claim_heartbeat_at) and
+              is_nil(effect.claim_expires_at) and is_nil(effect.claim_supervisor_id) and
+              is_nil(effect.claim_task_id)
+        )
+        |> where([guard, _effect], guard.tripped and guard.needs_recovery)
+        |> where([guard, _effect], not is_nil(guard.last_owner_token))
+        |> group_by([guard, _effect], [guard.agent_id, guard.generation])
+        |> order_by([guard, effect], asc: min(effect.inserted_at), asc: guard.agent_id)
+        |> limit(^limit)
+        |> select([guard, _effect], {guard.agent_id, guard.generation})
+        |> Repo.all()
+        |> Enum.reduce_while({:ok, 0}, fn {agent_id, generation}, {:ok, total} ->
+          case reconcile_tripped_generation(agent_id, generation) do
+            {:ok, count} -> {:cont, {:ok, total + count}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
+
+      {:blocked, reason} ->
+        {:error, {:effect_protocol_mismatch, reason}}
+    end
+  rescue
+    error -> {:error, error}
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  def reconcile_tripped_pending(_limit), do: {:error, :invalid_restart_guard_limit}
 
   def reset_for_operator(agent_id) do
     with {:ok, agent_id} <- cast_uuid(agent_id) do
@@ -197,6 +252,76 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
     |> AgentRestartGuard.changeset(attrs)
     |> Ecto.Changeset.change(updated_at: now)
     |> Repo.update!()
+  end
+
+  defp reconcile_tripped_generation(agent_id, generation) do
+    Repo.transaction(fn ->
+      ProtocolCutover.require_exact_reconciliation!()
+      agent = lock_agent!(agent_id)
+      _binding = lock_binding(agent)
+      guard = lock_guard(agent_id)
+      lease = lock_lease(agent_id)
+      _operation = lock_operation(agent_id)
+
+      cond do
+        not match?(%AgentRestartGuard{}, guard) ->
+          0
+
+        guard.generation != generation or not guard.tripped or not guard.needs_recovery ->
+          0
+
+        not is_nil(lease) ->
+          0
+
+        is_nil(guard.last_owner_token) ->
+          0
+
+        true ->
+          {count, _rows} =
+            cancel_pending_for_tripped_agent!(agent_id, DatabaseClock.now!())
+
+          count
+      end
+    end)
+    |> case do
+      {:ok, count} -> {:ok, count}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp cancel_pending_for_tripped_agent!(agent_id, now) do
+    Repo.update_all(
+      from(effect in Effect,
+        where: effect.agent_id == ^agent_id,
+        where: not is_nil(effect.runtime_owner_generation),
+        where: effect.status == "pending",
+        where: is_nil(effect.claimed_by),
+        where: is_nil(effect.claimed_at),
+        where: is_nil(effect.claim_token),
+        where: is_nil(effect.claim_owner_node),
+        where: is_nil(effect.claim_heartbeat_at),
+        where: is_nil(effect.claim_expires_at),
+        where: is_nil(effect.claim_supervisor_id),
+        where: is_nil(effect.claim_task_id)
+      ),
+      set: [
+        status: "cancelled",
+        cancellation_state: "settled",
+        cancellation_reason: "agent_crash_loop_tripped",
+        cancellation_requested_at: now,
+        cancellation_target_claim_token: nil,
+        cancellation_last_attempt_at: nil,
+        cancellation_last_error: nil,
+        cancellation_settled_at: now,
+        claimed_by: nil,
+        claimed_at: nil,
+        retry_after: nil,
+        result: nil,
+        result_envelope: nil,
+        error: "agent_crash_loop_tripped",
+        updated_at: now
+      ]
+    )
   end
 
   defp ensure_no_processing_directive!(agent_id) do

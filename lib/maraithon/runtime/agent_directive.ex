@@ -18,7 +18,10 @@ defmodule Maraithon.Runtime.AgentDirective do
     belongs_to :agent, Agent
     field :user_id, :string
     field :kind, :string
-    field :payload, :map, default: %{}
+    field :payload, Maraithon.Encrypted.Map, source: :payload_ciphertext
+    field :legacy_payload, :map, source: :payload, default: %{}
+    field :payload_encryption_version, :integer
+    field :payload_purged_at, :utc_datetime_usec
     field :dedupe_key, :string
     field :request_fingerprint, :binary
     field :status, :string, default: "pending"
@@ -46,6 +49,8 @@ defmodule Maraithon.Runtime.AgentDirective do
   def statuses, do: @statuses
 
   def changeset(directive, attrs) do
+    attrs = put_payload_encryption_metadata(attrs)
+
     directive
     |> cast(attrs, [
       :id,
@@ -53,6 +58,9 @@ defmodule Maraithon.Runtime.AgentDirective do
       :user_id,
       :kind,
       :payload,
+      :legacy_payload,
+      :payload_encryption_version,
+      :payload_purged_at,
       :dedupe_key,
       :request_fingerprint,
       :status,
@@ -125,6 +133,31 @@ defmodule Maraithon.Runtime.AgentDirective do
       name: :agent_directives_ambiguity_code_check
     )
   end
+
+  @doc false
+  def materialize_legacy_payload(%__MODULE__{} = directive) do
+    %{directive | payload: directive.payload || directive.legacy_payload}
+  end
+
+  defp put_payload_encryption_metadata(attrs) when is_map(attrs) do
+    payload = Map.get(attrs, :payload, Map.get(attrs, "payload"))
+
+    if is_map(payload) and not is_struct(payload) do
+      if Map.has_key?(attrs, "payload") do
+        attrs
+        |> Map.put_new("legacy_payload", payload)
+        |> Map.put("payload_encryption_version", 1)
+      else
+        attrs
+        |> Map.put_new(:legacy_payload, payload)
+        |> Map.put(:payload_encryption_version, 1)
+      end
+    else
+      attrs
+    end
+  end
+
+  defp put_payload_encryption_metadata(attrs), do: attrs
 
   defp validate_payload(changeset) do
     validate_change(changeset, :payload, fn :payload, payload ->

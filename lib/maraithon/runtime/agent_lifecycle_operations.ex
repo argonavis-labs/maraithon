@@ -14,26 +14,40 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
   import Ecto.Query
 
+  alias Ecto.Adapters.SQL
   alias Maraithon.AgentIsolation.Binding
   alias Maraithon.AgentSubscriptions
   alias Maraithon.AgentSubscriptions.AgentSubscription
+  alias Maraithon.Agents
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentRun
   alias Maraithon.Agents.AgentRunStep
   alias Maraithon.BoundedJSON
+  alias Maraithon.Effects
+  alias Maraithon.Effects.Cancellation
   alias Maraithon.Effects.Effect
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentLifecycleOperation
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
+  alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Runtime.ScheduledJob
 
   @max_payload_bytes 128_000
   @default_drain_ttl_ms 60_000
   @max_batch 500
   @active_effect_statuses ~w(pending claimed cancelling)
+  @terminal_effect_statuses ~w(completed failed cancelled)
+  @reconcilable_work_reasons [
+    :active_run_pointer,
+    :processing_directive,
+    :running_agent_run,
+    :requested_agent_run_step,
+    :active_effect
+  ]
 
   @doc """
   Establishes or idempotently adopts one exact lifecycle operation.
@@ -64,7 +78,15 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
         case operation do
           %AgentLifecycleOperation{} = existing ->
-            adopt!(existing, kind, request_digest, now, agent, lease)
+            adopt!(
+              existing,
+              kind,
+              request_digest,
+              requires_external_drain,
+              now,
+              agent,
+              lease
+            )
 
           nil ->
             mutation = plan!(planner, agent)
@@ -180,14 +202,26 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   A pending result is a successful, read-only finalization attempt: the marker
   remains durable and no directive/delivery/config/install mutation is applied.
   """
-  def finalize(agent_id, operation_token \\ nil)
+  def finalize(agent_id, operation_token)
 
   def finalize(agent_id, operation_token) when is_binary(agent_id) do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, operation_token} <- optional_uuid(operation_token) do
-      Repo.transaction(fn -> finalize_locked(agent_id, operation_token) end)
-      |> case do
+      transaction_result =
+        Repo.transaction(fn ->
+          ProtocolCutover.require_current_mutation!()
+          finalize_locked(agent_id, operation_token)
+        end)
+
+      case transaction_result do
         {:ok, {:pending, reason, operation}} ->
+          if reason in @reconcilable_work_reasons do
+            # This is deliberately after commit: exact cancellation may route
+            # to another node/Task.Supervisor and can never run under the
+            # lifecycle row locks.
+            _ = reconcile_work_after_commit(agent_id, operation, reason)
+          end
+
           {:ok,
            %{
              status: :reconciliation_pending,
@@ -213,7 +247,11 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   def list_pending_ids(limit) when is_integer(limit) and limit in 1..@max_batch do
     Repo.all(
       from(operation in AgentLifecycleOperation,
-        order_by: [asc: operation.initiated_at, asc: operation.agent_id],
+        order_by: [
+          asc: operation.last_attempted_at,
+          asc: operation.initiated_at,
+          asc: operation.agent_id
+        ],
         limit: ^limit,
         select: operation.agent_id
       )
@@ -298,14 +336,51 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
         steps = lock_steps(agent_id)
         effects = lock_effects(agent_id)
 
-        case unresolved_work(agent, directives, runs, steps, effects) do
-          nil -> finalize_quiesced!(agent, binding, guard, operation, directives, now)
-          reason -> {:pending, reason, touch!(operation, now)}
+        active_effect? = Enum.any?(effects, &(&1.status in @active_effect_statuses))
+
+        case unresolved_work(agent, operation, directives, runs, steps, effects) do
+          nil ->
+            finalize_quiesced!(agent, binding, guard, operation, directives, effects, now)
+
+          reason when reason in @reconcilable_work_reasons and not active_effect? ->
+            settle_orphaned_work!(agent, operation, directives, runs, steps, effects, now)
+
+            settled_agent = lock_agent!(agent_id)
+            settled_directives = lock_directives(agent_id)
+            settled_runs = lock_runs(agent_id)
+            settled_steps = lock_steps(agent_id)
+            settled_effects = lock_effects(agent_id)
+
+            case unresolved_work(
+                   settled_agent,
+                   operation,
+                   settled_directives,
+                   settled_runs,
+                   settled_steps,
+                   settled_effects
+                 ) do
+              nil ->
+                finalize_quiesced!(
+                  settled_agent,
+                  binding,
+                  guard,
+                  operation,
+                  settled_directives,
+                  settled_effects,
+                  now
+                )
+
+              remaining ->
+                Repo.rollback({:lifecycle_settlement_incomplete, remaining})
+            end
+
+          reason ->
+            {:pending, reason, touch!(operation, now)}
         end
     end
   end
 
-  defp finalize_quiesced!(agent, binding, guard, operation, directives, now) do
+  defp finalize_quiesced!(agent, binding, guard, operation, directives, effects, now) do
     scheduled_jobs = lock_scheduled_jobs(agent.id)
     subscriptions = lock_subscriptions(agent.id)
 
@@ -313,6 +388,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     cancel_scheduled_jobs!(scheduled_jobs)
     deactivate_subscriptions!(subscriptions, now)
     clear_expected_guard!(guard, operation)
+    erase_terminal_effects_for_delete!(operation, effects)
 
     case apply_mutation!(agent, binding, operation, now) do
       {:deleted, deleted_id} ->
@@ -444,15 +520,203 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
   defp maybe_sync_subscriptions!(_agent), do: :ok
 
-  defp unresolved_work(agent, directives, runs, steps, effects) do
-    cond do
-      is_binary(agent.active_run_id) -> :active_run_pointer
-      Enum.any?(directives, &(&1.status == "processing")) -> :processing_directive
-      Enum.any?(runs, &(&1.status == "running")) -> :running_agent_run
-      Enum.any?(steps, &(&1.status == "requested")) -> :requested_agent_run_step
-      Enum.any?(effects, &(&1.status in @active_effect_statuses)) -> :active_effect
-      true -> nil
+  defp reconcile_work_after_commit(agent_id, operation, _reason) do
+    cancellation_reason = "agent_lifecycle_reconciliation"
+
+    case ProtocolCutover.mode() do
+      :exact ->
+        with {:ok, plan} <-
+               Cancellation.prepare_lifecycle(
+                 agent_id,
+                 operation.operation_token,
+                 cancellation_reason,
+                 limit: 100
+               ) do
+          Cancellation.execute(plan)
+        end
+
+      :legacy ->
+        EffectRunner.cancel_active_for_agent(agent_id, cancellation_reason)
+
+      {:blocked, reason} ->
+        {:error, {:effect_protocol_mismatch, reason}}
     end
+  rescue
+    error -> {:error, error}
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  defp settle_orphaned_work!(agent, operation, directives, runs, _steps, effects, now) do
+    projected_effects =
+      Enum.filter(effects, fn effect ->
+        effect.status in ["completed", "failed"] and
+          is_map(effect.result_envelope) and
+          is_binary(effect.agent_run_id) and
+          is_binary(effect.agent_run_step_id)
+      end)
+
+    case Agents.reconcile_terminal_effect_steps_in_transaction(projected_effects) do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+
+    # Projection may have terminalized requested steps with update_all/3. Read
+    # them again before abandoning only those still genuinely requested.
+    agent.id
+    |> lock_steps()
+    |> Enum.each(fn
+      %AgentRunStep{status: "requested"} = step ->
+        step
+        |> AgentRunStep.changeset(%{
+          status: "failed",
+          error: step.error || "agent_lifecycle_cancelled",
+          completed_at: now
+        })
+        |> Repo.update!()
+
+      %AgentRunStep{} ->
+        :ok
+    end)
+
+    Enum.each(runs, fn
+      %AgentRun{status: "running"} = run ->
+        run
+        |> AgentRun.changeset(%{
+          status: "cancelled",
+          error: run.error || "agent_lifecycle_cancelled",
+          completed_at: now
+        })
+        |> Repo.update!()
+
+      %AgentRun{} ->
+        :ok
+    end)
+
+    if is_binary(agent.active_run_id) do
+      agent
+      |> Ecto.Changeset.change(active_run_id: nil, updated_at: now)
+      |> Repo.update!()
+    end
+
+    Enum.each(directives, &cancel_directive_for_lifecycle!(&1, now))
+
+    unless delete_action?(operation) do
+      projected_effects
+      |> Enum.map(& &1.agent_run_id)
+      |> Enum.uniq()
+      |> Enum.each(fn run_id ->
+        case Effects.acknowledge_terminal_results_for_run(run_id, agent.id) do
+          {:ok, _count} -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    end
+
+    :ok
+  end
+
+  defp cancel_directive_for_lifecycle!(
+         %AgentDirective{status: status} = directive,
+         now
+       )
+       when status in ["pending", "processing"] do
+    {terminal_claim_token, terminal_by_generation} =
+      if status == "processing" do
+        {directive.claim_token, directive.claimed_by_generation}
+      else
+        {nil, nil}
+      end
+
+    directive
+    |> AgentDirective.changeset(%{
+      status: "cancelled",
+      payload: %{"redacted" => true},
+      claim_token: nil,
+      claimed_by_generation: nil,
+      claimed_at: nil,
+      claim_expires_at: nil,
+      processing_started_at: nil,
+      terminal_at: now,
+      terminal_claim_token: terminal_claim_token,
+      terminal_by_generation: terminal_by_generation,
+      last_error_code: "lifecycle_cancelled",
+      ambiguity_code: if(directive.effect_count > 0, do: "effect_outcome_ambiguous", else: nil)
+    })
+    |> Ecto.Changeset.change(updated_at: now)
+    |> Repo.update!()
+  end
+
+  defp cancel_directive_for_lifecycle!(%AgentDirective{}, _now), do: :ok
+
+  defp erase_terminal_effects_for_delete!(operation, effects) do
+    if delete_action?(operation) do
+      SQL.query!(
+        Repo,
+        "SELECT set_config('maraithon.lifecycle_operation_token', $1, true)",
+        [operation.operation_token]
+      )
+
+      ids = Enum.map(effects, & &1.id)
+
+      {deleted, _rows} =
+        Repo.delete_all(
+          from(effect in Effect,
+            where: effect.id in ^ids,
+            where: effect.agent_id == ^operation.agent_id,
+            where: effect.status in ^@terminal_effect_statuses
+          )
+        )
+
+      if deleted != length(effects), do: Repo.rollback(:effect_erasure_fence_lost)
+    end
+
+    :ok
+  end
+
+  defp unresolved_work(agent, operation, directives, runs, steps, effects) do
+    cond do
+      is_binary(agent.active_run_id) ->
+        :active_run_pointer
+
+      Enum.any?(directives, &(&1.status == "processing")) ->
+        :processing_directive
+
+      Enum.any?(runs, &(&1.status == "running")) ->
+        :running_agent_run
+
+      Enum.any?(steps, &(&1.status == "requested")) ->
+        :requested_agent_run_step
+
+      Enum.any?(effects, &(&1.status in @active_effect_statuses)) ->
+        :active_effect
+
+      delete_action?(operation) and not effects_deletable_for_delete?(effects) ->
+        :effect_retention_requires_archival
+
+      true ->
+        nil
+    end
+  end
+
+  defp delete_action?(operation),
+    do: get_in(operation.payload, ["mutation", "action"]) == "delete"
+
+  defp effects_deletable_for_delete?(effects) do
+    # The persisted lifecycle delete marker is an explicit erasure intent, not
+    # a fabricated delivery acknowledgement. The DB trigger independently
+    # rechecks the marker and refuses every active Effect row.
+    Enum.all?(effects, fn
+      %Effect{status: "cancelled", result_envelope: nil} ->
+        true
+
+      %Effect{status: status, result_envelope: envelope}
+      when status in @terminal_effect_statuses and is_map(envelope) ->
+        envelope["version"] == 1 and envelope["status"] in ["ok", "error"]
+
+      %Effect{} ->
+        false
+    end)
   end
 
   defp cancel_pending_directives!(directives, now) do
@@ -524,12 +788,33 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     is_binary(expected_owner) and guard.last_owner_token == expected_owner
   end
 
-  defp adopt!(operation, kind, request_digest, now, agent, lease) do
+  defp adopt!(operation, kind, request_digest, requires_external_drain, now, agent, lease) do
     validate_payload!(operation)
 
     if operation.kind == kind and operation.request_digest == request_digest do
-      touched = touch!(operation, now)
-      lifecycle_fence(touched, agent, lease, :adopted)
+      operation =
+        if requires_external_drain and not operation.requires_external_drain do
+          payload =
+            operation.payload
+            |> Map.put("requires_external_drain", true)
+            |> canonical_payload!()
+
+          operation
+          |> Ecto.Changeset.change(%{
+            payload: payload,
+            payload_digest: digest(payload),
+            requires_external_drain: true,
+            external_drain_confirmed_at: nil,
+            external_drain_evidence_digest: nil,
+            last_attempted_at: now,
+            updated_at: now
+          })
+          |> Repo.update!()
+        else
+          touch!(operation, now)
+        end
+
+      lifecycle_fence(operation, agent, lease, :adopted)
     else
       Repo.rollback(:agent_drain_pending)
     end
@@ -545,8 +830,6 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
       disposition: disposition
     }
   end
-
-  defp validate_operation!(operation, nil), do: operation
 
   defp validate_operation!(operation, operation_token) do
     if operation.operation_token == operation_token,

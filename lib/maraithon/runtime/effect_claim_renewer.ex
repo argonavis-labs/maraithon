@@ -1,0 +1,320 @@
+defmodule Maraithon.Runtime.EffectClaimRenewer do
+  @moduledoc """
+  Independently renews generation-fenced Effect claims from coupled task
+  authority. Cancellation RPCs and EffectRunner polling cannot starve this
+  heartbeat loop.
+  """
+
+  use GenServer
+
+  import Ecto.Query
+
+  alias Maraithon.Effects.Effect
+  alias Maraithon.Effects.ProtocolCutover
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.EffectTaskSupervisor
+
+  require Logger
+
+  @default_interval_ms 5_000
+  @default_ttl_ms 30_000
+  @min_ttl_ms 30_000
+  @max_ttl_ms 300_000
+  @physical_teardown_margin_ms 10_000
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @doc false
+  def renew_now, do: GenServer.call(__MODULE__, :renew_now, 10_000)
+
+  @impl true
+  def init(_opts) do
+    ttl_ms =
+      RuntimeConfig.positive_integer(:effect_claim_liveness_ttl_ms, @default_ttl_ms)
+      |> max(@min_ttl_ms)
+      |> min(@max_ttl_ms)
+
+    requested_interval =
+      RuntimeConfig.positive_integer(:effect_claim_heartbeat_interval_ms, @default_interval_ms)
+
+    max_safe_interval = max(div(ttl_ms, 3), 1)
+    interval_ms = min(requested_interval, max_safe_interval)
+
+    if interval_ms != requested_interval do
+      Logger.warning("Effect claim heartbeat interval clamped below one third of its TTL",
+        failure_code: "effect_claim_heartbeat_interval_clamped",
+        configured_interval_ms: requested_interval,
+        effective_interval_ms: interval_ms,
+        ttl_ms: ttl_ms
+      )
+    end
+
+    schedule_renewal(interval_ms)
+
+    {:ok,
+     %{
+       interval_ms: interval_ms,
+       ttl_ms: ttl_ms,
+       renewal_deadlines: %{},
+       last_authority_observed_ms: monotonic_ms()
+     }}
+  end
+
+  @impl true
+  def handle_call(:renew_now, _from, state) do
+    case renew_active_claims(state) do
+      {:fatal, result, state} ->
+        {:stop, :effect_claim_authority_uncertain, result, state}
+
+      {result, state} ->
+        {:reply, result, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:renew_effect_claims, state) do
+    pass_started_ms = monotonic_ms()
+
+    case renew_active_claims(state) do
+      {:fatal, _result, state} ->
+        {:stop, :effect_claim_authority_uncertain, state}
+
+      {_result, state} ->
+        schedule_renewal(next_renewal_delay_ms(state, pass_started_ms))
+        {:noreply, state}
+    end
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
+  defp renew_active_claims(state) do
+    case EffectTaskSupervisor.active_identities() do
+      {:ok, []} ->
+        state = %{
+          state
+          | renewal_deadlines: %{},
+            last_authority_observed_ms: monotonic_ms()
+        }
+
+        {{:ok, %{active: 0, lost: 0}}, state}
+
+      {:ok, identities} ->
+        now_ms = monotonic_ms()
+        state = observe_identities(state, identities, now_ms)
+        deadline_ms = earliest_renewal_deadline!(state, identities)
+
+        case renew_identities(identities, state.ttl_ms, deadline_ms) do
+          {:ok, lost_identities} ->
+            if deadline_ms <= monotonic_ms() do
+              renewal_failed(state, :effect_claim_heartbeat_deadline_exceeded)
+            else
+              case terminate_lost_identities(lost_identities) do
+                :ok ->
+                  if deadline_ms <= monotonic_ms() do
+                    renewal_failed(state, :effect_claim_heartbeat_deadline_exceeded)
+                  else
+                    state =
+                      record_successful_renewal(state, identities, lost_identities, now_ms)
+
+                    {{:ok, %{active: length(identities), lost: length(lost_identities)}}, state}
+                  end
+
+                {:error, reason} ->
+                  renewal_failed(state, {:effect_claim_termination_unproved, reason})
+              end
+            end
+
+          {:error, reason} ->
+            renewal_failed(state, {:effect_claim_heartbeat_failed, reason})
+        end
+
+      {:error, reason} ->
+        renewal_failed(state, reason)
+    end
+  rescue
+    error ->
+      renewal_failed(state, {:effect_claim_heartbeat_exception, error})
+  catch
+    :exit, reason -> renewal_failed(state, {:effect_claim_heartbeat_exit, reason})
+  end
+
+  defp observe_identities(state, identities, now_ms) do
+    # A newly observed task could have claimed immediately after the previous
+    # authoritative enumeration, even if this pass was delayed. Anchor its
+    # first deadline to that prior observation rather than assuming one normal
+    # heartbeat interval of lag.
+    first_deadline_ms =
+      state.last_authority_observed_ms + state.ttl_ms - @physical_teardown_margin_ms
+
+    deadlines =
+      Map.new(identities, fn identity ->
+        key = identity_key(identity)
+        {key, Map.get(state.renewal_deadlines, key, {identity, first_deadline_ms})}
+      end)
+
+    %{
+      state
+      | renewal_deadlines: deadlines,
+        last_authority_observed_ms: now_ms
+    }
+  end
+
+  defp earliest_renewal_deadline!(state, identities) do
+    identities
+    |> Enum.map(fn identity ->
+      {_identity, deadline_ms} = Map.fetch!(state.renewal_deadlines, identity_key(identity))
+      deadline_ms
+    end)
+    |> Enum.min()
+  end
+
+  defp terminate_lost_identities(identities) do
+    Enum.reduce_while(identities, :ok, fn identity, :ok ->
+      case EffectTaskSupervisor.terminate_exact(identity) do
+        {:ok, _physical_termination_proof} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+        other -> {:halt, {:error, {:unexpected_termination_result, other}}}
+      end
+    end)
+  catch
+    :exit, reason -> {:error, {:termination_exit, reason}}
+  end
+
+  defp record_successful_renewal(state, identities, lost_identities, now_ms) do
+    lost_keys = MapSet.new(lost_identities, &identity_key/1)
+    deadline_ms = max(state.ttl_ms - @physical_teardown_margin_ms, 1)
+
+    deadlines =
+      identities
+      |> Enum.reject(&MapSet.member?(lost_keys, identity_key(&1)))
+      |> Map.new(fn identity -> {identity_key(identity), {identity, now_ms + deadline_ms}} end)
+
+    %{state | renewal_deadlines: deadlines}
+  end
+
+  defp renewal_failed(state, reason) do
+    # Renewal uncertainty is itself loss of local execution authority. Do not
+    # synchronously enumerate or terminate through the Authority here: it may
+    # be the failed sibling, and per-task calls can delay teardown beyond the
+    # claim TTL. This abnormal return stops the Renewer immediately; the
+    # coupled :one_for_all supervisor then tears down the exact TaskSupervisor
+    # and all provider tasks as the physical backstop.
+    Logger.warning("Effect claim heartbeat failed closed",
+      failure_code: Maraithon.Redaction.error_class(reason),
+      remembered_local_tasks: map_size(state.renewal_deadlines)
+    )
+
+    {:fatal, {:error, :effect_claim_heartbeat_failed}, state}
+  end
+
+  defp identity_key(identity) do
+    {
+      identity.effect_id,
+      identity.agent_id,
+      identity.claim_token,
+      identity.supervisor_id,
+      identity.task_id
+    }
+  end
+
+  defp monotonic_ms, do: System.monotonic_time(:millisecond)
+
+  defp renew_identities([], _ttl_ms, _deadline_ms), do: {:ok, []}
+
+  defp renew_identities(identities, ttl_ms, deadline_ms) do
+    transaction_timeout_ms = max(deadline_ms - monotonic_ms(), 1)
+
+    case Repo.transaction(
+           fn ->
+             configure_renewal_statement_timeout!(deadline_ms)
+             ProtocolCutover.require_exact_write!()
+             owner_node = Atom.to_string(node())
+
+             lost =
+               Enum.reduce(identities, [], fn identity, lost ->
+                 configure_renewal_statement_timeout!(deadline_ms)
+
+                 query =
+                   from(effect in Effect,
+                     where: effect.id == ^identity.effect_id,
+                     where: effect.agent_id == ^identity.agent_id,
+                     where: effect.status == "claimed",
+                     where: effect.claim_token == ^identity.claim_token,
+                     where: effect.claim_owner_node == ^owner_node,
+                     where: effect.claim_supervisor_id == ^identity.supervisor_id,
+                     where: effect.claim_task_id == ^identity.task_id,
+                     where: is_nil(effect.cancellation_state),
+                     where:
+                       effect.claim_expires_at >
+                         fragment("timezone('UTC', clock_timestamp())"),
+                     where:
+                       fragment(
+                         "EXISTS (SELECT 1 FROM agent_runtime_leases AS effect_owner_lease WHERE effect_owner_lease.agent_id = ? AND effect_owner_lease.owner_token = ? AND effect_owner_lease.ready_at IS NOT NULL AND effect_owner_lease.draining_at IS NULL AND effect_owner_lease.lease_until > timezone('UTC', clock_timestamp()))",
+                         effect.agent_id,
+                         effect.runtime_owner_generation
+                       ),
+                     update: [
+                       set: [
+                         claim_heartbeat_at: fragment("timezone('UTC', clock_timestamp())"),
+                         claim_expires_at:
+                           fragment(
+                             "timezone('UTC', clock_timestamp()) + (? * interval '1 millisecond')",
+                             ^ttl_ms
+                           ),
+                         updated_at: fragment("timezone('UTC', clock_timestamp())")
+                       ]
+                     ]
+                   )
+
+                 case Repo.update_all(query, []) do
+                   {1, _rows} -> lost
+                   _lost_or_terminal -> [identity | lost]
+                 end
+               end)
+
+             lost
+           end,
+           timeout: transaction_timeout_ms
+         ) do
+      {:ok, lost} -> {:ok, Enum.reverse(lost)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp configure_renewal_statement_timeout!(deadline_ms) do
+    remaining_ms = deadline_ms - monotonic_ms()
+
+    if remaining_ms <= 0 do
+      Repo.rollback(:effect_claim_heartbeat_deadline_exceeded)
+    end
+
+    timeout = "#{remaining_ms}ms"
+    Repo.query!("SELECT set_config('statement_timeout', $1, true)", [timeout], log: false)
+    Repo.query!("SELECT set_config('lock_timeout', $1, true)", [timeout], log: false)
+    :ok
+  end
+
+  defp next_renewal_delay_ms(state, pass_started_ms) do
+    now_ms = monotonic_ms()
+    cadence_delay_ms = max(state.interval_ms - (now_ms - pass_started_ms), 0)
+
+    deadline_delay_ms =
+      case Map.values(state.renewal_deadlines) do
+        [] ->
+          cadence_delay_ms
+
+        deadlines ->
+          earliest_ms = deadlines |> Enum.map(&elem(&1, 1)) |> Enum.min()
+          max(earliest_ms - now_ms - state.interval_ms, 0)
+      end
+
+    min(cadence_delay_ms, deadline_delay_ms)
+  end
+
+  defp schedule_renewal(interval_ms) do
+    Process.send_after(self(), :renew_effect_claims, interval_ms)
+  end
+end

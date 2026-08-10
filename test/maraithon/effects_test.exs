@@ -353,7 +353,7 @@ defmodule Maraithon.EffectsTest do
 
       legacy_effect =
         %Effect{}
-        |> Effect.changeset(%{
+        |> Effect.protocol_changeset(%{
           id: Ecto.UUID.generate(),
           agent_id: agent.id,
           idempotency_key: Ecto.UUID.generate(),
@@ -369,7 +369,7 @@ defmodule Maraithon.EffectsTest do
   end
 
   describe "cancel_active_for_agent/2" do
-    test "cancels only the agent's pending and claimed effects", %{agent_id: agent_id} do
+    test "cancels pending work but retains an unproved claimed worker", %{agent_id: agent_id} do
       {:ok, other_agent} = Agents.create_agent(%{behavior: "prompt_agent", config: %{}})
 
       {:ok, pending_id} = Effects.request(agent_id, :tool_call, "time", %{})
@@ -412,7 +412,7 @@ defmodule Maraithon.EffectsTest do
         set: [status: "cancelled", error: "already cancelled"]
       )
 
-      assert {:ok, 2} =
+      assert {:error, :effect_task_termination_incomplete} =
                Effects.cancel_active_for_agent(
                  agent_id,
                  "agent_recovered_without_effect_continuation"
@@ -426,11 +426,11 @@ defmodule Maraithon.EffectsTest do
       assert pending.error == "agent_recovered_without_effect_continuation"
 
       claimed = Repo.get!(Effect, claimed_id)
-      assert claimed.status == "failed"
-      assert claimed.error == "effect_outcome_ambiguous"
-      assert claimed.result_envelope["status"] == "error"
-      assert claimed.claimed_by == nil
-      assert claimed.claimed_at == nil
+      assert claimed.status == "cancelling"
+      assert claimed.error == "agent_recovered_without_effect_continuation"
+      assert claimed.result_envelope == nil
+      assert claimed.claimed_by == "old@node"
+      assert claimed.claimed_at == claimed_at
       assert claimed.retry_after == nil
 
       completed = Repo.get!(Effect, completed_id)
@@ -446,7 +446,9 @@ defmodule Maraithon.EffectsTest do
       assert cancelled.error == "already cancelled"
 
       assert Repo.get!(Effect, other_pending_id).status == "pending"
-      assert {:ok, 0} = Effects.cancel_active_for_agent(agent_id)
+
+      assert {:error, :effect_task_termination_incomplete} =
+               Effects.cancel_active_for_agent(agent_id)
     end
 
     test "keeps an unfinished cancellation discoverable across reason changes", %{
@@ -472,12 +474,12 @@ defmodule Maraithon.EffectsTest do
 
       assert second.claims == first.claims
 
-      assert {:ok, %{ambiguous: 1}} =
+      assert {:error, :legacy_effect_termination_proof_required} =
                Effects.finish_cancel_active_for_agent(agent_id, second.claims)
 
-      terminal = Repo.get!(Effect, effect_id)
-      assert terminal.status == "failed"
-      assert terminal.error == "effect_outcome_ambiguous"
+      retained = Repo.get!(Effect, effect_id)
+      assert retained.status == "cancelling"
+      assert retained.error == "first_cancellation_reason"
     end
   end
 
@@ -490,7 +492,7 @@ defmodule Maraithon.EffectsTest do
       key = Ecto.UUID.generate()
 
       %Effect{}
-      |> Effect.changeset(%{
+      |> Effect.protocol_changeset(%{
         id: Ecto.UUID.generate(),
         agent_id: agent_id,
         idempotency_key: key,
@@ -507,7 +509,7 @@ defmodule Maraithon.EffectsTest do
       key = Ecto.UUID.generate()
 
       %Effect{}
-      |> Effect.changeset(%{
+      |> Effect.protocol_changeset(%{
         id: Ecto.UUID.generate(),
         agent_id: agent_id,
         idempotency_key: key,
@@ -526,7 +528,7 @@ defmodule Maraithon.EffectsTest do
       key = Ecto.UUID.generate()
 
       %Effect{}
-      |> Effect.changeset(%{
+      |> Effect.protocol_changeset(%{
         id: Ecto.UUID.generate(),
         agent_id: agent_id,
         idempotency_key: key,
@@ -546,7 +548,7 @@ defmodule Maraithon.EffectsTest do
       key = Ecto.UUID.generate()
 
       %Effect{}
-      |> Effect.changeset(%{
+      |> Effect.protocol_changeset(%{
         id: Ecto.UUID.generate(),
         agent_id: agent_id,
         idempotency_key: key,
@@ -626,7 +628,7 @@ defmodule Maraithon.EffectsTest do
 
       effect =
         %Effect{}
-        |> Effect.changeset(%{
+        |> Effect.protocol_changeset(%{
           id: Ecto.UUID.generate(),
           agent_id: agent_id,
           idempotency_key: Ecto.UUID.generate(),
@@ -676,7 +678,7 @@ defmodule Maraithon.EffectsTest do
     test "excludes pre-outbox legacy rows and stopped agents", %{agent_id: agent_id} do
       legacy =
         %Effect{}
-        |> Effect.changeset(%{
+        |> Effect.protocol_changeset(%{
           id: Ecto.UUID.generate(),
           agent_id: agent_id,
           idempotency_key: Ecto.UUID.generate(),
@@ -688,7 +690,7 @@ defmodule Maraithon.EffectsTest do
 
       pending_delivery =
         %Effect{}
-        |> Effect.changeset(%{
+        |> Effect.protocol_changeset(%{
           id: Ecto.UUID.generate(),
           agent_id: agent_id,
           idempotency_key: Ecto.UUID.generate(),

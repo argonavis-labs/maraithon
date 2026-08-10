@@ -8,6 +8,7 @@ defmodule Maraithon.Runtime.Agent do
 
   alias Maraithon.Events
   alias Maraithon.Effects
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.AgentSubscriptions
   alias Maraithon.AgentHarness.Manifest
   alias Maraithon.Agents
@@ -43,6 +44,8 @@ defmodule Maraithon.Runtime.Agent do
   @global_register_retry_ms 25
   @global_register_retries 80
   @recovery_retry_ms 5_000
+  @max_exact_activation_timeout_ms 5_000
+  @min_exact_activation_timeout_ms 1_000
   @directive_poll_interval_ms 5_000
   @max_deferred_messages 200
   @periodic_wakeup_scope {"_schedule_key", "agent_periodic_wakeup"}
@@ -164,7 +167,14 @@ defmodule Maraithon.Runtime.Agent do
 
       # Stay dormant until AgentSupervisor synchronously installs the exact
       # Watcher monitor. No recovery work or readiness write may precede it.
-      {:ok, :recovering, data}
+      # A bounded watchdog closes the spawn -> monitor crash window: an orphan
+      # incarnation cannot remain registered forever if its starter dies.
+      activation_timeout_ms =
+        renew_interval_ms
+        |> max(@min_exact_activation_timeout_ms)
+        |> min(@max_exact_activation_timeout_ms)
+
+      {:ok, :recovering, data, [{{:timeout, :exact_activation}, activation_timeout_ms, :expire}]}
     else
       {:stop, :invalid_exact_agent_launch}
     end
@@ -246,6 +256,7 @@ defmodule Maraithon.Runtime.Agent do
 
     {:keep_state, data,
      [
+       {{:timeout, :exact_activation}, :cancel},
        lease_renewal_action(data),
        {:next_event, :internal, {:init, data.startup_agent}}
      ]}
@@ -253,6 +264,14 @@ defmodule Maraithon.Runtime.Agent do
 
   def recovering(:info, {:activate_exact, _owner_token}, %{exact_owner?: true} = data) do
     {:keep_state, data}
+  end
+
+  def recovering(
+        {:timeout, :exact_activation},
+        :expire,
+        %{exact_owner?: true, exact_activated?: false} = data
+      ) do
+    {:stop, :exact_activation_timeout, data}
   end
 
   def recovering({:timeout, :lease_renewal}, :renew_lease, data) do
@@ -268,7 +287,7 @@ defmodule Maraithon.Runtime.Agent do
           # continuation cannot be restored safely. Cancel them before this
           # incarnation can start another cycle.
           with {:ok, _cancelled_count} <-
-                 cancel_active_effects(agent.id, @orphaned_effect_reason),
+                 cancel_active_effects(agent.id, @orphaned_effect_reason, data.owner_token),
                :ok <- reconcile_persisted_active_run(agent) do
             finish_recovery(agent, data)
           else
@@ -831,7 +850,8 @@ defmodule Maraithon.Runtime.Agent do
 
     # The behavior is about to abandon this continuation. Cancel the durable
     # row before it can be retried, and fence any worker already finishing it.
-    {:ok, _cancelled_count} = cancel_active_effects(data.agent_id, "effect_timeout")
+    {:ok, _cancelled_count} =
+      cancel_active_effects(data.agent_id, "effect_timeout", data.owner_token)
 
     # R4 (SPEC 07): waiting_effect only ever holds the single in-flight
     # effect request_effect/2 just registered, and no effect_id is bound in
@@ -1658,8 +1678,9 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
-  defp close_terminated_effects(%{agent_id: agent_id}) when is_binary(agent_id) do
-    case cancel_active_effects(agent_id, @terminated_effect_reason) do
+  defp close_terminated_effects(%{agent_id: agent_id, owner_token: owner_token})
+       when is_binary(agent_id) do
+    case cancel_active_effects(agent_id, @terminated_effect_reason, owner_token) do
       {:ok, _cancelled_count} = success ->
         success
 
@@ -1786,10 +1807,12 @@ defmodule Maraithon.Runtime.Agent do
     Agents.reconcile_terminal_effect_step(effect)
   end
 
-  defp cancel_active_effects(agent_id, reason) do
+  defp cancel_active_effects(agent_id, reason, owner_token) do
     result =
       try do
-        EffectRunner.cancel_active_for_agent(agent_id, reason)
+        EffectRunner.cancel_active_for_agent(agent_id, reason,
+          expected_runtime_owner_generation: owner_token
+        )
       rescue
         _error -> {:error, :effect_repository_unavailable}
       catch
@@ -3223,6 +3246,8 @@ defmodule Maraithon.Runtime.Agent do
   defp renew_exact_lease(%{exact_owner?: true, exact_activated?: true} = data) do
     renewal =
       Repo.transaction(fn ->
+        ProtocolCutover.require_current_mutation!()
+
         lease_result =
           case data.guard_generation do
             nil ->
@@ -3321,7 +3346,7 @@ defmodule Maraithon.Runtime.Agent do
   defp stop_agent(reason, data, _legacy_owner_token), do: stop_agent(reason, data)
 
   defp clean_stopped_work(data) do
-    case cancel_active_effects(data.agent_id, @stopped_effect_reason) do
+    case cancel_active_effects(data.agent_id, @stopped_effect_reason, data.owner_token) do
       {:ok, _cancelled_count} ->
         closed = cancel_current_run(data, @stopped_run_reason)
         {closed, is_nil(closed.current_run_id)}

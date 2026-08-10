@@ -403,6 +403,40 @@ defmodule Maraithon.Runtime.AgentLeases do
     end
   end
 
+  @doc "Lists a bounded page of runnable Agents with no durable lease or recovery marker."
+  def list_unowned_runnable_ids(limit \\ 100)
+
+  def list_unowned_runnable_ids(limit) when is_integer(limit) and limit in 1..500 do
+    Repo.all(
+      from(agent in Agent,
+        join: binding in Binding,
+        on:
+          binding.agent_id == agent.id and binding.user_id == agent.user_id and
+            binding.status == "active",
+        left_join: lease in AgentRuntimeLease,
+        on: lease.agent_id == agent.id,
+        left_join: guard in AgentRestartGuard,
+        on: guard.agent_id == agent.id,
+        left_join: operation in AgentLifecycleOperation,
+        on: operation.agent_id == agent.id,
+        where: agent.status in ^@runnable_statuses,
+        where: agent.install_status == "enabled",
+        where: is_nil(lease.agent_id),
+        where: is_nil(operation.agent_id),
+        where:
+          is_nil(guard.agent_id) or
+            (guard.tripped == false and guard.needs_recovery == false and
+               (is_nil(guard.blocked_until) or
+                  guard.blocked_until <= fragment("timezone('UTC', clock_timestamp())"))),
+        order_by: [asc: agent.updated_at, asc: agent.id],
+        limit: ^limit,
+        select: agent.id
+      )
+    )
+  end
+
+  def list_unowned_runnable_ids(_limit), do: []
+
   def get(agent_id) do
     case cast_uuid(agent_id) do
       {:ok, agent_id} -> Repo.get(AgentRuntimeLease, agent_id)
@@ -523,9 +557,16 @@ defmodule Maraithon.Runtime.AgentLeases do
   end
 
   defp exact_runtime_enabled do
-    if RuntimeConfig.exact_agent_runtime_enabled?(),
-      do: :ok,
-      else: {:error, :exact_runtime_disabled}
+    cond do
+      not RuntimeConfig.exact_agent_runtime_enabled?() ->
+        {:error, :exact_runtime_disabled}
+
+      not RuntimeConfig.exact_agent_runtime_ready?() ->
+        {:error, :effect_protocol_not_exact}
+
+      true ->
+        :ok
+    end
   end
 
   defp ensure_runnable!(agent) do

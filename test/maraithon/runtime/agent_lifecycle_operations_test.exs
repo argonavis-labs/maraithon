@@ -178,6 +178,66 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     assert Agents.get_agent(agent.id).status == "stopped"
   end
 
+  test "closed admission finalizes resume lifecycle work without starting an Agent" do
+    agent = running_consented_agent("wake-finalize-closed-gate")
+
+    assert {:ok, fence} =
+             AgentLifecycleOperations.begin(
+               agent.id,
+               :update,
+               %{"params" => %{"config" => %{"revision" => 2}}},
+               fn locked ->
+                 %{
+                   "action" => "update",
+                   "attrs" => %{
+                     "behavior" => locked.behavior,
+                     "config" => Map.put(locked.config || %{}, "revision", 2)
+                   }
+                 }
+               end
+             )
+
+    assert fence.operation.payload["resume_after"]
+
+    assert {:ok, %{gate: :closed, lifecycle: lifecycle, admissions: []}} =
+             WakeCoordinator.reconcile_once(admit_recoveries: false, limit: 10)
+
+    assert Enum.any?(lifecycle, fn
+             {agent_id, {:ok, %{status: :finalized, resume_after: true}}, :boot_gate_closed} ->
+               agent_id == agent.id
+
+             _other ->
+               false
+           end)
+
+    assert AgentLifecycleOperations.get(agent.id) == nil
+    assert Agents.get_agent(agent.id).status == "running"
+    assert AgentLeases.get(agent.id) == nil
+  end
+
+  test "a conservative retry upgrades an adopted operation to require external drain" do
+    agent = running_consented_agent("external-drain-adoption")
+    request = %{"reason" => "concurrent_registry_observation"}
+    planner = fn _agent -> %{"action" => "stop"} end
+
+    assert {:ok, first} =
+             AgentLifecycleOperations.begin(agent.id, :stop, request, planner)
+
+    refute first.operation.requires_external_drain
+
+    assert {:ok, adopted} =
+             AgentLifecycleOperations.begin(agent.id, :stop, request, planner,
+               requires_external_drain: true
+             )
+
+    assert adopted.disposition == :adopted
+    assert adopted.operation_token == first.operation_token
+    assert adopted.operation.requires_external_drain
+
+    assert {:ok, %{status: :reconciliation_pending, reason: :external_fleet_drain_required}} =
+             AgentLifecycleOperations.finalize(agent.id, adopted.operation_token)
+  end
+
   test "unfenced legacy evidence requires explicit non-rolling fleet-drain confirmation" do
     agent = running_consented_agent("external-drain")
 
@@ -345,7 +405,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
 
   defp pending_effect(agent_id) do
     %Effect{}
-    |> Effect.changeset(%{
+    |> Effect.protocol_changeset(%{
       id: Ecto.UUID.generate(),
       agent_id: agent_id,
       idempotency_key: Ecto.UUID.generate(),

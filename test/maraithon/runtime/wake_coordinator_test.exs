@@ -8,6 +8,7 @@ defmodule Maraithon.Runtime.WakeCoordinatorTest do
   alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
+  alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.WakeCoordinator
 
   test "performs bounded guard-first expired ownership reconciliation" do
@@ -40,20 +41,52 @@ defmodule Maraithon.Runtime.WakeCoordinatorTest do
     assert AgentLeases.get(agent.id) == nil
   end
 
-  test "keeps ordinary directive wake and idle sleep feature-dark" do
-    {agent, user_id} = running_agent("wake-dark")
+  test "re-admits bounded runnable desired Agents stranded without a durable marker" do
+    {agent, user_id} = running_agent("wake-unowned")
 
-    assert {:ok, directive} =
-             AgentDirectives.enqueue(agent.id, user_id, "message", %{"body" => "later"}, "dark")
+    assert {:ok, _directive} =
+             AgentDirectives.enqueue(agent.id, user_id, "message", %{"body" => "later"}, "wake")
+
+    suffix = System.unique_integer([:positive])
+    supervisor = String.to_atom("wake_agent_supervisor_#{suffix}")
+    watcher = String.to_atom("wake_agent_watcher_#{suffix}")
+
+    start_supervised!(%{
+      id: supervisor,
+      start:
+        {DynamicSupervisor, :start_link,
+         [[strategy: :one_for_one, name: supervisor, max_restarts: 20, max_seconds: 60]]}
+    })
+
+    start_supervised!(%{
+      id: watcher,
+      start:
+        {AgentWatcher, :start_link,
+         [
+           [
+             name: watcher,
+             agent_supervisor: supervisor,
+             reconcile?: false,
+             recover?: false
+           ]
+         ]}
+    })
 
     assert {:ok, summary} =
-             WakeCoordinator.reconcile_once(limit: 10, admit_recoveries: true)
+             WakeCoordinator.reconcile_once(
+               limit: 10,
+               admit_recoveries: true,
+               supervisor: supervisor,
+               watcher: watcher
+             )
 
     assert summary.ownership == []
     assert summary.recorded == []
     assert summary.recoveries == []
-    assert AgentLeases.get(agent.id) == nil
-    assert Repo.get!(AgentDirective, directive.id).status == "pending"
+    assert [{agent_id, {:ok, pid}}] = summary.admissions
+    assert agent_id == agent.id
+    assert is_pid(pid)
+    assert AgentLeases.get(agent.id).owner_token != nil
   end
 
   defp running_agent(name) do

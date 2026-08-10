@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.WakeCoordinator do
   alias Maraithon.Agents
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLifecycleOperations
+  alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentWatcher
@@ -39,10 +40,19 @@ defmodule Maraithon.Runtime.WakeCoordinator do
   def reconcile_once(opts \\ [])
 
   def reconcile_once(opts) when is_list(opts) do
-    if Config.exact_agent_runtime_enabled?() do
+    if Config.exact_agent_runtime_ready?() do
       do_reconcile_once(opts)
     else
-      {:ok, %{ownership: [], recorded: [], lifecycle: [], recoveries: [], gate: :closed}}
+      {:ok,
+       %{
+         ownership: [],
+         recorded: [],
+         tripped_effects: 0,
+         lifecycle: [],
+         recoveries: [],
+         admissions: [],
+         gate: :closed
+       }}
     end
   end
 
@@ -59,23 +69,27 @@ defmodule Maraithon.Runtime.WakeCoordinator do
          :ok <- validate_ownership(ownership),
          recorded when is_list(recorded) <-
            AgentDirectives.reconcile_recorded_generations(limit),
-         :ok <- validate_recorded(recorded) do
-      lifecycle = reconcile_lifecycle_operations(limit)
+         :ok <- validate_recorded(recorded),
+         {:ok, tripped_effects} <- AgentRestartGuards.reconcile_tripped_pending(limit) do
+      admission_open? = Keyword.get(opts, :admit_recoveries, BootGate.open?())
+      lifecycle = reconcile_lifecycle_operations(limit, admission_open?)
 
-      recoveries =
-        if Keyword.get(opts, :admit_recoveries, BootGate.open?()) do
-          start_due_recoveries(limit, opts)
+      {recoveries, admissions} =
+        if admission_open? do
+          {start_due_recoveries(limit, opts), start_unowned_agents(limit, opts)}
         else
-          []
+          {[], []}
         end
 
       {:ok,
        %{
          ownership: ownership,
          recorded: recorded,
+         tripped_effects: tripped_effects,
          lifecycle: lifecycle,
          recoveries: recoveries,
-         gate: :open
+         admissions: admissions,
+         gate: if(admission_open?, do: :open, else: :closed)
        }}
     else
       {:error, reason} -> {:error, reason}
@@ -114,22 +128,57 @@ defmodule Maraithon.Runtime.WakeCoordinator do
     {:noreply, state}
   end
 
-  defp reconcile_lifecycle_operations(limit) do
+  defp reconcile_lifecycle_operations(limit, admission_open?) do
     limit
     |> AgentLifecycleOperations.list_pending_ids()
     |> Enum.map(fn agent_id ->
-      result = AgentLifecycleOperations.finalize(agent_id)
+      result =
+        case AgentLifecycleOperations.get(agent_id) do
+          %{operation_token: operation_token} ->
+            AgentLifecycleOperations.finalize(agent_id, operation_token)
+
+          nil ->
+            {:error, :lifecycle_operation_not_found}
+        end
 
       start_result =
         case result do
-          {:ok, %{status: :finalized, resume_after: true}} ->
+          {:ok, %{status: :finalized, resume_after: true}} when admission_open? ->
             Maraithon.Runtime.resume_finalized_lifecycle(agent_id, admission: :recovery)
+
+          {:ok, %{status: :finalized, resume_after: true}} ->
+            :boot_gate_closed
 
           _pending_or_failed ->
             :not_started
         end
 
       {agent_id, result, start_result}
+    end)
+  end
+
+  defp start_unowned_agents(limit, opts) do
+    supervisor = Keyword.get(opts, :supervisor, AgentSupervisor)
+    watcher = Keyword.get(opts, :watcher, AgentWatcher)
+
+    limit
+    |> AgentLeases.list_unowned_runnable_ids()
+    |> Enum.map(fn agent_id ->
+      result =
+        case Agents.get_agent(agent_id, include_removed: true) do
+          %{status: status, install_status: "enabled"} = agent
+          when status in ["running", "degraded"] ->
+            AgentSupervisor.start_agent(agent,
+              admission: :recovery,
+              supervisor: supervisor,
+              watcher: watcher
+            )
+
+          _stale_or_inactive ->
+            {:error, :stale_unowned_agent}
+        end
+
+      {agent_id, result}
     end)
   end
 

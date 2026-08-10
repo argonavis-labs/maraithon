@@ -1157,9 +1157,11 @@ defmodule Maraithon.Runtime do
   end
 
   defp exact_runtime_enabled do
-    if RuntimeConfig.exact_agent_runtime_enabled?(),
-      do: :ok,
-      else: {:error, :exact_runtime_disabled}
+    cond do
+      not RuntimeConfig.exact_agent_runtime_enabled?() -> {:error, :exact_runtime_disabled}
+      not RuntimeConfig.exact_agent_runtime_ready?() -> {:error, :effect_protocol_not_exact}
+      true -> :ok
+    end
   end
 
   defp normalize_optional_string(nil), do: nil

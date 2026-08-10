@@ -138,7 +138,7 @@ defmodule Maraithon.Runtime.AgentSupervisor do
     background_workers? = Application.get_env(:maraithon, :start_background_workers, true)
 
     cond do
-      not RuntimeConfig.exact_agent_runtime_enabled?() -> {:error, :exact_runtime_disabled}
+      not RuntimeConfig.exact_agent_runtime_ready?() -> {:error, :exact_runtime_disabled}
       admission in [:bootstrap, :recovery] -> :ok
       admission != :normal -> {:error, :invalid_agent_start}
       not background_workers? -> :ok

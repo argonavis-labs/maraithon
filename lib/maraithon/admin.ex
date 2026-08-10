@@ -513,20 +513,24 @@ defmodule Maraithon.Admin do
     |> where([effect], effect.agent_id == ^agent_id)
     |> order_by([effect], desc: effect.updated_at, desc: effect.inserted_at)
     |> limit(^limit)
-    |> select([effect], %{
-      id: effect.id,
-      effect_type: effect.effect_type,
-      status: effect.status,
-      attempts: effect.attempts,
-      claimed_by: effect.claimed_by,
-      retry_after: effect.retry_after,
-      params: effect.params,
-      result: effect.result,
-      error: effect.error,
-      inserted_at: effect.inserted_at,
-      updated_at: effect.updated_at
-    })
     |> Repo.all()
+    |> Enum.map(fn effect ->
+      effect = Effect.materialize_legacy_payload(effect)
+
+      %{
+        id: effect.id,
+        effect_type: effect.effect_type,
+        status: effect.status,
+        attempts: effect.attempts,
+        claimed_by: effect.claimed_by,
+        retry_after: effect.retry_after,
+        params: effect.params,
+        result: effect.result,
+        error: effect.error,
+        inserted_at: effect.inserted_at,
+        updated_at: effect.updated_at
+      }
+    end)
   end
 
   defp job_counts(agent_id) do

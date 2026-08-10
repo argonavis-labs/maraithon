@@ -31,7 +31,7 @@ defmodule Maraithon.AdminTest do
 
       {:ok, failed_effect} =
         %Effect{}
-        |> Effect.changeset(%{
+        |> Effect.protocol_changeset(%{
           id: Ecto.UUID.generate(),
           agent_id: agent.id,
           idempotency_key: Ecto.UUID.generate(),
@@ -115,7 +115,7 @@ defmodule Maraithon.AdminTest do
 
       {:ok, old_effect} =
         %Effect{}
-        |> Effect.changeset(%{
+        |> Effect.protocol_changeset(%{
           id: Ecto.UUID.generate(),
           agent_id: agent.id,
           idempotency_key: Ecto.UUID.generate(),
@@ -129,7 +129,7 @@ defmodule Maraithon.AdminTest do
 
       {:ok, new_effect} =
         %Effect{}
-        |> Effect.changeset(%{
+        |> Effect.protocol_changeset(%{
           id: Ecto.UUID.generate(),
           agent_id: agent.id,
           idempotency_key: Ecto.UUID.generate(),
@@ -164,7 +164,7 @@ defmodule Maraithon.AdminTest do
 
       {:ok, _effect} =
         %Effect{}
-        |> Effect.changeset(%{
+        |> Effect.protocol_changeset(%{
           id: Ecto.UUID.generate(),
           agent_id: agent.id,
           idempotency_key: Ecto.UUID.generate(),

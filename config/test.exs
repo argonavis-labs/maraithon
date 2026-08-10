@@ -74,3 +74,6 @@ config :phoenix, :plug_init_mode, :runtime
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Focused legacy-mode runtime tests opt in explicitly; production builds cannot use this bypass.
+config :maraithon, Maraithon.Runtime, allow_legacy_effect_protocol_in_test: true

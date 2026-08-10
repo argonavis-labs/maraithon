@@ -460,7 +460,7 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   defp deliver_job(job) do
-    if RuntimeConfig.exact_agent_runtime_enabled?() do
+    if RuntimeConfig.exact_agent_runtime_ready?() do
       durably_accept_job(job)
     else
       deliver_job_legacy(job)

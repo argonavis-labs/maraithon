@@ -42,6 +42,28 @@ defmodule Maraithon.Runtime.Config do
   end
 
   @doc """
+  Returns whether exact Agent admission has both the revision interlock and the
+  authoritative database Effect protocol. A config flag alone never proves a
+  stopped-fleet cutover completed.
+  """
+  def exact_agent_runtime_ready? do
+    exact_agent_runtime_enabled?() and
+      (Maraithon.Effects.ProtocolCutover.mode() == :exact or test_protocol_bypass?())
+  rescue
+    _storage_unavailable -> false
+  catch
+    :exit, _reason -> false
+  end
+
+  if Mix.env() == :test do
+    defp test_protocol_bypass? do
+      get(:allow_legacy_effect_protocol_in_test, false) == true
+    end
+  else
+    defp test_protocol_bypass?, do: false
+  end
+
+  @doc """
   Returns absolute allowed tool root directories.
   """
   def tool_allowed_paths do

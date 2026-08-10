@@ -254,7 +254,7 @@ defmodule Maraithon.RuntimeTest do
     Verifies that custom stop reasons can be provided.
     Stop reasons are useful for debugging and audit trails.
     """
-    test "leaves unfenced active effects for durable reconciliation when no owner is registered" do
+    test "durably stages unfenced active effects for reconciliation when no owner is registered" do
       {:ok, agent} =
         Agents.create_agent(%{
           behavior: "watchdog_summarizer",
@@ -268,7 +268,7 @@ defmodule Maraithon.RuntimeTest do
 
       {:ok, _effect} =
         %Effect{}
-        |> Effect.changeset(%{
+        |> Effect.protocol_changeset(%{
           id: effect_id,
           agent_id: agent.id,
           idempotency_key: Ecto.UUID.generate(),
@@ -284,13 +284,13 @@ defmodule Maraithon.RuntimeTest do
                Runtime.stop_agent(agent.id)
 
       effect = Repo.get!(Effect, effect_id)
-      assert effect.status == "claimed"
-      assert effect.error == nil
+      assert effect.status == "cancelling"
+      assert effect.error == "agent_lifecycle_reconciliation"
       assert effect.claimed_by == Atom.to_string(node())
       assert effect.claimed_at != nil
     end
 
-    test "an orphan running Run keeps stop reconciliation pending" do
+    test "an orphan running Run is cancelled atomically during stop reconciliation" do
       {:ok, agent} =
         Agents.create_agent(%{
           behavior: "watchdog_summarizer",
@@ -302,10 +302,12 @@ defmodule Maraithon.RuntimeTest do
       {:ok, run} = Agents.start_agent_run(agent)
       assert Agents.get_agent(agent.id).active_run_id == nil
 
-      assert {:ok, %{drain_status: :reconciliation_pending}} =
-               Runtime.stop_agent(agent.id)
+      assert {:ok, %{drain_status: :quiesced}} = Runtime.stop_agent(agent.id)
 
-      assert Repo.get!(AgentRun, run.id).status == "running"
+      settled_run = Repo.get!(AgentRun, run.id)
+      assert settled_run.status == "cancelled"
+      assert settled_run.error == "agent_lifecycle_cancelled"
+      assert %DateTime{} = settled_run.completed_at
     end
 
     test "refreshes a stale stopped_at when stopping live desired state" do

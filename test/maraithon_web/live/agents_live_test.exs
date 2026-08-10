@@ -611,7 +611,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     {:ok, _effect} =
       %Effect{}
-      |> Effect.changeset(%{
+      |> Effect.protocol_changeset(%{
         id: Ecto.UUID.generate(),
         agent_id: agent.id,
         idempotency_key: Ecto.UUID.generate(),

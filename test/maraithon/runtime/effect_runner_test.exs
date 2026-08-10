@@ -1339,7 +1339,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       assert updated_effect.error == "invalid_request"
     end
 
-    test "fails oversized successful results without retrying the effect", %{agent: agent} do
+    test "marks oversized post-success results ambiguous without retrying", %{agent: agent} do
       case Process.whereis(EffectRunner) do
         nil -> :ok
         pid -> GenServer.stop(pid, :normal)
@@ -1370,7 +1370,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       send(pid, :poll)
 
       assert_receive {:agent_dispatch,
-                      {:effect_result, ^effect_id, {:error, :invalid_effect_result}}},
+                      {:effect_result, ^effect_id, {:error, :effect_outcome_ambiguous}}},
                      1_000
 
       _ = :sys.get_state(pid)
@@ -1379,7 +1379,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       assert updated_effect.attempts == 1
       assert updated_effect.retry_after == nil
       assert updated_effect.result == nil
-      assert updated_effect.error == "invalid_effect_result"
+      assert updated_effect.error == "effect_outcome_ambiguous"
     end
 
     test "does not claim llm effects while provider cooldown is active", %{agent: agent} do
@@ -1689,19 +1689,21 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       assert is_binary(claimed.claimed_by)
       assert %DateTime{} = claimed.claimed_at
 
+      ref = Process.monitor(worker_pid)
+
       assert {:ok, 1} =
                Effects.cancel_active_for_agent(
                  agent.id,
                  "agent_recovered_without_effect_continuation"
                )
 
+      # Legacy settlement is now proof-gated: the cancellation call cannot
+      # return success until this concrete worker generation has terminated.
+      assert_receive {:DOWN, ^ref, :process, ^worker_pid, _reason}, 1_000
+
       cancelled = Maraithon.Repo.get!(Effect, effect_id)
       assert cancelled.status == "failed"
       assert cancelled.error == "effect_outcome_ambiguous"
-
-      ref = Process.monitor(worker_pid)
-      send(worker_pid, :release_blocking_provider)
-      assert_receive {:DOWN, ^ref, :process, ^worker_pid, :normal}, 1_000
       _ = :sys.get_state(pid)
 
       after_worker = Maraithon.Repo.get!(Effect, effect_id)
@@ -1713,7 +1715,9 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       assert after_worker.result == nil
       assert after_worker.attempts == 0
 
-      refute_received {:agent_dispatch, {:effect_result, ^effect_id, _result}}
+      # A cancellation outcome may be retried through the durable terminal
+      # outbox, but the terminated provider must never publish late success.
+      refute_received {:agent_dispatch, {:effect_result, ^effect_id, {:ok, _late_result}}}
     end
 
     test "cancellation fences the claim and terminates the supervised command task", %{

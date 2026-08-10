@@ -10,6 +10,7 @@ defmodule Maraithon.Agents do
   alias Maraithon.AgentHarness.MarkdownSkill
   alias Maraithon.AgentIsolation.Binding
   alias Maraithon.AgentSubscriptions
+  alias Maraithon.Effects.Effect
   alias Maraithon.Projects
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentLeases
@@ -502,7 +503,7 @@ defmodule Maraithon.Agents do
              status in ["completed", "failed"] do
     attrs =
       if status == "completed" do
-        %{"status" => "completed", "response_payload" => effect.result || %{}}
+        %{"status" => "completed", "response_payload" => Effect.result_payload(effect) || %{}}
       else
         %{
           "status" => "failed",
@@ -563,7 +564,7 @@ defmodule Maraithon.Agents do
       if status == "completed" do
         [
           status: "completed",
-          response_payload: effect.result || %{},
+          response_payload: Effect.result_payload(effect) || %{},
           completed_at: now,
           updated_at: now
         ]

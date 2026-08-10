@@ -16,6 +16,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
   alias Maraithon.Agents.Agent
   alias Maraithon.BoundedJSON
   alias Maraithon.Repo
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentLifecycleOperation
@@ -40,7 +41,11 @@ defmodule Maraithon.Runtime.AgentDirectives do
 
   def enqueue(agent_id, user_id, kind, payload, dedupe_key, opts) when is_list(opts) do
     with {:ok, prepared} <- prepare_enqueue(agent_id, user_id, kind, payload, dedupe_key, opts),
-         {:ok, directive} <- Repo.transaction(fn -> enqueue_prepared!(prepared) end) do
+         {:ok, directive} <-
+           Repo.transaction(fn ->
+             ProtocolCutover.require_current_mutation!()
+             enqueue_prepared!(prepared)
+           end) do
       :ok = notify_committed(directive)
       {:ok, directive}
     end
@@ -61,6 +66,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
       when is_list(opts) do
     with true <- Repo.in_transaction?(),
          {:ok, prepared} <- prepare_enqueue(agent_id, user_id, kind, payload, dedupe_key, opts) do
+      ProtocolCutover.require_current_mutation!()
       {:ok, enqueue_prepared!(prepared)}
     else
       false -> {:error, :transaction_required}
@@ -93,6 +99,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
          {:ok, owner_generation} <- cast_uuid(owner_generation),
          {:ok, ttl_ms} <- claim_opts(opts) do
       Repo.transaction(fn ->
+        ProtocolCutover.require_current_mutation!()
         AgentLeases.fence_ready!(agent_id, owner_generation)
         ensure_agent_user!(agent_id, user_id)
         lease = Repo.get!(AgentRuntimeLease, agent_id)
@@ -128,6 +135,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
                   ambiguity_code: nil,
                   updated_at: now
                 })
+                |> AgentDirective.materialize_legacy_payload()
             end
         end
       end)
@@ -154,6 +162,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
       when mode in [:ready, :owner] and is_function(fun, 2) do
     with {:ok, ids} <- exact_ids(agent_id, directive_id, owner_generation, claim_token) do
       Repo.transaction(fn ->
+        ProtocolCutover.require_current_mutation!()
         fence_claim_mode!(ids.agent_id, ids.owner_generation, mode)
         directive = lock_directive!(ids)
         now = DatabaseClock.now!()
@@ -285,6 +294,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
 
         nil ->
           Repo.transaction(fn ->
+            ProtocolCutover.require_current_mutation!()
             AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
             directive = lock_directive!(ids)
             now = DatabaseClock.now!()
@@ -339,6 +349,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
     with {:ok, ids} <- exact_ids(agent_id, directive_id, owner_generation, claim_token),
          {:ok, ttl_ms} <- claim_opts(opts) do
       Repo.transaction(fn ->
+        ProtocolCutover.require_current_mutation!()
         AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
         lease = Repo.get!(AgentRuntimeLease, ids.agent_id)
         directive = lock_directive!(ids)
@@ -385,6 +396,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
 
         nil ->
           Repo.transaction(fn ->
+            ProtocolCutover.require_current_mutation!()
             AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
             directive = lock_directive!(ids)
             now = DatabaseClock.now!()
@@ -415,22 +427,27 @@ defmodule Maraithon.Runtime.AgentDirectives do
          {:ok, owner_generation} <- cast_uuid(owner_generation),
          {:ok, retry_delay_ms} <- retry_opts(opts) do
       Repo.transaction(fn ->
+        ProtocolCutover.require_current_mutation!()
         agent = lock_agent!(agent_id)
         _binding = lock_binding(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
-        _operation = lock_operation(agent_id)
+        operation = lock_operation(agent_id)
 
         ensure_recorded_generation!(guard, lease, owner_generation)
 
-        case lock_processing_generation(agent_id, owner_generation) do
-          nil ->
-            nil
+        if operation do
+          :deferred_to_lifecycle
+        else
+          case lock_processing_generation(agent_id, owner_generation) do
+            nil ->
+              nil
 
-          directive ->
-            now = DatabaseClock.now!()
+            directive ->
+              now = DatabaseClock.now!()
 
-            update!(directive, failure_attrs(directive, now, retry_delay_ms, "runtime_crash"))
+              update!(directive, failure_attrs(directive, now, retry_delay_ms, "runtime_crash"))
+          end
         end
       end)
     end
@@ -451,7 +468,12 @@ defmodule Maraithon.Runtime.AgentDirectives do
     with {:ok, ids} <- exact_ids(agent_id, directive_id, owner_generation, claim_token),
          {:ok, retry_delay_ms} <- retry_opts(opts) do
       Repo.transaction(fn ->
+        ProtocolCutover.require_current_mutation!()
         AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
+        operation = lock_operation(ids.agent_id)
+
+        if operation, do: Repo.rollback(:deferred_to_lifecycle)
+
         directive = lock_directive!(ids)
         now = DatabaseClock.now!()
 
@@ -607,7 +629,10 @@ defmodule Maraithon.Runtime.AgentDirectives do
   defp expired_claim_candidates(limit) do
     Repo.all(
       from(directive in AgentDirective,
+        left_join: operation in AgentLifecycleOperation,
+        on: operation.agent_id == directive.agent_id,
         where: directive.status == "processing",
+        where: is_nil(operation.agent_id),
         where: directive.claim_expires_at <= fragment("timezone('UTC', clock_timestamp())"),
         order_by: [asc: directive.claim_expires_at, asc: directive.id],
         limit: ^limit,
@@ -641,15 +666,81 @@ defmodule Maraithon.Runtime.AgentDirectives do
             guard.last_owner_token == directive.claimed_by_generation,
         left_join: lease in AgentRuntimeLease,
         on: lease.agent_id == directive.agent_id,
+        left_join: operation in AgentLifecycleOperation,
+        on: operation.agent_id == directive.agent_id,
         where: directive.status == "processing",
         where: guard.needs_recovery == true,
         where: is_nil(lease.agent_id),
+        where: is_nil(operation.agent_id),
         order_by: [asc: directive.claim_expires_at, asc: directive.id],
         limit: ^limit,
         select: {directive.agent_id, directive.claimed_by_generation}
       )
     )
   end
+
+  @doc "Encrypts and redacts one resumable batch of legacy Directive payloads."
+  def backfill_legacy_payload_encryption(limit \\ 100)
+
+  def backfill_legacy_payload_encryption(limit) when is_integer(limit) and limit in 1..500 do
+    case Repo.transaction(fn ->
+           ProtocolCutover.require_legacy_mutation!()
+
+           directives =
+             AgentDirective
+             |> where(
+               [directive],
+               directive.payload_encryption_version != 1 or
+                 is_nil(directive.payload_encryption_version) or
+                 is_nil(directive.payload) or
+                 fragment(
+                   "? IS DISTINCT FROM '{\"redacted\": true}'::jsonb",
+                   directive.legacy_payload
+                 )
+             )
+             |> order_by([directive], asc: directive.id)
+             |> limit(^limit)
+             |> lock("FOR UPDATE SKIP LOCKED")
+             |> Repo.all()
+
+           Enum.each(directives, fn directive ->
+             terminal? = directive.status in ["completed", "dead_letter", "cancelled"]
+
+             payload =
+               if terminal?,
+                 do: @redacted_payload,
+                 else: directive.payload || directive.legacy_payload || %{}
+
+             attrs = %{
+               payload: payload,
+               legacy_payload: @redacted_payload,
+               payload_encryption_version: 1,
+               payload_purged_at:
+                 if(terminal?,
+                   do: directive.payload_purged_at || directive.terminal_at,
+                   else: nil
+                 )
+             }
+
+             directive
+             |> AgentDirective.changeset(attrs)
+             |> Repo.update!()
+           end)
+
+           length(directives)
+         end) do
+      {:ok, count} -> {:ok, count}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    error ->
+      {:error, {:directive_payload_backfill_failed, Maraithon.Redaction.error_class(error)}}
+  catch
+    :exit, reason ->
+      {:error, {:directive_payload_backfill_failed, Maraithon.Redaction.error_class(reason)}}
+  end
+
+  def backfill_legacy_payload_encryption(_limit), do: {:error, :invalid_payload_batch_size}
 
   defp prepare_enqueue(agent_id, user_id, kind, payload, dedupe_key, opts) do
     with {:ok, agent_id} <- cast_uuid(agent_id),
@@ -664,6 +755,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
          user_id: user_id,
          kind: kind,
          payload: payload,
+         legacy_payload:
+           if(ProtocolCutover.mode() == :legacy, do: payload, else: @redacted_payload),
          dedupe_key: dedupe_key,
          request_fingerprint: fingerprint(kind, payload),
          delay_ms: enqueue_opts.delay_ms,
@@ -689,6 +782,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
           user_id: prepared.user_id,
           kind: prepared.kind,
           payload: prepared.payload,
+          legacy_payload: prepared.legacy_payload,
           dedupe_key: prepared.dedupe_key,
           request_fingerprint: prepared.request_fingerprint,
           status: "pending",
@@ -1003,6 +1097,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
     %{
       status: status,
       payload: @redacted_payload,
+      payload_purged_at: now,
       claim_token: nil,
       claimed_by_generation: nil,
       claimed_at: nil,

@@ -6,7 +6,10 @@ defmodule Maraithon.Effects do
   import Ecto.Query
 
   alias Maraithon.Repo
+  alias Maraithon.Effects.Cancellation
+  alias Maraithon.Effects.CancellationPlan
   alias Maraithon.Effects.Effect
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Effects.TerminalEnvelope
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentRun
@@ -44,6 +47,7 @@ defmodule Maraithon.Effects do
 
     with {:ok, agent_run_id} <- optional_uuid(opts[:agent_run_id]),
          {:ok, agent_run_step_id} <- optional_uuid(opts[:agent_run_step_id]),
+         {:ok, runtime_owner_generation} <- optional_uuid(opts[:runtime_owner_generation]),
          {:ok, prepared} <- prepare_params(tool_name, params) do
       do_request(
         agent_id,
@@ -52,7 +56,8 @@ defmodule Maraithon.Effects do
         effect_id,
         idempotency_key,
         agent_run_id,
-        agent_run_step_id
+        agent_run_step_id,
+        runtime_owner_generation
       )
     end
   end
@@ -149,34 +154,177 @@ defmodule Maraithon.Effects do
          effect_id,
          idempotency_key,
          agent_run_id,
-         agent_run_step_id
+         agent_run_step_id,
+         runtime_owner_generation
+       ) do
+    case ProtocolCutover.mode() do
+      :exact when is_nil(runtime_owner_generation) ->
+        {:error, :effect_runtime_owner_generation_required}
+
+      :exact ->
+        case Repo.transaction(fn ->
+               Cancellation.fence_effect_admission!(agent_id, runtime_owner_generation)
+               fence_effect_run_link!(agent_id, agent_run_id, agent_run_step_id)
+
+               case insert_request_row(
+                      agent_id,
+                      effect_type,
+                      params,
+                      effect_id,
+                      idempotency_key,
+                      agent_run_id,
+                      agent_run_step_id,
+                      runtime_owner_generation
+                    ) do
+                 {:ok, inserted_id} -> inserted_id
+                 {:error, reason} -> Repo.rollback(reason)
+               end
+             end) do
+          {:ok, inserted_id} -> {:ok, inserted_id}
+          {:error, reason} -> {:error, reason}
+        end
+
+      :legacy when not is_nil(runtime_owner_generation) ->
+        {:error, :durable_effect_cancellation_disabled}
+
+      :legacy ->
+        case Repo.transaction(fn ->
+               ProtocolCutover.require_legacy_admission!()
+
+               case insert_request(
+                      agent_id,
+                      effect_type,
+                      params,
+                      effect_id,
+                      idempotency_key,
+                      agent_run_id,
+                      agent_run_step_id,
+                      nil
+                    ) do
+                 {:ok, inserted_id} -> inserted_id
+                 {:error, reason} -> Repo.rollback(reason)
+               end
+             end) do
+          {:ok, inserted_id} -> {:ok, inserted_id}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:blocked, reason} ->
+        {:error, {:effect_protocol_mismatch, reason}}
+    end
+  end
+
+  defp insert_request(
+         agent_id,
+         effect_type,
+         params,
+         effect_id,
+         idempotency_key,
+         agent_run_id,
+         agent_run_step_id,
+         runtime_owner_generation
        ) do
     if valid_run_link?(agent_id, agent_run_id, agent_run_step_id) do
-      owner_user_id =
-        Repo.one(from(agent in Agent, where: agent.id == ^agent_id, select: agent.user_id))
-
-      attrs = %{
-        id: effect_id,
-        agent_id: agent_id,
-        owner_user_id: owner_user_id,
-        agent_run_id: agent_run_id,
-        agent_run_step_id: agent_run_step_id,
-        effect_type: to_string(effect_type),
-        params: params,
-        idempotency_key: idempotency_key,
-        status: "pending",
-        attempts: 0,
-        max_attempts: 3
-      }
-
-      case %Effect{} |> Effect.changeset(attrs) |> Repo.insert() do
-        {:ok, effect} -> {:ok, effect.id}
-        {:error, reason} -> {:error, reason}
-      end
+      insert_request_row(
+        agent_id,
+        effect_type,
+        params,
+        effect_id,
+        idempotency_key,
+        agent_run_id,
+        agent_run_step_id,
+        runtime_owner_generation
+      )
     else
       {:error, :invalid_effect_run_context}
     end
   end
+
+  defp insert_request_row(
+         agent_id,
+         effect_type,
+         params,
+         effect_id,
+         idempotency_key,
+         agent_run_id,
+         agent_run_step_id,
+         runtime_owner_generation
+       ) do
+    owner_user_id =
+      Repo.one(from(agent in Agent, where: agent.id == ^agent_id, select: agent.user_id))
+
+    attrs = %{
+      id: effect_id,
+      agent_id: agent_id,
+      owner_user_id: owner_user_id,
+      agent_run_id: agent_run_id,
+      agent_run_step_id: agent_run_step_id,
+      runtime_owner_generation: runtime_owner_generation,
+      effect_type: to_string(effect_type),
+      params: params,
+      legacy_params:
+        if(is_nil(runtime_owner_generation), do: params, else: %{"redacted" => true}),
+      effect_protocol_version: Map.get(params, "__maraithon_effect_protocol"),
+      execution_lane: Map.get(params, "__maraithon_execution_lane"),
+      idempotency_key: idempotency_key,
+      status: "pending",
+      attempts: 0,
+      max_attempts: 3
+    }
+
+    case %Effect{} |> Effect.protocol_changeset(attrs) |> Repo.insert() do
+      {:ok, effect} -> {:ok, effect.id}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp fence_effect_run_link!(_agent_id, nil, nil), do: :ok
+
+  defp fence_effect_run_link!(agent_id, agent_run_id, agent_run_step_id)
+       when is_binary(agent_run_id) and is_binary(agent_run_step_id) do
+    # fence_effect_admission!/2 already holds this Agent row FOR UPDATE. Read
+    # its published pointer before taking the canonical Run -> RunStep locks;
+    # the pointer cannot change until this transaction commits.
+    active_run_id =
+      Repo.one(
+        from(agent in Agent,
+          where: agent.id == ^agent_id,
+          select: agent.active_run_id
+        )
+      )
+
+    run =
+      Repo.one(
+        from(run in AgentRun,
+          where: run.id == ^agent_run_id,
+          where: run.agent_id == ^agent_id,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    unless match?(%AgentRun{id: ^active_run_id, status: "running"}, run) do
+      Repo.rollback(:invalid_effect_run_context)
+    end
+
+    step =
+      Repo.one(
+        from(step in AgentRunStep,
+          where: step.id == ^agent_run_step_id,
+          where: step.agent_run_id == ^agent_run_id,
+          where: step.agent_id == ^agent_id,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    if match?(%AgentRunStep{status: "requested"}, step) do
+      :ok
+    else
+      Repo.rollback(:invalid_effect_run_context)
+    end
+  end
+
+  defp fence_effect_run_link!(_agent_id, _agent_run_id, _agent_run_step_id),
+    do: Repo.rollback(:invalid_effect_run_context)
 
   defp valid_run_link?(_agent_id, nil, nil), do: true
 
@@ -297,9 +445,10 @@ defmodule Maraithon.Effects do
         ]
       )
 
-    {count, _rows} = Repo.update_all(query, [])
-
-    {:ok, count == 1}
+    case effect_protocol_mutation(fn -> Repo.update_all(query, []) end) do
+      {:ok, {count, _rows}} -> {:ok, count == 1}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc false
@@ -333,8 +482,10 @@ defmodule Maraithon.Effects do
           ]
         )
 
-      {count, _rows} = Repo.update_all(query, [])
-      {:ok, count}
+      case effect_protocol_mutation(fn -> Repo.update_all(query, []) end) do
+        {:ok, {count, _rows}} -> {:ok, count}
+        {:error, reason} -> {:error, reason}
+      end
     else
       :error -> {:error, :invalid_effect_acknowledgement}
     end
@@ -392,8 +543,10 @@ defmodule Maraithon.Effects do
         ]
       )
 
-    {count, _rows} = Repo.update_all(query, [])
-    {:ok, count}
+    case effect_protocol_mutation(fn -> Repo.update_all(query, []) end) do
+      {:ok, {count, _rows}} -> {:ok, count}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   def acknowledge_terminal_results_for_run(_run_id, _agent_id),
@@ -402,7 +555,9 @@ defmodule Maraithon.Effects do
   @doc """
   Interpret an already-loaded persisted Effect row using the terminal codec.
   """
-  def terminal_result(%Effect{} = effect), do: TerminalEnvelope.decode(effect)
+  def terminal_result(%Effect{} = effect) do
+    effect |> Effect.materialize_legacy_payload() |> TerminalEnvelope.decode()
+  end
 
   @doc """
   Load and interpret an unacknowledged terminal Effect owned by the agent.
@@ -457,34 +612,93 @@ defmodule Maraithon.Effects do
   def get_terminal_result(_effect_id, _agent_id), do: nil
 
   @doc """
+  Stage exact Effect cancellation inside a standalone database transaction.
+
+  The returned plan must be passed to `finish_cancel_active_for_agent_post_commit/1`
+  only after this transaction (and any caller-owned outer transaction) commits.
+  """
+  def stage_cancel_active_for_agent(agent_id, reason, opts \\ []) do
+    Cancellation.prepare(agent_id, reason, opts)
+  end
+
+  @doc """
+  Stage exact Effect cancellation inside an existing caller-owned transaction.
+
+  This is the transaction-only AgentIsolation composition point. It takes no
+  process, Task.Supervisor, RPC, or network action and deliberately does not
+  redesign the Binding transition itself.
+  """
+  def stage_cancel_active_for_agent!(agent_id, reason, opts \\ []) do
+    Cancellation.prepare_in_transaction!(agent_id, reason, opts)
+  end
+
+  @doc "Execute a committed exact cancellation plan after transaction commit."
+  def finish_cancel_active_for_agent_post_commit(%CancellationPlan{} = plan) do
+    Cancellation.execute(plan)
+  end
+
+  def finish_cancel_active_for_agent_post_commit(_plan),
+    do: {:error, :invalid_effect_cancellation_plan}
+
+  @doc false
+  def reconcile_exact_cancellations_for_agent(agent_id, limit \\ 32) do
+    Cancellation.reconcile_agent(agent_id, limit)
+  end
+
+  @doc """
   Cancel active effects without treating an in-flight command as safely stopped.
 
-  Pending work is cancelled immediately. Claimed work has no termination proof
-  at this context-only boundary, so it is terminalized as ambiguous rather than
-  made eligible for replay or reported as safely cancelled.
+  With durable cancellation enabled, this stages exact claim identities, routes
+  termination after commit, and leaves every unproved owner durably cancelling.
+  The bounded legacy bridge is reachable only while the feature gate is off.
   """
-  def cancel_active_for_agent(agent_id, reason \\ "agent_recovered")
-      when is_binary(agent_id) and is_binary(reason) do
-    with {:ok, %{overflow?: false} = cancellation} <-
-           begin_cancel_active_for_agent(agent_id, reason),
-         {:ok, _summary} <- finish_cancel_active_for_agent(agent_id, cancellation.claims) do
-      {:ok, cancellation.count}
-    else
-      {:ok, %{overflow?: true}} -> {:error, :effect_cancellation_overflow}
-      {:error, _reason} = error -> error
+  def cancel_active_for_agent(agent_id, reason \\ "agent_recovered", opts \\ [])
+
+  def cancel_active_for_agent(agent_id, reason, opts)
+      when is_binary(agent_id) and is_binary(reason) and is_list(opts) do
+    case ProtocolCutover.mode() do
+      :exact ->
+        case Cancellation.request(agent_id, reason, opts) do
+          {:ok, summary} -> {:ok, summary.requested}
+          {:pending, _summary} -> {:error, :effect_cancellation_pending}
+          {:error, _reason} = error -> error
+        end
+
+      :legacy ->
+        Maraithon.Runtime.EffectRunner.cancel_active_for_agent(agent_id, reason, opts)
+
+      {:blocked, mismatch} ->
+        {:error, {:effect_protocol_mismatch, mismatch}}
     end
   end
 
   @doc false
   def begin_cancel_active_for_agent(agent_id, reason)
       when is_binary(agent_id) and is_binary(reason) do
+    case ProtocolCutover.mode() do
+      :legacy ->
+        begin_cancel_active_for_agent_legacy(agent_id, reason)
+
+      :exact ->
+        {:error, :legacy_effect_cancellation_disabled}
+
+      {:blocked, mismatch} ->
+        {:error, {:effect_protocol_mismatch, mismatch}}
+    end
+  end
+
+  defp begin_cancel_active_for_agent_legacy(agent_id, reason) do
     Repo.transaction(fn ->
+      ProtocolCutover.require_legacy_mutation!()
+      ensure_no_exact_active_effects!(agent_id)
+
       {pending_count, _rows} =
         Repo.update_all(
           from(effect in Effect,
             where: effect.agent_id == ^agent_id,
             where: effect.status == "pending"
-          ),
+          )
+          |> legacy_protocol_rows(),
           set: [
             status: "cancelled",
             claimed_by: nil,
@@ -500,7 +714,8 @@ defmodule Maraithon.Effects do
           from(effect in Effect,
             where: effect.agent_id == ^agent_id,
             where: effect.status == "claimed"
-          ),
+          )
+          |> legacy_protocol_rows(),
           set: [
             status: "cancelling",
             retry_after: nil,
@@ -510,19 +725,19 @@ defmodule Maraithon.Effects do
         )
 
       claims =
-        Repo.all(
-          from(effect in Effect,
-            where: effect.agent_id == ^agent_id,
-            where: effect.status == "cancelling",
-            order_by: [asc: effect.inserted_at, asc: effect.id],
-            limit: ^(@max_cancellation_claims + 1),
-            select: %{
-              id: effect.id,
-              claimed_by: effect.claimed_by,
-              claimed_at: effect.claimed_at
-            }
-          )
+        from(effect in Effect,
+          where: effect.agent_id == ^agent_id,
+          where: effect.status == "cancelling",
+          order_by: [asc: effect.inserted_at, asc: effect.id],
+          limit: ^(@max_cancellation_claims + 1),
+          select: %{
+            id: effect.id,
+            claimed_by: effect.claimed_by,
+            claimed_at: effect.claimed_at
+          }
         )
+        |> legacy_protocol_rows()
+        |> Repo.all()
 
       overflow? = length(claims) > @max_cancellation_claims
       claims = Enum.take(claims, @max_cancellation_claims)
@@ -536,15 +751,66 @@ defmodule Maraithon.Effects do
   end
 
   @doc false
+  def list_legacy_cancellation_agents(limit \\ 32)
+
+  def list_legacy_cancellation_agents(limit) when is_integer(limit) and limit in 1..512 do
+    case ProtocolCutover.mode() do
+      :legacy ->
+        agent_ids =
+          from(effect in Effect,
+            where: effect.status == "cancelling",
+            where: is_nil(effect.runtime_owner_generation),
+            distinct: true,
+            order_by: [asc: effect.agent_id],
+            limit: ^limit,
+            select: effect.agent_id
+          )
+          |> Repo.all()
+
+        {:ok, agent_ids}
+
+      :exact ->
+        {:error, :legacy_effect_cancellation_disabled}
+
+      {:blocked, mismatch} ->
+        {:error, {:effect_protocol_mismatch, mismatch}}
+    end
+  end
+
+  def list_legacy_cancellation_agents(_limit),
+    do: {:error, :invalid_effect_cancellation_limit}
+
+  @doc false
   def finish_cancel_active_for_agent(agent_id, expected_claims)
       when is_binary(agent_id) and is_list(expected_claims) and
              length(expected_claims) <= @max_cancellation_claims do
+    if self() == Process.whereis(Maraithon.Runtime.EffectRunner) do
+      case ProtocolCutover.mode() do
+        :legacy ->
+          finish_cancel_active_for_agent_legacy(agent_id, expected_claims)
+
+        :exact ->
+          {:error, :legacy_effect_cancellation_disabled}
+
+        {:blocked, mismatch} ->
+          {:error, {:effect_protocol_mismatch, mismatch}}
+      end
+    else
+      {:error, :legacy_effect_termination_proof_required}
+    end
+  end
+
+  defp finish_cancel_active_for_agent_legacy(agent_id, expected_claims) do
     # A killed task may already have crossed its external side-effect boundary.
     # Termination proof is required before the Agent may resume, but every
     # previously claimed outcome remains conservatively ambiguous. Each write
     # is fenced by its original claim generation so concurrent cancellation
     # cannot terminalize newly fenced work.
     Repo.transaction(fn ->
+      ProtocolCutover.require_legacy_mutation!()
+      ensure_no_exact_active_effects!(agent_id)
+      ensure_expected_claims_are_legacy!(agent_id, expected_claims)
+
       ambiguous_count =
         Enum.reduce(expected_claims, 0, fn claim, count ->
           query = cancellation_claim_query(agent_id, claim)
@@ -587,6 +853,7 @@ defmodule Maraithon.Effects do
         where: effect.id == ^id,
         where: effect.status == "cancelling"
       )
+      |> legacy_protocol_rows()
 
     query =
       if is_nil(claimed_by),
@@ -598,12 +865,201 @@ defmodule Maraithon.Effects do
       else: where(query, [effect], effect.claimed_at == ^claimed_at)
   end
 
+  defp ensure_no_exact_active_effects!(agent_id) do
+    base =
+      from(effect in Effect,
+        where: effect.agent_id == ^agent_id,
+        where: effect.status in ["pending", "claimed", "cancelling"]
+      )
+
+    total = Repo.aggregate(base, :count, :id)
+    legacy = base |> legacy_protocol_rows() |> Repo.aggregate(:count, :id)
+
+    if total == legacy, do: :ok, else: Repo.rollback({:effect_protocol_mismatch, total - legacy})
+  end
+
+  defp ensure_expected_claims_are_legacy!(agent_id, expected_claims) do
+    ids =
+      Enum.flat_map(expected_claims, fn
+        %{id: id} when is_binary(id) -> [id]
+        _invalid -> []
+      end)
+
+    if length(ids) != length(expected_claims) do
+      Repo.rollback(:invalid_effect_cancellation)
+    end
+
+    base =
+      from(effect in Effect,
+        where: effect.agent_id == ^agent_id,
+        where: effect.id in ^ids
+      )
+
+    total = Repo.aggregate(base, :count, :id)
+    legacy = base |> legacy_protocol_rows() |> Repo.aggregate(:count, :id)
+
+    if total == legacy, do: :ok, else: Repo.rollback({:effect_protocol_mismatch, total - legacy})
+  end
+
+  defp legacy_protocol_rows(query) do
+    from(effect in query,
+      where: is_nil(effect.runtime_owner_generation),
+      where: is_nil(effect.claim_token),
+      where: is_nil(effect.claim_owner_node),
+      where: is_nil(effect.claim_heartbeat_at),
+      where: is_nil(effect.claim_expires_at),
+      where: is_nil(effect.claim_supervisor_id),
+      where: is_nil(effect.claim_task_id),
+      where: is_nil(effect.cancellation_state),
+      where: is_nil(effect.cancellation_reason),
+      where: is_nil(effect.cancellation_requested_at),
+      where: is_nil(effect.cancellation_target_claim_token),
+      where: is_nil(effect.cancellation_last_attempt_at),
+      where: is_nil(effect.cancellation_last_error),
+      where: is_nil(effect.cancellation_settled_at)
+    )
+  end
+
+  @doc """
+  Encrypts and redacts one bounded batch of legacy Effect payload columns.
+
+  This operator path is deliberately available only before exact protocol
+  activation. Rows are locked with `SKIP LOCKED` so multiple workers can make
+  resumable progress without a table rewrite.
+  """
+  def backfill_legacy_payload_encryption(limit \\ 100)
+
+  def backfill_legacy_payload_encryption(limit) when is_integer(limit) and limit in 1..500 do
+    case Repo.transaction(fn ->
+           ProtocolCutover.require_legacy_mutation!()
+
+           effects =
+             Effect
+             |> where(
+               [effect],
+               effect.payload_encryption_version != 1 or
+                 is_nil(effect.payload_encryption_version) or
+                 (is_nil(effect.payload_purged_at) and is_nil(effect.params)) or
+                 fragment(
+                   "? IS DISTINCT FROM '{\"redacted\": true}'::jsonb",
+                   effect.legacy_params
+                 ) or
+                 not is_nil(effect.legacy_result)
+             )
+             |> order_by([effect], asc: effect.id)
+             |> limit(^limit)
+             |> lock("FOR UPDATE SKIP LOCKED")
+             |> Repo.all()
+
+           Enum.each(effects, fn effect ->
+             params = effect.params || effect.legacy_params || %{}
+             result = effect.result || effect.legacy_result
+
+             attrs = %{
+               params: params,
+               result: result,
+               legacy_params: %{"redacted" => true},
+               legacy_result: nil,
+               payload_encryption_version: 1,
+               error: normalize_persisted_error(effect.error)
+             }
+
+             effect
+             |> Effect.protocol_changeset(attrs)
+             |> Repo.update!()
+           end)
+
+           length(effects)
+         end) do
+      {:ok, count} -> {:ok, count}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    error -> {:error, {:effect_payload_backfill_failed, Maraithon.Redaction.error_class(error)}}
+  catch
+    :exit, reason ->
+      {:error, {:effect_payload_backfill_failed, Maraithon.Redaction.error_class(reason)}}
+  end
+
+  def backfill_legacy_payload_encryption(_limit), do: {:error, :invalid_payload_batch_size}
+
+  @doc """
+  Irreversibly clears eligible Effect content while retaining identity,
+  idempotency, claim provenance, terminal envelope, and acknowledgement facts.
+  """
+  def purge_terminal_payloads(cutoff, limit \\ 100)
+
+  def purge_terminal_payloads(%DateTime{} = cutoff, limit)
+      when is_integer(limit) and limit in 1..500 do
+    case Repo.transaction(fn ->
+           ProtocolCutover.require_current_mutation!()
+
+           Repo.query!(
+             "SELECT set_config('maraithon.effect_payload_retention', " <>
+               "'PURGE_ACKNOWLEDGED_PAYLOAD', true)",
+             [],
+             log: false
+           )
+
+           effects =
+             Effect
+             |> where([effect], is_nil(effect.payload_purged_at))
+             |> where(
+               [effect],
+               (effect.status in ["completed", "failed"] and
+                  not is_nil(effect.result_acknowledged_at) and
+                  effect.result_acknowledged_at <= ^cutoff) or
+                 (effect.status == "cancelled" and
+                    ((not is_nil(effect.cancellation_settled_at) and
+                        effect.cancellation_settled_at <= ^cutoff) or
+                       (is_nil(effect.runtime_owner_generation) and effect.updated_at <= ^cutoff)))
+             )
+             |> order_by([effect], asc: effect.updated_at, asc: effect.id)
+             |> limit(^limit)
+             |> lock("FOR UPDATE SKIP LOCKED")
+             |> Repo.all()
+
+           now = Maraithon.Runtime.DatabaseClock.now!()
+
+           Enum.each(effects, fn effect ->
+             effect
+             |> Effect.protocol_changeset(%{
+               params: nil,
+               legacy_params: %{"redacted" => true},
+               result: nil,
+               legacy_result: nil,
+               payload_purged_at: now
+             })
+             |> Repo.update!()
+           end)
+
+           length(effects)
+         end) do
+      {:ok, count} -> {:ok, count}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    error -> {:error, {:effect_payload_purge_failed, Maraithon.Redaction.error_class(error)}}
+  catch
+    :exit, reason ->
+      {:error, {:effect_payload_purge_failed, Maraithon.Redaction.error_class(reason)}}
+  end
+
+  def purge_terminal_payloads(_cutoff, _limit), do: {:error, :invalid_payload_retention}
+
+  defp normalize_persisted_error(nil), do: nil
+  defp normalize_persisted_error(error), do: Maraithon.Redaction.error_summary(error)
+
   @doc """
   Check if an effect has already been executed (for idempotency).
   """
   def check_idempotency(idempotency_key) when is_binary(idempotency_key) do
     with {:ok, idempotency_key} <- required_uuid(idempotency_key) do
       case Repo.get_by(Effect, idempotency_key: idempotency_key) do
+        %Effect{status: status, payload_purged_at: %DateTime{}} = effect
+        when status in ["completed", "failed", "cancelled"] ->
+          {:cached_payload_expired, %{status: status, result_envelope: effect.result_envelope}}
+
         %Effect{status: status} = effect when status in ["completed", "failed"] ->
           case terminal_result(effect) do
             {:ok, result} -> {:cached, result}
@@ -619,6 +1075,18 @@ defmodule Maraithon.Effects do
   end
 
   def check_idempotency(_idempotency_key), do: :not_found
+
+  defp effect_protocol_mutation(fun) when is_function(fun, 0) do
+    if Repo.in_transaction?() do
+      ProtocolCutover.require_current_mutation!()
+      {:ok, fun.()}
+    else
+      Repo.transaction(fn ->
+        ProtocolCutover.require_current_mutation!()
+        fun.()
+      end)
+    end
+  end
 
   defp required_uuid(value) when is_binary(value), do: Ecto.UUID.cast(value)
   defp required_uuid(_value), do: :error
