@@ -2,7 +2,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
   @moduledoc """
   The time-based follow-up firing engine (SPEC 01 R4).
 
-  Every tick it finds todos whose moment has arrived — a follow-up cadence
+  Every discovery cycle finds todos whose moment has arrived — a follow-up cadence
   (`next_nudge_at`) that elapsed, a snooze that expired, a due date that is
   overdue or inside the due-soon horizon — runs one bounded, best-effort LLM
   decision pass per affected user ("is a nudge/resurface appropriate right

@@ -49,6 +49,9 @@ defmodule Maraithon.Runtime.Supervisor do
             Maraithon.Runtime.AgentWatcher,
             Maraithon.Runtime.WakeCoordinator,
             Maraithon.Runtime.Bootstrap,
+            # Deliberately non-fair: this heterogeneous runner owns ordered
+            # Telegram ingress. Migration 140004 will supply its global tenant
+            # policy; only the two homogeneous lanes below use local rotation.
             Supervisor.child_spec(
               {Maraithon.Runtime.BackgroundJobRunner,
                exclude_queues: [PeriodicJobs.provider_queue(), PeriodicJobs.model_queue()]},

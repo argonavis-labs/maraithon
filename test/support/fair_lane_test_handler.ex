@@ -17,6 +17,10 @@ defmodule Maraithon.TestSupport.FairLaneTestHandler do
       "retry" ->
         {:error, {:retry_after, 60, :provider_rate_limited}}
 
+      "past_reschedule" ->
+        {:ok, %{partition: job.partition_key},
+         {:reschedule_at, DateTime.add(DateTime.utc_now(), -60, :second)}}
+
       _other ->
         {:ok, %{partition: job.partition_key}}
     end

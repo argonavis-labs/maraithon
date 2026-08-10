@@ -98,6 +98,75 @@ defmodule Maraithon.Runtime.FairBackgroundJobLanesTest do
     assert Repo.get!(BackgroundJob, google_second.id).status == "pending"
   end
 
+  test "two lane runners enforce the same durable tenant capacity" do
+    first = enqueue!("multi-node-first", "tenant:shared", -2, nil, "block")
+    second = enqueue!("multi-node-second", "tenant:shared", -1)
+
+    first_runner = start_fair_runner(:first_multi_node_fair_runner, [])
+    second_runner = start_fair_runner(:second_multi_node_fair_runner, [])
+    first_drain = Task.async(fn -> BackgroundJobRunner.drain_once(first_runner) end)
+
+    assert_receive {:fair_lane_started, first_handler, %BackgroundJob{id: first_id}}, 2_000
+    assert first_id == first.id
+
+    assert {:ok, []} = BackgroundJobRunner.drain_once(second_runner)
+    assert Repo.get!(BackgroundJob, second.id).status == "pending"
+
+    send(first_handler, {:release_fair_lane_job, first.id})
+    assert {:ok, [{^first_id, {:ok, _result}}]} = Task.await(first_drain)
+
+    assert {:ok, [{second_id, {:ok, _result}}]} =
+             BackgroundJobRunner.drain_once(second_runner)
+
+    assert second_id == second.id
+  end
+
+  test "fair selection retains each Telegram bot's active update head" do
+    bot_id = "880099"
+
+    assert {:ok, higher} =
+             BackgroundJobs.enqueue_telegram_webhook_event(bot_id, 102, %{
+               type: "message",
+               source: "telegram",
+               data: %{text: "higher"}
+             })
+
+    assert {:ok, lower} =
+             BackgroundJobs.enqueue_telegram_webhook_event(bot_id, 101, %{
+               type: "message",
+               source: "telegram",
+               data: %{text: "lower"}
+             })
+
+    runner =
+      start_fair_runner(:fair_telegram_order_runner,
+        queues: ["ingress"],
+        max_concurrency: 2,
+        batch_size: 2
+      )
+
+    assert {:ok, [{lower_id, {:ok, _result}}]} = BackgroundJobRunner.drain_once(runner)
+    assert lower_id == lower.id
+    assert Repo.get!(BackgroundJob, higher.id).status == "pending"
+  end
+
+  test "non-future wall-clock deadline backs off instead of hot-looping" do
+    before = DateTime.utc_now()
+    job = enqueue!("past-wall-clock", "tenant:clock", -1, nil, "past_reschedule")
+    runner = start_fair_runner(:fair_past_wall_clock_runner, [])
+
+    assert {:ok, [{job_id, {:ok, _result, {:reschedule_at, _past}}}]} =
+             BackgroundJobRunner.drain_once(runner)
+
+    assert job_id == job.id
+    rejected = Repo.get!(BackgroundJob, job.id)
+    assert rejected.status == "pending"
+    assert rejected.attempts == 1
+    assert rejected.last_error == "reschedule_at_not_future"
+    assert DateTime.compare(rejected.scheduled_at, before) == :gt
+    assert rejected.claim_token == nil
+  end
+
   test "a killed lane runner leaves a fenced claim that a new runner reclaims" do
     job = enqueue!("crash", "tenant:crash", -1, nil, "block")
 
@@ -191,6 +260,6 @@ defmodule Maraithon.Runtime.FairBackgroundJobLanesTest do
       ]
       |> Keyword.merge(overrides)
 
-    start_supervised!({BackgroundJobRunner, opts})
+    start_supervised!(Supervisor.child_spec({BackgroundJobRunner, opts}, id: name))
   end
 end

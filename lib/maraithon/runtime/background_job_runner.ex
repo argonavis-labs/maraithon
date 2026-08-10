@@ -20,6 +20,12 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   runner atomically moves the exactly claimed row back to `pending` at a
   database-clock deadline instead of completing it and arming a process timer.
 
+  Fair selection is opt-in for dedicated, homogeneous queues. The generic
+  runner intentionally remains non-fair and carries strict Telegram ingress
+  ordering; migration 140004 will supply its cross-queue tenant policy.
+  Even if fair selection is enabled for ingress, only each bot's active update
+  head is eligible and the transactional head check remains authoritative.
+
   Telegram ordering applies to committed, visible receipt rows. Production also
   enforces Telegram's provider-side `max_connections: 1` contract and a bounded
   ingress grace; a head query alone cannot make claims about an unseen update.
@@ -527,6 +533,19 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
               rate_limit.blocked_until IS NULL OR
               rate_limit.blocked_until <= timezone('UTC', clock_timestamp())
             )
+            AND (
+              job.job_type != 'telegram_webhook_event' OR
+              job.id = (
+                SELECT head.id
+                FROM background_jobs AS head
+                WHERE head.job_type = 'telegram_webhook_event'
+                  AND head.telegram_bot_id = job.telegram_bot_id
+                  AND head.status IN ('pending', 'running')
+                ORDER BY (head.status = 'running') DESC,
+                         head.telegram_update_id ASC
+                LIMIT 1
+              )
+            )
         ),
         ranked AS (
           SELECT *,
@@ -934,8 +953,56 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp mark_rescheduled_at(%BackgroundJob{} = job, result, %DateTime{} = scheduled_at) do
     DbResilience.with_database("background job runner wall-clock reschedule", fn ->
       now = database_now!()
-      reschedule_claim(job, result, scheduled_at, now)
+
+      if DateTime.compare(scheduled_at, now) == :gt do
+        reschedule_claim(job, result, scheduled_at, now)
+      else
+        reject_non_future_reschedule(job, now)
+      end
     end)
+  end
+
+  defp reject_non_future_reschedule(%BackgroundJob{} = job, now) do
+    attempts = job.attempts + 1
+    reason = :reschedule_at_not_future
+
+    Logger.warning("Rejected non-future background job wall-clock deadline",
+      background_job_id: job.id,
+      job_type: job.job_type
+    )
+
+    if attempts < job.max_attempts do
+      retry_at = DateTime.add(now, calculate_backoff(attempts), :millisecond)
+
+      Repo.update_all(
+        owned_claim(job),
+        set: [
+          status: "pending",
+          attempts: attempts,
+          scheduled_at: retry_at,
+          claimed_by: nil,
+          claimed_at: nil,
+          claim_token: nil,
+          last_error: error_text(reason),
+          updated_at: now
+        ]
+      )
+    else
+      Repo.update_all(
+        owned_claim(job),
+        set: [
+          status: "failed",
+          attempts: attempts,
+          payload: terminal_payload(job),
+          failed_at: now,
+          claimed_by: nil,
+          claimed_at: nil,
+          claim_token: nil,
+          last_error: error_text(reason),
+          updated_at: now
+        ]
+      )
+    end
   end
 
   defp reschedule_claim(job, result, scheduled_at, now) do

@@ -400,22 +400,49 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp normalize_work_result(:ok), do: {:ok, %{outcome: "ok"}}
   defp normalize_work_result({:skip, reason}), do: {:ok, %{outcome: "skipped", reason: reason}}
 
-  defp normalize_work_result({:error, {:rate_limited, seconds, _detail} = reason})
-       when is_integer(seconds) and seconds >= 0,
-       do: {:error, {:retry_after, seconds, reason}}
+  defp normalize_work_result({:error, reason}) do
+    case retry_after_seconds(reason, 0) do
+      {:ok, seconds} -> {:error, {:retry_after, seconds, reason}}
+      :none -> {:error, reason}
+    end
+  end
 
-  defp normalize_work_result({:error, {:rate_limited, retry_after_ms} = reason})
-       when is_integer(retry_after_ms) and retry_after_ms >= 0,
-       do: {:error, {:retry_after, max(div(retry_after_ms + 999, 1_000), 1), reason}}
-
-  defp normalize_work_result({:error, {:rate_limited, _detail} = reason}),
-    do: {:error, {:retry_after, @default_retry_after_seconds, reason}}
-
-  defp normalize_work_result({:error, {:http_status, 429, _detail} = reason}),
-    do: {:error, {:retry_after, @default_retry_after_seconds, reason}}
-
-  defp normalize_work_result({:error, reason}), do: {:error, reason}
   defp normalize_work_result(other), do: {:ok, %{outcome: "completed", result: inspect(other)}}
+
+  # Provider clients wrap HTTP failures (for example
+  # `{:token_refresh_failed, {:rate_limited, ...}}`). Walk only a small tuple
+  # depth so Retry-After still reaches the durable lane cooldown without
+  # inspecting or persisting arbitrary response structures.
+  defp retry_after_seconds({:rate_limited, seconds, _detail}, _depth)
+       when is_integer(seconds) and seconds >= 0,
+       do: {:ok, seconds}
+
+  # The two-tuple form is emitted by the model limiter in milliseconds.
+  defp retry_after_seconds({:rate_limited, retry_after_ms}, _depth)
+       when is_integer(retry_after_ms) and retry_after_ms >= 0,
+       do: {:ok, max(div(retry_after_ms + 999, 1_000), 1)}
+
+  defp retry_after_seconds({:rate_limited, _detail}, _depth),
+    do: {:ok, @default_retry_after_seconds}
+
+  defp retry_after_seconds({:http_status, 429, _detail}, _depth),
+    do: {:ok, @default_retry_after_seconds}
+
+  defp retry_after_seconds({:http_status, 429}, _depth),
+    do: {:ok, @default_retry_after_seconds}
+
+  defp retry_after_seconds(reason, depth) when is_tuple(reason) and depth < 4 do
+    reason
+    |> Tuple.to_list()
+    |> Enum.reduce_while(:none, fn value, :none ->
+      case retry_after_seconds(value, depth + 1) do
+        {:ok, _seconds} = found -> {:halt, found}
+        :none -> {:cont, :none}
+      end
+    end)
+  end
+
+  defp retry_after_seconds(_reason, _depth), do: :none
 
   defp partition_user_id(%BackgroundJob{user_id: user_id}) when is_binary(user_id),
     do: {:ok, user_id}

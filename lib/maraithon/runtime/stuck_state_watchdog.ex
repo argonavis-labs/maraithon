@@ -23,13 +23,14 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
       future (`scheduled_at`/`retry_after`) are not "due" and are excluded.
     * `briefs` — owned by `Briefs.expire_stale_pending/1` +
       `BriefingCron.alert_late_briefings/2`; defensive 90-minutes-late
-      alarm that should be unreachable unless the notifier itself died.
+      alarm that should be unreachable unless durable recurring dispatch stopped.
       `scheduled_for` is UTC and compared against UTC only.
     * `insight_deliveries` — after SPEC 02 R6, a `pending` telegram
-      delivery should clear within one `InsightNotifier` tick; 10 minutes.
+      delivery should clear within one durable `InsightNotifier` cycle; 10 minutes.
     * `proactive_candidates` (pending/planned) — normal expiry is owned by
       `ProactiveQueue.expire_stale/1`; alarm only at 2x the candidate TTL
-      (a sign `ProactiveCheckIn` died, not that candidates expire normally).
+      (a sign the durable proactive coordinator/model lane stopped, not that
+      candidates expire normally).
 
   Sweep + detect tables (no existing owner — swept here):
 

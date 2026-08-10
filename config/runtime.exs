@@ -552,9 +552,8 @@ config :maraithon, Maraithon.Runtime,
   dogfood_user_id: System.get_env("DOGFOOD_USER_ID") || System.get_env("PRIMARY_ADMIN_EMAIL"),
   dogfood_digest_hour: String.to_integer(System.get_env("DOGFOOD_DIGEST_HOUR", "7")),
   dogfood_digest_minute: String.to_integer(System.get_env("DOGFOOD_DIGEST_MINUTE", "30")),
+  # A named PostgreSQL timezone is required; fixed UTC offsets are not DST-safe.
   dogfood_digest_timezone: System.get_env("DOGFOOD_DIGEST_TIMEZONE", "America/Toronto"),
-  dogfood_digest_timezone_offset_hours:
-    String.to_integer(System.get_env("DOGFOOD_DIGEST_TIMEZONE_OFFSET_HOURS", "-4")),
   proactive_check_in_interval_ms: proactive_check_in_interval_ms,
   proactive_check_in_initial_delay_ms:
     String.to_integer(
