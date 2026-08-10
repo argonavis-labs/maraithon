@@ -198,6 +198,9 @@ defmodule Maraithon.DurablePayload do
         value when is_binary(value) and value != "" ->
           prepared
 
+        value when is_integer(value) and value > 0 ->
+          prepared
+
         nil when field == :id ->
           case Map.get(prepared.types, field) do
             type when type in [:binary_id, Ecto.UUID] ->
