@@ -33,8 +33,21 @@ defmodule Maraithon.DurablePayloadBinding do
   @spec sign(String.t(), String.t(), String.t() | nil, [{String.t(), term()}]) :: binding()
   def sign(table, row_identity, tenant_or_agent_identity, ordered_fields)
       when is_binary(table) and is_binary(row_identity) and is_list(ordered_fields) do
+    sign_with_key_tag(
+      table,
+      row_identity,
+      tenant_or_agent_identity,
+      ordered_fields,
+      current_key_tag()
+    )
+  end
+
+  @doc false
+  def sign_with_key_tag(table, row_identity, tenant_or_agent_identity, ordered_fields, key_tag)
+      when is_binary(table) and is_binary(row_identity) and is_list(ordered_fields) and
+             is_binary(key_tag) do
     ring = keyring!()
-    key = Map.fetch!(ring.keys, ring.current_tag)
+    key = Map.fetch!(ring.keys, key_tag)
 
     mac =
       :crypto.mac(
@@ -45,13 +58,13 @@ defmodule Maraithon.DurablePayloadBinding do
           table,
           row_identity,
           tenant_or_agent_identity,
-          ring.current_tag,
+          key_tag,
           @version,
           ordered_fields
         )
       )
 
-    %{version: @version, key_tag: ring.current_tag, mac: mac}
+    %{version: @version, key_tag: key_tag, mac: mac}
   end
 
   @doc "Verifies a persisted binding in constant time."

@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Maraithon.ConversationPrivacy do
   Operates only the additive Telegram conversation encryption rollout.
 
       mix maraithon.conversation_privacy preflight
-      mix maraithon.conversation_privacy backfill --confirm --evidence-id ID --evidence-sha256 SHA256 --revision REV --batch-size 100 --max-batches 20
+      mix maraithon.conversation_privacy backfill --confirm --evidence-id ID --evidence-sha256 SHA256 --operator OPERATOR --revision REV --batch-size 100 --max-batches 20
 
   Ongoing retention runs exclusively through `Maraithon.PrivacyRetention`,
   which owns the fixed policy, PostgreSQL clock, exact authority, tenant cursor,
@@ -22,6 +22,7 @@ defmodule Mix.Tasks.Maraithon.ConversationPrivacy do
     confirm: :boolean,
     evidence_id: :string,
     evidence_sha256: :string,
+    operator: :string,
     revision: :string
   ]
 
@@ -50,6 +51,7 @@ defmodule Mix.Tasks.Maraithon.ConversationPrivacy do
           |> Keyword.put(:confirmation, "NON_ROLLING_FLEET_DRAINED")
           |> Keyword.put(:evidence_id, opts[:evidence_id])
           |> Keyword.put(:evidence_digest, decode_sha256(opts[:evidence_sha256]))
+          |> Keyword.put(:operator, opts[:operator])
           |> Keyword.put(:revision, opts[:revision])
 
         case Privacy.backfill(backfill_opts) do
@@ -123,7 +125,7 @@ defmodule Mix.Tasks.Maraithon.ConversationPrivacy do
     """
     Usage:
       mix maraithon.conversation_privacy preflight
-      mix maraithon.conversation_privacy backfill --confirm --evidence-id ID --evidence-sha256 SHA256 --revision REV [--batch-size N] [--max-batches N]
+      mix maraithon.conversation_privacy backfill --confirm --evidence-id ID --evidence-sha256 SHA256 --operator OPERATOR --revision REV [--batch-size N] [--max-batches N]
     """
   end
 end

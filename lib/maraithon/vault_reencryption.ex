@@ -8,6 +8,7 @@ defmodule Maraithon.VaultReencryption do
   SHA-256 row-reference digest.
   """
 
+  alias Maraithon.KeyRetirement
   alias Maraithon.Repo
   alias Maraithon.Vault
   alias Maraithon.VaultCiphertextRegistry
@@ -57,14 +58,17 @@ defmodule Maraithon.VaultReencryption do
     :exit, _reason -> {:error, :vault_old_tag_preflight_failed}
   end
 
-  @doc "Succeeds only when the old tag count is globally zero."
-  def retirement_preflight(old_tag) do
-    case preflight(old_tag) do
-      {:ok, %{total: 0, oversized: 0} = report} -> {:ok, report}
-      {:ok, report} -> {:error, {:vault_old_tag_still_present, report}}
-      {:error, _reason} = error -> error
-    end
-  end
+  @doc "Persists the PostgreSQL-clock live-zero proof required before backup attestation."
+  def prove_live_zero(old_tag, opts),
+    do: KeyRetirement.prove_live_zero(:vault, old_tag, opts)
+
+  @doc "Attests backup/WAL/PITR/restore evidence bound to an earlier zero proof."
+  def attest_backup_evidence(old_tag, opts),
+    do: KeyRetirement.attest_backup_evidence(:vault, old_tag, opts)
+
+  @doc "Rechecks global zero and requires fresh post-zero recovery evidence."
+  def retirement_preflight(old_tag, opts \\ []),
+    do: KeyRetirement.retirement_preflight(:vault, old_tag, opts)
 
   @doc "Re-encrypts bounded locked batches from one configured old read tag."
   def reencrypt(old_tag, opts \\ [])

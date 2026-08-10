@@ -81,6 +81,122 @@ defmodule Maraithon.Runtime.Snapshot do
     |> DurablePayload.require_current_mutation()
   end
 
+  @doc "Returns the content-free count of legacy Snapshot payload rows."
+  def legacy_payload_encryption_backlog do
+    __MODULE__
+    |> where([snapshot], is_nil(snapshot.payload_purged_at))
+    |> where(
+      [snapshot],
+      snapshot.payload_encryption_version != 1 or
+        is_nil(snapshot.payload_encryption_version) or
+        is_nil(snapshot.state_data) or is_nil(snapshot.budget) or
+        snapshot.legacy_state_data != ^%{} or snapshot.legacy_budget != ^%{} or
+        snapshot.payload_binding_version != 1 or is_nil(snapshot.payload_binding_key_tag) or
+        is_nil(snapshot.payload_binding_mac)
+    )
+    |> Repo.aggregate(:count, :id, log: false)
+  end
+
+  @doc "Promotes one bounded, resumable bigint-identity Snapshot contraction batch."
+  def backfill_legacy_payload_encryption(opts \\ [])
+
+  def backfill_legacy_payload_encryption(opts) when is_list(opts) do
+    with {:ok, {limit, skip}} <- payload_backfill_options(opts) do
+      Repo.transaction(
+        fn ->
+          :ok = DurablePayload.require_legacy_mutation!()
+          :ok = Maraithon.DurablePayloadContraction.require_authorized!()
+
+          rows =
+            __MODULE__
+            |> where([snapshot], is_nil(snapshot.payload_purged_at))
+            |> where(
+              [snapshot],
+              snapshot.payload_encryption_version != 1 or
+                is_nil(snapshot.payload_encryption_version) or
+                is_nil(snapshot.state_data) or is_nil(snapshot.budget) or
+                snapshot.legacy_state_data != ^%{} or snapshot.legacy_budget != ^%{} or
+                snapshot.payload_binding_version != 1 or
+                is_nil(snapshot.payload_binding_key_tag) or is_nil(snapshot.payload_binding_mac)
+            )
+            |> order_by([snapshot], asc: snapshot.id)
+            |> offset(^skip)
+            |> limit(^limit)
+            |> lock("FOR UPDATE SKIP LOCKED")
+            |> Repo.all(log: false)
+
+          Enum.reduce(rows, %{migrated_snapshots: 0, blocked_snapshots: []}, fn snapshot, acc ->
+            case contract_legacy_payload(snapshot) do
+              :ok ->
+                %{acc | migrated_snapshots: acc.migrated_snapshots + 1}
+
+              {:error, failure} ->
+                blocked = %{id: snapshot.id, failure: failure}
+                %{acc | blocked_snapshots: [blocked | acc.blocked_snapshots]}
+            end
+          end)
+          |> Map.update!(:blocked_snapshots, &Enum.reverse/1)
+        end,
+        timeout: 120_000
+      )
+    end
+  rescue
+    _error -> {:error, :snapshot_payload_backfill_failed}
+  catch
+    :exit, _reason -> {:error, :snapshot_payload_backfill_failed}
+  end
+
+  def backfill_legacy_payload_encryption(_opts),
+    do: {:error, :invalid_snapshot_payload_backfill}
+
+  defp contract_legacy_payload(%__MODULE__{} = snapshot) do
+    state_data = authoritative_legacy(snapshot.legacy_state_data, snapshot.state_data)
+    budget = authoritative_legacy(snapshot.legacy_budget, snapshot.budget)
+
+    changeset =
+      snapshot
+      |> changeset(%{
+        agent_id: snapshot.agent_id,
+        sequence_num: snapshot.sequence_num,
+        state_name: snapshot.state_name,
+        state_data: state_data,
+        budget: budget,
+        schema_version: snapshot.schema_version || 0
+      })
+      |> Ecto.Changeset.force_change(:legacy_state_data, %{})
+      |> Ecto.Changeset.force_change(:legacy_budget, %{})
+
+    if changeset.valid? do
+      case Repo.update(changeset, log: false) do
+        {:ok, _snapshot} -> :ok
+        {:error, _changeset} -> {:error, :persistence_failed}
+      end
+    else
+      {:error, :payload_schema_invalid}
+    end
+  rescue
+    _error -> {:error, :payload_schema_invalid}
+  end
+
+  defp authoritative_legacy(legacy, _encrypted) when is_map(legacy) and legacy != %{}, do: legacy
+  defp authoritative_legacy(_legacy, encrypted) when is_map(encrypted), do: encrypted
+  defp authoritative_legacy(legacy, _encrypted) when is_map(legacy), do: legacy
+  defp authoritative_legacy(_legacy, _encrypted), do: %{}
+
+  defp payload_backfill_options(opts) do
+    if Keyword.keyword?(opts) and
+         Enum.all?(Keyword.keys(opts), &(&1 in [:limit, :skip])) do
+      limit = Keyword.get(opts, :limit, 25)
+      skip = Keyword.get(opts, :skip, 0)
+
+      if is_integer(limit) and limit in 1..100 and is_integer(skip) and skip in 0..10_000,
+        do: {:ok, {limit, skip}},
+        else: {:error, :invalid_snapshot_payload_backfill}
+    else
+      {:error, :invalid_snapshot_payload_backfill}
+    end
+  end
+
   @doc """
   Persist a checkpoint snapshot of an agent's behavior state and budget.
 

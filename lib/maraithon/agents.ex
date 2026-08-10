@@ -528,6 +528,7 @@ defmodule Maraithon.Agents do
       Repo.transaction(
         fn ->
           :ok = DurablePayload.require_legacy_mutation!()
+          :ok = Maraithon.DurablePayloadContraction.require_authorized!()
           step_ids = lock_legacy_run_step_payload_ids(limit, skip)
 
           steps =
@@ -1674,7 +1675,15 @@ defmodule Maraithon.Agents do
   end
 
   defp promote_legacy_run_step_payloads(%AgentRunStep{} = step) do
-    {request_payload, response_payload} = AgentRunStep.read_payloads!(step)
+    {stored_request, stored_response} = AgentRunStep.read_payloads!(step)
+
+    request_payload =
+      if step.legacy_request_payload != %{}, do: step.legacy_request_payload, else: stored_request
+
+    response_payload =
+      if step.legacy_response_payload != %{},
+        do: step.legacy_response_payload,
+        else: stored_response
 
     changeset =
       step

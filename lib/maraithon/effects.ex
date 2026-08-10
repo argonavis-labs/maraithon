@@ -969,6 +969,7 @@ defmodule Maraithon.Effects do
   def backfill_legacy_payload_encryption(limit) when is_integer(limit) and limit in 1..500 do
     case Repo.transaction(fn ->
            ProtocolCutover.require_legacy_mutation!()
+           Maraithon.DurablePayloadContraction.require_authorized!()
 
            effects =
              Effect
@@ -989,8 +990,13 @@ defmodule Maraithon.Effects do
              |> Repo.all()
 
            Enum.each(effects, fn effect ->
-             params = effect.params || effect.legacy_params || %{}
-             result = effect.result || effect.legacy_result
+             params =
+               if effect.legacy_params != %{"redacted" => true},
+                 do: effect.legacy_params || %{},
+                 else: effect.params || %{}
+
+             result =
+               if is_nil(effect.legacy_result), do: effect.result, else: effect.legacy_result
 
              attrs = %{
                params: params,

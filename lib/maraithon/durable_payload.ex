@@ -235,6 +235,21 @@ defmodule Maraithon.DurablePayload do
   end
 
   @doc false
+  def legacy_context_identity(values) when is_list(values) do
+    encoded =
+      Enum.map(values, fn
+        nil -> ""
+        value when is_binary(value) -> value
+        value when is_integer(value) -> Integer.to_string(value)
+      end)
+
+    case encoded do
+      [] -> ""
+      values -> Jason.encode!(values)
+    end
+  end
+
+  @doc false
   def context_identity(values) when is_list(values) do
     values
     |> Enum.map(&context_value!/1)

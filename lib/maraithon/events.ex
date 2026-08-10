@@ -106,6 +106,7 @@ defmodule Maraithon.Events do
       Repo.transaction(
         fn ->
           :ok = Maraithon.DurablePayload.require_legacy_mutation!()
+          :ok = Maraithon.DurablePayloadContraction.require_authorized!()
 
           events =
             Event
@@ -214,7 +215,10 @@ defmodule Maraithon.Events do
   # Private functions
 
   defp promote_legacy_event_payload(%Event{} = event) do
-    payload = Event.read_payload!(event)
+    payload =
+      if event.legacy_payload != %{},
+        do: event.legacy_payload,
+        else: Event.read_payload!(event)
 
     changeset =
       event
