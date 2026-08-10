@@ -26,6 +26,10 @@ defmodule Maraithon.Runtime.AgentRuntimeLease do
     field :renewed_at, :utc_datetime_usec
     field :ready_at, :utc_datetime_usec
     field :draining_at, :utc_datetime_usec
+    field :coordination_activation_epoch, Ecto.UUID
+    field :coordination_partition_id, :integer
+    field :coordination_partition_epoch, :integer
+    field :coordination_node_incarnation_id, Ecto.UUID
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -38,7 +42,14 @@ defmodule Maraithon.Runtime.AgentRuntimeLease do
     :lease_until,
     :renewed_at
   ]
-  @optional_fields [:ready_at, :draining_at]
+  @optional_fields [
+    :ready_at,
+    :draining_at,
+    :coordination_activation_epoch,
+    :coordination_partition_id,
+    :coordination_partition_epoch,
+    :coordination_node_incarnation_id
+  ]
 
   def changeset(lease, attrs) do
     lease

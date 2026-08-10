@@ -34,6 +34,11 @@ defmodule Maraithon.Effects.Effect do
     field :claim_expires_at, :utc_datetime_usec
     field :claim_supervisor_id, Ecto.UUID
     field :claim_task_id, Ecto.UUID
+    field :coordination_activation_epoch, Ecto.UUID
+    field :coordination_partition_id, :integer
+    field :coordination_partition_epoch, :integer
+    field :coordination_node_incarnation_id, Ecto.UUID
+    field :coordination_task_assignment_id, Ecto.UUID
 
     field :cancellation_state, :string
     field :cancellation_reason, :string
@@ -94,6 +99,11 @@ defmodule Maraithon.Effects.Effect do
     :claim_expires_at,
     :claim_supervisor_id,
     :claim_task_id,
+    :coordination_activation_epoch,
+    :coordination_partition_id,
+    :coordination_partition_epoch,
+    :coordination_node_incarnation_id,
+    :coordination_task_assignment_id,
     :cancellation_state,
     :cancellation_reason,
     :cancellation_requested_at,

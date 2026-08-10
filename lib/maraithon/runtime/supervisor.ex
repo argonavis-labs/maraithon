@@ -29,7 +29,7 @@ defmodule Maraithon.Runtime.Supervisor do
       Maraithon.Runtime.EffectTaskSupervisor,
       {Task.Supervisor, name: Maraithon.Runtime.ToolCallSupervisor},
       Maraithon.Runtime.Effects.LLMRateLimiter,
-      {Task.Supervisor, name: Maraithon.Runtime.BackgroundJobTaskSupervisor},
+      Maraithon.Runtime.Coordination.TaskSupervisor,
       {Task.Supervisor, name: Maraithon.Runtime.AgentRecoveryTaskSupervisor}
     ]
 
@@ -63,7 +63,10 @@ defmodule Maraithon.Runtime.Supervisor do
             Maraithon.Runtime.WatchRenewer,
             Maraithon.Runtime.FreshnessSweep,
             Maraithon.Runtime.StuckStateWatchdog,
-            Maraithon.TelegramAssistant.RunReaper
+            Maraithon.TelegramAssistant.RunReaper,
+            # Supervised last so graceful shutdown revokes PostgreSQL readiness
+            # before any scoped worker or exact task supervisor stops locally.
+            Maraithon.Runtime.Coordination.Session
           ]
       else
         # Exact starts are still exercised in focused tests. Keep the mandatory

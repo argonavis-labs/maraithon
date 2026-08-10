@@ -425,8 +425,19 @@ exact_agent_runtime_enabled =
     config_env() == :test
   end
 
+multinode_coordination_enabled =
+  if config_env() == :prod do
+    System.get_env("MULTINODE_COORDINATION_ENABLED", "false")
+    |> String.trim()
+    |> String.downcase()
+    |> Kernel.==("true")
+  else
+    false
+  end
+
 config :maraithon, Maraithon.Runtime,
   exact_agent_runtime_enabled: exact_agent_runtime_enabled,
+  multinode_coordination_enabled: multinode_coordination_enabled,
   # LLM settings
   llm_provider_name: llm_provider_name,
   llm_provider: llm_provider,
