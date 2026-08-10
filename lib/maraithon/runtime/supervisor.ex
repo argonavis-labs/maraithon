@@ -28,10 +28,9 @@ defmodule Maraithon.Runtime.Supervisor do
     dependency_children = [
       {Registry, keys: :unique, name: Maraithon.Runtime.AgentRegistry},
       {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor},
-      Maraithon.Runtime.EffectTaskSupervisor,
+      Maraithon.Runtime.TaskSystemSupervisor,
       {Task.Supervisor, name: Maraithon.Runtime.ToolCallSupervisor},
       Maraithon.Runtime.Effects.LLMRateLimiter,
-      Maraithon.Runtime.Coordination.TaskSupervisor,
       {Task.Supervisor, name: Maraithon.Runtime.AgentRecoveryTaskSupervisor}
     ]
 
