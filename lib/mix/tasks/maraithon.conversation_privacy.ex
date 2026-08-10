@@ -90,8 +90,13 @@ defmodule Mix.Tasks.Maraithon.ConversationPrivacy do
     end
 
     if is_binary(url) and String.trim(url) != "" do
-      config = Application.get_env(:maraithon, Maraithon.Repo, [])
-      Application.put_env(:maraithon, Maraithon.Repo, Keyword.put(config, :url, url))
+      if url == System.get_env("DATABASE_URL") do
+        Mix.raise(
+          "MARAITHON_ACTIVATION_DATABASE_URL credentials must be distinct from runtime DATABASE_URL"
+        )
+      end
+
+      :ok = Maraithon.DatabaseTLS.configure_repo!(url, "MARAITHON_ACTIVATION_DATABASE_URL")
     end
   end
 
