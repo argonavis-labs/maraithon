@@ -141,7 +141,9 @@ defmodule Maraithon.Runtime.Snapshot do
   end
 
   defp unwrap_term(%{"format" => "etf_base64", "data" => data}) when is_binary(data) do
-    data |> Base.decode64!() |> :erlang.binary_to_term()
+    data
+    |> Base.decode64!()
+    |> :erlang.binary_to_term([:safe])
   end
 
   # Defensive: an unrecognized shape (hand-written row, future format) is

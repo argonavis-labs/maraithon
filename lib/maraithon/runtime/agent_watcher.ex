@@ -173,10 +173,23 @@ defmodule Maraithon.Runtime.AgentWatcher do
       watcher = state.name
       supervisor = state.agent_supervisor
 
-      Task.start(fn ->
-        result = launch_recovery(supervisor, watcher, agent_id, guard_generation)
-        send(watcher, {:recovery_result, agent_id, guard_generation, crash_count, result})
-      end)
+      case Task.Supervisor.start_child(
+             Maraithon.Runtime.AgentRecoveryTaskSupervisor,
+             fn ->
+               result = launch_recovery(supervisor, watcher, agent_id, guard_generation)
+               send(watcher, {:recovery_result, agent_id, guard_generation, crash_count, result})
+             end
+           ) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, reason} ->
+          send(
+            watcher,
+            {:recovery_result, agent_id, guard_generation, crash_count,
+             {:error, {:recovery_task_start_failed, reason}}}
+          )
+      end
 
       {:noreply, state}
     else

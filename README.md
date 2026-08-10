@@ -58,7 +58,7 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 
 - Event-first runtime for low-latency reactions.
 - Durable scheduler for wakeups that must survive restarts.
-- OTP supervision for crash recovery without losing runtime state.
+- OTP supervision plus database-fenced recovery from the latest durable checkpoint.
 - Production observability (agent events, effect logs, Fly logs, spend tracking).
 
 ## Architecture
@@ -81,7 +81,7 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 ║   │  │  Linear    │──┼─────────►│   ╰────────────────────╯     │◄───┤ linear_*    │  ║
 ║   │  └────────────┘  │          │                              │    │ notaui_*    │  ║
 ║   │  ┌────────────┐  │          │   ┌────────────────────┐     │    │             │  ║
-║   │  │  Gmail     │──┼─────────►│   │   Event Sourcing   │     │    └─────────────┘  ║
+║   │  │  Gmail     │──┼─────────►│   │ Snapshots + History│     │    └─────────────┘  ║
 ║   │  └────────────┘  │          │   │   ┌─┬─┬─┬─┬─┬─┬─┐  │     │                     ║
 ║   │  ┌────────────┐  │          │   │   │E│E│E│E│E│E│E│  │     │    ┌─────────────┐  ║
 ║   │  │  WhatsApp  │──┼─────────►│   │   └─┴─┴─┴─┴─┴─┴─┘  │     │    │     LLM     │  ║
@@ -110,7 +110,7 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 
 **Connectors** receive webhooks from external services and publish normalized events to PubSub. Built-in connectors include GitHub, Google Calendar, Gmail, Slack, WhatsApp, Linear, Telegram, and Notion OAuth.
 
-**Agent Runtime** manages agent lifecycle, state persistence, LLM calls, and tool execution. It runs as OTP services with supervised workers for scheduling, effect dispatch, insight notification, and token refresh.
+**Agent Runtime** manages agent lifecycle, state persistence, LLM calls, and tool execution. Each resident agent is a `gen_statem` process. Dynamic supervision provides isolation, while PostgreSQL lease generations, restart guards, lifecycle operations, snapshots, and durable work tables provide authority across crashes and deploys. See [Durable, resident Agent runtime](docs/architecture/durable-agent-runtime.md).
 
 **Tools** are actions agents can take to interact with the world, constrained by explicit allowlists per agent.
 
@@ -1002,7 +1002,7 @@ Traditional AI agents are stateless scripts that wake up, do a thing, and die. M
 - **Always alive** - No cold starts, instant response
 - **Supervised** - Crash? Restart automatically with recovered state
 - **Event-first with durable wakeups** - React to webhooks instantly and run persisted wakeups for periodic loops
-- **Persistent** - State survives restarts via event sourcing
+- **Persistent** - State restores from versioned snapshots; the event log is audit history, not a replay engine
 - **Observable** - LiveView dashboard, event logs, spend tracking
 
 ## Development

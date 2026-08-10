@@ -29,7 +29,8 @@ defmodule Maraithon.Runtime.Supervisor do
       {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor},
       {Task.Supervisor, name: Maraithon.Runtime.ToolCallSupervisor},
       Maraithon.Runtime.Effects.LLMRateLimiter,
-      {Task.Supervisor, name: Maraithon.Runtime.BackgroundJobTaskSupervisor}
+      {Task.Supervisor, name: Maraithon.Runtime.BackgroundJobTaskSupervisor},
+      {Task.Supervisor, name: Maraithon.Runtime.AgentRecoveryTaskSupervisor}
     ]
 
     children =
