@@ -395,10 +395,10 @@ defmodule Maraithon.Effects.ProtocolCutover do
   defp ensure_exact_migrations_recorded do
     case SQL.query(
            Repo,
-           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140005)",
+           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140002, 20260810140003, 20260810140004, 20260810140005, 20260810140006, 20260810140007)",
            []
          ) do
-      {:ok, %{rows: [[5]]}} -> :ok
+      {:ok, %{rows: [[10]]}} -> :ok
       {:ok, _missing} -> {:error, :effect_protocol_migrations_not_recorded}
       {:error, _reason} -> {:error, :effect_protocol_unavailable}
     end
@@ -407,10 +407,10 @@ defmodule Maraithon.Effects.ProtocolCutover do
   defp ensure_exact_migrations_recorded! do
     case SQL.query!(
            Repo,
-           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140005)",
+           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140002, 20260810140003, 20260810140004, 20260810140005, 20260810140006, 20260810140007)",
            []
          ).rows do
-      [[5]] -> :ok
+      [[10]] -> :ok
       _missing -> Repo.rollback(:effect_protocol_migrations_not_recorded)
     end
   end
@@ -445,7 +445,7 @@ defmodule Maraithon.Effects.ProtocolCutover do
         ('public.durable_payload_digest_part(text,jsonb,text)'::regprocedure, 'i'::"char", 'sql', false),
         ('public.durable_payload_proof_failures()'::regprocedure, 's'::"char", 'plpgsql', false),
         ('public.durable_payload_roles_ready()'::regprocedure, 's'::"char", 'plpgsql', false),
-        ('public.delete_durable_payload_verification(text,uuid)'::regprocedure, 'v'::"char", 'plpgsql', true)
+        ('public.delete_durable_payload_verification(text,text)'::regprocedure, 'v'::"char", 'plpgsql', true)
     )
     SELECT COUNT(*)
     FROM required
@@ -464,7 +464,10 @@ defmodule Maraithon.Effects.ProtocolCutover do
   end
 
   defp ensure_payload_roles_ready do
-    case SQL.query(Repo, "SELECT public.durable_payload_roles_ready()", [], log: false) do
+    case SQL.query(
+           Repo,
+           "SELECT public.durable_payload_roles_ready() AND public.durable_payload_catalog_ready()",
+           [], log: false) do
       {:ok, %{rows: [[true]]}} -> :ok
       {:ok, _not_ready} -> {:error, :durable_payload_verifier_privileges_not_ready}
       {:error, _reason} -> {:error, :effect_protocol_unavailable}

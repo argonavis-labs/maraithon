@@ -372,17 +372,15 @@ defmodule Maraithon.KeyRetirement do
 
   defp lock_kind_sources!(:binding), do: Lifecycle.lock_source_tables!()
 
-  defp source_digest(kind, old_tag, targets) do
-    canonical =
-      targets
-      |> Enum.map(&Map.take(&1, [:table, :column, :binding, :old_tag_rows, :oversized_rows]))
-      |> then(
-        &%{domain: "maraithon:key-retirement-live-zero:v1", kind: kind, tag: old_tag, targets: &1}
-      )
-
-    canonical
-    |> :erlang.term_to_binary([:deterministic])
-    |> then(&:crypto.hash(:sha256, &1))
+  defp source_digest(kind, old_tag, _targets) do
+    case Repo.query!(
+           "SELECT public.durable_payload_old_key_source_digest($1, $2)",
+           [Atom.to_string(kind), old_tag],
+           log: false
+         ).rows do
+      [[digest]] when is_binary(digest) and byte_size(digest) == 32 -> digest
+      _invalid -> Repo.rollback(:key_retirement_registry_digest_unavailable)
+    end
   end
 
   defp recovery_component(opts, prefix) do

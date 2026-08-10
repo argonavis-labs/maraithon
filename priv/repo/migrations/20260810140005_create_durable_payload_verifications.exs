@@ -496,6 +496,29 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     )
 
     execute("""
+    DO $constraint$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+        WHERE conrelid = 'public.vault_backup_retirement_evidence'::regclass
+          AND conname = 'vault_backup_retirement_evidence_zero_proof_fkey'
+      ) THEN
+        ALTER TABLE public.vault_backup_retirement_evidence
+          ADD CONSTRAINT vault_backup_retirement_evidence_zero_proof_fkey
+          FOREIGN KEY (key_kind, old_tag, zero_proof_id)
+          REFERENCES public.key_retirement_zero_proofs (key_kind, old_tag, proof_id)
+          NOT VALID;
+      END IF;
+    END
+    $constraint$;
+    """)
+
+    execute("""
+    ALTER TABLE public.vault_backup_retirement_evidence
+      VALIDATE CONSTRAINT vault_backup_retirement_evidence_zero_proof_fkey
+    """)
+
+    execute("""
     CREATE OR REPLACE FUNCTION public.durable_payload_row_identity(
       source_table text,
       source_id text
@@ -1127,131 +1150,174 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     SET search_path = pg_catalog, public
     AS $function$
     DECLARE
-      roles_ready boolean;
+      owner_oid oid;
+      runtime_oid oid;
+      verifier_oid oid;
+      incident_oid oid;
+      activation_oid oid;
     BEGIN
-      SELECT COALESCE((
-        SELECT
-          NOT owner.rolcanlogin AND NOT owner.rolsuper AND NOT owner.rolcreatedb
-          AND NOT owner.rolcreaterole AND NOT owner.rolreplication AND NOT owner.rolbypassrls
-          AND NOT migrator.rolcanlogin AND NOT migrator.rolsuper AND NOT migrator.rolcreatedb
-          AND NOT migrator.rolcreaterole AND NOT migrator.rolreplication AND NOT migrator.rolbypassrls
-          AND NOT runtime.rolcanlogin AND NOT runtime.rolsuper AND NOT runtime.rolcreatedb
-          AND NOT runtime.rolcreaterole AND NOT runtime.rolreplication AND NOT runtime.rolbypassrls
-          AND NOT verifier.rolcanlogin AND NOT verifier.rolsuper AND NOT verifier.rolcreatedb
-          AND NOT verifier.rolcreaterole AND NOT verifier.rolreplication AND NOT verifier.rolbypassrls
-          AND NOT incident.rolcanlogin AND NOT incident.rolsuper AND NOT incident.rolcreatedb
-          AND NOT incident.rolcreaterole AND NOT incident.rolreplication AND NOT incident.rolbypassrls
-          AND NOT activation.rolcanlogin AND NOT activation.rolsuper AND NOT activation.rolcreatedb
-          AND NOT activation.rolcreaterole AND NOT activation.rolreplication AND NOT activation.rolbypassrls
-          AND pg_has_role(migrator.oid, owner.oid, 'member')
-          AND NOT pg_has_role(runtime.oid, owner.oid, 'member')
-          AND NOT pg_has_role(runtime.oid, migrator.oid, 'member')
-          AND NOT pg_has_role(runtime.oid, verifier.oid, 'member')
-          AND NOT pg_has_role(runtime.oid, incident.oid, 'member')
-          AND NOT pg_has_role(runtime.oid, activation.oid, 'member')
-          AND NOT pg_has_role(verifier.oid, owner.oid, 'member')
-          AND NOT pg_has_role(verifier.oid, migrator.oid, 'member')
-          AND NOT pg_has_role(verifier.oid, incident.oid, 'member')
-          AND NOT pg_has_role(verifier.oid, activation.oid, 'member')
-          AND NOT pg_has_role(incident.oid, verifier.oid, 'member')
-          AND NOT pg_has_role(activation.oid, verifier.oid, 'member')
-          AND NOT pg_has_role(verifier.oid, runtime.oid, 'member')
-          AND NOT pg_has_role(incident.oid, owner.oid, 'member')
-          AND NOT pg_has_role(incident.oid, migrator.oid, 'member')
-          AND NOT pg_has_role(incident.oid, runtime.oid, 'member')
-          AND NOT pg_has_role(incident.oid, verifier.oid, 'member')
-          AND NOT pg_has_role(incident.oid, activation.oid, 'member')
-          AND NOT pg_has_role(activation.oid, owner.oid, 'member')
-          AND NOT pg_has_role(activation.oid, migrator.oid, 'member')
-          AND NOT pg_has_role(activation.oid, runtime.oid, 'member')
-          AND NOT pg_has_role(activation.oid, verifier.oid, 'member')
-          AND NOT pg_has_role(activation.oid, incident.oid, 'member')
-          AND NOT pg_has_role(owner.oid, runtime.oid, 'member')
-          AND NOT pg_has_role(owner.oid, verifier.oid, 'member')
-          AND NOT pg_has_role(owner.oid, incident.oid, 'member')
-          AND NOT pg_has_role(owner.oid, activation.oid, 'member')
-          AND NOT pg_has_role(migrator.oid, runtime.oid, 'member')
-          AND NOT pg_has_role(migrator.oid, verifier.oid, 'member')
-          AND NOT pg_has_role(migrator.oid, incident.oid, 'member')
-          AND NOT pg_has_role(migrator.oid, activation.oid, 'member')
-          AND (SELECT relowner = owner.oid FROM pg_catalog.pg_class
-               WHERE oid = 'public.durable_payload_verifications'::regclass)
-          AND (SELECT relowner = owner.oid FROM pg_catalog.pg_class
-               WHERE oid = 'public.durable_payload_verification_failures'::regclass)
-          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'SELECT')
-          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'INSERT')
-          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'DELETE')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'UPDATE')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'TRUNCATE')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'REFERENCES')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'TRIGGER')
-          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'SELECT')
-          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'INSERT')
-          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'DELETE')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'UPDATE')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'TRUNCATE')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'REFERENCES')
-          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'TRIGGER')
-          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verifications', 'INSERT')
-          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verifications', 'UPDATE')
-          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verifications', 'TRUNCATE')
-          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verification_failures', 'INSERT')
-          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verification_failures', 'UPDATE')
-          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verification_failures', 'TRUNCATE')
-          AND has_function_privilege(runtime.rolname, 'public.delete_durable_payload_verification(text,text)', 'EXECUTE')
-          AND has_function_privilege(verifier.rolname, 'public.delete_durable_payload_verification(text,text)', 'EXECUTE')
-          AND NOT EXISTS (
-            SELECT 1
-            FROM pg_catalog.pg_proc AS function_row
-            CROSS JOIN LATERAL pg_catalog.aclexplode(
-              COALESCE(function_row.proacl, pg_catalog.acldefault('f', function_row.proowner))
-            ) AS acl
-            WHERE function_row.oid =
-                    'public.delete_durable_payload_verification(text,text)'::regprocedure
-              AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM (
-              VALUES
-                ('effects'), ('agent_directives'), ('events'), ('agent_run_steps'),
-                ('telegram_conversation_turns'), ('telegram_conversations'),
-                ('telegram_assistant_runs'), ('telegram_assistant_steps'),
-                ('telegram_prepared_actions'), ('agent_runs'), ('operator_events'),
-                ('user_memory_profiles'), ('operator_memory_summaries'),
-                ('background_jobs'), ('scheduled_jobs'),
-                ('runtime_ingress_receipts'), ('agent_work_results'), ('snapshots')
-            ) AS source(table_name)
-            WHERE NOT has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'SELECT')
-               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'INSERT')
-               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'UPDATE')
-               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'DELETE')
-               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'TRUNCATE')
-               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'REFERENCES')
-               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'TRIGGER')
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM pg_catalog.pg_class AS relation
-            CROSS JOIN LATERAL pg_catalog.aclexplode(
-              COALESCE(relation.relacl, pg_catalog.acldefault('r', relation.relowner))
-            ) AS acl
-            WHERE relation.oid IN (
-              'public.durable_payload_verifications'::regclass,
-              'public.durable_payload_verification_failures'::regclass
-            ) AND acl.grantee NOT IN (owner.oid, verifier.oid)
-          )
-        FROM pg_catalog.pg_roles AS owner
-        JOIN pg_catalog.pg_roles AS migrator ON migrator.rolname = 'maraithon_migrator'
-        JOIN pg_catalog.pg_roles AS runtime ON runtime.rolname = 'maraithon_runtime'
-        JOIN pg_catalog.pg_roles AS verifier ON verifier.rolname = 'maraithon_payload_verifier'
-        JOIN pg_catalog.pg_roles AS incident ON incident.rolname = 'maraithon_incident_operator'
-        JOIN pg_catalog.pg_roles AS activation ON activation.rolname = 'maraithon_activation_operator'
-        WHERE owner.rolname = 'maraithon_object_owner'
-      ), false)
-      INTO roles_ready;
+      IF NOT public.runtime_coordination_roles_ready() THEN
+        RETURN false;
+      END IF;
 
-      RETURN roles_ready;
+      SELECT oid INTO STRICT owner_oid FROM pg_catalog.pg_roles
+      WHERE rolname = 'maraithon_object_owner';
+      SELECT oid INTO STRICT runtime_oid FROM pg_catalog.pg_roles
+      WHERE rolname = 'maraithon_runtime';
+      SELECT oid INTO STRICT verifier_oid FROM pg_catalog.pg_roles
+      WHERE rolname = 'maraithon_payload_verifier';
+      SELECT oid INTO STRICT incident_oid FROM pg_catalog.pg_roles
+      WHERE rolname = 'maraithon_incident_operator';
+      SELECT oid INTO STRICT activation_oid FROM pg_catalog.pg_roles
+      WHERE rolname = 'maraithon_activation_operator';
+
+      IF EXISTS (
+        SELECT 1
+        FROM (
+          VALUES
+            ('public.durable_payload_verifications'::regclass),
+            ('public.durable_payload_verification_failures'::regclass),
+            ('public.vault_reencryption_failures'::regclass),
+            ('public.vault_backup_retirement_evidence'::regclass),
+            ('public.durable_payload_binding_operations'::regclass),
+            ('public.key_retirement_zero_proofs'::regclass)
+        ) AS controlled(relation_id)
+        JOIN pg_catalog.pg_class AS relation ON relation.oid = controlled.relation_id
+        WHERE relation.relowner <> owner_oid
+      ) THEN
+        RETURN false;
+      END IF;
+
+      IF NOT (
+        has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_verifications', 'SELECT') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_verifications', 'INSERT') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_verifications', 'DELETE') AND
+        NOT has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_verifications', 'UPDATE') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_verification_failures', 'SELECT') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_verification_failures', 'INSERT') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_verification_failures', 'UPDATE') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_verification_failures', 'DELETE') AND
+        has_table_privilege('maraithon_activation_operator',
+          'public.durable_payload_binding_operations', 'SELECT') AND
+        has_table_privilege('maraithon_activation_operator',
+          'public.durable_payload_binding_operations', 'INSERT') AND
+        has_table_privilege('maraithon_activation_operator',
+          'public.durable_payload_binding_operations', 'UPDATE') AND
+        NOT has_table_privilege('maraithon_activation_operator',
+          'public.durable_payload_binding_operations', 'DELETE') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.durable_payload_binding_operations', 'SELECT') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.durable_payload_binding_operations', 'INSERT') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.durable_payload_binding_operations', 'UPDATE') AND
+        NOT has_table_privilege('maraithon_incident_operator',
+          'public.durable_payload_binding_operations', 'DELETE') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.key_retirement_zero_proofs', 'SELECT') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.key_retirement_zero_proofs', 'INSERT') AND
+        NOT has_table_privilege('maraithon_incident_operator',
+          'public.key_retirement_zero_proofs', 'UPDATE') AND
+        NOT has_table_privilege('maraithon_incident_operator',
+          'public.key_retirement_zero_proofs', 'DELETE') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.vault_backup_retirement_evidence', 'SELECT') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.vault_backup_retirement_evidence', 'INSERT') AND
+        NOT has_table_privilege('maraithon_incident_operator',
+          'public.vault_backup_retirement_evidence', 'UPDATE') AND
+        NOT has_table_privilege('maraithon_incident_operator',
+          'public.vault_backup_retirement_evidence', 'DELETE') AND
+        NOT has_table_privilege('maraithon_runtime',
+          'public.durable_payload_binding_operations', 'SELECT') AND
+        NOT has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_binding_operations', 'SELECT') AND
+        NOT has_table_privilege('maraithon_runtime',
+          'public.key_retirement_zero_proofs', 'SELECT') AND
+        NOT has_table_privilege('maraithon_payload_verifier',
+          'public.key_retirement_zero_proofs', 'SELECT')
+      ) THEN
+        RETURN false;
+      END IF;
+
+      IF EXISTS (
+        SELECT 1
+        FROM (
+          VALUES ('effects'), ('agent_directives'), ('events'), ('agent_run_steps'), ('telegram_conversation_turns'), ('telegram_conversations'), ('telegram_assistant_runs'), ('telegram_assistant_steps'), ('telegram_prepared_actions'), ('agent_runs'), ('operator_events'), ('user_memory_profiles'), ('operator_memory_summaries'), ('background_jobs'), ('scheduled_jobs'), ('runtime_ingress_receipts'), ('snapshots'), ('agent_work_results')
+        ) AS source(table_name)
+        WHERE NOT has_table_privilege(
+                'maraithon_payload_verifier', 'public.' || source.table_name, 'SELECT')
+           OR has_table_privilege(
+                'maraithon_payload_verifier', 'public.' || source.table_name, 'INSERT')
+           OR has_table_privilege(
+                'maraithon_payload_verifier', 'public.' || source.table_name, 'UPDATE')
+           OR has_table_privilege(
+                'maraithon_payload_verifier', 'public.' || source.table_name, 'DELETE')
+           OR has_table_privilege(
+                'maraithon_payload_verifier', 'public.' || source.table_name, 'TRUNCATE')
+           OR has_table_privilege(
+                'maraithon_payload_verifier', 'public.' || source.table_name, 'REFERENCES')
+           OR has_table_privilege(
+                'maraithon_payload_verifier', 'public.' || source.table_name, 'TRIGGER')
+      ) THEN
+        RETURN false;
+      END IF;
+
+      IF EXISTS (
+        SELECT 1
+        FROM (
+          VALUES
+            ('public.durable_payload_verifications'::regclass,
+             ARRAY[owner_oid, verifier_oid, activation_oid]),
+            ('public.durable_payload_verification_failures'::regclass,
+             ARRAY[owner_oid, verifier_oid, activation_oid]),
+            ('public.vault_reencryption_failures'::regclass,
+             ARRAY[owner_oid, incident_oid]),
+            ('public.vault_backup_retirement_evidence'::regclass,
+             ARRAY[owner_oid, incident_oid]),
+            ('public.durable_payload_binding_operations'::regclass,
+             ARRAY[owner_oid, incident_oid, activation_oid]),
+            ('public.key_retirement_zero_proofs'::regclass,
+             ARRAY[owner_oid, incident_oid])
+        ) AS controlled(relation_id, allowed_grantees)
+        JOIN pg_catalog.pg_class AS relation ON relation.oid = controlled.relation_id
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+          COALESCE(relation.relacl, pg_catalog.acldefault('r', relation.relowner))
+        ) AS acl
+        WHERE acl.grantee = 0 OR NOT (acl.grantee = ANY(controlled.allowed_grantees))
+      ) THEN
+        RETURN false;
+      END IF;
+
+      IF NOT (
+        has_function_privilege('maraithon_runtime',
+          'public.delete_durable_payload_verification(text,text)', 'EXECUTE') AND
+        has_function_privilege('maraithon_payload_verifier',
+          'public.delete_durable_payload_verification(text,text)', 'EXECUTE') AND
+        has_function_privilege('maraithon_incident_operator',
+          'public.delete_durable_payload_verification(text,text)', 'EXECUTE') AND
+        has_function_privilege('maraithon_activation_operator',
+          'public.delete_durable_payload_verification(text,text)', 'EXECUTE') AND
+        has_function_privilege('maraithon_incident_operator',
+          'public.durable_payload_old_key_live_count(text,text)', 'EXECUTE') AND
+        has_function_privilege('maraithon_incident_operator',
+          'public.durable_payload_old_key_source_digest(text,text)', 'EXECUTE')
+      ) THEN
+        RETURN false;
+      END IF;
+
+      RETURN true;
+    EXCEPTION WHEN no_data_found OR undefined_table OR undefined_function THEN
+      RETURN false;
     END;
     $function$;
     """)
@@ -1373,16 +1439,170 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     """)
 
     execute("""
+    CREATE OR REPLACE FUNCTION public.durable_payload_old_key_live_count(
+      requested_key_kind text,
+      requested_old_tag text
+    )
+    RETURNS bigint
+    LANGUAGE plpgsql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      ciphertext_prefix bytea;
+      live_count bigint;
+    BEGIN
+      IF requested_old_tag IS NULL OR
+         requested_old_tag !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$' THEN
+        RETURN NULL;
+      END IF;
+
+      IF requested_key_kind = 'binding' THEN
+        SELECT
+          (SELECT count(*) FROM public.effects WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.agent_directives WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.events WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.agent_run_steps WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.telegram_conversation_turns WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.telegram_conversations WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.telegram_assistant_runs WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.telegram_assistant_steps WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.telegram_prepared_actions WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.agent_runs WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.operator_events WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.user_memory_profiles WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.operator_memory_summaries WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.background_jobs WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.scheduled_jobs WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.runtime_ingress_receipts WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.snapshots WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.agent_work_results WHERE payload_binding_key_tag = requested_old_tag) +
+          (SELECT count(*) FROM public.agent_work_results WHERE result_digest_key_tag = requested_old_tag)
+        INTO live_count;
+      ELSIF requested_key_kind = 'vault' THEN
+        ciphertext_prefix := pg_catalog.decode(
+          '01' || pg_catalog.lpad(pg_catalog.to_hex(
+            pg_catalog.octet_length(pg_catalog.convert_to(requested_old_tag, 'UTF8'))
+          ), 2, '0') ||
+          pg_catalog.encode(pg_catalog.convert_to(requested_old_tag, 'UTF8'), 'hex'),
+          'hex'
+        );
+
+        SELECT
+          (SELECT count(*) FROM public.effects WHERE params_ciphertext IS NOT NULL AND substring(params_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.effects WHERE result_ciphertext IS NOT NULL AND substring(result_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.agent_directives WHERE payload_ciphertext IS NOT NULL AND substring(payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.events WHERE payload_ciphertext IS NOT NULL AND substring(payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.agent_run_steps WHERE request_payload_ciphertext IS NOT NULL AND substring(request_payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.agent_run_steps WHERE response_payload_ciphertext IS NOT NULL AND substring(response_payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_conversation_turns WHERE text_ciphertext IS NOT NULL AND substring(text_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_conversation_turns WHERE structured_data_ciphertext IS NOT NULL AND substring(structured_data_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_conversations WHERE summary_ciphertext IS NOT NULL AND substring(summary_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_conversations WHERE historical_summary_ciphertext IS NOT NULL AND substring(historical_summary_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_assistant_runs WHERE prompt_snapshot_ciphertext IS NOT NULL AND substring(prompt_snapshot_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_assistant_runs WHERE result_summary_ciphertext IS NOT NULL AND substring(result_summary_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_assistant_steps WHERE request_payload_ciphertext IS NOT NULL AND substring(request_payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_assistant_steps WHERE response_payload_ciphertext IS NOT NULL AND substring(response_payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_prepared_actions WHERE payload_ciphertext IS NOT NULL AND substring(payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.telegram_prepared_actions WHERE preview_text_ciphertext IS NOT NULL AND substring(preview_text_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.agent_runs WHERE trigger_ciphertext IS NOT NULL AND substring(trigger_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.agent_runs WHERE metadata_ciphertext IS NOT NULL AND substring(metadata_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.operator_events WHERE payload_ciphertext IS NOT NULL AND substring(payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.operator_events WHERE metadata_ciphertext IS NOT NULL AND substring(metadata_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.user_memory_profiles WHERE summary_ciphertext IS NOT NULL AND substring(summary_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.user_memory_profiles WHERE profile_ciphertext IS NOT NULL AND substring(profile_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.operator_memory_summaries WHERE content_ciphertext IS NOT NULL AND substring(content_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.background_jobs WHERE payload_ciphertext IS NOT NULL AND substring(payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.background_jobs WHERE result_ciphertext IS NOT NULL AND substring(result_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.scheduled_jobs WHERE payload_ciphertext IS NOT NULL AND substring(payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.runtime_ingress_receipts WHERE payload_ciphertext IS NOT NULL AND substring(payload_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.snapshots WHERE state_data_ciphertext IS NOT NULL AND substring(state_data_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.snapshots WHERE budget_ciphertext IS NOT NULL AND substring(budget_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.agent_work_results WHERE result_ciphertext IS NOT NULL AND substring(result_ciphertext FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.connected_accounts WHERE access_token IS NOT NULL AND substring(access_token FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.connected_accounts WHERE refresh_token IS NOT NULL AND substring(refresh_token FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.oauth_tokens WHERE access_token IS NOT NULL AND substring(access_token FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.oauth_tokens WHERE refresh_token IS NOT NULL AND substring(refresh_token FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.local_browser_visits WHERE title IS NOT NULL AND substring(title FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.local_calendar_events WHERE title IS NOT NULL AND substring(title FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.local_calendar_events WHERE notes IS NOT NULL AND substring(notes FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.local_files WHERE filename IS NOT NULL AND substring(filename FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.local_files WHERE text_content IS NOT NULL AND substring(text_content FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.memory_items WHERE content IS NOT NULL AND substring(content FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.memory_items WHERE summary IS NOT NULL AND substring(summary FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix) +
+          (SELECT count(*) FROM public.memory_items WHERE metadata IS NOT NULL AND substring(metadata FROM 1 FOR octet_length(ciphertext_prefix)) = ciphertext_prefix)
+        INTO live_count;
+      ELSE
+        RETURN NULL;
+      END IF;
+
+      RETURN live_count;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.durable_payload_old_key_source_digest(
+      requested_key_kind text,
+      requested_old_tag text
+    )
+    RETURNS bytea
+    LANGUAGE sql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+      SELECT CASE
+        WHEN requested_key_kind IN ('vault', 'binding') AND
+             requested_old_tag ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+        THEN public.digest(pg_catalog.convert_to(pg_catalog.jsonb_build_object(
+          'registry', 'durable_payload_key_registry_v1',
+          'key_kind', requested_key_kind,
+          'old_tag', requested_old_tag,
+          'live_count', public.durable_payload_old_key_live_count(
+            requested_key_kind, requested_old_tag
+          ),
+          'vault_ciphertext_targets', 42,
+          'binding_targets', 19
+        )::text, 'UTF8'), 'sha256')
+        ELSE NULL::bytea
+      END;
+    $function$;
+    """)
+
+    execute("""
     CREATE OR REPLACE FUNCTION public.guard_durable_payload_binding_operation()
     RETURNS trigger
     LANGUAGE plpgsql
     SET search_path = pg_catalog, public
     AS $function$
+    DECLARE
+      runtime_mode text;
+      effect_mode text;
+      stored_evidence_id text;
+      stored_evidence_digest bytea;
+      stored_evidence_operator text;
+      stored_exact_revision text;
     BEGIN
       IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Durable payload binding progress cannot be deleted'
           USING ERRCODE = 'insufficient_privilege';
       END IF;
+
+      -- Protocol rows are always locked runtime-first, then Effect. A session
+      -- GUC is only a scoped capability; immutable stored evidence is the
+      -- authority for every accepted operation row.
+      SELECT mode INTO STRICT runtime_mode
+      FROM public.runtime_coordination_protocols
+      WHERE name = 'runtime'
+      FOR SHARE;
+
+      SELECT mode, activation_evidence_id, activation_evidence_digest,
+             activated_by, exact_revision
+      INTO STRICT effect_mode, stored_evidence_id, stored_evidence_digest,
+                  stored_evidence_operator, stored_exact_revision
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects'
+      FOR SHARE;
 
       IF NEW.operation_kind = 'legacy_context_rebind_v1' THEN
         IF current_user IS DISTINCT FROM 'maraithon_activation_operator' OR
@@ -1391,6 +1611,11 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           RAISE EXCEPTION 'Legacy binding context promotion requires stopped-fleet activation authority'
             USING ERRCODE = 'insufficient_privilege';
         END IF;
+
+        IF runtime_mode <> 'dark' OR effect_mode <> 'legacy' THEN
+          RAISE EXCEPTION 'Legacy binding context promotion requires the dark legacy pair'
+            USING ERRCODE = 'check_violation';
+        END IF;
       ELSIF NEW.operation_kind = 'binding_key_rotation_v1' THEN
         IF current_user IS DISTINCT FROM 'maraithon_incident_operator' OR
            current_setting('maraithon.binding_key_rotation', true)
@@ -1398,14 +1623,32 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           RAISE EXCEPTION 'Binding key rotation progress requires incident authority'
             USING ERRCODE = 'insufficient_privilege';
         END IF;
+
+        IF runtime_mode <> 'partition_fenced_v1' OR
+           effect_mode <> 'generation_fenced_v1' THEN
+          RAISE EXCEPTION 'Binding key rotation requires the active exact pair'
+            USING ERRCODE = 'check_violation';
+        END IF;
       ELSE
         RAISE EXCEPTION 'Unknown durable payload binding operation'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF stored_evidence_id IS NULL OR stored_evidence_digest IS NULL OR
+         pg_catalog.octet_length(stored_evidence_digest) <> 32 OR
+         stored_evidence_operator IS NULL OR stored_exact_revision IS NULL OR
+         NEW.evidence_id IS DISTINCT FROM stored_evidence_id OR
+         NEW.evidence_digest IS DISTINCT FROM stored_evidence_digest OR
+         NEW.evidence_operator IS DISTINCT FROM stored_evidence_operator OR
+         NEW.exact_revision IS DISTINCT FROM stored_exact_revision THEN
+        RAISE EXCEPTION 'Durable payload binding operation evidence does not match protocol authority'
           USING ERRCODE = 'check_violation';
       END IF;
 
       IF TG_OP = 'UPDATE' AND (
         NEW.operation_kind IS DISTINCT FROM OLD.operation_kind OR
         NEW.payload_table IS DISTINCT FROM OLD.payload_table OR
+        NEW.binding_name IS DISTINCT FROM OLD.binding_name OR
         NEW.row_identity IS DISTINCT FROM OLD.row_identity OR
         NEW.target_key_tag IS DISTINCT FROM OLD.target_key_tag
       ) THEN
@@ -1415,6 +1658,9 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
 
       NEW.attempted_at := timezone('UTC', clock_timestamp());
       RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'Durable payload binding operation protocol authority is missing'
+        USING ERRCODE = 'check_violation';
     END;
     $function$;
     """)
@@ -1436,6 +1682,14 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     LANGUAGE plpgsql
     SET search_path = pg_catalog, public
     AS $function$
+    DECLARE
+      runtime_mode text;
+      effect_mode text;
+      stored_evidence_id text;
+      stored_evidence_digest bytea;
+      stored_evidence_operator text;
+      stored_exact_revision text;
+      live_count bigint;
     BEGIN
       IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'Key retirement zero proofs are append-only'
@@ -1449,8 +1703,110 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           USING ERRCODE = 'insufficient_privilege';
       END IF;
 
+      SELECT mode INTO STRICT runtime_mode
+      FROM public.runtime_coordination_protocols
+      WHERE name = 'runtime'
+      FOR SHARE;
+
+      SELECT mode, activation_evidence_id, activation_evidence_digest,
+             activated_by, exact_revision
+      INTO STRICT effect_mode, stored_evidence_id, stored_evidence_digest,
+                  stored_evidence_operator, stored_exact_revision
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects'
+      FOR SHARE;
+
+      IF runtime_mode <> 'partition_fenced_v1' OR
+         effect_mode <> 'generation_fenced_v1' THEN
+        RAISE EXCEPTION 'Key retirement zero proof requires the active exact pair'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF stored_evidence_id IS NULL OR stored_evidence_digest IS NULL OR
+         pg_catalog.octet_length(stored_evidence_digest) <> 32 OR
+         stored_evidence_operator IS NULL OR stored_exact_revision IS NULL OR
+         NEW.evidence_id IS DISTINCT FROM stored_evidence_id OR
+         NEW.evidence_digest IS DISTINCT FROM stored_evidence_digest OR
+         NEW.evidence_operator IS DISTINCT FROM stored_evidence_operator OR
+         NEW.exact_revision IS DISTINCT FROM stored_exact_revision THEN
+        RAISE EXCEPTION 'Key retirement zero proof evidence does not match protocol authority'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF NEW.key_kind = 'binding' THEN
+        LOCK TABLE
+          public.effects,
+          public.agent_directives,
+          public.events,
+          public.agent_run_steps,
+          public.telegram_conversation_turns,
+          public.telegram_conversations,
+          public.telegram_assistant_runs,
+          public.telegram_assistant_steps,
+          public.telegram_prepared_actions,
+          public.agent_runs,
+          public.operator_events,
+          public.user_memory_profiles,
+          public.operator_memory_summaries,
+          public.background_jobs,
+          public.scheduled_jobs,
+          public.runtime_ingress_receipts,
+          public.snapshots,
+          public.agent_work_results
+        IN SHARE MODE;
+      ELSIF NEW.key_kind = 'vault' THEN
+        LOCK TABLE
+          public.effects,
+          public.agent_directives,
+          public.events,
+          public.agent_run_steps,
+          public.telegram_conversation_turns,
+          public.telegram_conversations,
+          public.telegram_assistant_runs,
+          public.telegram_assistant_steps,
+          public.telegram_prepared_actions,
+          public.agent_runs,
+          public.operator_events,
+          public.user_memory_profiles,
+          public.operator_memory_summaries,
+          public.background_jobs,
+          public.scheduled_jobs,
+          public.runtime_ingress_receipts,
+          public.snapshots,
+          public.agent_work_results,
+          public.connected_accounts,
+          public.oauth_tokens,
+          public.local_browser_visits,
+          public.local_calendar_events,
+          public.local_files,
+          public.memory_items
+        IN SHARE MODE;
+      ELSE
+        RAISE EXCEPTION 'Unknown key retirement kind'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      live_count := public.durable_payload_old_key_live_count(NEW.key_kind, NEW.old_tag);
+
+      IF live_count IS DISTINCT FROM 0 THEN
+        RAISE EXCEPTION 'Key retirement zero proof rejected because live old-key rows remain'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      NEW.source_digest := public.durable_payload_old_key_source_digest(
+        NEW.key_kind, NEW.old_tag
+      );
+
+      IF pg_catalog.octet_length(NEW.source_digest) <> 32 THEN
+        RAISE EXCEPTION 'Key retirement zero proof registry digest is unavailable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
       NEW.proved_at := timezone('UTC', clock_timestamp());
       RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'Key retirement zero proof protocol authority is missing'
+        USING ERRCODE = 'check_violation';
     END;
     $function$;
     """)
@@ -1494,6 +1850,20 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     LANGUAGE plpgsql
     SET search_path = pg_catalog, public
     AS $function$
+    DECLARE
+      runtime_mode text;
+      effect_mode text;
+      stored_evidence_id text;
+      stored_evidence_digest bytea;
+      stored_evidence_operator text;
+      stored_exact_revision text;
+      proof_evidence_id text;
+      proof_evidence_digest bytea;
+      proof_evidence_operator text;
+      proof_exact_revision text;
+      proof_source_digest bytea;
+      proof_proved_at timestamp(6) without time zone;
+      database_now timestamp(6) without time zone;
     BEGIN
       IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'Vault backup retirement evidence is append-only'
@@ -1507,8 +1877,90 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           USING ERRCODE = 'insufficient_privilege';
       END IF;
 
-      NEW.attested_at := timezone('UTC', clock_timestamp());
+      SELECT mode INTO STRICT runtime_mode
+      FROM public.runtime_coordination_protocols
+      WHERE name = 'runtime'
+      FOR SHARE;
+
+      SELECT mode, activation_evidence_id, activation_evidence_digest,
+             activated_by, exact_revision
+      INTO STRICT effect_mode, stored_evidence_id, stored_evidence_digest,
+                  stored_evidence_operator, stored_exact_revision
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects'
+      FOR SHARE;
+
+      IF runtime_mode <> 'partition_fenced_v1' OR
+         effect_mode <> 'generation_fenced_v1' THEN
+        RAISE EXCEPTION 'Backup retirement evidence requires the active exact pair'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF stored_evidence_id IS NULL OR stored_evidence_digest IS NULL OR
+         pg_catalog.octet_length(stored_evidence_digest) <> 32 OR
+         stored_evidence_operator IS NULL OR stored_exact_revision IS NULL OR
+         NEW.evidence_id IS DISTINCT FROM stored_evidence_id OR
+         NEW.evidence_digest IS DISTINCT FROM stored_evidence_digest OR
+         NEW.evidence_operator IS DISTINCT FROM stored_evidence_operator OR
+         NEW.exact_revision IS DISTINCT FROM stored_exact_revision THEN
+        RAISE EXCEPTION 'Backup retirement evidence does not match protocol authority'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      SELECT evidence_id, evidence_digest, evidence_operator, exact_revision,
+             source_digest, proved_at
+      INTO STRICT proof_evidence_id, proof_evidence_digest,
+                  proof_evidence_operator, proof_exact_revision,
+                  proof_source_digest, proof_proved_at
+      FROM public.key_retirement_zero_proofs
+      WHERE key_kind = NEW.key_kind
+        AND old_tag = NEW.old_tag
+        AND proof_id = NEW.zero_proof_id
+      FOR SHARE;
+
+      IF proof_evidence_id IS DISTINCT FROM stored_evidence_id OR
+         proof_evidence_digest IS DISTINCT FROM stored_evidence_digest OR
+         proof_evidence_operator IS DISTINCT FROM stored_evidence_operator OR
+         proof_exact_revision IS DISTINCT FROM stored_exact_revision OR
+         pg_catalog.octet_length(proof_source_digest) <> 32 THEN
+        RAISE EXCEPTION 'Backup retirement evidence is not bound to its zero proof authority'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      database_now := timezone('UTC', clock_timestamp());
+
+      IF NEW.backup_oldest_recoverable_at <= proof_proved_at OR
+         NEW.wal_oldest_recoverable_at <= proof_proved_at OR
+         NEW.pitr_oldest_recoverable_at <= proof_proved_at OR
+         NEW.restore_drill_recovered_through_at <= proof_proved_at OR
+         NEW.backup_catalog_captured_at <= proof_proved_at OR
+         NEW.wal_catalog_captured_at <= proof_proved_at OR
+         NEW.pitr_catalog_captured_at <= proof_proved_at OR
+         NEW.restore_drill_completed_at <= proof_proved_at OR
+         NEW.backup_catalog_captured_at > database_now OR
+         NEW.wal_catalog_captured_at > database_now OR
+         NEW.pitr_catalog_captured_at > database_now OR
+         NEW.restore_drill_completed_at > database_now OR
+         NEW.backup_oldest_recoverable_at > NEW.backup_catalog_captured_at OR
+         NEW.wal_oldest_recoverable_at > NEW.wal_catalog_captured_at OR
+         NEW.pitr_oldest_recoverable_at > NEW.pitr_catalog_captured_at OR
+         NEW.restore_drill_recovered_through_at > NEW.restore_drill_completed_at OR
+         NEW.oldest_recoverable_at IS DISTINCT FROM LEAST(
+           NEW.backup_oldest_recoverable_at,
+           NEW.wal_oldest_recoverable_at,
+           NEW.pitr_oldest_recoverable_at
+         ) OR
+         NEW.oldest_recoverable_at <= proof_proved_at OR
+         NEW.evidence_expires_at <= database_now THEN
+        RAISE EXCEPTION 'Backup retirement evidence timing is not strictly post-proof and current'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      NEW.attested_at := database_now;
       RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'Backup retirement evidence zero proof or protocol authority is missing'
+        USING ERRCODE = 'check_violation';
     END;
     $function$;
     """)
@@ -1862,19 +2314,39 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
-    execute("REVOKE ALL ON public.vault_backup_retirement_evidence FROM PUBLIC")
-    execute("REVOKE ALL ON FUNCTION public.guard_vault_backup_retirement_evidence() FROM PUBLIC")
-    execute("REVOKE ALL ON public.vault_reencryption_failures FROM PUBLIC")
-    execute("REVOKE ALL ON FUNCTION public.guard_vault_reencryption_failure_write() FROM PUBLIC")
+    execute("""
+    REVOKE ALL ON TABLE public.durable_payload_binding_operations,
+      public.key_retirement_zero_proofs,
+      public.vault_backup_retirement_evidence
+      FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier,
+        maraithon_incident_operator, maraithon_activation_operator
+    """)
 
+    execute("REVOKE ALL ON public.vault_reencryption_failures FROM PUBLIC")
     execute("REVOKE ALL ON public.durable_payload_verifications FROM PUBLIC")
     execute("REVOKE ALL ON public.durable_payload_verification_failures FROM PUBLIC")
 
-    execute(
-      "REVOKE ALL ON FUNCTION public.delete_durable_payload_verification(text, text) FROM PUBLIC"
-    )
-
-    execute("REVOKE ALL ON FUNCTION public.enforce_snapshot_payload_protocol() FROM PUBLIC")
+    execute("""
+    REVOKE ALL ON FUNCTION
+      public.durable_payload_row_identity(text, text),
+      public.durable_payload_digest_part(text, jsonb, text),
+      public.durable_payload_proof_failures(),
+      public.durable_payload_roles_ready(),
+      public.enforce_durable_history_payload_protocol(),
+      public.durable_payload_old_key_live_count(text, text),
+      public.durable_payload_old_key_source_digest(text, text),
+      public.guard_durable_payload_binding_operation(),
+      public.guard_key_retirement_zero_proof(),
+      public.guard_vault_backup_retirement_evidence(),
+      public.guard_vault_reencryption_failure_write(),
+      public.enforce_snapshot_payload_protocol(),
+      public.guard_durable_payload_verification_failure_write(),
+      public.guard_durable_payload_verification_write(),
+      public.delete_durable_payload_verification(text, text),
+      public.invalidate_durable_payload_verification()
+      FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier,
+        maraithon_incident_operator, maraithon_activation_operator
+    """)
 
     execute("""
     DO $grants$
@@ -1899,8 +2371,10 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
              public.background_jobs, public.scheduled_jobs,
              public.runtime_ingress_receipts, public.agent_work_results, public.snapshots
           TO maraithon_payload_verifier;
-        GRANT EXECUTE
-          ON FUNCTION public.delete_durable_payload_verification(text, text)
+        GRANT EXECUTE ON FUNCTION
+          public.durable_payload_row_identity(text, text),
+          public.durable_payload_digest_part(text, jsonb, text),
+          public.delete_durable_payload_verification(text, text)
           TO maraithon_payload_verifier;
       END IF;
 
@@ -1908,8 +2382,11 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         SELECT 1 FROM pg_catalog.pg_roles
         WHERE rolname = 'maraithon_runtime'
       ) THEN
-        GRANT EXECUTE
-          ON FUNCTION public.delete_durable_payload_verification(text, text)
+        GRANT EXECUTE ON FUNCTION
+          public.durable_payload_row_identity(text, text),
+          public.durable_payload_digest_part(text, jsonb, text),
+          public.durable_payload_roles_ready(),
+          public.delete_durable_payload_verification(text, text)
           TO maraithon_runtime;
       END IF;
 
@@ -1930,9 +2407,21 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
              public.background_jobs, public.scheduled_jobs,
              public.runtime_ingress_receipts, public.agent_work_results, public.snapshots,
              public.vault_reencryption_failures,
-             public.vault_backup_retirement_evidence
+             public.vault_backup_retirement_evidence,
+             public.durable_payload_binding_operations,
+             public.key_retirement_zero_proofs
           TO maraithon_incident_operator;
-        GRANT INSERT ON public.vault_backup_retirement_evidence
+        GRANT INSERT ON public.vault_backup_retirement_evidence,
+          public.key_retirement_zero_proofs
+          TO maraithon_incident_operator;
+        GRANT INSERT, UPDATE ON public.durable_payload_binding_operations
+          TO maraithon_incident_operator;
+        GRANT EXECUTE ON FUNCTION
+          public.durable_payload_row_identity(text, text),
+          public.durable_payload_digest_part(text, jsonb, text),
+          public.durable_payload_old_key_live_count(text, text),
+          public.durable_payload_old_key_source_digest(text, text),
+          public.delete_durable_payload_verification(text, text)
           TO maraithon_incident_operator;
         GRANT INSERT, UPDATE, DELETE ON public.vault_reencryption_failures
           TO maraithon_incident_operator;
@@ -2010,6 +2499,15 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       ) THEN
         GRANT SELECT, UPDATE ON public.effect_execution_protocols
           TO maraithon_activation_operator;
+        GRANT SELECT, INSERT, UPDATE ON public.durable_payload_binding_operations
+          TO maraithon_activation_operator;
+        GRANT EXECUTE ON FUNCTION
+          public.durable_payload_row_identity(text, text),
+          public.durable_payload_digest_part(text, jsonb, text),
+          public.durable_payload_proof_failures(),
+          public.durable_payload_roles_ready(),
+          public.delete_durable_payload_verification(text, text)
+          TO maraithon_activation_operator;
         GRANT SELECT, UPDATE
           ON public.effects, public.agent_directives, public.events, public.agent_run_steps,
              public.telegram_conversation_turns, public.telegram_conversations,
@@ -2050,18 +2548,436 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         ALTER TABLE public.durable_payload_verification_failures OWNER TO maraithon_object_owner;
         ALTER TABLE public.vault_reencryption_failures OWNER TO maraithon_object_owner;
         ALTER TABLE public.vault_backup_retirement_evidence OWNER TO maraithon_object_owner;
-        ALTER FUNCTION public.delete_durable_payload_verification(text, text)
+        ALTER TABLE public.durable_payload_binding_operations OWNER TO maraithon_object_owner;
+        ALTER TABLE public.key_retirement_zero_proofs OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_row_identity(text, text)
           OWNER TO maraithon_object_owner;
-        ALTER FUNCTION public.enforce_snapshot_payload_protocol()
+        ALTER FUNCTION public.durable_payload_digest_part(text, jsonb, text)
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_proof_failures()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_roles_ready()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.enforce_durable_history_payload_protocol()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_old_key_live_count(text, text)
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_old_key_source_digest(text, text)
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.guard_durable_payload_binding_operation()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.guard_key_retirement_zero_proof()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.guard_vault_backup_retirement_evidence()
           OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.guard_vault_reencryption_failure_write()
           OWNER TO maraithon_object_owner;
-        ALTER FUNCTION public.guard_vault_backup_retirement_evidence()
+        ALTER FUNCTION public.enforce_snapshot_payload_protocol()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.guard_durable_payload_verification_failure_write()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.guard_durable_payload_verification_write()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.delete_durable_payload_verification(text, text)
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.invalidate_durable_payload_verification()
           OWNER TO maraithon_object_owner;
       END IF;
     END
     $ownership$
     """)
+
+    execute("""
+    CREATE TABLE IF NOT EXISTS public.durable_payload_protocol_manifests (
+      name text PRIMARY KEY,
+      migration_version bigint NOT NULL,
+      catalog_manifest jsonb NOT NULL,
+      manifest_digest bytea NOT NULL,
+      inserted_at timestamp(6) without time zone NOT NULL,
+      updated_at timestamp(6) without time zone NOT NULL,
+      CONSTRAINT durable_payload_protocol_manifests_singleton CHECK (
+        name = 'durable_payload_140005'
+        AND migration_version = 20260810140005
+        AND pg_catalog.jsonb_typeof(catalog_manifest) = 'object'
+        AND pg_catalog.octet_length(manifest_digest) = 32
+      )
+    )
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.durable_payload_catalog_manifest_snapshot()
+    RETURNS jsonb
+    LANGUAGE sql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+      WITH required_relations(relation_id) AS (
+        VALUES
+          ('public.runtime_coordination_protocols'::regclass),
+          ('public.runtime_coordination_manifests'::regclass),
+          ('public.effect_execution_protocols'::regclass),
+          ('public.effect_execution_protocol_manifests'::regclass),
+          ('public.effect_termination_attestations'::regclass),
+          ('public.schema_migrations'::regclass),
+          ('public.effects'::regclass),
+          ('public.agent_directives'::regclass),
+          ('public.events'::regclass),
+          ('public.agent_run_steps'::regclass),
+          ('public.telegram_conversation_turns'::regclass),
+          ('public.telegram_conversations'::regclass),
+          ('public.telegram_assistant_runs'::regclass),
+          ('public.telegram_assistant_steps'::regclass),
+          ('public.telegram_prepared_actions'::regclass),
+          ('public.agent_runs'::regclass),
+          ('public.operator_events'::regclass),
+          ('public.user_memory_profiles'::regclass),
+          ('public.operator_memory_summaries'::regclass),
+          ('public.background_jobs'::regclass),
+          ('public.scheduled_jobs'::regclass),
+          ('public.runtime_ingress_receipts'::regclass),
+          ('public.snapshots'::regclass),
+          ('public.agent_work_results'::regclass),
+          ('public.connected_accounts'::regclass),
+          ('public.oauth_tokens'::regclass),
+          ('public.local_browser_visits'::regclass),
+          ('public.local_calendar_events'::regclass),
+          ('public.local_files'::regclass),
+          ('public.memory_items'::regclass),
+          ('public.durable_payload_verifications'::regclass),
+          ('public.durable_payload_verification_failures'::regclass),
+          ('public.vault_reencryption_failures'::regclass),
+          ('public.vault_backup_retirement_evidence'::regclass),
+          ('public.durable_payload_binding_operations'::regclass),
+          ('public.key_retirement_zero_proofs'::regclass),
+          ('public.durable_payload_protocol_manifests'::regclass)
+      ), explicit_function_names(function_name) AS (
+        VALUES ('durable_payload_row_identity'), ('durable_payload_digest_part'), ('durable_payload_proof_failures'), ('durable_payload_roles_ready'), ('durable_payload_old_key_live_count'), ('durable_payload_old_key_source_digest'), ('delete_durable_payload_verification'), ('runtime_catalog_table_fingerprint'), ('runtime_role_topology_fingerprint'), ('durable_payload_catalog_manifest_snapshot'), ('refresh_durable_payload_protocol_manifest'), ('durable_payload_catalog_ready'), ('reject_durable_payload_protocol_manifest_mutation'), ('reject_durable_effect_truncate')
+      ), required_functions(function_id) AS (
+        SELECT function_row.oid
+        FROM pg_catalog.pg_proc AS function_row
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = function_row.pronamespace
+         AND namespace.nspname = 'public'
+        JOIN explicit_function_names AS required
+          ON required.function_name = function_row.proname
+        UNION
+        SELECT trigger_row.tgfoid
+        FROM pg_catalog.pg_trigger AS trigger_row
+        JOIN required_relations AS required
+          ON required.relation_id = trigger_row.tgrelid
+        WHERE NOT trigger_row.tgisinternal
+      ), function_fingerprints AS (
+        SELECT COALESCE(pg_catalog.jsonb_object_agg(
+          function_row.oid::regprocedure::text,
+          pg_catalog.encode(public.digest(pg_catalog.convert_to(
+            pg_catalog.jsonb_build_object(
+              'definition', pg_catalog.pg_get_functiondef(function_row.oid),
+              'owner', owner_row.rolname,
+              'acl', function_row.proacl,
+              'config', function_row.proconfig,
+              'security_definer', function_row.prosecdef,
+              'volatility', function_row.provolatile,
+              'parallel', function_row.proparallel,
+              'leakproof', function_row.proleakproof,
+              'kind', function_row.prokind,
+              'language', language_row.lanname
+            )::text, 'UTF8'), 'sha256'), 'hex')
+          ORDER BY function_row.oid::regprocedure::text
+        ), '{}'::jsonb) AS value
+        FROM required_functions AS required
+        JOIN pg_catalog.pg_proc AS function_row ON function_row.oid = required.function_id
+        JOIN pg_catalog.pg_roles AS owner_row ON owner_row.oid = function_row.proowner
+        JOIN pg_catalog.pg_language AS language_row ON language_row.oid = function_row.prolang
+      ), constraint_fingerprints AS (
+        SELECT COALESCE(pg_catalog.jsonb_object_agg(
+          relation.relname || '.' || constraint_row.conname,
+          pg_catalog.encode(public.digest(pg_catalog.convert_to(
+            pg_catalog.jsonb_build_object(
+              'definition', pg_catalog.pg_get_constraintdef(constraint_row.oid, true),
+              'type', constraint_row.contype,
+              'validated', constraint_row.convalidated,
+              'deferrable', constraint_row.condeferrable,
+              'initially_deferred', constraint_row.condeferred,
+              'local', constraint_row.conislocal,
+              'inheritance_count', constraint_row.coninhcount,
+              'no_inherit', constraint_row.connoinherit
+            )::text, 'UTF8'), 'sha256'), 'hex')
+          ORDER BY relation.relname, constraint_row.conname
+        ), '{}'::jsonb) AS value
+        FROM required_relations AS required
+        JOIN pg_catalog.pg_class AS relation ON relation.oid = required.relation_id
+        JOIN pg_catalog.pg_constraint AS constraint_row
+          ON constraint_row.conrelid = required.relation_id
+      ), index_fingerprints AS (
+        SELECT COALESCE(pg_catalog.jsonb_object_agg(
+          relation.relname || '.' || index_relation.relname,
+          pg_catalog.encode(public.digest(pg_catalog.convert_to(
+            pg_catalog.jsonb_build_object(
+              'definition', pg_catalog.pg_get_indexdef(index_relation.oid),
+              'owner', owner_row.rolname,
+              'acl', index_relation.relacl,
+              'valid', index_row.indisvalid,
+              'ready', index_row.indisready,
+              'live', index_row.indislive,
+              'unique', index_row.indisunique,
+              'primary', index_row.indisprimary,
+              'exclusion', index_row.indisexclusion,
+              'immediate', index_row.indimmediate,
+              'clustered', index_row.indisclustered,
+              'replica_identity', index_row.indisreplident,
+              'check_xmin', index_row.indcheckxmin
+            )::text, 'UTF8'), 'sha256'), 'hex')
+          ORDER BY relation.relname, index_relation.relname
+        ), '{}'::jsonb) AS value
+        FROM required_relations AS required
+        JOIN pg_catalog.pg_class AS relation ON relation.oid = required.relation_id
+        JOIN pg_catalog.pg_index AS index_row ON index_row.indrelid = required.relation_id
+        JOIN pg_catalog.pg_class AS index_relation ON index_relation.oid = index_row.indexrelid
+        JOIN pg_catalog.pg_roles AS owner_row ON owner_row.oid = index_relation.relowner
+      ), trigger_fingerprints AS (
+        SELECT COALESCE(pg_catalog.jsonb_object_agg(
+          relation.relname || '.' || trigger_row.tgname,
+          pg_catalog.encode(public.digest(pg_catalog.convert_to(
+            pg_catalog.jsonb_build_object(
+              'definition', pg_catalog.pg_get_triggerdef(trigger_row.oid, true),
+              'enabled', trigger_row.tgenabled,
+              'type', trigger_row.tgtype,
+              'constraint', trigger_row.tgconstraint,
+              'deferrable', trigger_row.tgdeferrable,
+              'initially_deferred', trigger_row.tginitdeferred,
+              'function', trigger_row.tgfoid::regprocedure::text
+            )::text, 'UTF8'), 'sha256'), 'hex')
+          ORDER BY relation.relname, trigger_row.tgname
+        ), '{}'::jsonb) AS value
+        FROM required_relations AS required
+        JOIN pg_catalog.pg_class AS relation ON relation.oid = required.relation_id
+        JOIN pg_catalog.pg_trigger AS trigger_row
+          ON trigger_row.tgrelid = required.relation_id
+         AND NOT trigger_row.tgisinternal
+      ), catalog_fingerprints AS (
+        SELECT pg_catalog.jsonb_object_agg(
+          relation.oid::regclass::text,
+          public.runtime_catalog_table_fingerprint(relation.oid)
+          ORDER BY relation.oid::regclass::text
+        ) AS value
+        FROM required_relations AS required
+        JOIN pg_catalog.pg_class AS relation ON relation.oid = required.relation_id
+      ), missing_functions AS (
+        SELECT COALESCE(pg_catalog.jsonb_agg(required.function_name ORDER BY required.function_name),
+                        '[]'::jsonb) AS value
+        FROM explicit_function_names AS required
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM pg_catalog.pg_proc AS function_row
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = function_row.pronamespace
+           AND namespace.nspname = 'public'
+          WHERE function_row.proname = required.function_name
+        )
+      ), schema_authority AS (
+        SELECT pg_catalog.encode(public.digest(pg_catalog.convert_to(
+          pg_catalog.jsonb_build_object(
+            'owner', owner_row.rolname,
+            'acl', namespace.nspacl
+          )::text, 'UTF8'), 'sha256'), 'hex') AS value
+        FROM pg_catalog.pg_namespace AS namespace
+        JOIN pg_catalog.pg_roles AS owner_row ON owner_row.oid = namespace.nspowner
+        WHERE namespace.nspname = 'public'
+      )
+      SELECT pg_catalog.jsonb_build_object(
+        'functions', function_fingerprints.value,
+        'constraints', constraint_fingerprints.value,
+        'indexes', index_fingerprints.value,
+        'triggers', trigger_fingerprints.value,
+        'catalogs', catalog_fingerprints.value,
+        'missing_functions', missing_functions.value,
+        'role_topology', public.runtime_role_topology_fingerprint(),
+        'schema_authority', schema_authority.value,
+        'required_migrations', pg_catalog.to_jsonb(ARRAY[20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140002, 20260810140003, 20260810140004, 20260810140005, 20260810140006, 20260810140007]::bigint[])
+      )
+      FROM function_fingerprints, constraint_fingerprints, index_fingerprints,
+           trigger_fingerprints, catalog_fingerprints, missing_functions, schema_authority
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.refresh_durable_payload_protocol_manifest()
+    RETURNS void
+    LANGUAGE plpgsql
+    VOLATILE
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      runtime_mode text;
+      effect_mode text;
+      snapshot jsonb;
+      caller_superuser boolean;
+    BEGIN
+      SELECT rolsuper INTO STRICT caller_superuser
+      FROM pg_catalog.pg_roles
+      WHERE rolname = current_user;
+
+      IF current_user IS DISTINCT FROM 'maraithon_migrator' AND NOT caller_superuser THEN
+        RAISE EXCEPTION 'Durable payload manifest refresh requires migrator authority'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      SELECT mode INTO STRICT runtime_mode
+      FROM public.runtime_coordination_protocols
+      WHERE name = 'runtime'
+      FOR SHARE;
+
+      SELECT mode INTO STRICT effect_mode
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects'
+      FOR SHARE;
+
+      IF runtime_mode <> 'dark' OR effect_mode <> 'legacy' THEN
+        RAISE EXCEPTION 'Durable payload manifest refresh is allowed only before exact activation'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      snapshot := public.durable_payload_catalog_manifest_snapshot();
+      PERFORM set_config('maraithon.durable_payload_manifest_refresh',
+                         'MIGRATOR_DARK_REFRESH_V1', true);
+
+      INSERT INTO public.durable_payload_protocol_manifests (
+        name, migration_version, catalog_manifest, manifest_digest,
+        inserted_at, updated_at
+      ) VALUES (
+        'durable_payload_140005', 20260810140005, snapshot,
+        public.digest(pg_catalog.convert_to(snapshot::text, 'UTF8'), 'sha256'),
+        timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp())
+      )
+      ON CONFLICT (name) DO UPDATE SET
+        migration_version = EXCLUDED.migration_version,
+        catalog_manifest = EXCLUDED.catalog_manifest,
+        manifest_digest = EXCLUDED.manifest_digest,
+        updated_at = EXCLUDED.updated_at;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'Durable payload manifest protocol authority is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.durable_payload_catalog_ready()
+    RETURNS boolean
+    LANGUAGE plpgsql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      snapshot jsonb;
+      stored_manifest jsonb;
+      stored_digest bytea;
+    BEGIN
+      snapshot := public.durable_payload_catalog_manifest_snapshot();
+
+      SELECT catalog_manifest, manifest_digest
+      INTO STRICT stored_manifest, stored_digest
+      FROM public.durable_payload_protocol_manifests
+      WHERE name = 'durable_payload_140005'
+        AND migration_version = 20260810140005;
+
+      RETURN snapshot = stored_manifest
+        AND stored_manifest -> 'missing_functions' = '[]'::jsonb
+        AND stored_digest = public.digest(
+          pg_catalog.convert_to(stored_manifest::text, 'UTF8'), 'sha256'
+        )
+        AND (
+          SELECT count(DISTINCT version) = 10
+          FROM public.schema_migrations
+          WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140002, 20260810140003, 20260810140004, 20260810140005, 20260810140006, 20260810140007)
+        );
+    EXCEPTION WHEN no_data_found OR undefined_table OR undefined_function THEN
+      RETURN false;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.reject_durable_payload_protocol_manifest_mutation()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      caller_superuser boolean;
+    BEGIN
+      SELECT rolsuper INTO STRICT caller_superuser
+      FROM pg_catalog.pg_roles
+      WHERE rolname = current_user;
+
+      IF TG_OP = 'UPDATE' AND
+         (current_user = 'maraithon_migrator' OR caller_superuser) AND
+         current_setting('maraithon.durable_payload_manifest_refresh', true)
+           = 'MIGRATOR_DARK_REFRESH_V1' THEN
+        RETURN NEW;
+      END IF;
+
+      RAISE EXCEPTION 'Durable payload protocol manifest is immutable'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute("""
+    DROP TRIGGER IF EXISTS reject_durable_payload_protocol_manifest_mutation_trigger
+      ON public.durable_payload_protocol_manifests
+    """)
+
+    execute("""
+    CREATE TRIGGER reject_durable_payload_protocol_manifest_mutation_trigger
+      BEFORE UPDATE OR DELETE ON public.durable_payload_protocol_manifests
+      FOR EACH ROW EXECUTE FUNCTION public.reject_durable_payload_protocol_manifest_mutation()
+    """)
+
+    execute("""
+    DROP TRIGGER IF EXISTS reject_durable_payload_protocol_manifest_truncate_trigger
+      ON public.durable_payload_protocol_manifests
+    """)
+
+    execute("""
+    CREATE TRIGGER reject_durable_payload_protocol_manifest_truncate_trigger
+      BEFORE TRUNCATE ON public.durable_payload_protocol_manifests
+      FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_payload_protocol_manifest_mutation()
+    """)
+
+    execute("""
+    DO $payload_manifest_authority$
+    BEGIN
+      REVOKE ALL ON TABLE public.durable_payload_protocol_manifests
+        FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier,
+          maraithon_incident_operator, maraithon_activation_operator;
+      REVOKE ALL ON FUNCTION
+        public.durable_payload_catalog_manifest_snapshot(),
+        public.refresh_durable_payload_protocol_manifest(),
+        public.durable_payload_catalog_ready(),
+        public.reject_durable_payload_protocol_manifest_mutation()
+        FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier,
+          maraithon_incident_operator, maraithon_activation_operator;
+      GRANT SELECT ON TABLE public.durable_payload_protocol_manifests
+        TO maraithon_runtime, maraithon_activation_operator;
+      GRANT EXECUTE ON FUNCTION
+        public.durable_payload_catalog_manifest_snapshot(),
+        public.durable_payload_catalog_ready()
+        TO maraithon_runtime, maraithon_activation_operator;
+      ALTER TABLE public.durable_payload_protocol_manifests OWNER TO maraithon_object_owner;
+      ALTER FUNCTION public.durable_payload_catalog_manifest_snapshot()
+        OWNER TO maraithon_object_owner;
+      ALTER FUNCTION public.refresh_durable_payload_protocol_manifest()
+        OWNER TO maraithon_object_owner;
+      ALTER FUNCTION public.durable_payload_catalog_ready()
+        OWNER TO maraithon_object_owner;
+      ALTER FUNCTION public.reject_durable_payload_protocol_manifest_mutation()
+        OWNER TO maraithon_object_owner;
+    END
+    $payload_manifest_authority$
+    """)
+
+    execute("SELECT public.refresh_durable_payload_protocol_manifest()")
   end
 
   defp add_not_valid_constraint(table, name, expression) do
