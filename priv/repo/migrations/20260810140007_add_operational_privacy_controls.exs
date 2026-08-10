@@ -7,7 +7,6 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   # metadata-only expansion and every index over an existing table is built
   # online. The operator code performs all cleanup in bounded locked batches.
   @disable_ddl_transaction true
-  @disable_migration_lock true
 
   def up do
     execute(
