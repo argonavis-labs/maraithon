@@ -36,6 +36,11 @@ config :maraithon, :api_auth, bearer_token: api_bearer_token
 
 config :maraithon, :support, email: System.get_env("SUPPORT_EMAIL", "support@maraithon.app")
 
+# Public verification key only. The matching Ed25519 private key must remain in
+# the external incident-operator system and must never be present in this app.
+config :maraithon, Maraithon.Runtime.AgentTerminations,
+  external_attestation_public_key: System.get_env("AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY", "")
+
 # App Store review demo account. When both are set, the reviewer email skips
 # Postmark delivery and the listed code acts as the magic code (see
 # Accounts.app_review_bypass_config/0). Leave unset in dev/test — the bypass

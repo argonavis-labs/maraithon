@@ -733,6 +733,7 @@ flyctl secrets set -a maraithon \
   ADMIN_USERNAME="admin" \
   ADMIN_PASSWORD="replace-with-long-random-password" \
   API_BEARER_TOKEN="replace-with-long-random-token" \
+  AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY="base64-or-hex-ed25519-public-key" \
   OPENAI_API_KEY="sk-proj-..." \
   OPENROUTER_API_KEY="sk-or-v1-..." \
   LLM_MODEL="qwen/qwen3.7-max" \
@@ -829,7 +830,8 @@ Never commit deployment secrets.
 - Keep production secrets in Fly secrets
 - Keep local operator credentials in a file outside the repo, such as `~/.config/maraithon/fly-prod.env`
 - Do not commit `.env`, `.env.*`, service-account JSON, or copied API tokens
-- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `DIRECT_DATABASE_URL`, `CLOAK_KEY`, `FLY_API_TOKEN`, and third-party OAuth secrets as production credentials
+- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `DIRECT_DATABASE_URL`, `MARAITHON_INCIDENT_DATABASE_URL`, `CLOAK_KEY`, `FLY_API_TOKEN`, the Agent-termination private signing key, and third-party OAuth secrets as production credentials
+- Configure `AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY` on every runtime node; keep the matching private key only in the external incident-attestation system
 
 ## Configuration
 
