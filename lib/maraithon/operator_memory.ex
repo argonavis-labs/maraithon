@@ -91,6 +91,7 @@ defmodule Maraithon.OperatorMemory do
     |> order_by([turn, _conversation], desc: turn.inserted_at)
     |> limit(12)
     |> Repo.all()
+    |> Enum.map(&Turn.hydrate/1)
     |> Enum.map(fn turn ->
       %{
         role: turn.role,

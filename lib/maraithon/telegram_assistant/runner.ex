@@ -43,6 +43,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   require Logger
 
   @max_retained_tool_result_bytes 32_000
+  @legacy_turn_scan_limit 500
 
   def run_inbound(attrs) when is_map(attrs) do
     Tracing.with_span(
@@ -1686,29 +1687,64 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp digest_intro_delivered?(conversation_id, run_id) do
+    delivered? =
+      Turn
+      |> where([turn], turn.conversation_id == ^conversation_id)
+      |> where([turn], turn.delivery_state == "delivered")
+      |> where([turn], turn.assistant_run_id == ^run_id)
+      |> where([turn], turn.message_class == "todo_digest_intro")
+      |> Repo.exists?()
+
+    delivered? or legacy_digest_intro_delivered?(conversation_id, run_id)
+  end
+
+  defp legacy_digest_intro_delivered?(conversation_id, run_id) do
     Turn
     |> where([turn], turn.conversation_id == ^conversation_id)
     |> where([turn], turn.delivery_state == "delivered")
-    |> where([turn], fragment("?->>'run_id' = ?", turn.structured_data, ^run_id))
-    |> where(
-      [turn],
-      fragment("?->>'message_class' = 'todo_digest_intro'", turn.structured_data)
-    )
-    |> Repo.exists?()
+    |> where([turn], is_nil(turn.structured_data))
+    |> where([turn], is_nil(turn.assistant_run_id) and is_nil(turn.message_class))
+    |> order_by([turn], desc: turn.inserted_at)
+    |> limit(@legacy_turn_scan_limit)
+    |> Repo.all()
+    |> Enum.map(&Turn.hydrate/1)
+    |> Enum.any?(fn turn ->
+      Turn.effective_assistant_run_id(turn) == run_id and
+        Turn.effective_message_class(turn) == "todo_digest_intro"
+    end)
   end
 
   defp delivered_todo_ids(conversation_id, run_id) do
+    promoted_ids =
+      Turn
+      |> where([turn], turn.conversation_id == ^conversation_id)
+      |> where([turn], turn.delivery_state == "delivered")
+      |> where([turn], turn.assistant_run_id == ^run_id)
+      |> where([turn], turn.message_class == "todo_item")
+      |> where([turn], not is_nil(turn.linked_todo_id))
+      |> select([turn], turn.linked_todo_id)
+      |> distinct(true)
+      |> Repo.all()
+      |> MapSet.new()
+
     Turn
     |> where([turn], turn.conversation_id == ^conversation_id)
     |> where([turn], turn.delivery_state == "delivered")
-    |> where([turn], fragment("?->>'run_id' = ?", turn.structured_data, ^run_id))
-    |> where([turn], fragment("?->>'message_class' = 'todo_item'", turn.structured_data))
-    |> select([turn], turn.structured_data)
+    |> where([turn], is_nil(turn.structured_data))
+    |> where([turn], is_nil(turn.assistant_run_id) and is_nil(turn.message_class))
+    |> order_by([turn], desc: turn.inserted_at)
+    |> limit(@legacy_turn_scan_limit)
     |> Repo.all()
-    |> Enum.reduce(MapSet.new(), fn structured_data, delivered ->
-      case get_in(structured_data || %{}, ["linked_todo", "id"]) do
-        id when is_binary(id) -> MapSet.put(delivered, id)
-        _missing -> delivered
+    |> Enum.map(&Turn.hydrate/1)
+    |> Enum.reduce(promoted_ids, fn turn, delivered ->
+      if Turn.effective_assistant_run_id(turn) == run_id and
+           Turn.effective_message_class(turn) == "todo_item" do
+        case Turn.effective_linked_todo_id(turn) do
+          id when is_binary(id) -> MapSet.put(delivered, id)
+          _missing -> delivered
+        end
+      else
+        delivered
       end
     end)
   end

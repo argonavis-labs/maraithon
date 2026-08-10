@@ -1376,7 +1376,8 @@ defmodule Maraithon.TelegramAssistant do
           where: turn.origin_type == "prepared_action",
           where: turn.origin_id == ^prepared_action.id,
           where:
-            fragment("?->>'prepared_action_id' = ?", turn.structured_data, ^prepared_action.id),
+            turn.prepared_action_id == ^prepared_action.id or
+              (is_nil(turn.prepared_action_id) and turn.origin_id == ^prepared_action.id),
           where: turn.delivery_state == "delivered"
       )
   end

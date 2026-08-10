@@ -93,6 +93,7 @@ defmodule Maraithon.AssistantChat.RunRecovery do
     |> order_by(desc: :inserted_at)
     |> limit(1)
     |> Repo.one()
+    |> Turn.hydrate()
   end
 
   defp expire_ancient_queued_runs do

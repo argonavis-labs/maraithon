@@ -31,6 +31,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   @availability_slot_minutes 30
   @availability_candidate_hours [10, 12, 14, 15]
   @prepared_action_timeout_ms 2_500
+  @legacy_turn_scan_limit 500
 
   def ensure(%Conversation{} = conversation, %Todo{} = todo) do
     card = ActionCards.for_todo(todo, include_disconnected: true)
@@ -119,24 +120,38 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   end
 
   defp primer_turn(%Conversation{id: conversation_id}, todo_id) do
-    Turn
-    |> where([turn], turn.conversation_id == ^conversation_id)
-    |> where(
-      [turn],
-      turn.origin_id == ^primer_origin_id(todo_id) or
-        fragment("?->>'message_class' = ?", turn.structured_data, "todo_chat_primer")
-    )
-    |> order_by([turn], desc: turn.inserted_at)
-    |> limit(1)
-    |> Repo.one()
+    exact =
+      Turn
+      |> where([turn], turn.conversation_id == ^conversation_id)
+      |> where(
+        [turn],
+        turn.origin_id == ^primer_origin_id(todo_id) or turn.message_class == "todo_chat_primer"
+      )
+      |> order_by([turn], desc: turn.inserted_at)
+      |> limit(1)
+      |> Repo.one()
+
+    case exact do
+      %Turn{} = turn ->
+        Turn.hydrate(turn)
+
+      nil ->
+        Turn
+        |> where([turn], turn.conversation_id == ^conversation_id)
+        |> where([turn], is_nil(turn.structured_data) and is_nil(turn.message_class))
+        |> order_by([turn], desc: turn.inserted_at)
+        |> limit(@legacy_turn_scan_limit)
+        |> Repo.all()
+        |> Enum.map(&Turn.hydrate/1)
+        |> Enum.find(&primer_turn?(&1, todo_id))
+    end
   end
 
-  defp primer_turn?(
-         %Turn{origin_id: origin_id, structured_data: structured_data},
-         todo_id
-       ) do
-    origin_id == primer_origin_id(todo_id) or
-      get_in(structured_data || %{}, ["message_class"]) == "todo_chat_primer"
+  defp primer_turn?(%Turn{} = turn, todo_id) do
+    turn = Turn.hydrate(turn)
+
+    turn.origin_id == primer_origin_id(todo_id) or
+      Turn.effective_message_class(turn) == "todo_chat_primer"
   end
 
   defp primer_origin_id(todo_id), do: "todo-chat-primer:#{todo_id}"

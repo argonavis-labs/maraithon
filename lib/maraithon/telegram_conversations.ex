@@ -20,6 +20,11 @@ defmodule Maraithon.TelegramConversations do
   # `open_pending_clarification/1`.
   @awaiting_state_freshness_seconds 10 * 60
 
+  @doc false
+  def hydrate(%Conversation{} = conversation), do: Conversation.hydrate(conversation)
+  def hydrate(%Turn{} = turn), do: Turn.hydrate(turn)
+  def hydrate(other), do: other
+
   def start_or_continue(user_id, chat_id, attrs \\ %{})
       when is_binary(user_id) and is_binary(chat_id) and is_map(attrs) do
     metadata = read_map(attrs, "metadata")
@@ -70,6 +75,7 @@ defmodule Maraithon.TelegramConversations do
           metadata: Map.merge(existing.metadata || %{}, read_map(attrs, "metadata"))
         })
         |> Repo.update()
+        |> hydrate_conversation_result()
 
       nil ->
         changeset =
@@ -87,7 +93,7 @@ defmodule Maraithon.TelegramConversations do
 
         case Repo.insert(changeset) do
           {:ok, conversation} ->
-            {:ok, conversation}
+            {:ok, Conversation.hydrate(conversation)}
 
           {:error, changeset} = error ->
             # Two workers can race before either sees the root lookup. Reuse
@@ -133,6 +139,7 @@ defmodule Maraithon.TelegramConversations do
       metadata: metadata
     })
     |> Repo.insert()
+    |> hydrate_conversation_result()
   end
 
   def get_mobile_thread_for_todo(user_id, todo_id)
@@ -153,6 +160,7 @@ defmodule Maraithon.TelegramConversations do
     |> preload(:turns)
     |> limit(1)
     |> Repo.one()
+    |> Conversation.hydrate()
   end
 
   def get_mobile_thread_for_todo(_user_id, _todo_id), do: nil
@@ -166,6 +174,7 @@ defmodule Maraithon.TelegramConversations do
     |> limit(^limit)
     |> preload(:turns)
     |> Repo.all()
+    |> Enum.map(&Conversation.hydrate/1)
   end
 
   def get_mobile_thread(user_id, conversation_id)
@@ -174,6 +183,7 @@ defmodule Maraithon.TelegramConversations do
     |> where([c], c.user_id == ^user_id and c.id == ^conversation_id and c.surface == "mobile")
     |> preload(:turns)
     |> Repo.one()
+    |> Conversation.hydrate()
   end
 
   def latest_run_for_conversation(conversation_id) when is_binary(conversation_id) do
@@ -276,46 +286,35 @@ defmodule Maraithon.TelegramConversations do
       [turn, conversation],
       conversation.chat_id == ^chat_id and turn.role == "assistant" and
         turn.reply_to_message_id == ^telegram_message_id and
-        fragment(
-          "COALESCE(?->>'terminal_response', 'true') = 'true'",
-          turn.structured_data
-        ) and
+        (is_nil(turn.terminal_response) or turn.terminal_response == true) and
         (conversation.status != "awaiting_confirmation" or turn.turn_kind != "action_result")
     )
-    |> select([turn, _conversation], turn.structured_data)
+    |> select([turn, _conversation], turn)
     |> Repo.all()
-    |> Enum.any?(&terminal_turn_run_reconciled?/1)
+    |> Enum.map(&Turn.hydrate/1)
+    |> Enum.any?(fn turn ->
+      Turn.effective_terminal_response(turn) and
+        terminal_turn_run_reconciled?(Turn.effective_assistant_run_id(turn))
+    end)
   end
 
   def assistant_reply_recorded?(_chat_id, _telegram_message_id), do: false
 
-  defp terminal_turn_run_reconciled?(structured_data) when is_map(structured_data) do
-    case Map.get(structured_data, "run_id") do
-      run_id when is_binary(run_id) ->
-        case Ecto.UUID.cast(run_id) do
-          {:ok, run_id} ->
-            case Repo.get(Maraithon.TelegramAssistant.Run, run_id) do
-              %Maraithon.TelegramAssistant.Run{
-                status: status,
-                finished_at: %DateTime{}
-              }
-              when status in ["completed", "waiting_confirmation", "degraded"] ->
-                true
-
-              _incomplete_or_missing ->
-                false
-            end
-
-          :error ->
-            false
-        end
-
-      _legacy_turn_without_run ->
-        true
+  defp terminal_turn_run_reconciled?(run_id) when is_binary(run_id) do
+    with {:ok, run_id} <- Ecto.UUID.cast(run_id),
+         %Maraithon.TelegramAssistant.Run{
+           status: status,
+           finished_at: %DateTime{}
+         }
+         when status in ["completed", "waiting_confirmation", "degraded"] <-
+           Repo.get(Maraithon.TelegramAssistant.Run, run_id) do
+      true
+    else
+      _invalid_incomplete_or_missing -> false
     end
   end
 
-  defp terminal_turn_run_reconciled?(_structured_data), do: true
+  defp terminal_turn_run_reconciled?(_legacy_turn_without_run), do: true
 
   defp insert_or_reuse_turn(conversation, attrs, telegram_message_id, client_message_id) do
     %Turn{}
@@ -325,7 +324,7 @@ defmodule Maraithon.TelegramConversations do
     |> Repo.insert(mode: :savepoint)
     |> case do
       {:ok, turn} ->
-        {:ok, turn, :inserted}
+        {:ok, Turn.hydrate(turn), :inserted}
 
       {:error, changeset} ->
         cond do
@@ -345,7 +344,7 @@ defmodule Maraithon.TelegramConversations do
 
   defp reuse_turn(conversation_id, field, value, changeset) do
     case Repo.get_by(Turn, [{:conversation_id, conversation_id}, {field, value}]) do
-      %Turn{} = existing -> {:ok, existing, :reused}
+      %Turn{} = existing -> {:ok, Turn.hydrate(existing), :reused}
       nil -> {:error, changeset}
     end
   end
@@ -381,8 +380,8 @@ defmodule Maraithon.TelegramConversations do
              conversation_id: conversation.id,
              telegram_message_id: telegram_message_id
            ),
-         {:ok, turn} <- turn |> Turn.changeset(%{text: text}) |> Repo.update() do
-      {:ok, turn}
+         {:ok, turn} <- turn |> Turn.hydrate() |> Turn.changeset(%{text: text}) |> Repo.update() do
+      {:ok, Turn.hydrate(turn)}
     else
       nil -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
@@ -398,6 +397,7 @@ defmodule Maraithon.TelegramConversations do
     |> order_by([c, _t], desc: c.updated_at)
     |> limit(1)
     |> Repo.one()
+    |> Conversation.hydrate()
   end
 
   def find_turn_by_message(chat_id, telegram_message_id)
@@ -411,6 +411,7 @@ defmodule Maraithon.TelegramConversations do
     |> order_by([turn, _conversation], desc: turn.inserted_at)
     |> limit(1)
     |> Repo.one()
+    |> Turn.hydrate()
   end
 
   def find_turn_by_message(_chat_id, _telegram_message_id), do: nil
@@ -423,6 +424,7 @@ defmodule Maraithon.TelegramConversations do
     |> order_by([turn], desc: turn.inserted_at)
     |> limit(1)
     |> Repo.one()
+    |> Turn.hydrate()
   end
 
   def find_turn_by_client_message_id(_conversation_id, _client_message_id), do: nil
@@ -446,7 +448,7 @@ defmodule Maraithon.TelegramConversations do
         |> Repo.update!()
       end)
       |> case do
-        {:ok, updated_conversation} -> {:ok, updated_conversation}
+        {:ok, updated_conversation} -> {:ok, Conversation.hydrate(updated_conversation)}
         {:error, reason} -> {:error, reason}
       end
     else
@@ -464,6 +466,7 @@ defmodule Maraithon.TelegramConversations do
     |> preload([:linked_delivery, :linked_insight, :turns])
     |> limit(1)
     |> Repo.one()
+    |> Conversation.hydrate()
   end
 
   def find_by_root(_chat_id, _root_message_id), do: nil
@@ -484,6 +487,7 @@ defmodule Maraithon.TelegramConversations do
     |> preload(:turns)
     |> limit(1)
     |> Repo.one()
+    |> Conversation.hydrate()
   end
 
   @doc """
@@ -512,6 +516,7 @@ defmodule Maraithon.TelegramConversations do
     |> preload([:linked_delivery, :linked_insight, :turns])
     |> limit(1)
     |> Repo.one()
+    |> Conversation.hydrate()
     |> resolve_pending_confirmation(confirmation_reply?)
   end
 
@@ -567,6 +572,7 @@ defmodule Maraithon.TelegramConversations do
     |> preload([:linked_delivery, :linked_insight, :turns])
     |> limit(1)
     |> Repo.one()
+    |> Conversation.hydrate()
     |> resolve_pending_clarification(clarification_reply?)
   end
 
@@ -611,6 +617,7 @@ defmodule Maraithon.TelegramConversations do
       metadata: Map.merge(conversation.metadata || %{}, read_map(attrs, "metadata"))
     })
     |> Repo.update()
+    |> hydrate_conversation_result()
   end
 
   def update_metadata(%Conversation{} = conversation, attrs) when is_map(attrs) do
@@ -619,12 +626,14 @@ defmodule Maraithon.TelegramConversations do
       metadata: Map.merge(conversation.metadata || %{}, attrs)
     })
     |> Repo.update()
+    |> hydrate_conversation_result()
   end
 
   def reopen(%Conversation{} = conversation) do
     conversation
     |> Conversation.changeset(%{status: "open"})
     |> Repo.update()
+    |> hydrate_conversation_result()
   end
 
   def close(%Conversation{} = conversation, attrs \\ %{}) do
@@ -635,6 +644,7 @@ defmodule Maraithon.TelegramConversations do
       metadata: Map.merge(conversation.metadata || %{}, read_map(attrs, "metadata"))
     })
     |> Repo.update()
+    |> hydrate_conversation_result()
   end
 
   def recent_turns(%Conversation{} = conversation, opts \\ []) do
@@ -645,6 +655,7 @@ defmodule Maraithon.TelegramConversations do
     |> order_by([t], desc: t.inserted_at)
     |> limit(^limit)
     |> Repo.all()
+    |> Enum.map(&Turn.hydrate/1)
     |> Enum.reverse()
   end
 
@@ -686,7 +697,7 @@ defmodule Maraithon.TelegramConversations do
   defp estimate_conversation_tokens(conversation_id) do
     Turn
     |> where([t], t.conversation_id == ^conversation_id)
-    |> select([t], sum(fragment("octet_length(coalesce(?, ''))", t.text)))
+    |> select([t], sum(coalesce(t.text_bytes, 0)))
     |> Repo.one()
     |> case do
       nil -> 0
@@ -704,6 +715,7 @@ defmodule Maraithon.TelegramConversations do
       |> order_by([t], asc: t.inserted_at)
       |> limit(^drop_count)
       |> Repo.all()
+      |> Enum.map(&Turn.hydrate/1)
 
     case build_history_summary(older_turns, conversation, llm_complete) do
       {:ok, summary_text} when is_binary(summary_text) and summary_text != "" ->
@@ -777,8 +789,11 @@ defmodule Maraithon.TelegramConversations do
 
   defp default_summary_llm(params), do: Maraithon.LLM.complete_routing(params)
 
-  def preload(%Conversation{} = conversation),
-    do: Repo.preload(conversation, [:turns, :linked_delivery, :linked_insight])
+  def preload(%Conversation{} = conversation) do
+    conversation
+    |> Repo.preload([:turns, :linked_delivery, :linked_insight])
+    |> Conversation.hydrate()
+  end
 
   def latest_for_chat(chat_id) when is_binary(chat_id) do
     Conversation
@@ -787,6 +802,7 @@ defmodule Maraithon.TelegramConversations do
     |> preload([:linked_delivery, :linked_insight, :turns])
     |> limit(1)
     |> Repo.one()
+    |> Conversation.hydrate()
   end
 
   def latest_delivery_for_chat(chat_id) when is_binary(chat_id) do
@@ -846,6 +862,7 @@ defmodule Maraithon.TelegramConversations do
       |> preload([:linked_delivery, :linked_insight, :turns])
       |> limit(1)
       |> Repo.one()
+      |> Conversation.hydrate()
     end
   end
 
@@ -855,6 +872,7 @@ defmodule Maraithon.TelegramConversations do
     |> order_by([t], desc: t.inserted_at)
     |> limit(6)
     |> Repo.all()
+    |> Enum.map(&Turn.hydrate/1)
     |> Enum.reverse()
     |> Enum.map_join("\n", fn turn ->
       "#{turn.role}: #{String.slice(turn.text || "", 0, 160)}"
@@ -873,13 +891,18 @@ defmodule Maraithon.TelegramConversations do
         "conversation_id" => conversation.id,
         "chat_id" => conversation.chat_id,
         "role" => turn.role,
-        "text" => turn.text,
         "turn_kind" => turn.turn_kind,
         "origin_type" => turn.origin_type,
         "telegram_message_id" => turn.telegram_message_id,
         "reply_to_message_id" => turn.reply_to_message_id,
         "intent" => turn.intent,
-        "confidence" => turn.confidence
+        "confidence" => turn.confidence,
+        "text_bytes" => turn.text_bytes,
+        "assistant_run_id" => turn.assistant_run_id,
+        "message_class" => turn.message_class,
+        "prepared_action_id" => turn.prepared_action_id,
+        "linked_todo_id" => turn.linked_todo_id,
+        "terminal_response" => turn.terminal_response
       },
       metadata: %{
         "conversation_status" => conversation.status,
@@ -931,6 +954,11 @@ defmodule Maraithon.TelegramConversations do
 
     stale? or resolved?
   end
+
+  defp hydrate_conversation_result({:ok, %Conversation{} = conversation}),
+    do: {:ok, Conversation.hydrate(conversation)}
+
+  defp hydrate_conversation_result(other), do: other
 
   defp root_conflict?(changeset) do
     Enum.any?(changeset.errors, fn
