@@ -15,6 +15,7 @@ defmodule Maraithon.Effects do
   alias Maraithon.Agents.AgentRun
   alias Maraithon.Agents.AgentRunStep
   alias Maraithon.LLM
+  alias Maraithon.Runtime.AgentRuntimeLease
 
   @max_params_bytes 160_000
   @max_param_binary_bytes 128_000
@@ -253,28 +254,64 @@ defmodule Maraithon.Effects do
     owner_user_id =
       Repo.one(from(agent in Agent, where: agent.id == ^agent_id, select: agent.user_id))
 
-    attrs = %{
-      id: effect_id,
-      agent_id: agent_id,
-      owner_user_id: owner_user_id,
-      agent_run_id: agent_run_id,
-      agent_run_step_id: agent_run_step_id,
-      runtime_owner_generation: runtime_owner_generation,
-      effect_type: to_string(effect_type),
-      params: params,
-      legacy_params:
-        if(is_nil(runtime_owner_generation), do: params, else: %{"redacted" => true}),
-      effect_protocol_version: Map.get(params, "__maraithon_effect_protocol"),
-      execution_lane: Map.get(params, "__maraithon_execution_lane"),
-      idempotency_key: idempotency_key,
-      status: "pending",
-      attempts: 0,
-      max_attempts: 3
-    }
+    coordination_attrs = effect_coordination_attrs!(agent_id, runtime_owner_generation)
+
+    attrs =
+      Map.merge(
+        %{
+          id: effect_id,
+          agent_id: agent_id,
+          owner_user_id: owner_user_id,
+          agent_run_id: agent_run_id,
+          agent_run_step_id: agent_run_step_id,
+          runtime_owner_generation: runtime_owner_generation,
+          effect_type: to_string(effect_type),
+          params: params,
+          legacy_params:
+            if(is_nil(runtime_owner_generation), do: params, else: %{"redacted" => true}),
+          effect_protocol_version: Map.get(params, "__maraithon_effect_protocol"),
+          execution_lane: Map.get(params, "__maraithon_execution_lane"),
+          idempotency_key: idempotency_key,
+          status: "pending",
+          attempts: 0,
+          max_attempts: 3
+        },
+        coordination_attrs
+      )
 
     case %Effect{} |> Effect.protocol_changeset(attrs) |> Repo.insert() do
       {:ok, effect} -> {:ok, effect.id}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp effect_coordination_attrs!(_agent_id, nil), do: %{}
+
+  defp effect_coordination_attrs!(agent_id, runtime_owner_generation) do
+    case Repo.one(
+           from(lease in AgentRuntimeLease,
+             where: lease.agent_id == ^agent_id,
+             where: lease.owner_token == ^runtime_owner_generation,
+             select: {
+               lease.coordination_activation_epoch,
+               lease.coordination_partition_id,
+               lease.coordination_partition_epoch,
+               lease.coordination_node_incarnation_id
+             }
+           )
+         ) do
+      {activation_epoch, partition_id, partition_epoch, node_incarnation_id}
+      when not is_nil(activation_epoch) and not is_nil(partition_id) and
+             not is_nil(partition_epoch) and not is_nil(node_incarnation_id) ->
+        %{
+          coordination_activation_epoch: activation_epoch,
+          coordination_partition_id: partition_id,
+          coordination_partition_epoch: partition_epoch,
+          coordination_node_incarnation_id: node_incarnation_id
+        }
+
+      _ ->
+        Repo.rollback(:effect_partition_authority_missing)
     end
   end
 

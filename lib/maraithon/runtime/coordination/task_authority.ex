@@ -6,6 +6,9 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
   @call_timeout 5_000
   @proof_timeout 2_000
   @max_proofs 512
+  @supervisor_history_key {__MODULE__, :local_supervisor_history}
+  @max_supervisor_history 256
+  @persistence_retry_ms 1_000
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   def identity, do: GenServer.call(__MODULE__, :identity, @call_timeout)
@@ -36,9 +39,18 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
   @impl true
   def init(_opts) do
     if is_nil(Process.whereis(TaskSupervisor.task_supervisor())) do
+      supervisor_id = Ecto.UUID.generate()
+      predecessor_ids = :persistent_term.get(@supervisor_history_key, [])
+
+      :persistent_term.put(
+        @supervisor_history_key,
+        [supervisor_id | Enum.take(predecessor_ids, @max_supervisor_history - 1)]
+      )
+
       {:ok,
        %{
-         supervisor_id: Ecto.UUID.generate(),
+         supervisor_id: supervisor_id,
+         proven_predecessor_ids: MapSet.new(predecessor_ids),
          reservations: %{},
          monitors: %{},
          proofs: MapSet.new(),
@@ -59,7 +71,13 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
     owner_ref = Process.monitor(owner)
 
     reservation =
-      Map.merge(identity, %{owner: owner, owner_ref: owner_ref, task_pid: nil, task_ref: nil})
+      Map.merge(identity, %{
+        owner: owner,
+        owner_ref: owner_ref,
+        task_pid: nil,
+        task_ref: nil,
+        down_reason: nil
+      })
 
     state = %{
       state
@@ -104,19 +122,26 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
   end
 
   def handle_call({:terminate_exact, identity}, _from, state) do
-    cond do
-      identity.supervisor_id != state.supervisor_id ->
-        {:reply, {:unknown, :task_supervisor_incarnation_unreachable}, state}
-
-      reservation = exact(state, identity) ->
+    case exact(state, identity) do
+      reservation when is_map(reservation) ->
         terminate_reservation(reservation, state)
 
-      MapSet.member?(state.proofs, proof_key(identity)) ->
-        {:reply, {:ok, :terminated}, state}
+      nil ->
+        cond do
+          identity.supervisor_id == state.supervisor_id and
+              MapSet.member?(state.proofs, proof_key(identity)) ->
+            {:reply, {:ok, :terminated}, state}
 
-      true ->
-        # Registry or child-list absence is deliberately not proof.
-        {:reply, {:unknown, :task_termination_unproven}, state}
+          MapSet.member?(state.proven_predecessor_ids, identity.supervisor_id) ->
+            persist_predecessor_proof(identity, state)
+
+          identity.supervisor_id != state.supervisor_id ->
+            {:reply, {:unknown, :task_supervisor_incarnation_unreachable}, state}
+
+          true ->
+            # Registry or child-list absence is deliberately not proof.
+            {:reply, {:unknown, :task_termination_unproven}, state}
+        end
     end
   end
 
@@ -129,8 +154,52 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
     end
   end
 
+  def handle_info({:retry_persistence, task_id}, state) do
+    case Map.get(state.reservations, task_id) do
+      %{down_reason: reason} = reservation when not is_nil(reason) ->
+        identity = public_identity(reservation)
+
+        case persist_down_proof(identity, reason) do
+          :ok ->
+            {:noreply, remember_proof(delete(state, reservation), identity)}
+
+          _ ->
+            schedule_persistence_retry(task_id)
+            {:noreply, state}
+        end
+
+      %{task_pid: nil} = reservation ->
+        identity = public_identity(reservation)
+
+        case abort_reserved(identity) do
+          :ok ->
+            {:noreply, remember_proof(delete(state, reservation), identity)}
+
+          _ ->
+            schedule_persistence_retry(task_id)
+            {:noreply, state}
+        end
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
   defp owner_down(task_id, state) do
     case Map.get(state.reservations, task_id) do
+      %{down_reason: reason} = reservation when not is_nil(reason) ->
+        state = detach_owner(state, reservation)
+        identity = public_identity(reservation)
+
+        case persist_down_proof(identity, reason) do
+          :ok ->
+            {:noreply, remember_proof(delete(state, reservation), identity)}
+
+          _ ->
+            schedule_persistence_retry(task_id)
+            {:noreply, state}
+        end
+
       %{task_pid: pid, owner_ref: owner_ref} = reservation when is_pid(pid) ->
         _ = terminate_child(pid)
         reservation = %{reservation | owner: nil, owner_ref: nil}
@@ -142,8 +211,18 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
              monitors: Map.delete(state.monitors, owner_ref)
          }}
 
-      %{} = reservation ->
-        {:noreply, delete(state, reservation)}
+      %{task_pid: nil} = reservation ->
+        state = detach_owner(state, reservation)
+        identity = public_identity(reservation)
+
+        case abort_reserved(identity) do
+          :ok ->
+            {:noreply, remember_proof(delete(state, reservation), identity)}
+
+          _ ->
+            schedule_persistence_retry(task_id)
+            {:noreply, state}
+        end
 
       nil ->
         {:noreply, state}
@@ -157,12 +236,34 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
 
       reservation ->
         identity = public_identity(reservation)
-        # The monitor is exact physical termination proof. Persistence failure
-        # retains the reservation/proof in memory; it is never converted from a
-        # Registry miss, timeout, lease expiry or node event.
-        _ = persist_down_proof(identity, reason)
-        state = remember_proof(delete(state, reservation), identity)
-        {:noreply, state}
+
+        # The task monitor is exact physical termination proof. If PostgreSQL
+        # is unavailable retain that proof-bearing reservation and retry; never
+        # turn a transient persistence failure into forgotten authority.
+        case persist_down_proof(identity, reason) do
+          :ok ->
+            {:noreply, remember_proof(delete(state, reservation), identity)}
+
+          _ ->
+            task_ref = reservation.task_ref
+            reservation = %{reservation | task_pid: nil, task_ref: nil, down_reason: reason}
+            state = retain_without_task_monitor(state, reservation, task_id, task_ref)
+            schedule_persistence_retry(task_id)
+            {:noreply, state}
+        end
+    end
+  end
+
+  defp terminate_reservation(%{down_reason: reason} = reservation, state)
+       when not is_nil(reason) do
+    identity = public_identity(reservation)
+
+    case persist_down_proof(identity, reason) do
+      :ok ->
+        {:reply, {:ok, :terminated}, remember_proof(delete(state, reservation), identity)}
+
+      _ ->
+        {:reply, {:unknown, :termination_proof_persistence_failed}, state}
     end
   end
 
@@ -171,15 +272,13 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
     # This exact Authority owns a reservation that never activated under its
     # coupled Task.Supervisor. Abort only the reserved ledger; do not manufacture
     # a physical-DOWN proof or any provider outcome.
-    case TaskClaims.abort_reserved(load_assignment(identity)) do
-      {:ok, _} ->
+    case abort_reserved(identity) do
+      :ok ->
         {:reply, {:ok, :never_activated}, remember_proof(delete(state, reservation), identity)}
 
       _ ->
         {:reply, {:unknown, :termination_proof_persistence_failed}, state}
     end
-  rescue
-    _ -> {:reply, {:unknown, :termination_proof_persistence_failed}, state}
   end
 
   defp terminate_reservation(%{task_pid: pid, task_ref: ref} = reservation, state) do
@@ -225,6 +324,76 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthority do
     end
   rescue
     _ -> {:error, :proof_persistence_failed}
+  catch
+    _, _ -> {:error, :proof_persistence_failed}
+  end
+
+  defp persist_predecessor_proof(identity, state) do
+    assignment = load_assignment(identity)
+
+    result =
+      case assignment.state do
+        "reserved" ->
+          abort_reserved(identity)
+
+        terminal when terminal in ["settled", "outcome_ambiguous"] ->
+          :ok
+
+        _ ->
+          persist_down_proof(identity, :supervisor_restarted)
+      end
+
+    case result do
+      :ok -> {:reply, {:ok, :supervisor_restarted}, remember_proof(state, identity)}
+      _ -> {:reply, {:unknown, :termination_proof_persistence_failed}, state}
+    end
+  rescue
+    _ -> {:reply, {:unknown, :termination_proof_persistence_failed}, state}
+  catch
+    _, _ -> {:reply, {:unknown, :termination_proof_persistence_failed}, state}
+  end
+
+  defp abort_reserved(identity) do
+    case TaskClaims.abort_reserved(load_assignment(identity)) do
+      {:ok, _} -> :ok
+      _ -> {:error, :abort_failed}
+    end
+  rescue
+    _ -> {:error, :abort_failed}
+  catch
+    _, _ -> {:error, :abort_failed}
+  end
+
+  defp schedule_persistence_retry(task_id) do
+    Process.send_after(self(), {:retry_persistence, task_id}, @persistence_retry_ms)
+  end
+
+  defp detach_owner(state, reservation) do
+    owner_ref = reservation.owner_ref
+    if is_reference(owner_ref), do: Process.demonitor(owner_ref, [:flush])
+    reservation = %{reservation | owner: nil, owner_ref: nil}
+
+    %{
+      state
+      | reservations: Map.put(state.reservations, reservation.local_task_id, reservation),
+        monitors:
+          if(is_reference(owner_ref),
+            do: Map.delete(state.monitors, owner_ref),
+            else: state.monitors
+          )
+    }
+  end
+
+  defp retain_without_task_monitor(state, reservation, task_id, task_ref) do
+    %{
+      state
+      | reservations: Map.put(state.reservations, task_id, reservation),
+        monitors:
+          if(is_reference(task_ref),
+            do: Map.delete(state.monitors, task_ref),
+            else: state.monitors
+          )
+    }
   end
 
   defp load_assignment(identity) do

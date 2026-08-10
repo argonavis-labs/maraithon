@@ -11,7 +11,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
   import Ecto.Query
   alias Ecto.Adapters.SQL
   alias Maraithon.Repo
-  alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, TaskAssignment}
+  alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, Protocol, TaskAssignment}
 
   def reserve(%NodeIncarnation{} = session, partition, identity, opts \\ [])
       when is_map(partition) and is_map(identity) and is_list(opts) do
@@ -133,18 +133,77 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
   end
 
   def abort_reserved(%TaskAssignment{} = assignment) do
-    transition(
-      assignment,
-      """
-      state = 'settled', settled_at = timezone('UTC', clock_timestamp()),
-      outcome = 'cancelled_before_provider', updated_at = timezone('UTC', clock_timestamp())
-      """,
-      "state = 'reserved' AND provider_boundary = 'not_entered'"
-    )
+    Repo.transaction(fn ->
+      current = lock_assignment!(assignment)
+
+      settled =
+        case current do
+          %TaskAssignment{state: state, provider_boundary: "not_entered"}
+          when state in ["reserved", "termination_requested"] ->
+            case transition(
+                   current,
+                   """
+                   state = 'settled', settled_at = timezone('UTC', clock_timestamp()),
+                   outcome = 'cancelled_before_provider', updated_at = timezone('UTC', clock_timestamp())
+                   """,
+                   "state IN ('reserved', 'termination_requested') AND provider_boundary = 'not_entered'"
+                 ) do
+              {:ok, value} -> value
+              {:error, reason} -> Repo.rollback(reason)
+            end
+
+          %TaskAssignment{
+            state: "settled",
+            provider_boundary: "not_entered",
+            outcome: "cancelled_before_provider"
+          } = value ->
+            value
+
+          _ ->
+            Repo.rollback(:task_authority_lost)
+        end
+
+      clear_never_activated_work!(settled)
+      settled
+    end)
   end
+
+  defp clear_never_activated_work!(%TaskAssignment{work_kind: "background_job"} = assignment) do
+    set_action!(assignment.id)
+
+    result =
+      SQL.query!(
+        Repo,
+        """
+        UPDATE public.background_jobs
+        SET claimed_by = NULL, claimed_at = NULL, claim_token = NULL,
+            coordination_activation_epoch = NULL, coordination_partition_epoch = NULL,
+            coordination_node_incarnation_id = NULL,
+            coordination_task_assignment_id = NULL,
+            coordination_task_supervisor_id = NULL,
+            coordination_local_task_id = NULL,
+            updated_at = timezone('UTC', clock_timestamp())
+        WHERE id = $1::uuid AND status = 'pending' AND claim_token = $2::uuid
+          AND coordination_task_assignment_id = $3::uuid
+        """,
+        [
+          Ecto.UUID.dump!(assignment.work_id),
+          Ecto.UUID.dump!(assignment.claim_token),
+          Ecto.UUID.dump!(assignment.id)
+        ]
+      )
+
+    if result.num_rows == 1 or never_activated_work_cleared?(assignment),
+      do: :ok,
+      else: Repo.rollback(:coordinated_work_not_converged)
+  end
+
+  defp clear_never_activated_work!(%TaskAssignment{}), do: :ok
 
   def fence_running!(%TaskAssignment{} = assignment) do
     unless Repo.in_transaction?(), do: raise(ArgumentError, "task fence requires transaction")
+
+    assignment = lock_assignment!(assignment)
 
     case SQL.query!(
            Repo,
@@ -156,7 +215,6 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
              AND state = 'running' AND lease_expires_at > timezone('UTC', clock_timestamp())
              AND public.runtime_task_authority_valid(id, activation_epoch, partition_id,
                    partition_epoch, node_incarnation_id, claim_token)
-           FOR SHARE
            """,
            identity_params(assignment)
          ).rows do
@@ -236,18 +294,32 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
   end
 
   def reconcile_proven(limit \\ 25) when is_integer(limit) and limit in 1..100 do
-    Repo.transaction(fn ->
-      assignments =
-        Repo.all(
-          from a in TaskAssignment,
-            where: a.state == "termination_proven",
-            order_by: [asc: a.termination_proven_at, asc: a.id],
-            limit: ^limit,
-            lock: "FOR UPDATE SKIP LOCKED"
-        )
+    candidates =
+      Repo.all(
+        from a in TaskAssignment,
+          where: a.state == "termination_proven",
+          order_by: [asc: a.termination_proven_at, asc: a.id],
+          limit: ^limit
+      )
 
-      Enum.map(assignments, &reconcile_one!/1)
+    candidates
+    |> Enum.reduce_while({:ok, []}, fn assignment, {:ok, results} ->
+      case Repo.transaction(fn ->
+             locked = lock_assignment!(assignment)
+
+             if locked.state == "termination_proven",
+               do: reconcile_one!(locked),
+               else: :already_converged
+           end) do
+        {:ok, :already_converged} -> {:cont, {:ok, results}}
+        {:ok, result} -> {:cont, {:ok, [result | results]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
     end)
+    |> case do
+      {:ok, results} -> {:ok, Enum.reverse(results)}
+      error -> error
+    end
   end
 
   def get(id) when is_binary(id), do: Repo.get(TaskAssignment, id)
@@ -275,25 +347,30 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
         """
       end
 
+    outcome =
+      if provider_entered?, do: "provider_outcome_ambiguous", else: "cancelled_before_provider"
+
+    finish_proven!(assignment, outcome)
+
     result =
       SQL.query!(
         Repo,
         """
         UPDATE public.background_jobs SET #{updates}
-        WHERE id = $1::uuid AND status = 'running' AND claim_token = $2::uuid
+        WHERE id = $1::uuid AND claim_token = $2::uuid
           AND coordination_task_assignment_id = $3::uuid
+          AND ((status = 'running' AND $4::boolean) OR
+               (status IN ('pending', 'running') AND NOT $4::boolean))
         """,
         [
           Ecto.UUID.dump!(assignment.work_id),
           Ecto.UUID.dump!(assignment.claim_token),
-          Ecto.UUID.dump!(assignment.id)
+          Ecto.UUID.dump!(assignment.id),
+          provider_entered?
         ]
       )
 
-    outcome =
-      if provider_entered?, do: "provider_outcome_ambiguous", else: "cancelled_before_provider"
-
-    finish_proven!(assignment, outcome)
+    if result.num_rows != 1, do: Repo.rollback(:coordinated_work_not_converged)
     {assignment.id, result.num_rows, outcome}
   end
 
@@ -330,8 +407,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
        when is_binary(evidence_id) and byte_size(evidence_id) in 1..256 and
               is_binary(proved_by) and byte_size(proved_by) in 1..320 do
     Repo.transaction(fn ->
-      locked =
-        Repo.one!(from a in TaskAssignment, where: a.id == ^assignment.id, lock: "FOR UPDATE")
+      locked = lock_assignment!(assignment)
 
       locked =
         if locked.state in ["reserved", "running"],
@@ -420,8 +496,91 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
     load!(result, :task_authority_lost)
   end
 
+  # Canonical mutation order is coordination protocol -> node -> partition ->
+  # assignment. Work-specific callers may lock canonical Effect authority first.
+  defp lock_authority_rows!(assignment) do
+    _ = Protocol.locked_active!()
+
+    node_rows =
+      SQL.query!(
+        Repo,
+        """
+        SELECT id FROM public.runtime_node_incarnations
+        WHERE id = $1::uuid AND activation_epoch = $2::uuid
+        FOR SHARE
+        """,
+        [
+          Ecto.UUID.dump!(assignment.node_incarnation_id),
+          Ecto.UUID.dump!(assignment.activation_epoch)
+        ]
+      ).rows
+
+    if node_rows == [], do: Repo.rollback(:task_authority_lost)
+
+    partition_rows =
+      SQL.query!(
+        Repo,
+        """
+        SELECT partition_id FROM public.runtime_partitions
+        WHERE partition_id = $1 AND activation_epoch = $2::uuid
+          AND ownership_epoch = $3
+          AND owner_node_incarnation_id = $4::uuid
+        FOR SHARE
+        """,
+        [
+          assignment.partition_id,
+          Ecto.UUID.dump!(assignment.activation_epoch),
+          assignment.partition_epoch,
+          Ecto.UUID.dump!(assignment.node_incarnation_id)
+        ]
+      ).rows
+
+    if partition_rows == [], do: Repo.rollback(:task_authority_lost)
+    :ok
+  end
+
+  defp lock_assignment!(assignment) do
+    lock_authority_rows!(assignment)
+
+    case Repo.one(
+           from(current in TaskAssignment,
+             where: current.id == ^assignment.id,
+             where: current.activation_epoch == ^assignment.activation_epoch,
+             where: current.claim_token == ^assignment.claim_token,
+             where: current.node_incarnation_id == ^assignment.node_incarnation_id,
+             where: current.supervisor_id == ^assignment.supervisor_id,
+             where: current.local_task_id == ^assignment.local_task_id,
+             lock: "FOR UPDATE"
+           )
+         ) do
+      %TaskAssignment{} = current -> current
+      nil -> Repo.rollback(:task_authority_lost)
+    end
+  end
+
+  defp never_activated_work_cleared?(assignment) do
+    case SQL.query!(
+           Repo,
+           """
+           SELECT 1 FROM public.background_jobs
+           WHERE id = $1::uuid AND status = 'pending' AND claim_token IS NULL
+             AND coordination_task_assignment_id IS NULL
+             AND coordination_activation_epoch IS NULL
+             AND coordination_partition_epoch IS NULL
+             AND coordination_node_incarnation_id IS NULL
+             AND coordination_task_supervisor_id IS NULL
+             AND coordination_local_task_id IS NULL
+           """,
+           [Ecto.UUID.dump!(assignment.work_id)]
+         ).rows do
+      [[1]] -> true
+      _ -> false
+    end
+  end
+
   defp transition(assignment, set_sql, where_sql) do
     Repo.transaction(fn ->
+      assignment = lock_assignment!(assignment)
       set_action!(assignment.id)
 
       result =
