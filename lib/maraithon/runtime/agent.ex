@@ -20,6 +20,7 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.OperatorEvents
   alias Maraithon.OperatorEvents.OperatorEvent
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.EffectRunner
@@ -42,6 +43,7 @@ defmodule Maraithon.Runtime.Agent do
   @global_register_retry_ms 25
   @global_register_retries 80
   @recovery_retry_ms 5_000
+  @directive_poll_interval_ms 5_000
   @max_deferred_messages 200
   @periodic_wakeup_scope {"_schedule_key", "agent_periodic_wakeup"}
   @periodic_wakeup_opts [include_legacy_empty_payload: true]
@@ -70,6 +72,9 @@ defmodule Maraithon.Runtime.Agent do
     :current_message_metadata,
     :current_message_id,
     :current_run_id,
+    :current_directive_id,
+    :current_directive_claim_token,
+    :current_directive_kind,
     :deferred_messages,
     :startup_agent,
     :owner_token,
@@ -330,6 +335,21 @@ defmodule Maraithon.Runtime.Agent do
     stop_agent(reason, data)
   end
 
+  def recovering(
+        :info,
+        {:agent_dispatch, {:directive_available, _directive_id}},
+        data
+      ),
+      do: {:keep_state, data}
+
+  def recovering(:info, {:directive_available, _directive_id}, data),
+    do: {:keep_state, data}
+
+  def recovering(:info, :directive_poll, data) do
+    schedule_directive_poll()
+    {:keep_state, data}
+  end
+
   def recovering(:info, {:agent_dispatch, msg}, data) do
     {:keep_state, defer_message(data, msg)}
   end
@@ -401,6 +421,7 @@ defmodule Maraithon.Runtime.Agent do
     schedule_heartbeat(data)
     schedule_checkpoint(data)
     schedule_next_wakeup(data)
+    schedule_directive_poll()
 
     :ok = Dispatch.subscribe(agent.id)
 
@@ -471,15 +492,51 @@ defmodule Maraithon.Runtime.Agent do
 
   def idle(:enter, _old_state, data) do
     Logger.debug("Entering idle state")
-    {:keep_state, drain_deferred_messages(data)}
+
+    data = drain_deferred_messages(data)
+
+    if data.exact_owner?, do: send(self(), :claim_directive)
+    {:keep_state, data}
   end
+
+  def idle(:internal, :claim_directive, %{exact_owner?: true} = data) do
+    claim_and_activate_directive(data)
+  end
+
+  def idle(:internal, :claim_directive, data), do: {:keep_state, data}
 
   def idle({:timeout, :lease_renewal}, :renew_lease, data) do
     renew_exact_lease(data)
   end
 
+  def idle(:info, :claim_directive, %{exact_owner?: true} = data) do
+    claim_and_activate_directive(data)
+  end
+
+  def idle(:info, :claim_directive, data), do: {:keep_state, data}
+
   def idle(:info, {:agent_dispatch, msg}, data) do
     idle(:info, msg, data)
+  end
+
+  def idle(:info, {:directive_available, _directive_id}, %{exact_owner?: true} = data) do
+    {:keep_state, data, [{:next_event, :internal, :claim_directive}]}
+  end
+
+  def idle(:info, {:directive_available, _directive_id}, data), do: {:keep_state, data}
+
+  def idle(:info, :directive_poll, data) do
+    schedule_directive_poll()
+
+    if data.exact_owner? do
+      {:keep_state, data, [{:next_event, :internal, :claim_directive}]}
+    else
+      {:keep_state, data}
+    end
+  end
+
+  def idle(:info, {:wakeup, _job_type, _job_id, _payload}, %{exact_owner?: true} = data) do
+    reject_raw_exact_workload(data, :wakeup, claim?: true)
   end
 
   def idle(:info, {:wakeup, job_type, job_id, payload}, data) do
@@ -534,6 +591,10 @@ defmodule Maraithon.Runtime.Agent do
     stop_agent(reason, data)
   end
 
+  def idle(:info, {:message, _message, _metadata, _message_id}, %{exact_owner?: true} = data) do
+    reject_raw_exact_workload(data, :message, claim?: true)
+  end
+
   def idle(:info, {:message, message, metadata, message_id}, data) do
     metadata = normalize_message_metadata(metadata)
     data = maybe_reset_open_insights_for_refresh(data, message, metadata)
@@ -557,6 +618,10 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   # Handle PubSub events
+  def idle(:info, {:pubsub_event, _topic, _payload}, %{exact_owner?: true} = data) do
+    reject_raw_exact_workload(data, :pubsub_event, claim?: true)
+  end
+
   def idle(:info, {:pubsub_event, topic, payload}, data) do
     if topic in (data.subscriptions || []) do
       Logger.info("Received PubSub event", topic: topic)
@@ -608,6 +673,13 @@ defmodule Maraithon.Runtime.Agent do
     working(:info, msg, data)
   end
 
+  def working(:info, {:directive_available, _directive_id}, data), do: {:keep_state, data}
+
+  def working(:info, :directive_poll, data) do
+    schedule_directive_poll()
+    {:keep_state, data}
+  end
+
   def working(:internal, :execute_behavior, %{exact_owner?: true} = data) do
     if AgentLeases.ready?(data.agent_id, data.owner_token) do
       execute_behavior(data)
@@ -618,12 +690,24 @@ defmodule Maraithon.Runtime.Agent do
 
   def working(:internal, :execute_behavior, data), do: execute_behavior(data)
 
+  def working(:info, {:wakeup, _, _, _}, %{exact_owner?: true} = data) do
+    reject_raw_exact_workload(data, :wakeup)
+  end
+
   def working(:info, {:wakeup, _, _, _} = msg, data) do
     {:keep_state, defer_message(data, msg)}
   end
 
+  def working(:info, {:pubsub_event, _, _}, %{exact_owner?: true} = data) do
+    reject_raw_exact_workload(data, :pubsub_event)
+  end
+
   def working(:info, {:pubsub_event, _, _} = msg, data) do
     {:keep_state, defer_message(data, msg)}
+  end
+
+  def working(:info, {:message, _, _, _}, %{exact_owner?: true} = data) do
+    reject_raw_exact_workload(data, :message)
   end
 
   def working(:info, {:message, _, _, _} = msg, data) do
@@ -667,7 +751,6 @@ defmodule Maraithon.Runtime.Agent do
 
       {:emit, {event_type, payload}, new_behavior_state} ->
         data = %{data | behavior_state: new_behavior_state}
-        data = emit_event(data, to_string(event_type), payload)
         data = complete_current_run(data, event_type, payload)
         data = clear_transient_context(data)
         schedule_next_wakeup(data)
@@ -703,6 +786,14 @@ defmodule Maraithon.Runtime.Agent do
 
   def waiting_effect(:info, {:agent_dispatch, msg}, data) do
     waiting_effect(:info, msg, data)
+  end
+
+  def waiting_effect(:info, {:directive_available, _directive_id}, data),
+    do: {:keep_state, data}
+
+  def waiting_effect(:info, :directive_poll, data) do
+    schedule_directive_poll()
+    {:keep_state, data}
   end
 
   def waiting_effect(:info, {:effect_result, effect_id, _reported_result}, data) do
@@ -780,7 +871,6 @@ defmodule Maraithon.Runtime.Agent do
            ) do
         {:emit, {event_type, payload}, new_behavior_state} ->
           data = %{data | behavior_state: new_behavior_state}
-          data = emit_event(data, to_string(event_type), payload)
           data = complete_current_run(data, event_type, payload)
           data = clear_transient_context(data)
           schedule_next_wakeup(data)
@@ -809,12 +899,24 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
+  def waiting_effect(:info, {:wakeup, _, _, _}, %{exact_owner?: true} = data) do
+    reject_raw_exact_workload(data, :wakeup)
+  end
+
   def waiting_effect(:info, {:wakeup, _, _, _} = msg, data) do
     {:keep_state, defer_message(data, msg)}
   end
 
+  def waiting_effect(:info, {:pubsub_event, _, _}, %{exact_owner?: true} = data) do
+    reject_raw_exact_workload(data, :pubsub_event)
+  end
+
   def waiting_effect(:info, {:pubsub_event, _, _} = msg, data) do
     {:keep_state, defer_message(data, msg)}
+  end
+
+  def waiting_effect(:info, {:message, _, _, _}, %{exact_owner?: true} = data) do
+    reject_raw_exact_workload(data, :message)
   end
 
   def waiting_effect(:info, {:message, _, _, _} = msg, data) do
@@ -879,18 +981,10 @@ defmodule Maraithon.Runtime.Agent do
       {effect_info, pending_effects} ->
         data = %{data | pending_effects: pending_effects}
         data = decrement_budget(data, effect_info.type)
-        record_effect_step_result(effect_info, result)
 
         case result do
           {:ok, result_data} ->
-            update_current_run_from_effect(data.current_run_id, effect_info, result_data)
-
-            data =
-              emit_event(data, "effect_completed", %{
-                effect_id: effect_id,
-                effect_type: effect_info.type,
-                result: result_data
-              })
+            data = persist_effect_outcome(data, effect_id, effect_info, {:ok, result_data})
 
             # Pass result to behavior
             context = build_context(data)
@@ -902,7 +996,6 @@ defmodule Maraithon.Runtime.Agent do
                  ) do
               {:emit, {event_type, payload}, new_behavior_state} ->
                 data = %{data | behavior_state: new_behavior_state}
-                data = emit_event(data, to_string(event_type), payload)
                 data = complete_current_run(data, event_type, payload)
                 data = clear_transient_context(data)
                 schedule_next_wakeup(data)
@@ -925,15 +1018,7 @@ defmodule Maraithon.Runtime.Agent do
             end
 
           {:error, reason} ->
-            update_current_run_error(data.current_run_id, effect_info, reason)
-
-            data =
-              emit_event(data, "effect_failed", %{
-                effect_id: effect_id,
-                effect_type: effect_info.type,
-                failure_code: Maraithon.Redaction.error_class(reason),
-                error: Maraithon.Redaction.error_summary(reason)
-              })
+            data = persist_effect_outcome(data, effect_id, effect_info, {:error, reason})
 
             context = build_context(data)
 
@@ -946,7 +1031,6 @@ defmodule Maraithon.Runtime.Agent do
                    ) do
                 {:emit, {event_type, payload}, new_behavior_state} ->
                   data = %{data | behavior_state: new_behavior_state}
-                  data = emit_event(data, to_string(event_type), payload)
                   data = complete_current_run(data, event_type, payload)
                   data = clear_transient_context(data)
                   schedule_next_wakeup(data)
@@ -981,6 +1065,238 @@ defmodule Maraithon.Runtime.Agent do
   # Private Functions
   # ==========================================================================
 
+  defp claim_and_activate_directive(%{current_directive_id: directive_id} = data)
+       when is_binary(directive_id) do
+    {:stop, :directive_settlement_incomplete, data}
+  end
+
+  defp claim_and_activate_directive(data) do
+    case AgentDirectives.claim_next(data.agent_id, data.user_id, data.owner_token) do
+      {:ok, nil} ->
+        {:keep_state, data}
+
+      {:ok, directive} ->
+        activate_claimed_directive(data, directive)
+
+      {:error, reason} ->
+        Logger.warning("Exact Agent could not claim durable Directive",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        {:stop, {:directive_claim_failed, reason}, data}
+    end
+  end
+
+  defp activate_claimed_directive(data, directive) do
+    claimed_data = %{
+      data
+      | current_directive_id: directive.id,
+        current_directive_claim_token: directive.claim_token,
+        current_directive_kind: directive.kind
+    }
+
+    activation =
+      AgentDirectives.with_live_claim(
+        data.agent_id,
+        directive.id,
+        data.owner_token,
+        directive.claim_token,
+        :ready,
+        fn _locked_directive, _now ->
+          activate_directive_payload_locked(claimed_data, directive.kind, directive.payload)
+        end
+      )
+
+    case activation do
+      {:ok, %{current_trigger: %{type: :wakeup, job_type: "heartbeat"}} = activated_data} ->
+        settle_maintenance_directive(activated_data, :heartbeat)
+
+      {:ok, %{current_trigger: %{type: :wakeup, job_type: "checkpoint"}} = activated_data} ->
+        settle_maintenance_directive(activated_data, :checkpoint)
+
+      {:ok, activated_data} ->
+        activated_data = maybe_refill_budget(activated_data)
+
+        if has_budget?(activated_data) do
+          {:next_state, :working, activated_data, [{:next_event, :internal, :execute_behavior}]}
+        else
+          Logger.warning("No budget, rejecting durable Directive",
+            agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+            directive_reference: Maraithon.Redaction.fingerprint(directive.id)
+          )
+
+          fail_unstarted_directive(activated_data, "execution_failed")
+        end
+
+      {:error, :invalid_directive_payload} ->
+        dead_letter_invalid_directive(claimed_data)
+
+      {:error, reason} ->
+        Logger.warning("Durable Directive activation was fenced",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          directive_reference: Maraithon.Redaction.fingerprint(directive.id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        {:stop, {:directive_activation_failed, reason}, claimed_data}
+    end
+  end
+
+  defp activate_directive_payload_locked(data, "message", payload) when is_map(payload) do
+    with message_id when is_binary(message_id) <- payload["message_id"],
+         metadata when is_map(metadata) <- payload["metadata"] || %{},
+         true <- Map.has_key?(payload, "message") do
+      message = payload["message"]
+      data = maybe_reset_open_insights_for_refresh(data, message, metadata)
+      data = put_message_trigger(data, message, metadata, message_id)
+
+      {:ok,
+       append_event!(data, "message_received", %{
+         message: message,
+         metadata: metadata,
+         message_id: message_id
+       })}
+    else
+      _invalid -> {:error, :invalid_directive_payload}
+    end
+  end
+
+  defp activate_directive_payload_locked(data, "channel_ingress", payload)
+       when is_map(payload) do
+    with topic when is_binary(topic) <- payload["topic"],
+         true <- Map.has_key?(payload, "payload") do
+      event_payload = payload["payload"]
+      data = put_pubsub_trigger(data, topic, event_payload)
+
+      {:ok,
+       append_event!(data, "pubsub_event_received", %{
+         topic: topic,
+         payload: event_payload
+       })}
+    else
+      _invalid -> {:error, :invalid_directive_payload}
+    end
+  end
+
+  defp activate_directive_payload_locked(data, kind, payload)
+       when kind in ["scheduled_wakeup", "manual_wake", "background_job"] and is_map(payload) do
+    with job_type when is_binary(job_type) <- payload["job_type"],
+         job_id when is_binary(job_id) <- payload["job_id"],
+         job_payload when is_map(job_payload) <- payload["payload"] || %{} do
+      data = put_wakeup_trigger(data, job_type, job_id, job_payload)
+
+      if job_type in ["heartbeat", "checkpoint"] do
+        {:ok, data}
+      else
+        {:ok, append_event!(data, "wakeup_received", %{job_id: job_id, job_type: job_type})}
+      end
+    else
+      _invalid -> {:error, :invalid_directive_payload}
+    end
+  end
+
+  defp activate_directive_payload_locked(_data, _kind, _payload),
+    do: {:error, :invalid_directive_payload}
+
+  defp settle_maintenance_directive(data, kind) when kind in [:heartbeat, :checkpoint] do
+    now = DateTime.utc_now()
+
+    settlement =
+      AgentDirectives.settle_with(
+        data.agent_id,
+        data.current_directive_id,
+        data.owner_token,
+        data.current_directive_claim_token,
+        "completed",
+        nil,
+        fn _directive, _claim_now ->
+          case kind do
+            :heartbeat ->
+              updated_data =
+                append_event!(data, "heartbeat_emitted", %{
+                  timestamp: DateTime.to_iso8601(now)
+                })
+
+              with {:ok, _job_id} <- schedule_heartbeat(updated_data) do
+                {:ok,
+                 updated_data
+                 |> Map.put(:last_heartbeat_at, now)
+                 |> clear_transient_context()}
+              end
+
+            :checkpoint ->
+              updated_data =
+                append_event!(data, "checkpoint_created", %{
+                  timestamp: DateTime.to_iso8601(now)
+                })
+
+              with :ok <- persist_exact_snapshot!(updated_data),
+                   {:ok, _job_id} <- schedule_checkpoint(updated_data) do
+                {:ok,
+                 updated_data
+                 |> Map.put(:last_checkpoint_at, now)
+                 |> clear_transient_context()}
+              end
+          end
+        end
+      )
+
+    case settlement do
+      {:ok, %{newly_terminal?: true, result: finalized_data}} ->
+        event_type = if kind == :heartbeat, do: "heartbeat_emitted", else: "checkpoint_created"
+        Logger.info("Agent event", event_log_metadata(event_type, %{}))
+        {:next_state, :idle, finalized_data}
+
+      {:ok, %{newly_terminal?: false}} ->
+        finalized_data = %{
+          clear_transient_context(data)
+          | sequence_num: Events.latest_sequence_num(data.agent_id)
+        }
+
+        {:next_state, :idle, finalized_data}
+
+      {:error, reason} ->
+        {:stop, {:maintenance_directive_settlement_failed, reason}, data}
+    end
+  end
+
+  defp fail_unstarted_directive(data, error_code) do
+    case AgentDirectives.fail(
+           data.agent_id,
+           data.current_directive_id,
+           data.owner_token,
+           data.current_directive_claim_token,
+           error_code,
+           retry_delay_ms: @directive_poll_interval_ms
+         ) do
+      {:ok, _directive} ->
+        {:next_state, :idle, clear_transient_context(data)}
+
+      {:error, reason} ->
+        {:stop, {:directive_failure_settlement_failed, reason}, data}
+    end
+  end
+
+  defp dead_letter_invalid_directive(data) do
+    case AgentDirectives.settle_with(
+           data.agent_id,
+           data.current_directive_id,
+           data.owner_token,
+           data.current_directive_claim_token,
+           "dead_letter",
+           "invalid_directive",
+           fn _directive, _now -> {:ok, :invalid_directive} end
+         ) do
+      {:ok, _settlement} ->
+        {:next_state, :idle, clear_transient_context(data),
+         [{:next_event, :internal, :claim_directive}]}
+
+      {:error, reason} ->
+        {:stop, {:directive_dead_letter_failed, reason}, data}
+    end
+  end
+
   defp emit_event(%{exact_owner?: true} = data, event_type, payload) do
     emit_exact_event(data, event_type, payload, :ready)
   end
@@ -990,6 +1306,30 @@ defmodule Maraithon.Runtime.Agent do
     Events.append(data.agent_id, event_type, payload, sequence_num: sequence_num)
     Logger.info("Agent event", event_log_metadata(event_type, payload))
     %{data | sequence_num: sequence_num}
+  end
+
+  defp emit_exact_event(
+         %{current_directive_id: directive_id, current_directive_claim_token: claim_token} = data,
+         event_type,
+         payload,
+         fence_mode
+       )
+       when is_binary(directive_id) and is_binary(claim_token) do
+    case AgentDirectives.with_live_claim(
+           data.agent_id,
+           directive_id,
+           data.owner_token,
+           claim_token,
+           fence_mode,
+           fn _directive, _now -> {:ok, append_event!(data, event_type, payload)} end
+         ) do
+      {:ok, updated_data} ->
+        Logger.info("Agent event", event_log_metadata(event_type, payload))
+        updated_data
+
+      {:error, reason} ->
+        exit({:exact_directive_event_write_rejected, Maraithon.Redaction.error_class(reason)})
+    end
   end
 
   defp emit_exact_event(data, event_type, payload, fence_mode) do
@@ -1271,6 +1611,11 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
+  defp schedule_directive_poll do
+    Process.send_after(self(), :directive_poll, @directive_poll_interval_ms)
+    :ok
+  end
+
   defp schedule_heartbeat(data) do
     interval = get_config(:heartbeat_interval_ms, 900_000)
     Scheduler.schedule_unique_in(data.agent_id, "heartbeat", interval)
@@ -1502,32 +1847,27 @@ defmodule Maraithon.Runtime.Agent do
       run_step_id: record_effect_step(data, effect_type, tool_name, params)
     }
 
-    # Write to effect outbox. A failed write must not park the agent in
-    # waiting_effect with a phantom pending effect nothing will ever resolve —
-    # surface it through the normal effect-error path instead.
-    write_result =
+    {write_result, data} =
       if validation_error do
-        {:error, {:invalid_effect_request, validation_error}}
-      else
-        try do
-          Maraithon.Effects.request_prepared(data.agent_id, effect_type, tool_name, params, %{
+        data =
+          emit_event(data, "effect_requested", %{
             effect_id: effect_id,
-            idempotency_key: idempotency_key,
-            agent_run_id: data.current_run_id,
-            agent_run_step_id: effect_info.run_step_id
+            effect_type: effect_type,
+            idempotency_key: idempotency_key
           })
-        rescue
-          exception ->
-            {:error, {:effect_write_failed, Maraithon.Redaction.error_class(exception)}}
-        end
-      end
 
-    data =
-      emit_event(data, "effect_requested", %{
-        effect_id: effect_id,
-        effect_type: effect_type,
-        idempotency_key: idempotency_key
-      })
+        {{:error, {:invalid_effect_request, validation_error}}, data}
+      else
+        persist_effect_request(
+          data,
+          effect_info,
+          effect_id,
+          idempotency_key,
+          effect_type,
+          tool_name,
+          params
+        )
+      end
 
     data = %{data | pending_effects: Map.put(data.pending_effects, effect_id, effect_info)}
 
@@ -1563,6 +1903,107 @@ defmodule Maraithon.Runtime.Agent do
         {:next_state, :waiting_effect, data,
          actions ++ [{:next_event, :internal, {:synthetic_effect_result, effect_id, failure}}]}
     end
+  end
+
+  defp persist_effect_request(
+         %{
+           current_directive_id: directive_id,
+           current_directive_claim_token: claim_token,
+           current_run_id: run_id
+         } = data,
+         effect_info,
+         effect_id,
+         idempotency_key,
+         effect_type,
+         tool_name,
+         params
+       )
+       when is_binary(directive_id) and is_binary(claim_token) and is_binary(run_id) do
+    result =
+      AgentDirectives.with_live_claim(
+        data.agent_id,
+        directive_id,
+        data.owner_token,
+        claim_token,
+        :ready,
+        fn directive, now ->
+          with {:ok, persisted_effect_id} <-
+                 Effects.request_prepared(data.agent_id, effect_type, tool_name, params, %{
+                   effect_id: effect_id,
+                   idempotency_key: idempotency_key,
+                   agent_run_id: run_id,
+                   agent_run_step_id: effect_info.run_step_id,
+                   runtime_owner_generation: data.owner_token
+                 }),
+               {:ok, _directive, _ordinal} <-
+                 AgentDirectives.admit_effect_locked(directive, run_id, now) do
+            updated_data =
+              append_event!(data, "effect_requested", %{
+                effect_id: effect_id,
+                effect_type: effect_type,
+                idempotency_key: idempotency_key
+              })
+
+            {:ok, {persisted_effect_id, updated_data}}
+          end
+        end
+      )
+
+    case result do
+      {:ok, {persisted_effect_id, updated_data}} ->
+        Logger.info(
+          "Agent event",
+          event_log_metadata("effect_requested", %{
+            effect_id: effect_id,
+            effect_type: effect_type
+          })
+        )
+
+        {{:ok, persisted_effect_id}, updated_data}
+
+      {:error, reason} ->
+        {{:error, reason}, data}
+    end
+  rescue
+    exception ->
+      {{:error, {:effect_write_failed, Maraithon.Redaction.error_class(exception)}}, data}
+  end
+
+  defp persist_effect_request(
+         data,
+         effect_info,
+         effect_id,
+         idempotency_key,
+         effect_type,
+         tool_name,
+         params
+       ) do
+    result =
+      try do
+        Effects.request_prepared(data.agent_id, effect_type, tool_name, params, %{
+          effect_id: effect_id,
+          idempotency_key: idempotency_key,
+          agent_run_id: data.current_run_id,
+          agent_run_step_id: effect_info.run_step_id,
+          runtime_owner_generation: data.owner_token
+        })
+      rescue
+        exception ->
+          {:error, {:effect_write_failed, Maraithon.Redaction.error_class(exception)}}
+      end
+
+    data =
+      if match?({:ok, _effect_id}, result) do
+        emit_event(data, "effect_requested", %{
+          effect_id: effect_id,
+          effect_type: effect_type,
+          idempotency_key: idempotency_key
+        })
+      else
+        data
+      end
+
+    {result, data}
   end
 
   defp durable_effect_params(args, effect_type, tool_name)
@@ -1646,11 +2087,30 @@ defmodule Maraithon.Runtime.Agent do
     }
 
     run_result =
-      if is_binary(data.owner_token) do
-        Agents.start_exact_runtime_agent_run(agent, data.owner_token, attrs)
-      else
-        # Compatibility-only unfenced launches are never used by AgentSupervisor.
-        Agents.start_runtime_agent_run(agent, attrs)
+      cond do
+        is_binary(data.current_directive_id) and
+            is_binary(data.current_directive_claim_token) ->
+          AgentDirectives.with_live_claim(
+            data.agent_id,
+            data.current_directive_id,
+            data.owner_token,
+            data.current_directive_claim_token,
+            :ready,
+            fn directive, claim_now ->
+              with {:ok, run} <- Agents.start_runtime_agent_run(agent, attrs),
+                   {:ok, _directive} <-
+                     AgentDirectives.bind_run_locked(directive, run.id, claim_now) do
+                {:ok, run}
+              end
+            end
+          )
+
+        is_binary(data.owner_token) ->
+          Agents.start_exact_runtime_agent_run(agent, data.owner_token, attrs)
+
+        true ->
+          # Compatibility-only unfenced launches are never used by AgentSupervisor.
+          Agents.start_runtime_agent_run(agent, attrs)
       end
 
     case run_result do
@@ -1669,7 +2129,50 @@ defmodule Maraithon.Runtime.Agent do
 
   defp record_effect_step(%{current_run_id: nil}, _effect_type, _tool_name, _params), do: nil
 
+  defp record_effect_step(
+         %{
+           current_directive_id: directive_id,
+           current_directive_claim_token: claim_token
+         } = data,
+         effect_type,
+         tool_name,
+         params
+       )
+       when is_binary(directive_id) and is_binary(claim_token) do
+    case AgentDirectives.with_live_claim(
+           data.agent_id,
+           directive_id,
+           data.owner_token,
+           claim_token,
+           :ready,
+           fn _directive, _now ->
+             case persist_run_step(data, effect_type, tool_name, params) do
+               {:ok, step_id} -> {:ok, step_id}
+               {:error, reason} -> {:error, reason}
+             end
+           end
+         ) do
+      {:ok, step_id} ->
+        step_id
+
+      {:error, reason} ->
+        log_run_step_error(data, reason)
+        nil
+    end
+  end
+
   defp record_effect_step(data, effect_type, tool_name, params) do
+    case persist_run_step(data, effect_type, tool_name, params) do
+      {:ok, step_id} ->
+        step_id
+
+      {:error, reason} ->
+        log_run_step_error(data, reason)
+        nil
+    end
+  end
+
+  defp persist_run_step(data, effect_type, tool_name, params) do
     attrs = %{
       step_type: step_type(effect_type),
       effect_type: to_string(effect_type),
@@ -1682,18 +2185,92 @@ defmodule Maraithon.Runtime.Agent do
     }
 
     case Agents.record_agent_run_step(data.current_run_id, data.agent_id, attrs) do
-      {:ok, step} ->
-        step.id
+      {:ok, step} -> {:ok, step.id}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp log_run_step_error(data, reason) do
+    Logger.error("Failed to record agent run step",
+      agent_id: data.agent_id,
+      run_id: data.current_run_id,
+      failure_code: Maraithon.Redaction.error_class(reason)
+    )
+  end
+
+  defp persist_effect_outcome(
+         %{
+           current_directive_id: directive_id,
+           current_directive_claim_token: claim_token
+         } = data,
+         effect_id,
+         effect_info,
+         result
+       )
+       when is_binary(directive_id) and is_binary(claim_token) do
+    event = effect_outcome_event(effect_id, effect_info, result)
+
+    case AgentDirectives.with_live_claim(
+           data.agent_id,
+           directive_id,
+           data.owner_token,
+           claim_token,
+           :ready,
+           fn _directive, _now ->
+             with :ok <- record_effect_step_result(effect_info, result),
+                  :ok <-
+                    update_current_run_from_effect_result(
+                      data.current_run_id,
+                      effect_info,
+                      result
+                    ) do
+               {:ok, append_event!(data, event.type, event.payload)}
+             end
+           end
+         ) do
+      {:ok, updated_data} ->
+        Logger.info("Agent event", event_log_metadata(event.type, event.payload))
+        updated_data
 
       {:error, reason} ->
-        Logger.error("Failed to record agent run step",
+        Logger.error("Exact Agent lost authority while recording an Effect result",
           agent_id: data.agent_id,
           run_id: data.current_run_id,
           failure_code: Maraithon.Redaction.error_class(reason)
         )
 
-        nil
+        exit({:shutdown, :exact_effect_result_fence_lost})
     end
+  end
+
+  defp persist_effect_outcome(data, effect_id, effect_info, result) do
+    :ok = record_effect_step_result(effect_info, result)
+    :ok = update_current_run_from_effect_result(data.current_run_id, effect_info, result)
+    event = effect_outcome_event(effect_id, effect_info, result)
+    emit_event(data, event.type, event.payload)
+  end
+
+  defp effect_outcome_event(effect_id, effect_info, {:ok, result_data}) do
+    %{
+      type: "effect_completed",
+      payload: %{
+        effect_id: effect_id,
+        effect_type: effect_info.type,
+        result: result_data
+      }
+    }
+  end
+
+  defp effect_outcome_event(effect_id, effect_info, {:error, reason}) do
+    %{
+      type: "effect_failed",
+      payload: %{
+        effect_id: effect_id,
+        effect_type: effect_info.type,
+        failure_code: Maraithon.Redaction.error_class(reason),
+        error: Maraithon.Redaction.error_summary(reason)
+      }
+    }
   end
 
   defp record_effect_step_result(%{run_step_id: nil}, _result), do: :ok
@@ -1719,17 +2296,25 @@ defmodule Maraithon.Runtime.Agent do
     })
   end
 
+  defp update_current_run_from_effect_result(run_id, effect_info, {:ok, result_data}),
+    do: update_current_run_from_effect(run_id, effect_info, result_data)
+
+  defp update_current_run_from_effect_result(run_id, effect_info, {:error, reason}),
+    do: update_current_run_error(run_id, effect_info, reason)
+
   defp update_current_run_from_effect(nil, _effect_info, _result_data), do: :ok
 
   defp update_current_run_from_effect(run_id, %{type: :llm_call} = effect_info, result_data) do
-    Agents.update_agent_run(run_id, %{
-      resolved_model: model_from_response(result_data) || model_from_params(effect_info.params),
-      intelligence: intelligence_from_params(effect_info.params),
-      finish_reason: finish_reason_from_response(result_data),
-      generation_mode: "llm"
-    })
-
-    :ok
+    case Agents.update_agent_run(run_id, %{
+           resolved_model:
+             model_from_response(result_data) || model_from_params(effect_info.params),
+           intelligence: intelligence_from_params(effect_info.params),
+           finish_reason: finish_reason_from_response(result_data),
+           generation_mode: "llm"
+         }) do
+      {:ok, _run} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp update_current_run_from_effect(_run_id, _effect_info, _result_data), do: :ok
@@ -1737,22 +2322,95 @@ defmodule Maraithon.Runtime.Agent do
   defp update_current_run_error(nil, _effect_info, _reason), do: :ok
 
   defp update_current_run_error(run_id, %{type: :llm_call} = effect_info, reason) do
-    Agents.update_agent_run(run_id, %{
-      resolved_model: model_from_params(effect_info.params),
-      intelligence: intelligence_from_params(effect_info.params),
-      finish_reason: "error",
-      generation_mode: "error",
-      error: Maraithon.Redaction.error_summary(reason)
-    })
-
-    :ok
+    case Agents.update_agent_run(run_id, %{
+           resolved_model: model_from_params(effect_info.params),
+           intelligence: intelligence_from_params(effect_info.params),
+           finish_reason: "error",
+           generation_mode: "error",
+           error: Maraithon.Redaction.error_summary(reason)
+         }) do
+      {:ok, _run} -> :ok
+      {:error, update_reason} -> {:error, update_reason}
+    end
   end
 
   defp update_current_run_error(_run_id, _effect_info, _reason), do: :ok
 
+  defp complete_current_run(
+         %{
+           current_run_id: run_id,
+           current_directive_id: directive_id,
+           current_directive_claim_token: claim_token
+         } = data,
+         event_type,
+         payload
+       )
+       when is_binary(run_id) and is_binary(directive_id) and is_binary(claim_token) do
+    run_status = if to_string(event_type) == "agent_error", do: "failed", else: "completed"
+
+    attrs =
+      %{
+        status: run_status,
+        metadata: %{"terminal_event" => to_string(event_type)}
+      }
+      |> maybe_put_error(payload)
+
+    settlement =
+      AgentDirectives.settle_with(
+        data.agent_id,
+        directive_id,
+        data.owner_token,
+        claim_token,
+        "completed",
+        nil,
+        fn _directive, _now ->
+          updated_data = append_terminal_run_event!(data, event_type, payload)
+
+          with :ok <- reconcile_run_terminal_results(run_id, data.agent_id),
+               {:ok, _run} <- Agents.complete_agent_run(run_id, attrs),
+               {:ok, _count} <-
+                 Effects.acknowledge_terminal_results_for_run(run_id, data.agent_id),
+               :ok <- persist_exact_snapshot!(updated_data) do
+            {:ok, clear_completed_work_context(updated_data)}
+          end
+        end
+      )
+
+    case settlement do
+      {:ok, %{newly_terminal?: true, result: finalized_data}} ->
+        log_terminal_run_event(event_type, payload)
+        finalized_data
+
+      {:ok, %{newly_terminal?: false}} ->
+        # The commit may have succeeded while the caller lost its acknowledgement.
+        # Immutable terminal claim proof makes this a read-only convergence path.
+        %{
+          clear_completed_work_context(data)
+          | sequence_num: Events.latest_sequence_num(data.agent_id)
+        }
+
+      {:error, reason} ->
+        Logger.error("Failed to atomically settle Agent Directive",
+          agent_id: data.agent_id,
+          run_id: run_id,
+          directive_reference: Maraithon.Redaction.fingerprint(directive_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        data
+    end
+  end
+
   defp complete_current_run(%{current_run_id: nil} = data, _event_type, _payload), do: data
 
   defp complete_current_run(data, event_type, payload) do
+    data =
+      if event_type == :idle do
+        data
+      else
+        emit_event(data, to_string(event_type), payload)
+      end
+
     status = if to_string(event_type) == "agent_error", do: "failed", else: "completed"
 
     attrs =
@@ -1786,10 +2444,43 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
+  defp append_terminal_run_event!(data, :idle, _payload) do
+    append_event!(data, "agent_run_completed", %{
+      run_id: data.current_run_id,
+      outcome: "idle"
+    })
+  end
+
+  defp append_terminal_run_event!(data, event_type, payload) do
+    append_event!(data, to_string(event_type), payload)
+  end
+
+  defp log_terminal_run_event(:idle, _payload) do
+    Logger.info("Agent event", event_log_metadata("agent_run_completed", %{}))
+  end
+
+  defp log_terminal_run_event(event_type, payload) do
+    Logger.info("Agent event", event_log_metadata(to_string(event_type), payload))
+  end
+
+  defp clear_completed_work_context(data) do
+    data
+    |> Map.put(:current_run_id, nil)
+    |> clear_transient_context()
+  end
+
   defp reconcile_run_terminal_results(run_id, agent_id) do
     with {:ok, terminal_results} <- Effects.list_terminal_results_for_run(run_id, agent_id),
-         :ok <- Agents.reconcile_terminal_effect_steps(terminal_results) do
+         :ok <- reconcile_terminal_effect_steps(terminal_results) do
       :ok
+    end
+  end
+
+  defp reconcile_terminal_effect_steps(terminal_results) do
+    if Repo.in_transaction?() do
+      Agents.reconcile_terminal_effect_steps_in_transaction(terminal_results)
+    else
+      Agents.reconcile_terminal_effect_steps(terminal_results)
     end
   end
 
@@ -1802,6 +2493,65 @@ defmodule Maraithon.Runtime.Agent do
          {:ok, _count} <- Effects.acknowledge_terminal_results_for_run(run_id, agent_id) do
       :ok
     end
+  end
+
+  defp cancel_current_run(
+         %{
+           current_run_id: run_id,
+           current_directive_id: directive_id,
+           current_directive_claim_token: claim_token
+         } = data,
+         reason
+       )
+       when is_binary(run_id) and is_binary(directive_id) and is_binary(claim_token) do
+    settlement =
+      AgentDirectives.settle_with(
+        data.agent_id,
+        directive_id,
+        data.owner_token,
+        claim_token,
+        "cancelled",
+        "cancelled",
+        fn _directive, _now ->
+          updated_data =
+            append_event!(data, "agent_run_cancelled", %{
+              run_id: run_id,
+              failure_code: Maraithon.Redaction.error_class(reason)
+            })
+
+          with :ok <- reconcile_run_terminal_results(run_id, data.agent_id),
+               {:ok, _summary} <- Agents.cancel_agent_run(run_id, data.agent_id, reason),
+               {:ok, _count} <-
+                 Effects.acknowledge_terminal_results_for_run(run_id, data.agent_id) do
+            {:ok, clear_completed_work_context(updated_data)}
+          end
+        end
+      )
+
+    case settlement do
+      {:ok, %{newly_terminal?: true, result: finalized_data}} ->
+        Logger.info("Agent event", event_log_metadata("agent_run_cancelled", %{}))
+        finalized_data
+
+      {:ok, %{newly_terminal?: false}} ->
+        %{
+          clear_completed_work_context(data)
+          | sequence_num: Events.latest_sequence_num(data.agent_id)
+        }
+
+      {:error, cancellation_error} ->
+        Logger.warning("Failed to atomically cancel current Directive run",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          directive_reference: Maraithon.Redaction.fingerprint(directive_id),
+          failure_code: Maraithon.Redaction.error_class(cancellation_error)
+        )
+
+        data
+    end
+  rescue
+    _error -> data
+  catch
+    :exit, _reason -> data
   end
 
   defp cancel_current_run(%{current_run_id: nil} = data, _reason), do: data
@@ -1832,6 +2582,64 @@ defmodule Maraithon.Runtime.Agent do
     _error -> data
   catch
     :exit, _reason -> data
+  end
+
+  defp fail_current_run(
+         %{
+           current_run_id: run_id,
+           current_directive_id: directive_id,
+           current_directive_claim_token: claim_token
+         } = data,
+         reason
+       )
+       when is_binary(run_id) and is_binary(directive_id) and is_binary(claim_token) do
+    error_summary = Maraithon.Redaction.error_summary(reason)
+
+    settlement =
+      AgentDirectives.settle_with(
+        data.agent_id,
+        directive_id,
+        data.owner_token,
+        claim_token,
+        "completed",
+        nil,
+        fn _directive, _now ->
+          updated_data =
+            append_event!(data, "agent_run_failed", %{
+              run_id: run_id,
+              failure_code: Maraithon.Redaction.error_class(reason)
+            })
+
+          with :ok <- reconcile_run_terminal_results(run_id, data.agent_id),
+               {:ok, _run} <- Agents.fail_agent_run(run_id, %{error: error_summary}),
+               {:ok, _count} <-
+                 Effects.acknowledge_terminal_results_for_run(run_id, data.agent_id),
+               :ok <- persist_exact_snapshot!(updated_data) do
+            {:ok, clear_completed_work_context(updated_data)}
+          end
+        end
+      )
+
+    case settlement do
+      {:ok, %{newly_terminal?: true, result: finalized_data}} ->
+        Logger.info("Agent event", event_log_metadata("agent_run_failed", %{}))
+        finalized_data
+
+      {:ok, %{newly_terminal?: false}} ->
+        %{
+          clear_completed_work_context(data)
+          | sequence_num: Events.latest_sequence_num(data.agent_id)
+        }
+
+      {:error, failure_reason} ->
+        Logger.warning("Failed to atomically close Directive after Agent failure",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          directive_reference: Maraithon.Redaction.fingerprint(directive_id),
+          failure_code: Maraithon.Redaction.error_class(failure_reason)
+        )
+
+        data
+    end
   end
 
   defp fail_current_run(%{current_run_id: nil} = data, _reason), do: data
@@ -1874,6 +2682,8 @@ defmodule Maraithon.Runtime.Agent do
         Logger.error("Failed to update run step",
           failure_code: Maraithon.Redaction.error_class(reason)
         )
+
+        {:error, reason}
     end
   end
 
@@ -2056,7 +2866,13 @@ defmodule Maraithon.Runtime.Agent do
     }
   end
 
-  defp clear_transient_context(data) do
+  defp clear_transient_context(
+         %{current_run_id: run_id, current_directive_id: directive_id} = data
+       )
+       when is_binary(run_id) and is_binary(directive_id) do
+    # A failed atomic settlement keeps the immutable claim proof in process
+    # state. Dropping it would allow the Agent to look idle while PostgreSQL
+    # still owns one processing attempt.
     %{
       data
       | current_trigger: nil,
@@ -2064,6 +2880,20 @@ defmodule Maraithon.Runtime.Agent do
         current_message: nil,
         current_message_metadata: %{},
         current_message_id: nil
+    }
+  end
+
+  defp clear_transient_context(data) do
+    %{
+      data
+      | current_trigger: nil,
+        current_event: nil,
+        current_message: nil,
+        current_message_metadata: %{},
+        current_message_id: nil,
+        current_directive_id: nil,
+        current_directive_claim_token: nil,
+        current_directive_kind: nil
     }
   end
 
@@ -2293,6 +3123,20 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
+  defp reject_raw_exact_workload(data, workload_type, opts \\ []) do
+    Logger.warning("Exact Agent rejected non-durable workload delivery",
+      agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+      workload_type: workload_type,
+      failure_code: "raw_workload_rejected"
+    )
+
+    if Keyword.get(opts, :claim?, false) do
+      {:keep_state, data, [{:next_event, :internal, :claim_directive}]}
+    else
+      {:keep_state, data}
+    end
+  end
+
   # Buffer a message that arrived while the agent was busy (recovering, working,
   # or waiting on an effect) and replay it once the agent is idle again. Without
   # this, connector pubsub events and direct messages were silently dropped in
@@ -2378,18 +3222,45 @@ defmodule Maraithon.Runtime.Agent do
 
   defp renew_exact_lease(%{exact_owner?: true, exact_activated?: true} = data) do
     renewal =
-      case data.guard_generation do
-        nil ->
-          AgentLeases.renew(data.agent_id, data.owner_token, ttl_ms: data.lease_ttl_ms)
+      Repo.transaction(fn ->
+        lease_result =
+          case data.guard_generation do
+            nil ->
+              AgentLeases.renew(data.agent_id, data.owner_token, ttl_ms: data.lease_ttl_ms)
 
-        guard_generation ->
-          AgentLeases.renew_recovery(
-            data.agent_id,
-            data.owner_token,
-            guard_generation,
-            ttl_ms: data.lease_ttl_ms
-          )
-      end
+            guard_generation ->
+              AgentLeases.renew_recovery(
+                data.agent_id,
+                data.owner_token,
+                guard_generation,
+                ttl_ms: data.lease_ttl_ms
+              )
+          end
+
+        lease =
+          case lease_result do
+            {:ok, lease} -> lease
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        case {data.current_directive_id, data.current_directive_claim_token} do
+          {directive_id, claim_token}
+          when is_binary(directive_id) and is_binary(claim_token) ->
+            case AgentDirectives.renew_claim_in_transaction(
+                   data.agent_id,
+                   directive_id,
+                   data.owner_token,
+                   claim_token,
+                   ttl_ms: data.lease_ttl_ms
+                 ) do
+              {:ok, _directive} -> lease
+              {:error, reason} -> Repo.rollback(reason)
+            end
+
+          _no_active_directive ->
+            lease
+        end
+      end)
 
     case renewal do
       {:ok, %{draining_at: nil}} ->
@@ -2399,7 +3270,7 @@ defmodule Maraithon.Runtime.Agent do
         stop_agent("runtime_authority_revoked", data)
 
       {:error, reason} ->
-        Logger.warning("Exact Agent lease renewal failed",
+        Logger.warning("Exact Agent lease/Directive renewal failed",
           agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
           failure_code: Maraithon.Redaction.error_class(reason)
         )

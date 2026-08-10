@@ -41,6 +41,9 @@ defmodule Maraithon.Connectors.Connector do
       }
   """
 
+  alias Maraithon.Runtime.AgentDirectiveIngress
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
+
   @type event :: %{
           type: String.t(),
           source: String.t(),
@@ -81,12 +84,45 @@ defmodule Maraithon.Connectors.Connector do
   Helper to publish an event to PubSub.
   """
   def publish(topic, event) do
-    Phoenix.PubSub.broadcast(
-      Maraithon.PubSub,
-      topic,
-      {:pubsub_event, topic, event}
-    )
+    if RuntimeConfig.exact_agent_runtime_enabled?() do
+      case AgentDirectiveIngress.publish_topic(topic, event,
+             dedupe_key: connector_dedupe_key(topic, event)
+           ) do
+        {:ok, _result} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      Phoenix.PubSub.broadcast(
+        Maraithon.PubSub,
+        topic,
+        {:pubsub_event, topic, event}
+      )
+    end
   end
+
+  defp connector_dedupe_key(topic, event) when is_map(event) do
+    identity =
+      event["dedupe_key"] || event[:dedupe_key] || event["id"] || event[:id] ||
+        event["source_item_id"] || event[:source_item_id]
+
+    if is_binary(identity) and identity != "" do
+      source = event["source"] || event[:source] || "connector"
+      type = event["type"] || event[:type] || "event"
+      candidate = "connector:#{source}:#{type}:#{identity}"
+
+      if byte_size(candidate) <= 220 do
+        candidate
+      else
+        "connector:sha256:" <>
+          (:crypto.hash(:sha256, topic <> ":" <> candidate)
+           |> Base.encode16(case: :lower))
+      end
+    else
+      nil
+    end
+  end
+
+  defp connector_dedupe_key(_topic, _event), do: nil
 
   @doc """
   Build a standard event struct.

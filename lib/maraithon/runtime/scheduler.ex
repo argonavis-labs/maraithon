@@ -6,8 +6,11 @@ defmodule Maraithon.Runtime.Scheduler do
   use GenServer
 
   import Ecto.Query
+  alias Maraithon.Agents.Agent
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.ScheduledJob
@@ -457,8 +460,102 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   defp deliver_job(job) do
-    # Atomically claim for dispatch. PubSub acknowledges only after at least
-    # one subscriber mailbox accepts the message.
+    if RuntimeConfig.exact_agent_runtime_enabled?() do
+      durably_accept_job(job)
+    else
+      deliver_job_legacy(job)
+    end
+  end
+
+  defp durably_accept_job(job) do
+    user_id =
+      Repo.one(from(agent in Agent, where: agent.id == ^job.agent_id, select: agent.user_id))
+
+    result =
+      if is_binary(user_id) do
+        Repo.transaction(fn ->
+          payload = %{
+            "job_type" => job.job_type,
+            "job_id" => job.id,
+            "payload" => job.payload || %{}
+          }
+
+          directive =
+            case AgentDirectives.enqueue_in_transaction(
+                   job.agent_id,
+                   user_id,
+                   "scheduled_wakeup",
+                   payload,
+                   "scheduled_job:#{job.id}"
+                 ) do
+              {:ok, directive} -> directive
+              {:error, reason} -> Repo.rollback(reason)
+            end
+
+          locked_job =
+            ScheduledJob
+            |> where([stored], stored.id == ^job.id)
+            |> lock("FOR UPDATE")
+            |> Repo.one()
+
+          case locked_job do
+            %ScheduledJob{status: "pending"} ->
+              now = DatabaseClock.now!()
+
+              {1, _rows} =
+                Repo.update_all(
+                  from(stored in ScheduledJob,
+                    where: stored.id == ^job.id and stored.status == "pending"
+                  ),
+                  set: [
+                    status: "delivered",
+                    delivered_at: now,
+                    claimed_by: nil,
+                    claimed_at: nil,
+                    dispatched_at: nil
+                  ],
+                  inc: [attempts: 1]
+                )
+
+              directive
+
+            %ScheduledJob{status: status}
+            when status in ["delivered", "cancelled", "failed"] ->
+              Repo.rollback(:scheduled_job_already_terminal)
+
+            nil ->
+              Repo.rollback(:scheduled_job_not_found)
+
+            _other ->
+              Repo.rollback(:scheduled_job_not_pending)
+          end
+        end)
+      else
+        {:error, :scheduled_job_agent_not_found}
+      end
+
+    case result do
+      {:ok, directive} ->
+        :ok = AgentDirectives.notify_committed(directive)
+        :ok
+
+      {:error, :scheduled_job_already_terminal} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Scheduled job durable acceptance deferred",
+          job_reference: Maraithon.Redaction.fingerprint(job.id),
+          agent_reference: Maraithon.Redaction.fingerprint(job.agent_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp deliver_job_legacy(job) do
+    # Compatibility path for the stopped-fleet non-rolling cutover. Mailbox
+    # receipt is not durable acceptance and is never used by the exact runtime.
     case Repo.update_all(
            from(j in ScheduledJob,
              where: j.id == ^job.id,

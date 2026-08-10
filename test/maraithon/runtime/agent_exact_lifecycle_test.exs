@@ -10,11 +10,14 @@ defmodule Maraithon.Runtime.AgentExactLifecycleTest do
   alias Maraithon.Repo
   alias Maraithon.Runtime
   alias Maraithon.Runtime.Agent, as: RuntimeAgent
+  alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentWatcher
+  alias Maraithon.Runtime.Scheduler
+  alias Maraithon.Runtime.ScheduledJob
   alias Maraithon.Runtime.Snapshot
 
   test "preclaims a ready exact lease and exposes only local token metadata" do
@@ -41,6 +44,28 @@ defmodule Maraithon.Runtime.AgentExactLifecycleTest do
     assert AgentLeases.get(agent.id) == nil
     assert AgentRestartGuards.get(agent.id) == nil
     assert Agents.get_agent(agent.id).status == "running"
+  end
+
+  test "exact Agents reject raw mailbox workload paths" do
+    agent = running_agent("exact-raw-workload-fence")
+    {supervisor, watcher} = exact_runtime(recover?: false)
+
+    {:ok, pid} = start_exact(agent, supervisor, watcher)
+    wait_for_state(pid, :idle)
+    owner_token = registry_token(agent.id)
+
+    send(pid, {:agent_dispatch, {:message, "raw", %{}, Ecto.UUID.generate()}})
+    send(pid, {:agent_dispatch, {:pubsub_event, "raw:topic", %{"value" => 1}}})
+    send(pid, {:agent_dispatch, {:wakeup, "wakeup", Ecto.UUID.generate(), %{}}})
+
+    assert {:idle, _data} = :sys.get_state(pid)
+
+    refute Enum.any?(Events.list_events(agent.id), fn event ->
+             event.event_type in ["message_received", "pubsub_event_received", "wakeup_received"]
+           end)
+
+    assert Repo.aggregate(AgentDirective, :count, :id) == 0
+    assert :ok = AgentSupervisor.stop_agent(pid, "test_cleanup", owner_token)
   end
 
   test "renews the same owner token in every resident state" do
@@ -313,6 +338,141 @@ defmodule Maraithon.Runtime.AgentExactLifecycleTest do
     assert guard.needs_recovery
     assert DateTime.compare(guard.updated_at, stopped_agent.stopped_at) in [:lt, :eq]
     assert Repo.get!(Effect, effect_id).status == "pending"
+  end
+
+  test "message Directive binds its run and admits its Effect under one exact claim" do
+    agent = running_agent("directive-message")
+    {supervisor, watcher} = exact_runtime(recover?: false)
+
+    {:ok, pid} =
+      start_exact(agent, supervisor, watcher, ttl_ms: 5_000, renew_interval_ms: 100)
+
+    wait_for_state(pid, :idle)
+    owner_token = registry_token(agent.id)
+    message_id = "directive-message-1"
+
+    assert {:ok, %{directive_id: directive_id, message_id: ^message_id}} =
+             Runtime.send_message(agent.id, "hello exact runtime", %{
+               "message_id" => message_id
+             })
+
+    waiting_data =
+      assert_eventually_value(fn ->
+        case :sys.get_state(pid) do
+          {:waiting_effect, data} -> data
+          _other -> nil
+        end
+      end)
+
+    directive = Repo.get!(AgentDirective, directive_id)
+    [{effect_id, effect_info}] = Map.to_list(waiting_data.pending_effects)
+    effect = Repo.get!(Effect, effect_id)
+
+    assert directive.status == "processing"
+    assert directive.claimed_by_generation == owner_token
+    assert directive.claim_token == waiting_data.current_directive_claim_token
+    assert directive.active_run_id == waiting_data.current_run_id
+    assert directive.effect_count == 1
+    assert directive.effect_admitted_at != nil
+    assert effect.agent_run_id == directive.active_run_id
+    assert effect.agent_run_step_id == effect_info.run_step_id
+
+    requested_event =
+      agent.id
+      |> Events.list_events(limit: 50)
+      |> Enum.find(&(&1.event_type == "effect_requested"))
+
+    assert requested_event != nil
+
+    Repo.update_all(from(stored in Effect, where: stored.id == ^effect_id),
+      set: [
+        status: "completed",
+        result: %{"content" => "RESPOND: durable terminal"},
+        result_envelope: %{"status" => "ok", "version" => 1}
+      ]
+    )
+
+    send(
+      pid,
+      {:agent_dispatch, {:effect_result, effect_id, {:ok, %{content: "forged mailbox value"}}}}
+    )
+
+    completed =
+      assert_eventually_value(fn ->
+        case Repo.get!(AgentDirective, directive_id) do
+          %AgentDirective{status: "completed"} = directive -> directive
+          _other -> nil
+        end
+      end)
+
+    run = Repo.get!(Maraithon.Agents.AgentRun, completed.active_run_id)
+    acknowledged_effect = Repo.get!(Effect, effect_id)
+    snapshot = Snapshot.latest(agent.id)
+
+    assert run.status == "completed"
+    assert acknowledged_effect.result_acknowledged_at != nil
+    assert snapshot != nil
+
+    response_event =
+      agent.id
+      |> Events.list_events(limit: 50)
+      |> Enum.find(&(&1.event_type == "agent_response"))
+
+    assert response_event.payload["response"] == "durable terminal"
+    assert snapshot.sequence_num == response_event.sequence_num
+    wait_for_state(pid, :idle)
+
+    assert :ok = AgentSupervisor.stop_agent(pid, "test_cleanup", owner_token)
+    assert Repo.get!(AgentDirective, directive_id).status == "completed"
+  end
+
+  test "durable scheduled checkpoint settles Event Snapshot and Directive atomically" do
+    agent = running_agent("directive-checkpoint")
+    {supervisor, watcher} = exact_runtime(recover?: false)
+
+    {:ok, pid} =
+      start_exact(agent, supervisor, watcher, ttl_ms: 5_000, renew_interval_ms: 100)
+
+    wait_for_state(pid, :idle)
+    owner_token = registry_token(agent.id)
+    scheduler = start_supervised!({Scheduler, []})
+
+    {:ok, job_id} =
+      Scheduler.schedule_at(
+        agent.id,
+        "checkpoint",
+        DateTime.add(DateTime.utc_now(), -1, :second),
+        %{"source" => "focused_test"}
+      )
+
+    send(scheduler, {:fire, job_id})
+
+    directive =
+      assert_eventually_value(fn ->
+        case Repo.get_by(AgentDirective, dedupe_key: "scheduled_job:#{job_id}") do
+          %AgentDirective{status: "completed"} = directive -> directive
+          _other -> nil
+        end
+      end)
+
+    job = Repo.get!(ScheduledJob, job_id)
+    snapshot = Snapshot.latest(agent.id)
+
+    assert job.status == "delivered"
+    assert directive.terminal_by_generation == owner_token
+    assert is_binary(directive.terminal_claim_token)
+    assert snapshot != nil
+
+    checkpoint_event =
+      agent.id
+      |> Events.list_events(limit: 50)
+      |> Enum.find(&(&1.event_type == "checkpoint_created"))
+
+    assert checkpoint_event != nil
+    assert snapshot.sequence_num == checkpoint_event.sequence_num
+    assert Repo.get!(Maraithon.Agents.Agent, agent.id).active_run_id == nil
+
+    assert :ok = AgentSupervisor.stop_agent(pid, "test_cleanup", owner_token)
   end
 
   test "checkpoint Event and Snapshot are atomic against exact lease loss" do

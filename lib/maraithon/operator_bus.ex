@@ -5,15 +5,63 @@ defmodule Maraithon.OperatorBus do
 
   alias Maraithon.OperatorEvents
   alias Maraithon.OperatorEvents.OperatorEvent
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentDirectiveIngress
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
 
   def publish(attrs) when is_map(attrs) do
-    with {:ok, %OperatorEvent{} = event} <- OperatorEvents.record(attrs) do
-      :ok = broadcast(event)
-      {:ok, event}
+    if RuntimeConfig.exact_agent_runtime_enabled?() do
+      publish_durable(attrs)
+    else
+      with {:ok, %OperatorEvent{} = event} <- OperatorEvents.record(attrs) do
+        :ok = broadcast_legacy(event)
+        {:ok, event}
+      end
     end
   end
 
   def broadcast(%OperatorEvent{} = event) do
+    if RuntimeConfig.exact_agent_runtime_enabled?() do
+      case AgentDirectiveIngress.publish_topics(
+             topics_for_event(event),
+             serialize_event(event),
+             dedupe_key: "operator_event:#{event.id}"
+           ) do
+        {:ok, _result} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      broadcast_legacy(event)
+    end
+  end
+
+  defp publish_durable(attrs) do
+    result =
+      Repo.transaction(fn ->
+        with {:ok, %OperatorEvent{} = event} <- OperatorEvents.record(attrs),
+             {:ok, ingress} <-
+               AgentDirectiveIngress.publish_topics_in_transaction(
+                 topics_for_event(event),
+                 serialize_event(event),
+                 dedupe_key: "operator_event:#{event.id}"
+               ) do
+          %{event: event, ingress: ingress}
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, %{event: event, ingress: ingress}} ->
+        :ok = AgentDirectiveIngress.notify_committed(ingress)
+        {:ok, event}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp broadcast_legacy(%OperatorEvent{} = event) do
     payload = serialize_event(event)
 
     Enum.each(topics_for_event(event), fn topic ->

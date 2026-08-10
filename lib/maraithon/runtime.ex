@@ -9,6 +9,7 @@ defmodule Maraithon.Runtime do
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentPackageVersion
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLifecycleOperations
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentRegistry
@@ -391,13 +392,32 @@ defmodule Maraithon.Runtime do
       nil ->
         {:error, :not_found}
 
-      %{status: status} when status in ["running", "degraded"] ->
-        message_id = Ecto.UUID.generate()
-        :ok = Dispatch.dispatch(id, {:message, message, metadata, message_id})
-        {:ok, %{message_id: message_id}}
+      %{status: status} = agent when status in ["running", "degraded"] ->
+        if RuntimeConfig.exact_agent_runtime_enabled?() do
+          enqueue_message_directive(agent, message, metadata)
+        else
+          message_id = Ecto.UUID.generate()
+          :ok = Dispatch.dispatch(id, {:message, message, metadata, message_id})
+          {:ok, %{message_id: message_id}}
+        end
 
       _agent ->
         {:error, :agent_stopped}
+    end
+  end
+
+  defp enqueue_message_directive(agent, message, metadata) do
+    with {:ok, message_id} <- durable_message_id(metadata),
+         {:ok, payload} <- durable_message_payload(message, metadata, message_id),
+         {:ok, directive} <-
+           AgentDirectives.enqueue(
+             agent.id,
+             agent.user_id,
+             "message",
+             payload,
+             "message:#{message_id}"
+           ) do
+      {:ok, %{message_id: message_id, directive_id: directive.id}}
     end
   end
 
@@ -1075,6 +1095,43 @@ defmodule Maraithon.Runtime do
 
   defp response_status("agent_error"), do: "error"
   defp response_status(_event_type), do: "completed"
+
+  defp durable_message_id(metadata) when is_map(metadata) do
+    case metadata["message_id"] || metadata[:message_id] do
+      nil ->
+        {:ok, Ecto.UUID.generate()}
+
+      value when is_binary(value) and byte_size(value) in 1..200 ->
+        if String.valid?(value) and not Regex.match?(~r/[\x00-\x1F\x7F]/u, value),
+          do: {:ok, value},
+          else: {:error, :invalid_message_id}
+
+      _invalid ->
+        {:error, :invalid_message_id}
+    end
+  end
+
+  defp durable_message_id(_metadata), do: {:error, :invalid_message_metadata}
+
+  defp durable_message_payload(message, metadata, message_id) when is_map(metadata) do
+    %{"message" => message, "metadata" => metadata, "message_id" => message_id}
+    |> Jason.encode()
+    |> case do
+      {:ok, encoded} ->
+        case Jason.decode(encoded) do
+          {:ok, payload} when is_map(payload) -> {:ok, payload}
+          _invalid -> {:error, :invalid_message_payload}
+        end
+
+      {:error, _reason} ->
+        {:error, :invalid_message_payload}
+    end
+  rescue
+    _error -> {:error, :invalid_message_payload}
+  end
+
+  defp durable_message_payload(_message, _metadata, _message_id),
+    do: {:error, :invalid_message_metadata}
 
   defp correlation_id(metadata) when is_map(metadata) do
     metadata["correlation_id"] || metadata[:correlation_id] || Ecto.UUID.generate()

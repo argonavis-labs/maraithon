@@ -23,6 +23,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
+  alias Maraithon.Runtime.Dispatch
 
   @runnable_statuses ~w(running degraded)
   @default_claim_ttl_ms 60_000
@@ -38,8 +39,10 @@ defmodule Maraithon.Runtime.AgentDirectives do
   def enqueue(agent_id, user_id, kind, payload, dedupe_key, opts \\ [])
 
   def enqueue(agent_id, user_id, kind, payload, dedupe_key, opts) when is_list(opts) do
-    with {:ok, prepared} <- prepare_enqueue(agent_id, user_id, kind, payload, dedupe_key, opts) do
-      Repo.transaction(fn -> enqueue_prepared!(prepared) end)
+    with {:ok, prepared} <- prepare_enqueue(agent_id, user_id, kind, payload, dedupe_key, opts),
+         {:ok, directive} <- Repo.transaction(fn -> enqueue_prepared!(prepared) end) do
+      :ok = notify_committed(directive)
+      {:ok, directive}
     end
   end
 
@@ -67,6 +70,20 @@ defmodule Maraithon.Runtime.AgentDirectives do
 
   def enqueue_in_transaction(_agent_id, _user_id, _kind, _payload, _dedupe_key, _opts),
     do: {:error, :invalid_directive}
+
+  @doc """
+  Sends a best-effort ID-only nudge after a caller-owned enqueue transaction commits.
+
+  Durable acceptance is the committed Directive row. Missing subscribers or a
+  dropped mailbox notification do not change the result; resident Agents and
+  wake reconciliation also poll PostgreSQL.
+  """
+  def notify_committed(%AgentDirective{agent_id: agent_id, id: directive_id})
+      when is_binary(agent_id) and is_binary(directive_id) do
+    Dispatch.dispatch(agent_id, {:directive_available, directive_id})
+  end
+
+  def notify_committed(_directive), do: :ok
 
   def claim_next(agent_id, user_id, owner_generation, opts \\ [])
 

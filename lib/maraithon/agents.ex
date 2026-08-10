@@ -529,6 +529,89 @@ defmodule Maraithon.Agents do
     end)
   end
 
+  @doc false
+  def reconcile_terminal_effect_steps_in_transaction(effects) when is_list(effects) do
+    if Repo.in_transaction?() do
+      now = DatabaseClock.now!()
+
+      Enum.reduce_while(effects, :ok, fn effect, :ok ->
+        case reconcile_terminal_effect_step_in_transaction(effect, now) do
+          :ok -> {:cont, :ok}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end)
+    else
+      {:error, :transaction_required}
+    end
+  end
+
+  def reconcile_terminal_effect_steps_in_transaction(_effects),
+    do: {:error, :invalid_terminal_effects}
+
+  defp reconcile_terminal_effect_step_in_transaction(
+         %{
+           agent_run_step_id: step_id,
+           agent_run_id: run_id,
+           agent_id: agent_id,
+           status: status
+         } = effect,
+         now
+       )
+       when is_binary(step_id) and is_binary(run_id) and is_binary(agent_id) and
+              status in ["completed", "failed"] do
+    set_fields =
+      if status == "completed" do
+        [
+          status: "completed",
+          response_payload: effect.result || %{},
+          completed_at: now,
+          updated_at: now
+        ]
+      else
+        error = effect.error || "effect_failed"
+
+        [
+          status: "failed",
+          error: error,
+          response_payload: %{"error" => error},
+          completed_at: now,
+          updated_at: now
+        ]
+      end
+
+    {updated_count, _rows} =
+      Repo.update_all(
+        from(step in AgentRunStep,
+          where: step.id == ^step_id,
+          where: step.agent_run_id == ^run_id,
+          where: step.agent_id == ^agent_id,
+          where: step.status == "requested"
+        ),
+        set: set_fields
+      )
+
+    case updated_count do
+      1 ->
+        :ok
+
+      0 ->
+        case Repo.one(
+               from(step in AgentRunStep,
+                 where: step.id == ^step_id,
+                 where: step.agent_run_id == ^run_id,
+                 where: step.agent_id == ^agent_id,
+                 select: step.status
+               )
+             ) do
+          ^status -> :ok
+          nil -> {:error, :run_step_not_owned}
+          other_status -> {:error, {:run_step_not_requested, other_status}}
+        end
+    end
+  end
+
+  defp reconcile_terminal_effect_step_in_transaction(_effect, _now), do: :ok
+
   def update_agent_run_step(step_id, agent_id, run_id, attrs)
       when is_binary(step_id) and is_binary(agent_id) and is_binary(run_id) and is_map(attrs) do
     do_update_agent_run_step(step_id, attrs, {agent_id, run_id})
