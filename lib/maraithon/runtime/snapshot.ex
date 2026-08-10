@@ -90,9 +90,7 @@ defmodule Maraithon.Runtime.Snapshot do
       snapshot.payload_encryption_version != 1 or
         is_nil(snapshot.payload_encryption_version) or
         is_nil(snapshot.state_data) or is_nil(snapshot.budget) or
-        snapshot.legacy_state_data != ^%{} or snapshot.legacy_budget != ^%{} or
-        snapshot.payload_binding_version != 1 or is_nil(snapshot.payload_binding_key_tag) or
-        is_nil(snapshot.payload_binding_mac)
+        snapshot.legacy_state_data != ^%{} or snapshot.legacy_budget != ^%{}
     )
     |> Repo.aggregate(:count, :id, log: false)
   end
@@ -115,9 +113,7 @@ defmodule Maraithon.Runtime.Snapshot do
               snapshot.payload_encryption_version != 1 or
                 is_nil(snapshot.payload_encryption_version) or
                 is_nil(snapshot.state_data) or is_nil(snapshot.budget) or
-                snapshot.legacy_state_data != ^%{} or snapshot.legacy_budget != ^%{} or
-                snapshot.payload_binding_version != 1 or
-                is_nil(snapshot.payload_binding_key_tag) or is_nil(snapshot.payload_binding_mac)
+                snapshot.legacy_state_data != ^%{} or snapshot.legacy_budget != ^%{}
             )
             |> order_by([snapshot], asc: snapshot.id)
             |> offset(^skip)
@@ -149,10 +145,10 @@ defmodule Maraithon.Runtime.Snapshot do
   def backfill_legacy_payload_encryption(_opts),
     do: {:error, :invalid_snapshot_payload_backfill}
 
-  defp contract_legacy_payload(%__MODULE__{} = snapshot) do
-    state_data = authoritative_legacy(snapshot.legacy_state_data, snapshot.state_data)
-    budget = authoritative_legacy(snapshot.legacy_budget, snapshot.budget)
-
+  defp contract_legacy_payload(
+         %__MODULE__{legacy_state_data: state_data, legacy_budget: budget} = snapshot
+       )
+       when is_map(state_data) and is_map(budget) do
     changeset =
       snapshot
       |> changeset(%{
@@ -178,10 +174,7 @@ defmodule Maraithon.Runtime.Snapshot do
     _error -> {:error, :payload_schema_invalid}
   end
 
-  defp authoritative_legacy(legacy, _encrypted) when is_map(legacy) and legacy != %{}, do: legacy
-  defp authoritative_legacy(_legacy, encrypted) when is_map(encrypted), do: encrypted
-  defp authoritative_legacy(legacy, _encrypted) when is_map(legacy), do: legacy
-  defp authoritative_legacy(_legacy, _encrypted), do: %{}
+  defp contract_legacy_payload(%__MODULE__{}), do: {:error, :payload_schema_invalid}
 
   defp payload_backfill_options(opts) do
     if Keyword.keyword?(opts) and

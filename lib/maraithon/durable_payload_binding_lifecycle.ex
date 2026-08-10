@@ -85,12 +85,12 @@ defmodule Maraithon.DurablePayloadBindingLifecycle do
   end
 
   @doc false
-  def lock_source_tables!(lock_mode \\ "SHARE MODE") when is_binary(lock_mode) do
+  def lock_source_tables! do
     targets()
     |> Enum.map(& &1.table)
     |> Enum.uniq()
     |> Enum.each(fn table ->
-      Repo.query!("LOCK TABLE public.#{table} IN #{lock_mode}", [], log: false)
+      Repo.query!("LOCK TABLE public.#{table} IN SHARE MODE", [], log: false)
     end)
 
     :ok
@@ -117,23 +117,56 @@ defmodule Maraithon.DurablePayloadBindingLifecycle do
   def validate_evidence(_opts), do: {:error, :payload_lifecycle_evidence_required}
 
   @doc false
-  def verify_protocol_evidence!(evidence, lock \\ "FOR SHARE") when is_map(evidence) do
-    case Repo.query!(
-           """
-           SELECT activation_evidence_id, activation_evidence_digest, activated_by, exact_revision
-           FROM public.effect_execution_protocols
-           WHERE name = 'effects'
-           #{lock}
-           """,
-           [],
-           log: false
-         ).rows do
-      [[id, digest, operator, revision]]
+  def lock_exact_protocol! do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "payload lifecycle protocol fence requires a transaction")
+
+    runtime_mode =
+      case Repo.query!(
+             "SELECT mode FROM public.runtime_coordination_protocols WHERE name = 'runtime' FOR SHARE",
+             [],
+             log: false
+           ).rows do
+        [[mode]] -> mode
+        [] -> Repo.rollback(:runtime_coordination_protocol_missing)
+      end
+
+    effect_row =
+      case Repo.query!(
+             """
+             SELECT mode, activation_evidence_id, activation_evidence_digest,
+                    activated_by, exact_revision
+             FROM public.effect_execution_protocols
+             WHERE name = 'effects'
+             FOR SHARE
+             """,
+             [],
+             log: false
+           ).rows do
+        [row] -> row
+        [] -> Repo.rollback(:effect_execution_protocol_missing)
+      end
+
+    case {runtime_mode, effect_row} do
+      {"partition_fenced_v1", ["generation_fenced_v1", id, digest, operator, revision]}
+      when is_binary(id) and is_binary(digest) and byte_size(digest) == 32 and
+             is_binary(operator) and is_binary(revision) ->
+        %{id: id, digest: digest, operator: operator, revision: revision}
+
+      _mismatch ->
+        Repo.rollback(:payload_lifecycle_protocol_pair_mismatch)
+    end
+  end
+
+  @doc false
+  def verify_protocol_evidence!(evidence) when is_map(evidence) do
+    case lock_exact_protocol!() do
+      %{id: id, digest: digest, operator: operator, revision: revision}
       when id == evidence.id and digest == evidence.digest and operator == evidence.operator and
              revision == evidence.revision ->
         :ok
 
-      _invalid ->
+      _mismatch ->
         Repo.rollback(:payload_lifecycle_evidence_mismatch)
     end
   end
