@@ -174,6 +174,7 @@ defmodule Maraithon.UserMemory do
     |> order_by([turn, _conversation], desc: turn.inserted_at)
     |> limit(^@recent_turn_limit)
     |> Repo.all()
+    |> Enum.map(&Turn.hydrate/1)
     |> Enum.map(fn turn ->
       %{
         role: turn.role,

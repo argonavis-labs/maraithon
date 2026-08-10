@@ -192,8 +192,9 @@ defmodule Maraithon.AssistantChat do
         user_turn_id: user_turn_id
       }) do
     with %Run{} = run <- Repo.get(Run, run_id),
-         %Conversation{} = conversation <- Repo.get(Conversation, conversation_id),
-         %Turn{} = user_turn <- Repo.get(Turn, user_turn_id) do
+         %Conversation{} = conversation <-
+           conversation_id |> then(&Repo.get(Conversation, &1)) |> Conversation.hydrate(),
+         %Turn{} = user_turn <- user_turn_id |> then(&Repo.get(Turn, &1)) |> Turn.hydrate() do
       # Recovery sweeps may re-dispatch a run the original cast already
       # handled; only queued runs execute.
       if run.status == "queued" do
