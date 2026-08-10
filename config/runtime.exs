@@ -745,6 +745,147 @@ if config_env() == :prod do
 
   direct_database_url = System.get_env("DIRECT_DATABASE_URL") || database_url
 
+  database_tls_mode =
+    case System.get_env("DATABASE_TLS_MODE", "verify_peer")
+         |> String.trim()
+         |> String.downcase() do
+      mode when mode in ["verify", "verify_peer"] ->
+        :verify_peer
+
+      mode when mode in ["private_network_override", "insecure_override"] ->
+        confirmation = System.get_env("DATABASE_TLS_INSECURE_CONFIRMATION", "")
+        reason = System.get_env("DATABASE_TLS_INSECURE_REASON", "") |> String.trim()
+
+        unless confirmation == "I_ACKNOWLEDGE_DATABASE_TLS_IS_NOT_VERIFIED" do
+          raise """
+          DATABASE_TLS_INSECURE_CONFIRMATION must contain the exact audited
+          confirmation when DATABASE_TLS_MODE requests an insecure override.
+          """
+        end
+
+        unless Regex.match?(~r/\A[a-z0-9][a-z0-9._:-]{2,127}\z/, reason) do
+          raise """
+          DATABASE_TLS_INSECURE_REASON must be a content-free reason code using
+          3-128 lowercase ASCII letters, digits, dots, colons, underscores, or hyphens.
+          """
+        end
+
+        IO.warn(
+          "Database TLS peer verification is disabled by audited private-network override " <>
+            "(reason_code=#{reason})"
+        )
+
+        {:insecure_override, reason}
+
+      value ->
+        raise """
+        DATABASE_TLS_MODE must be verify_peer or private_network_override,
+        got an unsupported value: #{inspect(value)}
+        """
+    end
+
+  case System.get_env("DATABASE_SSL") do
+    nil ->
+      :ok
+
+    value ->
+      case value |> String.trim() |> String.downcase() do
+        enabled when enabled in ["true", "1"] ->
+          if database_tls_mode != :verify_peer do
+            raise "DATABASE_SSL conflicts with DATABASE_TLS_MODE"
+          end
+
+        disabled when disabled in ["false", "0"] ->
+          if database_tls_mode == :verify_peer do
+            raise """
+            DATABASE_SSL=false cannot disable verified production TLS. Use the
+            explicit DATABASE_TLS_MODE private-network override and confirmation.
+            """
+          end
+
+        _invalid ->
+          raise "DATABASE_SSL must be true or false when set"
+      end
+  end
+
+  database_ca_path = System.get_env("DATABASE_TLS_CA_CERT_PATH", "") |> String.trim()
+
+  database_ca_options =
+    case database_tls_mode do
+      :verify_peer ->
+        if database_ca_path == "" do
+          cacerts =
+            try do
+              :public_key.cacerts_get()
+            rescue
+              _error ->
+                raise "could not load the operating-system CA trust store for database TLS"
+            catch
+              _kind, _reason ->
+                raise "could not load the operating-system CA trust store for database TLS"
+            end
+
+          if cacerts == [] do
+            raise "the operating-system CA trust store is empty; database TLS cannot be verified"
+          end
+
+          {[cacerts: cacerts], :operating_system}
+        else
+          unless Path.type(database_ca_path) == :absolute and File.regular?(database_ca_path) do
+            raise "DATABASE_TLS_CA_CERT_PATH must name an absolute readable CA certificate file"
+          end
+
+          {[cacertfile: String.to_charlist(database_ca_path)], :custom_file}
+        end
+
+      {:insecure_override, _reason} ->
+        {[], :insecure_override}
+    end
+
+  verified_database_options = fn url, env_name ->
+    uri = URI.parse(url)
+
+    unless is_binary(uri.host) and uri.host != "" do
+      raise "#{env_name} must contain a database hostname"
+    end
+
+    query = if uri.query, do: Enum.to_list(URI.query_decoder(uri.query)), else: []
+
+    if Enum.any?(query, fn {key, value} ->
+         case String.downcase(key) do
+           "ssl" -> String.downcase(value) != "true"
+           "sslmode" -> String.downcase(value) != "verify-full"
+           _key -> false
+         end
+       end) do
+      raise "#{env_name} contains a TLS query option that does not verify peer and hostname"
+    end
+
+    case database_tls_mode do
+      :verify_peer ->
+        {ca_options, _ca_source} = database_ca_options
+
+        [
+          ssl:
+            [
+              verify: :verify_peer,
+              server_name_indication: String.to_charlist(uri.host),
+              customize_hostname_check: [
+                match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+              ]
+            ] ++ ca_options
+        ]
+
+      {:insecure_override, _reason} ->
+        [ssl: false]
+    end
+  end
+
+  database_tls_options = verified_database_options.(database_url, "DATABASE_URL")
+
+  direct_database_tls_options =
+    verified_database_options.(direct_database_url, "DIRECT_DATABASE_URL")
+
   database_pool_mode =
     case System.get_env("DATABASE_POOL_MODE", "") |> String.trim() |> String.downcase() do
       "" ->
@@ -765,8 +906,18 @@ if config_env() == :prod do
         raise "DATABASE_POOL_MODE must be \"transaction\" or \"session\", got: #{inspect(value)}"
     end
 
-  # For Cloud SQL connections via Unix socket
+  # For Cloud SQL connections via Unix socket. A local socket has no TLS peer
+  # or hostname to authenticate, so it is available only through the same
+  # explicit, audited private-network override as any other unverified path.
   socket_dir = System.get_env("CLOUD_SQL_SOCKET_DIR")
+
+  if socket_dir && database_tls_mode == :verify_peer do
+    raise """
+    CLOUD_SQL_SOCKET_DIR bypasses database TLS peer verification. Remove it for
+    verified TCP or use the explicit private-network override and confirmation.
+    """
+  end
+
   pool_size = String.to_integer(System.get_env("POOL_SIZE", "8"))
   queue_target = String.to_integer(System.get_env("DB_QUEUE_TARGET_MS", "250"))
   queue_interval = String.to_integer(System.get_env("DB_QUEUE_INTERVAL_MS", "2000"))
@@ -810,17 +961,37 @@ if config_env() == :prod do
       # Direct connection (local/testing)
       maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
-      [
-        url: database_url,
-        socket_options: maybe_ipv6,
-        ssl: System.get_env("DATABASE_SSL", "false") == "true"
-      ]
+      [url: database_url, socket_options: maybe_ipv6]
+      |> Kernel.++(database_tls_options)
       |> Kernel.++(common_repo_options)
       |> Kernel.++(postgrex_pool_options)
     end
 
+  {_ca_options, database_ca_source} = database_ca_options
+
+  database_tls_audit = %{
+    mode:
+      case database_tls_mode do
+        :verify_peer -> :verify_peer
+        {:insecure_override, _reason} -> :insecure_override
+      end,
+    ca_source: database_ca_source,
+    repo_transport: if(socket_dir, do: :unix_socket, else: :tcp),
+    insecure_override_reason:
+      case database_tls_mode do
+        :verify_peer -> nil
+        {:insecure_override, reason} -> reason
+      end
+  }
+
   config :maraithon, Maraithon.Repo, repo_config
   config :maraithon, :direct_database_url, direct_database_url
+
+  config :maraithon,
+         :direct_database_options,
+         [url: direct_database_url] ++ direct_database_tls_options
+
+  config :maraithon, :database_tls_audit, database_tls_audit
   config :maraithon, :database_pool_mode, database_pool_mode
 
   # Secret key base for sessions/signing
