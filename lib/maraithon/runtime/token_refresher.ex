@@ -1,115 +1,95 @@
 defmodule Maraithon.Runtime.TokenRefresher do
   @moduledoc """
-  Periodically refreshes OAuth tokens before they expire.
-  """
+  Executes one durably partitioned OAuth refresh at a time.
 
-  use GenServer
+  Cadence and ownership live in `background_jobs`; this module has no process,
+  mailbox, or timer authority. The provider lane serializes each logical
+  account and applies provider-wide durable cooldowns.
+  """
 
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
+  alias Maraithon.OAuth.Token
+  alias Maraithon.Repo
   alias Maraithon.Runtime.Config
 
   require Logger
 
-  @name __MODULE__
-  @default_interval_ms :timer.minutes(5)
   @default_lookahead_seconds 15 * 60
   @default_batch_size 100
-  @default_initial_delay_ms :timer.seconds(5)
 
-  def start_link(opts \\ []) do
-    case Keyword.get(opts, :name, @name) do
-      nil -> GenServer.start_link(__MODULE__, opts)
-      name -> GenServer.start_link(__MODULE__, opts, name: name)
-    end
-  end
-
-  @impl true
-  def init(opts) do
-    state = %{
-      interval_ms:
-        positive_integer_opt(
-          opts,
-          :interval_ms,
-          Config.positive_integer(:oauth_refresh_interval_ms, @default_interval_ms)
-        ),
-      lookahead_seconds:
-        positive_integer_opt(
-          opts,
-          :lookahead_seconds,
-          Config.positive_integer(:oauth_refresh_lookahead_seconds, @default_lookahead_seconds)
-        ),
-      batch_size:
-        positive_integer_opt(
-          opts,
-          :batch_size,
-          Config.positive_integer(:oauth_refresh_batch_size, @default_batch_size)
-        ),
-      observer: Keyword.get(opts, :observer)
-    }
-
-    initial_delay_ms = positive_integer_opt(opts, :initial_delay_ms, @default_initial_delay_ms)
-    schedule_tick(initial_delay_ms)
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_info(:tick, state) do
-    result = run_cycle(state)
-
-    if result.attempted > 0 do
-      Logger.info("OAuth token refresh cycle",
-        attempted: result.attempted,
-        refreshed: result.refreshed,
-        failed: result.failed
+  @doc "Runs the bounded compatibility sweep synchronously."
+  def run_once(opts \\ []) do
+    lookahead_seconds =
+      positive_integer_opt(
+        opts,
+        :lookahead_seconds,
+        Config.positive_integer(:oauth_refresh_lookahead_seconds, @default_lookahead_seconds)
       )
-    end
 
-    if is_pid(state.observer) do
-      send(state.observer, {:oauth_refresh_cycle, result})
-    end
+    batch_size =
+      positive_integer_opt(
+        opts,
+        :batch_size,
+        Config.positive_integer(:oauth_refresh_batch_size, @default_batch_size)
+      )
 
-    schedule_tick(state.interval_ms)
-    {:noreply, state}
-  rescue
-    error ->
-      Logger.warning("OAuth token refresh cycle failed", reason: Exception.message(error))
-      schedule_tick(state.interval_ms)
-      {:noreply, state}
-  end
-
-  defp run_cycle(state) do
-    state.lookahead_seconds
+    lookahead_seconds
     |> OAuth.list_expiring_tokens()
-    |> Enum.take(state.batch_size)
+    |> Enum.filter(&refresh_supported_provider?(&1.provider))
+    |> Enum.take(batch_size)
     |> Enum.reduce(%{attempted: 0, refreshed: 0, failed: 0}, fn token, acc ->
-      if refresh_supported_provider?(token.provider) do
-        case OAuth.refresh_if_expiring(token.user_id, token.provider, state.lookahead_seconds) do
-          {:ok, _updated} ->
-            %{acc | attempted: acc.attempted + 1, refreshed: acc.refreshed + 1}
+      case refresh_token(token, lookahead_seconds) do
+        {:ok, _result} ->
+          %{acc | attempted: acc.attempted + 1, refreshed: acc.refreshed + 1}
 
-          {:error, reason} ->
-            Logger.warning("OAuth token refresh failed",
-              user_id: token.user_id,
-              provider: token.provider,
-              reason: inspect(reason)
-            )
-
-            # R1: report immediately so a terminal failure (invalid_grant,
-            # revoked, missing refresh token) reaches the user at this
-            # cycle instead of waiting for the next active scan failure.
-            # `report_access_issue` already classifies the error shape
-            # (`ConnectedAccounts.normalize_access_issue_reason/1`) and is a
-            # no-op for transient/network errors, so this never notifies on
-            # a retryable failure.
-            report_refresh_issue(token.user_id, token.provider, reason)
-
-            %{acc | attempted: acc.attempted + 1, failed: acc.failed + 1}
-        end
-      else
-        acc
+        {:error, _reason} ->
+          %{acc | attempted: acc.attempted + 1, failed: acc.failed + 1}
       end
     end)
+  end
+
+  @doc "Executes the durable partition for one OAuth token row."
+  def run_token(token_id, opts \\ [])
+
+  def run_token(token_id, opts) when is_integer(token_id) do
+    lookahead_seconds =
+      positive_integer_opt(
+        opts,
+        :lookahead_seconds,
+        Config.positive_integer(:oauth_refresh_lookahead_seconds, @default_lookahead_seconds)
+      )
+
+    case Repo.get(Token, token_id) do
+      nil ->
+        {:ok, %{outcome: "missing", token_id: token_id}}
+
+      %Token{} = token ->
+        if refresh_supported_provider?(token.provider) do
+          refresh_token(token, lookahead_seconds)
+        else
+          {:ok, %{outcome: "unsupported", token_id: token_id}}
+        end
+    end
+  end
+
+  def run_token(_token_id, _opts), do: {:error, :invalid_token_partition}
+
+  defp refresh_token(%Token{} = token, lookahead_seconds) do
+    case OAuth.refresh_if_expiring(token.user_id, token.provider, lookahead_seconds) do
+      {:ok, _updated} ->
+        {:ok, %{outcome: "refreshed", provider: provider_family(token.provider)}}
+
+      {:error, reason} = error ->
+        Logger.warning("OAuth token refresh failed",
+          user_id: token.user_id,
+          provider: token.provider,
+          reason: inspect(reason)
+        )
+
+        report_refresh_issue(token.user_id, token.provider, reason)
+        error
+    end
   end
 
   defp report_refresh_issue(user_id, provider, reason) do
@@ -118,9 +98,22 @@ defmodule Maraithon.Runtime.TokenRefresher do
     _ -> :ok
   end
 
-  defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
-    Process.send_after(self(), :tick, delay_ms)
+  def provider_family(provider) when is_binary(provider) do
+    provider
+    |> String.split(":", parts: 2)
+    |> List.first()
   end
+
+  def provider_family(_provider), do: "unknown"
+
+  def refresh_supported_provider?("google"), do: true
+  def refresh_supported_provider?("notion"), do: true
+
+  def refresh_supported_provider?(provider) when is_binary(provider) do
+    String.starts_with?(provider, "google:") or String.starts_with?(provider, "slack:")
+  end
+
+  def refresh_supported_provider?(_provider), do: false
 
   defp positive_integer_opt(opts, key, default) when is_list(opts) and is_atom(key) do
     case Keyword.get(opts, key, default) do
@@ -128,14 +121,4 @@ defmodule Maraithon.Runtime.TokenRefresher do
       _ -> default
     end
   end
-
-  defp refresh_supported_provider?("google"), do: true
-
-  defp refresh_supported_provider?("notion"), do: true
-
-  defp refresh_supported_provider?(provider) when is_binary(provider) do
-    String.starts_with?(provider, "google:") or String.starts_with?(provider, "slack:")
-  end
-
-  defp refresh_supported_provider?(_provider), do: false
 end

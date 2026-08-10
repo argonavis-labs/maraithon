@@ -55,17 +55,9 @@ defmodule Maraithon.Runtime.WatchRenewerTest do
       )
     end)
 
-    start_supervised!(
-      {WatchRenewer,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.minutes(30),
-       lookahead_seconds: 24 * 60 * 60,
-       batch_size: 10,
-       initial_delay_ms: 10}
-    )
+    summary = WatchRenewer.run_once(lookahead_seconds: 24 * 60 * 60, batch_size: 10)
 
-    assert_receive {:watch_renewal_cycle, %{attempted: 1, renewed: 1, failed: 0}}, 2_000
+    assert summary == %{attempted: 1, renewed: 1, failed: 0}
 
     cursor = SourceCursors.get(account.id, "gmail_history_id")
     # The renewal must not rewind progress already made (R5: only seed the
@@ -94,17 +86,9 @@ defmodule Maraithon.Runtime.WatchRenewerTest do
       "watch_expires_at" => far_future
     })
 
-    start_supervised!(
-      {WatchRenewer,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.minutes(30),
-       lookahead_seconds: 24 * 60 * 60,
-       batch_size: 10,
-       initial_delay_ms: 10}
-    )
+    summary = WatchRenewer.run_once(lookahead_seconds: 24 * 60 * 60, batch_size: 10)
 
-    assert_receive {:watch_renewal_cycle, %{attempted: 0, renewed: 0, failed: 0}}, 2_000
+    assert summary == %{attempted: 0, renewed: 0, failed: 0}
   end
 
   test "renewing a Calendar watch stops the previous channel to avoid duplicate webhook deliveries" do
@@ -172,17 +156,9 @@ defmodule Maraithon.Runtime.WatchRenewerTest do
       |> Plug.Conn.resp(200, "{}")
     end)
 
-    start_supervised!(
-      {WatchRenewer,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.minutes(30),
-       lookahead_seconds: 24 * 60 * 60,
-       batch_size: 10,
-       initial_delay_ms: 10}
-    )
+    summary = WatchRenewer.run_once(lookahead_seconds: 24 * 60 * 60, batch_size: 10)
 
-    assert_receive {:watch_renewal_cycle, %{attempted: 1, renewed: 1, failed: 0}}, 2_000
+    assert summary == %{attempted: 1, renewed: 1, failed: 0}
 
     cursor = SourceCursors.get(account.id, "calendar_sync_token")
     assert cursor.watch_channel_id == "new-channel-id"

@@ -1,46 +1,11 @@
 defmodule Maraithon.Runtime.FreshnessSweep do
   @moduledoc """
-  Periodically detects silently-dead sources and flags them proactively
-  (SPEC 10 R2).
+  Evaluates one durable provider/account freshness partition.
 
-  `Maraithon.SourceFreshness.mark_error/4` (and the active failure sites
-  that call `Maraithon.ConnectedAccounts.report_access_issue/3`) only fire
-  when something actively fails. If a source just stops delivering — an
-  expired push watch, a cron that silently stopped running — nothing
-  notices. This mirrors `Maraithon.Runtime.TokenRefresher` and
-  `Maraithon.Runtime.WatchRenewer`'s shape (periodic tick, batched work,
-  per-account error isolation) but walks connected accounts and source
-  cursors looking for staleness instead of doing the sync/renewal work
-  itself.
-
-  Three conditions are flagged, each routed through
-  `ConnectedAccounts.report_access_issue/3` (which itself no-ops for
-  reasons it doesn't recognize as terminal, and is naturally idempotent
-  via the existing per-channel/reason reconnect-notification tracking):
-
-    * `stale` — `SourceFreshness.for_account/2` already computes a
-      provider-appropriate staleness threshold; report as `source_stale`.
-    * `never_synced` — only report as `source_stale` once the account has
-      been connected for longer than `never_synced_after_hours` (a fresh
-      connection is expected to be `never_synced` for a little while;
-      only a connection that's stayed that way is worth flagging).
-    * `watch_expired` — a `source_cursors` row whose `watch_expires_at` is
-      already in the past. `Maraithon.Runtime.WatchRenewer` renews watches
-      well before they expire (default 24h lookahead); an already-expired
-      watch means renewal attempts have been failing. The sweep flags,
-      `WatchRenewer` renews — this module never calls the Google APIs.
-
-  The sweep also *un-flags*: a Telegram account it soft-flagged
-  (`source_stale`/`watch_expired`) is probed with `getChat` each cycle and
-  marked successful when the channel answers. Without this, a soft flag is
-  self-sustaining — error status filters the account out of every outbound
-  path, so no traffic can ever prove it alive again, and briefings stay
-  dead until the user happens to message the bot (prod 2026-07-16: six
-  silent days). Hard failures (send rejected, bot blocked) are never
-  soft-flagged and are left alone.
+  Selection, cadence, account fairness, and crash recovery live in the durable
+  provider lane. Each invocation re-reads its row before changing health, so a
+  renewal or sync that wins the race remains authoritative.
   """
-
-  use GenServer
 
   import Ecto.Query
 
@@ -54,31 +19,86 @@ defmodule Maraithon.Runtime.FreshnessSweep do
 
   require Logger
 
-  @name __MODULE__
-  @default_interval_ms :timer.hours(1)
   @default_batch_size 500
-  @default_initial_delay_ms :timer.seconds(15)
-  # Roomier than the per-provider stale thresholds (SourceFreshness) so a
-  # still-onboarding backfill on a slower provider isn't flagged as broken
-  # while its first sync is legitimately still running.
   @default_never_synced_after_hours 72
 
-  def start_link(opts \\ []) do
-    case Keyword.get(opts, :name, @name) do
-      nil -> GenServer.start_link(__MODULE__, opts)
-      name -> GenServer.start_link(__MODULE__, opts, name: name)
+  @doc "Runs the bounded compatibility sweep synchronously."
+  def run_once(opts \\ []) do
+    state = state_from_opts(opts)
+    run_cycle(state)
+  end
+
+  @doc "Checks one connected-account partition for stale or never-synced data."
+  def run_account(account_id, opts \\ [])
+
+  def run_account(account_id, opts) when is_integer(account_id) do
+    state = state_from_opts(opts)
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    case Repo.get(ConnectedAccount, account_id) do
+      %ConnectedAccount{status: "connected"} = account ->
+        outcome = flag_account(account, state, now)
+        {:ok, %{outcome: to_string(outcome), account_id: account_id}}
+
+      %ConnectedAccount{} ->
+        {:ok, %{outcome: "not_connected", account_id: account_id}}
+
+      nil ->
+        {:ok, %{outcome: "missing", account_id: account_id}}
     end
   end
 
-  @impl true
-  def init(opts) do
-    state = %{
-      interval_ms:
-        positive_integer_opt(
-          opts,
-          :interval_ms,
-          Config.positive_integer(:freshness_sweep_interval_ms, @default_interval_ms)
-        ),
+  def run_account(_account_id, _opts), do: {:error, :invalid_freshness_account_partition}
+
+  @doc "Checks one source-cursor partition for an expired watch."
+  def run_expired_watch(cursor_id, opts \\ [])
+
+  def run_expired_watch(cursor_id, opts) when is_binary(cursor_id) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    case Repo.get(SourceCursor, cursor_id) do
+      %SourceCursor{watch_expires_at: %DateTime{} = expires_at} = cursor ->
+        if DateTime.compare(expires_at, now) == :lt do
+          outcome = flag_expired_watch(cursor)
+          {:ok, %{outcome: to_string(outcome), cursor_id: cursor_id}}
+        else
+          {:ok, %{outcome: "not_expired", cursor_id: cursor_id}}
+        end
+
+      %SourceCursor{} ->
+        {:ok, %{outcome: "not_watched", cursor_id: cursor_id}}
+
+      nil ->
+        {:ok, %{outcome: "missing", cursor_id: cursor_id}}
+    end
+  end
+
+  def run_expired_watch(_cursor_id, _opts),
+    do: {:error, :invalid_freshness_watch_partition}
+
+  @doc "Probes one sweep-soft-flagged Telegram account partition."
+  def run_telegram_heal(account_id) when is_integer(account_id) do
+    case Repo.get(ConnectedAccount, account_id) do
+      %ConnectedAccount{provider: "telegram", status: "error"} = account ->
+        if telegram_module().configured?() and soft_flagged?(account) do
+          outcome = probe_and_heal(account)
+          {:ok, %{outcome: to_string(outcome), account_id: account_id}}
+        else
+          {:ok, %{outcome: "not_probeable", account_id: account_id}}
+        end
+
+      %ConnectedAccount{} ->
+        {:ok, %{outcome: "not_probeable", account_id: account_id}}
+
+      nil ->
+        {:ok, %{outcome: "missing", account_id: account_id}}
+    end
+  end
+
+  def run_telegram_heal(_account_id), do: {:error, :invalid_telegram_heal_partition}
+
+  defp state_from_opts(opts) do
+    %{
       batch_size:
         positive_integer_opt(
           opts,
@@ -93,38 +113,8 @@ defmodule Maraithon.Runtime.FreshnessSweep do
             :freshness_sweep_never_synced_after_hours,
             @default_never_synced_after_hours
           )
-        ),
-      observer: Keyword.get(opts, :observer)
+        )
     }
-
-    initial_delay_ms = positive_integer_opt(opts, :initial_delay_ms, @default_initial_delay_ms)
-    schedule_tick(initial_delay_ms)
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_info(:tick, state) do
-    result = run_cycle(state)
-
-    if result.checked > 0 or result.flagged > 0 or result.healed > 0 do
-      Logger.info("Source freshness sweep cycle",
-        checked: result.checked,
-        flagged: result.flagged,
-        healed: result.healed
-      )
-    end
-
-    if is_pid(state.observer) do
-      send(state.observer, {:freshness_sweep_cycle, result})
-    end
-
-    schedule_tick(state.interval_ms)
-    {:noreply, state}
-  rescue
-    error ->
-      Logger.warning("Source freshness sweep cycle failed", reason: Exception.message(error))
-      schedule_tick(state.interval_ms)
-      {:noreply, state}
   end
 
   defp run_cycle(state) do
@@ -321,10 +311,6 @@ defmodule Maraithon.Runtime.FreshnessSweep do
   defp telegram_module do
     Application.get_env(:maraithon, :freshness_sweep, [])
     |> Keyword.get(:telegram_module, Maraithon.Connectors.Telegram)
-  end
-
-  defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
-    Process.send_after(self(), :tick, delay_ms)
   end
 
   defp positive_integer_opt(opts, key, default) when is_list(opts) and is_atom(key) do

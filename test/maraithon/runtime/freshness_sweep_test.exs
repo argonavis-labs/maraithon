@@ -73,16 +73,9 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
         }
       })
 
-    start_supervised!(
-      {FreshnessSweep,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.hours(1),
-       batch_size: 5_000,
-       initial_delay_ms: 10}
-    )
+    cycle = FreshnessSweep.run_once(batch_size: 5_000, never_synced_after_hours: 24)
 
-    assert_receive {:freshness_sweep_cycle, %{checked: checked, flagged: flagged}}, 2_000
+    assert %{checked: checked, flagged: flagged} = cycle
     assert checked >= 1
     assert flagged >= 1
 
@@ -109,17 +102,9 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
         metadata: %{"account_email" => "founder@example.com"}
       })
 
-    start_supervised!(
-      {FreshnessSweep,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.hours(1),
-       batch_size: 5_000,
-       never_synced_after_hours: 24,
-       initial_delay_ms: 10}
-    )
+    cycle = FreshnessSweep.run_once(batch_size: 5_000, never_synced_after_hours: 24)
 
-    assert_receive {:freshness_sweep_cycle, %{}}, 2_000
+    assert %{} = cycle
 
     account = ConnectedAccounts.get(user_id, "google:founder@example.com")
     assert account.status == "connected"
@@ -151,17 +136,9 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
       set: [connected_at: nil, last_refreshed_at: nil, inserted_at: old_inserted_at]
     )
 
-    start_supervised!(
-      {FreshnessSweep,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.hours(1),
-       batch_size: 5_000,
-       never_synced_after_hours: 24,
-       initial_delay_ms: 10}
-    )
+    cycle = FreshnessSweep.run_once(batch_size: 5_000, never_synced_after_hours: 24)
 
-    assert_receive {:freshness_sweep_cycle, %{flagged: flagged}}, 2_000
+    assert %{flagged: flagged} = cycle
     assert flagged >= 1
 
     account = ConnectedAccounts.get(user_id, "google:founder@example.com")
@@ -188,16 +165,9 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
       "watch_expires_at" => expired_at
     })
 
-    start_supervised!(
-      {FreshnessSweep,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.hours(1),
-       batch_size: 5_000,
-       initial_delay_ms: 10}
-    )
+    cycle = FreshnessSweep.run_once(batch_size: 5_000, never_synced_after_hours: 24)
 
-    assert_receive {:freshness_sweep_cycle, %{flagged: flagged}}, 2_000
+    assert %{flagged: flagged} = cycle
     assert flagged >= 1
 
     account = ConnectedAccounts.get(user_id, "google")
@@ -219,16 +189,9 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
     Application.put_env(:maraithon, :freshness_sweep, telegram_module: CapturingTelegram)
     on_exit(fn -> Application.delete_env(:maraithon, :freshness_sweep) end)
 
-    start_supervised!(
-      {FreshnessSweep,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.hours(1),
-       batch_size: 5_000,
-       initial_delay_ms: 10}
-    )
+    cycle = FreshnessSweep.run_once(batch_size: 5_000, never_synced_after_hours: 24)
 
-    assert_receive {:freshness_sweep_cycle, %{healed: healed}}, 2_000
+    assert %{healed: healed} = cycle
     assert healed >= 1
 
     healed_account = ConnectedAccounts.get(user_id, "telegram")
@@ -253,16 +216,9 @@ defmodule Maraithon.Runtime.FreshnessSweepTest do
     Application.put_env(:maraithon, :freshness_sweep, telegram_module: CapturingTelegram)
     on_exit(fn -> Application.delete_env(:maraithon, :freshness_sweep) end)
 
-    start_supervised!(
-      {FreshnessSweep,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.hours(1),
-       batch_size: 5_000,
-       initial_delay_ms: 10}
-    )
+    cycle = FreshnessSweep.run_once(batch_size: 5_000, never_synced_after_hours: 24)
 
-    assert_receive {:freshness_sweep_cycle, %{}}, 2_000
+    assert %{} = cycle
 
     account = ConnectedAccounts.get_by_external_account_any_status("telegram", "778899")
     assert account.status == "error"

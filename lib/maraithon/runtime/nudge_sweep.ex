@@ -14,17 +14,11 @@ defmodule Maraithon.Runtime.NudgeSweep do
   "Send" confirm (`close_or_nudge_todo/3`), which is also the only path that
   may call `Todos.record_nudge_sent/3`.
 
-  Mechanism choice (deliberate, per SPEC 01): this is a self-contained
-  periodic GenServer in the `TodoCompletionSweep`/`TokenRefresher` shape, NOT
-  per-todo `Scheduler.schedule_at` wakeups. A scheduled wakeup fires the full
-  `AIChiefOfStaff` skill cycle, which has no nudge skill to consume the
-  payload and is gated by that agent's effect budget/health — coupling
-  follow-ups to it means a nudge silently never fires whenever the agent is
-  unhealthy for unrelated reasons. A supervised sweep runs independently and
-  inherits quiet hours, budget, and dedupe from the delivery gate for free.
+  Durable recurring discovery enqueues one bounded job per affected tenant.
+  The dedicated model/user lane keeps the engine independent from the full
+  `AIChiefOfStaff` skill cycle while providing crash recovery, one active job
+  per tenant, and starvation-free rotation across tenants.
   """
-
-  use GenServer
 
   import Ecto.Query
 
@@ -37,19 +31,14 @@ defmodule Maraithon.Runtime.NudgeSweep do
   alias Maraithon.Todos
   alias Maraithon.Todos.ActionDrafts
   alias Maraithon.Todos.Todo
-  alias Maraithon.Todos.UserBatch
 
   require Logger
 
-  @name __MODULE__
-  @default_interval_ms :timer.minutes(30)
   @default_todos_per_user 20
   @default_due_soon_horizon_hours 4
   @default_nudge_cap 4
   @default_llm_timeout_ms 60_000
   @default_max_tokens 2_048
-  @max_interval_ms :timer.hours(24)
-  @cursor_key "nudge_sweep"
   @max_users_per_cycle 10
   @max_explicit_user_ids 1_000
   @max_todos_per_user 20
@@ -85,67 +74,6 @@ defmodule Maraithon.Runtime.NudgeSweep do
     snooze_expiry: 0.55
   }
 
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, @name))
-  end
-
-  @impl true
-  def init(opts) do
-    interval_ms =
-      Keyword.get(
-        opts,
-        :interval_ms,
-        Config.positive_integer(:nudge_sweep_interval_ms, @default_interval_ms)
-      )
-
-    initial_delay_ms =
-      Keyword.get(
-        opts,
-        :initial_delay_ms,
-        Config.positive_integer(:nudge_sweep_initial_delay_ms, interval_ms)
-      )
-
-    interval_ms = min(positive_integer(interval_ms, @default_interval_ms), @max_interval_ms)
-    initial_delay_ms = min(positive_integer(initial_delay_ms, interval_ms), @max_interval_ms)
-    state = %{interval_ms: interval_ms, user_cursor: UserBatch.load_cursor(@cursor_key)}
-
-    schedule_tick(initial_delay_ms)
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_info(:tick, state) do
-    {summary, next_cursor} = do_run_once(after_user_id: state.user_cursor)
-
-    if summary.proposed > 0 or summary.errors > 0 do
-      Logger.info("Nudge sweep cycle",
-        users: summary.users,
-        checked: summary.checked,
-        proposed: summary.proposed,
-        held: summary.held,
-        cadence_updates: summary.cadence_updates,
-        errors: summary.errors
-      )
-    end
-
-    # `schedule_tick` deliberately runs after the cycle's work completes
-    # (mirroring TokenRefresher), so overlapping ticks can never stack when a
-    # run takes longer than the interval.
-    next_cursor = next_cursor || state.user_cursor
-    if is_binary(next_cursor), do: UserBatch.record_cursor(@cursor_key, next_cursor)
-
-    schedule_tick(state.interval_ms)
-    {:noreply, %{state | user_cursor: next_cursor}}
-  rescue
-    error ->
-      Logger.warning("Nudge sweep cycle failed",
-        failure_code: Maraithon.Redaction.error_class(error)
-      )
-
-      schedule_tick(state.interval_ms)
-      {:noreply, state}
-  end
-
   @doc """
   Runs one full sweep synchronously (directly callable in tests, no timer).
   """
@@ -169,7 +97,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
           |> Enum.take(@max_users_per_cycle)
 
         _other ->
-          due_user_ids(now, horizon_hours, Keyword.get(opts, :after_user_id))
+          select_due_user_ids(now, horizon_hours, Keyword.get(opts, :after_user_id))
       end
 
     empty = %{
@@ -215,6 +143,13 @@ defmodule Maraithon.Runtime.NudgeSweep do
       end)
 
     {summary, last_attempted}
+  end
+
+  @doc "Returns the next bounded, cursor-rotated page of due tenants."
+  def due_user_ids(opts \\ []) do
+    now = Keyword.get(opts, :now) || DateTime.utc_now()
+    horizon_hours = due_soon_horizon_hours(opts)
+    select_due_user_ids(now, horizon_hours, Keyword.get(opts, :after_user_id))
   end
 
   @doc """
@@ -272,7 +207,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   # A bounded lexical cursor rotates due users across cycles without scanning
   # the full tenant set or permanently starving IDs beyond the first page.
-  defp due_user_ids(now, horizon_hours, after_user_id) do
+  defp select_due_user_ids(now, horizon_hours, after_user_id) do
     horizon_end = DateTime.add(now, horizon_hours * 3_600, :second)
     query = due_user_query(now, horizon_end)
 
@@ -951,8 +886,4 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
   defp positive_integer(_value, default), do: default
-
-  defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
-    Process.send_after(self(), :tick, min(delay_ms, @max_interval_ms))
-  end
 end

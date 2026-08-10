@@ -1,16 +1,10 @@
 defmodule Maraithon.Runtime.WatchRenewer do
   @moduledoc """
-  Periodically re-issues Gmail/Calendar push watches before they expire.
+  Renews one durably partitioned Gmail or Calendar watch.
 
-  Google push watches are not permanent: Gmail watches last about 7 days and
-  Calendar channels are created with a TTL (also up to 7 days). If nothing
-  renews them, push ingestion silently stops. This mirrors
-  `Maraithon.Runtime.TokenRefresher`'s shape (periodic tick, batched work,
-  per-account error isolation) but walks `source_cursors` watch rows instead
-  of OAuth tokens.
+  The provider lane owns cadence, crash recovery, account serialization, and
+  provider cooldown. This module deliberately has no GenServer or timer.
   """
-
-  use GenServer
 
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ConnectedAccounts
@@ -25,31 +19,14 @@ defmodule Maraithon.Runtime.WatchRenewer do
 
   require Logger
 
-  @name __MODULE__
-  @default_interval_ms :timer.minutes(30)
   @default_lookahead_seconds 24 * 60 * 60
   @default_batch_size 50
-  @default_initial_delay_ms :timer.seconds(10)
-
   @gmail_kind "gmail_history_id"
   @calendar_kind "calendar_sync_token"
 
-  def start_link(opts \\ []) do
-    case Keyword.get(opts, :name, @name) do
-      nil -> GenServer.start_link(__MODULE__, opts)
-      name -> GenServer.start_link(__MODULE__, opts, name: name)
-    end
-  end
-
-  @impl true
-  def init(opts) do
+  @doc "Runs the bounded compatibility sweep synchronously."
+  def run_once(opts \\ []) do
     state = %{
-      interval_ms:
-        positive_integer_opt(
-          opts,
-          :interval_ms,
-          Config.positive_integer(:watch_renewal_interval_ms, @default_interval_ms)
-        ),
       lookahead_seconds:
         positive_integer_opt(
           opts,
@@ -61,39 +38,46 @@ defmodule Maraithon.Runtime.WatchRenewer do
           opts,
           :batch_size,
           Config.positive_integer(:watch_renewal_batch_size, @default_batch_size)
-        ),
-      observer: Keyword.get(opts, :observer)
+        )
     }
 
-    initial_delay_ms = positive_integer_opt(opts, :initial_delay_ms, @default_initial_delay_ms)
-    schedule_tick(initial_delay_ms)
-    {:ok, state}
+    run_cycle(state)
   end
 
-  @impl true
-  def handle_info(:tick, state) do
-    result = run_cycle(state)
+  @doc "Executes one durable source-cursor partition."
+  def run_cursor(cursor_id, opts \\ [])
 
-    if result.attempted > 0 do
-      Logger.info("Watch renewal cycle",
-        attempted: result.attempted,
-        renewed: result.renewed,
-        failed: result.failed
+  def run_cursor(cursor_id, opts) when is_binary(cursor_id) do
+    lookahead_seconds =
+      positive_integer_opt(
+        opts,
+        :lookahead_seconds,
+        Config.positive_integer(:watch_renewal_lookahead_seconds, @default_lookahead_seconds)
       )
-    end
 
-    if is_pid(state.observer) do
-      send(state.observer, {:watch_renewal_cycle, result})
-    end
+    case Repo.get(SourceCursor, cursor_id) do
+      nil ->
+        {:ok, %{outcome: "missing", cursor_id: cursor_id}}
 
-    schedule_tick(state.interval_ms)
-    {:noreply, state}
-  rescue
-    error ->
-      Logger.warning("Watch renewal cycle failed", reason: Exception.message(error))
-      schedule_tick(state.interval_ms)
-      {:noreply, state}
+      %SourceCursor{watch_expires_at: %DateTime{} = expires_at} = cursor ->
+        now = Keyword.get(opts, :now, DateTime.utc_now())
+        cutoff = DateTime.add(now, lookahead_seconds, :second)
+
+        if DateTime.compare(expires_at, cutoff) in [:lt, :eq] do
+          case renew_cursor(cursor) do
+            :ok -> {:ok, %{outcome: "renewed", kind: cursor.kind}}
+            {:error, _reason} = error -> error
+          end
+        else
+          {:ok, %{outcome: "not_due", kind: cursor.kind}}
+        end
+
+      %SourceCursor{} = cursor ->
+        {:ok, %{outcome: "not_watched", kind: cursor.kind}}
+    end
   end
+
+  def run_cursor(_cursor_id, _opts), do: {:error, :invalid_watch_partition}
 
   defp run_cycle(state) do
     SourceCursors.due_for_renewal(DateTime.utc_now(), state.lookahead_seconds, state.batch_size)
@@ -236,10 +220,6 @@ defmodule Maraithon.Runtime.WatchRenewer do
     SourceFreshness.mark_success(user_id, provider)
   rescue
     _ -> :ok
-  end
-
-  defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
-    Process.send_after(self(), :tick, delay_ms)
   end
 
   defp positive_integer_opt(opts, key, default) when is_list(opts) and is_atom(key) do
