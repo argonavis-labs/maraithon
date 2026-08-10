@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.AgentWorkResult do
   import Ecto.Changeset
 
   alias Maraithon.DurablePayload
+  alias Maraithon.DurablePayloadBinding
   alias Maraithon.Lineage.ChangesetValidators, as: V
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -58,26 +59,16 @@ defmodule Maraithon.Runtime.AgentWorkResult do
   def changeset(result, attrs) do
     result
     |> cast(attrs, [
-      :id,
-      :result_key,
-      :agent_directive_id,
-      :agent_id,
-      :user_id,
-      :agent_run_id,
-      :claim_generation,
-      :claim_token,
       :status,
       :outcome,
       :terminal_event,
       :result,
-      :result_digest,
-      :result_digest_version,
-      :result_digest_key_tag,
-      :provisional_at,
-      :committed_at,
-      :inserted_at,
-      :updated_at
+      :committed_at
     ])
+    |> mirror_legacy_result()
+    |> put_payload_encryption_version()
+    |> reactivate_result()
+    |> put_authority_digest()
     |> validate_required([
       :result_key,
       :agent_directive_id,
@@ -102,9 +93,6 @@ defmodule Maraithon.Runtime.AgentWorkResult do
     |> V.validate_bytes(:user_id, min: 1, max: 320)
     |> V.validate_bytes(:terminal_event, min: 1, max: 80)
     |> V.validate_object(:result)
-    |> mirror_legacy_result()
-    |> put_payload_encryption_version()
-    |> reactivate_result()
     |> DurablePayload.put_binding(payload_binding_spec())
     |> DurablePayload.require_current_mutation()
     |> unique_constraint(:result_key, name: :agent_work_results_result_key_unique_index)
@@ -153,6 +141,35 @@ defmodule Maraithon.Runtime.AgentWorkResult do
       row.result
     else
       raise ArgumentError, "exact AgentWorkResult is not ciphertext-only"
+    end
+  end
+
+  defp put_authority_digest(changeset) do
+    with true <- Map.has_key?(changeset.changes, :result),
+         id when is_binary(id) <- get_field(changeset, :id) do
+      scope =
+        DurablePayload.context_identity([
+          get_field(changeset, :user_id),
+          get_field(changeset, :agent_id),
+          get_field(changeset, :agent_directive_id),
+          get_field(changeset, :agent_run_id)
+        ])
+
+      digest =
+        DurablePayloadBinding.sign(
+          "agent_work_result_authority",
+          id,
+          scope,
+          [{"result", get_field(changeset, :result)}]
+        )
+
+      changeset
+      |> put_change(:result_digest, digest.mac)
+      |> put_change(:result_digest_version, digest.version)
+      |> put_change(:result_digest_key_tag, digest.key_tag)
+    else
+      false -> changeset
+      _missing_id -> add_error(changeset, :id, "must be generated before signing")
     end
   end
 

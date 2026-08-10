@@ -202,7 +202,17 @@ defmodule Maraithon.TelegramAssistant.Run do
   end
 
   defp map_value(map, key, default) when is_map(map) do
-    Map.get(map, key, Map.get(map, String.to_existing_atom(key), default))
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> atom_key_value(map, key, default)
+    end
+  end
+
+  defp atom_key_value(map, key, default) do
+    Enum.find_value(map, default, fn
+      {atom, value} when is_atom(atom) -> if Atom.to_string(atom) == key, do: value
+      _entry -> nil
+    end)
   end
 
   defp map_value(_map, _key, default), do: default

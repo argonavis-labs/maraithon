@@ -13,6 +13,7 @@ defmodule Maraithon.Runtime.AgentWorkResultsTest do
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
+  alias Maraithon.Runtime.AgentWorkResult
   alias Maraithon.Runtime.AgentWorkResults
   alias Maraithon.Runtime.DatabaseClock
 
@@ -444,6 +445,66 @@ defmodule Maraithon.Runtime.AgentWorkResultsTest do
     assert AgentWorkResults.get_for_directive(claimed.id) == nil
     assert Repo.aggregate(Maraithon.ChiefOfStaff.ProjectionReceipt, :count) == 0
     assert Repo.aggregate(SourceCursorAdvancement, :count) == 0
+  end
+
+  test "AgentWorkResult ignores caller authority identity and signs the normalized result" do
+    id = Ecto.UUID.generate()
+    now = DateTime.utc_now()
+
+    stored_authority = %AgentWorkResult{
+      id: id,
+      result_key: :crypto.strong_rand_bytes(32),
+      agent_directive_id: Ecto.UUID.generate(),
+      agent_id: Ecto.UUID.generate(),
+      user_id: "authority@example.com",
+      agent_run_id: Ecto.UUID.generate(),
+      claim_generation: Ecto.UUID.generate(),
+      claim_token: Ecto.UUID.generate(),
+      provisional_at: now,
+      inserted_at: now,
+      updated_at: now
+    }
+
+    tampered_digest = :crypto.strong_rand_bytes(32)
+
+    changeset =
+      AgentWorkResult.changeset(stored_authority, %{
+        id: Ecto.UUID.generate(),
+        agent_id: Ecto.UUID.generate(),
+        user_id: "attacker@example.com",
+        result_digest: tampered_digest,
+        result_digest_version: 99,
+        result_digest_key_tag: "ATTACKER",
+        status: "provisional",
+        outcome: "completed",
+        terminal_event: "chief_cycle_completed",
+        result: %{"projection_count" => 1}
+      })
+
+    assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :id) == id
+    assert Ecto.Changeset.get_field(changeset, :agent_id) == stored_authority.agent_id
+    assert Ecto.Changeset.get_field(changeset, :user_id) == stored_authority.user_id
+    assert Ecto.Changeset.get_field(changeset, :result_digest_version) == 1
+    refute Ecto.Changeset.get_field(changeset, :result_digest) == tampered_digest
+    refute Map.has_key?(changeset.changes, :id)
+  end
+
+  test "AgentWorkResult refuses to sign without programmatic authority identity" do
+    changeset =
+      AgentWorkResult.changeset(%AgentWorkResult{}, %{
+        id: Ecto.UUID.generate(),
+        result_key: :crypto.strong_rand_bytes(32),
+        agent_id: Ecto.UUID.generate(),
+        user_id: "attacker@example.com",
+        status: "provisional",
+        outcome: "completed",
+        terminal_event: "chief_cycle_completed",
+        result: %{}
+      })
+
+    refute changeset.valid?
+    assert "must be generated before signing" in errors_on(changeset).id
   end
 
   defp assert_raw_check_violation(sql, params, expected_message) do

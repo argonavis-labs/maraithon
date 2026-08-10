@@ -176,7 +176,17 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
   end
 
   defp promoted_id(payload, key) do
-    value = Map.get(payload, key, Map.get(payload, String.to_existing_atom(key)))
+    value =
+      case Map.fetch(payload, key) do
+        {:ok, value} ->
+          value
+
+        :error ->
+          Enum.find_value(payload, fn
+            {atom, value} when is_atom(atom) -> if Atom.to_string(atom) == key, do: value
+            _entry -> nil
+          end)
+      end
 
     if is_binary(value) and value != "" and String.valid?(value) and byte_size(value) <= 255,
       do: value,

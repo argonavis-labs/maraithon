@@ -260,7 +260,16 @@ defmodule Maraithon.Agents.AgentRun do
   defp valid_budget_count?(value), do: is_integer(value) and value in 0..@max_budget_count
 
   defp budget_value(map, key) do
-    Map.get(map, key, Map.get(map, String.to_existing_atom(key), 0))
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        Enum.find_value(map, 0, fn
+          {atom, value} when is_atom(atom) -> if Atom.to_string(atom) == key, do: value
+          _entry -> nil
+        end)
+    end
   end
 
   defp mirror_legacy_payload(changeset, payload_field, legacy_field) do

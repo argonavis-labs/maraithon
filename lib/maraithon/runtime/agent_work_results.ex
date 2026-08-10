@@ -18,7 +18,6 @@ defmodule Maraithon.Runtime.AgentWorkResults do
   alias Maraithon.Agents.AgentRun
   alias Maraithon.ChiefOfStaff.AcquisitionRun
   alias Maraithon.DurablePayload
-  alias Maraithon.DurablePayloadBinding
   alias Maraithon.Lineage.Canonical
   alias Maraithon.Lineage.Transaction
   alias Maraithon.Repo
@@ -75,26 +74,8 @@ defmodule Maraithon.Runtime.AgentWorkResults do
          {:ok, result_key} <- result_key(directive, acquisitions, outcome, terminal_event) do
       now = DatabaseClock.now!()
 
-      id = Ecto.UUID.generate()
-
-      scope =
-        DurablePayload.context_identity([
-          directive.user_id,
-          directive.agent_id,
-          directive.id,
-          run.id
-        ])
-
-      digest =
-        DurablePayloadBinding.sign(
-          "agent_work_result_authority",
-          id,
-          scope,
-          [{"result", result}]
-        )
-
-      prepared = %{
-        id: id,
+      work_result = %AgentWorkResult{
+        id: Ecto.UUID.generate(),
         result_key: result_key,
         agent_directive_id: directive.id,
         agent_id: directive.agent_id,
@@ -102,22 +83,22 @@ defmodule Maraithon.Runtime.AgentWorkResults do
         agent_run_id: run.id,
         claim_generation: proof.claim_generation,
         claim_token: proof.claim_token,
-        status: "provisional",
-        outcome: outcome,
-        terminal_event: terminal_event,
-        result: result,
-        result_digest: digest.mac,
-        result_digest_version: digest.version,
-        result_digest_key_tag: digest.key_tag,
         provisional_at: now,
-        committed_at: nil,
         inserted_at: now,
         updated_at: now
       }
 
+      payload_attrs = %{
+        status: "provisional",
+        outcome: outcome,
+        terminal_event: terminal_event,
+        result: result,
+        committed_at: nil
+      }
+
       with {:ok, work_result} <-
-             %AgentWorkResult{}
-             |> AgentWorkResult.changeset(prepared)
+             work_result
+             |> AgentWorkResult.changeset(payload_attrs)
              |> Repo.insert(),
            :ok <- insert_acquisition_links(work_result, acquisitions, now) do
         {:ok, work_result}
@@ -150,9 +131,9 @@ defmodule Maraithon.Runtime.AgentWorkResults do
       case result
            |> AgentWorkResult.changeset(%{
              status: "committed",
-             committed_at: now,
-             updated_at: now
+             committed_at: now
            })
+           |> Ecto.Changeset.force_change(:updated_at, now)
            |> Repo.update() do
         {:ok, committed} -> {:ok, committed}
         {:error, changeset} -> {:error, changeset}
