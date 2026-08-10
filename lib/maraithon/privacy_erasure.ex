@@ -32,6 +32,7 @@ defmodule Maraithon.PrivacyErasure do
   @default_copy_batch 100
   @max_batch 500
   @receipt_ttl_seconds 90 * 24 * 60 * 60
+  @conversation_privacy_migration 20_260_810_140_002
   @reschedule_ms 1_000
 
   # These rows can authenticate a device or receive private output. They are
@@ -314,6 +315,8 @@ defmodule Maraithon.PrivacyErasure do
           requested_at: now,
           target_agent_count: 0
         })
+
+    set_erasure_context!(request.id)
 
     if is_nil(user.privacy_erasure_requested_at) do
       user
@@ -928,6 +931,13 @@ defmodule Maraithon.PrivacyErasure do
   end
 
   defp erase_user_copies(%ErasureRequest{subject_user_id: user_id} = request, batch) do
+    case erase_exact_conversation_batch(request, user_id, batch) do
+      :ready -> erase_plain_user_copies(request, user_id, batch)
+      {:pending, blocker} -> release_claim(request, blocker_code: blocker)
+    end
+  end
+
+  defp erase_plain_user_copies(request, user_id, batch) do
     result =
       Repo.transaction(fn ->
         _owned = lock_owned_request!(request)
@@ -946,6 +956,234 @@ defmodule Maraithon.PrivacyErasure do
       {:ok, {:pending, blocker}} -> release_claim(request, blocker_code: blocker)
       {:error, _reason} -> {:error, :user_copy_cleanup_failed}
     end
+  end
+
+  defp erase_exact_conversation_batch(request, user_id, batch) do
+    case conversation_erasure_adapter() do
+      nil ->
+        :ready
+
+      adapter ->
+        with :ready <- drain_conversation_authority(request, user_id, batch),
+             true <- function_exported?(adapter, :erase_user_batch, 4) do
+          now = DatabaseClock.now!()
+
+          case adapter.erase_user_batch(user_id, request.id, request.claim_token,
+                 limit: batch,
+                 now: now
+               ) do
+            {:ok, %{processed: processed, deferred: deferred}}
+            when is_integer(processed) and processed >= 0 and is_map(deferred) ->
+              cond do
+                processed > 0 -> {:pending, "conversation_copy_cleanup_pending"}
+                positive_count?(deferred) -> {:pending, "conversation_authority_deferred"}
+                true -> :ready
+              end
+
+            {:error, _reason} ->
+              {:pending, "conversation_erasure_unavailable"}
+
+            _invalid ->
+              {:pending, "conversation_erasure_unavailable"}
+          end
+        else
+          {:pending, blocker} -> {:pending, blocker}
+          false -> {:pending, "conversation_adapter_unavailable"}
+        end
+    end
+  rescue
+    _error -> {:pending, "conversation_erasure_unavailable"}
+  catch
+    :exit, _reason -> {:pending, "conversation_erasure_unavailable"}
+  end
+
+  defp conversation_erasure_adapter do
+    config = Application.get_env(:maraithon, __MODULE__, [])
+    configured_adapter = Keyword.get(config, :conversation_erasure_adapter)
+
+    if migration_recorded?(@conversation_privacy_migration) or not is_nil(configured_adapter),
+      do: configured_adapter || Module.concat(Maraithon.TelegramConversations, Privacy),
+      else: nil
+  end
+
+  # The exact adapter intentionally defers active conversation authority. Move
+  # only states with an unambiguous local cancellation outcome to terminal
+  # states first; externally ambiguous prepared actions remain proof blockers.
+  defp drain_conversation_authority(request, user_id, batch) do
+    now = DatabaseClock.now!()
+
+    case Repo.transaction(fn ->
+           _owned = lock_owned_request!(request)
+
+           set_erasure_context!(request.id)
+
+           cond do
+             row_exists?(
+               "telegram_prepared_actions",
+               "user_id = $1 AND status IN ('confirmed','execution_unknown')",
+               [user_id]
+             ) ->
+               {:pending, "prepared_action_external_proof_required"}
+
+             cancel_background_job_batch(user_id, batch, now) > 0 ->
+               {:pending, "conversation_background_job_drain_pending"}
+
+             reject_prepared_action_batch(user_id, batch, now) > 0 ->
+               {:pending, "prepared_action_drain_pending"}
+
+             fail_assistant_step_batch(user_id, batch, now) > 0 ->
+               {:pending, "assistant_step_drain_pending"}
+
+             cancel_assistant_run_batch(user_id, batch, now) > 0 ->
+               {:pending, "assistant_run_drain_pending"}
+
+             close_conversation_batch(user_id, batch, now) > 0 ->
+               {:pending, "conversation_close_pending"}
+
+             true ->
+               :ready
+           end
+         end) do
+      {:ok, result} -> result
+      {:error, _reason} -> {:pending, "conversation_authority_drain_unavailable"}
+    end
+  end
+
+  defp cancel_background_job_batch(user_id, batch, now) do
+    Repo.query!(
+      """
+      UPDATE background_jobs AS target
+      SET status = 'cancelled', claimed_by = NULL, claimed_at = NULL,
+          claim_token = NULL, cancelled_at = $3, updated_at = $3
+      WHERE target.id IN (
+        SELECT candidate.id
+        FROM background_jobs AS candidate
+        WHERE candidate.user_id = $1
+          AND candidate.status IN ('pending','running')
+        ORDER BY candidate.id
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+      )
+      """,
+      [user_id, batch, now],
+      log: false
+    ).num_rows
+  end
+
+  defp reject_prepared_action_batch(user_id, batch, now) do
+    Repo.query!(
+      """
+      UPDATE telegram_prepared_actions AS target
+      SET status = 'rejected', updated_at = $3
+      WHERE target.id IN (
+        SELECT candidate.id
+        FROM telegram_prepared_actions AS candidate
+        WHERE candidate.user_id = $1 AND candidate.status = 'awaiting_confirmation'
+        ORDER BY candidate.id
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+      )
+      """,
+      [user_id, batch, now],
+      log: false
+    ).num_rows
+  end
+
+  defp fail_assistant_step_batch(user_id, batch, now) do
+    Repo.query!(
+      """
+      UPDATE telegram_assistant_steps AS target
+      SET status = 'failed', finished_at = COALESCE(finished_at, $3), updated_at = $3
+      WHERE target.id IN (
+        SELECT step.id
+        FROM telegram_assistant_steps AS step
+        INNER JOIN telegram_assistant_runs AS run ON run.id = step.run_id
+        WHERE run.user_id = $1 AND step.status = 'running'
+        ORDER BY step.id
+        LIMIT $2
+        FOR UPDATE OF step SKIP LOCKED
+      )
+      """,
+      [user_id, batch, now],
+      log: false
+    ).num_rows
+  end
+
+  defp cancel_assistant_run_batch(user_id, batch, now) do
+    Repo.query!(
+      """
+      UPDATE telegram_assistant_runs AS target
+      SET status = 'cancelled', finished_at = COALESCE(finished_at, $3), updated_at = $3
+      WHERE target.id IN (
+        SELECT candidate.id
+        FROM telegram_assistant_runs AS candidate
+        WHERE candidate.user_id = $1
+          AND candidate.status IN ('queued','running','waiting_confirmation')
+        ORDER BY candidate.id
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+      )
+      """,
+      [user_id, batch, now],
+      log: false
+    ).num_rows
+  end
+
+  defp close_conversation_batch(user_id, batch, now) do
+    Repo.query!(
+      """
+      UPDATE telegram_conversations AS target
+      SET status = 'closed', updated_at = $3
+      WHERE target.id IN (
+        SELECT conversation.id
+        FROM telegram_conversations AS conversation
+        WHERE conversation.user_id = $1 AND conversation.status <> 'closed'
+          AND NOT EXISTS (
+            SELECT 1 FROM telegram_assistant_runs AS run
+            WHERE run.conversation_id = conversation.id
+              AND run.status IN ('queued','running','waiting_confirmation')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM telegram_prepared_actions AS action
+            WHERE action.conversation_id = conversation.id
+              AND action.status NOT IN ('executed','rejected','expired','failed')
+          )
+        ORDER BY conversation.id
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+      )
+      """,
+      [user_id, batch, now],
+      log: false
+    ).num_rows
+  end
+
+  defp set_erasure_context!(request_id) do
+    Repo.query!(
+      "SELECT set_config('maraithon.privacy_erasure_request_id', $1, true)",
+      [request_id],
+      log: false
+    )
+
+    :ok
+  end
+
+  defp migration_recorded?(version) do
+    case Repo.query!(
+           "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)",
+           [version],
+           log: false
+         ).rows do
+      [[true]] -> true
+      _missing -> false
+    end
+  end
+
+  defp positive_count?(counts) do
+    Enum.any?(counts, fn
+      {_family, count} when is_integer(count) and count > 0 -> true
+      _other -> false
+    end)
   end
 
   defp mutate_user_copy_batch({:delete, table, column}, user_id, batch) do
@@ -1237,7 +1475,25 @@ defmodule Maraithon.PrivacyErasure do
         end),
       requested_at: request.requested_at,
       completed_at: request.completed_at,
-      provider_revocation_outcome: if(receipt, do: receipt.provider_revocation_outcome, else: nil)
+      provider_revocation_outcome:
+        if(receipt, do: receipt.provider_revocation_outcome, else: nil),
+      receipt: serialize_receipt(receipt)
+    }
+  end
+
+  defp serialize_receipt(nil), do: nil
+
+  defp serialize_receipt(%ErasureReceipt{} = receipt) do
+    %{
+      classification: receipt.classification,
+      scope: receipt.scope,
+      outcome: receipt.outcome,
+      local_data_deleted: receipt.local_data_deleted,
+      credentials_locally_revoked: receipt.credentials_locally_revoked,
+      provider_revocation_outcome: receipt.provider_revocation_outcome,
+      erased_agent_count: receipt.erased_agent_count,
+      issued_at: receipt.issued_at,
+      expires_at: receipt.expires_at
     }
   end
 

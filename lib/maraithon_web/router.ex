@@ -11,6 +11,14 @@ defmodule MaraithonWeb.Router do
     plug :put_secure_browser_headers
   end
 
+  pipeline :web_api do
+    plug :accepts, ["json"]
+    plug :fetch_session
+    plug MaraithonWeb.Plugs.FetchCurrentUser
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+  end
+
   pipeline :require_authenticated_user do
     plug MaraithonWeb.Plugs.RequireAuthenticatedUser
   end
@@ -126,6 +134,14 @@ defmodule MaraithonWeb.Router do
       live "/operator/people", PeopleLive, :index
       live "/operator/memories", MemoriesLive, :index
     end
+  end
+
+  # Browser-session JSON API. CSRF protection remains mandatory for POST.
+  scope "/api", MaraithonWeb do
+    pipe_through [:web_api, :require_authenticated_user]
+
+    post "/account-erasure", MobileAccountErasureController, :create
+    get "/account-erasure", MobileAccountErasureController, :show
   end
 
   # API v1
