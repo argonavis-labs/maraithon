@@ -1,49 +1,47 @@
 defmodule Maraithon.DurablePayload do
   @moduledoc false
 
-  import Ecto.Changeset, only: [add_error: 4, fetch_change: 2, put_change: 3]
+  import Ecto.Changeset,
+    only: [
+      add_error: 4,
+      fetch_change: 2,
+      get_field: 2,
+      prepare_changes: 2,
+      put_change: 3
+    ]
 
   alias Maraithon.BoundedJSON
 
   @protocol_cutover Maraithon.Effects.ProtocolCutover
 
   @doc false
-  def legacy_write? do
-    case protocol_mode() do
-      :legacy -> true
-      :exact -> false
-      {:blocked, _mismatch} -> raise "durable payload protocol is blocked"
-      _invalid -> raise "invalid durable payload protocol mode"
+  def mode! do
+    case @protocol_cutover.mode() do
+      :legacy -> :legacy
+      :exact -> :exact
+      {:blocked, reason} -> raise "durable payload protocol is blocked: #{inspect(reason)}"
+      invalid -> raise "invalid durable payload protocol mode: #{inspect(invalid)}"
     end
   end
 
   @doc false
-  def require_legacy_mutation! do
-    if Code.ensure_loaded?(@protocol_cutover) and
-         function_exported?(@protocol_cutover, :require_legacy_mutation!, 0) do
-      apply(@protocol_cutover, :require_legacy_mutation!, [])
-    else
-      :ok
-    end
-  end
+  def legacy_write?, do: mode!() == :legacy
 
   @doc false
-  def require_current_mutation! do
-    if Code.ensure_loaded?(@protocol_cutover) and
-         function_exported?(@protocol_cutover, :require_current_mutation!, 0) do
-      apply(@protocol_cutover, :require_current_mutation!, [])
-    else
-      :ok
-    end
-  end
+  def legacy_read?, do: mode!() == :legacy
 
-  defp protocol_mode do
-    if Code.ensure_loaded?(@protocol_cutover) and
-         function_exported?(@protocol_cutover, :mode, 0) do
-      apply(@protocol_cutover, :mode, [])
-    else
-      :legacy
-    end
+  @doc false
+  def require_legacy_mutation!, do: @protocol_cutover.require_legacy_mutation!()
+
+  @doc false
+  def require_current_mutation!, do: @protocol_cutover.require_current_mutation!()
+
+  @doc false
+  def require_current_mutation(changeset) do
+    prepare_changes(changeset, fn changeset ->
+      :ok = require_current_mutation!()
+      changeset
+    end)
   end
 
   @doc false
@@ -90,4 +88,116 @@ defmodule Maraithon.DurablePayload do
   end
 
   def prepare_map(_value, _max_bytes, _opts), do: {:error, :invalid_payload}
+
+  @doc false
+  def put_binding(changeset, spec) when is_map(spec) do
+    prepare_changes(changeset, fn prepared ->
+      purge_marker = get_field(prepared, Map.fetch!(spec, :purge_field))
+
+      if is_nil(purge_marker) do
+        binding = binding_for_changeset!(prepared, spec)
+
+        prepared
+        |> put_change(:payload_binding_version, binding.version)
+        |> put_change(:payload_binding_key_tag, binding.key_tag)
+        |> put_change(:payload_binding_mac, binding.mac)
+      else
+        prepared
+        |> put_change(:payload_binding_version, nil)
+        |> put_change(:payload_binding_key_tag, nil)
+        |> put_change(:payload_binding_mac, nil)
+      end
+    end)
+  end
+
+  @doc false
+  def binding_attrs!(row_or_changeset, spec) when is_map(spec) do
+    binding = binding_for!(row_or_changeset, spec)
+
+    %{
+      payload_binding_version: binding.version,
+      payload_binding_key_tag: binding.key_tag,
+      payload_binding_mac: binding.mac
+    }
+  end
+
+  @doc false
+  def verify_binding!(row, spec, mode \\ mode!()) when mode in [:legacy, :exact] do
+    purged? = not is_nil(Map.fetch!(row, Map.fetch!(spec, :purge_field)))
+
+    binding =
+      {Map.get(row, :payload_binding_version), Map.get(row, :payload_binding_key_tag),
+       Map.get(row, :payload_binding_mac)}
+
+    cond do
+      purged? and binding == {nil, nil, nil} ->
+        :ok
+
+      purged? ->
+        raise ArgumentError, "purged durable payload binding must be empty"
+
+      binding == {nil, nil, nil} and mode == :legacy ->
+        :ok
+
+      true ->
+        {version, key_tag, mac} = binding
+        {table, identity, scope, fields} = binding_context!(row, spec)
+
+        case Maraithon.DurablePayloadBinding.verify(
+               table,
+               identity,
+               scope,
+               fields,
+               version,
+               key_tag,
+               mac
+             ) do
+          :ok -> :ok
+          {:error, reason} -> raise ArgumentError, "durable payload binding failed: #{reason}"
+        end
+    end
+  end
+
+  @doc false
+  def binding_context!(row_or_changeset, spec) when is_map(spec) do
+    getter = getter(row_or_changeset)
+    table = Map.fetch!(spec, :table)
+
+    identity =
+      spec
+      |> Map.fetch!(:identity_fields)
+      |> Enum.map(&context_value!(getter.(&1)))
+      |> encode_context!()
+
+    scope =
+      spec
+      |> Map.get(:scope_fields, [])
+      |> Enum.map(&context_value!(getter.(&1)))
+      |> encode_context!()
+
+    fields =
+      Enum.map(Map.fetch!(spec, :fields), fn field ->
+        {Atom.to_string(field), getter.(field)}
+      end)
+
+    {table, identity, scope, fields}
+  end
+
+  defp binding_for_changeset!(changeset, spec), do: binding_for!(changeset, spec)
+
+  defp binding_for!(row_or_changeset, spec) do
+    {table, identity, scope, fields} = binding_context!(row_or_changeset, spec)
+    Maraithon.DurablePayloadBinding.sign(table, identity, scope, fields)
+  end
+
+  defp getter(%Ecto.Changeset{} = changeset), do: &get_field(changeset, &1)
+  defp getter(row) when is_map(row), do: &Map.get(row, &1)
+
+  defp context_value!(nil), do: ""
+  defp context_value!(value) when is_binary(value), do: value
+  defp context_value!(value) when is_integer(value), do: Integer.to_string(value)
+  defp context_value!(value), do: to_string(value)
+
+  defp encode_context!([]), do: ""
+  defp encode_context!(values), do: Jason.encode!(values)
 end
