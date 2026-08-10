@@ -98,7 +98,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert [["dark"]] = Repo.query!("SELECT mode FROM runtime_coordination_protocols", []).rows
     finalize_partition_catalog!()
 
-    assert [[95]] =
+    assert [[114]] =
              in_role!("maraithon_payload_verifier", fn ->
                Repo.query!("SELECT public.runtime_coordination_catalog_ready_count()", []).rows
              end)
