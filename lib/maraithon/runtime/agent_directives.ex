@@ -701,6 +701,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
   def backfill_legacy_payload_encryption(limit) when is_integer(limit) and limit in 1..500 do
     case Repo.transaction(fn ->
            ProtocolCutover.require_legacy_mutation!()
+           Maraithon.DurablePayloadContraction.require_authorized!()
 
            directives =
              AgentDirective
@@ -725,7 +726,11 @@ defmodule Maraithon.Runtime.AgentDirectives do
              # exact-protocol acknowledgement; it must never be inferred from
              # terminal status during a legacy conversion.
              attrs = %{
-               payload: directive.payload || directive.legacy_payload || %{},
+               payload:
+                 if(directive.legacy_payload != @redacted_payload,
+                   do: directive.legacy_payload || %{},
+                   else: directive.payload || %{}
+                 ),
                legacy_payload: @redacted_payload,
                payload_encryption_version: 1,
                payload_purged_at: directive.payload_purged_at

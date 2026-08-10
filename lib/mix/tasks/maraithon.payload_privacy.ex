@@ -3,31 +3,23 @@ defmodule Mix.Tasks.Maraithon.PayloadPrivacy do
 
   alias Maraithon.DurablePayloadPrivacy
 
-  @shortdoc "Preflight or backfill durable Event/RunStep payload encryption"
-
-  @moduledoc """
-  Runs the content-free Event and AgentRunStep payload encryption operator.
-
-      mix maraithon.payload_privacy preflight
-      mix maraithon.payload_privacy backfill --batch-size 25 --max-batches 20
-
-  This task deliberately starts only Cloak's Vault and the Repo, not the
-  Maraithon application/runtime fleet. Run it only in the stopped-legacy-fleet
-  backfill phase. A production release can invoke the same content-free API
-  from a controlled RPC:
-
-      bin/maraithon rpc 'IO.inspect(Maraithon.DurablePayloadPrivacy.preflight())'
-  """
-
-  @switches [batch_size: :integer, max_batches: :integer, dry_run: :boolean]
+  @shortdoc "Evidence-bound Event/RunStep/Snapshot payload contraction"
+  @switches [
+    batch_size: :integer,
+    max_batches: :integer,
+    dry_run: :boolean,
+    confirm: :boolean,
+    evidence_id: :string,
+    evidence_sha256: :string,
+    operator: :string,
+    revision: :string
+  ]
 
   @impl Mix.Task
   def run(args) do
     {opts, argv, invalid} = OptionParser.parse(args, strict: @switches)
 
-    if invalid != [] do
-      Mix.raise("invalid payload privacy options")
-    end
+    if invalid != [], do: Mix.raise("invalid payload privacy options")
 
     start_storage!()
 
@@ -47,32 +39,63 @@ defmodule Mix.Tasks.Maraithon.PayloadPrivacy do
   end
 
   defp run_backfill(opts) do
+    unless opts[:confirm],
+      do: Mix.raise("backfill requires --confirm after the non-rolling fleet is drained")
+
     backfill_opts =
-      []
+      [
+        confirmation: "NON_ROLLING_FLEET_DRAINED",
+        evidence_id: opts[:evidence_id],
+        evidence_digest: decode_sha256(opts[:evidence_sha256]),
+        operator: opts[:operator],
+        revision: opts[:revision]
+      ]
       |> maybe_put(:batch_size, opts[:batch_size])
       |> maybe_put(:max_batches, opts[:max_batches])
 
     case DurablePayloadPrivacy.backfill(backfill_opts) do
-      {:ok, result} ->
-        result
-        |> Jason.encode!(pretty: true)
-        |> Mix.shell().info()
-
-      {:error, reason} ->
-        Mix.raise("durable payload backfill failed: #{inspect(reason)}")
+      {:ok, result} -> Mix.shell().info(Jason.encode!(result, pretty: true))
+      {:error, reason} -> Mix.raise("durable payload backfill failed: #{inspect(reason)}")
     end
   end
 
   defp start_storage! do
     Mix.Task.run("app.config")
+    configure_activation_url!()
 
     case Application.ensure_all_started(:ecto_sql) do
       {:ok, _apps} -> :ok
       {:error, _reason} -> Mix.raise("could not start durable payload storage dependencies")
     end
 
+    :ok = Maraithon.DurablePayloadBinding.validate_config!()
     start_once(Maraithon.Vault)
     start_once(Maraithon.Repo)
+  end
+
+  defp configure_activation_url! do
+    url = System.get_env("MARAITHON_ACTIVATION_DATABASE_URL")
+
+    if Mix.env() == :prod and (is_nil(url) or String.trim(url) == "") do
+      Mix.raise("MARAITHON_ACTIVATION_DATABASE_URL is required in production")
+    end
+
+    if is_binary(url) and String.trim(url) != "" do
+      if url == System.get_env("DATABASE_URL") do
+        Mix.raise("MARAITHON_ACTIVATION_DATABASE_URL must be distinct from runtime DATABASE_URL")
+      end
+
+      :ok = Maraithon.DatabaseTLS.configure_repo!(url, "MARAITHON_ACTIVATION_DATABASE_URL")
+    end
+  end
+
+  defp decode_sha256(nil), do: nil
+
+  defp decode_sha256(value) do
+    case Base.decode16(value, case: :lower) do
+      {:ok, digest} when byte_size(digest) == 32 -> digest
+      _invalid -> Mix.raise("--evidence-sha256 must be 64 lowercase hexadecimal characters")
+    end
   end
 
   defp start_once(module) do
@@ -90,7 +113,7 @@ defmodule Mix.Tasks.Maraithon.PayloadPrivacy do
     """
     Usage:
       mix maraithon.payload_privacy preflight
-      mix maraithon.payload_privacy backfill [--batch-size N] [--max-batches N]
+      mix maraithon.payload_privacy backfill --confirm --evidence-id ID --evidence-sha256 SHA256 --operator OPERATOR --revision REV [--batch-size N] [--max-batches N]
       mix maraithon.payload_privacy backfill --dry-run
     """
   end
