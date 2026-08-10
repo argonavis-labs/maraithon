@@ -4,6 +4,7 @@ defmodule Maraithon.Runtime.Coordination.Scope do
   import Ecto.Query
 
   alias Ecto.Adapters.SQL
+  alias Maraithon.Effects.ProtocolCutover, as: EffectProtocol
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.Config
@@ -228,9 +229,9 @@ defmodule Maraithon.Runtime.Coordination.Scope do
 
     case Protocol.mode() do
       :dark ->
-        if Config.exact_agent_runtime_enabled?(),
-          do: Repo.rollback(:runtime_coordination_not_active),
-          else: :legacy
+        if EffectProtocol.mode() == :legacy,
+          do: :legacy,
+          else: Repo.rollback(:runtime_coordination_not_active)
 
       :active ->
         with {:ok, session} <- current(),
@@ -314,9 +315,9 @@ defmodule Maraithon.Runtime.Coordination.Scope do
 
     case Protocol.mode() do
       :dark ->
-        if Config.exact_agent_runtime_enabled?(),
-          do: Repo.rollback(:runtime_coordination_not_active),
-          else: :ok
+        if EffectProtocol.mode() == :legacy,
+          do: :ok,
+          else: Repo.rollback(:runtime_coordination_not_active)
 
       :active ->
         with {:ok, session} <- current(),
@@ -336,9 +337,9 @@ defmodule Maraithon.Runtime.Coordination.Scope do
   def active_or_legacy do
     case Protocol.mode() do
       :dark ->
-        if Config.exact_agent_runtime_enabled?(),
-          do: {:error, :runtime_coordination_not_active},
-          else: :legacy
+        if EffectProtocol.mode() == :legacy,
+          do: :legacy,
+          else: {:error, :runtime_coordination_not_active}
 
       :active ->
         current()

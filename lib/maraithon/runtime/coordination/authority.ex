@@ -100,10 +100,9 @@ defmodule Maraithon.Runtime.Coordination.Authority do
   def begin_node_drain(%NodeIncarnation{} = session) do
     Repo.transaction(fn ->
       _ = Protocol.locked_active!()
+      revoke_owned_leader!(session)
       locked = lock_node!(session)
       set_local!("maraithon.runtime_node_action", session.id)
-
-      revoke_owned_leader!(locked)
 
       now_sql = "timezone('UTC', clock_timestamp())"
 
@@ -186,7 +185,6 @@ defmodule Maraithon.Runtime.Coordination.Authority do
     with :ok <- valid_ttl(ttl_ms) do
       Repo.transaction(fn ->
         activation_epoch = Protocol.locked_active!()
-        _ = lock_node!(session)
         token = Ecto.UUID.generate()
         set_local!("maraithon.runtime_leader_action", token)
 
@@ -196,6 +194,8 @@ defmodule Maraithon.Runtime.Coordination.Authority do
             "SELECT state, leader_epoch, lease_expires_at FROM public.runtime_leader_authorities WHERE role = 'partition_planner' FOR UPDATE",
             []
           ).rows
+
+        _ = lock_node!(session)
 
         case leader do
           [[state, _epoch, expires_at]]
@@ -433,6 +433,10 @@ defmodule Maraithon.Runtime.Coordination.Authority do
             [partition_id]
           ).rows
 
+        unresolved_tasks =
+          request_task_termination_for_partition!(Ecto.UUID.load!(from_node), partition_id, epoch)
+
+        blocked? = blocked? or unresolved_tasks > 0
         transition_id = Ecto.UUID.generate()
         state = if blocked?, do: "blocked", else: "draining"
         reason = if blocked?, do: "physical_task_termination_proof_required", else: nil
@@ -492,7 +496,7 @@ defmodule Maraithon.Runtime.Coordination.Authority do
   def revoke_partition_workload(%NodeIncarnation{} = session, partition_id) do
     Repo.transaction(fn ->
       _ = Protocol.locked_active!()
-      _ = lock_node!(session)
+      _ = lock_node_for_settlement!(session)
       set_local!("maraithon.runtime_node_action", session.id)
 
       case SQL.query!(
@@ -583,6 +587,18 @@ defmodule Maraithon.Runtime.Coordination.Authority do
     )
   end
 
+  # Cleanup scope only: exact local ownership without a lease-time predicate.
+  # Never use this query for admission, provider entry, or renewal.
+  def locally_owned_revoked_partitions(%NodeIncarnation{} = session) do
+    Repo.all(
+      from p in Partition,
+        where: p.owner_node_incarnation_id == ^session.id,
+        where: p.activation_epoch == ^session.activation_epoch,
+        where: p.state in ["draining", "blocked"],
+        order_by: p.partition_id
+    )
+  end
+
   def active_nodes do
     Repo.all(
       from n in NodeIncarnation,
@@ -599,6 +615,27 @@ defmodule Maraithon.Runtime.Coordination.Authority do
 
     _ = Protocol.locked_active!()
     states = if mode == :ready, do: ["ready"], else: ["ready", "draining"]
+
+    case SQL.query!(
+           Repo,
+           """
+           SELECT id FROM public.runtime_node_incarnations
+           WHERE id = $1::uuid AND activation_epoch = $2::uuid
+             AND state = ANY($3::text[])
+             AND ($4::boolean = false OR ready_at IS NOT NULL)
+             AND lease_expires_at > timezone('UTC', clock_timestamp())
+           FOR SHARE
+           """,
+           [
+             Ecto.UUID.dump!(session.id),
+             Ecto.UUID.dump!(session.activation_epoch),
+             states,
+             mode == :ready
+           ]
+         ).rows do
+      [[_id]] -> :ok
+      [] -> Repo.rollback(:node_authority_lost)
+    end
 
     case SQL.query!(
            Repo,
@@ -714,6 +751,7 @@ defmodule Maraithon.Runtime.Coordination.Authority do
       ).rows
 
     request_task_rows!(rows)
+    length(rows)
   end
 
   defp request_task_termination_for_node!(node_id) do
@@ -786,12 +824,30 @@ defmodule Maraithon.Runtime.Coordination.Authority do
     end
   end
 
+  defp lock_node_for_settlement!(session) do
+    case SQL.query!(
+           Repo,
+           """
+           SELECT id, activation_epoch, node_name, revision, state, lease_expires_at,
+                  ready_at, draining_at, revoked_at, metadata, inserted_at, updated_at
+           FROM public.runtime_node_incarnations
+           WHERE id = $1::uuid AND activation_epoch = $2::uuid
+             AND state IN ('ready', 'draining')
+           FOR UPDATE
+           """,
+           [Ecto.UUID.dump!(session.id), Ecto.UUID.dump!(session.activation_epoch)]
+         ) do
+      %{rows: [_]} = result -> load(NodeIncarnation, result)
+      _ -> Repo.rollback(:node_incarnation_lost)
+    end
+  end
+
   defp load(schema, %{columns: columns, rows: [row]}) do
     row = decode_json(columns, row)
     Repo.load(schema, {columns, row})
   end
 
-  defp load!(schema, %{rows: []}, reason), do: Repo.rollback(reason)
+  defp load!(_schema, %{rows: []}, reason), do: Repo.rollback(reason)
   defp load!(schema, result, _reason), do: load(schema, result)
 
   defp load_many(schema, %{columns: columns, rows: rows}),
