@@ -12,7 +12,6 @@ defmodule Maraithon.Repo.Migrations.EncryptTelegramConversationPayloads do
   """
 
   @disable_ddl_transaction true
-  @disable_migration_lock true
 
   @binding_tables [
     {"telegram_conversation_turns", "content_scrubbed_at"},
