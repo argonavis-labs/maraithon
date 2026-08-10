@@ -171,6 +171,40 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
     end
   end
 
+  @doc false
+  def lock_effect_pair!(trace \\ fn _stage -> :ok end) when is_function(trace, 1) do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "runtime/Effect protocol pair lock requires transaction")
+
+    runtime =
+      case SQL.query!(
+             Repo,
+             "SELECT mode, activation_epoch FROM public.runtime_coordination_protocols WHERE name = $1 FOR SHARE",
+             [@name]
+           ).rows do
+        [[@dark, nil]] -> :dark
+        [[@active, epoch]] when not is_nil(epoch) -> {:active, Ecto.UUID.load!(epoch)}
+        [[mode, _epoch]] -> Repo.rollback({:coordination_protocol_invalid, mode})
+        [] -> Repo.rollback(:coordination_protocol_missing)
+      end
+
+    trace.(:runtime_protocol_locked)
+    effect = EffectProtocol.locked_mode!()
+    trace.(:effect_protocol_locked)
+
+    case {runtime, effect} do
+      {:dark, :legacy} ->
+        :legacy
+
+      {{:active, epoch}, :exact} ->
+        EffectProtocol.require_exact_write!()
+        {:active, epoch}
+
+      {runtime_mode, effect_mode} ->
+        Repo.rollback({:runtime_effect_protocol_pair_mismatch, runtime_mode, effect_mode})
+    end
+  end
+
   defp activate_locked(epoch, timeout, evidence) do
     try do
       Repo.transaction(

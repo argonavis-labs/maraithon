@@ -10,7 +10,6 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
   import Ecto.Query
 
   alias Maraithon.Effects.Effect
-  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Repo
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.EffectTaskSupervisor
@@ -231,14 +230,14 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
     case Repo.transaction(
            fn ->
              configure_renewal_statement_timeout!(deadline_ms)
-             ProtocolCutover.require_exact_write!()
-             owner_node = Atom.to_string(node())
 
              coordination_mode =
-               case Protocol.mode() do
-                 mode when mode in [:dark, :active] -> mode
-                 blocked -> Repo.rollback({:runtime_coordination_blocked, blocked})
+               case Protocol.lock_effect_pair!() do
+                 {:active, epoch} -> {:active, epoch}
+                 other -> Repo.rollback({:runtime_effect_protocol_pair_mismatch, other})
                end
+
+             owner_node = Atom.to_string(node())
 
              lost =
                identities
@@ -322,23 +321,10 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
   end
 
   defp renew_coordination_assignment!(
-         %Effect{
-           coordination_task_assignment_id: nil,
-           coordination_activation_epoch: nil,
-           coordination_partition_id: nil,
-           coordination_partition_epoch: nil,
-           coordination_node_incarnation_id: nil
-         },
+         %Effect{} = effect,
          ttl_ms,
-         :dark
+         {:active, activation_epoch}
        ) do
-    {_now, expires_at} = Maraithon.Runtime.DatabaseClock.window!(ttl_ms)
-    expires_at
-  end
-
-  defp renew_coordination_assignment!(%Effect{} = effect, ttl_ms, :active) do
-    activation_epoch = Protocol.locked_active!()
-
     unless activation_epoch == effect.coordination_activation_epoch,
       do: Repo.rollback(:coordination_task_authority_lost)
 
