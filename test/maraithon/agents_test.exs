@@ -408,6 +408,121 @@ defmodule Maraithon.AgentsTest do
       assert Repo.aggregate(AgentRunStep, :count) == 0
     end
 
+    test "rejects caller completed_at when creating Runs and RunSteps" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      forged_completed_at = ~U[2001-02-03 04:05:06.000000Z]
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.start_agent_run(agent, %{completed_at: forged_completed_at})
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.start_agent_run(agent, %{"completed_at" => forged_completed_at})
+
+      assert Repo.aggregate(AgentRun, :count) == 0
+      assert {:ok, run} = Agents.start_agent_run(agent)
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 step_type: "llm_call",
+                 completed_at: forged_completed_at
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.record_agent_run_step(run.id, agent.id, %{
+                 "step_type" => "llm_call",
+                 "completed_at" => forged_completed_at
+               })
+
+      assert Repo.aggregate(AgentRunStep, :count) == 0
+    end
+
+    test "rejects caller completed_at on Run and RunStep updates without mutation" do
+      {:ok, agent} = Agents.create_agent(@valid_attrs)
+      {:ok, run} = Agents.start_agent_run(agent)
+
+      {:ok, step} =
+        Agents.record_agent_run_step(run.id, agent.id, %{
+          step_type: "llm_call",
+          status: "requested"
+        })
+
+      forged_completed_at = ~U[2001-02-03 04:05:06.000000Z]
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.update_agent_run(run.id, %{
+                 completed_at: forged_completed_at,
+                 error: "forged"
+               })
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.update_agent_run(run.id, %{
+                 "completed_at" => forged_completed_at,
+                 "error" => "forged"
+               })
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.complete_agent_run(run.id, %{completed_at: forged_completed_at})
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.complete_agent_run(run.id, %{"completed_at" => forged_completed_at})
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.fail_agent_run(run.id, %{completed_at: forged_completed_at})
+
+      assert {:error, :immutable_agent_run_identity} =
+               Agents.fail_agent_run(run.id, %{"completed_at" => forged_completed_at})
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, %{
+                 completed_at: forged_completed_at,
+                 error: "forged"
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, %{
+                 "completed_at" => forged_completed_at,
+                 "error" => "forged"
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, agent.id, run.id, %{
+                 completed_at: forged_completed_at
+               })
+
+      assert {:error, :immutable_agent_run_step_identity} =
+               Agents.update_agent_run_step(step.id, agent.id, run.id, %{
+                 "completed_at" => forged_completed_at
+               })
+
+      assert %{status: "running", completed_at: nil, error: nil} = Repo.get!(AgentRun, run.id)
+
+      assert %{status: "requested", completed_at: nil, error: nil} =
+               Repo.get!(AgentRunStep, step.id)
+
+      %{rows: [[step_window_start]]} = Repo.query!("SELECT clock_timestamp()")
+
+      assert {:ok, completed_step} =
+               Agents.update_agent_run_step(step.id, %{
+                 status: "completed",
+                 finish_reason: "stop"
+               })
+
+      %{rows: [[step_window_end]]} = Repo.query!("SELECT clock_timestamp()")
+      assert DateTime.compare(completed_step.completed_at, step_window_start) in [:eq, :gt]
+      assert DateTime.compare(completed_step.completed_at, step_window_end) in [:eq, :lt]
+      refute completed_step.completed_at == forged_completed_at
+
+      %{rows: [[run_window_start]]} = Repo.query!("SELECT clock_timestamp()")
+
+      assert {:ok, completed_run} =
+               Agents.complete_agent_run(run.id, %{finish_reason: "stop"})
+
+      %{rows: [[run_window_end]]} = Repo.query!("SELECT clock_timestamp()")
+      assert DateTime.compare(completed_run.completed_at, run_window_start) in [:eq, :gt]
+      assert DateTime.compare(completed_run.completed_at, run_window_end) in [:eq, :lt]
+      refute completed_run.completed_at == forged_completed_at
+    end
+
     test "rejects Run and RunStep reparenting while preserving terminal provider fields" do
       {:ok, agent} = Agents.create_agent(@valid_attrs)
       {:ok, other_agent} = Agents.create_agent(@valid_attrs)

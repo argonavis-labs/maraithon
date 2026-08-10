@@ -33,10 +33,11 @@ defmodule Maraithon.Agents do
     :agent_package_id,
     :agent_package_version_id,
     :behavior,
-    :started_at
+    :started_at,
+    :completed_at
   ]
   @immutable_run_update_fields @run_identity_fields ++ [:trigger_type, :trigger]
-  @step_identity_fields [:agent_id, :agent_run_id, :started_at]
+  @step_identity_fields [:agent_id, :agent_run_id, :started_at, :completed_at]
   @immutable_step_update_fields @step_identity_fields ++
                                   [
                                     :sequence,
@@ -376,7 +377,7 @@ defmodule Maraithon.Agents do
             attrs
             |> Map.delete("status")
             |> Map.put(:status, status)
-            |> Map.put_new(:completed_at, now)
+            |> Map.put(:completed_at, now)
           else
             attrs
           end
@@ -555,7 +556,7 @@ defmodule Maraithon.Agents do
             attrs
             |> Map.delete("status")
             |> Map.put(:status, status)
-            |> Map.put_new(:completed_at, now)
+            |> Map.put(:completed_at, now)
           else
             attrs
           end
