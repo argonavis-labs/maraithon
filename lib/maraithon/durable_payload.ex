@@ -5,7 +5,7 @@ defmodule Maraithon.DurablePayload do
 
   alias Maraithon.BoundedJSON
 
-  @protocol_cutover Maraithon.Runtime.ProtocolCutover
+  @protocol_cutover Maraithon.Effects.ProtocolCutover
 
   @doc false
   def legacy_write? do
