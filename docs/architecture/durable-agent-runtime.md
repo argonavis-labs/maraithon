@@ -1,144 +1,290 @@
 # Durable, resident Agent runtime
 
-**Status:** Implemented behind the `EXACT_AGENT_RUNTIME_ENABLED` production interlock.
+**Status:** Implemented. Production admission remains closed until both database
+protocols are activated and the matching revision capability interlocks are
+enabled.
 **Decision date:** 2026-08-10
 
 ## Decision
 
 Maraithon Agents remain long-lived OTP processes. OTP owns local liveness,
-serialization, isolation, and routing; PostgreSQL owns durable intent,
-incarnation authority, recovery facts, checkpoints, and work records. A PID,
-Registry entry, PubSub delivery, or mailbox acknowledgement is never treated as
-durable ownership or completion proof.
+serialization, isolation, and routing. PostgreSQL owns durable intent,
+incarnation authority, recovery facts, checkpoints, work admission, fairness,
+and terminal outcomes. A PID, Registry entry, PubSub delivery, mailbox
+acknowledgement, timer, or advisory lock is never durable ownership or
+completion proof.
 
-This is a state-machine-with-checkpoints architecture, not strict event
-sourcing. The event log is an audit/history surface. Recovery restores a
-versioned snapshot and reconciles durable work instead of replaying behavior
-handlers and risking repeated external side effects.
+This is a state machine with checkpoints, not strict event sourcing. Recovery
+restores a bounded, versioned snapshot and reconciles durable work. The event
+log is an audit/history surface; behavior handlers are not replayed in a way
+that could repeat external side effects.
 
-## Runtime shape
+## Authority layers
 
-- One `Maraithon.Runtime.Agent` `gen_statem` process serializes each resident
-  Agent's `recovering`, `idle`, `working`, and `waiting_effect` states.
-- `Maraithon.Runtime.AgentSupervisor` dynamically starts Agent incarnations.
-  Exact children are `:temporary`: a restart must first acquire a fresh database
-  ownership generation instead of reusing stale supervisor arguments.
-- `Maraithon.Runtime.AgentRegistry` is a local routing index. Its metadata
-  carries the exact owner token, but it is not authority.
-- `Maraithon.Runtime.AgentLeases` claims and renews one UUID generation using
-  the PostgreSQL clock. Readiness is written last, after recovery, subscriptions,
-  timers, and checkpoint state are installed.
-- `Maraithon.Runtime.AgentWatcher` monitors `{pid, agent_id, owner_token}` and
-  records a crash only when that exact generation still owns the durable lease.
-  Recovery launches run under `Maraithon.Runtime.AgentRecoveryTaskSupervisor`.
+The production runtime has three deliberately separate authority layers:
+
+1. **PostgreSQL protocols.** Effect mode moves one way from `legacy` to
+   `generation_fenced_v1`; runtime coordination moves one way from `dark` to
+   `partition_fenced_v1`. Database rows, triggers, catalog fingerprints, and
+   exact transaction locks enforce these modes.
+2. **Revision capabilities.** `EXACT_AGENT_RUNTIME_ENABLED` and
+   `MULTINODE_COORDINATION_ENABLED` allow a compatible revision to participate.
+   They cannot activate either protocol and are not stopped-fleet evidence. A
+   node registration must also present the exact `GIT_SHA` stored by the
+   activation evidence; a different revision cannot join the activated epoch.
+3. **Local execution.** OTP supervisors, monitors, registries, and PubSub make
+   execution responsive. They act only while the database proves the exact
+   node, partition, Agent, claim, and task incarnation authoritative.
+
+`Maraithon.Runtime.BootGate` starts closed whenever background workers start.
+It opens only after the coordination session is ready, wake reconciliation has
+completed, desired Agents have taken the preclaim path, and readiness is
+rechecked. BootGate is a local admission barrier, not proof that another
+revision is absent.
+
+## Resident Agent lifecycle
+
+- One `Maraithon.Runtime.Agent` `gen_statem` serializes each resident Agent's
+  `recovering`, `idle`, `working`, and `waiting_effect` states.
+- `Maraithon.Runtime.AgentSupervisor` starts exact children as `:temporary`.
+  Restarting stale supervisor arguments cannot reuse authority; a replacement
+  must acquire a fresh database owner generation.
+- `Maraithon.Runtime.AgentRegistry` is a local routing index. Its owner-token
+  metadata is useful for routing but is not authority.
+- `Maraithon.Runtime.AgentLeases` claims and renews a UUID owner generation
+  using the PostgreSQL clock. The Agent is marked ready only after recovery,
+  subscriptions, timers, checkpoint state, and monitoring are installed.
+- `Maraithon.Runtime.AgentWatcher` monitors the exact
+  `{pid, agent_id, owner_token}`. A delayed `:DOWN` for an old PID cannot fence
+  or restart its replacement.
 - `Maraithon.Runtime.AgentRestartGuards` persists crash-loop counts, backoff,
   recovery-required state, and operator reset authority.
+- `Maraithon.Runtime.AgentLifecycleOperations` makes stop, pause, update,
+  upgrade, remove, and delete drain/finalize operations crash-recoverable.
 - `Maraithon.Runtime.WakeCoordinator` performs bounded reconciliation of
-  expired ownership, incomplete guard/directive transitions, pending lifecycle
-  operations, and due recovery generations.
-- `Maraithon.Runtime.AgentLifecycleOperations` makes stop, update, pause,
-  remove, upgrade, and delete drain/finalize operations crash-recoverable.
-- Snapshots, scheduled jobs, background jobs, effects, runs, and incidents are
-  stored in PostgreSQL. Task supervisors isolate effect, tool, background-job,
-  and recovery execution from their coordinating GenServers.
+  expired ownership, incomplete guard/directive transitions, lifecycle work,
+  and due recovery generations.
 
-## Required invariants
+Authority-sensitive writes take the canonical database locks and verify the
+exact generation in the same transaction. Desired-state changes revoke
+readiness and persist intent before best-effort process signalling.
 
-1. **Preclaim before spawn.** No production Agent process starts without a
-   fresh durable lease token.
-2. **Ready last.** A process cannot accept workload until recovery is complete
-   and its exact lease is marked ready.
-3. **Generation fencing.** Every authority-sensitive write verifies the exact
-   owner token in the same database transaction.
-4. **Monitor exact incarnations.** A delayed `:DOWN` for an old PID cannot fence
-   or restart its replacement.
-5. **Temporary children, durable restart policy.** The DynamicSupervisor does
-   not blindly restart stale launch arguments. Watcher + restart guard + wake
-   reconciliation admit a replacement generation.
-6. **Desired state is durable.** Stop/update/delete operations first revoke
-   readiness and persist intent, then signal processes outside database locks.
-7. **Mailbox delivery is only a hint.** Durable producers may use PubSub to
-   reduce latency, but acceptance and terminal state belong in PostgreSQL.
-8. **External effects are outbox work.** Provider success, unknown outcome,
-   local checkpoint, cancellation, and acknowledgement must remain distinct.
+## Durable Directives
 
-## Current boundaries and next work
+`Maraithon.Runtime.AgentDirectives` is the durable inbox for Agent demand. A
+Directive is bounded and encrypted, is idempotent on
+`{agent_id, dedupe_key}`, may have a future `available_at`, and is claimed only
+by a live, ready exact owner generation. Claim renewal and settlement remain
+fenced by that generation and claim token.
 
-The exact lifecycle closes the competing Bootstrap/DynamicSupervisor/Watcher
-restart policies and makes one database generation authoritative. It does not
-make every existing producer durable by itself.
+The shipped paths no longer treat mailbox acceptance as durable demand:
 
-Before claiming end-to-end durable Agent work, complete these follow-ups:
+- exact `Maraithon.Runtime.send_message/3` enqueues a `message` Directive;
+- topic and connector fan-out commits Directives before acknowledging ingress;
+- scheduled wakeups commit a Directive and acknowledge the scheduled row in the
+  same transaction.
 
-1. Cut generic `Runtime.send_message/3`, connector events, and scheduled wakeups
-   over to the existing `AgentDirectives` inbox with ACK-last semantics. The
-   process notification should contain only a directive ID and remain a hint.
-2. Finish generation-fenced Effect cancellation and explicit provider-outcome
-   ambiguity handling before allowing retries to resend non-idempotent work.
-3. Replace safely decoded ETF snapshots with a bounded, language-neutral
-   versioned format and define retention/encryption for event, effect, run-step,
-   and turn payloads.
-4. Add explicit partition authority for any future external-work lane before
-   scaling that lane beyond its configured bounds.
+After commit, an ID-only PubSub notification reduces latency. A missing
+subscriber or dropped notification is harmless because resident Agents and
+wake reconciliation poll PostgreSQL. Processing, active run/effect lineage,
+terminal state, terminal acknowledgement, and ambiguity are durable. Reusing a
+dedupe key with different input conflicts instead of silently becoming a new
+request.
 
-### Periodic service consolidation
+## Effect execution and the provider boundary
 
-All thirteen ordinary recurring services execute through stable
-`Maraithon.Runtime.RecurringJobs` rows and `BackgroundJobRunner`; none retains a
-scheduler GenServer. The original five stateless cycles are:
+Effects are durable outbox work. Exact claims carry the Agent owner generation,
+claim token, owner node, Task.Supervisor generation, and local task identity.
+The claim is checked again under database authority immediately before command
+entry.
 
-- `Maraithon.Runtime.BriefingCron`
-- `Maraithon.Runtime.BriefNotifier`
-- `Maraithon.Runtime.InsightNotifier`
-- `Maraithon.AssistantChat.RunRecovery`
-- `Maraithon.TelegramAssistant.RunReaper`
+Under partition-fenced coordination, each physical execution also has a
+`runtime_task_assignments` row. Its durable provider boundary is explicit:
+`not_entered` before command entry, `entered` before provider code may run,
+`outcome_known` when an exact returned outcome is durably settled, and
+`outcome_unknown` when termination is requested after entry without a durable
+outcome. This is the retry rule:
 
-The final eight are `TokenRefresher`, `WatchRenewer`, `FreshnessSweep`,
-`ProactiveCheckIn`, `TodoCompletionSweep`, `NudgeSweep`,
-`StalenessTriageSweep`, and `DogfoodDigest`. Each recurring coordinator has one
-stable active dedupe key. A successful claim-token-fenced cycle moves that same
-row back to `pending` using the PostgreSQL clock, so success and the next
-deadline are one durable compare-and-set rather than a mailbox timer. Missing
-schedules are repaired under a transaction-scoped PostgreSQL advisory lock.
-Poll timers and PIDs are wakeup hints only.
+- cancellation with physical proof while `not_entered` may settle as
+  `cancelled_before_provider` and release safely;
+- after `entered`, loss without a durable outcome becomes
+  `provider_outcome_ambiguous`/`outcome_unknown` and must not replay
+  non-idempotent work;
+- a provider response is not completion until the exact Effect terminal record,
+  coordinated task outcome evidence, and claim settlement are durable;
+- result notification is a replayable delivery hint. Durable dispatch
+  reservation and acknowledgement remain separate from the terminal outcome.
 
-Provider discovery coordinators enqueue one bounded account/cursor/token unit
-into `runtime_provider_account`. Its dedicated runner rotates partitions by a
-durable `last_started_at` watermark, enforces one in-flight job for a logical
-provider account, serializes provider-family capacity, and persists
-`Retry-After` as a provider cooldown. Model discovery coordinators enqueue one
-bounded tenant unit into `runtime_model_user`; its separate runner applies the
-same durable rotation with one in-flight model job per user, so a hot tenant
-cannot starve a tenant that has never run. The generic runner excludes both
-queues, preventing provider or model work from consuming the other lanes.
-That heterogeneous runner deliberately remains non-fair here: it carries strict
-Telegram update ordering, and migration 140004 will own its global cross-queue
-tenant policy. Fair selection still filters Telegram to each bot's active head
-and rechecks that head transactionally, so opting an ingress queue into fair
-selection cannot reorder updates. Expired claims are reclaimed by their fenced
-durable rows after a runner crash.
+Tool calls are especially conservative: only policy/validation failures proven
+before command entry are ordinary failures. Transport failure, task loss,
+response failure, or inability to persist a returned success after entry is
+ambiguous. Provider idempotency keys should still be used where available, but
+they do not weaken the runtime fence.
 
-`DogfoodDigest` persists the validated named timezone, hour, and minute in its
-recurring row and stores each exact next-fire instant. PostgreSQL timezone data
-is authoritative across DST: nonexistent spring-gap wall times use the
-pre-transition standard offset, and ambiguous fall-fold wall times resolve to
-the later standard-time occurrence. An invalid named timezone is rejected with
-a content-free alert; it never falls back to UTC or overwrites an existing
-validated row.
+## Physical termination proof
 
-`HealthReporter` and `StuckStateWatchdog` deliberately remain resident
-observers. Moving either into the queue it diagnoses could silence the only
-health signal when every durable runner is stopped or wedged. They own no
-business deadline or delivery authority. `Scheduler`, `EffectRunner`,
-`WakeCoordinator`, and `AgentWatcher` also remain durable executors or
-reconcilers rather than ordinary periodic business work. Startup retry and
-process-local UI/session timers are outside this consolidation, as are resident
-Agent heartbeat, checkpoint, directive-poll, and wakeup hints.
+Authority expiry and physical termination are different facts.
+
+### Effect and coordinated tasks
+
+`Maraithon.Runtime.TaskGuardian` installs monitors on exact Task.Supervisor and
+task PIDs and retains bounded proof history. Only its exact monitor-derived
+`:DOWN` observation (or cancellation before activation) is local physical
+proof. Lookup failure, `:not_found`, RPC failure, node disconnect, timeout,
+lease expiry, supervisor restart, or missing Registry name is not proof.
+
+If the original monitor can never return, a separately authenticated incident
+operator may record external destruction evidence bound to the activation and
+partition epochs, assignment/work identity, claim token, node incarnation,
+Task.Supervisor generation, and local task ID. The role-specific database
+trigger rejects stale or incomplete identity. Reconciliation preserves
+provider ambiguity after the entry boundary; it never invents success or
+releases the Effect for replay.
+
+### Agent processes
+
+An expired Agent lease or ambiguous route/supervisor result creates an
+`agent_termination_incidents` row and blocks successor claims. A replacement is
+admitted only after either:
+
+- the stable original `AgentWatcher` observes the exact local `:DOWN`; or
+- an incident operator supplies a SHA-256-addressed, Ed25519-signed external
+  node-destruction attestation over the stored activation epoch, node
+  incarnation, partition epoch, Agent ID, and lease token.
+
+The incident role cannot delete leases or manufacture a local watcher proof.
+The runtime reconciler consumes proven evidence, writes the restart guard,
+removes only the matching lease, and marks the incident reconciled in a fenced
+transaction.
+
+## PostgreSQL partition and scheduling authority
+
+Active coordination uses 64 stable tenant partitions. PostgreSQL owns:
+
+- the activation epoch and exact node incarnations;
+- ready-last node and partition leases plus monotonic ownership epochs;
+- leader planning, bounded assignment, drain, steal, and rebalance transitions;
+- physical task assignments, provider-boundary state, outcomes, and termination
+  proofs;
+- tenant concurrency limits, PostgreSQL-clock token refills, and deterministic
+  per-partition service sequences;
+- durable provider/account lane watermarks, per-key concurrency, rate-limit
+  cooldowns, and `Retry-After` deadlines.
+
+The 64-way tenant mapping and every background/scheduled job's `tenant_key` and
+`partition_id` are database facts prepared before activation. A worker may
+select only work in its ready database-owned partitions. Every settlement
+repeats node, partition epoch, task assignment, and claim-token checks. Local
+registries and timers are wakeup hints. Transaction-scoped
+advisory locks serialize narrow operations but do not survive as ownership
+facts.
+
+Readiness is continuous, not a startup receipt. Exact admission re-evaluates
+both protocol modes, catalog/manifest/role/ACL readiness, and the local
+ready-last coordination session. The session publishes database node readiness
+only after scoped workers exist, renews node/partition authority with the
+PostgreSQL clock, and revokes readiness before graceful local shutdown. Any
+uncertain renewal or protocol/catalog mismatch closes new admission and fences
+local execution; an old `ready_at` value is not permission to continue.
+
+## Durable jobs and periodic work
+
+Fifteen ordinary recurring coordinators are stable `background_jobs` rows:
+brief and insight notification, briefing discovery, assistant recovery,
+Telegram run reaping, token and watch renewal, freshness, proactive check-in,
+todo completion, nudging, staleness triage, the wall-clock dogfood digest,
+erasure-job discovery, and privacy retention. A successful claim-token-fenced
+cycle moves the same row back to `pending` with its next PostgreSQL-clock
+deadline. Reconciliation repairs missing schedules under a transaction-scoped
+lock; no scheduler PID owns the deadline.
+
+Provider discovery emits one bounded account/cursor/token unit into
+`runtime_provider_account`; model discovery emits one bounded user unit into
+`runtime_model_user`. Durable lane watermarks, partition keys, and rate keys
+prevent one account, provider family, or hot tenant from monopolizing capacity.
+In active coordination, the global fair scheduler chooses only a ready owned
+partition, enforces the tenant's active-task limit and PostgreSQL-clock token
+bucket, and advances the partition service sequence and tenant cursor in the
+same transaction as the exact job/task reservation. It applies that authority
+to heterogeneous background work while preserving Telegram's per-bot committed
+update head.
+
+`DogfoodDigest` persists a validated named timezone and exact next-fire instant.
+PostgreSQL timezone data resolves DST gaps and folds; invalid zones fail closed
+rather than falling back to UTC.
+
+`HealthReporter` and `StuckStateWatchdog` remain resident independent observers
+so a wedged queue cannot silence its own alarm. `Scheduler`, `EffectRunner`,
+`WakeCoordinator`, `AgentWatcher`, and the coordination session are durable
+executors/reconcilers rather than ordinary periodic business work.
+
+## Snapshots and encrypted durable payloads
+
+Snapshots use bounded tagged JSON, carry schema versions, and are encrypted and
+context-bound like the other durable payload sources. Tagged JSON v1 is the
+only write format; the migration-only legacy reader is bounded and safe-decoded
+and never executes arbitrary ETF. A checkpoint insertion prunes the same Agent
+to its newest ten Snapshots in the transaction. Snapshot quarantine and
+retention metadata are content-free.
+
+`Maraithon.DurablePayloadRegistry` is the closed source of truth for exactly 18
+authenticated encrypted payload sources:
+
+1. `effects`
+2. `agent_directives`
+3. `events`
+4. `agent_run_steps`
+5. `telegram_conversation_turns`
+6. `telegram_conversations`
+7. `telegram_assistant_runs`
+8. `telegram_assistant_steps`
+9. `telegram_prepared_actions`
+10. `agent_runs`
+11. `operator_events`
+12. `user_memory_profiles`
+13. `operator_memory_summaries`
+14. `background_jobs`
+15. `scheduled_jobs`
+16. `runtime_ingress_receipts`
+17. `snapshots` (Snapshot state and budget)
+18. `agent_work_results`
+
+Cloak AES-GCM authenticates ciphertext bytes. A separate versioned HMAC binds
+the ordered plaintext fields to their table, typed row identity, and tenant or
+Agent context, preventing valid ciphertext substitution. Verification,
+binding migration/rotation, Vault re-encryption, retention, and erasure share
+the reviewed registry; arbitrary table names never enter those operations.
+Source mutation invalidates its proof under the same advisory identity used by
+the verifier.
+
+## Privacy lifecycle
+
+Retention is bounded, fair per tenant, and based on the PostgreSQL clock. The
+durable retention coordinator runs every 15 minutes after a 20-second initial
+delay. Eligibility fails closed for active, requested, outcome-ambiguous, or
+unacknowledged work; expiry clears content while preserving the minimum
+identity, dedupe, authority, and audit facts required by the protocol.
+
+Erasure-job discovery runs every minute after a 10-second initial delay. User
+and Agent erasure is a durable claim-token-fenced state machine: publish the
+write fence, drain Agent/effect authority, revoke local credentials and request
+provider revocation, erase bounded copies, prove the fixed surfaces clean, then
+write a content-free receipt. Provider non-confirmation produces
+`partial_unverified`; it does not undo verified local deletion. Logging out only
+ends a session and is not an erasure request.
+
+See the operations guides for the executable policy:
+
+- [Durable payload lifecycle](../operations/durable-payload-lifecycle.md)
+- [Privacy retention and erasure](../operations/privacy-retention-erasure.md)
+- [Database TLS, backup, and restore](../operations/database-tls-backup-restore.md)
 
 ## Production activation
 
-Production defaults to `EXACT_AGENT_RUNTIME_ENABLED=false`. Activation is a
-non-rolling protocol, not a normal feature-flag flip. Apply the additive
-migrations, stop every legacy runtime revision, prove durable work quiescence,
-and then start the sole exact-runtime revision with the gate enabled. See
-[`docs/exact-agent-runtime-cutover.md`](../exact-agent-runtime-cutover.md).
+Neither capability flag may be enabled by a normal rolling deployment. The
+initial transition is a feature-dark, stopped-fleet, revision-bound procedure
+with external fleet evidence, all-source payload proofs, and two irreversible
+database activations. The evidence and exact revision become immutable; after
+the first activation there is no flag or SQL downgrade, only retry with the
+same envelope or a separately reviewed fix-forward protocol change. See [Exact
+Agent runtime production cutover](../exact-agent-runtime-cutover.md).

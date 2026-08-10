@@ -114,6 +114,14 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 
 **Tools** are actions agents can take to interact with the world, constrained by explicit allowlists per agent.
 
+### Durable runtime operations
+
+- [Durable resident Agent runtime](docs/architecture/durable-agent-runtime.md)
+- [Exact Agent runtime production cutover](docs/exact-agent-runtime-cutover.md)
+- [Durable payload lifecycle](docs/operations/durable-payload-lifecycle.md)
+- [Privacy retention and erasure](docs/operations/privacy-retention-erasure.md)
+- [Database TLS, backup, and restore](docs/operations/database-tls-backup-restore.md)
+
 ## Quick Start
 
 ```bash
@@ -184,11 +192,16 @@ The current production shape is intentionally simple:
 - Phoenix, the admin control center, the API, and the OTP runtime all run in the same release
 - Database-backed runtime state in PostgreSQL
 - Fly Managed Postgres in the same region
-- `DATABASE_URL` should be the pooled runtime URL
-- `DIRECT_DATABASE_URL` should be the direct connection URL used only for migrations and admin tasks
+- `DATABASE_URL` is the pooled `maraithon_runtime` URL
+- `DIRECT_DATABASE_URL` is the verified direct migrator transport used only by
+  the release command; named storage-only URLs bind verifier, activation, and
+  incident roles
 - `POOL_SIZE=8`, `DB_QUEUE_TARGET_MS=250`, and `DB_QUEUE_INTERVAL_MS=2000` for the current single-machine footprint
 
-This is the right shape for a single-user or small-team ambient agent deployment. Do not scale app machines horizontally until the database capacity and runtime polling strategy are adjusted to match.
+This is the right shape for a single-user or small-team ambient agent
+deployment. Scale app Machines horizontally only after the one-way coordination
+cutover and after adjusting database capacity for the additional node and
+worker pools.
 
 ### Why This Shape Wins
 
