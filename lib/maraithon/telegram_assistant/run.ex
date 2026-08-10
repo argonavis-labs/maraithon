@@ -208,14 +208,14 @@ defmodule Maraithon.TelegramAssistant.Run do
     end
   end
 
+  defp map_value(_map, _key, default), do: default
+
   defp atom_key_value(map, key, default) do
     Enum.find_value(map, default, fn
       {atom, value} when is_atom(atom) -> if Atom.to_string(atom) == key, do: value
       _entry -> nil
     end)
   end
-
-  defp map_value(_map, _key, default), do: default
 
   defp bounded_string(value, max_bytes) when is_binary(value) do
     value = String.trim(value)
