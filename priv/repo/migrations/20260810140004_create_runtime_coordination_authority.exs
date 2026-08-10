@@ -795,7 +795,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         'effect_execution_protocols', 'effect_execution_protocol_manifests',
         'effect_termination_attestations', 'effects', 'agent_runtime_leases',
         'agent_directives', 'agent_runs', 'agent_run_steps', 'background_jobs',
-        'scheduled_jobs', 'schema_migrations'
+        'scheduled_jobs', 'agent_termination_incidents', 'agent_termination_proofs',
+        'schema_migrations'
       ] LOOP
         IF NOT EXISTS (
           SELECT 1 FROM pg_catalog.pg_class AS relation
@@ -823,7 +824,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         'enforce_runtime_work_role()',
         'enforce_coordinated_background_job()', 'enforce_coordinated_scheduled_job()',
         'enforce_coordinated_agent_directive()', 'enforce_coordinated_agent_lease()',
-        'enforce_coordinated_effect()', 'runtime_coordination_catalog_ready_count()'
+        'enforce_coordinated_effect()', 'enforce_agent_termination_incident()',
+        'enforce_agent_termination_proof()',
+        'enforce_agent_termination_partition_release()',
+        'runtime_coordination_catalog_ready_count()'
       ] LOOP
         IF NOT EXISTS (
           SELECT 1 FROM pg_catalog.pg_proc AS procedure
@@ -862,7 +866,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
             'effect_execution_protocols', 'effect_execution_protocol_manifests',
             'effect_termination_attestations', 'effects', 'agent_runtime_leases',
             'agent_directives', 'agent_runs', 'agent_run_steps', 'background_jobs',
-            'scheduled_jobs', 'schema_migrations'
+            'scheduled_jobs', 'agent_termination_incidents', 'agent_termination_proofs',
+            'schema_migrations'
           ]) AND privilege.grantee = 0
       ) THEN
         RETURN false;
@@ -886,7 +891,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
             'effect_execution_protocols', 'effect_execution_protocol_manifests',
             'effect_termination_attestations', 'effects', 'agent_runtime_leases',
             'agent_directives', 'agent_runs', 'agent_run_steps', 'background_jobs',
-            'scheduled_jobs', 'schema_migrations'
+            'scheduled_jobs', 'agent_termination_incidents', 'agent_termination_proofs',
+            'schema_migrations'
           ])
       ) THEN
         RETURN false;
@@ -923,7 +929,12 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           has_table_privilege('maraithon_runtime', 'public.runtime_partition_rebalance_requests', 'UPDATE')) AND
         (has_table_privilege('maraithon_runtime', 'public.effect_execution_protocols', 'SELECT') AND
           has_table_privilege('maraithon_runtime', 'public.effect_execution_protocols', 'UPDATE')) AND
-        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'SELECT')
+        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'SELECT') AND
+        (has_table_privilege('maraithon_runtime', 'public.agent_termination_incidents', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.agent_termination_incidents', 'INSERT') AND
+          has_table_privilege('maraithon_runtime', 'public.agent_termination_incidents', 'UPDATE')) AND
+        (has_table_privilege('maraithon_runtime', 'public.agent_termination_proofs', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.agent_termination_proofs', 'INSERT'))
       ) OR
         has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'INSERT') OR
         has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'DELETE') OR
@@ -944,7 +955,12 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'INSERT') OR
         has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'UPDATE') OR
         has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'DELETE') OR
-        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'TRUNCATE') THEN
+        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.agent_termination_incidents', 'DELETE') OR
+        has_table_privilege('maraithon_runtime', 'public.agent_termination_incidents', 'TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.agent_termination_proofs', 'UPDATE') OR
+        has_table_privilege('maraithon_runtime', 'public.agent_termination_proofs', 'DELETE') OR
+        has_table_privilege('maraithon_runtime', 'public.agent_termination_proofs', 'TRUNCATE') THEN
         RETURN false;
       END IF;
 
@@ -966,7 +982,12 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         (has_table_privilege('maraithon_incident_operator', 'public.runtime_task_termination_proofs', 'SELECT') AND
           has_table_privilege('maraithon_incident_operator', 'public.runtime_task_termination_proofs', 'INSERT')) AND
         (has_table_privilege('maraithon_incident_operator', 'public.effect_termination_attestations', 'SELECT') AND
-          has_table_privilege('maraithon_incident_operator', 'public.effect_termination_attestations', 'INSERT'))
+          has_table_privilege('maraithon_incident_operator', 'public.effect_termination_attestations', 'INSERT')) AND
+        has_table_privilege('maraithon_incident_operator', 'public.agent_runtime_leases', 'SELECT') AND
+        (has_table_privilege('maraithon_incident_operator', 'public.agent_termination_incidents', 'SELECT') AND
+          has_table_privilege('maraithon_incident_operator', 'public.agent_termination_incidents', 'UPDATE')) AND
+        (has_table_privilege('maraithon_incident_operator', 'public.agent_termination_proofs', 'SELECT') AND
+          has_table_privilege('maraithon_incident_operator', 'public.agent_termination_proofs', 'INSERT'))
       ) OR has_table_privilege('maraithon_incident_operator',
              'public.runtime_task_outcome_evidence', 'INSERT') OR
            has_table_privilege('maraithon_incident_operator',
@@ -998,7 +1019,27 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
            has_table_privilege('maraithon_incident_operator',
              'public.effect_termination_attestations', 'DELETE') OR
            has_table_privilege('maraithon_incident_operator',
-             'public.effect_termination_attestations', 'TRUNCATE') THEN
+             'public.effect_termination_attestations', 'TRUNCATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_runtime_leases', 'INSERT') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_runtime_leases', 'UPDATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_runtime_leases', 'DELETE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_runtime_leases', 'TRUNCATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_termination_incidents', 'INSERT') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_termination_incidents', 'DELETE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_termination_incidents', 'TRUNCATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_termination_proofs', 'UPDATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_termination_proofs', 'DELETE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.agent_termination_proofs', 'TRUNCATE') THEN
         RETURN false;
       END IF;
 
@@ -1032,7 +1073,27 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
            has_table_privilege('maraithon_activation_operator',
              'public.runtime_task_termination_proofs', 'DELETE') OR
            has_table_privilege('maraithon_activation_operator',
-             'public.runtime_task_termination_proofs', 'TRUNCATE') THEN
+             'public.runtime_task_termination_proofs', 'TRUNCATE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_incidents', 'SELECT') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_incidents', 'INSERT') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_incidents', 'UPDATE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_incidents', 'DELETE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_incidents', 'TRUNCATE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_proofs', 'SELECT') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_proofs', 'INSERT') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_proofs', 'UPDATE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_proofs', 'DELETE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.agent_termination_proofs', 'TRUNCATE') THEN
         RETURN false;
       END IF;
 
@@ -1062,7 +1123,27 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
            has_table_privilege('maraithon_payload_verifier',
              'public.runtime_task_termination_proofs', 'DELETE') OR
            has_table_privilege('maraithon_payload_verifier',
-             'public.runtime_task_termination_proofs', 'TRUNCATE') THEN
+             'public.runtime_task_termination_proofs', 'TRUNCATE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_incidents', 'SELECT') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_incidents', 'INSERT') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_incidents', 'UPDATE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_incidents', 'DELETE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_incidents', 'TRUNCATE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_proofs', 'SELECT') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_proofs', 'INSERT') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_proofs', 'UPDATE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_proofs', 'DELETE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.agent_termination_proofs', 'TRUNCATE') THEN
         RETURN false;
       END IF;
 
@@ -1204,7 +1285,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
 
           IF (SELECT count(*) FROM public.schema_migrations
               WHERE version = 20260810140004) <> 1 OR
-             public.runtime_coordination_catalog_ready_count() <> 95 OR
+             public.runtime_coordination_catalog_ready_count() <> 114 OR
              NOT public.runtime_coordination_roles_ready() OR
              NOT public.runtime_coordination_acl_ready() OR
              NEW.manifest_digest IS DISTINCT FROM (
@@ -2382,7 +2463,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     DECLARE
       protocol_mode text;
       authority_valid boolean;
-      reconciler_valid boolean;
+      termination_valid boolean;
       ready_authority_required boolean;
     BEGIN
       IF current_user IS DISTINCT FROM 'maraithon_runtime' AND NOT (
@@ -2396,48 +2477,38 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       END IF;
       SELECT mode INTO STRICT protocol_mode
       FROM public.runtime_coordination_protocols WHERE name = 'runtime';
-      IF protocol_mode = 'dark' THEN RETURN COALESCE(NEW, OLD); END IF;
 
       IF TG_OP = 'DELETE' THEN
         SELECT EXISTS (
-          SELECT 1 FROM public.runtime_partitions AS partition
-          JOIN public.runtime_node_incarnations AS node
-            ON node.id = OLD.coordination_node_incarnation_id
-           AND node.activation_epoch = OLD.coordination_activation_epoch
-           AND node.state IN ('ready', 'draining')
-           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
-          WHERE partition.partition_id = OLD.coordination_partition_id
-            AND partition.activation_epoch = OLD.coordination_activation_epoch
-            AND partition.ownership_epoch = OLD.coordination_partition_epoch
-            AND partition.owner_node_incarnation_id = OLD.coordination_node_incarnation_id
-            AND partition.state IN ('ready', 'draining')
-            AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
-        ) INTO authority_valid;
+          SELECT 1
+          FROM public.agent_termination_incidents AS incident
+          JOIN public.agent_termination_proofs AS proof
+            ON proof.incident_id = incident.id
+           AND proof.agent_id = incident.agent_id
+           AND proof.lease_token = incident.lease_token
+          WHERE incident.id::text =
+                  current_setting('maraithon.agent_termination_reconciliation', true)
+            AND incident.status = 'proven'
+            AND incident.agent_id = OLD.agent_id
+            AND incident.lease_token = OLD.owner_token
+            AND incident.activation_epoch IS NOT DISTINCT FROM
+                  OLD.coordination_activation_epoch
+            AND incident.node_incarnation_id IS NOT DISTINCT FROM
+                  OLD.coordination_node_incarnation_id
+            AND incident.partition_id IS NOT DISTINCT FROM
+                  OLD.coordination_partition_id
+            AND incident.partition_epoch IS NOT DISTINCT FROM
+                  OLD.coordination_partition_epoch
+        ) INTO termination_valid;
 
-        SELECT EXISTS (
-          SELECT 1 FROM public.agents AS agent
-          JOIN public.runtime_partitions AS partition
-            ON partition.partition_id = public.runtime_partition_for('user:' || agent.user_id)
-          JOIN public.runtime_node_incarnations AS node
-            ON node.id = partition.owner_node_incarnation_id
-           AND node.activation_epoch = partition.activation_epoch
-           AND node.state = 'ready' AND node.ready_at IS NOT NULL
-           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
-          WHERE agent.id = OLD.agent_id AND partition.state = 'ready'
-            AND partition.ready_at IS NOT NULL
-            AND partition.owner_node_incarnation_id::text =
-                  current_setting('maraithon.runtime_node_action', true)
-            AND current_setting('maraithon.runtime_agent_reconciliation', true) =
-                  OLD.agent_id::text
-            AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
-        ) INTO reconciler_valid;
-
-        IF NOT authority_valid AND NOT reconciler_valid THEN
-          RAISE EXCEPTION 'Agent lease deletion requires live owner or current partition reconciler'
+        IF NOT termination_valid THEN
+          RAISE EXCEPTION 'Agent lease deletion requires exact physical termination proof'
             USING ERRCODE = 'check_violation';
         END IF;
         RETURN OLD;
       END IF;
+
+      IF protocol_mode = 'dark' THEN RETURN NEW; END IF;
 
       IF NEW.coordination_activation_epoch IS NULL OR
          NEW.coordination_partition_id IS NULL OR
@@ -2663,6 +2734,335 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_effect()
     """)
 
+    # Physical Agent termination is a durable evidence protocol. Expiry and
+    # topology uncertainty remain fences; only a proof bound to one immutable
+    # lease identity permits reconciliation and partition release.
+    create_if_not_exists table(:agent_termination_incidents, primary_key: false) do
+      add :id, :uuid, primary_key: true
+      add :activation_epoch, :uuid
+      add :node_incarnation_id, :uuid
+      add :partition_id, :smallint
+      add :partition_epoch, :bigint
+      add :agent_id, :uuid, null: false
+      add :lease_token, :uuid, null: false
+      add :owner_node, :text, null: false
+      add :status, :text, null: false, default: "requested"
+      add :request_reason, :text, null: false
+      add :requested_at, :utc_datetime_usec, null: false
+      add :last_requested_at, :utc_datetime_usec, null: false
+      add :request_count, :integer, null: false, default: 1
+      add :proof_id, :uuid
+      add :proof_kind, :text
+      add :proved_at, :utc_datetime_usec
+      add :reconcile_attempts, :integer, null: false, default: 0
+      add :retry_at, :utc_datetime_usec, null: false
+      add :last_error, :text
+      add :reconciled_at, :utc_datetime_usec
+      add :reconciliation_policy, :map, null: false, default: %{}
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create_if_not_exists unique_index(:agent_termination_incidents, [:lease_token],
+                           name: :agent_termination_incidents_lease_token_index
+                         )
+
+    create_if_not_exists unique_index(:agent_termination_incidents, [:agent_id],
+                           where: "status IN ('requested', 'proven')",
+                           name: :agent_termination_incidents_open_agent_index
+                         )
+
+    create_if_not_exists index(
+                           :agent_termination_incidents,
+                           [:status, :retry_at, :requested_at, :id],
+                           name: :agent_termination_incidents_due_index,
+                           where: "status IN ('requested', 'proven')"
+                         )
+
+    create_if_not_exists index(
+                           :agent_termination_incidents,
+                           [
+                             :activation_epoch,
+                             :node_incarnation_id,
+                             :partition_id,
+                             :partition_epoch
+                           ],
+                           name: :agent_termination_incidents_coordination_index
+                         )
+
+    execute("""
+    ALTER TABLE public.agent_termination_incidents
+      DROP CONSTRAINT IF EXISTS agent_termination_incidents_shape,
+      ADD CONSTRAINT agent_termination_incidents_shape CHECK (
+        octet_length(owner_node) BETWEEN 1 AND 255 AND
+        octet_length(request_reason) BETWEEN 1 AND 255 AND
+        request_count > 0 AND reconcile_attempts >= 0 AND
+        status IN ('requested', 'proven', 'reconciled') AND
+        ((activation_epoch IS NULL AND node_incarnation_id IS NULL AND
+          partition_id IS NULL AND partition_epoch IS NULL) OR
+         (activation_epoch IS NOT NULL AND node_incarnation_id IS NOT NULL AND
+          partition_id BETWEEN 0 AND 63 AND partition_epoch > 0)) AND
+        ((status = 'requested' AND proof_id IS NULL AND proof_kind IS NULL AND
+          proved_at IS NULL AND reconciled_at IS NULL) OR
+         (status = 'proven' AND proof_id IS NOT NULL AND proof_kind IS NOT NULL AND
+          proved_at IS NOT NULL AND reconciled_at IS NULL) OR
+         (status = 'reconciled' AND proof_id IS NOT NULL AND proof_kind IS NOT NULL AND
+          proved_at IS NOT NULL AND reconciled_at IS NOT NULL)) AND
+        (last_error IS NULL OR octet_length(last_error) BETWEEN 1 AND 255)
+      ) NOT VALID
+    """)
+
+    execute(
+      "ALTER TABLE public.agent_termination_incidents VALIDATE CONSTRAINT agent_termination_incidents_shape"
+    )
+
+    create_if_not_exists table(:agent_termination_proofs, primary_key: false) do
+      add :id, :uuid, primary_key: true
+
+      add :incident_id,
+          references(:agent_termination_incidents,
+            column: :id,
+            type: :uuid,
+            on_delete: :restrict
+          ),
+          null: false
+
+      add :activation_epoch, :uuid
+      add :node_incarnation_id, :uuid
+      add :partition_id, :smallint
+      add :partition_epoch, :bigint
+      add :agent_id, :uuid, null: false
+      add :lease_token, :uuid, null: false
+      add :proof_kind, :text, null: false
+      add :local_pid, :text
+      add :monitor_started_at, :utc_datetime_usec
+      add :down_reason, :text
+      add :evidence_id, :text
+      add :evidence_digest, :binary
+      add :attestation_signature, :binary
+      add :proved_by, :text, null: false
+      add :proved_at, :utc_datetime_usec, null: false
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create_if_not_exists unique_index(:agent_termination_proofs, [:incident_id],
+                           name: :agent_termination_proofs_incident_index
+                         )
+
+    create_if_not_exists unique_index(:agent_termination_proofs, [:lease_token],
+                           name: :agent_termination_proofs_lease_token_index
+                         )
+
+    create_if_not_exists index(
+                           :agent_termination_proofs,
+                           [:activation_epoch, :node_incarnation_id, :agent_id, :lease_token],
+                           name: :agent_termination_proofs_exact_identity_index
+                         )
+
+    execute("""
+    ALTER TABLE public.agent_termination_proofs
+      DROP CONSTRAINT IF EXISTS agent_termination_proofs_shape,
+      ADD CONSTRAINT agent_termination_proofs_shape CHECK (
+        proof_kind IN ('local_down', 'external_node_destroyed') AND
+        octet_length(proved_by) BETWEEN 1 AND 320 AND
+        ((activation_epoch IS NULL AND node_incarnation_id IS NULL AND
+          partition_id IS NULL AND partition_epoch IS NULL) OR
+         (activation_epoch IS NOT NULL AND node_incarnation_id IS NOT NULL AND
+          partition_id BETWEEN 0 AND 63 AND partition_epoch > 0)) AND
+        ((proof_kind = 'local_down' AND
+          octet_length(local_pid) BETWEEN 1 AND 255 AND monitor_started_at IS NOT NULL AND
+          octet_length(down_reason) BETWEEN 1 AND 255 AND
+          evidence_id IS NULL AND evidence_digest IS NULL AND
+          attestation_signature IS NULL) OR
+         (proof_kind = 'external_node_destroyed' AND
+          activation_epoch IS NOT NULL AND node_incarnation_id IS NOT NULL AND
+          local_pid IS NULL AND monitor_started_at IS NULL AND down_reason IS NULL AND
+          octet_length(evidence_id) BETWEEN 1 AND 256 AND
+          octet_length(evidence_digest) = 32 AND
+          octet_length(attestation_signature) = 64))
+      ) NOT VALID
+    """)
+
+    execute(
+      "ALTER TABLE public.agent_termination_proofs VALIDATE CONSTRAINT agent_termination_proofs_shape"
+    )
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_agent_termination_incident()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
+        RAISE EXCEPTION 'Agent termination incidents are durable reconciliation facts'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id OR
+           NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch OR
+           NEW.node_incarnation_id IS DISTINCT FROM OLD.node_incarnation_id OR
+           NEW.partition_id IS DISTINCT FROM OLD.partition_id OR
+           NEW.partition_epoch IS DISTINCT FROM OLD.partition_epoch OR
+           NEW.agent_id IS DISTINCT FROM OLD.agent_id OR
+           NEW.lease_token IS DISTINCT FROM OLD.lease_token OR
+           NEW.owner_node IS DISTINCT FROM OLD.owner_node OR
+           NEW.requested_at IS DISTINCT FROM OLD.requested_at OR
+           NEW.inserted_at IS DISTINCT FROM OLD.inserted_at THEN
+          RAISE EXCEPTION 'Agent termination incident identity is immutable'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF (OLD.status = 'requested' AND NEW.status NOT IN ('requested', 'proven')) OR
+           (OLD.status = 'proven' AND NEW.status NOT IN ('proven', 'reconciled')) OR
+           (OLD.status = 'reconciled' AND NEW.status <> 'reconciled') THEN
+          RAISE EXCEPTION 'invalid Agent termination incident transition'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+
+      RETURN COALESCE(NEW, OLD);
+    END;
+    $function$;
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_agent_termination_incident_trigger ON public.agent_termination_incidents"
+    )
+
+    execute("""
+    CREATE TRIGGER enforce_agent_termination_incident_trigger
+      BEFORE UPDATE OR DELETE ON public.agent_termination_incidents
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_agent_termination_incident()
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_agent_termination_incidents_truncate_trigger ON public.agent_termination_incidents"
+    )
+
+    execute("""
+    CREATE TRIGGER reject_agent_termination_incidents_truncate_trigger
+      BEFORE TRUNCATE ON public.agent_termination_incidents
+      FOR EACH STATEMENT EXECUTE FUNCTION public.enforce_agent_termination_incident()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_agent_termination_proof()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE incident record;
+    BEGIN
+      IF NOT (
+        (NEW.proof_kind = 'local_down' AND current_user = 'maraithon_runtime') OR
+        (NEW.proof_kind = 'external_node_destroyed' AND
+          current_user = 'maraithon_incident_operator') OR
+        (current_user = 'maraithon_migrator' AND EXISTS (
+          SELECT 1 FROM public.runtime_coordination_protocols
+          WHERE name = 'runtime' AND mode = 'dark'
+        ))
+      ) THEN
+        RAISE EXCEPTION 'Agent termination proof kind is not authorized for current role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Agent termination proof is append-only'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      SELECT * INTO STRICT incident
+      FROM public.agent_termination_incidents
+      WHERE id = NEW.incident_id
+      FOR UPDATE;
+
+      IF incident.status <> 'requested' OR
+         NEW.activation_epoch IS DISTINCT FROM incident.activation_epoch OR
+         NEW.node_incarnation_id IS DISTINCT FROM incident.node_incarnation_id OR
+         NEW.partition_id IS DISTINCT FROM incident.partition_id OR
+         NEW.partition_epoch IS DISTINCT FROM incident.partition_epoch OR
+         NEW.agent_id IS DISTINCT FROM incident.agent_id OR
+         NEW.lease_token IS DISTINCT FROM incident.lease_token THEN
+        RAISE EXCEPTION 'Agent termination proof identity does not match its incident'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF NEW.proof_kind = 'local_down' AND
+         current_setting('maraithon.agent_local_down_proof', true)
+           IS DISTINCT FROM NEW.incident_id::text THEN
+        RAISE EXCEPTION 'local Agent termination proof requires the exact monitor barrier'
+          USING ERRCODE = 'check_violation';
+      ELSIF NEW.proof_kind = 'external_node_destroyed' AND
+            current_setting('maraithon.agent_external_termination_attestation', true)
+              IS DISTINCT FROM encode(NEW.evidence_digest, 'hex') THEN
+        RAISE EXCEPTION 'external Agent termination proof requires signed operator attestation'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'Agent termination incident is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_agent_termination_proof_trigger ON public.agent_termination_proofs"
+    )
+
+    execute("""
+    CREATE TRIGGER enforce_agent_termination_proof_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.agent_termination_proofs
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_agent_termination_proof()
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_agent_termination_proofs_truncate_trigger ON public.agent_termination_proofs"
+    )
+
+    execute("""
+    CREATE TRIGGER reject_agent_termination_proofs_truncate_trigger
+      BEFORE TRUNCATE ON public.agent_termination_proofs
+      FOR EACH STATEMENT EXECUTE FUNCTION public.enforce_agent_termination_proof()
+    """)
+
+    # The v1 partition trigger only counted live Agent leases.  This additional
+    # trigger makes every exact lease row (including an expired ambiguous row)
+    # a release barrier until proof-gated reconciliation removes that row.
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_agent_termination_partition_release()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      IF OLD.state IN ('draining', 'blocked') AND NEW.state = 'unassigned' AND EXISTS (
+        SELECT 1 FROM public.agent_runtime_leases AS lease
+        WHERE lease.coordination_activation_epoch = OLD.activation_epoch
+          AND lease.coordination_partition_id = OLD.partition_id
+          AND lease.coordination_partition_epoch = OLD.ownership_epoch
+          AND lease.coordination_node_incarnation_id = OLD.owner_node_incarnation_id
+      ) THEN
+        RAISE EXCEPTION 'partition cannot move before exact Agent termination proof'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_agent_termination_partition_release_trigger ON public.runtime_partitions"
+    )
+
+    execute("""
+    CREATE TRIGGER enforce_agent_termination_partition_release_trigger
+      BEFORE UPDATE ON public.runtime_partitions
+      FOR EACH ROW EXECUTE FUNCTION public.enforce_agent_termination_partition_release()
+    """)
+
     execute("""
     CREATE OR REPLACE FUNCTION public.runtime_catalog_table_fingerprint(requested regclass)
     RETURNS text
@@ -2835,6 +3235,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           ('public.enforce_coordinated_agent_directive()'::regprocedure),
           ('public.enforce_coordinated_agent_lease()'::regprocedure),
           ('public.enforce_coordinated_effect()'::regprocedure),
+          ('public.enforce_agent_termination_incident()'::regprocedure),
+          ('public.enforce_agent_termination_proof()'::regprocedure),
+          ('public.enforce_agent_termination_partition_release()'::regprocedure),
           ('public.runtime_coordination_catalog_ready_count()'::regprocedure)
       ), function_matches AS (
         SELECT count(*) AS count
@@ -2867,7 +3270,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           ('public.runtime_tenant_fairness'::regclass, 'runtime_tenant_fairness_bounds'),
           ('public.runtime_partition_rebalance_requests'::regclass, 'runtime_partition_rebalance_requests_shape'),
           ('public.background_jobs'::regclass, 'background_jobs_partition_shape'),
-          ('public.scheduled_jobs'::regclass, 'scheduled_jobs_partition_shape')
+          ('public.scheduled_jobs'::regclass, 'scheduled_jobs_partition_shape'),
+          ('public.agent_termination_incidents'::regclass, 'agent_termination_incidents_shape'),
+          ('public.agent_termination_proofs'::regclass, 'agent_termination_proofs_shape')
       ), constraint_matches AS (
         SELECT count(*) AS count
         FROM required_constraints AS required
@@ -2902,7 +3307,12 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           ('public.agent_run_steps'::regclass, 'enforce_agent_run_steps_runtime_role_trigger'),
         ('public.agent_directives'::regclass, 'enforce_coordinated_agent_directive_trigger'),
           ('public.agent_runtime_leases'::regclass, 'enforce_coordinated_agent_lease_trigger'),
-          ('public.effects'::regclass, 'enforce_coordinated_effect_trigger')
+          ('public.effects'::regclass, 'enforce_coordinated_effect_trigger'),
+          ('public.agent_termination_incidents'::regclass, 'enforce_agent_termination_incident_trigger'),
+          ('public.agent_termination_incidents'::regclass, 'reject_agent_termination_incidents_truncate_trigger'),
+          ('public.agent_termination_proofs'::regclass, 'enforce_agent_termination_proof_trigger'),
+          ('public.agent_termination_proofs'::regclass, 'reject_agent_termination_proofs_truncate_trigger'),
+          ('public.runtime_partitions'::regclass, 'enforce_agent_termination_partition_release_trigger')
       ), trigger_matches AS (
         SELECT count(*) AS count
         FROM required_triggers AS required
@@ -2925,7 +3335,14 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           ('background_jobs_tenant_active_index'),
           ('scheduled_jobs_partition_due_index'),
           ('agent_runtime_leases_coordination_partition_index'),
-          ('effects_coordination_partition_pending_index')
+          ('effects_coordination_partition_pending_index'),
+          ('agent_termination_incidents_lease_token_index'),
+          ('agent_termination_incidents_open_agent_index'),
+          ('agent_termination_incidents_due_index'),
+          ('agent_termination_incidents_coordination_index'),
+          ('agent_termination_proofs_incident_index'),
+          ('agent_termination_proofs_lease_token_index'),
+          ('agent_termination_proofs_exact_identity_index')
       ), index_matches AS (
         SELECT count(*) AS count
         FROM required_indexes AS required
@@ -2967,7 +3384,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           ('public.agent_directives'::regclass, 'agent_directives'),
           ('public.agent_runs'::regclass, 'agent_runs'),
           ('public.agent_run_steps'::regclass, 'agent_run_steps'),
-          ('public.effects'::regclass, 'effects')
+          ('public.effects'::regclass, 'effects'),
+          ('public.agent_termination_incidents'::regclass, 'agent_termination_incidents'),
+          ('public.agent_termination_proofs'::regclass, 'agent_termination_proofs')
       ), catalog_matches AS (
         SELECT count(*) AS count
         FROM required_catalogs AS required
@@ -3070,7 +3489,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
               'runtime_node_incarnations', 'runtime_leader_authorities', 'runtime_partitions',
               'runtime_partition_transitions', 'runtime_task_assignments',
               'runtime_task_outcome_evidence', 'runtime_task_termination_proofs',
-              'runtime_tenant_fairness', 'runtime_partition_rebalance_requests'
+              'runtime_tenant_fairness', 'runtime_partition_rebalance_requests',
+              'agent_termination_incidents', 'agent_termination_proofs'
             ])
         LOOP
           EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO maraithon_runtime', relation_name);
@@ -3093,7 +3513,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           'effect_execution_protocols', 'effect_execution_protocol_manifests',
           'effect_termination_attestations', 'effects', 'agent_runtime_leases',
           'agent_directives', 'agent_runs', 'agent_run_steps',
-          'background_jobs', 'scheduled_jobs', 'schema_migrations'
+          'background_jobs', 'scheduled_jobs', 'agent_termination_incidents',
+          'agent_termination_proofs', 'schema_migrations'
         ] LOOP
           EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier, maraithon_incident_operator, maraithon_activation_operator', relation_name);
           EXECUTE format('GRANT ALL ON TABLE public.%I TO maraithon_migrator', relation_name);
@@ -3119,7 +3540,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
               'effect_execution_protocols', 'effect_execution_protocol_manifests',
               'effect_termination_attestations', 'effects', 'agent_runtime_leases',
               'agent_directives', 'agent_runs', 'agent_run_steps', 'background_jobs',
-              'scheduled_jobs', 'schema_migrations'
+              'scheduled_jobs', 'agent_termination_incidents', 'agent_termination_proofs',
+              'schema_migrations'
             ])
         LOOP
           IF grantee_name = 'PUBLIC' THEN
@@ -3135,6 +3557,16 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           public.agent_runtime_leases, public.agent_directives, public.agent_runs,
           public.agent_run_steps, public.background_jobs, public.scheduled_jobs
           TO maraithon_runtime;
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.agent_termination_incidents
+          TO maraithon_runtime;
+        GRANT SELECT, INSERT ON TABLE public.agent_termination_proofs
+          TO maraithon_runtime;
+        GRANT SELECT ON TABLE public.agent_runtime_leases
+          TO maraithon_incident_operator;
+        GRANT SELECT, UPDATE ON TABLE public.agent_termination_incidents
+          TO maraithon_incident_operator;
+        GRANT SELECT, INSERT ON TABLE public.agent_termination_proofs
+          TO maraithon_incident_operator;
         -- Regrant Effect protocol access after the blanket revocation above.
         -- This ordering is required on partial expansion retries as well as on
         -- a fresh catalog.
@@ -3178,6 +3610,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           'enforce_runtime_work_role()', 'enforce_coordinated_background_job()',
           'enforce_coordinated_scheduled_job()', 'enforce_coordinated_agent_directive()',
           'enforce_coordinated_agent_lease()', 'enforce_coordinated_effect()',
+          'enforce_agent_termination_incident()', 'enforce_agent_termination_proof()',
+          'enforce_agent_termination_partition_release()',
           'runtime_coordination_catalog_ready_count()'
         ] LOOP
           EXECUTE format('REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier, maraithon_incident_operator, maraithon_activation_operator', function_name);
@@ -3233,6 +3667,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.enforce_coordinated_agent_directive()'::regprocedure),
         ('public.enforce_coordinated_agent_lease()'::regprocedure),
         ('public.enforce_coordinated_effect()'::regprocedure),
+        ('public.enforce_agent_termination_incident()'::regprocedure),
+        ('public.enforce_agent_termination_proof()'::regprocedure),
+        ('public.enforce_agent_termination_partition_release()'::regprocedure),
         ('public.runtime_coordination_catalog_ready_count()'::regprocedure)
     ), functions AS (
       SELECT jsonb_object_agg(function_row.proname,
@@ -3259,7 +3696,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.runtime_tenant_fairness'::regclass, 'runtime_tenant_fairness_bounds'),
         ('public.runtime_partition_rebalance_requests'::regclass, 'runtime_partition_rebalance_requests_shape'),
         ('public.background_jobs'::regclass, 'background_jobs_partition_shape'),
-        ('public.scheduled_jobs'::regclass, 'scheduled_jobs_partition_shape')
+        ('public.scheduled_jobs'::regclass, 'scheduled_jobs_partition_shape'),
+        ('public.agent_termination_incidents'::regclass, 'agent_termination_incidents_shape'),
+        ('public.agent_termination_proofs'::regclass, 'agent_termination_proofs_shape')
     ), constraints AS (
       SELECT jsonb_object_agg(required.constraint_name,
                encode(public.digest(convert_to(regexp_replace(pg_catalog.pg_get_constraintdef(constraint_row.oid, true), ' NOT VALID$', ''), 'UTF8'), 'sha256'), 'hex')) AS value
@@ -3291,7 +3730,12 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.agent_run_steps'::regclass, 'enforce_agent_run_steps_runtime_role_trigger'),
         ('public.agent_directives'::regclass, 'enforce_coordinated_agent_directive_trigger'),
         ('public.agent_runtime_leases'::regclass, 'enforce_coordinated_agent_lease_trigger'),
-        ('public.effects'::regclass, 'enforce_coordinated_effect_trigger')
+        ('public.effects'::regclass, 'enforce_coordinated_effect_trigger'),
+        ('public.agent_termination_incidents'::regclass, 'enforce_agent_termination_incident_trigger'),
+        ('public.agent_termination_incidents'::regclass, 'reject_agent_termination_incidents_truncate_trigger'),
+        ('public.agent_termination_proofs'::regclass, 'enforce_agent_termination_proof_trigger'),
+        ('public.agent_termination_proofs'::regclass, 'reject_agent_termination_proofs_truncate_trigger'),
+        ('public.runtime_partitions'::regclass, 'enforce_agent_termination_partition_release_trigger')
     ), triggers AS (
       SELECT jsonb_object_agg(required.trigger_name,
                encode(public.digest(convert_to(pg_catalog.pg_get_triggerdef(trigger_row.oid, true), 'UTF8'), 'sha256'), 'hex')) AS value
@@ -3312,7 +3756,14 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('background_jobs_tenant_active_index'),
         ('scheduled_jobs_partition_due_index'),
         ('agent_runtime_leases_coordination_partition_index'),
-        ('effects_coordination_partition_pending_index')
+        ('effects_coordination_partition_pending_index'),
+        ('agent_termination_incidents_lease_token_index'),
+        ('agent_termination_incidents_open_agent_index'),
+        ('agent_termination_incidents_due_index'),
+        ('agent_termination_incidents_coordination_index'),
+        ('agent_termination_proofs_incident_index'),
+        ('agent_termination_proofs_lease_token_index'),
+        ('agent_termination_proofs_exact_identity_index')
     ), indexes AS (
       SELECT jsonb_object_agg(required.index_name,
                encode(public.digest(convert_to(pg_catalog.jsonb_build_object(
@@ -3350,7 +3801,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.agent_directives'::regclass, 'agent_directives'),
         ('public.agent_runs'::regclass, 'agent_runs'),
         ('public.agent_run_steps'::regclass, 'agent_run_steps'),
-        ('public.effects'::regclass, 'effects')
+        ('public.effects'::regclass, 'effects'),
+        ('public.agent_termination_incidents'::regclass, 'agent_termination_incidents'),
+        ('public.agent_termination_proofs'::regclass, 'agent_termination_proofs')
     ), catalogs AS (
       SELECT jsonb_object_agg(required.relation_name,
                public.runtime_catalog_table_fingerprint(required.relation_id)) ||
