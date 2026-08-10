@@ -34,7 +34,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.AgentTerminationIncident
   alias Maraithon.Runtime.DatabaseClock
-  alias Maraithon.Runtime.Coordination.Scope
+  alias Maraithon.Runtime.Coordination.{Protocol, Scope}
   alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Runtime.ScheduledJob
 
@@ -313,7 +313,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
          {:ok, operation_token} <- optional_uuid(operation_token) do
       transaction_result =
         Repo.transaction(fn ->
-          ProtocolCutover.require_current_mutation!()
+          _protocol_pair = Protocol.locked_pair!()
           finalize_locked(agent_id, operation_token, scoped?)
         end)
 
@@ -961,7 +961,29 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
       else: Repo.rollback(:lifecycle_operation_token_mismatch)
   end
 
+  @doc false
+  def expected_termination?(
+        %AgentLifecycleOperation{} = operation,
+        agent_id,
+        owner_token
+      )
+      when is_binary(agent_id) and is_binary(owner_token) do
+    valid_payload?(operation) and
+      operation.state == "draining" and
+      operation.agent_id == agent_id and
+      operation.expected_owner_token == owner_token and
+      get_in(operation.payload, ["mutation", "action"]) == operation.kind
+  end
+
+  def expected_termination?(_operation, _agent_id, _owner_token), do: false
+
   defp validate_payload!(operation) do
+    if valid_payload?(operation),
+      do: operation,
+      else: Repo.rollback(:invalid_lifecycle_payload)
+  end
+
+  defp valid_payload?(operation) do
     with {:ok, payload} <- canonical_payload(operation.payload),
          true <- payload == operation.payload,
          true <- digest(payload) == operation.payload_digest,
@@ -972,9 +994,9 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
          true <- payload["expected_owner_token"] == operation.expected_owner_token,
          true <- payload["requires_external_drain"] == operation.requires_external_drain,
          1 <- payload["version"] do
-      operation
+      true
     else
-      _invalid -> Repo.rollback(:invalid_lifecycle_payload)
+      _invalid -> false
     end
   end
 
