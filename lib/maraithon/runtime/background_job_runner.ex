@@ -35,6 +35,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   import Ecto.Query
 
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
   alias Maraithon.DurablePayload
   alias Maraithon.Runtime.BackgroundJob
@@ -1047,7 +1048,10 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     end)
   end
 
-  defp completed_payload(%BackgroundJob{job_type: "telegram_webhook_event"}), do: %{}
+  defp completed_payload(%BackgroundJob{job_type: job_type})
+       when job_type in ["telegram_webhook_event", "privacy_erasure"],
+       do: %{}
+
   defp completed_payload(%BackgroundJob{payload: payload}), do: payload || %{}
 
   # Clamps the provider-requested delay to `@max_retry_after_delay_seconds`
@@ -1415,6 +1419,32 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp schedule_poll(ms), do: Process.send_after(self(), :poll, ms)
   defp schedule_renewal(ms), do: Process.send_after(self(), :renew_claims, ms)
+
+  defp safe_execute(handler, %BackgroundJob{job_type: "privacy_erasure"} = job) do
+    handler.execute(job)
+  rescue
+    exception ->
+      {:error, Exception.format(:error, exception, __STACKTRACE__)}
+  catch
+    kind, reason ->
+      {:error, "#{kind}: #{inspect(reason)}"}
+  end
+
+  defp safe_execute(handler, %BackgroundJob{user_id: user_id} = job)
+       when is_binary(user_id) do
+    case WriteFence.check_user(user_id) do
+      :ok -> handler.execute(job)
+      {:error, :privacy_erasure_requested} -> {:ok, %{outcome: "erasure_fenced"}}
+      {:error, :user_not_found} -> {:ok, %{outcome: "user_gone"}}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    exception ->
+      {:error, Exception.format(:error, exception, __STACKTRACE__)}
+  catch
+    kind, reason ->
+      {:error, "#{kind}: #{inspect(reason)}"}
+  end
 
   defp safe_execute(handler, %BackgroundJob{} = job) do
     handler.execute(job)

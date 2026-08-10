@@ -47,7 +47,7 @@ defmodule Maraithon.Privacy.ErasureProviderRevocation do
       :state,
       :attempt_count
     ])
-    |> validate_inclusion(:credential_table, ["oauth_tokens"])
+    |> validate_inclusion(:credential_table, ["oauth_tokens", "connected_accounts"])
     |> validate_inclusion(:state, @states)
     |> validate_number(:credential_row_id, greater_than_or_equal_to: 0)
     |> validate_number(:attempt_count, greater_than_or_equal_to: 0)

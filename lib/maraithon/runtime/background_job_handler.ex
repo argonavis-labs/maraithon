@@ -20,6 +20,7 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   alias Maraithon.LocalContacts
   alias Maraithon.OpenLoops
   alias Maraithon.OperatorEvents
+  alias Maraithon.PrivacyErasure
   alias Maraithon.RelationshipIntelligence
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
@@ -31,6 +32,29 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   # Default backoff applied when a provider returns 429 without a parseable
   # `Retry-After` header.
   @default_rate_limit_retry_seconds 30
+
+  def execute(%BackgroundJob{
+        job_type: "privacy_erasure",
+        payload: %{"request_id" => request_id}
+      })
+      when is_binary(request_id) do
+    case PrivacyErasure.perform(request_id) do
+      {:ok, %{state: "completed"} = status} ->
+        {:ok, privacy_result(status)}
+
+      {:ok, status} ->
+        {:ok, privacy_result(status), {:reschedule_in, PrivacyErasure.reschedule_ms()}}
+
+      {:error, :not_found} ->
+        {:ok, %{scope: "unknown", state: "gone"}}
+
+      {:error, reason} ->
+        {:error, {:privacy_erasure_failed, reason}}
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "privacy_erasure"}),
+    do: {:error, :invalid_privacy_erasure_payload}
 
   def execute(%BackgroundJob{
         job_type: "telegram_webhook_event",
@@ -542,6 +566,14 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
     end
   rescue
     error -> %{source: "person_merge_suggestions", error: Exception.message(error)}
+  end
+
+  defp privacy_result(status) do
+    %{
+      scope: Map.get(status, :scope, "unknown"),
+      state: Map.get(status, :state, "unknown"),
+      blocker_code: Map.get(status, :blocker_code)
+    }
   end
 
   defp require_user_id(%BackgroundJob{user_id: user_id})
