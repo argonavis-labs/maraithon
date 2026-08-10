@@ -72,8 +72,8 @@ That hybrid is reasonable, but each durable-work substrate must share the same s
 ### P1 — Bootstrap/restart/desired-state authority
 
 **Production baseline:** temporary Bootstrap, transient Agent restart and Watcher recovery remain competing policies.
-**Reviewed work:** the accepted foundation through `b92b5ea` supplies feature-dark leases, guards, database clock, and directives. Successive lifecycle candidates (`2f1b5d6`, `faa4f7a`, and `2016093`) exposed composite races, consent/legacy-fleet problems, forged terminal timestamps, and mixed-key terminal crashes. A later narrow descendant `dbde557` was still under review when the release decision was made.
-**Disposition:** deliberately deferred from this release. No lifecycle delta from `2f1b5d6` onward is integrated, `exact_agent_runtime_enabled` remains false, and activation requires a separately reviewed release and non-rolling cutover. This finding remains open rather than being hidden behind green partial tests.
+**Reviewed work:** the accepted foundation through `b92b5ea` supplies feature-dark leases, guards, database clock, and directives. Successive lifecycle candidates (`2f1b5d6`, `faa4f7a`, and `2016093`) exposed composite races, consent/legacy-fleet problems, forged terminal timestamps, and mixed-key terminal crashes. The narrow final descendant `dbde557` was independently accepted for its string-key settlement repair after the release disposition was set.
+**Disposition:** deliberately deferred from this release despite the final narrow acceptance. No lifecycle delta from `2f1b5d6` onward is integrated, `exact_agent_runtime_enabled` remains false, and activation requires a separately reviewed release and non-rolling cutover. This avoids expanding the production cutover while Effects remains unresolved.
 
 ### P1 — Effect cancellation and exact ownership
 
@@ -117,7 +117,7 @@ Integrated reviewed lineages:
 Explicitly excluded:
 
 - Quarantined mega-merges and archive tips, including `dcfe7fa`, `1cee860`, and `300ad84`.
-- Rejected or deliberately deferred lifecycle range `2f1b5d6` through `dbde557`.
+- Deliberately deferred lifecycle range `2f1b5d6` through accepted final descendant `dbde557`.
 - Rejected Effects tip `e8ff71d` and its unreviewed repair.
 - Rejected intermediate component tips are present only when they are ancestors of an independently accepted final descendant, never as standalone release claims.
 
