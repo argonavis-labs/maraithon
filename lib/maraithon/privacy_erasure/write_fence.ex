@@ -11,6 +11,7 @@ defmodule Maraithon.PrivacyErasure.WriteFence do
   import Ecto.Query
 
   alias Maraithon.Accounts.User
+  alias Maraithon.Agents.Agent
   alias Maraithon.Privacy.ErasureAgentTarget
   alias Maraithon.Privacy.ErasureRequest
   alias Maraithon.Repo
@@ -53,10 +54,19 @@ defmodule Maraithon.PrivacyErasure.WriteFence do
 
   def lock_user_writable!(_user_id), do: Repo.rollback(:invalid_user)
 
-  @doc "Fails closed while an Agent is represented by an active erasure request."
+  @doc "Locks the Agent and fails closed after durable erasure intent."
   def ensure_agent_writable!(agent_id) when is_binary(agent_id) do
     require_transaction!()
 
+    case Repo.one(from(agent in Agent, where: agent.id == ^agent_id, lock: "FOR UPDATE")) do
+      nil -> Repo.rollback(:agent_not_found)
+      %Agent{} -> ensure_no_active_agent_request!(agent_id)
+    end
+  end
+
+  def ensure_agent_writable!(_agent_id), do: Repo.rollback(:invalid_agent_id)
+
+  defp ensure_no_active_agent_request!(agent_id) do
     target_exists? =
       Repo.exists?(
         from(target in ErasureAgentTarget,
@@ -80,8 +90,6 @@ defmodule Maraithon.PrivacyErasure.WriteFence do
       do: Repo.rollback(:privacy_erasure_requested),
       else: :ok
   end
-
-  def ensure_agent_writable!(_agent_id), do: Repo.rollback(:invalid_agent_id)
 
   defp require_transaction! do
     unless Repo.in_transaction?(), do: raise("privacy write fence requires a transaction")

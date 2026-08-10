@@ -281,7 +281,7 @@ defmodule Maraithon.PrivacyErasure do
           [@dedupe_prefix, limit],
           log: false
         ).rows
-        |> Enum.map(&List.first/1)
+        |> Enum.map(fn row -> row |> List.first() |> load_uuid!() end)
 
       Enum.each(ids, &enqueue_locked!/1)
       %{repaired: length(ids)}
@@ -341,21 +341,17 @@ defmodule Maraithon.PrivacyErasure do
   end
 
   defp request_agent_locked!(agent_id, digest, opts) do
+    observed_agent = Repo.get(Agent, agent_id) || Repo.rollback(:agent_not_found)
+    expected_user_id = Keyword.get(opts, :user_id)
+    validate_agent_owner!(observed_agent, expected_user_id)
+    lock_agent_user!(observed_agent.user_id)
+
     agent =
-      Repo.one(from(agent in Agent, where: agent.id == ^agent_id, lock: "FOR UPDATE")) ||
+      Repo.one(from(candidate in Agent, where: candidate.id == ^agent_id, lock: "FOR UPDATE")) ||
         Repo.rollback(:agent_not_found)
 
-    if expected_user_id = Keyword.get(opts, :user_id) do
-      if agent.user_id != expected_user_id, do: Repo.rollback(:agent_not_found)
-    end
-
-    if is_binary(agent.user_id) do
-      case Repo.one(from(user in User, where: user.id == ^agent.user_id, lock: "FOR UPDATE")) do
-        %User{privacy_erasure_requested_at: nil} -> :ok
-        %User{} -> Repo.rollback(:privacy_erasure_requested)
-        nil -> Repo.rollback(:user_not_found)
-      end
-    end
+    if agent.user_id != observed_agent.user_id, do: Repo.rollback(:agent_owner_changed)
+    validate_agent_owner!(agent, expected_user_id)
 
     now = DatabaseClock.now!()
 
@@ -374,6 +370,22 @@ defmodule Maraithon.PrivacyErasure do
     enqueue_locked!(request.id)
     request
   end
+
+  defp validate_agent_owner!(_agent, nil), do: :ok
+
+  defp validate_agent_owner!(%Agent{user_id: user_id}, expected_user_id) do
+    if user_id != expected_user_id, do: Repo.rollback(:agent_not_found)
+  end
+
+  defp lock_agent_user!(user_id) when is_binary(user_id) do
+    case Repo.one(from(user in User, where: user.id == ^user_id, lock: "FOR UPDATE")) do
+      %User{privacy_erasure_requested_at: nil} -> :ok
+      %User{} -> Repo.rollback(:privacy_erasure_requested)
+      nil -> Repo.rollback(:user_not_found)
+    end
+  end
+
+  defp lock_agent_user!(nil), do: :ok
 
   defp lock_active_request(scope, field, subject) do
     Repo.one(
@@ -456,7 +468,7 @@ defmodule Maraithon.PrivacyErasure do
           WHERE credential.user_id = $3
           ON CONFLICT (request_id, credential_table, credential_row_id) DO NOTHING
           """,
-          [request_id, credential_table, user_id, now],
+          [dump_uuid!(request_id), credential_table, user_id, now],
           log: false
         )
     end)
@@ -646,7 +658,7 @@ defmodule Maraithon.PrivacyErasure do
       _owned = lock_owned_request!(request)
 
       Enum.reduce_while(@agent_cleanup_tables, :clean, fn table, _acc ->
-        count = delete_batch(table, "agent_id", agent_id, batch)
+        count = delete_batch(table, "agent_id", dump_uuid!(agent_id), batch)
 
         if count > 0, do: {:halt, :pending}, else: {:cont, :clean}
       end)
@@ -701,25 +713,27 @@ defmodule Maraithon.PrivacyErasure do
   end
 
   defp agent_blocker(agent_id, _reason) do
+    dumped_agent_id = dump_uuid!(agent_id)
+
     cond do
       row_exists?(
         "effects",
         "agent_id = $1 AND status IN ('claimed', 'cancelling')",
-        [agent_id]
+        [dumped_agent_id]
       ) ->
         "effect_termination_proof_required"
 
       row_exists?(
         "effects",
         "agent_id = $1 AND status NOT IN ('pending','claimed','cancelling','completed','failed','cancelled')",
-        [agent_id]
+        [dumped_agent_id]
       ) ->
         "effect_unknown_authority"
 
       row_exists?(
         "agent_lifecycle_operations",
         "agent_id = $1 AND requires_external_drain = TRUE AND external_drain_confirmed_at IS NULL",
-        [agent_id]
+        [dumped_agent_id]
       ) ->
         "operator_drain_proof_required"
 
@@ -1052,8 +1066,10 @@ defmodule Maraithon.PrivacyErasure do
   end
 
   defp prove_agent_clean!(agent_id) do
+    dumped_agent_id = dump_uuid!(agent_id)
+
     Enum.each(@agent_proof_specs, fn {table, column} ->
-      if row_exists?(table, "#{column} = $1", [agent_id]),
+      if row_exists?(table, "#{column} = $1", [dumped_agent_id]),
         do: Repo.rollback(:agent_copy_remaining)
     end)
   end
@@ -1264,6 +1280,9 @@ defmodule Maraithon.PrivacyErasure do
       {:error, :invalid_erasure_options}
     end
   end
+
+  defp dump_uuid!(value), do: Ecto.UUID.dump!(value)
+  defp load_uuid!(value), do: Ecto.UUID.load!(value)
 
   defp cast_uuid(value) do
     case Ecto.UUID.cast(value) do
