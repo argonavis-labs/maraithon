@@ -7,6 +7,7 @@ defmodule Maraithon.Accounts do
 
   alias Maraithon.Accounts.{MagicLink, User, UserSession}
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
 
   @magic_link_ttl_seconds 900
@@ -54,7 +55,9 @@ defmodule Maraithon.Accounts do
             |> normalize_user_changeset_error()
 
           user ->
-            maybe_promote_admin(user)
+            with :ok <- WriteFence.check_user(user.id) do
+              maybe_promote_admin(user)
+            end
         end
     end
   end
@@ -90,7 +93,7 @@ defmodule Maraithon.Accounts do
         user_agent: Keyword.get(opts, :user_agent)
       }
 
-      case %MagicLink{} |> MagicLink.changeset(attrs) |> Repo.insert() do
+      case insert_magic_link(user, attrs) do
         {:ok, _record} ->
           {:ok, %{user: user, token: token, expires_at: expires_at}}
 
@@ -161,7 +164,7 @@ defmodule Maraithon.Accounts do
         user_agent: Keyword.get(opts, :user_agent)
       }
 
-      case %MagicLink{} |> MagicLink.changeset(attrs) |> Repo.insert() do
+      case insert_magic_link(user, attrs) do
         {:ok, _record} ->
           {:ok, %{user: user, code: format_magic_code(code), expires_at: expires_at}}
 
@@ -249,12 +252,20 @@ defmodule Maraithon.Accounts do
       user_agent: Keyword.get(opts, :user_agent)
     }
 
-    case %UserSession{} |> UserSession.changeset(attrs) |> Repo.insert() do
-      {:ok, session} ->
-        {:ok, %{user: user, token: token, session: session, expires_at: expires_at}}
+    Repo.transaction(fn ->
+      locked_user = WriteFence.lock_user_writable!(user.id)
 
-      error ->
-        error
+      case %UserSession{} |> UserSession.changeset(attrs) |> Repo.insert() do
+        {:ok, session} ->
+          %{user: locked_user, token: token, session: session, expires_at: expires_at}
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, session} -> {:ok, session}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -350,16 +361,39 @@ defmodule Maraithon.Accounts do
 
   defp maybe_confirm_user(_user), do: :ok
 
+  defp insert_magic_link(%User{} = user, attrs) do
+    Repo.transaction(fn ->
+      _user = WriteFence.lock_user_writable!(user.id)
+
+      case %MagicLink{} |> MagicLink.changeset(attrs) |> Repo.insert() do
+        {:ok, link} -> link
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, link} -> {:ok, link}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp consume_magic_record(record, now, opts, error_reason \\ :invalid_or_expired_link)
 
   defp consume_magic_record(nil, _now, _opts, error_reason), do: {:error, error_reason}
 
-  defp consume_magic_record(%MagicLink{} = link, now, opts, _error_reason) do
+  defp consume_magic_record(%MagicLink{} = link, now, opts, error_reason) do
     Repo.transaction(fn ->
-      case Repo.update(Ecto.Changeset.change(link, used_at: now)) do
+      locked_user = WriteFence.lock_user_writable!(link.user_id)
+
+      locked_link =
+        Repo.one(
+          from(candidate in MagicLink, where: candidate.id == ^link.id, lock: "FOR UPDATE")
+        ) ||
+          Repo.rollback(error_reason)
+
+      case Repo.update(Ecto.Changeset.change(locked_link, used_at: now)) do
         {:ok, _used_link} ->
-          maybe_confirm_user(link.user)
-          create_session_for_user(link.user, opts)
+          maybe_confirm_user(locked_user)
+          create_session_for_user(locked_user, opts)
 
         {:error, changeset} ->
           Repo.rollback(changeset)

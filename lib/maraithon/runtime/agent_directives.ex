@@ -15,6 +15,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
   alias Maraithon.AgentIsolation.Binding
   alias Maraithon.Agents.Agent
   alias Maraithon.BoundedJSON
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
   alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Runtime.AgentDirective
@@ -760,6 +761,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
 
   defp enqueue_prepared!(prepared) do
     agent = lock_agent!(prepared.agent_id)
+    _user = WriteFence.lock_user_writable!(prepared.user_id)
+    :ok = WriteFence.ensure_agent_writable!(prepared.agent_id)
     binding = lock_binding(agent)
     _guard = lock_guard(prepared.agent_id)
     _lease = lock_lease(prepared.agent_id)
