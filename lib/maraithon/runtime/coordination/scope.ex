@@ -116,11 +116,11 @@ defmodule Maraithon.Runtime.Coordination.Scope do
                     timezone('UTC', clock_timestamp())
           )
           """,
-          ^session.activation_epoch,
-          ^session.id,
+          type(^session.activation_epoch, :binary_id),
+          type(^session.id, :binary_id),
           agent.user_id,
-          ^session.activation_epoch,
-          ^session.id
+          type(^session.activation_epoch, :binary_id),
+          type(^session.id, :binary_id)
         )
   end
 
@@ -169,14 +169,14 @@ defmodule Maraithon.Runtime.Coordination.Scope do
           lease.coordination_partition_id,
           lease.coordination_partition_epoch,
           lease.coordination_node_incarnation_id,
-          ^session.activation_epoch,
-          ^session.id,
+          type(^session.activation_epoch, :binary_id),
+          type(^session.id, :binary_id),
           agent.user_id,
-          ^session.activation_epoch,
+          type(^session.activation_epoch, :binary_id),
           lease.coordination_activation_epoch,
-          ^session.activation_epoch,
+          type(^session.activation_epoch, :binary_id),
           lease.coordination_node_incarnation_id,
-          ^session.id,
+          type(^session.id, :binary_id),
           lease.lease_until
         )
   end
@@ -296,12 +296,12 @@ defmodule Maraithon.Runtime.Coordination.Scope do
               AND coordination_node.lease_expires_at > timezone('UTC', clock_timestamp())
           )
           """,
-          ^session.activation_epoch,
+          type(^session.activation_epoch, :binary_id),
           ^partition.partition_id,
-          ^partition.activation_epoch,
+          type(^partition.activation_epoch, :binary_id),
           ^partition.ownership_epoch,
-          ^session.id,
-          ^session.id
+          type(^session.id, :binary_id),
+          type(^session.id, :binary_id)
         )
       )
 

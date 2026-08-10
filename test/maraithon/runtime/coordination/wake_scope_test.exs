@@ -67,9 +67,9 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
     :ok
   end
 
-  test "exact admission stays closed while coordination is dark" do
+  test "legacy Effect mode remains available while coordination is dark" do
     assert Protocol.mode() == :dark
-    assert Scope.active_or_legacy() == {:error, :runtime_coordination_not_active}
+    assert Scope.active_or_legacy() == :legacy
     assert AgentLeases.list_bootstrap_agents() == []
 
     assert {:ok, summary} = WakeCoordinator.reconcile_once()
@@ -146,7 +146,7 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
 
     put_session!(node_a)
 
-    assert [{^ownership_a_agent_id, ^ownership_a_token, {:recorded, _}, nil}] =
+    assert [{^ownership_a_agent_id, ^ownership_a_token, {:recorded, _}, {:ok, nil}}] =
              AgentDirectives.reconcile_expired_ownership(1, backoffs_ms: [0])
 
     refute Repo.get(AgentRuntimeLease, ownership_a.agent.id)
@@ -156,7 +156,7 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
 
     put_session!(node_b)
 
-    assert [{^ownership_b_agent_id, ^ownership_b_token, {:recorded, _}, nil}] =
+    assert [{^ownership_b_agent_id, ^ownership_b_token, {:recorded, _}, {:ok, nil}}] =
              AgentDirectives.reconcile_expired_ownership(1, backoffs_ms: [0])
 
     recorded_b = create_recorded_generation!(node_b, user_b, "recorded-b", 120)
@@ -180,7 +180,7 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
     assert settled_b.status == "pending"
   end
 
-  test "stale ownership epochs and expired node sessions return no wake work" do
+  test "stale ownership epochs and revoked node sessions return no wake work" do
     {user_a, user_b} = distinct_partition_users("stale")
 
     %{
@@ -220,7 +220,7 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
     put_session!(node_b)
     assert AgentDirectives.list_due_agent_ids(1) == [agent.id]
 
-    expire_node_incarnation!(node_b)
+    assert {:ok, :draining} = Authority.begin_node_drain(node_b)
     assert {:error, :coordination_session_stale} = Scope.current()
     assert AgentDirectives.list_due_agent_ids(1) == []
     assert AgentDirectives.list_recovery_agent_ids(1) == []
@@ -424,30 +424,6 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
       """,
       [Ecto.UUID.dump!(older_id), Ecto.UUID.dump!(newer_id)]
     )
-  end
-
-  defp expire_node_incarnation!(node) do
-    Repo.query!(
-      "SELECT set_config('maraithon.runtime_node_action', $1, true)",
-      [node.id]
-    )
-
-    Repo.query!(
-      """
-      UPDATE public.runtime_node_incarnations
-      SET lease_expires_at = timezone('UTC', clock_timestamp()) - interval '1 second',
-          updated_at = timezone('UTC', clock_timestamp())
-      WHERE id = $1::uuid
-      """,
-      [Ecto.UUID.dump!(node.id)]
-    )
-
-    # Synchronous SQL is the expiry observation barrier.
-    assert [[false]] =
-             Repo.query!(
-               "SELECT lease_expires_at > timezone('UTC', clock_timestamp()) FROM public.runtime_node_incarnations WHERE id = $1::uuid",
-               [Ecto.UUID.dump!(node.id)]
-             ).rows
   end
 
   defp put_session!(node) do
