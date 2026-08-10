@@ -2,7 +2,7 @@
 
 **Status:** Final release-candidate audit. The exact deployed SHA is reported in the accompanying release record because a file cannot contain the hash of the commit that contains itself.
 **Production baseline at audit time:** Fly release 1430, commit `48b72a75b81b522ae80da9900c3ad454470c37fb`.
-**Candidate code anchor before this report:** `73b842c` on the fresh production-lineage integration worktree.
+**Candidate code anchor before the final report refresh:** `481623d` on the fresh production-lineage integration worktree, including independently accepted ownership-index retry hardening.
 **Method:** Source/history review, independent P0/P1 reviews of immutable component SHAs, focused OTP 26 validation, migration proofs, and production postflight evidence. Candidate statements below are not claims about production until the release record confirms deployment.
 
 ## Executive conclusion
@@ -110,7 +110,7 @@ Integrated reviewed lineages:
 - Insight provider fencing: final accepted descendant `4e781a2`.
 - Todo/Brief presentation and ambiguity fencing: final accepted descendant `c2ff9f9`.
 - PreparedAction execution/result fencing: final accepted descendant `31bd99f`.
-- Feature-dark runtime foundation: `7926592`, `507050a`, `7003891`, `b92b5ea`.
+- Feature-dark runtime foundation: `7926592`, `507050a`, `7003891`, `b92b5ea`, plus candidate migration retry hardening `481623d`.
 - Feature-dark Chief lineage: final accepted descendant `a061585`.
 - Background-job claim generations: `23fe1eb`, `dd629c7`, plus the exact `0bdd53f` Telegram background-job path union.
 
