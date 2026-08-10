@@ -246,6 +246,7 @@ defmodule Maraithon.Effects.Effect do
     |> validate_inclusion(:status, [
       "pending",
       "claimed",
+      "executing",
       "cancelling",
       "completed",
       "failed",
