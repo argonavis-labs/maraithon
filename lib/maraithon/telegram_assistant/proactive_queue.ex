@@ -329,6 +329,14 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
       |> Keyword.get(:limit, @default_due_user_limit)
       |> positive_integer(@default_due_user_limit)
 
+    excluded_user_ids =
+      opts
+      |> Keyword.get(:exclude_user_ids, [])
+      |> List.wrap()
+      |> Enum.filter(&(is_binary(&1) and &1 != "" and byte_size(&1) <= 1_280))
+      |> Enum.uniq()
+      |> Enum.take(1_000)
+
     ProactiveCandidate
     |> join(:inner, [candidate], device in Device,
       on: device.user_id == candidate.user_id and device.status == "active"
@@ -338,6 +346,12 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
     )
     |> where([candidate, _device, _cursor], candidate.status == "pending")
     |> where([candidate, _device, _cursor], candidate.expires_at > ^now)
+    |> then(fn query ->
+      case excluded_user_ids do
+        [] -> query
+        values -> where(query, [candidate, _device, _cursor], candidate.user_id not in ^values)
+      end
+    end)
     |> group_by(
       [candidate, _device, cursor],
       [candidate.user_id, field(cursor, :last_attempted_at)]

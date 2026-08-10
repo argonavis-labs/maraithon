@@ -6,6 +6,8 @@ defmodule Maraithon.Runtime.Supervisor do
   use Supervisor
 
   alias Maraithon.Runtime.BootGate
+  alias Maraithon.Runtime.Config
+  alias Maraithon.Runtime.PeriodicJobs
 
   def start_link(init_arg) do
     Supervisor.start_link(__MODULE__, init_arg, name: __MODULE__)
@@ -47,18 +49,39 @@ defmodule Maraithon.Runtime.Supervisor do
             Maraithon.Runtime.AgentWatcher,
             Maraithon.Runtime.WakeCoordinator,
             Maraithon.Runtime.Bootstrap,
-            Maraithon.Runtime.BackgroundJobRunner,
+            Supervisor.child_spec(
+              {Maraithon.Runtime.BackgroundJobRunner,
+               exclude_queues: [PeriodicJobs.provider_queue(), PeriodicJobs.model_queue()]},
+              id: Maraithon.Runtime.BackgroundJobRunner
+            ),
+            Supervisor.child_spec(
+              {Maraithon.Runtime.BackgroundJobRunner,
+               name: Maraithon.Runtime.ProviderBackgroundJobRunner,
+               queues: [PeriodicJobs.provider_queue()],
+               fair?: true,
+               max_concurrency: Config.positive_integer(:provider_job_max_concurrency, 4),
+               max_partition_concurrency: 1,
+               max_rate_limit_concurrency: 1,
+               reconcile_recurring_jobs?: false},
+              id: Maraithon.Runtime.ProviderBackgroundJobRunner
+            ),
+            Supervisor.child_spec(
+              {Maraithon.Runtime.BackgroundJobRunner,
+               name: Maraithon.Runtime.ModelBackgroundJobRunner,
+               queues: [PeriodicJobs.model_queue()],
+               fair?: true,
+               max_concurrency: Config.positive_integer(:model_job_max_concurrency, 3),
+               max_partition_concurrency: 1,
+               max_rate_limit_concurrency: Config.positive_integer(:model_job_max_concurrency, 3),
+               reconcile_recurring_jobs?: false},
+              id: Maraithon.Runtime.ModelBackgroundJobRunner
+            ),
             Maraithon.Runtime.Scheduler,
             Maraithon.Runtime.ShutdownReporter,
+            # These two remain independent observers by design. If the durable
+            # queue or every lane runner wedges, putting its reporter/alarm in
+            # that same queue would silence the only signal about the failure.
             Maraithon.Runtime.HealthReporter,
-            Maraithon.Runtime.DogfoodDigest,
-            Maraithon.Runtime.ProactiveCheckIn,
-            Maraithon.Runtime.TodoCompletionSweep,
-            Maraithon.Runtime.NudgeSweep,
-            Maraithon.Runtime.StalenessTriageSweep,
-            Maraithon.Runtime.TokenRefresher,
-            Maraithon.Runtime.WatchRenewer,
-            Maraithon.Runtime.FreshnessSweep,
             Maraithon.Runtime.StuckStateWatchdog
           ]
       else

@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.Runtime.ProactiveCheckIn
+  alias Maraithon.Runtime.RecurringJobs
   alias Maraithon.TelegramAssistant.ProactiveCandidate
   alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.TestSupport.CapturingAPNS
@@ -23,7 +24,7 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
     %{original_assistant: original_assistant, original_runtime: original_runtime}
   end
 
-  test "initial tick delay defaults to the configured interval", %{
+  test "durable schedule defaults its first deadline to the configured interval", %{
     original_runtime: original_runtime
   } do
     runtime_config =
@@ -33,14 +34,12 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
 
     Application.put_env(:maraithon, Maraithon.Runtime, runtime_config)
 
-    pid = start_supervised!(ProactiveCheckIn)
-    state = :sys.get_state(pid)
-
-    assert state.interval_ms == 123_456
-    assert state.initial_delay_ms == 123_456
+    spec = Enum.find(RecurringJobs.specs(), &(&1.name == "proactive_check_in"))
+    assert spec.schedule == {:interval, 123_456}
+    assert spec.initial_delay_ms == 123_456
   end
 
-  test "initial tick delay can be configured separately", %{
+  test "durable schedule accepts a separate first deadline", %{
     original_runtime: original_runtime
   } do
     runtime_config =
@@ -50,11 +49,9 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
 
     Application.put_env(:maraithon, Maraithon.Runtime, runtime_config)
 
-    pid = start_supervised!(ProactiveCheckIn)
-    state = :sys.get_state(pid)
-
-    assert state.interval_ms == 123_456
-    assert state.initial_delay_ms == 5_000
+    spec = Enum.find(RecurringJobs.specs(), &(&1.name == "proactive_check_in"))
+    assert spec.schedule == {:interval, 123_456}
+    assert spec.initial_delay_ms == 5_000
   end
 
   test "run_delivery_planner is disabled until the planner flag is enabled", %{

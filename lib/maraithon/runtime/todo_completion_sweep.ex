@@ -1,22 +1,14 @@
 defmodule Maraithon.Runtime.TodoCompletionSweep do
   @moduledoc """
-  Periodically runs the deterministic todo completion sweep.
+  Runs deterministic and model-assisted completion for durable user partitions.
+
+  The recurring coordinator discovers tenants; the fair model/user lane owns
+  execution, retries, and crash recovery. This module has no timer process.
   """
 
-  use GenServer
-
-  alias Maraithon.Runtime.Config
   alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion, UserBatch}
 
   require Logger
-
-  @name __MODULE__
-  @default_interval_ms :timer.minutes(30)
-  @cursor_key "todo_completion_sweep"
-
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, @name))
-  end
 
   def run_once(opts \\ []) do
     user_ids = UserBatch.open_todo_user_ids(opts)
@@ -27,67 +19,49 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
     |> Map.put(:cross_source, run_cross_source_pass(bounded_opts))
   end
 
-  @impl true
-  def init(opts) do
-    interval_ms =
-      Keyword.get(
-        opts,
-        :interval_ms,
-        Config.positive_integer(:todo_completion_sweep_interval_ms, @default_interval_ms)
-      )
+  @doc "Executes one tenant partition."
+  def run_for_user(user_id, opts \\ [])
 
-    initial_delay_ms =
-      Keyword.get(
-        opts,
-        :initial_delay_ms,
-        Config.positive_integer(:todo_completion_sweep_initial_delay_ms, interval_ms)
-      )
-
-    state = %{
-      interval_ms: interval_ms,
-      initial_delay_ms: initial_delay_ms,
-      user_limit: Config.positive_integer(:todo_completion_sweep_user_limit, 10),
-      user_cursor: UserBatch.load_cursor(@cursor_key)
-    }
-
-    schedule_tick(state.initial_delay_ms)
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_info(:tick, state) do
-    user_ids = UserBatch.open_todo_user_ids(after_user_id: state.user_cursor)
-    summary = run_once(user_ids: user_ids)
-
-    if summary.completed > 0 or summary.errors > 0 or summary.fetch_errors > 0 do
-      Logger.info("Todo completion sweep cycle",
-        users: summary.users,
-        checked: summary.checked,
-        completed: summary.completed,
-        errors: summary.errors,
-        fetch_errors: summary.fetch_errors,
-        completed_by_source: inspect(summary.completed_by_source),
-        completed_by_reason: inspect(summary.completed_by_reason)
-      )
-    end
-
-    next_cursor = List.last(user_ids) || state.user_cursor
-    if is_binary(next_cursor), do: UserBatch.record_cursor(@cursor_key, next_cursor)
-
-    schedule_tick(state.interval_ms)
-    {:noreply, %{state | user_cursor: next_cursor}}
+  def run_for_user(user_id, opts) when is_binary(user_id) do
+    deterministic = CompletionSweep.run_for_user(user_id, opts)
+    Map.put(deterministic, :cross_source, run_cross_source_user(user_id, opts))
   rescue
     error ->
-      Logger.warning("Todo completion sweep cycle failed",
+      Logger.warning("Todo completion user partition crashed",
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
         failure_code: Maraithon.Redaction.error_class(error)
       )
 
-      schedule_tick(state.interval_ms)
-      {:noreply, state}
+      {:error, Maraithon.Redaction.error_class(error)}
+  catch
+    kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
 
-  # Cross-channel LLM pass after the deterministic sweep. Failures here must
-  # never break the sweep cadence, so everything is rescued.
+  def run_for_user(_user_id, _opts), do: {:error, :invalid_user}
+
+  defp run_cross_source_user(user_id, opts) do
+    cross_source_opts =
+      Keyword.take(opts, [
+        :now,
+        :llm_complete,
+        :live_sources,
+        :source_bundle,
+        :source_bundle_fetcher,
+        :source_timeout_ms,
+        :source_skill_config
+      ])
+
+    CrossSourceCompletion.run_for_user(user_id, cross_source_opts)
+  rescue
+    error ->
+      Logger.warning("Cross-source completion user partition failed",
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        failure_code: Maraithon.Redaction.error_class(error)
+      )
+
+      {:error, Maraithon.Redaction.error_class(error)}
+  end
+
   defp run_cross_source_pass(opts) do
     summary =
       opts
@@ -121,9 +95,5 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
       )
 
       %{users: 0, checked: 0, completed: 0, skipped: 0, errors: 1}
-  end
-
-  defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
-    Process.send_after(self(), :tick, delay_ms)
   end
 end

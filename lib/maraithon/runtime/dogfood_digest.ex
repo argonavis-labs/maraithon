@@ -1,13 +1,22 @@
 defmodule Maraithon.Runtime.DogfoodDigest do
   @moduledoc """
-  Daily Telegram digest for the Chief of Staff dogfood stability run.
-  """
+  Daily Chief-of-Staff stability digest executed by a durable wall-clock row.
 
-  use GenServer
+  PostgreSQL computes the next named-timezone wall time, including DST. Its
+  deterministic timezone policy is authoritative: a nonexistent spring-gap
+  wall time is interpreted with the pre-transition standard offset, while an
+  ambiguous fall-fold wall time resolves to the later standard-time occurrence.
+  Invalid timezone names fail closed and are never replaced with UTC.
+
+  The recurring row's `scheduled_at`, persisted wall-clock specification, and
+  claim token are authority; no timer process participates in delivery or
+  scheduling.
+  """
 
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
   alias Maraithon.Health
+  alias Maraithon.Repo
   alias Maraithon.Runtime.Config
   alias Maraithon.Runtime.IncidentLog
   alias Maraithon.Runtime.RuntimeIncident
@@ -15,55 +24,8 @@ defmodule Maraithon.Runtime.DogfoodDigest do
 
   require Logger
 
-  @name __MODULE__
   @day_seconds 86_400
 
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: @name)
-  end
-
-  @impl true
-  def init(opts) do
-    state = %{
-      user_id: Keyword.get(opts, :user_id) || Config.get(:dogfood_user_id, nil),
-      hour: Keyword.get(opts, :hour) || Config.positive_integer(:dogfood_digest_hour, 7),
-      minute: Keyword.get(opts, :minute) || Config.get(:dogfood_digest_minute, 30),
-      timezone:
-        Keyword.get(opts, :timezone) || Config.get(:dogfood_digest_timezone, "America/Toronto"),
-      timezone_offset_hours:
-        Keyword.get(opts, :timezone_offset_hours) ||
-          Config.get(:dogfood_digest_timezone_offset_hours, -4),
-      telegram_module: Keyword.get(opts, :telegram_module, Telegram)
-    }
-
-    schedule_next(state, DateTime.utc_now())
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_info(:send_digest, state) do
-    case deliver(DateTime.utc_now(), state) do
-      {:ok, :sent} ->
-        Logger.info("Dogfood digest sent", user_id: state.user_id)
-
-      {:ok, :skipped} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("Dogfood digest failed", reason: inspect(reason), user_id: state.user_id)
-    end
-
-    schedule_next(state, DateTime.utc_now())
-    {:noreply, state}
-  end
-
-  # SPEC 02 R10: the digest rides PushBroker.deliver/1 (quiet hours,
-  # PushReceipt audit trail, per-day dedupe) instead of a direct Telegram
-  # send. `held_rate_limit` is `{:ok, :skipped}` — a daily digest held by
-  # quiet hours is not a data-loss event; it composes fresh content again
-  # tomorrow. When the unified broker is globally off there is no gate to
-  # bypass, so `{:fallback, :disabled}` falls back to the legacy direct
-  # send rather than silently dropping the digest.
   def deliver(now \\ DateTime.utc_now(), opts \\ []) do
     opts = Map.new(opts)
     user_id = Map.get(opts, :user_id) || Config.get(:dogfood_user_id, nil)
@@ -144,34 +106,59 @@ defmodule Maraithon.Runtime.DogfoodDigest do
     |> Enum.join("\n")
   end
 
-  def next_fire_after(now, hour, minute, offset_hours) do
-    local_now = DateTime.add(now, offset_hours * 3600, :second)
-    local_date = DateTime.to_date(local_now)
-    local_time = Time.new!(hour, minute, 0)
-    target_local = DateTime.new!(local_date, local_time, "Etc/UTC")
-    target_utc = DateTime.add(target_local, -offset_hours * 3600, :second)
+  @doc "Returns the next local wall-clock fire instant using PostgreSQL's timezone database."
+  def next_fire_after(%DateTime{} = now, hour, minute, timezone) when is_binary(timezone) do
+    with {:ok, timezone} <- validate_timezone(timezone) do
+      hour = clamp_hour(hour)
+      minute = clamp_minute(minute)
 
-    if DateTime.compare(target_utc, now) == :gt do
-      target_utc
-    else
-      target_utc
-      |> DateTime.add(@day_seconds, :second)
+      case Repo.query!(
+             """
+             WITH target AS (
+               SELECT (
+                 ($1::timestamptz AT TIME ZONE $4)::date +
+                 make_time($2::integer, $3::integer, 0)
+               ) AS local_wall_time
+             )
+             SELECT CASE
+               WHEN (local_wall_time AT TIME ZONE $4) > $1::timestamptz
+                 THEN local_wall_time AT TIME ZONE $4
+               ELSE (local_wall_time + interval '1 day') AT TIME ZONE $4
+             END
+             FROM target
+             """,
+             [now, hour, minute, timezone],
+             log: false
+           ).rows do
+        [[%DateTime{} = next_fire]] -> next_fire
+        [[%NaiveDateTime{} = next_fire]] -> DateTime.from_naive!(next_fire, "Etc/UTC")
+      end
     end
   end
 
-  defp schedule_next(state, now) do
-    next_fire =
-      next_fire_after(
-        now,
-        clamp_hour(state.hour),
-        clamp_minute(state.minute),
-        normalize_offset(state.timezone_offset_hours)
-      )
+  @doc "Checks a named zone against PostgreSQL's installed timezone database."
+  def timezone_valid?(timezone) when is_binary(timezone) do
+    timezone = String.trim(timezone)
 
-    delay_ms =
-      max(DateTime.diff(next_fire, now, :millisecond), 1_000)
+    timezone != "" and
+      Repo.query!(
+        "SELECT EXISTS(SELECT 1 FROM pg_timezone_names WHERE name = $1)",
+        [timezone],
+        log: false
+      ).rows == [[true]]
+  end
 
-    Process.send_after(self(), :send_digest, delay_ms)
+  def timezone_valid?(_timezone), do: false
+
+  defp validate_timezone(timezone) do
+    timezone = String.trim(timezone)
+
+    if timezone_valid?(timezone) do
+      {:ok, timezone}
+    else
+      Logger.error("Dogfood digest schedule disabled: invalid timezone configuration")
+      {:error, :invalid_dogfood_digest_timezone}
+    end
   end
 
   defp latest_boot_baseline(incidents) do
@@ -430,7 +417,4 @@ defmodule Maraithon.Runtime.DogfoodDigest do
 
   defp clamp_minute(value) when is_integer(value), do: value |> max(0) |> min(59)
   defp clamp_minute(_value), do: 30
-
-  defp normalize_offset(value) when is_integer(value), do: value |> max(-12) |> min(14)
-  defp normalize_offset(_value), do: -4
 end

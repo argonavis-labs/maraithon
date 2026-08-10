@@ -44,17 +44,9 @@ defmodule Maraithon.Runtime.TokenRefresherTest do
       )
     end)
 
-    start_supervised!(
-      {TokenRefresher,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.minutes(5),
-       lookahead_seconds: 300,
-       batch_size: 10,
-       initial_delay_ms: 10}
-    )
+    summary = TokenRefresher.run_once(lookahead_seconds: 300, batch_size: 10)
 
-    assert_receive {:oauth_refresh_cycle, %{attempted: 1, refreshed: 1, failed: 0}}, 2_000
+    assert summary == %{attempted: 1, refreshed: 1, failed: 0}
 
     token = OAuth.get_token(user_id, "google")
     assert token.access_token == "new_refreshed_token"
@@ -116,17 +108,9 @@ defmodule Maraithon.Runtime.TokenRefresherTest do
       )
     end)
 
-    start_supervised!(
-      {TokenRefresher,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.minutes(5),
-       lookahead_seconds: 300,
-       batch_size: 10,
-       initial_delay_ms: 10}
-    )
+    summary = TokenRefresher.run_once(lookahead_seconds: 300, batch_size: 10)
 
-    assert_receive {:oauth_refresh_cycle, %{attempted: 1, refreshed: 0, failed: 1}}, 2_000
+    assert summary == %{attempted: 1, refreshed: 0, failed: 1}
 
     account = ConnectedAccounts.get(user_id, "google")
     assert account.status == "error"
@@ -134,7 +118,7 @@ defmodule Maraithon.Runtime.TokenRefresherTest do
     assert get_in(account.metadata, ["reconnect_notification", "reason"]) ==
              "oauth_reauth_required"
 
-    assert [%{chat_id: "778899"}] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    assert [%{to: ^user_id}] = Agent.get(:capturing_email_recorder, &Enum.reverse/1)
   end
 
   test "R1: a transient refresh failure does not send a reconnect notification" do
@@ -177,17 +161,9 @@ defmodule Maraithon.Runtime.TokenRefresherTest do
       Plug.Conn.resp(conn, 503, "service unavailable")
     end)
 
-    start_supervised!(
-      {TokenRefresher,
-       name: nil,
-       observer: self(),
-       interval_ms: :timer.minutes(5),
-       lookahead_seconds: 300,
-       batch_size: 10,
-       initial_delay_ms: 10}
-    )
+    summary = TokenRefresher.run_once(lookahead_seconds: 300, batch_size: 10)
 
-    assert_receive {:oauth_refresh_cycle, %{attempted: 1, refreshed: 0, failed: 1}}, 2_000
+    assert summary == %{attempted: 1, refreshed: 0, failed: 1}
 
     account = ConnectedAccounts.get(user_id, "google")
     assert account.status == "connected"

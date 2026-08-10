@@ -1,6 +1,8 @@
 defmodule Maraithon.Runtime.DogfoodDigestTest do
   use Maraithon.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
@@ -131,11 +133,47 @@ defmodule Maraithon.Runtime.DogfoodDigestTest do
     assert message.text =~ "Chief of Staff daily check"
   end
 
-  test "schedules the next local digest time using the configured offset" do
-    assert DogfoodDigest.next_fire_after(~U[2026-05-20 10:00:00Z], 7, 30, -4) ==
-             ~U[2026-05-20 11:30:00Z]
+  test "computes named-timezone next fire across ordinary and DST days" do
+    timezone = "America/Toronto"
 
-    assert DogfoodDigest.next_fire_after(~U[2026-05-20 12:00:00Z], 7, 30, -4) ==
-             ~U[2026-05-21 11:30:00Z]
+    assert DogfoodDigest.next_fire_after(~U[2026-05-20 10:00:00Z], 7, 30, timezone) ==
+             ~U[2026-05-20 11:30:00.000000Z]
+
+    assert DogfoodDigest.next_fire_after(~U[2026-05-20 12:00:00Z], 7, 30, timezone) ==
+             ~U[2026-05-21 11:30:00.000000Z]
+
+    # Spring-forward keeps 07:30 local and therefore advances only 23 UTC hours.
+    assert DogfoodDigest.next_fire_after(~U[2026-03-07 13:00:00Z], 7, 30, timezone) ==
+             ~U[2026-03-08 11:30:00.000000Z]
+
+    # Fall-back keeps 07:30 local and therefore advances 25 UTC hours.
+    assert DogfoodDigest.next_fire_after(~U[2026-10-31 13:00:00Z], 7, 30, timezone) ==
+             ~U[2026-11-01 12:30:00.000000Z]
+
+    # PostgreSQL maps a nonexistent 02:30 through the pre-transition standard
+    # offset, producing 07:30Z (03:30 after Toronto's spring-forward).
+    assert DogfoodDigest.next_fire_after(~U[2026-03-07 08:00:00Z], 2, 30, timezone) ==
+             ~U[2026-03-08 07:30:00.000000Z]
+
+    # PostgreSQL resolves ambiguous 01:30 to the later standard-time occurrence.
+    assert DogfoodDigest.next_fire_after(~U[2026-10-31 07:00:00Z], 1, 30, timezone) ==
+             ~U[2026-11-01 06:30:00.000000Z]
+  end
+
+  test "invalid named timezone fails closed without logging configured content" do
+    invalid_timezone = "invalid-sensitive-timezone"
+
+    log =
+      capture_log(fn ->
+        assert DogfoodDigest.next_fire_after(
+                 ~U[2026-05-20 10:00:00Z],
+                 7,
+                 30,
+                 invalid_timezone
+               ) == {:error, :invalid_dogfood_digest_timezone}
+      end)
+
+    assert log =~ "Dogfood digest schedule disabled: invalid timezone configuration"
+    refute log =~ invalid_timezone
   end
 end

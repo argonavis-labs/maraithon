@@ -8,6 +8,7 @@ defmodule Maraithon.Runtime.NudgeSweepTest do
   alias Maraithon.Accounts
   alias Maraithon.Repo
   alias Maraithon.Runtime.NudgeSweep
+  alias Maraithon.Runtime.RecurringJobs
   alias Maraithon.TelegramAssistant.ProactiveCandidate
   alias Maraithon.Todos
 
@@ -17,27 +18,23 @@ defmodule Maraithon.Runtime.NudgeSweepTest do
     %{user_id: user_id}
   end
 
-  test "NudgeSweep is registered as a background worker and starts cleanly" do
+  test "nudge cadence and work are owned by the durable recurring and fair model lanes" do
     original = Application.get_env(:maraithon, :start_background_workers, true)
     Application.put_env(:maraithon, :start_background_workers, true)
 
     try do
       {:ok, {_flags, children}} = Maraithon.Runtime.Supervisor.init(:ok)
       ids = Enum.map(children, &child_id/1)
-      assert NudgeSweep in ids
+
+      assert Maraithon.Runtime.ModelBackgroundJobRunner in ids
+      refute NudgeSweep in ids
     after
       Application.put_env(:maraithon, :start_background_workers, original)
     end
 
-    pid =
-      start_supervised!(
-        {NudgeSweep,
-         name: :"nudge_sweep_test_#{System.unique_integer([:positive])}",
-         interval_ms: :timer.minutes(30),
-         initial_delay_ms: :timer.minutes(30)}
-      )
-
-    assert Process.alive?(pid)
+    spec = Enum.find(RecurringJobs.specs(), &(&1.name == "nudge_sweep"))
+    assert {:interval, interval_ms} = spec.schedule
+    assert interval_ms > 0
   end
 
   defp child_id(module) when is_atom(module), do: module
