@@ -78,16 +78,14 @@ Before claiming end-to-end durable Agent work, complete these follow-ups:
 3. Replace safely decoded ETF snapshots with a bounded, language-neutral
    versioned format and define retention/encryption for event, effect, run-step,
    and turn payloads.
-4. Finish the periodic-service consolidation described below. The first
-   high-confidence tranche now uses durable background jobs, but provider/model
-   sweeps and independent queue sentinels remain deliberately separate.
-5. Add explicit leader/partition authority and tenant fairness before scaling
-   beyond the current single application Machine.
+4. Add explicit partition authority for any future external-work lane before
+   scaling that lane beyond its configured bounds.
 
+### Periodic service consolidation
 
-### Periodic service consolidation audit
-
-The first consolidation tranche removes five stateless scheduler identities:
+All thirteen ordinary recurring services execute through stable
+`Maraithon.Runtime.RecurringJobs` rows and `BackgroundJobRunner`; none retains a
+scheduler GenServer. The original five stateless cycles are:
 
 - `Maraithon.Runtime.BriefingCron`
 - `Maraithon.Runtime.BriefNotifier`
@@ -95,28 +93,42 @@ The first consolidation tranche removes five stateless scheduler identities:
 - `Maraithon.AssistantChat.RunRecovery`
 - `Maraithon.TelegramAssistant.RunReaper`
 
-They execute through `Maraithon.Runtime.RecurringJobs` and the existing
-`BackgroundJobRunner`. Each schedule has one stable active dedupe key. A
-successful claim-token-fenced cycle moves the same row back to `pending` using
-the PostgreSQL clock, so success and the next deadline are one durable compare
-and-set rather than a mailbox timer. Missing schedules are repaired under a
-transaction-scoped PostgreSQL advisory lock; no long-lived seeder or scheduler
-PID is authority. The existing `background_jobs` columns and active-dedupe
-index are sufficient, so this tranche needs no migration.
+The final eight are `TokenRefresher`, `WatchRenewer`, `FreshnessSweep`,
+`ProactiveCheckIn`, `TodoCompletionSweep`, `NudgeSweep`,
+`StalenessTriageSweep`, and `DogfoodDigest`. Each recurring coordinator has one
+stable active dedupe key. A successful claim-token-fenced cycle moves that same
+row back to `pending` using the PostgreSQL clock, so success and the next
+deadline are one durable compare-and-set rather than a mailbox timer. Missing
+schedules are repaired under a transaction-scoped PostgreSQL advisory lock.
+Poll timers and PIDs are wakeup hints only.
 
-The remaining recurring GenServers were audited as follows:
+Provider discovery coordinators enqueue one bounded account/cursor/token unit
+into `runtime_provider_account`. Its dedicated runner rotates partitions by a
+durable `last_started_at` watermark, enforces one in-flight job for a logical
+provider account, serializes provider-family capacity, and persists
+`Retry-After` as a provider cooldown. Model discovery coordinators enqueue one
+bounded tenant unit into `runtime_model_user`; its separate runner applies the
+same durable rotation with one in-flight model job per user, so a hot tenant
+cannot starve a tenant that has never run. The generic runner excludes both
+queues, preventing provider or model work from consuming the other lanes.
+Expired claims are reclaimed by their fenced durable rows after a runner crash.
 
-| Classification | Modules | Disposition |
-| --- | --- | --- |
-| Ordinary provider/account sweeps | `TokenRefresher`, `WatchRenewer`, `FreshnessSweep` | Still cron-like. Move after the durable queue has explicit provider/account partitioning and rate-limit fairness; these cycles call external providers and can occupy a worker lane for a full batch. |
-| Ordinary model/user sweeps | `ProactiveCheckIn`, `TodoCompletionSweep`, `NudgeSweep`, `StalenessTriageSweep` | Still cron-like. Their bounded user cursors are durable, but model work needs a dedicated fair queue/tenant lane before sharing the generic background-job concurrency pool. |
-| Wall-clock digest | `DogfoodDigest` | Still cron-like. It needs a durable timezone-aware next-fire calculation rather than fixed-delay rescheduling; delivery dedupe already exists. |
-| Independent queue sentinels | `HealthReporter`, `StuckStateWatchdog` | Retained outside `BackgroundJobs` so a stopped or wedged background-job runner cannot silence its own health signal/alarm. Their resident identity is not business authority. |
-| Durable executors/coordinators | `BackgroundJobRunner`, `Scheduler`, `EffectRunner`, `WakeCoordinator`, `AgentWatcher` | Not ordinary cron. Their timers drive claim renewal, durable queue dispatch, or exact-incarnation reconciliation. |
-| Startup/local-session timers | `Bootstrap`, `RunStreamPreview`, `LivenessSession`, LiveView refresh loops | Not ordinary cron. They own bounded startup retry or process-local UI/session state. |
+`DogfoodDigest` persists the validated named timezone, hour, and minute in its
+recurring row and stores each exact next-fire instant. PostgreSQL timezone data
+is authoritative across DST: nonexistent spring-gap wall times use the
+pre-transition standard offset, and ambiguous fall-fold wall times resolve to
+the later standard-time occurrence. An invalid named timezone is rejected with
+a content-free alert; it never falls back to UTC or overwrites an existing
+validated row.
 
-Resident `Maraithon.Runtime.Agent` heartbeat, checkpoint, directive-poll, and
-wakeup timers are intentionally outside this consolidation.
+`HealthReporter` and `StuckStateWatchdog` deliberately remain resident
+observers. Moving either into the queue it diagnoses could silence the only
+health signal when every durable runner is stopped or wedged. They own no
+business deadline or delivery authority. `Scheduler`, `EffectRunner`,
+`WakeCoordinator`, and `AgentWatcher` also remain durable executors or
+reconcilers rather than ordinary periodic business work. Startup retry and
+process-local UI/session timers are outside this consolidation, as are resident
+Agent heartbeat, checkpoint, directive-poll, and wakeup hints.
 
 ## Production activation
 
