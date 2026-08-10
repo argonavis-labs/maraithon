@@ -704,22 +704,15 @@ defmodule Maraithon.Runtime.AgentDirectives do
              |> Repo.all()
 
            Enum.each(directives, fn directive ->
-             terminal? = directive.status in ["completed", "dead_letter", "cancelled"]
-
-             payload =
-               if terminal?,
-                 do: @redacted_payload,
-                 else: directive.payload || directive.legacy_payload || %{}
-
+             # Backfill only establishes encrypted storage. Terminal payload
+             # expiry remains exclusively owned by central retention after an
+             # exact-protocol acknowledgement; it must never be inferred from
+             # terminal status during a legacy conversion.
              attrs = %{
-               payload: payload,
+               payload: directive.payload || directive.legacy_payload || %{},
                legacy_payload: @redacted_payload,
                payload_encryption_version: 1,
-               payload_purged_at:
-                 if(terminal?,
-                   do: directive.payload_purged_at || directive.terminal_at,
-                   else: nil
-                 )
+               payload_purged_at: directive.payload_purged_at
              }
 
              directive

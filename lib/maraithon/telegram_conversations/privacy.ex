@@ -361,47 +361,96 @@ defmodule Maraithon.TelegramConversations.Privacy do
 
   def erasure_backlog(_user_id), do: %{error: :invalid_user_id}
 
-  @doc "Erases one bounded stopped-fleet batch without deleting authority rows."
-  def erase_user_batch(user_id, opts \\ [])
+  @doc "Erases one bounded batch for an exact, claimed central erasure request."
+  def erase_user_batch(user_id, request_id, claim_token, opts \\ [])
 
-  def erase_user_batch(user_id, opts)
-      when is_binary(user_id) and user_id != "" and is_list(opts) do
-    limit = batch_size(opts)
-    confirmation = Keyword.get(opts, :confirmation)
-    now = Keyword.get(opts, :now, DateTime.utc_now())
+  def erase_user_batch(user_id, request_id, claim_token, opts)
+      when is_binary(user_id) and user_id != "" and is_binary(request_id) and
+             is_binary(claim_token) and is_list(opts) do
+    limit = Keyword.get(opts, :limit)
+    now = Keyword.get(opts, :now)
 
-    if confirmation == ProtocolCutover.activation_confirmation() and match?(%DateTime{}, now) do
-      Repo.transaction(
-        fn ->
-          :ok = DurablePayload.require_current_mutation!()
-          :ok = assert_stopped_fleet!()
+    if is_integer(limit) and limit in 1..@max_batch_size and
+         match?(%DateTime{utc_offset: 0, std_offset: 0}, now) do
+      case Repo.transaction(
+             fn ->
+               ProtocolCutover.require_exact_write!()
+               assert_central_erasure_claim!(user_id, request_id, claim_token)
+               assert_central_erasure_drained!(user_id, request_id)
 
-          {erased, remaining} =
-            Enum.reduce(erasure_families(), {%{}, limit}, fn
-              _family, acc = {_erased, 0} ->
-                acc
+               Repo.query!(
+                 "SELECT set_config('maraithon.privacy_erasure_request_id', $1, true)",
+                 [request_id],
+                 log: false
+               )
 
-              family, {erased, remaining} ->
-                ids = lock_erasure_ids(family, user_id, remaining)
-                count = purge_family_ids(family, ids, now)
-                {Map.put(erased, family, count), remaining - length(ids)}
-            end)
+               {erased, remaining} =
+                 Enum.reduce(erasure_families(), {%{}, limit}, fn
+                   _family, acc = {_erased, 0} ->
+                     acc
 
-          %{
-            erased: fill_family_defaults(erased, 0),
-            processed: limit - remaining,
-            deferred: erasure_backlog(user_id).deferred,
-            retained_authority_rows: true
-          }
-        end,
-        timeout: 60_000
-      )
+                   family, {erased, remaining} ->
+                     ids = lock_erasure_ids(family, user_id, remaining)
+                     count = purge_family_ids(family, ids, now)
+                     {Map.put(erased, family, count), remaining - length(ids)}
+                 end)
+
+               %{
+                 erased: fill_family_defaults(erased, 0),
+                 processed: limit - remaining,
+                 deferred: erasure_backlog(user_id).deferred,
+                 retained_authority_rows: true
+               }
+             end,
+             timeout: 60_000
+           ) do
+        {:ok, result} -> {:ok, result}
+        {:error, reason} -> {:error, reason}
+      end
     else
-      {:error, :stopped_fleet_confirmation_required}
+      {:error, :invalid_central_erasure_options}
     end
   end
 
-  def erase_user_batch(_user_id, _opts), do: {:error, :invalid_user_id}
+  def erase_user_batch(_user_id, _request_id, _claim_token, _opts),
+    do: {:error, :invalid_central_erasure_options}
+
+  defp assert_central_erasure_claim!(user_id, request_id, claim_token) do
+    case Repo.query!(
+           """
+           SELECT 1
+           FROM public.privacy_erasure_requests
+           WHERE id = $1::uuid
+             AND subject_user_id = $2
+             AND state = 'erasing'
+             AND claim_token = $3::uuid
+             AND claim_expires_at > timezone('UTC', clock_timestamp())
+           FOR UPDATE
+           """,
+           [request_id, user_id, claim_token],
+           log: false
+         ).rows do
+      [[1]] -> :ok
+      _missing -> Repo.rollback(:invalid_privacy_erasure_claim)
+    end
+  end
+
+  defp assert_central_erasure_drained!(user_id, request_id) do
+    case Repo.query!(
+           """
+           SELECT
+             (SELECT count(*) FROM public.agents WHERE user_id = $1),
+             (SELECT count(*)
+              FROM public.privacy_erasure_agent_targets
+              WHERE request_id = $2::uuid AND state <> 'deleted')
+           """,
+           [user_id, request_id],
+           log: false
+         ).rows do
+      [[0, 0]] -> :ok
+      [[agents, targets]] -> Repo.rollback({:privacy_erasure_not_drained, agents, targets})
+    end
+  end
 
   defp erasure_families do
     [
@@ -506,229 +555,6 @@ defmodule Maraithon.TelegramConversations.Privacy do
   defp lock_erasure_ids(family, user_id, limit) do
     family
     |> erasure_query(user_id)
-    |> order_by([row], asc: row.id)
-    |> select([row], row.id)
-    |> limit(^limit)
-    |> lock("FOR UPDATE SKIP LOCKED")
-    |> Repo.all()
-  end
-
-  @doc "Content-free retention counts for the central tenant-fair registry."
-  def retention_backlog(cutoff, tenant_cursor, opts \\ [])
-
-  def retention_backlog(%DateTime{} = cutoff, tenant_cursor, opts) when is_list(opts) do
-    eligible =
-      retention_families()
-      |> Map.new(fn family ->
-        {family, family |> retention_query(cutoff, tenant_cursor) |> Repo.aggregate(:count, :id)}
-      end)
-
-    deferred_work_results =
-      AgentWorkResult
-      |> where([row], row.status == "committed" and row.committed_at < ^cutoff)
-      |> where([row], is_nil(row.result_purged_at))
-      |> Repo.aggregate(:count, :id)
-
-    %{
-      eligible: eligible,
-      deferred:
-        Map.new(@families, &{&1, 0})
-        |> Map.put(:agent_work_results, deferred_work_results),
-      blocked: Map.new(@families, &{&1, 0}),
-      tenant_cursor: tenant_cursor
-    }
-  end
-
-  def retention_backlog(_cutoff, tenant_cursor, _opts),
-    do: %{error: :invalid_cutoff, tenant_cursor: tenant_cursor}
-
-  @doc "Purges one bounded terminal/closed/expired retention batch with SKIP LOCKED."
-  def purge_retention_batch(cutoff, tenant_cursor, opts \\ [])
-
-  def purge_retention_batch(%DateTime{} = cutoff, tenant_cursor, opts) when is_list(opts) do
-    limit = batch_size(opts)
-    now = Keyword.get(opts, :now, DateTime.utc_now())
-
-    if match?(%DateTime{}, now) do
-      Repo.transaction(
-        fn ->
-          :ok = DurablePayload.require_current_mutation!()
-
-          {purged, remaining} =
-            Enum.reduce(retention_families(), {%{}, limit}, fn
-              _family, acc = {_purged, 0} ->
-                acc
-
-              family, {purged, remaining} ->
-                ids = lock_retention_ids(family, cutoff, tenant_cursor, remaining)
-                count = purge_family_ids(family, ids, now)
-                {Map.put(purged, family, count), remaining - length(ids)}
-            end)
-
-          %{
-            purged: fill_family_defaults(purged, 0),
-            processed: limit - remaining,
-            tenant_cursor: tenant_cursor,
-            retained_ids: true
-          }
-        end,
-        timeout: 60_000
-      )
-    else
-      {:error, :invalid_now}
-    end
-  end
-
-  def purge_retention_batch(_cutoff, _tenant_cursor, _opts), do: {:error, :invalid_cutoff}
-
-  defp retention_families do
-    [
-      :turns,
-      :conversations,
-      :assistant_runs,
-      :assistant_steps,
-      :prepared_actions,
-      :agent_runs,
-      :operator_events,
-      :user_memory_profiles,
-      :operator_memory_summaries,
-      :background_jobs,
-      :scheduled_jobs,
-      :ingress_receipts
-    ]
-  end
-
-  defp retention_query(:turns, cutoff, _cursor) do
-    eligible_ids =
-      cutoff
-      |> eligible_conversations()
-      |> select([conversation: conversation], conversation.id)
-
-    Turn
-    |> where([row], row.conversation_id in subquery(eligible_ids))
-    |> where([row], row.inserted_at < ^cutoff and is_nil(row.content_scrubbed_at))
-  end
-
-  defp retention_query(:conversations, cutoff, _cursor), do: eligible_conversations(cutoff)
-
-  defp retention_query(:assistant_runs, cutoff, cursor) do
-    pending_action =
-      from action in PreparedAction,
-        where:
-          action.run_id == parent_as(:retention_run).id and
-            action.status not in ^@terminal_action_statuses,
-        select: 1
-
-    from(row in Run, as: :retention_run)
-    |> where([row], row.status in ["completed", "failed", "cancelled", "degraded"])
-    |> where([row], row.finished_at < ^cutoff and is_nil(row.payload_purged_at))
-    |> where([row], not exists(subquery(pending_action)))
-    |> maybe_tenant_cursor(:user_id, cursor)
-  end
-
-  defp retention_query(:assistant_steps, cutoff, _cursor) do
-    Step
-    |> where([row], row.status in ["completed", "failed", "skipped"])
-    |> where([row], row.finished_at < ^cutoff and is_nil(row.payload_purged_at))
-  end
-
-  defp retention_query(:prepared_actions, cutoff, cursor) do
-    PreparedAction
-    |> where([row], row.status in ^@terminal_action_statuses)
-    |> where(
-      [row],
-      fragment("COALESCE(?, ?) < ?", row.executed_at, row.updated_at, ^cutoff) and
-        is_nil(row.payload_purged_at)
-    )
-    |> maybe_tenant_cursor(:user_id, cursor)
-  end
-
-  defp retention_query(:agent_runs, cutoff, cursor) do
-    AgentRun
-    |> where([row], row.status in ["completed", "failed", "cancelled"])
-    |> where([row], row.completed_at < ^cutoff and is_nil(row.private_payload_purged_at))
-    |> maybe_tenant_cursor(:user_id, cursor)
-  end
-
-  defp retention_query(:operator_events, cutoff, cursor) do
-    OperatorEvent
-    |> where([row], row.occurred_at < ^cutoff and is_nil(row.payload_purged_at))
-    |> maybe_tenant_cursor(:user_id, cursor)
-  end
-
-  defp retention_query(:user_memory_profiles, cutoff, cursor) do
-    UserMemoryProfile
-    |> where(
-      [row],
-      fragment("COALESCE(?, ?) < ?", row.source_window_end, row.updated_at, ^cutoff) and
-        is_nil(row.content_erased_at)
-    )
-    |> maybe_tenant_cursor(:user_id, cursor)
-  end
-
-  defp retention_query(:operator_memory_summaries, cutoff, cursor) do
-    OperatorMemorySummary
-    |> where(
-      [row],
-      fragment("COALESCE(?, ?) < ?", row.source_window_end, row.updated_at, ^cutoff) and
-        is_nil(row.content_erased_at)
-    )
-    |> maybe_tenant_cursor(:user_id, cursor)
-  end
-
-  defp retention_query(:background_jobs, cutoff, cursor) do
-    BackgroundJob
-    |> where([row], row.status in ["completed", "failed", "cancelled"])
-    |> where(
-      [row],
-      fragment(
-        "COALESCE(?, ?, ?, ?) < ?",
-        row.completed_at,
-        row.failed_at,
-        row.cancelled_at,
-        row.updated_at,
-        ^cutoff
-      ) and
-        is_nil(row.payload_purged_at)
-    )
-    |> maybe_tenant_cursor(:user_id, cursor)
-  end
-
-  defp retention_query(:scheduled_jobs, cutoff, _cursor) do
-    ScheduledJob
-    |> where([row], row.status in ["delivered", "cancelled", "failed"])
-    |> where(
-      [row],
-      fragment("COALESCE(?, ?) < ?", row.delivered_at, row.updated_at, ^cutoff) and
-        is_nil(row.payload_purged_at)
-    )
-  end
-
-  defp retention_query(:ingress_receipts, cutoff, cursor) do
-    IngressReceipt
-    |> where([row], row.received_at < ^cutoff and is_nil(row.payload_purged_at))
-    |> maybe_tenant_cursor(:user_id, cursor)
-  end
-
-  defp maybe_tenant_cursor(query, field, cursor) when is_binary(cursor) and cursor != "" do
-    where(query, [row], field(row, ^field) >= ^cursor)
-  end
-
-  defp maybe_tenant_cursor(query, _field, _cursor), do: query
-
-  defp lock_retention_ids(:conversations, cutoff, cursor, limit) do
-    :conversations
-    |> retention_query(cutoff, cursor)
-    |> order_by([conversation: row], asc_nulls_first: row.last_turn_at, asc: row.id)
-    |> select([conversation: row], row.id)
-    |> limit(^limit)
-    |> lock("FOR UPDATE SKIP LOCKED")
-    |> Repo.all()
-  end
-
-  defp lock_retention_ids(family, cutoff, cursor, limit) do
-    family
-    |> retention_query(cutoff, cursor)
     |> order_by([row], asc: row.id)
     |> select([row], row.id)
     |> limit(^limit)
@@ -915,6 +741,256 @@ defmodule Maraithon.TelegramConversations.Privacy do
       |> Repo.update_all(set: updates)
 
     count
+  end
+
+  @retention_families [:turns, :conversations]
+
+  @doc "Content-free retention backlog for the central fixed adapter."
+  def retention_backlog(cutoff, tenant_cursor, opts \\ [])
+
+  def retention_backlog(%DateTime{} = cutoff, tenant_cursor, opts) when is_list(opts) do
+    with {:ok, config} <- retention_adapter_config(tenant_cursor, opts) do
+      {turn_count, turn_oldest} = retention_aggregate(:turns, cutoff)
+      {conversation_count, conversation_oldest} = retention_aggregate(:conversations, cutoff)
+
+      {:ok,
+       %{
+         count: turn_count + conversation_count,
+         oldest_age_seconds:
+           oldest_age_seconds(
+             config.now,
+             [turn_oldest, conversation_oldest]
+           )
+       }}
+    end
+  end
+
+  def retention_backlog(_cutoff, _tenant_cursor, _opts),
+    do: {:error, :invalid_retention_adapter_options}
+
+  @doc "Purges one exact, bounded, tenant-fair conversation retention batch."
+  def purge_retention_batch(cutoff, tenant_cursor, opts \\ [])
+
+  def purge_retention_batch(%DateTime{} = cutoff, tenant_cursor, opts) when is_list(opts) do
+    with {:ok, config} <- retention_adapter_config(tenant_cursor, opts) do
+      run_exact_retention(fn ->
+        turn_rows =
+          lock_retention_rows(
+            :turns,
+            cutoff,
+            tenant_cursor,
+            config.limit,
+            config.per_tenant
+          )
+
+        remaining = config.limit - length(turn_rows)
+        cursor_after_turns = last_tenant_cursor(turn_rows, tenant_cursor)
+
+        conversation_rows =
+          lock_retention_rows(
+            :conversations,
+            cutoff,
+            cursor_after_turns,
+            remaining,
+            config.per_tenant
+          )
+
+        purged_turns = purge_retention_turns(turn_rows, config.now)
+        purged_conversations = purge_retention_conversations(conversation_rows, config.now)
+
+        %{
+          purged: purged_turns + purged_conversations,
+          tenant_cursor: last_tenant_cursor(conversation_rows, cursor_after_turns)
+        }
+      end)
+    end
+  end
+
+  def purge_retention_batch(_cutoff, _tenant_cursor, _opts),
+    do: {:error, :invalid_retention_adapter_options}
+
+  defp retention_adapter_config(tenant_cursor, opts) do
+    families = Keyword.get(opts, :families)
+    limit = Keyword.get(opts, :limit)
+    per_tenant = Keyword.get(opts, :per_tenant)
+    now = Keyword.get(opts, :now)
+
+    if families == @retention_families and
+         (is_nil(tenant_cursor) or (is_binary(tenant_cursor) and byte_size(tenant_cursor) <= 320)) and
+         is_integer(limit) and limit in 1..@max_batch_size and
+         is_integer(per_tenant) and per_tenant in 1..50 and
+         match?(%DateTime{utc_offset: 0, std_offset: 0}, now) do
+      {:ok, %{limit: limit, per_tenant: per_tenant, now: now}}
+    else
+      {:error, :invalid_retention_adapter_options}
+    end
+  end
+
+  defp run_exact_retention(fun) when is_function(fun, 0) do
+    if Repo.in_transaction?() do
+      ProtocolCutover.require_exact_write!()
+      {:ok, fun.()}
+    else
+      case Repo.transaction(fn ->
+             ProtocolCutover.require_exact_write!()
+             fun.()
+           end) do
+        {:ok, result} -> {:ok, result}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp retention_aggregate(family, cutoff) do
+    family
+    |> retention_candidate_query(cutoff)
+    |> then(fn query ->
+      Repo.one(
+        from candidate in subquery(query),
+          select: {count(candidate.id), min(candidate.eligible_at)}
+      )
+    end)
+  end
+
+  defp retention_candidate_query(:turns, cutoff) do
+    eligible_ids =
+      cutoff
+      |> eligible_conversations()
+      |> select([conversation: conversation], conversation.id)
+
+    from row in Turn,
+      join: conversation in Conversation,
+      on: conversation.id == row.conversation_id,
+      where: row.conversation_id in subquery(eligible_ids),
+      where: row.inserted_at <= ^cutoff and is_nil(row.content_scrubbed_at),
+      select: %{
+        id: row.id,
+        tenant_key: conversation.user_id,
+        eligible_at: row.inserted_at
+      }
+  end
+
+  defp retention_candidate_query(:conversations, cutoff) do
+    cutoff
+    |> eligible_conversations()
+    |> select([conversation: row], %{
+      id: row.id,
+      tenant_key: row.user_id,
+      eligible_at: fragment("COALESCE(?, ?)", row.last_turn_at, row.updated_at)
+    })
+  end
+
+  defp lock_retention_rows(_family, _cutoff, _cursor, 0, _per_tenant), do: []
+
+  defp lock_retention_rows(family, cutoff, cursor, limit, per_tenant) do
+    candidates = retention_candidate_query(family, cutoff)
+
+    ranked =
+      from candidate in subquery(candidates),
+        select: %{
+          id: candidate.id,
+          tenant_key: candidate.tenant_key,
+          eligible_at: candidate.eligible_at,
+          tenant_rank:
+            fragment(
+              "row_number() OVER (PARTITION BY ? ORDER BY ?, ?)",
+              candidate.tenant_key,
+              candidate.eligible_at,
+              candidate.id
+            )
+        }
+
+    schema = if family == :turns, do: Turn, else: Conversation
+
+    from(row in schema,
+      join: candidate in subquery(ranked),
+      on: candidate.id == row.id,
+      where: candidate.tenant_rank <= ^per_tenant,
+      order_by: [
+        asc:
+          fragment(
+            "CASE WHEN ?::text IS NULL OR ? > ?::text THEN 0 ELSE 1 END",
+            ^cursor,
+            candidate.tenant_key,
+            ^cursor
+          ),
+        asc: candidate.tenant_key,
+        asc: candidate.tenant_rank,
+        asc: candidate.eligible_at,
+        asc: candidate.id
+      ],
+      select: %{
+        id: row.id,
+        tenant_key: candidate.tenant_key,
+        eligible_at: candidate.eligible_at
+      },
+      limit: ^limit,
+      lock: "FOR UPDATE OF t0 SKIP LOCKED"
+    )
+    |> Repo.all()
+  end
+
+  defp purge_retention_turns([], _now), do: 0
+
+  defp purge_retention_turns(rows, now) do
+    ids = Enum.map(rows, & &1.id)
+
+    {count, _} =
+      Turn
+      |> where([row], row.id in ^ids and is_nil(row.content_scrubbed_at))
+      |> Repo.update_all(
+        set: [
+          text: nil,
+          structured_data: nil,
+          legacy_text: Turn.legacy_text_tombstone(),
+          legacy_structured_data: %{},
+          payload_binding_version: nil,
+          payload_binding_key_tag: nil,
+          payload_binding_mac: nil,
+          content_scrubbed_at: now
+        ]
+      )
+
+    count
+  end
+
+  defp purge_retention_conversations([], _now), do: 0
+
+  defp purge_retention_conversations(rows, now) do
+    ids = Enum.map(rows, & &1.id)
+
+    {count, _} =
+      from(row in Conversation,
+        where: row.id in ^ids and is_nil(row.content_scrubbed_at),
+        update: [
+          set: [
+            summary: nil,
+            legacy_summary: nil,
+            historical_summary: nil,
+            metadata: fragment("? - 'historical_summary'", row.metadata),
+            payload_binding_version: nil,
+            payload_binding_key_tag: nil,
+            payload_binding_mac: nil,
+            content_scrubbed_at: ^now
+          ]
+        ]
+      )
+      |> Repo.update_all([])
+
+    count
+  end
+
+  defp last_tenant_cursor([], old_cursor), do: old_cursor
+  defp last_tenant_cursor(rows, _old_cursor), do: rows |> List.last() |> Map.fetch!(:tenant_key)
+
+  defp oldest_age_seconds(now, oldest_values) do
+    oldest_values
+    |> Enum.reject(&is_nil/1)
+    |> Enum.min(DateTime, fn -> nil end)
+    |> case do
+      nil -> 0
+      oldest -> max(DateTime.diff(now, oldest, :second), 0)
+    end
   end
 
   @doc """

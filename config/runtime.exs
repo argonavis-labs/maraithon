@@ -36,6 +36,52 @@ config :maraithon, :api_auth, bearer_token: api_bearer_token
 
 config :maraithon, :support, email: System.get_env("SUPPORT_EMAIL", "support@maraithon.app")
 
+privacy_retention_integer = fn env_name, default, min, max ->
+  value = System.get_env(env_name, Integer.to_string(default))
+
+  case Integer.parse(String.trim(value)) do
+    {parsed, ""} when parsed >= min and parsed <= max ->
+      parsed
+
+    _invalid ->
+      raise "#{env_name} must be an integer between #{min} and #{max}"
+  end
+end
+
+config :maraithon, Maraithon.PrivacyRetention,
+  effects_days: privacy_retention_integer.("PRIVACY_RETENTION_EFFECTS_DAYS", 30, 7, 365),
+  directives_days: privacy_retention_integer.("PRIVACY_RETENTION_DIRECTIVES_DAYS", 30, 7, 365),
+  events_days: privacy_retention_integer.("PRIVACY_RETENTION_EVENTS_DAYS", 90, 30, 365),
+  run_steps_days: privacy_retention_integer.("PRIVACY_RETENTION_RUN_STEPS_DAYS", 30, 7, 365),
+  agent_runs_days: privacy_retention_integer.("PRIVACY_RETENTION_AGENT_RUNS_DAYS", 30, 7, 365),
+  assistant_runs_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_ASSISTANT_RUNS_DAYS", 30, 7, 365),
+  assistant_steps_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_ASSISTANT_STEPS_DAYS", 30, 7, 365),
+  prepared_actions_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_PREPARED_ACTIONS_DAYS", 30, 7, 365),
+  operator_events_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_OPERATOR_EVENTS_DAYS", 90, 30, 365),
+  background_jobs_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_BACKGROUND_JOBS_DAYS", 30, 7, 365),
+  scheduled_jobs_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_SCHEDULED_JOBS_DAYS", 30, 7, 365),
+  ingress_receipts_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_INGRESS_RECEIPTS_DAYS", 90, 30, 365),
+  work_results_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_WORK_RESULTS_DAYS", 30, 7, 365),
+  conversation_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_CONVERSATION_DAYS", 90, 30, 365),
+  snapshot_quarantine_days:
+    privacy_retention_integer.("PRIVACY_RETENTION_SNAPSHOT_REPORT_DAYS", 30, 1, 30),
+  erasure_receipts_days: privacy_retention_integer.("PRIVACY_ERASURE_RECEIPT_DAYS", 365, 30, 730),
+  batch_size: privacy_retention_integer.("PRIVACY_RETENTION_BATCH_SIZE", 100, 1, 500),
+  per_tenant: privacy_retention_integer.("PRIVACY_RETENTION_PER_TENANT", 5, 1, 50),
+  alert_grace_hours:
+    privacy_retention_integer.("PRIVACY_RETENTION_ALERT_GRACE_HOURS", 24, 1, 168),
+  critical_grace_hours:
+    privacy_retention_integer.("PRIVACY_RETENTION_CRITICAL_GRACE_HOURS", 168, 24, 720)
+
 # App Store review demo account. When both are set, the reviewer email skips
 # Postmark delivery and the listed code acts as the magic code (see
 # Accounts.app_review_bypass_config/0). Leave unset in dev/test — the bypass
