@@ -128,68 +128,31 @@ defmodule Maraithon.Spend do
     |> aggregate_spend()
   end
 
-  # Aggregate inside Postgres instead of loading every historical effect payload
-  # into the BEAM. The admin dashboard calls this on every refresh, and the old
-  # approach transferred tens of thousands of JSON documents just to sum four
-  # numeric fields.
+  # Payload ciphertext is intentionally opaque to SQL. Spend reporting uses
+  # immutable scalar facts derived by Event.changeset/2 at append time, so
+  # retention can remove payload bodies without changing accounting totals.
   defp aggregate_spend(query) do
     query
     |> select([event], %{
       total_cost:
         fragment(
-          """
-          COALESCE(
-            SUM(
-              CASE
-                WHEN jsonb_typeof(? #> '{result,usage,total_cost}') = 'number'
-                  THEN (? #>> '{result,usage,total_cost}')::double precision
-                ELSE 0
-              END
-            ),
-            0
-          )::double precision
-          """,
-          event.payload,
-          event.payload
+          "COALESCE(SUM(?), 0)::double precision",
+          event.spend_total_cost
         ),
       input_tokens:
         fragment(
-          """
-          COALESCE(
-            SUM(
-              CASE
-                WHEN jsonb_typeof(? #> '{result,usage,input_tokens}') = 'number'
-                  THEN (? #>> '{result,usage,input_tokens}')::bigint
-                ELSE 0
-              END
-            ),
-            0
-          )::bigint
-          """,
-          event.payload,
-          event.payload
+          "COALESCE(SUM(?), 0)::bigint",
+          event.spend_input_tokens
         ),
       output_tokens:
         fragment(
-          """
-          COALESCE(
-            SUM(
-              CASE
-                WHEN jsonb_typeof(? #> '{result,usage,output_tokens}') = 'number'
-                  THEN (? #>> '{result,usage,output_tokens}')::bigint
-                ELSE 0
-              END
-            ),
-            0
-          )::bigint
-          """,
-          event.payload,
-          event.payload
+          "COALESCE(SUM(?), 0)::bigint",
+          event.spend_output_tokens
         ),
       llm_calls:
         fragment(
-          "COUNT(*) FILTER (WHERE jsonb_typeof(? #> '{result,usage}') = 'object')::bigint",
-          event.payload
+          "COALESCE(SUM(?), 0)::bigint",
+          event.spend_llm_calls
         )
     })
     |> Repo.one!()

@@ -124,15 +124,18 @@ defmodule Maraithon.Admin do
     |> maybe_filter_agent_user(user_id)
     |> order_by([event, _agent], desc: event.inserted_at)
     |> limit(^limit)
-    |> select([event, agent], %{
-      id: event.id,
-      inserted_at: event.inserted_at,
-      agent_id: event.agent_id,
-      behavior: agent.behavior,
-      event_type: event.event_type,
-      payload: event.payload
-    })
+    |> select([event, agent], {event, agent.behavior})
     |> Repo.all()
+    |> Enum.map(fn {event, behavior} ->
+      %{
+        id: event.id,
+        inserted_at: event.inserted_at,
+        agent_id: event.agent_id,
+        behavior: behavior,
+        event_type: event.event_type,
+        payload: Event.read_payload!(event)
+      }
+    end)
   end
 
   @doc """

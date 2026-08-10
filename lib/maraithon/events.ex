@@ -82,6 +82,7 @@ defmodule Maraithon.Events do
       order_by: [asc: e.sequence_num]
     )
     |> Repo.all()
+    |> Enum.map(&Event.hydrate_payload!/1)
   end
 
   # Private functions
@@ -95,7 +96,7 @@ defmodule Maraithon.Events do
       id: event.id,
       sequence_num: event.sequence_num,
       event_type: event.event_type,
-      payload: event.payload,
+      payload: Event.read_payload!(event),
       created_at: event.inserted_at
     }
   end

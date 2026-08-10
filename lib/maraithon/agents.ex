@@ -443,6 +443,7 @@ defmodule Maraithon.Agents do
     |> limit(^limit)
     |> Repo.all()
     |> Repo.preload(preload)
+    |> Enum.map(&hydrate_run_step_payloads!/1)
   end
 
   def record_agent_run_step(run_id, agent_id, attrs)
@@ -560,54 +561,63 @@ defmodule Maraithon.Agents do
        )
        when is_binary(step_id) and is_binary(run_id) and is_binary(agent_id) and
               status in ["completed", "failed"] do
-    set_fields =
-      if status == "completed" do
-        [
-          status: "completed",
-          response_payload: Effect.result_payload(effect) || %{},
-          completed_at: now,
-          updated_at: now
-        ]
-      else
-        error = effect.error || "effect_failed"
+    error = if status == "failed", do: effect.error || "effect_failed"
 
-        [
-          status: "failed",
-          error: error,
-          response_payload: %{"error" => error},
-          completed_at: now,
-          updated_at: now
-        ]
-      end
+    response_payload =
+      if status == "completed",
+        do: Effect.result_payload(effect) || %{},
+        else: %{"error" => error}
 
-    {updated_count, _rows} =
-      Repo.update_all(
-        from(step in AgentRunStep,
-          where: step.id == ^step_id,
-          where: step.agent_run_id == ^run_id,
-          where: step.agent_id == ^agent_id,
-          where: step.status == "requested"
-        ),
-        set: set_fields
-      )
-
-    case updated_count do
-      1 ->
-        :ok
-
-      0 ->
-        case Repo.one(
-               from(step in AgentRunStep,
-                 where: step.id == ^step_id,
-                 where: step.agent_run_id == ^run_id,
-                 where: step.agent_id == ^agent_id,
-                 select: step.status
-               )
-             ) do
-          ^status -> :ok
-          nil -> {:error, :run_step_not_owned}
-          other_status -> {:error, {:run_step_not_requested, other_status}}
+    with {:ok, response_payload} <- AgentRunStep.prepare_response_payload(response_payload) do
+      set_fields =
+        if status == "completed" do
+          [
+            status: "completed",
+            response_payload: response_payload,
+            completed_at: now,
+            updated_at: now
+          ]
+        else
+          [
+            status: "failed",
+            error: error,
+            response_payload: response_payload,
+            completed_at: now,
+            updated_at: now
+          ]
         end
+
+      {updated_count, _rows} =
+        Repo.update_all(
+          from(step in AgentRunStep,
+            where: step.id == ^step_id,
+            where: step.agent_run_id == ^run_id,
+            where: step.agent_id == ^agent_id,
+            where: step.status == "requested"
+          ),
+          set: set_fields
+        )
+
+      case updated_count do
+        1 ->
+          :ok
+
+        0 ->
+          case Repo.one(
+                 from(step in AgentRunStep,
+                   where: step.id == ^step_id,
+                   where: step.agent_run_id == ^run_id,
+                   where: step.agent_id == ^agent_id,
+                   select: step.status
+                 )
+               ) do
+            ^status -> :ok
+            nil -> {:error, :run_step_not_owned}
+            other_status -> {:error, {:run_step_not_requested, other_status}}
+          end
+      end
+    else
+      {:error, :invalid_payload} -> {:error, :invalid_agent_run_step_payload}
     end
   end
 
@@ -1436,6 +1446,12 @@ defmodule Maraithon.Agents do
       {:error, reason} -> Repo.rollback(reason)
     end
   end
+
+  defp hydrate_run_step_payloads!(%AgentRun{steps: steps} = run) when is_list(steps) do
+    %{run | steps: Enum.map(steps, &AgentRunStep.hydrate_payloads!/1)}
+  end
+
+  defp hydrate_run_step_payloads!(%AgentRun{} = run), do: run
 
   defp valid_database_text?(value) do
     String.valid?(value) and :binary.match(value, <<0>>) == :nomatch
