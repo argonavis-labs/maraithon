@@ -238,6 +238,48 @@ defmodule Maraithon.DurablePayloadRegistry do
     }
   end
 
+  @doc "Every authenticated binding target, including the AgentWorkResult authority MAC."
+  def binding_targets do
+    payload_targets =
+      Enum.map(@sources, fn source ->
+        Map.merge(source, %{
+          binding_name: "payload",
+          binding_table: source.table,
+          binding_version_column: "payload_binding_version",
+          binding_key_tag_column: "payload_binding_key_tag",
+          binding_mac_column: "payload_binding_mac",
+          identity_encoding: :context
+        })
+      end)
+
+    authority =
+      @sources
+      |> Enum.find(&(&1.table == "agent_work_results"))
+      |> Map.merge(%{
+        binding_name: "authority",
+        binding_table: "agent_work_result_authority",
+        binding_version_column: "result_digest_version",
+        binding_key_tag_column: "result_digest_key_tag",
+        binding_mac_column: "result_digest",
+        identity_encoding: :scalar
+      })
+
+    payload_targets ++ [authority]
+  end
+
+  @doc "Fetches one reviewed binding target; arbitrary identifiers are rejected."
+  def fetch_binding_target(table, binding_name)
+      when is_binary(table) and binding_name in ["payload", "authority"] do
+    case Enum.find(binding_targets(), fn target ->
+           target.table == table and target.binding_name == binding_name
+         end) do
+      nil -> :error
+      target -> {:ok, Map.merge(target, locator(target.identity))}
+    end
+  end
+
+  def fetch_binding_target(_table, _binding_name), do: :error
+
   @doc "Every registered Cloak ciphertext column."
   def ciphertext_columns do
     for source <- @sources,

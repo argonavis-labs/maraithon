@@ -13,6 +13,7 @@ defmodule Maraithon.TelegramConversations.Privacy do
 
   alias Maraithon.Agents.{Agent, AgentRun}
   alias Maraithon.DurablePayload
+  alias Maraithon.DurablePayloadContraction
   alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.OperatorEvents.OperatorEvent
   alias Maraithon.OperatorMemory.Summary, as: OperatorMemorySummary
@@ -131,14 +132,15 @@ defmodule Maraithon.TelegramConversations.Privacy do
 
   def backfill_batch(opts) when is_list(opts) do
     with {:ok, config} <- backfill_config(opts) do
-      Repo.transaction(
+      DurablePayloadContraction.transaction(
+        [
+          confirmation: config.confirmation,
+          evidence_id: config.evidence_id,
+          evidence_digest: config.evidence_digest,
+          operator: config.operator,
+          revision: config.revision
+        ],
         fn ->
-          Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
-          :ok = lock_and_verify_contraction_evidence!(config)
-          :ok = DurablePayload.require_legacy_mutation!()
-          :ok = assert_stopped_fleet!()
-          :ok = assert_durable_work_drained!()
-
           {migrated, blocked, remaining} =
             Enum.reduce(@families, {%{}, %{}, config.batch_size}, fn
               _family, acc = {_migrated, _blocked, 0} ->
@@ -190,8 +192,7 @@ defmodule Maraithon.TelegramConversations.Privacy do
             blocked_conversations: blocked.conversations,
             processed: config.batch_size - remaining
           }
-        end,
-        timeout: 60_000
+        end
       )
     end
   end
@@ -210,6 +211,7 @@ defmodule Maraithon.TelegramConversations.Privacy do
            confirmation: config.confirmation,
            evidence_id: config.evidence_id,
            evidence_digest: config.evidence_digest,
+           operator: config.operator,
            revision: config.revision,
            excluded: state.excluded
          ) do
@@ -267,11 +269,13 @@ defmodule Maraithon.TelegramConversations.Privacy do
     excluded = Keyword.get(opts, :excluded, %{})
     evidence_id = Keyword.get(opts, :evidence_id)
     evidence_digest = Keyword.get(opts, :evidence_digest)
+    operator = Keyword.get(opts, :operator)
     revision = Keyword.get(opts, :revision)
 
     if Keyword.keyword?(opts) and confirmation == ProtocolCutover.activation_confirmation() and
          is_map(excluded) and is_binary(evidence_id) and byte_size(evidence_id) in 1..256 and
          is_binary(evidence_digest) and byte_size(evidence_digest) == 32 and
+         is_binary(operator) and byte_size(operator) in 1..320 and
          is_binary(revision) and Regex.match?(~r/^[0-9a-f]{40}([0-9a-f]{24})?$/, revision) do
       {:ok,
        %{
@@ -280,64 +284,12 @@ defmodule Maraithon.TelegramConversations.Privacy do
          confirmation: confirmation,
          evidence_id: evidence_id,
          evidence_digest: evidence_digest,
+         operator: operator,
          revision: revision,
          excluded: excluded
        }}
     else
       {:error, :stopped_fleet_evidence_required}
-    end
-  end
-
-  defp lock_and_verify_contraction_evidence!(config) do
-    case Repo.query!(
-           """
-           SELECT mode, activation_evidence_id, activation_evidence_digest, exact_revision
-           FROM public.effect_execution_protocols
-           WHERE name = 'effects'
-           FOR UPDATE
-           """,
-           [],
-           log: false
-         ).rows do
-      [["legacy", id, digest, revision]]
-      when id == config.evidence_id and digest == config.evidence_digest and
-             revision == config.revision ->
-        :ok
-
-      _invalid ->
-        Repo.rollback(:stopped_fleet_evidence_mismatch)
-    end
-
-    for table <- Maraithon.DurablePayloadRegistry.tables() do
-      Repo.query!("LOCK TABLE public.#{table} IN SHARE ROW EXCLUSIVE MODE", [], log: false)
-    end
-
-    Repo.query!("LOCK TABLE public.agent_runtime_leases IN SHARE MODE", [], log: false)
-    :ok
-  end
-
-  defp assert_durable_work_drained! do
-    %{rows: [[directives, runs, steps]]} =
-      Repo.query!(
-        """
-        SELECT
-          (SELECT COUNT(*) FROM public.agent_directives WHERE status = 'processing'),
-          (SELECT COUNT(*) FROM public.agent_runs WHERE status = 'running'),
-          (SELECT COUNT(*) FROM public.agent_run_steps WHERE status = 'requested')
-        """,
-        [],
-        log: false
-      )
-
-    if directives == 0 and runs == 0 and steps == 0,
-      do: :ok,
-      else: Repo.rollback({:durable_work_requires_drain, directives + runs + steps})
-  end
-
-  defp assert_stopped_fleet! do
-    case Repo.query!("SELECT COUNT(*) FROM public.agent_runtime_leases", [], log: false).rows do
-      [[0]] -> :ok
-      [[count]] -> Repo.rollback({:runtime_workers_require_drain, count})
     end
   end
 
