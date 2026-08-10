@@ -111,7 +111,12 @@ bounded tenant unit into `runtime_model_user`; its separate runner applies the
 same durable rotation with one in-flight model job per user, so a hot tenant
 cannot starve a tenant that has never run. The generic runner excludes both
 queues, preventing provider or model work from consuming the other lanes.
-Expired claims are reclaimed by their fenced durable rows after a runner crash.
+That heterogeneous runner deliberately remains non-fair here: it carries strict
+Telegram update ordering, and migration 140004 will own its global cross-queue
+tenant policy. Fair selection still filters Telegram to each bot's active head
+and rechecks that head transactionally, so opting an ingress queue into fair
+selection cannot reorder updates. Expired claims are reclaimed by their fenced
+durable rows after a runner crash.
 
 `DogfoodDigest` persists the validated named timezone, hour, and minute in its
 recurring row and stores each exact next-fire instant. PostgreSQL timezone data

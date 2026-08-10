@@ -47,6 +47,45 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
            ) == 1
   end
 
+  test "wrapped provider Retry-After reaches the durable cooldown contract" do
+    bypass = Bypass.open()
+    previous_google = Application.get_env(:maraithon, :google, [])
+
+    Application.put_env(:maraithon, :google,
+      token_url: "http://localhost:#{bypass.port}/token",
+      client_id: "test-client",
+      client_secret: "test-secret"
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :google, previous_google) end)
+
+    user_id = "periodic-rate-limit-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, token} =
+      OAuth.store_tokens(user_id, "google", %{
+        access_token: "expiring-access",
+        refresh_token: "refresh-token",
+        expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
+      })
+
+    Bypass.expect_once(bypass, "POST", "/token", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("retry-after", "42")
+      |> Plug.Conn.resp(429, "provider limited")
+    end)
+
+    job = %BackgroundJob{
+      queue: "runtime_provider_account",
+      job_type: "runtime_partition:token_refresh",
+      payload: %{"token_id" => token.id, "lookahead_seconds" => 300}
+    }
+
+    assert {:error,
+            {:retry_after, 42, {:token_refresh_failed, {:rate_limited, 42, :provider_limited}}}} =
+             PeriodicJobs.execute(job)
+  end
+
   test "model coordinator creates one opaque durable tenant partition" do
     user_id = "periodic-model-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
