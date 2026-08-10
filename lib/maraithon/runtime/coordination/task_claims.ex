@@ -296,11 +296,12 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
     locked = lock_effect_assignment_in_transaction!(assignment)
 
     case locked do
-      %TaskAssignment{state: "running", provider_boundary: "not_entered"} ->
+      %TaskAssignment{state: state, provider_boundary: "not_entered"}
+      when state in ["reserved", "running"] ->
         _lease_cap =
           fence_effect_authority_in_transaction!(locked, agent_id, owner_generation, :owner)
 
-        settle_with_boundary!(locked, "not_entered", "cancelled_before_provider")
+        settle_with_boundary!(locked, "not_entered", "cancelled_before_provider", state)
 
       %TaskAssignment{
         state: "settled",
@@ -504,7 +505,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
     settle_with_boundary!(assignment, "outcome_known", outcome)
   end
 
-  defp settle_with_boundary!(assignment, boundary, outcome) do
+  defp settle_with_boundary!(assignment, boundary, outcome, expected_state \\ "running") do
     result =
       SQL.query!(
         Repo,
@@ -514,14 +515,14 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
             updated_at = timezone('UTC', clock_timestamp())
         WHERE id = $1::uuid AND activation_epoch = $2::uuid AND claim_token = $3::uuid
           AND node_incarnation_id = $4::uuid AND supervisor_id = $5::uuid
-          AND local_task_id = $6::uuid AND state = 'running' AND provider_boundary = $7
+          AND local_task_id = $6::uuid AND state = $9 AND provider_boundary = $7
         RETURNING id, activation_epoch, work_kind, work_id, claim_token,
                   partition_id, partition_epoch, node_incarnation_id,
                   supervisor_id, local_task_id, state, provider_boundary,
                   lease_expires_at, ready_at, termination_requested_at,
                   termination_proven_at, settled_at, outcome, inserted_at, updated_at
         """,
-        identity_params(assignment) ++ [boundary, outcome]
+        identity_params(assignment) ++ [boundary, outcome, expected_state]
       )
 
     load!(result, :task_authority_lost)

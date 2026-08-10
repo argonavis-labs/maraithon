@@ -71,6 +71,14 @@ defmodule Maraithon.ToolPolicy do
     end
   end
 
+  @doc false
+  def enforce_prepared(attrs, %Decision{status: :allow} = decision, fun)
+      when is_map(attrs) and is_function(fun, 0) do
+    result = fun.()
+    maybe_record_success(normalize_context(attrs), decision, result)
+    result
+  end
+
   def metadata_for(tool_name) when is_binary(tool_name) do
     case Maraithon.Tools.policy_metadata_for(tool_name) do
       nil -> nil
