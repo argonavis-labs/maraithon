@@ -1096,8 +1096,10 @@ defmodule Maraithon.Runtime.AgentDirectives do
   defp terminal_attrs(directive, status, now, error_code) do
     %{
       status: status,
-      payload: @redacted_payload,
-      payload_purged_at: now,
+      # Settlement is the Directive consumer acknowledgement. Keep content
+      # encrypted until the bounded retention worker clears it; do not erase
+      # before this terminal authority commit exists.
+      terminal_acknowledged_at: now,
       claim_token: nil,
       claimed_by_generation: nil,
       claimed_at: nil,
