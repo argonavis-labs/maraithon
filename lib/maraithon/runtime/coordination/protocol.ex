@@ -158,9 +158,11 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
             :attested
 
           {runtime_mode, [effect_mode, id, digest, by, revision]}
-          when runtime_mode in [@dark, @active] and
-                 effect_mode in ["legacy", "generation_fenced_v1"] and
-                 id == evidence.id and digest == evidence.digest and
+          when {runtime_mode, effect_mode} in [
+                 {@dark, "legacy"},
+                 {@dark, "generation_fenced_v1"},
+                 {@active, "generation_fenced_v1"}
+               ] and id == evidence.id and digest == evidence.digest and
                  by == evidence.activated_by and revision == evidence.revision ->
             :already_attested
 
@@ -330,7 +332,7 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
       (SELECT count(*) FROM public.agent_runtime_leases),
       (SELECT count(*) FROM public.background_jobs WHERE status = 'running'),
       (SELECT count(*) FROM public.scheduled_jobs WHERE status = 'dispatched'),
-      (SELECT count(*) FROM public.effects WHERE status IN ('pending', 'claimed', 'cancelling')),
+      (SELECT count(*) FROM public.effects WHERE status IN ('pending', 'claimed', 'executing', 'cancelling')),
       (SELECT count(*) FROM public.runtime_node_incarnations WHERE state <> 'revoked'),
       (SELECT count(*) FROM public.runtime_task_assignments
        WHERE state IN ('reserved', 'running', 'termination_requested', 'termination_proven'))
@@ -377,11 +379,20 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
          {:ok, digest} <- digest(Keyword.get(opts, :evidence_digest)),
          {:ok, activated_by} <-
            bounded_string(Keyword.get(opts, :activated_by), 1, 320, :invalid_activation_operator),
-         {:ok, revision} <-
-           bounded_string(Keyword.get(opts, :exact_revision), 7, 255, :invalid_exact_revision) do
+         {:ok, revision} <- exact_revision(Keyword.get(opts, :exact_revision)) do
       {:ok, %{id: id, digest: digest, activated_by: activated_by, revision: revision}}
     end
   end
+
+  defp exact_revision(value) when is_binary(value) do
+    value = String.trim(value)
+
+    if Regex.match?(~r/^[0-9a-f]{40}([0-9a-f]{24})?$/, value),
+      do: {:ok, value},
+      else: {:error, :invalid_exact_revision}
+  end
+
+  defp exact_revision(_value), do: {:error, :invalid_exact_revision}
 
   defp bounded_string(value, min, max, error) when is_binary(value) do
     value = String.trim(value)
