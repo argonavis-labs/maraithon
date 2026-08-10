@@ -10,6 +10,13 @@ defmodule Maraithon.DatabaseTLS do
   """
 
   @repo_transport_keys [:url, :ssl, :socket, :hostname]
+  @operator_roles %{
+    "DURABLE_PAYLOAD_VERIFIER_DATABASE_URL" => "maraithon_payload_verifier",
+    "MARAITHON_ACTIVATION_DATABASE_URL" => "maraithon_activation_operator",
+    "MARAITHON_INCIDENT_DATABASE_URL" => "maraithon_incident_operator",
+    "MARAITHON_MIGRATOR_DATABASE_URL" => "maraithon_migrator",
+    "VAULT_ROTATION_DATABASE_URL" => "maraithon_incident_operator"
+  }
 
   @doc "Replaces a Repo URL and its transport options without retaining stale SNI or sockets."
   def configure_repo!(url, env_name) when is_binary(url) and is_binary(env_name) do
@@ -23,6 +30,37 @@ defmodule Maraithon.DatabaseTLS do
 
     Application.put_env(:maraithon, Maraithon.Repo, updated)
     :ok
+  end
+
+  @doc "Installs a fixed, separately credentialed operator URL when configured."
+  def configure_operator_repo_from_env!(env_name, production?)
+      when is_map_key(@operator_roles, env_name) and is_boolean(production?) do
+    url = System.get_env(env_name)
+    present? = is_binary(url) and String.trim(url) != ""
+
+    if production? and not present? do
+      raise "#{env_name} is required in production"
+    end
+
+    if present? do
+      expected_role = Map.fetch!(@operator_roles, env_name)
+
+      unless Plug.Crypto.secure_compare(database_role!(url, env_name), expected_role) do
+        raise "#{env_name} must use the canonical #{expected_role} database role"
+      end
+
+      if production? do
+        require_distinct_credentials!(url, System.get_env("DATABASE_URL"), env_name)
+      end
+
+      configure_repo!(url, env_name)
+    else
+      :ok
+    end
+  end
+
+  def configure_operator_repo_from_env!(env_name, _production?) do
+    raise ArgumentError, "unsupported operator database URL environment: #{inspect(env_name)}"
   end
 
   @doc "Refuses an operator URL that reuses the runtime database role."

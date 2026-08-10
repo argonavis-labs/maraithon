@@ -3,6 +3,12 @@ defmodule Mix.Tasks.Maraithon.Effects.AttestActivation do
   alias Maraithon.Runtime.Coordination.Protocol
   @shortdoc "One-way stopped-fleet evidence attestation for exact Effect activation"
 
+  @moduledoc """
+  Persists the immutable stopped-fleet evidence bound to an already exact
+  Effect protocol. Production requires `MARAITHON_ACTIVATION_DATABASE_URL`
+  using the canonical activation-operator role and verified TLS.
+  """
+
   @impl Mix.Task
   def run(args) do
     {opts, rest, invalid} =
@@ -16,6 +22,8 @@ defmodule Mix.Tasks.Maraithon.Effects.AttestActivation do
       )
 
     if rest != [] or invalid != [], do: Mix.raise("unexpected attestation arguments")
+
+    configure_operator_storage!("MARAITHON_ACTIVATION_DATABASE_URL")
 
     attestation = [
       evidence_id: opts[:evidence_id],
@@ -40,5 +48,10 @@ defmodule Mix.Tasks.Maraithon.Effects.AttestActivation do
       {:error, reason} ->
         Mix.raise("Repository start failed: #{inspect(reason)}")
     end
+  end
+
+  defp configure_operator_storage!(env_name) do
+    Mix.Task.run("app.config")
+    Maraithon.DatabaseTLS.configure_operator_repo_from_env!(env_name, Mix.env() == :prod)
   end
 end

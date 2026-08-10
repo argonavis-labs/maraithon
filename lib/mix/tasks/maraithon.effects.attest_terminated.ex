@@ -18,7 +18,9 @@ defmodule Mix.Tasks.Maraithon.Effects.AttestTerminated do
         --confirm PHYSICAL_TASK_TERMINATED
 
   Use only after external infrastructure evidence proves that the named BEAM
-  task incarnation cannot still execute. The task starts only Repo dependencies,
+  task incarnation cannot still execute. Production requires
+  `MARAITHON_INCIDENT_DATABASE_URL` using the canonical incident-operator role
+  and independently rebuilt verified TLS. The task starts only Repo dependencies,
   records an immutable attestation, and retries conservative cancellation
   settlement. It never claims to know the provider outcome.
   """
@@ -41,6 +43,8 @@ defmodule Mix.Tasks.Maraithon.Effects.AttestTerminated do
     if rest != [] or invalid != [] do
       Mix.raise("unexpected termination-attestation arguments")
     end
+
+    configure_operator_storage!("MARAITHON_INCIDENT_DATABASE_URL")
 
     identity = %{
       effect_id: required!(opts, :effect_id),
@@ -92,6 +96,11 @@ defmodule Mix.Tasks.Maraithon.Effects.AttestTerminated do
       {:error, reason} ->
         Mix.raise("Termination attestation refused: #{inspect(reason)}")
     end
+  end
+
+  defp configure_operator_storage!(env_name) do
+    Mix.Task.run("app.config")
+    Maraithon.DatabaseTLS.configure_operator_repo_from_env!(env_name, Mix.env() == :prod)
   end
 
   defp required!(opts, key) do

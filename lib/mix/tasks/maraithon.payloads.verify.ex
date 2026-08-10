@@ -61,19 +61,10 @@ defmodule Mix.Tasks.Maraithon.Payloads.Verify do
   end
 
   defp configure_verifier_url! do
-    url = System.get_env("DURABLE_PAYLOAD_VERIFIER_DATABASE_URL")
-
-    if Mix.env() == :prod and (is_nil(url) or String.trim(url) == "") do
-      Mix.raise("DURABLE_PAYLOAD_VERIFIER_DATABASE_URL is required in production")
-    end
-
-    if is_binary(url) and String.trim(url) != "" do
-      if url == System.get_env("DATABASE_URL") do
-        Mix.raise("payload verifier credentials must be distinct from runtime DATABASE_URL")
-      end
-
-      :ok = Maraithon.DatabaseTLS.configure_repo!(url, "DURABLE_PAYLOAD_VERIFIER_DATABASE_URL")
-    end
+    Maraithon.DatabaseTLS.configure_operator_repo_from_env!(
+      "DURABLE_PAYLOAD_VERIFIER_DATABASE_URL",
+      Mix.env() == :prod
+    )
   end
 
   defp start_once(module) do

@@ -21,6 +21,8 @@ defmodule Mix.Tasks.Maraithon.Effects.ActivateGenerationFenced do
 
   `--lock-timeout-ms` may override the bounded 15-second lock wait. A timeout
   refuses activation and is safe to retry after investigating the blocker.
+  Production requires `MARAITHON_ACTIVATION_DATABASE_URL` using the canonical
+  activation-operator role and independently rebuilt verified TLS.
   """
 
   @impl Mix.Task
@@ -40,6 +42,8 @@ defmodule Mix.Tasks.Maraithon.Effects.ActivateGenerationFenced do
     if rest != [] or invalid != [] do
       Mix.raise("unexpected activation arguments")
     end
+
+    configure_operator_storage!("MARAITHON_ACTIVATION_DATABASE_URL")
 
     activation_opts =
       [confirmation: opts[:confirm]]
@@ -66,6 +70,11 @@ defmodule Mix.Tasks.Maraithon.Effects.ActivateGenerationFenced do
       {:error, reason} ->
         Mix.raise("Effect protocol activation refused: #{inspect(reason)}")
     end
+  end
+
+  defp configure_operator_storage!(env_name) do
+    Mix.Task.run("app.config")
+    Maraithon.DatabaseTLS.configure_operator_repo_from_env!(env_name, Mix.env() == :prod)
   end
 
   defp decode_sha256(nil), do: nil
