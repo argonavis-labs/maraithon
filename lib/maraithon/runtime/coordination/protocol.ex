@@ -274,7 +274,7 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
       (SELECT count(*) FROM public.agent_runtime_leases),
       (SELECT count(*) FROM public.background_jobs WHERE status = 'running'),
       (SELECT count(*) FROM public.scheduled_jobs WHERE status = 'dispatched'),
-      (SELECT count(*) FROM public.effects WHERE status IN ('claimed', 'cancelling')),
+      (SELECT count(*) FROM public.effects WHERE status IN ('claimed', 'executing', 'cancelling')),
       (SELECT count(*) FROM public.runtime_node_incarnations WHERE state <> 'revoked'),
       (SELECT count(*) FROM public.runtime_task_assignments
        WHERE state IN ('reserved', 'running', 'termination_requested', 'termination_proven'))

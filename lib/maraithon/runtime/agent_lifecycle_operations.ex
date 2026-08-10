@@ -39,7 +39,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   @max_payload_bytes 128_000
   @default_drain_ttl_ms 60_000
   @max_batch 500
-  @active_effect_statuses ~w(pending claimed cancelling)
+  @active_effect_statuses ~w(pending claimed executing cancelling)
   @terminal_effect_statuses ~w(completed failed cancelled)
   @reconcilable_work_reasons [
     :active_run_pointer,

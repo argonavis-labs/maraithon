@@ -32,6 +32,7 @@ defmodule Maraithon.Effects.Cancellation do
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.EffectTaskSupervisor
+  alias Maraithon.Runtime.Coordination.{TaskAssignment, TaskClaims}
 
   @default_plan_limit 32
   @max_plan_limit 100
@@ -64,6 +65,115 @@ defmodule Maraithon.Effects.Cancellation do
     end
   end
 
+  @doc false
+  def request_coordination_drain_in_transaction!(
+        node_incarnation_id,
+        partition_id,
+        partition_epoch,
+        reason
+      )
+      when is_binary(node_incarnation_id) and is_integer(partition_id) and
+             is_integer(partition_epoch) and is_binary(reason) do
+    require_transaction!()
+    ProtocolCutover.require_exact_reconciliation!()
+    now = DatabaseClock.now!()
+
+    effects =
+      Repo.all(
+        from effect in Effect,
+          where: effect.coordination_node_incarnation_id == ^node_incarnation_id,
+          where: effect.coordination_partition_id == ^partition_id,
+          where: effect.coordination_partition_epoch == ^partition_epoch,
+          where: effect.status in ["claimed", "executing", "cancelling"],
+          order_by: [asc: effect.id],
+          lock: "FOR UPDATE"
+      )
+
+    Enum.each(effects, fn effect ->
+      request_coordination_termination!(effect)
+
+      if effect.status != "cancelling" do
+        effect
+        |> Ecto.Changeset.change(%{
+          status: "cancelling",
+          cancellation_state: "requested",
+          cancellation_reason: reason,
+          cancellation_requested_at: now,
+          cancellation_target_claim_token: effect.claim_token,
+          cancellation_last_attempt_at: nil,
+          cancellation_last_error: nil,
+          cancellation_settled_at: nil,
+          retry_after: nil,
+          error: reason,
+          updated_at: now
+        })
+        |> Repo.update!()
+      end
+    end)
+
+    length(effects)
+  end
+
+  @doc false
+  def record_local_coordination_termination(
+        %TaskAssignment{work_kind: "effect"} = assignment,
+        evidence_id
+      )
+      when is_binary(evidence_id) and byte_size(evidence_id) in 1..256 do
+    Repo.transaction(fn ->
+      ProtocolCutover.require_exact_reconciliation!()
+
+      effect =
+        case Repo.one(
+               from effect in Effect,
+                 where: effect.id == ^assignment.work_id,
+                 where: effect.status == "cancelling",
+                 where: effect.cancellation_state == "requested",
+                 lock: "FOR UPDATE"
+             ) do
+          %Effect{} = value -> value
+          nil -> Repo.rollback(:effect_claim_lost)
+        end
+
+      case coordination_assignment(effect) do
+        {:ok, expected} ->
+          unless exact_coordination_assignment?(assignment, expected),
+            do: Repo.rollback(:coordination_task_authority_lost)
+
+          actual = exact_coordination_assignment!(expected)
+
+          actual =
+            if actual.state in ["reserved", "running"],
+              do: TaskClaims.request_effect_termination_in_transaction!(actual),
+              else: actual
+
+          case actual.state do
+            "termination_requested" ->
+              case TaskClaims.record_local_termination(
+                     actual,
+                     "supervisor_down",
+                     evidence_id
+                   ) do
+                {:ok, %TaskAssignment{state: "termination_proven"} = proven} -> proven
+                _lost -> Repo.rollback(:coordination_task_termination_proof_lost)
+              end
+
+            "termination_proven" ->
+              actual
+
+            _terminal_or_mismatched ->
+              Repo.rollback(:coordination_task_authority_lost)
+          end
+
+        _uncoordinated_or_mismatched ->
+          Repo.rollback(:coordination_task_authority_lost)
+      end
+    end)
+  end
+
+  def record_local_coordination_termination(_assignment, _evidence_id),
+    do: {:error, :invalid_effect_claim}
+
   @doc "Persist cancellation intent and execute the first exact post-commit page."
   def request(agent_id, reason, opts \\ []) do
     with {:ok, plan} <- prepare(agent_id, reason, opts) do
@@ -95,6 +205,7 @@ defmodule Maraithon.Effects.Cancellation do
          {:ok, limit} <- plan_limit(Keyword.get(opts, :limit, @default_plan_limit)) do
       Repo.transaction(fn ->
         ProtocolCutover.require_exact_reconciliation!()
+        _effects = lock_effects_for_cancellation!(agent_id)
         agent = lock_agent!(agent_id)
         _binding = lock_optional_same_user_binding!(agent)
         lease = lock_runtime_rows!(agent_id)
@@ -139,6 +250,7 @@ defmodule Maraithon.Effects.Cancellation do
          {:ok, reason} <- cancellation_reason(reason),
          {:ok, parsed_opts} <- normalize_agent_prepared_opts(opts) do
       ProtocolCutover.require_exact_reconciliation!()
+      _effects = lock_effects_for_cancellation!(agent_id)
       agent = lock_agent!(agent_id)
       binding = lock_same_user_binding!(agent)
       ensure_expected_user!(binding, parsed_opts.user_id)
@@ -176,6 +288,7 @@ defmodule Maraithon.Effects.Cancellation do
          {:ok, parsed_opts} <- prepare_opts(opts) do
       Repo.transaction(fn ->
         ProtocolCutover.require_exact_reconciliation!()
+        _effects = lock_referenced_effects!(agent_id, references)
         agent = lock_agent!(agent_id)
         binding = lock_same_user_binding!(agent)
         ensure_expected_user!(binding, parsed_opts.user_id)
@@ -378,37 +491,47 @@ defmodule Maraithon.Effects.Cancellation do
   end
 
   defp request_active_cancellation!(agent_id, reason, now) do
-    query =
-      from(effect in Effect,
-        where: effect.agent_id == ^agent_id,
-        where: effect.status == "claimed",
-        where: not is_nil(effect.runtime_owner_generation),
-        where: not is_nil(effect.claim_token),
-        where: not is_nil(effect.claim_owner_node),
-        where: not is_nil(effect.claim_heartbeat_at),
-        where: not is_nil(effect.claim_expires_at),
-        where: not is_nil(effect.claim_supervisor_id),
-        where: not is_nil(effect.claim_task_id),
-        where: is_nil(effect.cancellation_state),
-        update: [
-          set: [
-            status: "cancelling",
-            cancellation_state: "requested",
-            cancellation_reason: ^reason,
-            cancellation_requested_at: ^now,
-            cancellation_target_claim_token: effect.claim_token,
-            cancellation_last_attempt_at: nil,
-            cancellation_last_error: nil,
-            cancellation_settled_at: nil,
-            retry_after: nil,
-            error: ^reason,
-            updated_at: ^now
-          ]
-        ]
+    effects =
+      Repo.all(
+        from effect in Effect,
+          where: effect.agent_id == ^agent_id,
+          where: effect.status in ["claimed", "executing"],
+          where: not is_nil(effect.runtime_owner_generation),
+          where: not is_nil(effect.claim_token),
+          where: not is_nil(effect.claim_owner_node),
+          where: not is_nil(effect.claim_heartbeat_at),
+          where: not is_nil(effect.claim_expires_at),
+          where: not is_nil(effect.claim_supervisor_id),
+          where: not is_nil(effect.claim_task_id),
+          where: is_nil(effect.cancellation_state),
+          order_by: [asc: effect.id],
+          lock: "FOR UPDATE"
       )
 
-    {count, _rows} = Repo.update_all(query, [])
-    count
+    # Lock the complete canonical Effect set before touching any assignment.
+    # This gives every multi-row cancellation the same Effect -> assignment
+    # order as entry, renewal, terminal settlement, and proof convergence.
+    Enum.each(effects, fn effect ->
+      request_coordination_termination!(effect)
+
+      effect
+      |> Ecto.Changeset.change(%{
+        status: "cancelling",
+        cancellation_state: "requested",
+        cancellation_reason: reason,
+        cancellation_requested_at: now,
+        cancellation_target_claim_token: effect.claim_token,
+        cancellation_last_attempt_at: nil,
+        cancellation_last_error: nil,
+        cancellation_settled_at: nil,
+        retry_after: nil,
+        error: reason,
+        updated_at: now
+      })
+      |> Repo.update!()
+    end)
+
+    length(effects)
   end
 
   defp requested_claim_page(agent_id, limit) do
@@ -439,7 +562,9 @@ defmodule Maraithon.Effects.Cancellation do
     effect = lock_effect!(agent_id, reference.effect_id)
 
     cond do
-      exact_claim?(effect, reference) and effect.status == "claimed" ->
+      exact_claim?(effect, reference) and effect.status in ["claimed", "executing"] ->
+        request_coordination_termination!(effect)
+
         effect
         |> Ecto.Changeset.change(%{
           status: "cancelling",
@@ -459,6 +584,7 @@ defmodule Maraithon.Effects.Cancellation do
 
       exact_claim?(effect, reference) and effect.status == "cancelling" and
           effect.cancellation_state == "requested" ->
+        request_coordination_termination!(effect)
         claim_from_effect!(effect)
 
       true ->
@@ -469,14 +595,14 @@ defmodule Maraithon.Effects.Cancellation do
   defp prepare_expired_claim(agent_id, effect_id, claim_token) do
     Repo.transaction(fn ->
       ProtocolCutover.require_exact_reconciliation!()
+      effect = lock_effect!(agent_id, effect_id)
       agent = lock_agent!(agent_id)
       _binding = lock_optional_same_user_binding!(agent)
       lock_runtime_rows!(agent_id)
-      effect = lock_effect!(agent_id, effect_id)
       now = DatabaseClock.now!()
 
       cond do
-        effect.status == "claimed" and effect.claim_token == claim_token and
+        effect.status in ["claimed", "executing"] and effect.claim_token == claim_token and
           not is_nil(effect.claim_expires_at) and
             DateTime.compare(effect.claim_expires_at, now) != :gt ->
           claim =
@@ -621,14 +747,16 @@ defmodule Maraithon.Effects.Cancellation do
         where: effect.claim_task_id == ^claim.task_id,
         where:
           (effect.status == "cancelling" and effect.cancellation_state == "requested") or
-            (effect.status == "failed" and effect.cancellation_state == "settled")
+            (effect.status in ["failed", "cancelled"] and
+               effect.cancellation_state == "settled")
       )
 
     case Repo.one(query) do
       %Effect{status: "cancelling", cancellation_state: "requested"} = effect ->
         {:ok, claim_from_effect!(effect)}
 
-      %Effect{status: "failed", cancellation_state: "settled"} = effect ->
+      %Effect{status: status, cancellation_state: "settled"} = effect
+      when status in ["failed", "cancelled"] ->
         {:duplicate, claim_from_effect!(effect)}
 
       nil ->
@@ -645,12 +773,13 @@ defmodule Maraithon.Effects.Cancellation do
             ] do
     Repo.transaction(fn ->
       ProtocolCutover.require_exact_reconciliation!()
+      effect = lock_effect!(claim.agent_id, claim.effect_id)
       agent = lock_agent!(claim.agent_id)
       lock_plan_authority!(plan, agent)
-      effect = lock_effect!(claim.agent_id, claim.effect_id)
 
       cond do
-        effect.status == "failed" and effect.cancellation_state == "settled" and
+        effect.status in ["failed", "cancelled"] and
+          effect.cancellation_state == "settled" and
           effect.cancellation_target_claim_token == claim.claim_token and
             effect.claim_token == claim.claim_token ->
           :duplicate
@@ -658,28 +787,28 @@ defmodule Maraithon.Effects.Cancellation do
         exact_cancelling_claim?(effect, claim) ->
           now = DatabaseClock.now!()
 
-          effect
-          |> Ecto.Changeset.change(%{
-            status: "failed",
-            cancellation_state: "settled",
-            cancellation_last_attempt_at: now,
-            cancellation_last_error: nil,
-            cancellation_settled_at: now,
-            result: nil,
-            error: "effect_outcome_ambiguous",
-            result_envelope: TerminalEnvelope.error(@ambiguous_outcome),
-            result_dispatched_at: nil,
-            result_dispatch_after: nil,
-            result_dispatch_attempts: 0,
-            result_acknowledged_at: nil,
-            completion_claimed_by: effect.claim_owner_node,
-            completion_claimed_at: effect.claimed_at,
-            claimed_by: nil,
-            claimed_at: nil,
-            retry_after: nil,
-            updated_at: now
-          })
-          |> Repo.update!()
+          case settle_coordination_termination!(effect, proof) do
+            %TaskAssignment{
+              state: "settled",
+              provider_boundary: "not_entered",
+              outcome: "cancelled_before_provider"
+            } ->
+              settle_pre_provider_cancellation!(effect, now)
+
+            %TaskAssignment{
+              state: "outcome_ambiguous",
+              provider_boundary: boundary,
+              outcome: "provider_outcome_ambiguous"
+            }
+            when boundary in ["entered", "outcome_unknown"] ->
+              settle_ambiguous_cancellation!(effect, now)
+
+            :uncoordinated ->
+              settle_ambiguous_cancellation!(effect, now)
+
+            _mismatched ->
+              Repo.rollback(:coordination_task_settlement_lost)
+          end
 
           :settled
 
@@ -691,9 +820,276 @@ defmodule Maraithon.Effects.Cancellation do
 
   defp settle(_plan, _claim, _proof), do: {:error, :effect_task_termination_unproven}
 
+  defp settle_pre_provider_cancellation!(%Effect{} = effect, now) do
+    if retryable_pre_provider_abort?(effect.cancellation_reason) do
+      effect
+      |> Ecto.Changeset.change(%{
+        status: "pending",
+        claimed_by: nil,
+        claimed_at: nil,
+        claim_token: nil,
+        claim_owner_node: nil,
+        claim_heartbeat_at: nil,
+        claim_expires_at: nil,
+        claim_supervisor_id: nil,
+        claim_task_id: nil,
+        coordination_task_assignment_id: nil,
+        cancellation_state: nil,
+        cancellation_reason: nil,
+        cancellation_requested_at: nil,
+        cancellation_target_claim_token: nil,
+        cancellation_last_attempt_at: nil,
+        cancellation_last_error: nil,
+        cancellation_settled_at: nil,
+        retry_after: now,
+        result: nil,
+        result_envelope: nil,
+        error: nil,
+        updated_at: now
+      })
+      |> Repo.update!()
+    else
+      effect
+      |> Ecto.Changeset.change(%{
+        status: "cancelled",
+        cancellation_state: "settled",
+        cancellation_target_claim_token: nil,
+        cancellation_last_attempt_at: now,
+        cancellation_last_error: nil,
+        cancellation_settled_at: now,
+        result: nil,
+        result_envelope: nil,
+        completion_claimed_by: effect.claim_owner_node,
+        completion_claimed_at: effect.claimed_at,
+        claimed_by: nil,
+        claimed_at: nil,
+        claim_token: nil,
+        claim_owner_node: nil,
+        claim_heartbeat_at: nil,
+        claim_expires_at: nil,
+        claim_supervisor_id: nil,
+        claim_task_id: nil,
+        coordination_task_assignment_id: nil,
+        retry_after: nil,
+        updated_at: now
+      })
+      |> Repo.update!()
+    end
+  end
+
+  defp settle_ambiguous_cancellation!(%Effect{} = effect, now) do
+    effect
+    |> Ecto.Changeset.change(%{
+      status: "failed",
+      cancellation_state: "settled",
+      cancellation_last_attempt_at: now,
+      cancellation_last_error: nil,
+      cancellation_settled_at: now,
+      result: nil,
+      error: "effect_outcome_ambiguous",
+      result_envelope: TerminalEnvelope.error(@ambiguous_outcome),
+      result_dispatched_at: nil,
+      result_dispatch_after: nil,
+      result_dispatch_attempts: 0,
+      result_acknowledged_at: nil,
+      completion_claimed_by: effect.claim_owner_node,
+      completion_claimed_at: effect.claimed_at,
+      claimed_by: nil,
+      claimed_at: nil,
+      retry_after: nil,
+      updated_at: now
+    })
+    |> Repo.update!()
+  end
+
+  defp retryable_pre_provider_abort?(reason),
+    do:
+      reason in [
+        "claim_liveness_expired",
+        "effect_runner_shutdown",
+        "effect_task_exited_without_outcome",
+        "effect_task_start_ambiguous"
+      ]
+
+  defp request_coordination_termination!(%Effect{} = effect) do
+    case coordination_assignment(effect) do
+      :uncoordinated ->
+        :ok
+
+      {:ok, expected} ->
+        case TaskClaims.request_effect_termination_in_transaction!(expected) do
+          %TaskAssignment{state: "termination_requested"} = requested ->
+            unless exact_coordination_assignment?(requested, expected),
+              do: Repo.rollback(:coordination_task_authority_lost)
+
+            :ok
+
+          _terminal_or_mismatched ->
+            Repo.rollback(:coordination_task_authority_lost)
+        end
+
+      :mismatched ->
+        Repo.rollback(:coordination_task_authority_lost)
+    end
+  end
+
+  defp settle_coordination_termination!(%Effect{} = effect, proof) do
+    case coordination_assignment(effect) do
+      :uncoordinated ->
+        :uncoordinated
+
+      {:ok, expected} ->
+        assignment = exact_coordination_assignment!(expected)
+
+        proven_or_terminal =
+          case assignment.state do
+            state when state in ["reserved", "running", "termination_requested"] ->
+              record_coordination_termination_proof!(assignment, proof)
+
+            "termination_proven" ->
+              assignment
+
+            state when state in ["settled", "outcome_ambiguous"] ->
+              assignment
+
+            _invalid_state ->
+              Repo.rollback(:coordination_task_authority_lost)
+          end
+
+        final =
+          case proven_or_terminal.state do
+            "termination_proven" ->
+              TaskClaims.reconcile_effect_proven_in_transaction(
+                proven_or_terminal,
+                effect.agent_id,
+                effect.runtime_owner_generation
+              )
+
+            _already_terminal ->
+              proven_or_terminal
+          end
+
+        case final do
+          %TaskAssignment{
+            id: id,
+            state: "settled",
+            provider_boundary: "not_entered",
+            outcome: "cancelled_before_provider"
+          }
+          when id == expected.id ->
+            final
+
+          %TaskAssignment{
+            id: id,
+            state: "outcome_ambiguous",
+            provider_boundary: boundary,
+            outcome: "provider_outcome_ambiguous"
+          }
+          when id == expected.id and boundary in ["entered", "outcome_unknown"] ->
+            final
+
+          _mismatched_terminal_proof ->
+            Repo.rollback(:coordination_task_settlement_lost)
+        end
+
+      :mismatched ->
+        Repo.rollback(:coordination_task_authority_lost)
+    end
+  end
+
+  defp record_coordination_termination_proof!(assignment, :operator_attestation) do
+    evidence_id = "effect-termination-attestation:#{assignment.claim_token}"
+
+    case TaskClaims.record_external_termination(
+           assignment,
+           evidence_id,
+           "Maraithon.Effects.TerminationAttestations"
+         ) do
+      {:ok, %TaskAssignment{} = proven} -> proven
+      _lost -> Repo.rollback(:coordination_task_termination_proof_lost)
+    end
+  end
+
+  defp record_coordination_termination_proof!(assignment, proof)
+       when proof in [:terminated, :authority_absence, :supervisor_restarted] do
+    evidence_id = "effect-task-authority:#{proof}:#{assignment.local_task_id}"
+
+    case TaskClaims.record_local_termination(assignment, "supervisor_down", evidence_id) do
+      {:ok, %TaskAssignment{} = proven} -> proven
+      _lost -> Repo.rollback(:coordination_task_termination_proof_lost)
+    end
+  end
+
+  defp exact_coordination_assignment?(actual, expected) do
+    fields = [
+      :id,
+      :activation_epoch,
+      :work_kind,
+      :work_id,
+      :claim_token,
+      :partition_id,
+      :partition_epoch,
+      :node_incarnation_id,
+      :supervisor_id,
+      :local_task_id
+    ]
+
+    Map.take(actual, fields) == Map.take(expected, fields)
+  end
+
+  defp exact_coordination_assignment!(expected) do
+    actual = TaskClaims.lock_effect_assignment_in_transaction!(expected)
+
+    if exact_coordination_assignment?(actual, expected),
+      do: actual,
+      else: Repo.rollback(:coordination_task_authority_lost)
+  end
+
+  defp coordination_assignment(%Effect{
+         id: work_id,
+         claim_token: claim_token,
+         claim_supervisor_id: supervisor_id,
+         claim_task_id: local_task_id,
+         coordination_activation_epoch: activation_epoch,
+         coordination_partition_id: partition_id,
+         coordination_partition_epoch: partition_epoch,
+         coordination_node_incarnation_id: node_incarnation_id,
+         coordination_task_assignment_id: assignment_id
+       })
+       when is_binary(work_id) and is_binary(claim_token) and is_binary(supervisor_id) and
+              is_binary(local_task_id) and is_binary(activation_epoch) and
+              is_integer(partition_id) and is_integer(partition_epoch) and
+              is_binary(node_incarnation_id) and is_binary(assignment_id) do
+    {:ok,
+     %TaskAssignment{
+       id: assignment_id,
+       activation_epoch: activation_epoch,
+       work_kind: "effect",
+       work_id: work_id,
+       claim_token: claim_token,
+       partition_id: partition_id,
+       partition_epoch: partition_epoch,
+       node_incarnation_id: node_incarnation_id,
+       supervisor_id: supervisor_id,
+       local_task_id: local_task_id
+     }}
+  end
+
+  defp coordination_assignment(%Effect{
+         coordination_activation_epoch: nil,
+         coordination_partition_id: nil,
+         coordination_partition_epoch: nil,
+         coordination_node_incarnation_id: nil,
+         coordination_task_assignment_id: nil
+       }),
+       do: :uncoordinated
+
+  defp coordination_assignment(%Effect{}), do: :mismatched
+
   defp persist_unknown(%CancellationPlan{} = plan, claim, reason) do
     Repo.transaction(fn ->
       ProtocolCutover.require_exact_reconciliation!()
+      _effect = lock_effect!(claim.agent_id, claim.effect_id)
       agent = lock_agent!(claim.agent_id)
       lock_plan_authority!(plan, agent)
       now = DatabaseClock.now!()
@@ -747,7 +1143,7 @@ defmodule Maraithon.Effects.Cancellation do
   defp expired_claim_candidates(limit) do
     Repo.all(
       from(effect in Effect,
-        where: effect.status == "claimed",
+        where: effect.status in ["claimed", "executing"],
         where: not is_nil(effect.runtime_owner_generation),
         where: not is_nil(effect.claim_token),
         where: not is_nil(effect.claim_owner_node),
@@ -770,7 +1166,7 @@ defmodule Maraithon.Effects.Cancellation do
         """
         SELECT id::text
         FROM public.effects
-        WHERE status IN ('pending', 'claimed', 'cancelling')
+        WHERE status IN ('pending', 'claimed', 'executing', 'cancelling')
           AND NOT (
             runtime_owner_generation IS NOT NULL AND
             effect_protocol_version = 2 AND
@@ -786,7 +1182,7 @@ defmodule Maraithon.Effects.Cancellation do
                cancellation_requested_at IS NULL AND cancellation_target_claim_token IS NULL AND
                cancellation_last_attempt_at IS NULL AND cancellation_last_error IS NULL AND
                cancellation_settled_at IS NULL) OR
-              (status = 'claimed' AND claimed_by IS NOT NULL AND claimed_at IS NOT NULL AND
+              (status IN ('claimed', 'executing') AND claimed_by IS NOT NULL AND claimed_at IS NOT NULL AND
                claim_token IS NOT NULL AND claim_owner_node IS NOT NULL AND
                claim_owner_node = claimed_by AND claim_heartbeat_at IS NOT NULL AND
                claim_expires_at IS NOT NULL AND claim_heartbeat_at < claim_expires_at AND
@@ -848,7 +1244,7 @@ defmodule Maraithon.Effects.Cancellation do
         SELECT COUNT(*)
         FROM public.effects
         WHERE agent_id = $1::uuid
-          AND status IN ('pending', 'claimed', 'cancelling')
+          AND status IN ('pending', 'claimed', 'executing', 'cancelling')
           AND NOT (
             runtime_owner_generation IS NOT NULL AND
             effect_protocol_version = 2 AND
@@ -864,7 +1260,7 @@ defmodule Maraithon.Effects.Cancellation do
                cancellation_requested_at IS NULL AND cancellation_target_claim_token IS NULL AND
                cancellation_last_attempt_at IS NULL AND cancellation_last_error IS NULL AND
                cancellation_settled_at IS NULL) OR
-              (status = 'claimed' AND claimed_by IS NOT NULL AND claimed_at IS NOT NULL AND
+              (status IN ('claimed', 'executing') AND claimed_by IS NOT NULL AND claimed_at IS NOT NULL AND
                claim_token IS NOT NULL AND claim_owner_node IS NOT NULL AND
                claim_owner_node = claimed_by AND claim_heartbeat_at IS NOT NULL AND
                claim_expires_at IS NOT NULL AND claim_heartbeat_at < claim_expires_at AND
@@ -1080,6 +1476,29 @@ defmodule Maraithon.Effects.Cancellation do
     error -> {:error, error}
   catch
     :exit, reason -> {:error, reason}
+  end
+
+  defp lock_effects_for_cancellation!(agent_id) do
+    Repo.all(
+      from effect in Effect,
+        where: effect.agent_id == ^agent_id,
+        where: effect.status in ["pending", "claimed", "executing", "cancelling"],
+        where: not is_nil(effect.runtime_owner_generation),
+        order_by: [asc: effect.id],
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp lock_referenced_effects!(agent_id, references) do
+    ids = references |> Enum.map(& &1.effect_id) |> Enum.uniq() |> Enum.sort()
+
+    Repo.all(
+      from effect in Effect,
+        where: effect.agent_id == ^agent_id,
+        where: effect.id in ^ids,
+        order_by: [asc: effect.id],
+        lock: "FOR UPDATE"
+    )
   end
 
   defp lock_effect!(agent_id, effect_id) do

@@ -15,6 +15,7 @@ defmodule Maraithon.Effects do
   alias Maraithon.Agents.AgentRun
   alias Maraithon.Agents.AgentRunStep
   alias Maraithon.LLM
+  alias Maraithon.Runtime.Coordination.{Protocol, Scope}
 
   @max_params_bytes 160_000
   @max_param_binary_bytes 128_000
@@ -253,28 +254,58 @@ defmodule Maraithon.Effects do
     owner_user_id =
       Repo.one(from(agent in Agent, where: agent.id == ^agent_id, select: agent.user_id))
 
-    attrs = %{
-      id: effect_id,
-      agent_id: agent_id,
-      owner_user_id: owner_user_id,
-      agent_run_id: agent_run_id,
-      agent_run_step_id: agent_run_step_id,
-      runtime_owner_generation: runtime_owner_generation,
-      effect_type: to_string(effect_type),
-      params: params,
-      legacy_params:
-        if(is_nil(runtime_owner_generation), do: params, else: %{"redacted" => true}),
-      effect_protocol_version: Map.get(params, "__maraithon_effect_protocol"),
-      execution_lane: Map.get(params, "__maraithon_execution_lane"),
-      idempotency_key: idempotency_key,
-      status: "pending",
-      attempts: 0,
-      max_attempts: 3
-    }
+    coordination_attrs = coordination_scope_attrs!(agent_id, runtime_owner_generation)
+
+    attrs =
+      %{
+        id: effect_id,
+        agent_id: agent_id,
+        owner_user_id: owner_user_id,
+        agent_run_id: agent_run_id,
+        agent_run_step_id: agent_run_step_id,
+        runtime_owner_generation: runtime_owner_generation,
+        effect_type: to_string(effect_type),
+        params: params,
+        legacy_params:
+          if(is_nil(runtime_owner_generation), do: params, else: %{"redacted" => true}),
+        effect_protocol_version: Map.get(params, "__maraithon_effect_protocol"),
+        execution_lane: Map.get(params, "__maraithon_execution_lane"),
+        idempotency_key: idempotency_key,
+        status: "pending",
+        attempts: 0,
+        max_attempts: 3
+      }
+      |> Map.merge(coordination_attrs)
 
     case %Effect{} |> Effect.protocol_changeset(attrs) |> Repo.insert() do
       {:ok, effect} -> {:ok, effect.id}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp coordination_scope_attrs!(_agent_id, nil), do: %{}
+
+  defp coordination_scope_attrs!(agent_id, runtime_owner_generation) do
+    case Protocol.mode() do
+      :dark ->
+        %{}
+
+      :active ->
+        case Scope.partition_for_agent_owner(agent_id, runtime_owner_generation) do
+          {:ok, session, partition} ->
+            %{
+              coordination_activation_epoch: session.activation_epoch,
+              coordination_partition_id: partition.partition_id,
+              coordination_partition_epoch: partition.ownership_epoch,
+              coordination_node_incarnation_id: session.id
+            }
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+
+      blocked ->
+        Repo.rollback({:runtime_coordination_blocked, blocked})
     end
   end
 
@@ -869,7 +900,7 @@ defmodule Maraithon.Effects do
     base =
       from(effect in Effect,
         where: effect.agent_id == ^agent_id,
-        where: effect.status in ["pending", "claimed", "cancelling"]
+        where: effect.status in ["pending", "claimed", "executing", "cancelling"]
       )
 
     total = Repo.aggregate(base, :count, :id)

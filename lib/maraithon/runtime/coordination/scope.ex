@@ -1,5 +1,7 @@
 defmodule Maraithon.Runtime.Coordination.Scope do
   @moduledoc "Fail-closed access to the current DB-owned node and partition scope."
+  alias Ecto.Adapters.SQL
+  alias Maraithon.Repo
   alias Maraithon.Runtime.Config
   alias Maraithon.Runtime.Coordination.{Authority, Partitioning, Protocol, Session}
 
@@ -29,6 +31,47 @@ defmodule Maraithon.Runtime.Coordination.Scope do
       {:ok, session, partition}
     else
       _ -> {:error, :partition_not_owned}
+    end
+  end
+
+  def partition_for_agent_owner(agent_id, owner_generation) do
+    with {:ok, session} <- current(),
+         {:ok, agent_id} <- Ecto.UUID.cast(agent_id),
+         {:ok, owner_generation} <- Ecto.UUID.cast(owner_generation),
+         {:ok, %{rows: [[partition_id, partition_epoch]]}} <-
+           SQL.query(
+             Repo,
+             """
+             SELECT lease.coordination_partition_id, lease.coordination_partition_epoch
+             FROM public.agent_runtime_leases AS lease
+             JOIN public.runtime_partitions AS partition
+               ON partition.partition_id = lease.coordination_partition_id
+              AND partition.activation_epoch = lease.coordination_activation_epoch
+              AND partition.ownership_epoch = lease.coordination_partition_epoch
+              AND partition.owner_node_incarnation_id = lease.coordination_node_incarnation_id
+              AND partition.state = 'ready' AND partition.ready_at IS NOT NULL
+              AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+             WHERE lease.agent_id = $1::uuid AND lease.owner_token = $2::uuid
+               AND lease.ready_at IS NOT NULL AND lease.draining_at IS NULL
+               AND lease.lease_until > timezone('UTC', clock_timestamp())
+               AND lease.coordination_activation_epoch = $3::uuid
+               AND lease.coordination_node_incarnation_id = $4::uuid
+             """,
+             [
+               Ecto.UUID.dump!(agent_id),
+               Ecto.UUID.dump!(owner_generation),
+               Ecto.UUID.dump!(session.activation_epoch),
+               Ecto.UUID.dump!(session.id)
+             ]
+           ),
+         partition when not is_nil(partition) <-
+           Enum.find(
+             Authority.owned_partitions(session, ["ready"]),
+             &(&1.partition_id == partition_id and &1.ownership_epoch == partition_epoch)
+           ) do
+      {:ok, session, partition}
+    else
+      _ -> {:error, :agent_partition_not_owned}
     end
   end
 

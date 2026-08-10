@@ -14,6 +14,7 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
   alias Maraithon.Repo
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.EffectTaskSupervisor
+  alias Maraithon.Runtime.Coordination.{Protocol, TaskAssignment, TaskClaims}
 
   require Logger
 
@@ -233,45 +234,26 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
              ProtocolCutover.require_exact_write!()
              owner_node = Atom.to_string(node())
 
+             coordination_mode =
+               case Protocol.mode() do
+                 mode when mode in [:dark, :active] -> mode
+                 blocked -> Repo.rollback({:runtime_coordination_blocked, blocked})
+               end
+
              lost =
-               Enum.reduce(identities, [], fn identity, lost ->
+               identities
+               |> Enum.sort_by(&identity_key/1)
+               |> Enum.reduce([], fn identity, lost ->
                  configure_renewal_statement_timeout!(deadline_ms)
 
-                 query =
-                   from(effect in Effect,
-                     where: effect.id == ^identity.effect_id,
-                     where: effect.agent_id == ^identity.agent_id,
-                     where: effect.status == "claimed",
-                     where: effect.claim_token == ^identity.claim_token,
-                     where: effect.claim_owner_node == ^owner_node,
-                     where: effect.claim_supervisor_id == ^identity.supervisor_id,
-                     where: effect.claim_task_id == ^identity.task_id,
-                     where: is_nil(effect.cancellation_state),
-                     where:
-                       effect.claim_expires_at >
-                         fragment("timezone('UTC', clock_timestamp())"),
-                     where:
-                       fragment(
-                         "EXISTS (SELECT 1 FROM agent_runtime_leases AS effect_owner_lease WHERE effect_owner_lease.agent_id = ? AND effect_owner_lease.owner_token = ? AND effect_owner_lease.ready_at IS NOT NULL AND effect_owner_lease.draining_at IS NULL AND effect_owner_lease.lease_until > timezone('UTC', clock_timestamp()))",
-                         effect.agent_id,
-                         effect.runtime_owner_generation
-                       ),
-                     update: [
-                       set: [
-                         claim_heartbeat_at: fragment("timezone('UTC', clock_timestamp())"),
-                         claim_expires_at:
-                           fragment(
-                             "timezone('UTC', clock_timestamp()) + (? * interval '1 millisecond')",
-                             ^ttl_ms
-                           ),
-                         updated_at: fragment("timezone('UTC', clock_timestamp())")
-                       ]
-                     ]
-                   )
-
-                 case Repo.update_all(query, []) do
-                   {1, _rows} -> lost
-                   _lost_or_terminal -> [identity | lost]
+                 case renew_identity_in_transaction!(
+                        identity,
+                        owner_node,
+                        ttl_ms,
+                        coordination_mode
+                      ) do
+                   :ok -> lost
+                   :lost -> [identity | lost]
                  end
                end)
 
@@ -282,6 +264,155 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
       {:ok, lost} -> {:ok, Enum.reverse(lost)}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp renew_identity_in_transaction!(identity, owner_node, ttl_ms, coordination_mode) do
+    stored =
+      Repo.one(
+        from effect in Effect,
+          where: effect.id == ^identity.effect_id,
+          where: effect.agent_id == ^identity.agent_id,
+          where: effect.status in ["claimed", "executing"],
+          where: effect.claim_token == ^identity.claim_token,
+          where: effect.claim_owner_node == ^owner_node,
+          where: effect.claim_supervisor_id == ^identity.supervisor_id,
+          where: effect.claim_task_id == ^identity.task_id,
+          where: is_nil(effect.cancellation_state),
+          where: effect.claim_expires_at > fragment("timezone('UTC', clock_timestamp())"),
+          where:
+            fragment(
+              "EXISTS (SELECT 1 FROM agent_runtime_leases AS effect_owner_lease WHERE effect_owner_lease.agent_id = ? AND effect_owner_lease.owner_token = ? AND effect_owner_lease.ready_at IS NOT NULL AND effect_owner_lease.draining_at IS NULL AND effect_owner_lease.lease_until > timezone('UTC', clock_timestamp()))",
+              effect.agent_id,
+              effect.runtime_owner_generation
+            ),
+          lock: "FOR UPDATE"
+      )
+
+    case stored do
+      nil ->
+        :lost
+
+      %Effect{} = effect ->
+        expires_at = renew_coordination_assignment!(effect, ttl_ms, coordination_mode)
+
+        query =
+          from(stored in Effect,
+            where: stored.id == ^effect.id,
+            where: stored.agent_id == ^effect.agent_id,
+            where: stored.status == ^effect.status,
+            where: stored.claim_token == ^effect.claim_token,
+            where: stored.claim_owner_node == ^owner_node,
+            where: stored.claim_supervisor_id == ^effect.claim_supervisor_id,
+            where: stored.claim_task_id == ^effect.claim_task_id,
+            where: is_nil(stored.cancellation_state),
+            update: [
+              set: [
+                claim_heartbeat_at: fragment("timezone('UTC', clock_timestamp())"),
+                claim_expires_at: ^expires_at,
+                updated_at: fragment("timezone('UTC', clock_timestamp())")
+              ]
+            ]
+          )
+
+        case Repo.update_all(query, []) do
+          {1, _rows} -> :ok
+          _lost_or_mismatched -> Repo.rollback(:coordination_task_authority_lost)
+        end
+    end
+  end
+
+  defp renew_coordination_assignment!(
+         %Effect{
+           coordination_task_assignment_id: nil,
+           coordination_activation_epoch: nil,
+           coordination_partition_id: nil,
+           coordination_partition_epoch: nil,
+           coordination_node_incarnation_id: nil
+         },
+         ttl_ms,
+         :dark
+       ) do
+    {_now, expires_at} = Maraithon.Runtime.DatabaseClock.window!(ttl_ms)
+    expires_at
+  end
+
+  defp renew_coordination_assignment!(%Effect{} = effect, ttl_ms, :active) do
+    activation_epoch = Protocol.locked_active!()
+
+    unless activation_epoch == effect.coordination_activation_epoch,
+      do: Repo.rollback(:coordination_task_authority_lost)
+
+    assignment = effect_assignment!(effect)
+
+    renewed =
+      TaskClaims.renew_effect_in_transaction!(
+        assignment,
+        effect.agent_id,
+        effect.runtime_owner_generation,
+        ttl_ms
+      )
+
+    case renewed do
+      %TaskAssignment{state: "running"} = value ->
+        unless exact_assignment?(value, assignment),
+          do: Repo.rollback(:coordination_task_authority_lost)
+
+        value.lease_expires_at
+
+      _mismatched ->
+        Repo.rollback(:coordination_task_authority_lost)
+    end
+  end
+
+  defp renew_coordination_assignment!(%Effect{}, _ttl_ms, _mode),
+    do: Repo.rollback(:coordination_task_authority_lost)
+
+  defp effect_assignment!(%Effect{
+         id: work_id,
+         claim_token: claim_token,
+         claim_supervisor_id: supervisor_id,
+         claim_task_id: local_task_id,
+         coordination_task_assignment_id: assignment_id,
+         coordination_activation_epoch: activation_epoch,
+         coordination_partition_id: partition_id,
+         coordination_partition_epoch: partition_epoch,
+         coordination_node_incarnation_id: node_incarnation_id
+       })
+       when is_binary(work_id) and is_binary(claim_token) and is_binary(supervisor_id) and
+              is_binary(local_task_id) and is_binary(assignment_id) and
+              is_binary(activation_epoch) and is_integer(partition_id) and
+              is_integer(partition_epoch) and is_binary(node_incarnation_id) do
+    %TaskAssignment{
+      id: assignment_id,
+      activation_epoch: activation_epoch,
+      work_kind: "effect",
+      work_id: work_id,
+      claim_token: claim_token,
+      partition_id: partition_id,
+      partition_epoch: partition_epoch,
+      node_incarnation_id: node_incarnation_id,
+      supervisor_id: supervisor_id,
+      local_task_id: local_task_id
+    }
+  end
+
+  defp effect_assignment!(%Effect{}), do: Repo.rollback(:coordination_task_authority_lost)
+
+  defp exact_assignment?(actual, expected) do
+    fields = [
+      :id,
+      :activation_epoch,
+      :work_kind,
+      :work_id,
+      :claim_token,
+      :partition_id,
+      :partition_epoch,
+      :node_incarnation_id,
+      :supervisor_id,
+      :local_task_id
+    ]
+
+    Map.take(actual, fields) == Map.take(expected, fields)
   end
 
   defp configure_renewal_statement_timeout!(deadline_ms) do

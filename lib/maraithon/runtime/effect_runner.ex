@@ -28,6 +28,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   alias Maraithon.Runtime.EffectTaskSupervisor
   alias Maraithon.Runtime.Effects.CommandFactory
   alias Maraithon.Runtime.Effects.LLMRateLimiter
+  alias Maraithon.Runtime.Coordination.{Protocol, Scope, TaskAssignment, TaskClaims}
 
   require Logger
 
@@ -336,7 +337,7 @@ defmodule Maraithon.Runtime.EffectRunner do
             )
           end
 
-          case finalize_ambiguous_claim(effect) do
+          case finalize_effect_task_down(effect) do
             :ok ->
               dispatch_terminal_result(effect, {:error, @ambiguous_outcome})
 
@@ -453,30 +454,7 @@ defmodule Maraithon.Runtime.EffectRunner do
                       failure_code: "effect_supervisor_unavailable"
                     )
 
-                    if reservation_release == :ok do
-                      case finalize_ambiguous_claim(claimed) do
-                        :ok ->
-                          dispatch_terminal_result(claimed, {:error, @ambiguous_outcome})
-
-                        :claim_lost ->
-                          :ok
-
-                        {:error, _reason} ->
-                          :ok
-                      end
-                    else
-                      # The starter may have created a child before returning an
-                      # error. Fence and prove that exact reservation instead of
-                      # terminalizing while an untracked task may still run.
-                      case Cancellation.prepare_exact_claims(
-                             claimed.agent_id,
-                             [claimed],
-                             "effect_task_start_ambiguous"
-                           ) do
-                        {:ok, plan} -> Cancellation.execute(plan)
-                        {:error, _reason} -> :ok
-                      end
-                    end
+                    finalize_failed_effect_task_start(claimed, reservation_release)
 
                     acc
                 end
@@ -708,11 +686,56 @@ defmodule Maraithon.Runtime.EffectRunner do
               e.runtime_owner_generation
             )
         )
+        |> coordinated_effect_query()
 
       :legacy ->
         legacy_protocol_rows(query)
 
       _draining_or_blocked ->
+        where(query, [e], false)
+    end
+  end
+
+  defp coordinated_effect_query(query) do
+    case Protocol.mode() do
+      :dark ->
+        query
+
+      :active ->
+        case Scope.current() do
+          {:ok, session} ->
+            from(e in query,
+              where:
+                fragment(
+                  """
+                  EXISTS (
+                    SELECT 1 FROM public.agent_runtime_leases AS scoped_lease
+                    JOIN public.runtime_partitions AS scoped_partition
+                      ON scoped_partition.partition_id = scoped_lease.coordination_partition_id
+                     AND scoped_partition.activation_epoch = scoped_lease.coordination_activation_epoch
+                     AND scoped_partition.ownership_epoch = scoped_lease.coordination_partition_epoch
+                     AND scoped_partition.owner_node_incarnation_id = scoped_lease.coordination_node_incarnation_id
+                     AND scoped_partition.state = 'ready' AND scoped_partition.ready_at IS NOT NULL
+                     AND scoped_partition.lease_expires_at > timezone('UTC', clock_timestamp())
+                    WHERE scoped_lease.agent_id = ? AND scoped_lease.owner_token = ?
+                      AND scoped_lease.coordination_activation_epoch = ?::uuid
+                      AND scoped_lease.coordination_node_incarnation_id = ?::uuid
+                      AND scoped_lease.ready_at IS NOT NULL AND scoped_lease.draining_at IS NULL
+                      AND scoped_lease.lease_until > timezone('UTC', clock_timestamp())
+                  )
+                  """,
+                  e.agent_id,
+                  e.runtime_owner_generation,
+                  ^session.activation_epoch,
+                  ^session.id
+                )
+            )
+
+          _not_ready ->
+            where(query, [e], false)
+        end
+
+      _blocked ->
         where(query, [e], false)
     end
   end
@@ -914,6 +937,14 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp claim_effect_exact(effect, claim_liveness_ttl_ms) do
+    case Protocol.mode() do
+      :dark -> claim_effect_exact_uncoordinated(effect, claim_liveness_ttl_ms)
+      :active -> claim_effect_coordinated(effect, claim_liveness_ttl_ms)
+      blocked -> {:error, {:runtime_coordination_blocked, blocked}}
+    end
+  end
+
+  defp claim_effect_exact_uncoordinated(effect, claim_liveness_ttl_ms) do
     claim_token = Ecto.UUID.generate()
 
     case EffectTaskSupervisor.reserve(effect.id, effect.agent_id, claim_token) do
@@ -986,6 +1017,131 @@ defmodule Maraithon.Runtime.EffectRunner do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp claim_effect_coordinated(effect, claim_liveness_ttl_ms) do
+    claim_token = Ecto.UUID.generate()
+
+    with {:ok, session, partition} <-
+           Scope.partition_for_agent_owner(effect.agent_id, effect.runtime_owner_generation),
+         {:ok, physical} <- EffectTaskSupervisor.reserve(effect.id, effect.agent_id, claim_token) do
+      identity = %{
+        work_kind: "effect",
+        work_id: effect.id,
+        claim_token: claim_token,
+        assignment_id: Ecto.UUID.generate(),
+        supervisor_id: physical.supervisor_id,
+        local_task_id: physical.task_id
+      }
+
+      node_id = Atom.to_string(node())
+      ttl_ms = min(max(claim_liveness_ttl_ms, 1_000), 300_000)
+
+      outcome =
+        DbResilience.with_database("effect runner coordinated claim", fn ->
+          Repo.transaction(fn ->
+            locked = lock_pending_effect_for_claim!(effect)
+            ensure_pending_coordination_scope!(locked, session, partition)
+            Cancellation.fence_effect_admission!(locked.agent_id, locked.runtime_owner_generation)
+
+            assignment =
+              case TaskClaims.reserve(session, partition, identity, ttl_ms: ttl_ms) do
+                {:ok,
+                 %TaskAssignment{state: "reserved", provider_boundary: "not_entered"} = value} ->
+                  value
+
+                {:ok, _mismatched} ->
+                  Repo.rollback(:coordination_task_authority_lost)
+
+                {:error, reason} ->
+                  Repo.rollback(reason)
+              end
+
+            now = Maraithon.Runtime.DatabaseClock.now!()
+            expires_at = assignment.lease_expires_at
+
+            query =
+              from(e in Effect,
+                where: e.id == ^locked.id,
+                where: e.status == "pending",
+                where: is_nil(e.claim_token),
+                where: is_nil(e.cancellation_state),
+                update: [
+                  set: [
+                    status: "claimed",
+                    claimed_by: ^node_id,
+                    claimed_at: ^now,
+                    claim_token: ^claim_token,
+                    claim_owner_node: ^node_id,
+                    claim_heartbeat_at: ^now,
+                    claim_expires_at: ^expires_at,
+                    claim_supervisor_id: ^physical.supervisor_id,
+                    claim_task_id: ^physical.task_id,
+                    coordination_task_assignment_id: ^assignment.id,
+                    updated_at: ^now
+                  ]
+                ],
+                select: e
+              )
+              |> fence_runtime_owner_lineage(locked)
+
+            case Repo.update_all(query, []) do
+              {1, [%Effect{} = claimed]} -> claimed
+              {0, _rows} -> Repo.rollback(:already_claimed)
+              _unexpected -> Repo.rollback(:unexpected_claim_result)
+            end
+          end)
+        end)
+
+      case outcome do
+        {:ok, {:ok, %Effect{} = claimed}} ->
+          {:ok, claimed}
+
+        {:ok, {:error, :already_claimed}} ->
+          release_task_identity(physical)
+          :already_claimed
+
+        {:ok, {:error, reason}} ->
+          release_task_identity(physical)
+          {:error, reason}
+
+        {:error, reason} ->
+          release_task_identity(physical)
+          {:error, reason}
+      end
+    end
+  end
+
+  defp lock_pending_effect_for_claim!(%Effect{} = expected) do
+    query =
+      from(effect in Effect,
+        where: effect.id == ^expected.id,
+        where: effect.agent_id == ^expected.agent_id,
+        where: effect.status == "pending",
+        where: is_nil(effect.claim_token),
+        where: is_nil(effect.cancellation_state),
+        where:
+          is_nil(effect.retry_after) or
+            effect.retry_after <= fragment("timezone('UTC', clock_timestamp())"),
+        lock: "FOR UPDATE"
+      )
+      |> fence_runtime_owner_lineage(expected)
+
+    case Repo.one(query) do
+      %Effect{} = locked -> locked
+      nil -> Repo.rollback(:already_claimed)
+    end
+  end
+
+  defp ensure_pending_coordination_scope!(effect, session, partition) do
+    unless effect.coordination_activation_epoch == session.activation_epoch and
+             effect.coordination_partition_id == partition.partition_id and
+             effect.coordination_partition_epoch == partition.ownership_epoch and
+             effect.coordination_node_incarnation_id == session.id and
+             is_nil(effect.coordination_task_assignment_id),
+           do: Repo.rollback(:coordination_task_authority_lost)
+
+    :ok
   end
 
   defp claim_effect_legacy(effect) do
@@ -1062,6 +1218,100 @@ defmodule Maraithon.Runtime.EffectRunner do
     }
   end
 
+  defp finalize_failed_effect_task_start(%Effect{} = effect, reservation_release) do
+    case {coordination_assignment(effect), reservation_release} do
+      {{:ok, assignment}, :ok} ->
+        case abort_never_activated_effect_claim(effect, assignment) do
+          :ok -> :ok
+          _lost_or_unavailable -> request_failed_start_termination(effect)
+        end
+
+      {{:ok, _assignment}, _ambiguous_release} ->
+        request_failed_start_termination(effect)
+
+      {:mismatched, _release} ->
+        :ok
+
+      {:uncoordinated, :ok} ->
+        case finalize_ambiguous_claim(effect) do
+          :ok -> dispatch_terminal_result(effect, {:error, @ambiguous_outcome})
+          :claim_lost -> :ok
+          {:error, _reason} -> :ok
+        end
+
+      {:uncoordinated, _ambiguous_release} ->
+        request_failed_start_termination(effect)
+    end
+  end
+
+  defp request_failed_start_termination(%Effect{} = effect) do
+    case Cancellation.prepare_exact_claims(
+           effect.agent_id,
+           [effect],
+           "effect_task_start_ambiguous"
+         ) do
+      {:ok, plan} ->
+        case Cancellation.execute(plan) do
+          {:ok, _summary} -> dispatch_terminal_result(effect, {:error, @ambiguous_outcome})
+          _pending_or_failed -> :ok
+        end
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  defp abort_never_activated_effect_claim(%Effect{} = effect, assignment) do
+    case Repo.transaction(fn ->
+           ProtocolCutover.require_exact_write!()
+           locked = lock_exact_effect_claim_in_transaction!(effect, ["claimed"])
+
+           case TaskClaims.abort_effect_reserved_in_transaction!(
+                  assignment,
+                  locked.agent_id,
+                  locked.runtime_owner_generation
+                ) do
+             %TaskAssignment{
+               state: "settled",
+               provider_boundary: "not_entered",
+               outcome: "cancelled_before_provider"
+             } = settled ->
+               unless exact_coordination_assignment?(settled, assignment),
+                 do: Repo.rollback(:coordination_task_settlement_lost)
+
+             _mismatched ->
+               Repo.rollback(:coordination_task_settlement_lost)
+           end
+
+           now = Maraithon.Runtime.DatabaseClock.now!()
+
+           locked
+           |> Ecto.Changeset.change(%{
+             status: "pending",
+             claimed_by: nil,
+             claimed_at: nil,
+             claim_token: nil,
+             claim_owner_node: nil,
+             claim_heartbeat_at: nil,
+             claim_expires_at: nil,
+             claim_supervisor_id: nil,
+             claim_task_id: nil,
+             coordination_task_assignment_id: nil,
+             retry_after: now,
+             error: nil,
+             updated_at: now
+           })
+           |> Repo.update!()
+         end) do
+      {:ok, %Effect{status: "pending"}} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    error -> {:error, error}
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
   defp release_task_reservation(%Effect{claim_token: claim_token} = effect)
        when is_binary(claim_token) do
     effect |> task_identity() |> release_task_identity()
@@ -1109,6 +1359,12 @@ defmodule Maraithon.Runtime.EffectRunner do
       effect_task_supervisor(effect),
       fn ->
         register_effect_task!(effect)
+
+        case activate_coordinated_effect_task(effect) do
+          :ok -> :ok
+          {:error, reason} -> exit(reason)
+        end
+
         result = execute_effect(effect, completion_writer, completion_sleeper)
 
         send(
@@ -1127,6 +1383,158 @@ defmodule Maraithon.Runtime.EffectRunner do
       end,
       shutdown: :brutal_kill
     )
+  end
+
+  defp activate_coordinated_effect_task(%Effect{} = effect) do
+    case {Protocol.mode(), coordination_assignment(effect)} do
+      {:dark, :uncoordinated} ->
+        :ok
+
+      {:active, {:ok, assignment}} ->
+        case Repo.transaction(fn ->
+               ProtocolCutover.require_exact_write!()
+               _locked_effect = lock_exact_effect_claim_in_transaction!(effect, ["claimed"])
+               activation_epoch = Protocol.locked_active!()
+
+               unless activation_epoch == effect.coordination_activation_epoch,
+                 do: Repo.rollback(:coordination_task_authority_lost)
+
+               TaskClaims.activate_effect_in_transaction!(
+                 assignment,
+                 effect.agent_id,
+                 effect.runtime_owner_generation
+               )
+             end) do
+          {:ok,
+           %TaskAssignment{
+             state: "running",
+             provider_boundary: "not_entered"
+           } = active} ->
+            if exact_coordination_assignment?(active, assignment),
+              do: :ok,
+              else: {:error, :coordination_task_authority_lost}
+
+          _lost_or_mismatched ->
+            {:error, :coordination_task_authority_lost}
+        end
+
+      _mode_or_identity_mismatch ->
+        {:error, :coordination_task_authority_lost}
+    end
+  end
+
+  defp coordination_assignment(%Effect{
+         id: work_id,
+         claim_token: claim_token,
+         claim_supervisor_id: supervisor_id,
+         claim_task_id: local_task_id,
+         coordination_activation_epoch: activation_epoch,
+         coordination_partition_id: partition_id,
+         coordination_partition_epoch: partition_epoch,
+         coordination_node_incarnation_id: node_incarnation_id,
+         coordination_task_assignment_id: assignment_id
+       })
+       when is_binary(work_id) and is_binary(claim_token) and is_binary(supervisor_id) and
+              is_binary(local_task_id) and is_binary(activation_epoch) and
+              is_integer(partition_id) and is_integer(partition_epoch) and
+              is_binary(node_incarnation_id) and is_binary(assignment_id) do
+    {:ok,
+     %TaskAssignment{
+       id: assignment_id,
+       activation_epoch: activation_epoch,
+       work_kind: "effect",
+       work_id: work_id,
+       claim_token: claim_token,
+       partition_id: partition_id,
+       partition_epoch: partition_epoch,
+       node_incarnation_id: node_incarnation_id,
+       supervisor_id: supervisor_id,
+       local_task_id: local_task_id
+     }}
+  end
+
+  defp coordination_assignment(%Effect{
+         coordination_activation_epoch: nil,
+         coordination_partition_id: nil,
+         coordination_partition_epoch: nil,
+         coordination_node_incarnation_id: nil,
+         coordination_task_assignment_id: nil
+       }),
+       do: :uncoordinated
+
+  defp coordination_assignment(%Effect{}), do: :mismatched
+
+  defp lock_exact_effect_claim_in_transaction!(%Effect{} = expected, statuses)
+       when is_list(statuses) do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "exact Effect lock requires transaction")
+
+    query =
+      from(stored in Effect,
+        where: stored.id == ^expected.id,
+        where: stored.agent_id == ^expected.agent_id,
+        where: stored.status in ^statuses,
+        where: stored.claimed_by == ^expected.claimed_by,
+        where: stored.claimed_at == ^expected.claimed_at,
+        where: stored.claim_token == ^expected.claim_token,
+        where: stored.claim_owner_node == ^expected.claim_owner_node,
+        where: stored.claim_supervisor_id == ^expected.claim_supervisor_id,
+        where: stored.claim_task_id == ^expected.claim_task_id,
+        where: stored.runtime_owner_generation == ^expected.runtime_owner_generation,
+        where:
+          fragment(
+            "? IS NOT DISTINCT FROM ?",
+            stored.coordination_activation_epoch,
+            ^expected.coordination_activation_epoch
+          ),
+        where:
+          fragment(
+            "? IS NOT DISTINCT FROM ?",
+            stored.coordination_partition_id,
+            ^expected.coordination_partition_id
+          ),
+        where:
+          fragment(
+            "? IS NOT DISTINCT FROM ?",
+            stored.coordination_partition_epoch,
+            ^expected.coordination_partition_epoch
+          ),
+        where:
+          fragment(
+            "? IS NOT DISTINCT FROM ?",
+            stored.coordination_node_incarnation_id,
+            ^expected.coordination_node_incarnation_id
+          ),
+        where:
+          fragment(
+            "? IS NOT DISTINCT FROM ?",
+            stored.coordination_task_assignment_id,
+            ^expected.coordination_task_assignment_id
+          ),
+        lock: "FOR UPDATE"
+      )
+
+    case Repo.one(query) do
+      %Effect{} = locked -> locked
+      nil -> Repo.rollback(:effect_claim_lost)
+    end
+  end
+
+  defp exact_coordination_assignment?(actual, expected) do
+    fields = [
+      :id,
+      :activation_epoch,
+      :work_kind,
+      :work_id,
+      :claim_token,
+      :partition_id,
+      :partition_epoch,
+      :node_incarnation_id,
+      :supervisor_id,
+      :local_task_id
+    ]
+
+    Map.take(actual, fields) == Map.take(expected, fields)
   end
 
   defp execute_effect(effect, completion_writer, completion_sleeper) do
@@ -1184,18 +1592,25 @@ defmodule Maraithon.Runtime.EffectRunner do
               failure_code: "invalid_effect_result"
             )
 
-            case mark_failed(effect, reason, attempts) do
-              :ok -> dispatch_terminal_result(effect, {:error, reason})
-              :claim_lost -> :ok
-              {:error, _reason} -> :ok
-            end
+            case coordinated_ambiguity_exit!(effect, :invalid_effect_result) do
+              :uncoordinated ->
+                case mark_failed(effect, reason, attempts) do
+                  :ok -> dispatch_terminal_result(effect, {:error, reason})
+                  :claim_lost -> :ok
+                  {:error, _reason} -> :ok
+                end
 
-            {:error, reason}
+                {:error, reason}
+            end
         end
 
       {:error, reason} ->
         reason = classify_claimed_error(effect, reason)
         attempts = next_attempt_count(effect, reason)
+
+        if reason == @ambiguous_outcome do
+          coordinated_ambiguity_exit!(effect, :provider_outcome_ambiguous)
+        end
 
         if should_retry?(effect, reason, attempts) do
           mark_pending_retry(effect, reason, attempts)
@@ -1227,7 +1642,6 @@ defmodule Maraithon.Runtime.EffectRunner do
          %Effect{
            id: effect_id,
            agent_id: agent_id,
-           owner_user_id: owner_user_id,
            agent_run_id: nil,
            claimed_by: claimed_by,
            claimed_at: claimed_at
@@ -1258,7 +1672,6 @@ defmodule Maraithon.Runtime.EffectRunner do
          %Effect{
            id: effect_id,
            agent_id: agent_id,
-           owner_user_id: owner_user_id,
            agent_run_id: run_id,
            agent_run_step_id: step_id,
            claimed_by: claimed_by,
@@ -1302,6 +1715,8 @@ defmodule Maraithon.Runtime.EffectRunner do
       {:error, :stale_effect_context}
     end
   end
+
+  defp authorize_effect_claim(_effect), do: {:error, :stale_effect_context}
 
   defp authorize_effect_owner(
          query,
@@ -1363,8 +1778,6 @@ defmodule Maraithon.Runtime.EffectRunner do
     where(query, [stored], stored.effect_protocol_version == 2)
   end
 
-  defp authorize_effect_claim(_effect), do: {:error, :stale_effect_context}
-
   # This exact CAS is the final authoritative pre-command boundary. It prevents
   # a cancellation committed before activation from reaching provider code; a
   # cancellation racing after the CAS is still conservatively ambiguous.
@@ -1376,14 +1789,16 @@ defmodule Maraithon.Runtime.EffectRunner do
     case Repo.transaction(fn ->
            ProtocolCutover.require_current_mutation!()
 
-           now =
+           {now, entry_updates} =
              if legacy_effect_struct?(effect) do
-               Maraithon.Runtime.DatabaseClock.now!()
+               {Maraithon.Runtime.DatabaseClock.now!(), []}
              else
-               lock_exact_command_authority!(effect)
+               locked = lock_exact_effect_claim_in_transaction!(effect, ["claimed"])
+               now = lock_exact_command_authority!(locked)
+               {now, enter_coordination_provider_boundary!(locked)}
              end
 
-           Repo.update_all(query, set: [updated_at: now])
+           Repo.update_all(query, set: Keyword.put(entry_updates, :updated_at, now))
          end) do
       {:ok, {1, _rows}} -> true
       _lost_or_unavailable -> false
@@ -1392,6 +1807,40 @@ defmodule Maraithon.Runtime.EffectRunner do
     _database_or_protocol_failure -> false
   catch
     :exit, _reason -> false
+  end
+
+  defp enter_coordination_provider_boundary!(%Effect{} = effect) do
+    case {Protocol.mode(), coordination_assignment(effect)} do
+      {:dark, :uncoordinated} ->
+        []
+
+      {:active, {:ok, assignment}} ->
+        activation_epoch = Protocol.locked_active!()
+
+        unless activation_epoch == effect.coordination_activation_epoch,
+          do: Repo.rollback(:coordination_task_authority_lost)
+
+        case TaskClaims.enter_effect_provider_in_transaction!(
+               assignment,
+               effect.agent_id,
+               effect.runtime_owner_generation
+             ) do
+          %TaskAssignment{
+            state: "running",
+            provider_boundary: "entered"
+          } = entered ->
+            unless exact_coordination_assignment?(entered, assignment),
+              do: Repo.rollback(:coordination_task_authority_lost)
+
+            [status: "executing"]
+
+          _mismatched ->
+            Repo.rollback(:coordination_task_authority_lost)
+        end
+
+      _mode_or_identity_mismatch ->
+        Repo.rollback(:coordination_task_authority_lost)
+    end
   end
 
   defp lock_exact_command_authority!(effect) do
@@ -1583,10 +2032,13 @@ defmodule Maraithon.Runtime.EffectRunner do
           failure_code: "effect_outcome_ambiguous"
         )
 
-        case finalize_ambiguous_claim(effect) do
-          :ok -> {:ambiguous, :persisted}
-          :claim_lost -> :claim_lost
-          {:error, _reason} -> {:ambiguous, :unpersisted}
+        case coordinated_ambiguity_exit!(effect, :effect_completion_persistence_uncertain) do
+          :uncoordinated ->
+            case finalize_ambiguous_claim(effect) do
+              :ok -> {:ambiguous, :persisted}
+              :claim_lost -> :claim_lost
+              {:error, _reason} -> {:ambiguous, :unpersisted}
+            end
         end
     end
   end
@@ -1669,6 +2121,7 @@ defmodule Maraithon.Runtime.EffectRunner do
             claim_expires_at: nil,
             claim_supervisor_id: nil,
             claim_task_id: nil,
+            coordination_task_assignment_id: nil,
             cancellation_state: nil,
             cancellation_reason: nil,
             cancellation_requested_at: nil,
@@ -1719,6 +2172,161 @@ defmodule Maraithon.Runtime.EffectRunner do
   defp failure_provenance(_reason, _attempts),
     do: [last_failure_code: nil, last_failure_attempt: nil]
 
+  defp finalize_effect_task_down(%Effect{} = effect) do
+    case coordination_assignment(effect) do
+      {:ok, _assignment} ->
+        case reconcile_effect_after_task_down(effect) do
+          {:terminal, _stored} ->
+            :ok
+
+          :active ->
+            with {:ok, plan} <-
+                   Cancellation.prepare_exact_claims(
+                     effect.agent_id,
+                     [effect],
+                     "effect_task_exited_without_outcome"
+                   ),
+                 {:ok, _summary} <- Cancellation.execute(plan) do
+              :ok
+            else
+              {:pending, _summary} -> {:error, :effect_task_termination_unproven}
+              {:error, reason} -> {:error, reason}
+            end
+
+          :claim_lost ->
+            :claim_lost
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      :uncoordinated ->
+        finalize_ambiguous_claim(effect)
+
+      :mismatched ->
+        {:error, :coordination_task_authority_lost}
+    end
+  end
+
+  defp reconcile_effect_after_task_down(%Effect{} = expected) do
+    case Repo.transaction(fn ->
+           ProtocolCutover.require_exact_reconciliation!()
+           stored = lock_effect_after_task_down(expected)
+
+           case stored.status do
+             status when status in ["completed", "failed", "cancelled"] ->
+               converge_terminal_coordination!(stored)
+               {:terminal, stored}
+
+             status when status in ["claimed", "executing", "cancelling"] ->
+               :active
+
+             _pending_or_replaced ->
+               :claim_lost
+           end
+         end) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    error -> {:error, error}
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  defp lock_effect_after_task_down(%Effect{} = expected) do
+    query =
+      from(stored in Effect,
+        where: stored.id == ^expected.id,
+        where: stored.agent_id == ^expected.agent_id,
+        where: stored.claim_token == ^expected.claim_token,
+        where: stored.claim_owner_node == ^expected.claim_owner_node,
+        where: stored.claim_supervisor_id == ^expected.claim_supervisor_id,
+        where: stored.claim_task_id == ^expected.claim_task_id,
+        where: stored.runtime_owner_generation == ^expected.runtime_owner_generation,
+        lock: "FOR UPDATE"
+      )
+
+    case Repo.one(query) do
+      %Effect{} = stored -> stored
+      nil -> Repo.rollback(:effect_claim_lost)
+    end
+  end
+
+  defp converge_terminal_coordination!(%Effect{} = effect) do
+    case {Protocol.mode(), coordination_assignment(effect), canonical_assignment_outcome(effect)} do
+      {:dark, :uncoordinated, _outcome} ->
+        :ok
+
+      {:active, {:ok, assignment}, {:settled, outcome}} ->
+        activation_epoch = Protocol.locked_active!()
+
+        unless activation_epoch == effect.coordination_activation_epoch,
+          do: Repo.rollback(:coordination_task_authority_lost)
+
+        case TaskClaims.settle_effect_in_transaction(
+               assignment,
+               effect.agent_id,
+               effect.runtime_owner_generation,
+               outcome
+             ) do
+          %TaskAssignment{state: "settled", outcome: ^outcome} = settled ->
+            unless exact_coordination_assignment?(settled, assignment),
+              do: Repo.rollback(:coordination_task_settlement_lost)
+
+            :ok
+
+          %TaskAssignment{state: "outcome_ambiguous"} ->
+            # The Effect is already canonical and immutable. Preserve it rather
+            # than downgrading known content to an ambiguity marker.
+            :ok
+
+          _mismatched ->
+            Repo.rollback(:coordination_task_settlement_lost)
+        end
+
+      {:active, {:ok, assignment}, :outcome_ambiguous} ->
+        activation_epoch = Protocol.locked_active!()
+
+        unless activation_epoch == effect.coordination_activation_epoch,
+          do: Repo.rollback(:coordination_task_authority_lost)
+
+        case TaskClaims.lock_effect_assignment_in_transaction!(assignment) do
+          %TaskAssignment{
+            state: "outcome_ambiguous",
+            outcome: "provider_outcome_ambiguous"
+          } = ambiguous ->
+            unless exact_coordination_assignment?(ambiguous, assignment),
+              do: Repo.rollback(:coordination_task_settlement_lost)
+
+            :ok
+
+          %TaskAssignment{state: "settled", outcome: "failed"} ->
+            # A durable known result is stronger than a later crash signal.
+            :ok
+
+          _not_yet_converged ->
+            Repo.rollback(:coordination_task_settlement_lost)
+        end
+
+      _mode_or_identity_mismatch ->
+        Repo.rollback(:coordination_task_authority_lost)
+    end
+  end
+
+  defp canonical_assignment_outcome(%Effect{status: "completed"}), do: {:settled, "completed"}
+
+  defp canonical_assignment_outcome(%Effect{
+         status: "failed",
+         error: "effect_outcome_ambiguous"
+       }),
+       do: :outcome_ambiguous
+
+  defp canonical_assignment_outcome(%Effect{status: "failed"}), do: {:settled, "failed"}
+
+  defp canonical_assignment_outcome(%Effect{status: "cancelled"}),
+    do: {:settled, "cancelled_before_provider"}
+
   defp finalize_ambiguous_claim(effect) do
     update_claimed_effect(effect, "mark ambiguous outcome",
       status: "failed",
@@ -1754,9 +2362,15 @@ defmodule Maraithon.Runtime.EffectRunner do
                ProtocolCutover.require_exact_write!()
              end
 
+             locked = lock_effect_before_outcome!(effect)
+             settle_coordinated_effect_in_transaction!(locked, "retry_scheduled")
+
              now = Maraithon.Runtime.DatabaseClock.now!()
              updates = Keyword.put(updates, :updated_at, now)
-             Repo.update_all(claimed_effect_query(effect), set: updates)
+             result = Repo.update_all(claimed_effect_query(effect), set: updates)
+
+             if not match?({1, _rows}, result), do: Repo.rollback(:effect_claim_lost)
+             result
            end)
          end) do
       {:ok, {:ok, {1, _rows}}} ->
@@ -1770,8 +2384,14 @@ defmodule Maraithon.Runtime.EffectRunner do
 
         :claim_lost
 
+      {:ok, {:error, :effect_claim_lost}} ->
+        :claim_lost
+
       {:ok, {:error, reason}} ->
         {:error, reason}
+
+      {:error, :effect_claim_lost} ->
+        :claim_lost
 
       {:error, reason} ->
         {:error, reason}
@@ -1801,9 +2421,16 @@ defmodule Maraithon.Runtime.EffectRunner do
                ProtocolCutover.require_exact_write!()
              end
 
+             locked = lock_effect_before_outcome!(effect)
+             outcome = terminal_coordination_outcome!(updates)
+             settle_coordinated_effect_in_transaction!(locked, outcome)
+
              now = Maraithon.Runtime.DatabaseClock.now!()
              updates = Keyword.put(updates, :updated_at, now)
-             Repo.update_all(claimed_effect_query(effect), set: updates)
+             result = Repo.update_all(claimed_effect_query(effect), set: updates)
+
+             if not match?({1, _rows}, result), do: Repo.rollback(:effect_claim_lost)
+             result
            end)
          end) do
       {:ok, {:ok, {1, _rows}}} ->
@@ -1817,8 +2444,14 @@ defmodule Maraithon.Runtime.EffectRunner do
 
         :claim_lost
 
+      {:ok, {:error, :effect_claim_lost}} ->
+        :claim_lost
+
       {:ok, {:error, reason}} ->
         {:error, reason}
+
+      {:error, :effect_claim_lost} ->
+        :claim_lost
 
       {:error, reason} ->
         {:error, reason}
@@ -1834,10 +2467,75 @@ defmodule Maraithon.Runtime.EffectRunner do
     :claim_lost
   end
 
+  defp lock_effect_before_outcome!(%Effect{} = effect) do
+    if legacy_effect_struct?(effect) do
+      effect
+    else
+      lock_exact_effect_claim_in_transaction!(effect, [effect_execution_status(effect)])
+    end
+  end
+
+  defp effect_execution_status(%Effect{} = effect) do
+    case coordination_assignment(effect) do
+      {:ok, _assignment} -> "executing"
+      :uncoordinated -> "claimed"
+      :mismatched -> Repo.rollback(:coordination_task_authority_lost)
+    end
+  end
+
+  defp terminal_coordination_outcome!(updates) do
+    case Keyword.fetch(updates, :status) do
+      {:ok, "completed"} -> "completed"
+      {:ok, "failed"} -> "failed"
+      _invalid_terminal_transition -> Repo.rollback(:invalid_effect_terminal_outcome)
+    end
+  end
+
+  defp settle_coordinated_effect_in_transaction!(%Effect{} = effect, outcome) do
+    case {Protocol.mode(), coordination_assignment(effect)} do
+      {:dark, :uncoordinated} ->
+        :ok
+
+      {:active, {:ok, assignment}} ->
+        activation_epoch = Protocol.locked_active!()
+
+        unless activation_epoch == effect.coordination_activation_epoch,
+          do: Repo.rollback(:coordination_task_authority_lost)
+
+        case TaskClaims.settle_effect_in_transaction(
+               assignment,
+               effect.agent_id,
+               effect.runtime_owner_generation,
+               outcome
+             ) do
+          %TaskAssignment{state: "settled", outcome: ^outcome} = settled ->
+            if exact_coordination_assignment?(settled, assignment),
+              do: :ok,
+              else: Repo.rollback(:coordination_task_settlement_lost)
+
+          %TaskAssignment{state: "outcome_ambiguous"} ->
+            Repo.rollback(:coordination_task_outcome_already_ambiguous)
+
+          _mismatched ->
+            Repo.rollback(:coordination_task_settlement_lost)
+        end
+
+      _mode_or_identity_mismatch ->
+        Repo.rollback(:coordination_task_authority_lost)
+    end
+  end
+
   defp claimed_effect_query(%Effect{} = effect) do
+    expected_status =
+      case coordination_assignment(effect) do
+        {:ok, _assignment} -> "executing"
+        :uncoordinated -> "claimed"
+        :mismatched -> "__coordination_identity_mismatched__"
+      end
+
     from(e in Effect,
       where: e.id == ^effect.id,
-      where: e.status == "claimed",
+      where: e.status == ^expected_status,
       where: e.claimed_by == ^effect.claimed_by,
       where: e.claimed_at == ^effect.claimed_at
     )
@@ -1876,6 +2574,14 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp fence_terminal_claim_identity(query, %Effect{}), do: where(query, [stored], false)
+
+  defp coordinated_ambiguity_exit!(%Effect{} = effect, reason) do
+    case coordination_assignment(effect) do
+      {:ok, _assignment} -> exit(reason)
+      :uncoordinated -> :uncoordinated
+      :mismatched -> exit(:coordination_task_authority_lost)
+    end
+  end
 
   defp classify_claimed_error(_effect, {:effect_exception, _class}),
     do: @ambiguous_outcome
@@ -1994,7 +2700,7 @@ defmodule Maraithon.Runtime.EffectRunner do
     count =
       Repo.aggregate(
         from(effect in Effect,
-          where: effect.status in ["pending", "claimed", "cancelling"],
+          where: effect.status in ["pending", "claimed", "executing", "cancelling"],
           where: is_nil(effect.runtime_owner_generation)
         ),
         :count,
@@ -2534,7 +3240,7 @@ defmodule Maraithon.Runtime.EffectRunner do
         Repo.all(
           from(effect in Effect,
             where: effect.id in ^ids,
-            where: effect.status in ["claimed", "cancelling"]
+            where: effect.status in ["claimed", "executing", "cancelling"]
           )
         )
         |> Enum.filter(fn effect ->

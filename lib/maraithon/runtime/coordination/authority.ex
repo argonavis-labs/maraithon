@@ -117,14 +117,14 @@ defmodule Maraithon.Runtime.Coordination.Authority do
         SQL.query!(
           Repo,
           """
-          SELECT partition_id FROM public.runtime_partitions
+          SELECT partition_id, ownership_epoch FROM public.runtime_partitions
           WHERE owner_node_incarnation_id = $1::uuid AND state IN ('preparing', 'ready')
           ORDER BY partition_id FOR UPDATE
           """,
           [Ecto.UUID.dump!(session.id)]
         ).rows
 
-      Enum.each(rows, fn [partition_id] ->
+      Enum.each(rows, fn [partition_id, _ownership_epoch] ->
         SQL.query!(
           Repo,
           """
@@ -148,6 +148,18 @@ defmodule Maraithon.Runtime.Coordination.Authority do
           """,
           [partition_id]
         )
+      end)
+
+      # Canonical Effects are locked before their assignments. Partition
+      # state is already draining, so no new provider entry can race this fence.
+      Enum.each(rows, fn [partition_id, ownership_epoch] ->
+        _ =
+          Maraithon.Effects.Cancellation.request_coordination_drain_in_transaction!(
+            session.id,
+            partition_id,
+            ownership_epoch,
+            "coordination_node_draining"
+          )
       end)
 
       # Ready authority is revoked in PostgreSQL before any local process is
@@ -505,6 +517,14 @@ defmodule Maraithon.Runtime.Coordination.Authority do
              [partition_id, Ecto.UUID.dump!(session.id)]
            ).rows do
         [[epoch]] ->
+          _ =
+            Maraithon.Effects.Cancellation.request_coordination_drain_in_transaction!(
+              session.id,
+              partition_id,
+              epoch,
+              "coordination_partition_draining"
+            )
+
           SQL.query!(
             Repo,
             """
@@ -707,7 +727,7 @@ defmodule Maraithon.Runtime.Coordination.Authority do
         """
         SELECT id FROM public.runtime_task_assignments
         WHERE node_incarnation_id = $1::uuid AND partition_id = $2 AND partition_epoch = $3
-          AND state IN ('reserved', 'running')
+          AND state IN ('reserved', 'running') AND work_kind <> 'effect'
         ORDER BY inserted_at, id FOR UPDATE
         """,
         [Ecto.UUID.dump!(node_id), partition_id, epoch]
@@ -723,6 +743,7 @@ defmodule Maraithon.Runtime.Coordination.Authority do
         """
         SELECT id FROM public.runtime_task_assignments
         WHERE node_incarnation_id = $1::uuid AND state IN ('reserved', 'running')
+          AND work_kind <> 'effect'
         ORDER BY inserted_at, id FOR UPDATE
         """,
         [Ecto.UUID.dump!(node_id)]
