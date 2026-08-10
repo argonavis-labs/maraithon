@@ -40,10 +40,9 @@ defmodule Mix.Tasks.Maraithon.Snapshots.Migrate do
       Mix.raise(usage())
     end
 
-    # An operator migration process must not boot periodic producers or Agent
-    # workers alongside the already-running production node.
-    Application.put_env(:maraithon, :start_background_workers, false)
-    Mix.Task.run("app.start")
+    # A stopped-fleet migration must not restart Maraithon.Application,
+    # Runtime.Supervisor, an Agent producer, or a web endpoint.
+    start_storage_only!()
 
     opts =
       []
@@ -69,6 +68,26 @@ defmodule Mix.Tasks.Maraithon.Snapshots.Migrate do
 
       {:error, reason} ->
         Mix.raise("Snapshot migration failed: #{Maraithon.Redaction.error_class(reason)}")
+    end
+  end
+
+  defp start_storage_only! do
+    Mix.Task.run("app.config")
+
+    case Application.ensure_all_started(:ecto_sql) do
+      {:ok, _apps} -> :ok
+      {:error, _reason} -> Mix.raise("could not start snapshot storage dependencies")
+    end
+
+    start_once(Maraithon.Vault)
+    start_once(Maraithon.Repo)
+  end
+
+  defp start_once(module) do
+    case module.start_link() do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, _reason} -> Mix.raise("could not start snapshot storage")
     end
   end
 
