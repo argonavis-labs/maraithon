@@ -1005,6 +1005,56 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert final_state["execution_owner"] == live_state["execution_owner"]
   end
 
+  test "an owner resuming at its hard deadline makes zero provider calls", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    test_pid = self()
+    provider_calls = :atomics.new(1, [])
+    clock_reads = :atomics.new(1, [])
+
+    provider_runner = fn _spec, _insight ->
+      call_number = :atomics.add_get(provider_calls, 1, 1)
+      send(test_pid, {:expired_owner_provider_called, call_number})
+      {:ok, %{ts: "must-not-send"}}
+    end
+
+    provider_clock = fn ->
+      # The first read fixes a 10_500 hard deadline. The next read models the
+      # already-checkpointed owner getting CPU again exactly at that boundary.
+      case :atomics.add_get(clock_reads, 1, 1) do
+        1 -> 10_000
+        _owner_resumed_at_deadline -> 10_500
+      end
+    end
+
+    Application.put_env(:maraithon, Actions,
+      provider_execution_timeout_ms: 500,
+      provider_execution_runner: provider_runner,
+      provider_monotonic_clock: provider_clock
+    )
+
+    delivery = create_slack_send_delivery(agent, user_id, "expired-before-spawn")
+
+    assert {:ok, unknown_delivery, "Check Slack before sending again"} =
+             Actions.perform_action(delivery, "send")
+
+    state = Actions.action_state_for_delivery(unknown_delivery)
+
+    assert state["status"] == "outcome_unknown"
+    assert state["provider_timeout_ms"] == 500
+
+    assert state["outcome_evidence"] == %{
+             "code" => "provider_deadline_exceeded",
+             "manual_reconciliation_required" => true
+           }
+
+    # A spawned worker would take another clock reading for its own guard.
+    assert :atomics.get(clock_reads, 1) == 2
+    assert :atomics.get(provider_calls, 1) == 0
+    refute_receive {:expired_owner_provider_called, _call_number}, 100
+  end
+
   test "provider execution reaches its natural deadline below the lease and terminates the task",
        %{
          agent: agent,

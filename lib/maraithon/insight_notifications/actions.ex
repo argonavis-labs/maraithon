@@ -646,7 +646,7 @@ defmodule Maraithon.InsightNotifications.Actions do
             # The monotonic deadline is fixed before the durable marker is
             # committed, so commit/scheduling delay consumes (never extends)
             # the provider's lease-relative execution budget.
-            hard_deadline = System.monotonic_time(:millisecond) + budget_ms
+            hard_deadline = provider_monotonic_now_ms() + budget_ms
 
             desired_state =
               state
@@ -721,29 +721,63 @@ defmodule Maraithon.InsightNotifications.Actions do
     )
   end
 
-  defp run_action_bounded(spec, insight, hard_deadline) do
-    with {:ok, task} <- start_owned_provider_task(spec, insight) do
-      remaining_ms = max(hard_deadline - System.monotonic_time(:millisecond), 0)
-      task_result = if remaining_ms > 0, do: Task.yield(task, remaining_ms), else: nil
-
-      case task_result do
-        {:ok, result} ->
-          result
-
-        {:exit, _reason} ->
-          {:error, :provider_task_failed}
-
-        nil ->
-          terminate_and_confirm_provider_task(task)
-          {:error, :provider_deadline_exceeded}
+  defp provider_monotonic_now_ms do
+    clock =
+      case Application.get_env(:maraithon, __MODULE__, []) do
+        opts when is_list(opts) -> Keyword.get(opts, :provider_monotonic_clock)
+        _invalid -> nil
       end
+
+    case clock do
+      clock when is_function(clock, 0) ->
+        case clock.() do
+          now when is_integer(now) -> now
+          _invalid -> raise ArgumentError, "provider monotonic clock must return an integer"
+        end
+
+      _default ->
+        System.monotonic_time(:millisecond)
     end
   end
 
-  defp start_owned_provider_task(spec, insight) do
+  defp run_action_bounded(spec, insight, hard_deadline) do
+    # Check before spawning: an owner can be descheduled after committing the
+    # durable provider_started marker and resume only after its budget is gone.
+    # In that state even creating the task is unsafe because the child could
+    # reach a non-idempotent provider before the owner gets to Task.yield/2.
+    if provider_execution_remaining_ms(hard_deadline) > 0 do
+      with {:ok, task} <- start_owned_provider_task(spec, insight, hard_deadline) do
+        remaining_ms = provider_execution_remaining_ms(hard_deadline)
+        task_result = if remaining_ms > 0, do: Task.yield(task, remaining_ms), else: nil
+
+        case task_result do
+          {:ok, result} ->
+            result
+
+          {:exit, _reason} ->
+            {:error, :provider_task_failed}
+
+          nil ->
+            terminate_and_confirm_provider_task(task)
+            {:error, :provider_deadline_exceeded}
+        end
+      end
+    else
+      {:error, :provider_deadline_exceeded}
+    end
+  end
+
+  defp start_owned_provider_task(spec, insight, hard_deadline) do
     task =
       Task.Supervisor.async(Maraithon.Runtime.ToolCallSupervisor, fn ->
-        safely_run_action(spec, insight)
+        # The task may itself sit runnable until after the deadline even though
+        # its owner had budget before spawning it. Fail closed before entering
+        # the non-idempotent provider runner.
+        if provider_execution_remaining_ms(hard_deadline) > 0 do
+          safely_run_action(spec, insight)
+        else
+          {:error, :provider_deadline_exceeded}
+        end
       end)
 
     {:ok, task}
@@ -751,6 +785,10 @@ defmodule Maraithon.InsightNotifications.Actions do
     _exception -> {:error, :provider_task_unavailable}
   catch
     :exit, _reason -> {:error, :provider_task_unavailable}
+  end
+
+  defp provider_execution_remaining_ms(hard_deadline) do
+    max(hard_deadline - provider_monotonic_now_ms(), 0)
   end
 
   defp safely_run_action(spec, insight) do
