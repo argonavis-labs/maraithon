@@ -44,6 +44,20 @@ defmodule Maraithon.Runtime.SnapshotMigration do
     "snapshots_payload_storage_bound",
     @format_constraint
   ]
+  @constraint_definitions %{
+    "snapshots_nonnegative_sequence" => "CHECK (sequence_num >= 0)",
+    "snapshots_schema_version_range" =>
+      "CHECK (schema_version >= 0 AND schema_version <= 2147483647)",
+    "snapshots_payload_objects" =>
+      "CHECK (jsonb_typeof(state_data) = 'object'::text AND jsonb_typeof(budget) = 'object'::text)",
+    "snapshots_payload_storage_bound" =>
+      "CHECK ((pg_column_size(state_data) + pg_column_size(budget)) <= 1200000)",
+    @format_constraint =>
+      "CHECK (((state_data ->> 'format'::text) = 'maraithon.agent_snapshot'::text AND " <>
+        "(state_data -> 'format_version'::text) = '1'::jsonb AND " <>
+        "(budget ->> 'format'::text) = 'maraithon.agent_snapshot'::text AND " <>
+        "(budget -> 'format_version'::text) = '1'::jsonb) IS TRUE)"
+  }
 
   @type preflight_stats :: %{
           total_snapshot_count: non_neg_integer(),
@@ -291,7 +305,9 @@ defmodule Maraithon.Runtime.SnapshotMigration do
             {:ok, stats} ->
               if clean_format?(stats) and stats.agents_over_retention == 0 do
                 ensure_format_constraint!(repo)
-                Enum.each(@snapshot_constraints, &validate_constraint_if_present!(repo, &1))
+                Enum.each(@snapshot_constraints, &require_constraint_definition!(repo, &1))
+                Enum.each(@snapshot_constraints, &validate_required_constraint!(repo, &1))
+                Enum.each(@snapshot_constraints, &require_constraint_definition!(repo, &1))
 
                 case preflight(proof_opts) do
                   {:ok, proved} -> proved
@@ -835,46 +851,75 @@ defmodule Maraithon.Runtime.SnapshotMigration do
   end
 
   defp ensure_format_constraint!(repo) do
-    {:ok, status} = format_constraint_status(repo)
+    case constraint_definition(repo, @format_constraint) do
+      {:ok, nil} ->
+        query!(
+          repo,
+          """
+          ALTER TABLE snapshots
+          ADD CONSTRAINT #{@format_constraint}
+          CHECK ((
+            state_data ->> 'format' = '#{SnapshotFormat.format()}'
+            AND state_data -> 'format_version' = '#{SnapshotFormat.version()}'::jsonb
+            AND budget ->> 'format' = '#{SnapshotFormat.format()}'
+            AND budget -> 'format_version' = '#{SnapshotFormat.version()}'::jsonb
+          ) IS TRUE) NOT VALID
+          """,
+          []
+        )
 
-    unless status.format_constraint_installed do
-      query!(
-        repo,
-        """
-        ALTER TABLE snapshots
-        ADD CONSTRAINT #{@format_constraint}
-        CHECK ((
-          state_data ->> 'format' = '#{SnapshotFormat.format()}'
-          AND state_data -> 'format_version' = '#{SnapshotFormat.version()}'::jsonb
-          AND budget ->> 'format' = '#{SnapshotFormat.format()}'
-          AND budget -> 'format_version' = '#{SnapshotFormat.version()}'::jsonb
-        ) IS TRUE) NOT VALID
-        """,
-        []
-      )
-    end
-  end
-
-  defp validate_constraint_if_present!(repo, constraint) do
-    sql = """
-    SELECT EXISTS (
-      SELECT 1
-      FROM pg_constraint
-      WHERE conrelid = 'snapshots'::regclass
-        AND conname = $1
-    )
-    """
-
-    case repo.query(sql, [constraint], timeout: @query_timeout_ms) do
-      {:ok, %{rows: [[true]]}} ->
-        query!(repo, "ALTER TABLE snapshots VALIDATE CONSTRAINT #{constraint}", [])
-
-      {:ok, %{rows: [[false]]}} ->
-        :ok
+      {:ok, _definition} ->
+        require_constraint_definition!(repo, @format_constraint)
 
       {:error, reason} ->
         repo.rollback(reason)
     end
+  end
+
+  defp require_constraint_definition!(repo, constraint) do
+    expected = Map.fetch!(@constraint_definitions, constraint)
+
+    case constraint_definition(repo, constraint) do
+      {:ok, ^expected} ->
+        :ok
+
+      {:ok, nil} ->
+        repo.rollback({:snapshot_constraint_missing, constraint})
+
+      {:ok, _other} ->
+        repo.rollback({:snapshot_constraint_definition_mismatch, constraint})
+
+      {:error, reason} ->
+        repo.rollback(reason)
+    end
+  end
+
+  defp constraint_definition(repo, constraint) do
+    sql = """
+    SELECT pg_get_constraintdef(oid, true)
+    FROM pg_constraint
+    WHERE conrelid = 'snapshots'::regclass
+      AND conname = $1
+      AND contype = 'c'
+    """
+
+    case repo.query(sql, [constraint], timeout: @query_timeout_ms) do
+      {:ok, %{rows: [[definition]]}} ->
+        {:ok, String.replace_suffix(definition, " NOT VALID", "")}
+
+      {:ok, %{rows: []}} ->
+        {:ok, nil}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp validate_required_constraint!(repo, constraint) do
+    # The definition was checked immediately before this statement. Quoting is
+    # deliberately unnecessary because names come only from the fixed module
+    # manifest above, never from operator input.
+    query!(repo, "ALTER TABLE snapshots VALIDATE CONSTRAINT #{constraint}", [])
   end
 
   defp prune_sql do

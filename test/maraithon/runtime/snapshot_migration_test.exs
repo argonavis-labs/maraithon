@@ -219,6 +219,25 @@ defmodule Maraithon.Runtime.SnapshotMigrationTest do
     end)
   end
 
+  test "format proof refuses a same-name permissive format constraint" do
+    Repo.query!("ALTER TABLE snapshots DROP CONSTRAINT IF EXISTS snapshots_tagged_v1_payloads")
+
+    Repo.query!("""
+    ALTER TABLE snapshots
+    ADD CONSTRAINT snapshots_tagged_v1_payloads CHECK (TRUE) NOT VALID
+    """)
+
+    assert {:error, {:snapshot_constraint_definition_mismatch, "snapshots_tagged_v1_payloads"}} =
+             SnapshotMigration.finalize()
+  end
+
+  test "format proof refuses a missing storage-bound constraint" do
+    Repo.query!("ALTER TABLE snapshots DROP CONSTRAINT snapshots_payload_storage_bound")
+
+    assert {:error, {:snapshot_constraint_missing, "snapshots_payload_storage_bound"}} =
+             SnapshotMigration.finalize()
+  end
+
   test "format proof adds and validates the exact dual-payload v1 constraint", %{agent: agent} do
     assert {:ok, _snapshot} = Snapshot.persist(agent.id, 1, :idle, %{valid: true}, %{}, 0)
 
