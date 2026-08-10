@@ -639,8 +639,8 @@ defmodule Maraithon.Effects.Cancellation do
   defp settle(%CancellationPlan{} = plan, claim, proof)
        when proof in [
               :terminated,
-              :authority_absence,
-              :supervisor_restarted,
+              :supervisor_down,
+              :never_activated,
               :operator_attestation
             ] do
     Repo.transaction(fn ->
