@@ -25,6 +25,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Dispatch
+  alias Maraithon.Runtime.Coordination.Scope
 
   @runnable_statuses ~w(running degraded)
   @default_claim_ttl_ms 60_000
@@ -429,6 +430,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
       Repo.transaction(fn ->
         ProtocolCutover.require_current_mutation!()
         agent = lock_agent!(agent_id)
+        _coordination = Scope.authorize_reconciliation!(agent)
         _binding = lock_binding(agent)
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
@@ -559,37 +561,37 @@ defmodule Maraithon.Runtime.AgentDirectives do
   def list_due_agent_ids(limit \\ 100)
 
   def list_due_agent_ids(limit) when is_integer(limit) and limit in 1..@max_batch do
-    Repo.all(
-      from(directive in AgentDirective,
-        join: agent in Agent,
-        on: agent.id == directive.agent_id and agent.user_id == directive.user_id,
-        join: binding in Binding,
-        on: binding.agent_id == agent.id and binding.user_id == agent.user_id,
-        left_join: lease in AgentRuntimeLease,
-        on: lease.agent_id == agent.id,
-        left_join: guard in AgentRestartGuard,
-        on: guard.agent_id == agent.id,
-        left_join: operation in AgentLifecycleOperation,
-        on: operation.agent_id == agent.id,
-        where: directive.status == "pending",
-        where: directive.available_at <= fragment("timezone('UTC', clock_timestamp())"),
-        where: directive.attempts < directive.max_attempts,
-        where: agent.install_status == "enabled",
-        where: agent.status in ^@runnable_statuses,
-        where: binding.status == "active",
-        where: is_nil(lease.agent_id),
-        where: is_nil(operation.agent_id),
-        where:
-          is_nil(guard.agent_id) or
-            (guard.tripped == false and guard.needs_recovery == false and
-               (is_nil(guard.blocked_until) or
-                  guard.blocked_until <= fragment("timezone('UTC', clock_timestamp())"))),
-        group_by: agent.id,
-        order_by: [asc: min(directive.available_at), asc: agent.id],
-        limit: ^limit,
-        select: agent.id
-      )
+    from(directive in AgentDirective,
+      join: agent in Agent,
+      as: :agent,
+      on: agent.id == directive.agent_id and agent.user_id == directive.user_id,
+      join: binding in Binding,
+      on: binding.agent_id == agent.id and binding.user_id == agent.user_id,
+      left_join: lease in AgentRuntimeLease,
+      on: lease.agent_id == agent.id,
+      left_join: guard in AgentRestartGuard,
+      on: guard.agent_id == agent.id,
+      left_join: operation in AgentLifecycleOperation,
+      on: operation.agent_id == agent.id,
+      where: directive.status == "pending",
+      where: directive.available_at <= fragment("timezone('UTC', clock_timestamp())"),
+      where: directive.attempts < directive.max_attempts,
+      where: agent.install_status == "enabled",
+      where: agent.status in ^@runnable_statuses,
+      where: binding.status == "active",
+      where: is_nil(lease.agent_id),
+      where: is_nil(operation.agent_id),
+      where:
+        is_nil(guard.agent_id) or
+          (guard.tripped == false and guard.needs_recovery == false and
+             (is_nil(guard.blocked_until) or
+                guard.blocked_until <= fragment("timezone('UTC', clock_timestamp())"))),
+      group_by: agent.id,
+      order_by: [asc: min(directive.available_at), asc: agent.id],
+      limit: ^limit,
+      select: agent.id
     )
+    |> Scope.all_ready_agent()
   end
 
   def list_due_agent_ids(_limit), do: []
@@ -597,86 +599,99 @@ defmodule Maraithon.Runtime.AgentDirectives do
   def list_recovery_agent_ids(limit \\ 100)
 
   def list_recovery_agent_ids(limit) when is_integer(limit) and limit in 1..@max_batch do
-    Repo.all(
-      from(guard in AgentRestartGuard,
-        join: agent in Agent,
-        on: agent.id == guard.agent_id,
-        join: binding in Binding,
-        on: binding.agent_id == agent.id and binding.user_id == agent.user_id,
-        left_join: lease in AgentRuntimeLease,
-        on: lease.agent_id == agent.id,
-        left_join: operation in AgentLifecycleOperation,
-        on: operation.agent_id == agent.id,
-        where: guard.needs_recovery == true,
-        where: guard.tripped == false,
-        where:
-          is_nil(guard.blocked_until) or
-            guard.blocked_until <= fragment("timezone('UTC', clock_timestamp())"),
-        where: agent.install_status == "enabled",
-        where: agent.status in ^@runnable_statuses,
-        where: binding.status == "active",
-        where: is_nil(lease.agent_id),
-        where: is_nil(operation.agent_id),
-        order_by: [asc: guard.blocked_until, asc: guard.updated_at, asc: agent.id],
-        limit: ^limit,
-        select: agent.id
-      )
+    from(guard in AgentRestartGuard,
+      join: agent in Agent,
+      as: :agent,
+      on: agent.id == guard.agent_id,
+      join: binding in Binding,
+      on: binding.agent_id == agent.id and binding.user_id == agent.user_id,
+      left_join: lease in AgentRuntimeLease,
+      on: lease.agent_id == agent.id,
+      left_join: operation in AgentLifecycleOperation,
+      on: operation.agent_id == agent.id,
+      where: guard.needs_recovery == true,
+      where: guard.tripped == false,
+      where:
+        is_nil(guard.blocked_until) or
+          guard.blocked_until <= fragment("timezone('UTC', clock_timestamp())"),
+      where: agent.install_status == "enabled",
+      where: agent.status in ^@runnable_statuses,
+      where: binding.status == "active",
+      where: is_nil(lease.agent_id),
+      where: is_nil(operation.agent_id),
+      order_by: [asc: guard.blocked_until, asc: guard.updated_at, asc: agent.id],
+      limit: ^limit,
+      select: agent.id
     )
+    |> Scope.all_ready_agent()
   end
 
   def list_recovery_agent_ids(_limit), do: []
 
   defp expired_claim_candidates(limit) do
-    Repo.all(
-      from(directive in AgentDirective,
-        left_join: operation in AgentLifecycleOperation,
-        on: operation.agent_id == directive.agent_id,
-        where: directive.status == "processing",
-        where: is_nil(operation.agent_id),
-        where: directive.claim_expires_at <= fragment("timezone('UTC', clock_timestamp())"),
-        order_by: [asc: directive.claim_expires_at, asc: directive.id],
-        limit: ^limit,
-        select: {
-          directive.agent_id,
-          directive.id,
-          directive.claimed_by_generation,
-          directive.claim_token
-        }
-      )
+    from(directive in AgentDirective,
+      join: agent in Agent,
+      as: :agent,
+      on: agent.id == directive.agent_id and agent.user_id == directive.user_id,
+      join: lease in AgentRuntimeLease,
+      as: :lease,
+      on:
+        lease.agent_id == directive.agent_id and
+          lease.owner_token == directive.claimed_by_generation,
+      left_join: operation in AgentLifecycleOperation,
+      on: operation.agent_id == directive.agent_id,
+      where: directive.status == "processing",
+      where: is_nil(operation.agent_id),
+      where: lease.lease_until > fragment("timezone('UTC', clock_timestamp())"),
+      where: directive.claim_expires_at <= fragment("timezone('UTC', clock_timestamp())"),
+      order_by: [asc: directive.claim_expires_at, asc: directive.id],
+      limit: ^limit,
+      select: {
+        directive.agent_id,
+        directive.id,
+        directive.claimed_by_generation,
+        directive.claim_token
+      }
     )
+    |> Scope.all_ready_agent_lease()
   end
 
   defp expired_lease_candidates(limit) do
-    Repo.all(
-      from(lease in AgentRuntimeLease,
-        where: lease.lease_until <= fragment("timezone('UTC', clock_timestamp())"),
-        order_by: [asc: lease.lease_until, asc: lease.agent_id],
-        limit: ^limit,
-        select: {lease.agent_id, lease.owner_token}
-      )
+    from(lease in AgentRuntimeLease,
+      as: :expired_lease,
+      join: agent in Agent,
+      as: :agent,
+      on: agent.id == lease.agent_id,
+      where: lease.lease_until <= fragment("timezone('UTC', clock_timestamp())"),
+      order_by: [asc: lease.lease_until, asc: lease.agent_id],
+      limit: ^limit,
+      select: {lease.agent_id, lease.owner_token}
     )
+    |> Scope.all_ready_agent()
   end
 
   defp recorded_generation_candidates(limit) do
-    Repo.all(
-      from(directive in AgentDirective,
-        join: guard in AgentRestartGuard,
-        on:
-          guard.agent_id == directive.agent_id and
-            guard.last_owner_token == directive.claimed_by_generation,
-        left_join: lease in AgentRuntimeLease,
-        on: lease.agent_id == directive.agent_id,
-        left_join: operation in AgentLifecycleOperation,
-        on: operation.agent_id == directive.agent_id,
-        where: directive.status == "processing",
-        where: guard.needs_recovery == true,
-        where: is_nil(lease.agent_id),
-        where: is_nil(operation.agent_id),
-        order_by: [asc: directive.claim_expires_at, asc: directive.id],
-        limit: ^limit,
-        select: {directive.agent_id, directive.claimed_by_generation}
-      )
+    from(directive in AgentDirective,
+      join: agent in Agent,
+      as: :agent,
+      on: agent.id == directive.agent_id and agent.user_id == directive.user_id,
+      join: guard in AgentRestartGuard,
+      on:
+        guard.agent_id == directive.agent_id and
+          guard.last_owner_token == directive.claimed_by_generation,
+      left_join: lease in AgentRuntimeLease,
+      on: lease.agent_id == directive.agent_id,
+      left_join: operation in AgentLifecycleOperation,
+      on: operation.agent_id == directive.agent_id,
+      where: directive.status == "processing",
+      where: guard.needs_recovery == true,
+      where: is_nil(lease.agent_id),
+      where: is_nil(operation.agent_id),
+      order_by: [asc: directive.claim_expires_at, asc: directive.id],
+      limit: ^limit,
+      select: {directive.agent_id, directive.claimed_by_generation}
     )
+    |> Scope.all_ready_agent()
   end
 
   @doc "Encrypts and redacts one resumable batch of legacy Directive payloads."
