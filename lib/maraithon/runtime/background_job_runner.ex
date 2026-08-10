@@ -1124,6 +1124,9 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
           end
 
           transition
+        end)
+
+      transition
     end)
   end
 
