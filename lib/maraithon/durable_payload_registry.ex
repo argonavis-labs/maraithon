@@ -186,6 +186,18 @@ defmodule Maraithon.DurablePayloadRegistry do
       fields: [{:payload, :payload_ciphertext, :map, 160_000, true}]
     },
     %{
+      table: "snapshots",
+      module: Maraithon.Runtime.Snapshot,
+      identity: [:id],
+      scope: [:agent_id, :sequence_num, :schema_version, :state_name],
+      purge: :payload_purged_at,
+      version: :payload_encryption_version,
+      fields: [
+        {:state_data, :state_data_ciphertext, :map, 1_100_000, true},
+        {:budget, :budget_ciphertext, :map, 1_100_000, true}
+      ]
+    },
+    %{
       table: "agent_work_results",
       module: Maraithon.Runtime.AgentWorkResult,
       identity: [:id],
@@ -206,11 +218,25 @@ defmodule Maraithon.DurablePayloadRegistry do
   def fetch(table) when is_binary(table) do
     case Enum.find(@sources, &(&1.table == table)) do
       nil -> :error
-      source -> {:ok, source}
+      source -> {:ok, Map.merge(source, locator(source.identity))}
     end
   end
 
   def fetch(_table), do: :error
+
+  defp locator([:id]) do
+    %{identity_sql: "source.id::text", report_sql: "source.id::text", order_sql: "source.id"}
+  end
+
+  defp locator([:agent_id, :sequence_num]) do
+    %{
+      identity_sql:
+        "'[' || to_json(source.agent_id::text)::text || ',' || " <>
+          "to_json(source.sequence_num::text)::text || ']'",
+      report_sql: "source.id::text",
+      order_sql: "source.inserted_at, source.id"
+    }
+  end
 
   @doc "Every registered Cloak ciphertext column."
   def ciphertext_columns do

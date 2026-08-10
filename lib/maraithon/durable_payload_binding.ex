@@ -188,9 +188,7 @@ defmodule Maraithon.DurablePayloadBinding do
   end
 
   defp validate_tag!(tag) do
-    tag = String.trim(tag)
-
-    if Regex.match?(@tag_regex, tag),
+    if tag == String.trim(tag) and Regex.match?(@tag_regex, tag),
       do: tag,
       else: raise("invalid durable payload binding key tag")
   end

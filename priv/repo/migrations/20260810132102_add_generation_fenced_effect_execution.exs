@@ -9,6 +9,10 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
       add :mode, :string, null: false, default: "legacy"
       add :activated_at, :utc_datetime_usec
       add :activation_epoch, :uuid
+      add :activation_evidence_id, :string
+      add :activation_evidence_digest, :binary
+      add :activated_by, :string
+      add :exact_revision, :string
       timestamps(type: :utc_datetime_usec)
     end
 
@@ -86,9 +90,17 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
         CHECK (mode IN ('legacy', 'generation_fenced_v1')) NOT VALID,
       ADD CONSTRAINT effect_execution_protocol_activation_shape_check
         CHECK (
-          (mode = 'legacy' AND activated_at IS NULL AND activation_epoch IS NULL) OR
-          (mode = 'generation_fenced_v1' AND activated_at IS NOT NULL AND
-           activation_epoch IS NOT NULL)
+          (mode = 'legacy'
+           AND activated_at IS NULL
+           AND activation_epoch IS NULL) OR
+          (mode = 'generation_fenced_v1'
+           AND activated_at IS NOT NULL
+           AND activation_epoch IS NOT NULL
+           AND octet_length(activation_evidence_id) BETWEEN 1 AND 128
+           AND activation_evidence_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+           AND octet_length(activation_evidence_digest) = 32
+           AND octet_length(activated_by) BETWEEN 1 AND 320
+           AND exact_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$')
         ) NOT VALID
     """)
 
@@ -335,6 +347,19 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
         END IF;
 
         RETURN OLD;
+      END IF;
+
+      IF TG_OP = 'UPDATE'
+         AND current_user = 'maraithon_migrator'
+         AND current_setting('maraithon.vault_reencryption', true) = 'VAULT_REENCRYPT_V1'
+         AND (NEW.params_ciphertext IS NULL) = (OLD.params_ciphertext IS NULL)
+         AND (NEW.result_ciphertext IS NULL) = (OLD.result_ciphertext IS NULL)
+         AND (to_jsonb(NEW) - ARRAY['params_ciphertext', 'result_ciphertext', 'updated_at']::text[])
+               IS NOT DISTINCT FROM
+             (to_jsonb(OLD) - ARRAY['params_ciphertext', 'result_ciphertext', 'updated_at']::text[])
+         AND (NEW.params_ciphertext IS DISTINCT FROM OLD.params_ciphertext OR
+              NEW.result_ciphertext IS DISTINCT FROM OLD.result_ciphertext) THEN
+        RETURN NEW;
       END IF;
 
       IF TG_OP = 'UPDATE' AND
@@ -589,6 +614,17 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
 
       IF TG_OP = 'DELETE' THEN
         RETURN OLD;
+      END IF;
+
+      IF TG_OP = 'UPDATE'
+         AND current_user = 'maraithon_migrator'
+         AND current_setting('maraithon.vault_reencryption', true) = 'VAULT_REENCRYPT_V1'
+         AND (NEW.payload_ciphertext IS NULL) = (OLD.payload_ciphertext IS NULL)
+         AND (to_jsonb(NEW) - ARRAY['payload_ciphertext', 'updated_at']::text[])
+               IS NOT DISTINCT FROM
+             (to_jsonb(OLD) - ARRAY['payload_ciphertext', 'updated_at']::text[])
+         AND NEW.payload_ciphertext IS DISTINCT FROM OLD.payload_ciphertext THEN
+        RETURN NEW;
       END IF;
 
       IF NOT ((
@@ -852,18 +888,28 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
       source_table text,
       source_id text
     )
-    RETURNS uuid
+    RETURNS text
     LANGUAGE sql
     IMMUTABLE
     STRICT
     SET search_path = pg_catalog, public
     AS $function$
-      SELECT CASE source_table
-        WHEN 'events' THEN md5('maraithon:durable-payload-row:v1:events:' || source_id)::uuid
-        WHEN 'effects' THEN source_id::uuid
-        WHEN 'agent_directives' THEN source_id::uuid
-        WHEN 'agent_run_steps' THEN source_id::uuid
-        ELSE NULL::uuid
+      SELECT CASE
+        WHEN source_table = 'events'
+         AND source_id ~ '^\\["[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}","[1-9][0-9]*"\\]$'
+          THEN source_id
+        WHEN source_table IN (
+          'effects', 'agent_directives', 'agent_run_steps',
+          'telegram_conversation_turns', 'telegram_conversations',
+          'telegram_assistant_runs', 'telegram_assistant_steps',
+          'telegram_prepared_actions', 'agent_runs', 'operator_events',
+          'user_memory_profiles', 'operator_memory_summaries',
+          'background_jobs', 'scheduled_jobs', 'runtime_ingress_receipts',
+          'agent_work_results'
+        )
+         AND source_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          THEN source_id
+        ELSE NULL::text
       END;
     $function$;
     """)
@@ -890,40 +936,84 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
               CASE digest_part
                 WHEN 'ciphertext' THEN
                   CASE source_table
-                    WHEN 'effects' THEN jsonb_build_array(
-                      source_row -> 'params_ciphertext',
-                      source_row -> 'result_ciphertext'
-                    )
-                    WHEN 'agent_directives' THEN
-                      jsonb_build_array(source_row -> 'payload_ciphertext')
-                    WHEN 'events' THEN
-                      jsonb_build_array(source_row -> 'payload_ciphertext')
-                    WHEN 'agent_run_steps' THEN jsonb_build_array(
-                      source_row -> 'request_payload_ciphertext',
-                      source_row -> 'response_payload_ciphertext'
-                    )
+                    WHEN 'effects' THEN jsonb_build_array(source_row -> 'params_ciphertext', source_row -> 'result_ciphertext')
+                    WHEN 'agent_directives' THEN jsonb_build_array(source_row -> 'payload_ciphertext')
+                    WHEN 'events' THEN jsonb_build_array(source_row -> 'payload_ciphertext')
+                    WHEN 'agent_run_steps' THEN jsonb_build_array(source_row -> 'request_payload_ciphertext', source_row -> 'response_payload_ciphertext')
+                    WHEN 'telegram_conversation_turns' THEN jsonb_build_array(source_row -> 'text_ciphertext', source_row -> 'structured_data_ciphertext')
+                    WHEN 'telegram_conversations' THEN jsonb_build_array(source_row -> 'summary_ciphertext', source_row -> 'historical_summary_ciphertext')
+                    WHEN 'telegram_assistant_runs' THEN jsonb_build_array(source_row -> 'prompt_snapshot_ciphertext', source_row -> 'result_summary_ciphertext')
+                    WHEN 'telegram_assistant_steps' THEN jsonb_build_array(source_row -> 'request_payload_ciphertext', source_row -> 'response_payload_ciphertext')
+                    WHEN 'telegram_prepared_actions' THEN jsonb_build_array(source_row -> 'payload_ciphertext', source_row -> 'preview_text_ciphertext')
+                    WHEN 'agent_runs' THEN jsonb_build_array(source_row -> 'trigger_ciphertext', source_row -> 'metadata_ciphertext')
+                    WHEN 'operator_events' THEN jsonb_build_array(source_row -> 'payload_ciphertext', source_row -> 'metadata_ciphertext')
+                    WHEN 'user_memory_profiles' THEN jsonb_build_array(source_row -> 'summary_ciphertext', source_row -> 'profile_ciphertext')
+                    WHEN 'operator_memory_summaries' THEN jsonb_build_array(source_row -> 'content_ciphertext')
+                    WHEN 'background_jobs' THEN jsonb_build_array(source_row -> 'payload_ciphertext', source_row -> 'result_ciphertext')
+                    WHEN 'scheduled_jobs' THEN jsonb_build_array(source_row -> 'payload_ciphertext')
+                    WHEN 'runtime_ingress_receipts' THEN jsonb_build_array(source_row -> 'payload_ciphertext')
+                    WHEN 'agent_work_results' THEN jsonb_build_array(source_row -> 'result_ciphertext')
                   END
                 WHEN 'projection' THEN
                   CASE source_table
-                    WHEN 'effects' THEN
-                      jsonb_build_array(source_row -> 'params', source_row -> 'result')
-                    WHEN 'agent_directives' THEN
-                      jsonb_build_array(source_row -> 'payload')
-                    WHEN 'events' THEN
-                      jsonb_build_array(source_row -> 'payload')
-                    WHEN 'agent_run_steps' THEN jsonb_build_array(
-                      source_row -> 'request_payload',
-                      source_row -> 'response_payload'
-                    )
+                    WHEN 'effects' THEN jsonb_build_array(source_row -> 'params', source_row -> 'result')
+                    WHEN 'agent_directives' THEN jsonb_build_array(source_row -> 'payload')
+                    WHEN 'events' THEN jsonb_build_array(source_row -> 'payload')
+                    WHEN 'agent_run_steps' THEN jsonb_build_array(source_row -> 'request_payload', source_row -> 'response_payload')
+                    WHEN 'telegram_conversation_turns' THEN jsonb_build_array(source_row -> 'text', source_row -> 'structured_data')
+                    WHEN 'telegram_conversations' THEN jsonb_build_array(source_row -> 'summary', source_row -> 'metadata' -> 'historical_summary')
+                    WHEN 'telegram_assistant_runs' THEN jsonb_build_array(source_row -> 'prompt_snapshot', source_row -> 'result_summary')
+                    WHEN 'telegram_assistant_steps' THEN jsonb_build_array(source_row -> 'request_payload', source_row -> 'response_payload')
+                    WHEN 'telegram_prepared_actions' THEN jsonb_build_array(source_row -> 'payload', source_row -> 'preview_text')
+                    WHEN 'agent_runs' THEN jsonb_build_array(source_row -> 'trigger', source_row -> 'metadata')
+                    WHEN 'operator_events' THEN jsonb_build_array(source_row -> 'payload', source_row -> 'metadata')
+                    WHEN 'user_memory_profiles' THEN jsonb_build_array(source_row -> 'summary', source_row -> 'profile')
+                    WHEN 'operator_memory_summaries' THEN jsonb_build_array(source_row -> 'content')
+                    WHEN 'background_jobs' THEN jsonb_build_array(source_row -> 'payload', source_row -> 'result')
+                    WHEN 'scheduled_jobs' THEN jsonb_build_array(source_row -> 'payload')
+                    WHEN 'runtime_ingress_receipts' THEN jsonb_build_array(source_row -> 'payload')
+                    WHEN 'agent_work_results' THEN jsonb_build_array(source_row -> 'result')
                   END
-                WHEN 'version' THEN jsonb_build_array(
-                  source_row -> 'payload_encryption_version',
-                  source_row -> 'payload_binding_version',
-                  source_row -> 'payload_binding_key_tag',
-                  source_row -> 'payload_binding_mac'
-                )
+                WHEN 'version' THEN
+                  CASE source_table
+                    WHEN 'effects' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'owner_user_id', source_row -> 'agent_id')
+                    WHEN 'agent_directives' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'agent_id')
+                    WHEN 'events' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'agent_id', source_row -> 'sequence_num')
+                    WHEN 'agent_run_steps' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'agent_id', source_row -> 'agent_run_id')
+                    WHEN 'telegram_conversation_turns' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'conversation_id')
+                    WHEN 'telegram_conversations' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id')
+                    WHEN 'telegram_assistant_runs' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'conversation_id')
+                    WHEN 'telegram_assistant_steps' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'run_id')
+                    WHEN 'telegram_prepared_actions' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'conversation_id', source_row -> 'run_id')
+                    WHEN 'agent_runs' THEN jsonb_build_array(source_row -> 'private_payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'agent_id')
+                    WHEN 'operator_events' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'project_id')
+                    WHEN 'user_memory_profiles' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id')
+                    WHEN 'operator_memory_summaries' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id')
+                    WHEN 'background_jobs' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id')
+                    WHEN 'scheduled_jobs' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'agent_id')
+                    WHEN 'runtime_ingress_receipts' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'agent_id', source_row -> 'connected_account_id')
+                    WHEN 'agent_work_results' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'agent_id', source_row -> 'agent_directive_id', source_row -> 'agent_run_id', source_row -> 'result_digest_version', source_row -> 'result_digest_key_tag', source_row -> 'result_digest')
+                  END
                 WHEN 'purge' THEN
-                  jsonb_build_array(source_row -> 'payload_purged_at')
+                  CASE source_table
+                    WHEN 'effects' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'agent_directives' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'events' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'agent_run_steps' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'telegram_conversation_turns' THEN jsonb_build_array(source_row -> 'content_scrubbed_at')
+                    WHEN 'telegram_conversations' THEN jsonb_build_array(source_row -> 'content_scrubbed_at')
+                    WHEN 'telegram_assistant_runs' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'telegram_assistant_steps' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'telegram_prepared_actions' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'agent_runs' THEN jsonb_build_array(source_row -> 'private_payload_purged_at')
+                    WHEN 'operator_events' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'user_memory_profiles' THEN jsonb_build_array(source_row -> 'content_erased_at')
+                    WHEN 'operator_memory_summaries' THEN jsonb_build_array(source_row -> 'content_erased_at')
+                    WHEN 'background_jobs' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'scheduled_jobs' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'runtime_ingress_receipts' THEN jsonb_build_array(source_row -> 'payload_purged_at')
+                    WHEN 'agent_work_results' THEN jsonb_build_array(source_row -> 'result_purged_at')
+                  END
               END
           )::text,
           'UTF8'
@@ -953,18 +1043,17 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
             public.durable_payload_row_identity('effects', source.id::text) AS row_identity,
             to_jsonb(source) AS source_row,
             source.payload_purged_at IS NULL AS proof_required,
-            (source.payload_encryption_version = 1
-              AND source.params = '{"redacted": true}'::jsonb
-              AND source.result IS NULL
+            (source.params = '{"redacted": true}'::jsonb AND source.result IS NULL
               AND (
                 (source.payload_purged_at IS NULL
+                  AND source.payload_encryption_version = 1
                   AND source.params_ciphertext IS NOT NULL
                   AND source.payload_binding_version = 1
                   AND source.payload_binding_key_tag IS NOT NULL
                   AND octet_length(source.payload_binding_mac) = 32) OR
                 (source.payload_purged_at IS NOT NULL
-                  AND source.params_ciphertext IS NULL
-                  AND source.result_ciphertext IS NULL
+                  AND true
+                  AND source.params_ciphertext IS NULL AND source.result_ciphertext IS NULL
                   AND source.payload_binding_version IS NULL
                   AND source.payload_binding_key_tag IS NULL
                   AND source.payload_binding_mac IS NULL)
@@ -974,35 +1063,34 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
           UNION ALL
 
           SELECT
-            'agent_directives',
-            public.durable_payload_row_identity('agent_directives', source.id::text),
-            to_jsonb(source),
-            source.payload_purged_at IS NULL OR source.payload_ciphertext IS NOT NULL,
-            (source.payload_encryption_version = 1
-              AND source.payload = '{"redacted": true}'::jsonb
+            'agent_directives'::text AS payload_table,
+            public.durable_payload_row_identity('agent_directives', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
+            (source.payload = '{"redacted": true}'::jsonb
               AND (
-                (source.payload_ciphertext IS NOT NULL
+                (source.payload_purged_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.payload_ciphertext IS NOT NULL
                   AND source.payload_binding_version = 1
                   AND source.payload_binding_key_tag IS NOT NULL
                   AND octet_length(source.payload_binding_mac) = 32) OR
                 (source.payload_purged_at IS NOT NULL
+                  AND true
                   AND source.payload_ciphertext IS NULL
                   AND source.payload_binding_version IS NULL
                   AND source.payload_binding_key_tag IS NULL
                   AND source.payload_binding_mac IS NULL)
-              )
-            ) IS TRUE
+              )) IS TRUE AS shape_valid
           FROM public.agent_directives AS source
 
           UNION ALL
 
           SELECT
-            'events',
-            public.durable_payload_row_identity(
-              'events', source.agent_id::text || ':' || source.sequence_num::text
-            ),
-            to_jsonb(source),
-            source.payload_purged_at IS NULL,
+            'events'::text AS payload_table,
+            public.durable_payload_row_identity('events', '[' || to_json(source.agent_id::text)::text || ',' || to_json(source.sequence_num::text)::text || ']') AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
             (source.payload = '{}'::jsonb
               AND (
                 (source.payload_purged_at IS NULL
@@ -1012,38 +1100,349 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
                   AND source.payload_binding_key_tag IS NOT NULL
                   AND octet_length(source.payload_binding_mac) = 32) OR
                 (source.payload_purged_at IS NOT NULL
+                  AND true
                   AND source.payload_ciphertext IS NULL
                   AND source.payload_binding_version IS NULL
                   AND source.payload_binding_key_tag IS NULL
                   AND source.payload_binding_mac IS NULL)
-              )) IS TRUE
+              )) IS TRUE AS shape_valid
           FROM public.events AS source
 
           UNION ALL
 
           SELECT
-            'agent_run_steps',
-            public.durable_payload_row_identity('agent_run_steps', source.id::text),
-            to_jsonb(source),
-            source.payload_purged_at IS NULL,
-            (source.request_payload = '{}'::jsonb
-              AND source.response_payload = '{}'::jsonb
+            'agent_run_steps'::text AS payload_table,
+            public.durable_payload_row_identity('agent_run_steps', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
+            (source.request_payload = '{}'::jsonb AND source.response_payload = '{}'::jsonb
               AND (
                 (source.payload_purged_at IS NULL
                   AND source.payload_encryption_version = 1
-                  AND source.request_payload_ciphertext IS NOT NULL
-                  AND source.response_payload_ciphertext IS NOT NULL
+                  AND source.request_payload_ciphertext IS NOT NULL AND source.response_payload_ciphertext IS NOT NULL
                   AND source.payload_binding_version = 1
                   AND source.payload_binding_key_tag IS NOT NULL
                   AND octet_length(source.payload_binding_mac) = 32) OR
                 (source.payload_purged_at IS NOT NULL
-                  AND source.request_payload_ciphertext IS NULL
-                  AND source.response_payload_ciphertext IS NULL
+                  AND true
+                  AND source.request_payload_ciphertext IS NULL AND source.response_payload_ciphertext IS NULL
                   AND source.payload_binding_version IS NULL
                   AND source.payload_binding_key_tag IS NULL
                   AND source.payload_binding_mac IS NULL)
-              )) IS TRUE
+              )) IS TRUE AS shape_valid
           FROM public.agent_run_steps AS source
+
+          UNION ALL
+
+          SELECT
+            'telegram_conversation_turns'::text AS payload_table,
+            public.durable_payload_row_identity('telegram_conversation_turns', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.content_scrubbed_at IS NULL AS proof_required,
+            (source.text = '[encrypted]' AND source.structured_data = '{}'::jsonb
+              AND (
+                (source.content_scrubbed_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.text_ciphertext IS NOT NULL AND source.structured_data_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.content_scrubbed_at IS NOT NULL
+                  AND true
+                  AND source.text_ciphertext IS NULL AND source.structured_data_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.telegram_conversation_turns AS source
+
+          UNION ALL
+
+          SELECT
+            'telegram_conversations'::text AS payload_table,
+            public.durable_payload_row_identity('telegram_conversations', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.content_scrubbed_at IS NULL AS proof_required,
+            (source.summary IS NULL AND NOT jsonb_exists(source.metadata, 'historical_summary')
+              AND (
+                (source.content_scrubbed_at IS NULL
+                  AND (source.payload_encryption_version = 1 OR (source.payload_encryption_version IS NULL AND source.summary_ciphertext IS NULL AND source.historical_summary_ciphertext IS NULL))
+                  AND true
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.content_scrubbed_at IS NOT NULL
+                  AND true
+                  AND source.summary_ciphertext IS NULL AND source.historical_summary_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.telegram_conversations AS source
+
+          UNION ALL
+
+          SELECT
+            'telegram_assistant_runs'::text AS payload_table,
+            public.durable_payload_row_identity('telegram_assistant_runs', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
+            (source.prompt_snapshot = '{}'::jsonb AND source.result_summary = '{}'::jsonb
+              AND (
+                (source.payload_purged_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.prompt_snapshot_ciphertext IS NOT NULL AND source.result_summary_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.payload_purged_at IS NOT NULL
+                  AND true
+                  AND source.prompt_snapshot_ciphertext IS NULL AND source.result_summary_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.telegram_assistant_runs AS source
+
+          UNION ALL
+
+          SELECT
+            'telegram_assistant_steps'::text AS payload_table,
+            public.durable_payload_row_identity('telegram_assistant_steps', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
+            (source.request_payload = '{}'::jsonb AND source.response_payload = '{}'::jsonb
+              AND (
+                (source.payload_purged_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.request_payload_ciphertext IS NOT NULL AND source.response_payload_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.payload_purged_at IS NOT NULL
+                  AND true
+                  AND source.request_payload_ciphertext IS NULL AND source.response_payload_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.telegram_assistant_steps AS source
+
+          UNION ALL
+
+          SELECT
+            'telegram_prepared_actions'::text AS payload_table,
+            public.durable_payload_row_identity('telegram_prepared_actions', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
+            (source.payload = '{}'::jsonb AND source.preview_text IS NULL
+              AND (
+                (source.payload_purged_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.payload_ciphertext IS NOT NULL AND source.preview_text_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.payload_purged_at IS NOT NULL
+                  AND source.status IN ('executed', 'rejected', 'expired', 'failed')
+                  AND source.payload_ciphertext IS NULL AND source.preview_text_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.telegram_prepared_actions AS source
+
+          UNION ALL
+
+          SELECT
+            'agent_runs'::text AS payload_table,
+            public.durable_payload_row_identity('agent_runs', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.private_payload_purged_at IS NULL AS proof_required,
+            (source.trigger = '{}'::jsonb AND source.metadata = '{}'::jsonb
+              AND (
+                (source.private_payload_purged_at IS NULL
+                  AND source.private_payload_encryption_version = 1
+                  AND source.trigger_ciphertext IS NOT NULL AND source.metadata_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.private_payload_purged_at IS NOT NULL
+                  AND true
+                  AND source.trigger_ciphertext IS NULL AND source.metadata_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.agent_runs AS source
+
+          UNION ALL
+
+          SELECT
+            'operator_events'::text AS payload_table,
+            public.durable_payload_row_identity('operator_events', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
+            (source.payload = '{}'::jsonb AND source.metadata = '{}'::jsonb
+              AND (
+                (source.payload_purged_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.payload_ciphertext IS NOT NULL AND source.metadata_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.payload_purged_at IS NOT NULL
+                  AND true
+                  AND source.payload_ciphertext IS NULL AND source.metadata_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.operator_events AS source
+
+          UNION ALL
+
+          SELECT
+            'user_memory_profiles'::text AS payload_table,
+            public.durable_payload_row_identity('user_memory_profiles', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.content_erased_at IS NULL AS proof_required,
+            (source.summary = '[encrypted]' AND source.profile = '{}'::jsonb
+              AND (
+                (source.content_erased_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.summary_ciphertext IS NOT NULL AND source.profile_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.content_erased_at IS NOT NULL
+                  AND true
+                  AND source.summary_ciphertext IS NULL AND source.profile_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.user_memory_profiles AS source
+
+          UNION ALL
+
+          SELECT
+            'operator_memory_summaries'::text AS payload_table,
+            public.durable_payload_row_identity('operator_memory_summaries', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.content_erased_at IS NULL AS proof_required,
+            (source.content = '[encrypted]'
+              AND (
+                (source.content_erased_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.content_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.content_erased_at IS NOT NULL
+                  AND true
+                  AND source.content_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.operator_memory_summaries AS source
+
+          UNION ALL
+
+          SELECT
+            'background_jobs'::text AS payload_table,
+            public.durable_payload_row_identity('background_jobs', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
+            (source.payload = '{}'::jsonb AND source.result = '{}'::jsonb
+              AND (
+                (source.payload_purged_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.payload_ciphertext IS NOT NULL AND source.result_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.payload_purged_at IS NOT NULL
+                  AND true
+                  AND source.payload_ciphertext IS NULL AND source.result_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.background_jobs AS source
+
+          UNION ALL
+
+          SELECT
+            'scheduled_jobs'::text AS payload_table,
+            public.durable_payload_row_identity('scheduled_jobs', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
+            (source.payload = '{}'::jsonb
+              AND (
+                (source.payload_purged_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.payload_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.payload_purged_at IS NOT NULL
+                  AND true
+                  AND source.payload_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.scheduled_jobs AS source
+
+          UNION ALL
+
+          SELECT
+            'runtime_ingress_receipts'::text AS payload_table,
+            public.durable_payload_row_identity('runtime_ingress_receipts', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.payload_purged_at IS NULL AS proof_required,
+            (source.payload = '{}'::jsonb
+              AND (
+                (source.payload_purged_at IS NULL
+                  AND source.payload_encryption_version = 1
+                  AND source.payload_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.payload_purged_at IS NOT NULL
+                  AND true
+                  AND source.payload_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.runtime_ingress_receipts AS source
+
+          UNION ALL
+
+          SELECT
+            'agent_work_results'::text AS payload_table,
+            public.durable_payload_row_identity('agent_work_results', source.id::text) AS row_identity,
+            to_jsonb(source) AS source_row,
+            source.result_purged_at IS NULL AS proof_required,
+            (source.result = '{}'::jsonb
+              AND (
+                (source.result_purged_at IS NULL
+                  AND source.payload_encryption_version = 1 AND source.result_digest_version = 1 AND source.result_digest_key_tag IS NOT NULL AND octet_length(source.result_digest) = 32
+                  AND source.result_ciphertext IS NOT NULL
+                  AND source.payload_binding_version = 1
+                  AND source.payload_binding_key_tag IS NOT NULL
+                  AND octet_length(source.payload_binding_mac) = 32) OR
+                (source.result_purged_at IS NOT NULL
+                  AND source.status = 'committed'
+                  AND source.result_ciphertext IS NULL
+                  AND source.payload_binding_version IS NULL
+                  AND source.payload_binding_key_tag IS NULL
+                  AND source.payload_binding_mac IS NULL)
+              )) IS TRUE AS shape_valid
+          FROM public.agent_work_results AS source
         )
         SELECT COUNT(*)
         FROM source_rows AS source
@@ -1088,67 +1487,108 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
     DECLARE
       roles_ready boolean;
     BEGIN
-      EXECUTE $role_query$
-        SELECT COALESCE((
-          SELECT
-            NOT verifier.rolcanlogin
-            AND NOT verifier.rolsuper
-            AND NOT verifier.rolcreatedb
-            AND NOT verifier.rolcreaterole
-            AND NOT verifier.rolreplication
-            AND NOT verifier.rolbypassrls
-            AND NOT pg_has_role(session_user, verifier.oid, 'member')
-            AND NOT EXISTS (
-              SELECT 1
-              FROM pg_catalog.pg_class AS relation
-              WHERE relation.relowner = verifier.oid
-                AND relation.oid IN (
-                  'public.durable_payload_verifications'::regclass,
-                  'public.durable_payload_verification_failures'::regclass,
-                  'public.effects'::regclass,
-                  'public.agent_directives'::regclass,
-                  'public.events'::regclass,
-                  'public.agent_run_steps'::regclass,
-                  'public.effect_execution_protocols'::regclass
-                )
-            )
-            AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'SELECT')
-            AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'INSERT')
-            AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'DELETE')
-            AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'UPDATE')
-            AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'TRUNCATE')
-            AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'SELECT')
-            AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'INSERT')
-            AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'DELETE')
-            AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'UPDATE')
-            AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'TRUNCATE')
-            AND has_column_privilege(verifier.rolname, 'public.effects', 'payload_binding_mac', 'UPDATE')
-            AND has_column_privilege(verifier.rolname, 'public.agent_directives', 'payload_binding_mac', 'UPDATE')
-            AND has_column_privilege(verifier.rolname, 'public.events', 'payload_binding_mac', 'UPDATE')
-            AND has_column_privilege(verifier.rolname, 'public.agent_run_steps', 'payload_binding_mac', 'UPDATE')
-            AND NOT has_column_privilege(verifier.rolname, 'public.effects', 'params_ciphertext', 'UPDATE')
-            AND NOT has_column_privilege(verifier.rolname, 'public.agent_directives', 'payload_ciphertext', 'UPDATE')
-            AND NOT has_column_privilege(verifier.rolname, 'public.events', 'payload_ciphertext', 'UPDATE')
-            AND NOT has_column_privilege(
-              verifier.rolname,
-              'public.agent_run_steps',
-              'request_payload_ciphertext',
-              'UPDATE'
-            )
-            AND NOT has_table_privilege(
-              session_user,
-              'public.durable_payload_verifications',
-              'INSERT'
-            )
-            AND NOT has_table_privilege(
-              session_user,
-              'public.durable_payload_verifications',
-              'UPDATE'
-            )
-          FROM pg_catalog.pg_roles AS verifier
-          WHERE verifier.rolname = 'maraithon_payload_verifier'
-        ), false)
-      $role_query$
+      SELECT COALESCE((
+        SELECT
+          NOT owner.rolcanlogin AND NOT owner.rolsuper AND NOT owner.rolcreatedb
+          AND NOT owner.rolcreaterole AND NOT owner.rolreplication AND NOT owner.rolbypassrls
+          AND NOT migrator.rolcanlogin AND NOT migrator.rolsuper AND NOT migrator.rolcreatedb
+          AND NOT migrator.rolcreaterole AND NOT migrator.rolreplication AND NOT migrator.rolbypassrls
+          AND NOT runtime.rolcanlogin AND NOT runtime.rolsuper AND NOT runtime.rolcreatedb
+          AND NOT runtime.rolcreaterole AND NOT runtime.rolreplication AND NOT runtime.rolbypassrls
+          AND NOT verifier.rolcanlogin AND NOT verifier.rolsuper AND NOT verifier.rolcreatedb
+          AND NOT verifier.rolcreaterole AND NOT verifier.rolreplication AND NOT verifier.rolbypassrls
+          AND NOT incident.rolcanlogin AND NOT incident.rolsuper AND NOT incident.rolcreatedb
+          AND NOT incident.rolcreaterole AND NOT incident.rolreplication AND NOT incident.rolbypassrls
+          AND NOT activation.rolcanlogin AND NOT activation.rolsuper AND NOT activation.rolcreatedb
+          AND NOT activation.rolcreaterole AND NOT activation.rolreplication AND NOT activation.rolbypassrls
+          AND pg_has_role(migrator.oid, owner.oid, 'member')
+          AND NOT pg_has_role(runtime.oid, owner.oid, 'member')
+          AND NOT pg_has_role(runtime.oid, migrator.oid, 'member')
+          AND NOT pg_has_role(runtime.oid, verifier.oid, 'member')
+          AND NOT pg_has_role(runtime.oid, incident.oid, 'member')
+          AND NOT pg_has_role(runtime.oid, activation.oid, 'member')
+          AND NOT pg_has_role(verifier.oid, owner.oid, 'member')
+          AND NOT pg_has_role(verifier.oid, migrator.oid, 'member')
+          AND NOT pg_has_role(verifier.oid, incident.oid, 'member')
+          AND NOT pg_has_role(verifier.oid, activation.oid, 'member')
+          AND NOT pg_has_role(incident.oid, verifier.oid, 'member')
+          AND NOT pg_has_role(activation.oid, verifier.oid, 'member')
+          AND NOT pg_has_role(verifier.oid, runtime.oid, 'member')
+          AND NOT pg_has_role(incident.oid, owner.oid, 'member')
+          AND NOT pg_has_role(incident.oid, migrator.oid, 'member')
+          AND NOT pg_has_role(incident.oid, runtime.oid, 'member')
+          AND NOT pg_has_role(incident.oid, verifier.oid, 'member')
+          AND NOT pg_has_role(incident.oid, activation.oid, 'member')
+          AND NOT pg_has_role(activation.oid, owner.oid, 'member')
+          AND NOT pg_has_role(activation.oid, migrator.oid, 'member')
+          AND NOT pg_has_role(activation.oid, runtime.oid, 'member')
+          AND NOT pg_has_role(activation.oid, verifier.oid, 'member')
+          AND NOT pg_has_role(activation.oid, incident.oid, 'member')
+          AND NOT pg_has_role(owner.oid, runtime.oid, 'member')
+          AND NOT pg_has_role(owner.oid, verifier.oid, 'member')
+          AND NOT pg_has_role(owner.oid, incident.oid, 'member')
+          AND NOT pg_has_role(owner.oid, activation.oid, 'member')
+          AND NOT pg_has_role(migrator.oid, runtime.oid, 'member')
+          AND NOT pg_has_role(migrator.oid, verifier.oid, 'member')
+          AND NOT pg_has_role(migrator.oid, incident.oid, 'member')
+          AND NOT pg_has_role(migrator.oid, activation.oid, 'member')
+          AND (SELECT relowner = owner.oid FROM pg_catalog.pg_class
+               WHERE oid = 'public.durable_payload_verifications'::regclass)
+          AND (SELECT relowner = owner.oid FROM pg_catalog.pg_class
+               WHERE oid = 'public.durable_payload_verification_failures'::regclass)
+          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'SELECT,INSERT,DELETE')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verifications', 'UPDATE,TRUNCATE,REFERENCES,TRIGGER')
+          AND has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'SELECT,INSERT,DELETE')
+          AND NOT has_table_privilege(verifier.rolname, 'public.durable_payload_verification_failures', 'UPDATE,TRUNCATE,REFERENCES,TRIGGER')
+          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verifications', 'INSERT,UPDATE,TRUNCATE')
+          AND NOT has_table_privilege(runtime.rolname, 'public.durable_payload_verification_failures', 'INSERT,UPDATE,TRUNCATE')
+          AND has_function_privilege(runtime.rolname, 'public.delete_durable_payload_verification(text,text)', 'EXECUTE')
+          AND has_function_privilege(verifier.rolname, 'public.delete_durable_payload_verification(text,text)', 'EXECUTE')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_proc AS function_row
+            CROSS JOIN LATERAL pg_catalog.aclexplode(
+              COALESCE(function_row.proacl, pg_catalog.acldefault('f', function_row.proowner))
+            ) AS acl
+            WHERE function_row.oid =
+                    'public.delete_durable_payload_verification(text,text)'::regprocedure
+              AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM (
+              VALUES
+                ('effects'), ('agent_directives'), ('events'), ('agent_run_steps'),
+                ('telegram_conversation_turns'), ('telegram_conversations'),
+                ('telegram_assistant_runs'), ('telegram_assistant_steps'),
+                ('telegram_prepared_actions'), ('agent_runs'), ('operator_events'),
+                ('user_memory_profiles'), ('operator_memory_summaries'),
+                ('background_jobs'), ('scheduled_jobs'),
+                ('runtime_ingress_receipts'), ('agent_work_results')
+            ) AS source(table_name)
+            WHERE NOT has_table_privilege(verifier.rolname, 'public.' || source.table_name, 'SELECT')
+               OR has_table_privilege(verifier.rolname, 'public.' || source.table_name,
+                                      'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_class AS relation
+            CROSS JOIN LATERAL pg_catalog.aclexplode(
+              COALESCE(relation.relacl, pg_catalog.acldefault('r', relation.relowner))
+            ) AS acl
+            WHERE relation.oid IN (
+              'public.durable_payload_verifications'::regclass,
+              'public.durable_payload_verification_failures'::regclass
+            ) AND acl.grantee NOT IN (owner.oid, verifier.oid)
+          )
+        FROM pg_catalog.pg_roles AS owner
+        JOIN pg_catalog.pg_roles AS migrator ON migrator.rolname = 'maraithon_migrator'
+        JOIN pg_catalog.pg_roles AS runtime ON runtime.rolname = 'maraithon_runtime'
+        JOIN pg_catalog.pg_roles AS verifier ON verifier.rolname = 'maraithon_payload_verifier'
+        JOIN pg_catalog.pg_roles AS incident ON incident.rolname = 'maraithon_incident_operator'
+        JOIN pg_catalog.pg_roles AS activation ON activation.rolname = 'maraithon_activation_operator'
+        WHERE owner.rolname = 'maraithon_object_owner'
+      ), false)
       INTO roles_ready;
 
       RETURN roles_ready;
@@ -1163,7 +1603,7 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
     SET search_path = pg_catalog, public
     AS $function$
     BEGIN
-      IF NOT pg_has_role(session_user, 'maraithon_payload_verifier', 'member') OR
+      IF current_user IS DISTINCT FROM 'maraithon_payload_verifier' OR
          current_setting('maraithon.durable_payload_verifier', true)
            IS DISTINCT FROM 'VAULT_AUTHENTICATED_V1' THEN
         RAISE EXCEPTION 'Only the Vault verification operator may record verification failures'
@@ -1188,7 +1628,7 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
           USING ERRCODE = 'insufficient_privilege';
       END IF;
 
-      IF NOT pg_has_role(session_user, 'maraithon_payload_verifier', 'member') OR
+      IF current_user IS DISTINCT FROM 'maraithon_payload_verifier' OR
          current_setting('maraithon.durable_payload_verifier', true)
            IS DISTINCT FROM 'VAULT_AUTHENTICATED_V1' THEN
         RAISE EXCEPTION 'Only the Vault verification operator may insert durable payload proofs'
@@ -1204,7 +1644,7 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
     execute("""
     CREATE OR REPLACE FUNCTION public.delete_durable_payload_verification(
       source_table text,
-      source_identity uuid
+      source_identity text
     )
     RETURNS void
     LANGUAGE plpgsql
@@ -1212,6 +1652,16 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
     SET search_path = pg_catalog, public
     AS $function$
     BEGIN
+      IF public.durable_payload_row_identity(source_table, source_identity)
+           IS DISTINCT FROM source_identity THEN
+        RAISE EXCEPTION 'Invalid durable payload proof identity'
+          USING ERRCODE = 'invalid_parameter_value';
+      END IF;
+
+      PERFORM pg_catalog.pg_advisory_xact_lock(
+        pg_catalog.hashtextextended(source_table || ':' || source_identity, 0)
+      );
+
       DELETE FROM public.durable_payload_verifications
       WHERE payload_table = source_table
         AND row_identity = source_identity;
@@ -1230,19 +1680,65 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
     SET search_path = pg_catalog, public
     AS $function$
     DECLARE
-      source_row jsonb;
-      source_identity uuid;
+      old_row jsonb;
+      new_row jsonb;
+      old_identity text;
+      new_identity text;
+      relevant_change boolean;
     BEGIN
-      source_row := CASE WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
-      source_identity := public.durable_payload_row_identity(
-        TG_TABLE_NAME,
-        CASE TG_TABLE_NAME
-          WHEN 'events' THEN (source_row ->> 'agent_id') || ':' || (source_row ->> 'sequence_num')
-          ELSE source_row ->> 'id'
-        END
-      );
+      old_row := CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN to_jsonb(OLD) ELSE NULL END;
+      new_row := CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN to_jsonb(NEW) ELSE NULL END;
 
-      PERFORM public.delete_durable_payload_verification(TG_TABLE_NAME, source_identity);
+      IF TG_OP IN ('UPDATE', 'DELETE') THEN
+        old_identity := public.durable_payload_row_identity(
+          TG_TABLE_NAME,
+          CASE TG_TABLE_NAME
+            WHEN 'events' THEN
+              '[' || to_json(old_row ->> 'agent_id')::text || ',' ||
+              to_json(old_row ->> 'sequence_num')::text || ']'
+            ELSE old_row ->> 'id'
+          END
+        );
+      END IF;
+
+      IF TG_OP IN ('INSERT', 'UPDATE') THEN
+        new_identity := public.durable_payload_row_identity(
+          TG_TABLE_NAME,
+          CASE TG_TABLE_NAME
+            WHEN 'events' THEN
+              '[' || to_json(new_row ->> 'agent_id')::text || ',' ||
+              to_json(new_row ->> 'sequence_num')::text || ']'
+            ELSE new_row ->> 'id'
+          END
+        );
+      END IF;
+
+      relevant_change := TG_OP <> 'UPDATE' OR
+        old_identity IS DISTINCT FROM new_identity OR
+        public.durable_payload_digest_part(TG_TABLE_NAME, old_row, 'ciphertext')
+          IS DISTINCT FROM
+        public.durable_payload_digest_part(TG_TABLE_NAME, new_row, 'ciphertext') OR
+        public.durable_payload_digest_part(TG_TABLE_NAME, old_row, 'projection')
+          IS DISTINCT FROM
+        public.durable_payload_digest_part(TG_TABLE_NAME, new_row, 'projection') OR
+        public.durable_payload_digest_part(TG_TABLE_NAME, old_row, 'version')
+          IS DISTINCT FROM
+        public.durable_payload_digest_part(TG_TABLE_NAME, new_row, 'version') OR
+        public.durable_payload_digest_part(TG_TABLE_NAME, old_row, 'purge')
+          IS DISTINCT FROM
+        public.durable_payload_digest_part(TG_TABLE_NAME, new_row, 'purge');
+
+      IF relevant_change THEN
+        IF old_identity IS NOT NULL THEN
+          PERFORM public.delete_durable_payload_verification(TG_TABLE_NAME, old_identity);
+        END IF;
+
+        IF new_identity IS NOT NULL AND new_identity IS DISTINCT FROM old_identity THEN
+          PERFORM public.delete_durable_payload_verification(TG_TABLE_NAME, new_identity);
+        ELSIF TG_OP = 'INSERT' AND new_identity IS NOT NULL THEN
+          PERFORM public.delete_durable_payload_verification(TG_TABLE_NAME, new_identity);
+        END IF;
+      END IF;
 
       RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
     END;
@@ -1283,6 +1779,35 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
 
       IF TG_OP = 'DELETE' THEN
         RETURN OLD;
+      END IF;
+
+      IF TG_OP = 'UPDATE'
+         AND current_user = 'maraithon_migrator'
+         AND current_setting('maraithon.vault_reencryption', true) = 'VAULT_REENCRYPT_V1'
+         AND (
+           (TG_TABLE_NAME = 'events'
+            AND (NEW.payload_ciphertext IS NULL) = (OLD.payload_ciphertext IS NULL)
+            AND (to_jsonb(NEW) - ARRAY['payload_ciphertext']::text[])
+                  IS NOT DISTINCT FROM
+                (to_jsonb(OLD) - ARRAY['payload_ciphertext']::text[])
+            AND NEW.payload_ciphertext IS DISTINCT FROM OLD.payload_ciphertext) OR
+           (TG_TABLE_NAME = 'agent_run_steps'
+            AND (NEW.request_payload_ciphertext IS NULL) =
+                  (OLD.request_payload_ciphertext IS NULL)
+            AND (NEW.response_payload_ciphertext IS NULL) =
+                  (OLD.response_payload_ciphertext IS NULL)
+            AND (to_jsonb(NEW) - ARRAY[
+                  'request_payload_ciphertext', 'response_payload_ciphertext', 'updated_at'
+                ]::text[]) IS NOT DISTINCT FROM
+                (to_jsonb(OLD) - ARRAY[
+                  'request_payload_ciphertext', 'response_payload_ciphertext', 'updated_at'
+                ]::text[])
+            AND (NEW.request_payload_ciphertext IS DISTINCT FROM
+                   OLD.request_payload_ciphertext OR
+                 NEW.response_payload_ciphertext IS DISTINCT FROM
+                   OLD.response_payload_ciphertext))
+         ) THEN
+        RETURN NEW;
       END IF;
 
       valid_shape := CASE TG_TABLE_NAME
@@ -1372,20 +1897,39 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
 
       IF OLD.mode = 'generation_fenced_v1' AND
          (NEW.activated_at IS DISTINCT FROM OLD.activated_at OR
-          NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch) THEN
+          NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch OR
+          NEW.activation_evidence_id IS DISTINCT FROM OLD.activation_evidence_id OR
+          NEW.activation_evidence_digest IS DISTINCT FROM OLD.activation_evidence_digest OR
+          NEW.activated_by IS DISTINCT FROM OLD.activated_by OR
+          NEW.exact_revision IS DISTINCT FROM OLD.exact_revision) THEN
         RAISE EXCEPTION 'Activated Effect protocol identity is immutable'
           USING ERRCODE = 'check_violation';
       END IF;
 
       IF OLD.mode = 'legacy' AND NEW.mode = 'generation_fenced_v1' THEN
+        IF current_user IS DISTINCT FROM 'maraithon_activation_operator' THEN
+          RAISE EXCEPTION 'Effect protocol activation requires exact activation role'
+            USING ERRCODE = 'insufficient_privilege';
+        END IF;
+
         IF current_setting('maraithon.effect_protocol_activation', true)
              IS DISTINCT FROM 'generation_fenced_v1' THEN
           RAISE EXCEPTION 'Effect protocol activation requires the cutover barrier'
             USING ERRCODE = 'check_violation';
         END IF;
 
-        IF NEW.activated_at IS NULL OR NEW.activation_epoch IS NULL THEN
+        IF NEW.activated_at IS NULL OR NEW.activation_epoch IS NULL OR
+           NEW.activation_evidence_id IS NULL OR NEW.activation_evidence_digest IS NULL OR
+           NEW.activated_by IS NULL OR NEW.exact_revision IS NULL THEN
           RAISE EXCEPTION 'Effect protocol activation identity is incomplete'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF NEW.activation_evidence_id IS DISTINCT FROM OLD.activation_evidence_id OR
+           NEW.activation_evidence_digest IS DISTINCT FROM OLD.activation_evidence_digest OR
+           NEW.activated_by IS DISTINCT FROM OLD.activated_by OR
+           NEW.exact_revision IS DISTINCT FROM OLD.exact_revision THEN
+          RAISE EXCEPTION 'Effect protocol activation requires pre-attested fleet evidence'
             USING ERRCODE = 'check_violation';
         END IF;
 
@@ -1399,7 +1943,21 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
         LOCK TABLE public.agent_runs IN SHARE MODE;
         LOCK TABLE public.agent_run_steps IN SHARE MODE;
         LOCK TABLE public.events IN SHARE MODE;
+        LOCK TABLE public.telegram_conversation_turns IN SHARE MODE;
+        LOCK TABLE public.telegram_conversations IN SHARE MODE;
+        LOCK TABLE public.telegram_assistant_runs IN SHARE MODE;
+        LOCK TABLE public.telegram_assistant_steps IN SHARE MODE;
+        LOCK TABLE public.telegram_prepared_actions IN SHARE MODE;
+        LOCK TABLE public.agent_runs IN SHARE MODE;
+        LOCK TABLE public.operator_events IN SHARE MODE;
+        LOCK TABLE public.user_memory_profiles IN SHARE MODE;
+        LOCK TABLE public.operator_memory_summaries IN SHARE MODE;
+        LOCK TABLE public.background_jobs IN SHARE MODE;
+        LOCK TABLE public.scheduled_jobs IN SHARE MODE;
+        LOCK TABLE public.runtime_ingress_receipts IN SHARE MODE;
+        LOCK TABLE public.agent_work_results IN SHARE MODE;
         LOCK TABLE public.durable_payload_verifications IN SHARE MODE;
+        LOCK TABLE public.durable_payload_verification_failures IN SHARE MODE;
 
         SELECT COUNT(*) INTO runtime_leases
         FROM public.agent_runtime_leases;
@@ -1518,7 +2076,7 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
             ('public.durable_payload_digest_part(text,jsonb,text)'::regprocedure, 'i'::"char", 'sql', false),
             ('public.durable_payload_proof_failures()'::regprocedure, 's'::"char", 'plpgsql', false),
             ('public.durable_payload_roles_ready()'::regprocedure, 's'::"char", 'plpgsql', false),
-            ('public.delete_durable_payload_verification(text,uuid)'::regprocedure, 'v'::"char", 'plpgsql', true)
+            ('public.delete_durable_payload_verification(text,text)'::regprocedure, 'v'::"char", 'plpgsql', true)
         )
         SELECT COUNT(*) INTO ready_helpers
         FROM required
@@ -1787,7 +2345,7 @@ defmodule Maraithon.Repo.Migrations.AddGenerationFencedEffectExecution do
           'public.durable_payload_roles_ready()'::regprocedure,
           'public.guard_durable_payload_verification_failure_write()'::regprocedure,
           'public.guard_durable_payload_verification_write()'::regprocedure,
-          'public.delete_durable_payload_verification(text,uuid)'::regprocedure,
+          'public.delete_durable_payload_verification(text,text)'::regprocedure,
           'public.invalidate_durable_payload_verification()'::regprocedure,
           'public.enforce_durable_history_payload_protocol()'::regprocedure,
           'public.enforce_effect_execution_protocol()'::regprocedure,
