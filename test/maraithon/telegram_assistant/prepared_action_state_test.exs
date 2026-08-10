@@ -46,7 +46,7 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
   alias Maraithon.TelegramAssistant.PreparedAction
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Turn
-  alias Maraithon.TestSupport.CapturingTelegram
+  alias Maraithon.TestSupport.{BoundedHTTPTimeout, CapturingTelegram}
 
   setup do
     start_supervised!(%{
@@ -370,6 +370,70 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     assert conversation.id == executed.conversation_id
   end
 
+  test "an expired project mutation owner terminalizes without starting a concurrent task", ctx do
+    configure_scripted_executor(
+      [{:wait, {:ok, %{"message" => "Created once."}}}],
+      prepared_action_execution_lease_seconds: 1,
+      prepared_action_execution_heartbeat_ms: 100
+    )
+
+    {:ok, _conversation, action} =
+      create_mobile_action(
+        ctx,
+        %{
+          "user_id" => ctx.user_id,
+          "attrs" => %{"name" => "Fenced project"}
+        },
+        action_type: "project_create",
+        target_type: "project"
+      )
+
+    first =
+      Task.async(fn ->
+        AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+          "client_message_id" => Ecto.UUID.generate()
+        })
+      end)
+
+    assert_receive {:prepared_action_executor_called, 1, _executing_action, provider_pid}, 1_000
+    provider_ref = Process.monitor(provider_pid)
+    :erlang.suspend_process(first.pid)
+
+    try do
+      stale_action = Repo.get!(PreparedAction, action.id)
+
+      stale_payload =
+        stale_action.payload
+        |> Map.put(
+          "_maraithon_execution_lease_until",
+          DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.to_iso8601()
+        )
+        |> Map.put("_maraithon_execution_reclaimable", true)
+
+      stale_action
+      |> Ecto.Changeset.change(payload: stale_payload)
+      |> Repo.update!()
+
+      assert {:ok, %{prepared_action: unknown}} =
+               AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+                 "client_message_id" => Ecto.UUID.generate()
+               })
+
+      assert unknown.status == "execution_unknown"
+      assert get_in(unknown.payload, ["_maraithon_execution_error", "class"]) == "ambiguous"
+      assert scripted_executor_calls() == 1
+      refute_receive {:prepared_action_executor_called, 2, _action, _pid}, 100
+      refute_receive {:DOWN, ^provider_ref, :process, ^provider_pid, _reason}, 100
+    after
+      :erlang.resume_process(first.pid)
+    end
+
+    _ = Task.await(first, 2_000)
+    assert_receive {:DOWN, ^provider_ref, :process, ^provider_pid, _reason}, 1_000
+    assert Repo.get!(PreparedAction, action.id).status == "execution_unknown"
+    assert scripted_executor_calls() == 1
+  end
+
   test "mobile transient execution retries are finite and terminal delivery is deterministic",
        ctx do
     configure_scripted_executor(
@@ -454,6 +518,93 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     assert failed.status == "failed"
     assert failed.payload["_maraithon_execution_attempts"] == 1
     assert scripted_executor_calls() == 1
+  end
+
+  test "real lossy HTTP write shapes become execution unknown without durable raw detail", ctx do
+    timeout_bypass = Bypass.open()
+    BoundedHTTPTimeout.expect_once(timeout_bypass, "/prepared-action-timeout")
+
+    assert {:error, {:http_error, "unknown_error"} = bounded_timeout_reason} =
+             BoundedHTTPTimeout.get(timeout_bypass, "/prepared-action-timeout")
+
+    transport_bypass = Bypass.open()
+    transport_port = transport_bypass.port
+    Bypass.down(transport_bypass)
+
+    assert {:error, {:http_error, "Elixir.Req.TransportError"} = transport_reason} =
+             Maraithon.HTTP.get("http://localhost:#{transport_port}/lost-response", [],
+               receive_timeout: 500,
+               request_timeout: 1_000,
+               log_failures?: false
+             )
+
+    status_reasons =
+      for status <- [408, 504] do
+        bypass = Bypass.open()
+        raw_detail = "provider-detail-must-not-persist-#{status}"
+
+        Bypass.expect_once(bypass, "GET", "/status-#{status}", fn conn ->
+          Plug.Conn.resp(conn, status, raw_detail)
+        end)
+
+        assert {:error, {:http_status, ^status, ^raw_detail} = reason} =
+                 Maraithon.HTTP.get("http://localhost:#{bypass.port}/status-#{status}", [],
+                   log_failures?: false
+                 )
+
+        {status, reason, raw_detail}
+      end
+
+    cases = [
+      {:gmail, "gmail_send", bounded_timeout_reason, nil},
+      {:slack, "slack_post", transport_reason, "Req.TransportError"},
+      {:gmail, "gmail_send", elem(Enum.at(status_reasons, 0), 1),
+       elem(Enum.at(status_reasons, 0), 2)},
+      {:slack, "slack_post", elem(Enum.at(status_reasons, 1), 1),
+       elem(Enum.at(status_reasons, 1), 2)}
+    ]
+
+    for {provider, action_type, raw_reason, forbidden_detail} <- cases do
+      wrapper =
+        {:provider_error, provider, raw_reason,
+         "#{provider} is temporarily unavailable. Wait before retrying."}
+
+      assert TelegramAssistant.prepared_action_error_class(raw_reason) == :ambiguous
+      assert TelegramAssistant.prepared_action_error_class(wrapper) == :ambiguous
+
+      configure_scripted_executor([{:return, {:error, wrapper}}])
+
+      {:ok, _conversation, action} =
+        create_mobile_action(ctx, %{"text" => "send once"},
+          action_type: action_type,
+          target_type: if(provider == :gmail, do: "gmail_thread", else: "slack_channel")
+        )
+
+      assert {:ok, %{prepared_action: unknown}} =
+               AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+                 "client_message_id" => Ecto.UUID.generate()
+               })
+
+      checkpoint = unknown.payload["_maraithon_execution_error"]
+      assert unknown.status == "execution_unknown"
+      assert checkpoint["class"] == "ambiguous"
+      refute Map.has_key?(checkpoint, "reason")
+      refute Map.has_key?(unknown.payload, "_maraithon_execution_token")
+
+      if forbidden_detail do
+        refute inspect(unknown.payload) =~ forbidden_detail
+      end
+
+      assert scripted_executor_calls() == 1
+
+      assert {:ok, %{prepared_action: still_unknown}} =
+               AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+                 "client_message_id" => Ecto.UUID.generate()
+               })
+
+      assert still_unknown.status == "execution_unknown"
+      assert scripted_executor_calls() == 1
+    end
   end
 
   test "mobile confirm resumes an executed row before considering expiry or stale draft edits",
@@ -608,6 +759,67 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
     assert scripted_executor_calls() == 1
   end
 
+  test "project create reconciles a persisted result after its owner observed checkpoint failure",
+       ctx do
+    {:ok, _conversation, action} =
+      create_mobile_action(
+        ctx,
+        %{
+          "user_id" => ctx.user_id,
+          "attrs" => %{"name" => "Checkpointed project", "summary" => "Created once"}
+        },
+        action_type: "project_create",
+        target_type: "project"
+      )
+
+    Repo.query!("""
+    CREATE FUNCTION maraithon_test_fail_project_create_executed_write()
+    RETURNS trigger AS $$
+    BEGIN
+      IF OLD.id = '#{action.id}' AND NEW.status = 'executed' THEN
+        RAISE EXCEPTION 'injected project-create execution checkpoint failure';
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER maraithon_test_fail_project_create_executed_write
+    BEFORE UPDATE ON telegram_prepared_actions
+    FOR EACH ROW
+    EXECUTE FUNCTION maraithon_test_fail_project_create_executed_write()
+    """)
+
+    first_result =
+      try do
+        TelegramAssistant.confirm_and_execute(action, durable: true)
+      after
+        Repo.query!(
+          "DROP TRIGGER maraithon_test_fail_project_create_executed_write " <>
+            "ON telegram_prepared_actions"
+        )
+
+        Repo.query!("DROP FUNCTION maraithon_test_fail_project_create_executed_write()")
+      end
+
+    assert {:error, %PreparedAction{status: "confirmed"} = retryable, _checkpoint_reason} =
+             first_result
+
+    refute Map.has_key?(retryable.payload, "_maraithon_execution_token")
+
+    created_projects = projects_created_for_action(ctx.user_id, action.id)
+    assert [created_project] = created_projects
+
+    assert {:ok, %PreparedAction{status: "executed"} = executed, result} =
+             TelegramAssistant.confirm_and_execute(retryable, durable: true)
+
+    assert result["message"] == "Created the project."
+    assert executed.payload["_maraithon_execution_attempts"] == 2
+    assert [reconciled_project] = projects_created_for_action(ctx.user_id, action.id)
+    assert reconciled_project.id == created_project.id
+  end
+
   test "frozen payload tampering fails closed before another provider call", ctx do
     configure_scripted_executor([
       {:return, {:error, {:http_error, 503, "provider unavailable"}}},
@@ -639,6 +851,57 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
              "prepared_action_payload_tampered"
 
     assert scripted_executor_calls() == 1
+  end
+
+  test "frozen draft update instruction cannot be flipped or deleted before retry", ctx do
+    for mutation <- [:flip, :delete] do
+      configure_scripted_executor([
+        {:return, {:error, {:http_error, 503, "provider unavailable"}}},
+        {:return, {:ok, %{"message" => "must not run"}}}
+      ])
+
+      {:ok, _conversation, action} =
+        create_mobile_action(
+          ctx,
+          %{
+            "user_id" => ctx.user_id,
+            "draft_id" => "draft-#{mutation}",
+            "body" => "frozen body",
+            "_maraithon_update_draft_before_send" => true
+          },
+          action_type: "gmail_draft_send",
+          target_type: "gmail_thread"
+        )
+
+      assert {:error, {:prepared_action_execution_retryable, :transient}} =
+               AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+                 "client_message_id" => Ecto.UUID.generate()
+               })
+
+      retryable = Repo.get!(PreparedAction, action.id)
+
+      tampered_payload =
+        case mutation do
+          :flip -> Map.put(retryable.payload, "_maraithon_update_draft_before_send", false)
+          :delete -> Map.delete(retryable.payload, "_maraithon_update_draft_before_send")
+        end
+
+      retryable
+      |> Ecto.Changeset.change(payload: tampered_payload)
+      |> Repo.update!()
+
+      assert {:ok, %{prepared_action: failed}} =
+               AssistantChat.decide_prepared_action(ctx.user_id, action.id, "confirm", %{
+                 "client_message_id" => Ecto.UUID.generate()
+               })
+
+      assert failed.status == "failed"
+
+      assert get_in(failed.payload, ["_maraithon_execution_error", "code"]) ==
+               "prepared_action_payload_tampered"
+
+      assert scripted_executor_calls() == 1
+    end
   end
 
   test "concurrent Telegram callbacks reserve one result send before dispatch", ctx do
@@ -786,6 +1049,14 @@ defmodule Maraithon.TelegramAssistant.PreparedActionStateTest do
       started_at: now,
       finished_at: now
     })
+  end
+
+  defp projects_created_for_action(user_id, prepared_action_id) do
+    user_id
+    |> then(&Projects.list_projects(user_id: &1))
+    |> Enum.filter(fn project ->
+      get_in(project.metadata || %{}, ["_maraithon_prepared_action_id"]) == prepared_action_id
+    end)
   end
 
   defp count_telegram_events(type) do

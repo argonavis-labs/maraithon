@@ -48,7 +48,31 @@ defmodule Maraithon.TelegramAssistant do
   @prepared_result_delivery_token_key "_maraithon_result_delivery_token"
   @prepared_result_delivery_lease_until_key "_maraithon_result_delivery_lease_until"
   @prepared_result_delivery_attempts_key "_maraithon_result_delivery_attempts"
+  @prepared_result_delivery_error_key "_maraithon_result_delivery_error"
+
+  # These are the only payload fields that the execution/delivery protocols
+  # mutate after confirmation. Every other field, including execution-affecting
+  # `_maraithon_*` instructions, remains covered by the frozen payload hash.
+  @prepared_mutable_runtime_payload_keys [
+    @prepared_execution_result_key,
+    @prepared_execution_error_key,
+    @prepared_result_delivered_at_key,
+    @prepared_execution_attempts_key,
+    @prepared_execution_token_key,
+    @prepared_execution_lease_until_key,
+    # Read and cleared for rows claimed by the previous protocol, but never
+    # trusted as permission to reclaim an expired mutation owner.
+    @prepared_execution_reclaimable_key,
+    @prepared_confirmed_payload_hash_key,
+    @prepared_result_delivery_state_key,
+    @prepared_result_delivery_token_key,
+    @prepared_result_delivery_lease_until_key,
+    @prepared_result_delivery_attempts_key,
+    @prepared_result_delivery_error_key
+  ]
+
   @prepared_error_max_bytes 240
+  @ambiguous_http_error_classes ["unknown_error", "Elixir.Req.TransportError"]
   @default_prepared_action_max_attempts 3
   @default_prepared_execution_lease_seconds 60
   @default_prepared_execution_heartbeat_ms 5_000
@@ -56,7 +80,8 @@ defmodule Maraithon.TelegramAssistant do
   @prepared_result_delivery_lease_seconds 60
 
   # Only these actions have a provider key or exact durable evidence that lets
-  # a finished attempt be reconciled/replayed without duplicating the write.
+  # this owner reconcile/replay after it has observed its provider task finish.
+  # This never permits reclaiming expired ownership while the old task may live.
   # Everything else is conservative after an ambiguous provider boundary.
   @replay_safe_prepared_action_types ~w(
     project_create project_update
@@ -1461,7 +1486,7 @@ defmodule Maraithon.TelegramAssistant do
           |> clear_prepared_result_delivery_owner()
           |> Map.put(@prepared_result_delivery_state_key, state)
           |> Map.put(
-            "_maraithon_result_delivery_error",
+            @prepared_result_delivery_error_key,
             compact_prepared_action_error(reason)
           )
 
@@ -1495,7 +1520,7 @@ defmodule Maraithon.TelegramAssistant do
       |> clear_prepared_result_delivery_owner()
       |> Map.put(@prepared_result_delivery_state_key, "delivered")
       |> Map.put(@prepared_result_delivered_at_key, database_now!() |> DateTime.to_iso8601())
-      |> Map.delete("_maraithon_result_delivery_error")
+      |> Map.delete(@prepared_result_delivery_error_key)
 
     update_prepared_action(action, %{payload: delivered_payload})
   end
@@ -1670,9 +1695,7 @@ defmodule Maraithon.TelegramAssistant do
 
   defp prepared_payload_hash(payload) when is_map(payload) do
     payload
-    |> Map.reject(fn {key, _value} ->
-      is_binary(key) and String.starts_with?(key, "_maraithon_")
-    end)
+    |> Map.drop(@prepared_mutable_runtime_payload_keys)
     |> canonical_json_term()
     |> case do
       {:ok, canonical_payload} ->
@@ -1811,8 +1834,11 @@ defmodule Maraithon.TelegramAssistant do
       prepared_execution_claim_active?(payload, now) ->
         {:error, action, :prepared_action_execution_in_progress}
 
-      is_binary(Map.get(payload, @prepared_execution_token_key)) and
-          Map.get(payload, @prepared_execution_reclaimable_key) != true ->
+      is_binary(Map.get(payload, @prepared_execution_token_key)) ->
+        # An expired lease proves only that the owner stopped renewing; it does
+        # not prove the mutation task is dead. Never launch a concurrent owner.
+        # Terminalize for manual reconciliation instead, including legacy rows
+        # that claimed to be replay-safe.
         case checkpoint_prepared_action_unknown_locked(
                action,
                payload,
@@ -1835,10 +1861,6 @@ defmodule Maraithon.TelegramAssistant do
           payload
           |> Map.put(@prepared_execution_attempts_key, attempts)
           |> Map.put(@prepared_execution_token_key, token)
-          |> Map.put(
-            @prepared_execution_reclaimable_key,
-            replay_safe_prepared_action?(action)
-          )
           |> Map.put(@prepared_execution_lease_until_key, DateTime.to_iso8601(lease_until))
 
         case update_prepared_action(action, %{payload: claimed_payload}) do
@@ -2194,7 +2216,7 @@ defmodule Maraithon.TelegramAssistant do
     |> clear_prepared_result_delivery_owner()
     |> Map.delete(@prepared_result_delivery_state_key)
     |> Map.delete(@prepared_result_delivered_at_key)
-    |> Map.delete("_maraithon_result_delivery_error")
+    |> Map.delete(@prepared_result_delivery_error_key)
   end
 
   defp prepared_execution_attempts(payload) when is_map(payload) do
@@ -2426,15 +2448,29 @@ defmodule Maraithon.TelegramAssistant do
   defp explicit_prepared_action_error_class(_reason), do: nil
 
   defp ambiguous_execution_failure?(reason)
-       when reason in [:timeout, :closed, :econnreset, :network_error, :transport_error],
+       when reason in [
+              :timeout,
+              :closed,
+              :econnreset,
+              :network_error,
+              :transport_error,
+              :prepared_action_execution_owner_lost
+            ],
        do: true
 
   defp ambiguous_execution_failure?({kind, status, _detail})
-       when kind in [:api_error, :http_error] and status in [408, 504],
+       when kind in [:api_error, :http_error, :http_status] and status in [408, 504],
        do: true
 
   defp ambiguous_execution_failure?({kind, status})
-       when kind in [:api_error, :http_error] and status in [408, 504],
+       when kind in [:api_error, :http_error, :http_status] and status in [408, 504],
+       do: true
+
+  # Maraithon.HTTP intentionally drops raw transport detail. These closed
+  # classes can therefore be the only remaining proof that a write response
+  # was lost after the provider may have accepted it.
+  defp ambiguous_execution_failure?({:http_error, error_class})
+       when error_class in @ambiguous_http_error_classes,
        do: true
 
   defp ambiguous_execution_failure?({:prepared_action_execution_exception, _reason}), do: true
