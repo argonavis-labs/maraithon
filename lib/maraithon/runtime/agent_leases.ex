@@ -19,7 +19,7 @@ defmodule Maraithon.Runtime.AgentLeases do
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Config, as: RuntimeConfig
-  alias Maraithon.Runtime.Coordination.{Authority, Protocol, Scope}
+  alias Maraithon.Runtime.Coordination.{Protocol, Scope}
 
   @default_ttl_ms 60_000
   @min_ttl_ms 1_000
@@ -346,13 +346,9 @@ defmodule Maraithon.Runtime.AgentLeases do
   def owner?(agent_id, owner_token) do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
-      Repo.exists?(
-        from(lease in AgentRuntimeLease,
-          where: lease.agent_id == ^agent_id,
-          where: lease.owner_token == ^owner_token,
-          where: lease.lease_until > fragment("timezone('UTC', clock_timestamp())")
-        )
-      )
+      agent_id
+      |> owner_query(owner_token)
+      |> Scope.exists_ready_agent_lease()
     else
       _invalid -> false
     end
@@ -362,7 +358,9 @@ defmodule Maraithon.Runtime.AgentLeases do
     with :ok <- exact_runtime_enabled(),
          {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_token} <- cast_uuid(owner_token) do
-      Repo.exists?(ready_query(agent_id, owner_token))
+      agent_id
+      |> ready_query(owner_token)
+      |> Scope.exists_ready_agent_lease()
     else
       _invalid_or_disabled -> false
     end
@@ -418,35 +416,70 @@ defmodule Maraithon.Runtime.AgentLeases do
   def list_unowned_runnable_ids(limit \\ 100)
 
   def list_unowned_runnable_ids(limit) when is_integer(limit) and limit in 1..500 do
-    Repo.all(
-      from(agent in Agent,
-        join: binding in Binding,
-        on:
-          binding.agent_id == agent.id and binding.user_id == agent.user_id and
-            binding.status == "active",
-        left_join: lease in AgentRuntimeLease,
-        on: lease.agent_id == agent.id,
-        left_join: guard in AgentRestartGuard,
-        on: guard.agent_id == agent.id,
-        left_join: operation in AgentLifecycleOperation,
-        on: operation.agent_id == agent.id,
-        where: agent.status in ^@runnable_statuses,
-        where: agent.install_status == "enabled",
-        where: is_nil(lease.agent_id),
-        where: is_nil(operation.agent_id),
-        where:
-          is_nil(guard.agent_id) or
-            (guard.tripped == false and guard.needs_recovery == false and
-               (is_nil(guard.blocked_until) or
-                  guard.blocked_until <= fragment("timezone('UTC', clock_timestamp())"))),
-        order_by: [asc: agent.updated_at, asc: agent.id],
-        limit: ^limit,
-        select: agent.id
-      )
+    from(agent in Agent,
+      as: :agent,
+      join: binding in Binding,
+      on:
+        binding.agent_id == agent.id and binding.user_id == agent.user_id and
+          binding.status == "active",
+      left_join: lease in AgentRuntimeLease,
+      on: lease.agent_id == agent.id,
+      left_join: guard in AgentRestartGuard,
+      on: guard.agent_id == agent.id,
+      left_join: operation in AgentLifecycleOperation,
+      on: operation.agent_id == agent.id,
+      where: agent.status in ^@runnable_statuses,
+      where: agent.install_status == "enabled",
+      where: is_nil(lease.agent_id),
+      where: is_nil(operation.agent_id),
+      where:
+        is_nil(guard.agent_id) or
+          (guard.tripped == false and guard.needs_recovery == false and
+             (is_nil(guard.blocked_until) or
+                guard.blocked_until <= fragment("timezone('UTC', clock_timestamp())"))),
+      order_by: [asc: agent.updated_at, asc: agent.id],
+      limit: ^limit,
+      select: agent.id
     )
+    |> Scope.all_ready_agent()
   end
 
   def list_unowned_runnable_ids(_limit), do: []
+
+  @doc "Lists bootstrap candidates inside the current ready partitions."
+  def list_bootstrap_agents do
+    case Protocol.mode() do
+      :dark ->
+        []
+
+      :active ->
+        case Scope.current() do
+          {:ok, session} ->
+            from(agent in Agent,
+              as: :agent,
+              left_join: operation in AgentLifecycleOperation,
+              on: operation.agent_id == agent.id,
+              where: agent.status in ["recovering", "running", "degraded"],
+              where: is_nil(agent.removed_at),
+              where: is_nil(operation.agent_id),
+              order_by: [asc: agent.updated_at, asc: agent.id],
+              select: agent
+            )
+            |> Scope.scope_ready_agent(session)
+            |> Repo.all()
+
+          _missing_or_stale_session ->
+            []
+        end
+
+      _blocked ->
+        []
+    end
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
 
   def get(agent_id) do
     case cast_uuid(agent_id) do
@@ -455,9 +488,23 @@ defmodule Maraithon.Runtime.AgentLeases do
     end
   end
 
+  defp owner_query(agent_id, owner_token) do
+    from(lease in AgentRuntimeLease,
+      as: :lease,
+      join: agent in Agent,
+      as: :agent,
+      on: agent.id == lease.agent_id,
+      where: lease.agent_id == ^agent_id,
+      where: lease.owner_token == ^owner_token,
+      where: lease.lease_until > fragment("timezone('UTC', clock_timestamp())")
+    )
+  end
+
   defp ready_query(agent_id, owner_token) do
     from(lease in AgentRuntimeLease,
+      as: :lease,
       join: agent in Agent,
+      as: :agent,
       on: agent.id == lease.agent_id,
       join: binding in Binding,
       on: binding.agent_id == agent.id and binding.user_id == agent.user_id,
@@ -520,7 +567,7 @@ defmodule Maraithon.Runtime.AgentLeases do
   defp coordination_scope!(user_id) do
     case Protocol.mode() do
       :dark ->
-        nil
+        Repo.rollback(:runtime_coordination_not_active)
 
       :active ->
         case Scope.partition_for_user(user_id) do
@@ -533,31 +580,7 @@ defmodule Maraithon.Runtime.AgentLeases do
     end
   end
 
-  defp ensure_coordination_lease!(lease, mode) do
-    case Protocol.mode() do
-      :dark ->
-        :ok
-
-      :active ->
-        case Scope.current() do
-          {:ok, session}
-          when session.id == lease.coordination_node_incarnation_id and
-                 session.activation_epoch == lease.coordination_activation_epoch ->
-            Authority.fence_partition!(
-              session,
-              lease.coordination_partition_id,
-              lease.coordination_partition_epoch,
-              mode
-            )
-
-          _ ->
-            Repo.rollback(:partition_authority_lost)
-        end
-
-      blocked ->
-        Repo.rollback({:coordination_protocol_blocked, blocked})
-    end
-  end
+  defp ensure_coordination_lease!(lease, mode), do: Scope.fence_lease!(lease, mode)
 
   defp update_lease!(lease, updates) do
     lease
