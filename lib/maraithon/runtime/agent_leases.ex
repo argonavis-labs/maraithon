@@ -19,6 +19,7 @@ defmodule Maraithon.Runtime.AgentLeases do
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.Coordination.{Authority, Protocol, Scope}
 
   @default_ttl_ms 60_000
   @min_ttl_ms 1_000
@@ -48,8 +49,9 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_initial_guard_allows_claim!(guard, now)
         ensure_no_existing_lease!(lease, now)
         ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
+        coordination = coordination_scope!(agent.user_id)
 
-        insert_lease!(agent_id, owner_token, owner_node, now, lease_until)
+        insert_lease!(agent_id, owner_token, owner_node, now, lease_until, coordination)
       end)
     end
   end
@@ -80,8 +82,9 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_due_recovery_guard!(guard, guard_generation, now)
         ensure_no_existing_lease!(lease, now)
         ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
+        coordination = coordination_scope!(agent.user_id)
 
-        insert_lease!(agent_id, owner_token, owner_node, now, lease_until)
+        insert_lease!(agent_id, owner_token, owner_node, now, lease_until, coordination)
       end)
     end
   end
@@ -105,6 +108,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
         ensure_exact_live_lease!(lease, owner_token, now)
+        ensure_coordination_lease!(lease, :owner)
 
         runnable? =
           is_nil(operation) and runnable?(agent) and binding_matches?(agent, binding) and
@@ -156,6 +160,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_binding_matches!(agent, binding)
         ensure_due_recovery_guard!(guard, guard_generation, now)
         ensure_exact_live_lease!(lease, owner_token, now)
+        ensure_coordination_lease!(lease, :owner)
 
         update_lease!(lease, %{
           renewed_at: now,
@@ -186,6 +191,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_binding_matches!(agent, binding)
         ensure_initial_guard_allows_claim!(guard, now)
         ensure_exact_live_lease!(lease, owner_token, now)
+        ensure_coordination_lease!(lease, :ready)
 
         # Readiness is deliberately the last authority write in this transaction.
         update_lease!(lease, %{ready_at: now, draining_at: nil, updated_at: now})
@@ -211,6 +217,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_binding_matches!(agent, binding)
         ensure_due_recovery_guard!(guard, guard_generation, now)
         ensure_exact_live_lease!(lease, owner_token, now)
+        ensure_coordination_lease!(lease, :ready)
 
         guard
         |> Ecto.Changeset.change(%{
@@ -305,6 +312,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         now = DatabaseClock.now!()
 
         ensure_exact_live_lease!(lease, owner_token, now)
+        ensure_coordination_lease!(lease, :owner)
 
         update_lease!(lease, %{
           ready_at: nil,
@@ -327,6 +335,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         _operation = lock_operation(agent_id)
         now = DatabaseClock.now!()
         ensure_exact_live_lease!(lease, owner_token, now)
+        ensure_coordination_lease!(lease, :owner)
         ensure_no_processing_directive!(agent_id, :runtime_work_in_progress)
         Repo.delete!(lease)
         :released
@@ -373,6 +382,7 @@ defmodule Maraithon.Runtime.AgentLeases do
       now = DatabaseClock.now!()
 
       ensure_exact_live_lease!(lease, owner_token, now)
+      ensure_coordination_lease!(lease, :owner)
       :ok
     else
       _invalid -> Repo.rollback(:runtime_lease_lost)
@@ -397,6 +407,7 @@ defmodule Maraithon.Runtime.AgentLeases do
       ensure_binding_matches!(agent, binding)
       ensure_initial_guard_allows_claim!(guard, now)
       ensure_exact_ready_lease!(lease, owner_token, now)
+      ensure_coordination_lease!(lease, :ready)
       :ok
     else
       _invalid -> Repo.rollback(:runtime_not_ready)
@@ -472,19 +483,80 @@ defmodule Maraithon.Runtime.AgentLeases do
     )
   end
 
-  defp insert_lease!(agent_id, owner_token, owner_node, now, lease_until) do
+  defp insert_lease!(agent_id, owner_token, owner_node, now, lease_until, coordination) do
+    coordination_attrs =
+      case coordination do
+        nil ->
+          %{}
+
+        %{session: session, partition: partition} ->
+          %{
+            coordination_activation_epoch: session.activation_epoch,
+            coordination_partition_id: partition.partition_id,
+            coordination_partition_epoch: partition.ownership_epoch,
+            coordination_node_incarnation_id: session.id
+          }
+      end
+
     %AgentRuntimeLease{inserted_at: now, updated_at: now}
-    |> AgentRuntimeLease.changeset(%{
-      agent_id: agent_id,
-      owner_token: owner_token,
-      owner_node: owner_node,
-      claimed_at: now,
-      renewed_at: now,
-      lease_until: lease_until,
-      ready_at: nil,
-      draining_at: nil
-    })
+    |> AgentRuntimeLease.changeset(
+      Map.merge(
+        %{
+          agent_id: agent_id,
+          owner_token: owner_token,
+          owner_node: owner_node,
+          claimed_at: now,
+          renewed_at: now,
+          lease_until: lease_until,
+          ready_at: nil,
+          draining_at: nil
+        },
+        coordination_attrs
+      )
+    )
     |> Repo.insert!()
+  end
+
+  defp coordination_scope!(user_id) do
+    case Protocol.mode() do
+      :dark ->
+        nil
+
+      :active ->
+        case Scope.partition_for_user(user_id) do
+          {:ok, session, partition} -> %{session: session, partition: partition}
+          _ -> Repo.rollback(:partition_not_owned)
+        end
+
+      blocked ->
+        Repo.rollback({:coordination_protocol_blocked, blocked})
+    end
+  end
+
+  defp ensure_coordination_lease!(lease, mode) do
+    case Protocol.mode() do
+      :dark ->
+        :ok
+
+      :active ->
+        case Scope.current() do
+          {:ok, session}
+          when session.id == lease.coordination_node_incarnation_id and
+                 session.activation_epoch == lease.coordination_activation_epoch ->
+            Authority.fence_partition!(
+              session,
+              lease.coordination_partition_id,
+              lease.coordination_partition_epoch,
+              mode
+            )
+
+          _ ->
+            Repo.rollback(:partition_authority_lost)
+        end
+
+      blocked ->
+        Repo.rollback({:coordination_protocol_blocked, blocked})
+    end
   end
 
   defp update_lease!(lease, updates) do

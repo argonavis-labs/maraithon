@@ -48,11 +48,16 @@ defmodule Maraithon.Runtime.Config do
   """
   def exact_agent_runtime_ready? do
     exact_agent_runtime_enabled?() and
-      (Maraithon.Effects.ProtocolCutover.mode() == :exact or test_protocol_bypass?())
+      (Maraithon.Effects.ProtocolCutover.mode() == :exact or test_protocol_bypass?()) and
+      coordination_requirement_ready?()
   rescue
     _storage_unavailable -> false
   catch
     :exit, _reason -> false
+  end
+
+  defp coordination_requirement_ready? do
+    multinode_coordination_ready?() or test_protocol_bypass?()
   end
 
   if Mix.env() == :test do
@@ -61,6 +66,22 @@ defmodule Maraithon.Runtime.Config do
     end
   else
     defp test_protocol_bypass?, do: false
+  end
+
+  @doc "Returns whether this revision may participate in DB-owned multi-node coordination."
+  def multinode_coordination_enabled? do
+    get(:multinode_coordination_enabled, false) == true
+  end
+
+  @doc "Fails closed unless config, catalog-attested DB mode, and local ready-last session agree."
+  def multinode_coordination_ready? do
+    multinode_coordination_enabled?() and
+      Maraithon.Runtime.Coordination.Protocol.mode() == :active and
+      match?({:ok, _session}, Maraithon.Runtime.Coordination.Session.current())
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
   end
 
   @doc """
