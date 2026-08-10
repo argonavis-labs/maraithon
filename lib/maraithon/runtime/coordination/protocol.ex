@@ -291,7 +291,7 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
            """
            SELECT
              (SELECT count(*) FROM public.schema_migrations WHERE version = #{@migration}) = 1 AND
-             public.runtime_coordination_catalog_ready_count() = 95 AND
+             public.runtime_coordination_catalog_ready_count() = 114 AND
              public.runtime_coordination_roles_ready() AND
              public.runtime_coordination_acl_ready() AND
              EXISTS (
