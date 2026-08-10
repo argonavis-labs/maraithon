@@ -19,6 +19,12 @@ defmodule Maraithon.Runtime.Coordination.TaskSupervisor do
 
   def release(identity), do: Maraithon.Runtime.Coordination.TaskAuthority.release(identity)
 
+  def authorize_activation(identity) do
+    Maraithon.Runtime.Coordination.TaskAuthority.authorize_activation(identity)
+  catch
+    :exit, _reason -> {:error, :task_supervisor_unavailable}
+  end
+
   def register_current!(identity) do
     :ok = Maraithon.Runtime.Coordination.TaskAuthority.activate(identity)
     {:ok, _} = Registry.register(@registry, registry_key(identity), identity)
@@ -38,8 +44,8 @@ defmodule Maraithon.Runtime.Coordination.TaskSupervisor do
     Supervisor.init(
       [
         {Registry, keys: :unique, name: @registry},
-        Maraithon.Runtime.Coordination.TaskAuthority,
-        {Task.Supervisor, name: @task_supervisor}
+        {Task.Supervisor, name: @task_supervisor},
+        Maraithon.Runtime.Coordination.TaskAuthority
       ],
       strategy: :one_for_all,
       max_restarts: 10,

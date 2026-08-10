@@ -11,7 +11,14 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
   import Ecto.Query
   alias Ecto.Adapters.SQL
   alias Maraithon.Repo
-  alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, Protocol, TaskAssignment}
+
+  alias Maraithon.Runtime.Coordination.{
+    Authority,
+    NodeIncarnation,
+    Protocol,
+    TaskAssignment,
+    TaskSupervisor
+  }
 
   def reserve(%NodeIncarnation{} = session, partition, identity, opts \\ [])
       when is_map(partition) and is_map(identity) and is_list(opts) do
@@ -83,24 +90,28 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
   end
 
   def activate(%TaskAssignment{} = assignment) do
-    transition(
-      assignment,
-      """
-      state = 'running', ready_at = timezone('UTC', clock_timestamp()),
-      updated_at = timezone('UTC', clock_timestamp())
-      """,
-      "state = 'reserved'"
-    )
+    with :ok <- TaskSupervisor.authorize_activation(task_identity(assignment)) do
+      transition(
+        assignment,
+        """
+        state = 'running', ready_at = timezone('UTC', clock_timestamp()),
+        updated_at = timezone('UTC', clock_timestamp())
+        """,
+        "state = 'reserved'"
+      )
+    end
   end
 
   def mark_provider_entered(%TaskAssignment{} = assignment) do
-    transition(
-      assignment,
-      """
-      provider_boundary = 'entered', updated_at = timezone('UTC', clock_timestamp())
-      """,
-      "state = 'running' AND provider_boundary = 'not_entered'"
-    )
+    with :ok <- TaskSupervisor.authorize_activation(task_identity(assignment)) do
+      transition(
+        assignment,
+        """
+        provider_boundary = 'entered', updated_at = timezone('UTC', clock_timestamp())
+        """,
+        "state = 'running' AND provider_boundary = 'not_entered'"
+      )
+    end
   end
 
   def renew(%TaskAssignment{} = assignment, ttl_ms)
@@ -294,6 +305,10 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
   end
 
   def reconcile_proven(limit \\ 25) when is_integer(limit) and limit in 1..100 do
+    # Discovery is deliberately unlocked and bounded. Each candidate takes the
+    # canonical authority locks before attempting its assignment row, so a busy
+    # assignment is skipped without reversing protocol -> node -> partition ->
+    # assignment -> work ordering or blocking another reconciler.
     candidates =
       Repo.all(
         from a in TaskAssignment,
@@ -305,15 +320,20 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
     candidates
     |> Enum.reduce_while({:ok, []}, fn assignment, {:ok, results} ->
       case Repo.transaction(fn ->
-             locked = lock_assignment!(assignment)
-
-             if locked.state == "termination_proven",
-               do: reconcile_one!(locked),
-               else: :already_converged
+             case try_lock_assignment(assignment) do
+               %TaskAssignment{state: "termination_proven"} = locked -> reconcile_one!(locked)
+               %TaskAssignment{} -> :already_converged
+               nil -> :busy
+             end
            end) do
-        {:ok, :already_converged} -> {:cont, {:ok, results}}
-        {:ok, result} -> {:cont, {:ok, [result | results]}}
-        {:error, reason} -> {:halt, {:error, reason}}
+        {:ok, state} when state in [:already_converged, :busy] ->
+          {:cont, {:ok, results}}
+
+        {:ok, result} ->
+          {:cont, {:ok, [result | results]}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
       end
     end)
     |> case do
@@ -539,6 +559,22 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
     :ok
   end
 
+  defp try_lock_assignment(assignment) do
+    lock_authority_rows!(assignment)
+
+    Repo.one(
+      from(current in TaskAssignment,
+        where: current.id == ^assignment.id,
+        where: current.activation_epoch == ^assignment.activation_epoch,
+        where: current.claim_token == ^assignment.claim_token,
+        where: current.node_incarnation_id == ^assignment.node_incarnation_id,
+        where: current.supervisor_id == ^assignment.supervisor_id,
+        where: current.local_task_id == ^assignment.local_task_id,
+        lock: "FOR UPDATE SKIP LOCKED"
+      )
+    )
+  end
+
   defp lock_assignment!(assignment) do
     lock_authority_rows!(assignment)
 
@@ -602,6 +638,17 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
 
       load!(result, :task_authority_lost)
     end)
+  end
+
+  defp task_identity(assignment) do
+    %{
+      work_kind: assignment.work_kind,
+      work_id: assignment.work_id,
+      claim_token: assignment.claim_token,
+      assignment_id: assignment.id,
+      supervisor_id: assignment.supervisor_id,
+      local_task_id: assignment.local_task_id
+    }
   end
 
   defp identity_params(a),
