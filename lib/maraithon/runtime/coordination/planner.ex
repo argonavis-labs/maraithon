@@ -8,8 +8,7 @@ defmodule Maraithon.Runtime.Coordination.Planner do
     Authority,
     Partition,
     Partitioning,
-    TaskAssignment,
-    TaskClaims
+    TaskAssignment
   }
 
   @max_limit 16
@@ -61,25 +60,9 @@ defmodule Maraithon.Runtime.Coordination.Planner do
 
     count =
       Enum.count(partitions, fn partition ->
-        assignments =
-          Repo.all(
-            from a in TaskAssignment,
-              where:
-                a.partition_id == ^partition.partition_id and
-                  a.partition_epoch == ^partition.ownership_epoch and
-                  a.state in ["reserved", "running"],
-              order_by: a.id
-          )
-
-        Enum.each(assignments, &TaskClaims.request_termination/1)
-        blocked? = assignments != []
-
         match?(
           {:ok, %Partition{}},
-          Authority.begin_partition_drain(leader, partition.partition_id,
-            kind: "lease_expired",
-            blocked?: blocked?
-          )
+          Authority.begin_partition_drain(leader, partition.partition_id, kind: "lease_expired")
         )
       end)
 

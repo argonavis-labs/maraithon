@@ -147,6 +147,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
   end
 
   defp coordinate(%{phase: :ready} = state), do: ready_cycle(state)
+  defp coordinate(%{phase: :uncertain} = state), do: cleanup_uncertain(state)
   defp coordinate(state), do: state
 
   defp ready_cycle(state) do
@@ -157,6 +158,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
       state = refresh_leader(state)
       _ = publish_preparing_partitions(session)
       _ = drain_revoked_partitions(session)
+      _ = TaskClaims.reconcile_proven(100)
       if state.leader, do: Planner.plan_once(state.leader, limit: state.transition_limit)
       state
     else
@@ -197,7 +199,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
   end
 
   defp drain_revoked_partitions(session) do
-    Authority.owned_partitions(session, ["draining", "blocked"])
+    Authority.locally_owned_revoked_partitions(session)
     |> Enum.each(fn partition ->
       _ = Authority.revoke_partition_workload(session, partition.partition_id)
       terminate_partition_tasks(session, partition.partition_id, partition.ownership_epoch)
@@ -272,6 +274,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
     # PostgreSQL revocation happens before any local termination attempt.
     case Authority.begin_node_drain(session) do
       {:ok, :draining} ->
+        terminate_local_agents()
         drain_revoked_partitions(%{session | state: "draining", ready_at: nil})
         _ = TaskClaims.reconcile_proven(100)
 
@@ -292,10 +295,59 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   defp drain(state), do: {:ok, state}
 
-  defp fail_closed(state) do
-    # No local state transition is absence proof. Pollers consult the DB scope
-    # and task writes retain exact SQL fences, so uncertainty only removes work.
+  defp terminate_local_agents do
+    DynamicSupervisor.which_children(Maraithon.Runtime.AgentSupervisor)
+    |> Enum.each(fn
+      {_id, pid, _type, _modules} when is_pid(pid) ->
+        _ = DynamicSupervisor.terminate_child(Maraithon.Runtime.AgentSupervisor, pid)
+
+      _ ->
+        :ok
+    end)
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp cleanup_uncertain(%{session: %NodeIncarnation{} = session} = state) do
+    terminate_local_agents()
+    terminate_local_tasks(session)
+    _ = drain_revoked_partitions(session)
+    _ = TaskClaims.reconcile_proven(100)
     %{state | phase: :uncertain, leader: nil}
+  end
+
+  defp cleanup_uncertain(state), do: %{state | phase: :uncertain, leader: nil}
+
+  defp terminate_local_tasks(session) do
+    Repo.all(
+      from a in TaskAssignment,
+        where: a.node_incarnation_id == ^session.id,
+        where: a.state in ["reserved", "running", "termination_requested"],
+        order_by: a.id
+    )
+    |> Enum.each(fn assignment ->
+      assignment =
+        if assignment.state in ["reserved", "running"] do
+          case TaskClaims.request_termination(assignment) do
+            {:ok, requested} -> requested
+            _ -> assignment
+          end
+        else
+          assignment
+        end
+
+      if assignment.state == "termination_requested", do: terminate_exact_task(assignment)
+    end)
+  rescue
+    _ -> :blocked
+  catch
+    :exit, _ -> :blocked
+  end
+
+  defp fail_closed(state) do
+    # Uncertainty revokes all local execution immediately. Durable settlement
+    # still requires exact monitored termination proof and PostgreSQL fences.
+    cleanup_uncertain(state)
   end
 
   defp workers_ready?(workers), do: Enum.all?(workers, &is_pid(Process.whereis(&1)))

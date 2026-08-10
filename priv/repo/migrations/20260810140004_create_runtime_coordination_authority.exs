@@ -2,13 +2,117 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
   use Ecto.Migration
 
   @disable_ddl_transaction true
-  @disable_migration_lock true
   @partition_count 64
 
   # This protocol is intentionally expansion-only. Production activation is a
   # separate, stopped-fleet operator transaction; there is no rollback path.
   def up do
-    create table(:runtime_coordination_protocols, primary_key: false) do
+    execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.runtime_coordination_roles_ready()
+    RETURNS boolean
+    LANGUAGE sql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+      WITH canonical(role_name) AS (
+        VALUES
+          ('maraithon_object_owner'),
+          ('maraithon_migrator'),
+          ('maraithon_runtime'),
+          ('maraithon_payload_verifier'),
+          ('maraithon_incident_operator'),
+          ('maraithon_activation_operator')
+      ), roles AS (
+        SELECT role_row.*
+        FROM pg_catalog.pg_roles AS role_row
+        JOIN canonical ON canonical.role_name = role_row.rolname
+      ), relevant_memberships AS (
+        SELECT member_role.rolname AS member_name, granted_role.rolname AS granted_name
+        FROM pg_catalog.pg_auth_members AS membership
+        JOIN pg_catalog.pg_roles AS member_role ON member_role.oid = membership.member
+        JOIN pg_catalog.pg_roles AS granted_role ON granted_role.oid = membership.roleid
+        WHERE member_role.rolname IN (SELECT role_name FROM canonical)
+           OR granted_role.rolname IN (SELECT role_name FROM canonical)
+      )
+      SELECT
+        (SELECT count(*) = 6 AND
+                bool_and(NOT rolsuper AND NOT rolcreaterole AND NOT rolcreatedb AND
+                         NOT rolreplication AND NOT rolbypassrls)
+         FROM roles) AND
+        (SELECT NOT rolcanlogin FROM roles
+         WHERE rolname = 'maraithon_object_owner') AND
+        (SELECT bool_and(rolcanlogin) FROM roles
+         WHERE rolname <> 'maraithon_object_owner') AND
+        (SELECT count(*) = 1 AND
+                bool_and(member_name = 'maraithon_migrator' AND
+                         granted_name = 'maraithon_object_owner')
+         FROM relevant_memberships)
+    $function$;
+    """)
+
+    execute("""
+    DO $role_topology$
+    BEGIN
+      IF NOT public.runtime_coordination_roles_ready() THEN
+        RAISE EXCEPTION 'canonical runtime coordination roles must be provisioned before migration'
+          USING ERRCODE = 'invalid_authorization_specification';
+      END IF;
+    END;
+    $role_topology$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.runtime_role_topology_fingerprint()
+    RETURNS text
+    LANGUAGE sql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+      WITH canonical(role_name) AS (
+        VALUES
+          ('maraithon_object_owner'),
+          ('maraithon_migrator'),
+          ('maraithon_runtime'),
+          ('maraithon_payload_verifier'),
+          ('maraithon_incident_operator'),
+          ('maraithon_activation_operator')
+      ), roles AS (
+        SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+          'name', role_row.rolname,
+          'superuser', role_row.rolsuper,
+          'inherit', role_row.rolinherit,
+          'create_role', role_row.rolcreaterole,
+          'create_db', role_row.rolcreatedb,
+          'can_login', role_row.rolcanlogin,
+          'replication', role_row.rolreplication,
+          'bypass_rls', role_row.rolbypassrls,
+          'connection_limit', role_row.rolconnlimit,
+          'valid_until', role_row.rolvaliduntil
+        ) ORDER BY role_row.rolname) AS value
+        FROM pg_catalog.pg_roles AS role_row
+        JOIN canonical ON canonical.role_name = role_row.rolname
+      ), memberships AS (
+        SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+          'member', member_role.rolname,
+          'granted', granted_role.rolname,
+          'admin', membership.admin_option
+        ) ORDER BY member_role.rolname, granted_role.rolname), '[]'::jsonb) AS value
+        FROM pg_catalog.pg_auth_members AS membership
+        JOIN pg_catalog.pg_roles AS member_role ON member_role.oid = membership.member
+        JOIN pg_catalog.pg_roles AS granted_role ON granted_role.oid = membership.roleid
+        WHERE member_role.rolname IN (SELECT role_name FROM canonical)
+           OR granted_role.rolname IN (SELECT role_name FROM canonical)
+      )
+      SELECT encode(public.digest(convert_to(pg_catalog.jsonb_build_object(
+        'roles', roles.value, 'memberships', memberships.value
+      )::text, 'UTF8'), 'sha256'), 'hex')
+      FROM roles, memberships
+    $function$;
+    """)
+
+    create_if_not_exists table(:runtime_coordination_protocols, primary_key: false) do
       add :name, :string, primary_key: true
       add :mode, :string, null: false, default: "dark"
       add :partition_count, :smallint, null: false, default: @partition_count
@@ -21,6 +125,11 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       add :manifest_digest, :binary, null: false
       timestamps(type: :utc_datetime_usec)
     end
+
+    drop_if_exists constraint(
+                     :runtime_coordination_protocols,
+                     :runtime_coordination_protocol_shape
+                   )
 
     create constraint(:runtime_coordination_protocols, :runtime_coordination_protocol_shape,
              check: """
@@ -38,14 +147,20 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
              """
            )
 
-    create table(:runtime_coordination_manifests, primary_key: false) do
+    create_if_not_exists table(:runtime_coordination_manifests, primary_key: false) do
       add :name, :string, primary_key: true
       add :constraint_fingerprints, :map, null: false
       add :function_fingerprints, :map, null: false
       add :trigger_fingerprints, :map, null: false
       add :index_fingerprints, :map, null: false
+      add :catalog_fingerprints, :map, null: false
       timestamps(type: :utc_datetime_usec)
     end
+
+    drop_if_exists constraint(
+                     :runtime_coordination_manifests,
+                     :runtime_coordination_manifest_singleton
+                   )
 
     create constraint(:runtime_coordination_manifests, :runtime_coordination_manifest_singleton,
              check: "name = 'runtime'"
@@ -58,6 +173,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       add_if_not_exists :exact_revision, :string
     end
 
+    drop_if_exists constraint(:effect_execution_protocols, :effect_activation_evidence_shape)
+
     create constraint(:effect_execution_protocols, :effect_activation_evidence_shape,
              check: """
              (activation_evidence_id IS NULL AND activation_evidence_digest IS NULL AND
@@ -69,7 +186,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
              """
            )
 
-    create table(:runtime_node_incarnations, primary_key: false) do
+    create_if_not_exists table(:runtime_node_incarnations, primary_key: false) do
       add :id, :uuid, primary_key: true
       add :activation_epoch, :uuid, null: false
       add :node_name, :string, null: false
@@ -83,6 +200,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       timestamps(type: :utc_datetime_usec)
     end
 
+    drop_if_exists constraint(:runtime_node_incarnations, :runtime_node_incarnations_shape)
+
     create constraint(:runtime_node_incarnations, :runtime_node_incarnations_shape,
              check: """
              octet_length(node_name) BETWEEN 1 AND 255 AND
@@ -95,10 +214,12 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
              """
            )
 
-    create index(:runtime_node_incarnations, [:state, :lease_expires_at])
-    create index(:runtime_node_incarnations, [:node_name, :inserted_at])
+    drop_invalid_index("runtime_node_incarnations_state_lease_expires_at_index")
+    create_if_not_exists index(:runtime_node_incarnations, [:state, :lease_expires_at])
+    drop_invalid_index("runtime_node_incarnations_node_name_inserted_at_index")
+    create_if_not_exists index(:runtime_node_incarnations, [:node_name, :inserted_at])
 
-    create table(:runtime_leader_authorities, primary_key: false) do
+    create_if_not_exists table(:runtime_leader_authorities, primary_key: false) do
       add :role, :string, primary_key: true
       add :activation_epoch, :uuid
       add :leader_epoch, :bigint, null: false, default: 0
@@ -110,6 +231,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       add :draining_at, :utc_datetime_usec
       timestamps(type: :utc_datetime_usec)
     end
+
+    drop_if_exists constraint(:runtime_leader_authorities, :runtime_leader_authorities_shape)
 
     create constraint(:runtime_leader_authorities, :runtime_leader_authorities_shape,
              check: """
@@ -128,7 +251,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
              """
            )
 
-    create table(:runtime_partitions, primary_key: false) do
+    create_if_not_exists table(:runtime_partitions, primary_key: false) do
       add :partition_id, :smallint, primary_key: true
       add :activation_epoch, :uuid
       add :ownership_epoch, :bigint, null: false, default: 0
@@ -142,6 +265,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       add :fair_sequence, :bigint, null: false, default: 0
       timestamps(type: :utc_datetime_usec)
     end
+
+    drop_if_exists constraint(:runtime_partitions, :runtime_partitions_shape)
 
     create constraint(:runtime_partitions, :runtime_partitions_shape,
              check: """
@@ -162,10 +287,12 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
              """
            )
 
-    create index(:runtime_partitions, [:state, :lease_expires_at])
-    create index(:runtime_partitions, [:owner_node_incarnation_id, :state])
+    drop_invalid_index("runtime_partitions_state_lease_expires_at_index")
+    create_if_not_exists index(:runtime_partitions, [:state, :lease_expires_at])
+    drop_invalid_index("runtime_partitions_owner_node_incarnation_id_state_index")
+    create_if_not_exists index(:runtime_partitions, [:owner_node_incarnation_id, :state])
 
-    create table(:runtime_partition_transitions, primary_key: false) do
+    create_if_not_exists table(:runtime_partition_transitions, primary_key: false) do
       add :id, :uuid, primary_key: true
       add :activation_epoch, :uuid, null: false
       add :partition_id, :smallint, null: false
@@ -184,6 +311,11 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       timestamps(type: :utc_datetime_usec)
     end
 
+    drop_if_exists constraint(
+                     :runtime_partition_transitions,
+                     :runtime_partition_transitions_shape
+                   )
+
     create constraint(:runtime_partition_transitions, :runtime_partition_transitions_shape,
              check: """
              partition_id >= 0 AND partition_id < #{@partition_count} AND partition_epoch > 0 AND
@@ -198,10 +330,12 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
              """
            )
 
-    create index(:runtime_partition_transitions, [:partition_id, :partition_epoch])
-    create index(:runtime_partition_transitions, [:state, :requested_at])
+    drop_invalid_index("runtime_partition_transitions_partition_id_partition_epoch_index")
+    create_if_not_exists index(:runtime_partition_transitions, [:partition_id, :partition_epoch])
+    drop_invalid_index("runtime_partition_transitions_state_requested_at_index")
+    create_if_not_exists index(:runtime_partition_transitions, [:state, :requested_at])
 
-    create table(:runtime_task_assignments, primary_key: false) do
+    create_if_not_exists table(:runtime_task_assignments, primary_key: false) do
       add :id, :uuid, primary_key: true
       add :activation_epoch, :uuid, null: false
       add :work_kind, :string, null: false
@@ -223,6 +357,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       timestamps(type: :utc_datetime_usec)
     end
 
+    drop_if_exists constraint(:runtime_task_assignments, :runtime_task_assignments_shape)
+
     create constraint(:runtime_task_assignments, :runtime_task_assignments_shape,
              check: """
              work_kind IN ('background_job', 'effect') AND
@@ -243,26 +379,40 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
              """
            )
 
-    create unique_index(:runtime_task_assignments, [:claim_token],
-             name: :runtime_task_assignments_claim_token_index
-           )
+    drop_invalid_index("runtime_task_assignments_claim_token_index")
 
-    create unique_index(
-             :runtime_task_assignments,
-             [:node_incarnation_id, :supervisor_id, :local_task_id],
-             name: :runtime_task_assignments_physical_identity_index
-           )
+    create_if_not_exists unique_index(:runtime_task_assignments, [:claim_token],
+                           name: :runtime_task_assignments_claim_token_index
+                         )
 
-    create unique_index(:runtime_task_assignments, [:work_kind, :work_id],
-             where:
-               "state IN ('reserved', 'running', 'termination_requested', 'termination_proven')",
-             name: :runtime_task_assignments_active_work_index
-           )
+    drop_invalid_index("runtime_task_assignments_physical_identity_index")
 
-    create index(:runtime_task_assignments, [:partition_id, :partition_epoch, :state])
-    create index(:runtime_task_assignments, [:state, :lease_expires_at])
+    create_if_not_exists unique_index(
+                           :runtime_task_assignments,
+                           [:node_incarnation_id, :supervisor_id, :local_task_id],
+                           name: :runtime_task_assignments_physical_identity_index
+                         )
 
-    create table(:runtime_task_outcome_evidence, primary_key: false) do
+    drop_invalid_index("runtime_task_assignments_active_work_index")
+
+    create_if_not_exists unique_index(:runtime_task_assignments, [:work_kind, :work_id],
+                           where:
+                             "state IN ('reserved', 'running', 'termination_requested', 'termination_proven')",
+                           name: :runtime_task_assignments_active_work_index
+                         )
+
+    drop_invalid_index("runtime_task_assignments_partition_id_partition_epoch_state_index")
+
+    create_if_not_exists index(:runtime_task_assignments, [
+                           :partition_id,
+                           :partition_epoch,
+                           :state
+                         ])
+
+    drop_invalid_index("runtime_task_assignments_state_lease_expires_at_index")
+    create_if_not_exists index(:runtime_task_assignments, [:state, :lease_expires_at])
+
+    create_if_not_exists table(:runtime_task_outcome_evidence, primary_key: false) do
       add :id, :uuid, primary_key: true
       add :assignment_id, :uuid, null: false
       add :activation_epoch, :uuid, null: false
@@ -275,15 +425,22 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:runtime_task_outcome_evidence, [:assignment_id],
-             name: :runtime_task_outcome_evidence_assignment_index
-           )
+    drop_invalid_index("runtime_task_outcome_evidence_assignment_index")
+
+    create_if_not_exists unique_index(:runtime_task_outcome_evidence, [:assignment_id],
+                           name: :runtime_task_outcome_evidence_assignment_index
+                         )
+
+    drop_if_exists constraint(
+                     :runtime_task_outcome_evidence,
+                     :runtime_task_outcome_evidence_shape
+                   )
 
     create constraint(:runtime_task_outcome_evidence, :runtime_task_outcome_evidence_shape,
              check: "octet_length(outcome) BETWEEN 1 AND 255"
            )
 
-    create table(:runtime_task_termination_proofs, primary_key: false) do
+    create_if_not_exists table(:runtime_task_termination_proofs, primary_key: false) do
       add :id, :uuid, primary_key: true
       add :assignment_id, :uuid, null: false
       add :activation_epoch, :uuid, null: false
@@ -299,9 +456,16 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:runtime_task_termination_proofs, [:assignment_id],
-             name: :runtime_task_termination_proofs_assignment_index
-           )
+    drop_invalid_index("runtime_task_termination_proofs_assignment_index")
+
+    create_if_not_exists unique_index(:runtime_task_termination_proofs, [:assignment_id],
+                           name: :runtime_task_termination_proofs_assignment_index
+                         )
+
+    drop_if_exists constraint(
+                     :runtime_task_termination_proofs,
+                     :runtime_task_termination_proofs_shape
+                   )
 
     create constraint(:runtime_task_termination_proofs, :runtime_task_termination_proofs_shape,
              check: """
@@ -312,7 +476,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
              """
            )
 
-    create table(:runtime_tenant_fairness, primary_key: false) do
+    create_if_not_exists table(:runtime_tenant_fairness, primary_key: false) do
       add :tenant_key, :string, primary_key: true
       add :partition_id, :smallint, null: false
       add :max_concurrency, :smallint, null: false, default: 1
@@ -325,6 +489,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       timestamps(type: :utc_datetime_usec)
     end
 
+    drop_if_exists constraint(:runtime_tenant_fairness, :runtime_tenant_fairness_bounds)
+
     create constraint(:runtime_tenant_fairness, :runtime_tenant_fairness_bounds,
              check: """
              octet_length(tenant_key) BETWEEN 1 AND 512 AND
@@ -335,9 +501,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
              """
            )
 
-    create index(:runtime_tenant_fairness, [:partition_id, :last_served_sequence, :tenant_key])
+    drop_invalid_index(
+      "runtime_tenant_fairness_partition_id_last_served_sequence_tenant_key_index"
+    )
 
-    create table(:runtime_partition_rebalance_requests, primary_key: false) do
+    create_if_not_exists index(:runtime_tenant_fairness, [
+                           :partition_id,
+                           :last_served_sequence,
+                           :tenant_key
+                         ])
+
+    create_if_not_exists table(:runtime_partition_rebalance_requests, primary_key: false) do
       add :id, :uuid, primary_key: true
       add :activation_epoch, :uuid, null: false
       add :partition_id, :smallint, null: false
@@ -352,10 +526,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:runtime_partition_rebalance_requests, [:partition_id],
-             where: "state = 'pending'",
-             name: :runtime_partition_rebalance_requests_pending_partition_index
-           )
+    drop_invalid_index("runtime_partition_rebalance_requests_pending_partition_index")
+
+    create_if_not_exists unique_index(:runtime_partition_rebalance_requests, [:partition_id],
+                           where: "state = 'pending'",
+                           name: :runtime_partition_rebalance_requests_pending_partition_index
+                         )
+
+    drop_if_exists constraint(
+                     :runtime_partition_rebalance_requests,
+                     :runtime_partition_rebalance_requests_shape
+                   )
 
     create constraint(
              :runtime_partition_rebalance_requests,
@@ -370,68 +551,82 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
            )
 
     alter table(:background_jobs) do
-      add :tenant_key, :string
-      add :partition_id, :smallint
-      add :coordination_activation_epoch, :uuid
-      add :coordination_partition_epoch, :bigint
-      add :coordination_node_incarnation_id, :uuid
-      add :coordination_task_assignment_id, :uuid
-      add :coordination_task_supervisor_id, :uuid
-      add :coordination_local_task_id, :uuid
+      add_if_not_exists :tenant_key, :string
+      add_if_not_exists :partition_id, :smallint
+      add_if_not_exists :coordination_activation_epoch, :uuid
+      add_if_not_exists :coordination_partition_epoch, :bigint
+      add_if_not_exists :coordination_node_incarnation_id, :uuid
+      add_if_not_exists :coordination_task_assignment_id, :uuid
+      add_if_not_exists :coordination_task_supervisor_id, :uuid
+      add_if_not_exists :coordination_local_task_id, :uuid
     end
 
     alter table(:scheduled_jobs) do
-      add :tenant_key, :string
-      add :partition_id, :smallint
-      add :dispatch_token, :uuid
-      add :coordination_activation_epoch, :uuid
-      add :coordination_partition_epoch, :bigint
-      add :coordination_node_incarnation_id, :uuid
+      add_if_not_exists :tenant_key, :string
+      add_if_not_exists :partition_id, :smallint
+      add_if_not_exists :dispatch_token, :uuid
+      add_if_not_exists :coordination_activation_epoch, :uuid
+      add_if_not_exists :coordination_partition_epoch, :bigint
+      add_if_not_exists :coordination_node_incarnation_id, :uuid
     end
 
     alter table(:agent_runtime_leases) do
-      add :coordination_activation_epoch, :uuid
-      add :coordination_partition_id, :smallint
-      add :coordination_partition_epoch, :bigint
-      add :coordination_node_incarnation_id, :uuid
+      add_if_not_exists :coordination_activation_epoch, :uuid
+      add_if_not_exists :coordination_partition_id, :smallint
+      add_if_not_exists :coordination_partition_epoch, :bigint
+      add_if_not_exists :coordination_node_incarnation_id, :uuid
     end
 
     alter table(:effects) do
-      add :coordination_activation_epoch, :uuid
-      add :coordination_partition_id, :smallint
-      add :coordination_partition_epoch, :bigint
-      add :coordination_node_incarnation_id, :uuid
-      add :coordination_task_assignment_id, :uuid
+      add_if_not_exists :coordination_activation_epoch, :uuid
+      add_if_not_exists :coordination_partition_id, :smallint
+      add_if_not_exists :coordination_partition_epoch, :bigint
+      add_if_not_exists :coordination_node_incarnation_id, :uuid
+      add_if_not_exists :coordination_task_assignment_id, :uuid
     end
 
-    create index(:background_jobs, [:partition_id, :status, :scheduled_at],
-             name: :background_jobs_partition_due_index,
-             where: "status = 'pending'",
-             concurrently: true
-           )
+    execute("DROP INDEX CONCURRENTLY IF EXISTS public.background_jobs_partition_due_index")
 
-    create index(:background_jobs, [:tenant_key, :status],
-             name: :background_jobs_tenant_active_index,
-             where: "status IN ('pending', 'running')",
-             concurrently: true
-           )
+    create_if_not_exists index(:background_jobs, [:partition_id, :status, :scheduled_at],
+                           name: :background_jobs_partition_due_index,
+                           where: "status = 'pending'",
+                           concurrently: true
+                         )
 
-    create index(:scheduled_jobs, [:partition_id, :status, :fire_at],
-             name: :scheduled_jobs_partition_due_index,
-             where: "status = 'pending'",
-             concurrently: true
-           )
+    execute("DROP INDEX CONCURRENTLY IF EXISTS public.background_jobs_tenant_active_index")
 
-    create index(:agent_runtime_leases, [:coordination_partition_id, :lease_until],
-             name: :agent_runtime_leases_coordination_partition_index,
-             concurrently: true
-           )
+    create_if_not_exists index(:background_jobs, [:tenant_key, :status],
+                           name: :background_jobs_tenant_active_index,
+                           where: "status IN ('pending', 'running')",
+                           concurrently: true
+                         )
 
-    create index(:effects, [:coordination_partition_id, :status, :retry_after],
-             name: :effects_coordination_partition_pending_index,
-             where: "status = 'pending'",
-             concurrently: true
-           )
+    execute("DROP INDEX CONCURRENTLY IF EXISTS public.scheduled_jobs_partition_due_index")
+
+    create_if_not_exists index(:scheduled_jobs, [:partition_id, :status, :fire_at],
+                           name: :scheduled_jobs_partition_due_index,
+                           where: "status = 'pending'",
+                           concurrently: true
+                         )
+
+    execute(
+      "DROP INDEX CONCURRENTLY IF EXISTS public.agent_runtime_leases_coordination_partition_index"
+    )
+
+    create_if_not_exists index(:agent_runtime_leases, [:coordination_partition_id, :lease_until],
+                           name: :agent_runtime_leases_coordination_partition_index,
+                           concurrently: true
+                         )
+
+    execute(
+      "DROP INDEX CONCURRENTLY IF EXISTS public.effects_coordination_partition_pending_index"
+    )
+
+    create_if_not_exists index(:effects, [:coordination_partition_id, :status, :retry_after],
+                           name: :effects_coordination_partition_pending_index,
+                           where: "status = 'pending'",
+                           concurrently: true
+                         )
 
     execute("""
     CREATE OR REPLACE FUNCTION public.runtime_partition_for(tenant text)
@@ -472,6 +667,18 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           FROM public.agents AS agent
           WHERE agent.id = NEW.agent_id AND agent.user_id IS NOT NULL;
           IF resolved_tenant IS NULL THEN
+            -- Expansion must not change legacy scheduling while coordination is
+            -- dark. The activation backfill barrier still rejects these null
+            -- tenant rows before partition-fenced mode can be enabled.
+            IF EXISTS (
+              SELECT 1 FROM public.runtime_coordination_protocols
+              WHERE name = 'runtime' AND mode = 'dark'
+            ) THEN
+              NEW.tenant_key := NULL;
+              NEW.partition_id := NULL;
+              RETURN NEW;
+            END IF;
+
             RAISE EXCEPTION 'scheduled job tenant is unavailable'
               USING ERRCODE = 'check_violation';
           END IF;
@@ -486,12 +693,20 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS populate_background_job_partition_trigger ON public.background_jobs"
+    )
+
     execute("""
     CREATE TRIGGER populate_background_job_partition_trigger
       BEFORE INSERT OR UPDATE OF user_id, queue, telegram_bot_id, tenant_key
       ON public.background_jobs
       FOR EACH ROW EXECUTE FUNCTION public.populate_runtime_work_partition()
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS populate_scheduled_job_partition_trigger ON public.scheduled_jobs"
+    )
 
     execute("""
     CREATE TRIGGER populate_scheduled_job_partition_trigger
@@ -503,6 +718,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     # Existing rows remain nullable during the expansion. A bounded operator
     # backfill uses SKIP LOCKED; activation repeats the zero-null proof while
     # holding the work tables in SHARE mode. No migration-time table rewrite.
+    execute(
+      "ALTER TABLE public.background_jobs DROP CONSTRAINT IF EXISTS background_jobs_partition_shape"
+    )
+
     execute("""
     ALTER TABLE public.background_jobs
       ADD CONSTRAINT background_jobs_partition_shape CHECK (
@@ -511,6 +730,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
          partition_id >= 0 AND partition_id < #{@partition_count})
       ) NOT VALID
     """)
+
+    execute(
+      "ALTER TABLE public.scheduled_jobs DROP CONSTRAINT IF EXISTS scheduled_jobs_partition_shape"
+    )
 
     execute("""
     ALTER TABLE public.scheduled_jobs
@@ -521,6 +744,263 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       ) NOT VALID
     """)
 
+    execute(
+      "ALTER TABLE public.background_jobs VALIDATE CONSTRAINT background_jobs_partition_shape"
+    )
+
+    execute(
+      "ALTER TABLE public.scheduled_jobs VALIDATE CONSTRAINT scheduled_jobs_partition_shape"
+    )
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.runtime_coordination_acl_ready()
+    RETURNS boolean
+    LANGUAGE plpgsql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      relation_name text;
+      function_name text;
+    BEGIN
+      IF NOT public.runtime_coordination_roles_ready() THEN
+        RETURN false;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_namespace AS namespace
+        JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
+        WHERE namespace.nspname = 'public'
+          AND owner_role.rolname = 'maraithon_object_owner'
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_catalog.aclexplode(COALESCE(
+              namespace.nspacl, pg_catalog.acldefault('n', namespace.nspowner))) AS privilege
+            WHERE privilege.grantee = 0
+          )
+      ) OR NOT (
+        has_schema_privilege('maraithon_runtime', 'public', 'USAGE') AND
+        has_schema_privilege('maraithon_payload_verifier', 'public', 'USAGE') AND
+        has_schema_privilege('maraithon_incident_operator', 'public', 'USAGE') AND
+        has_schema_privilege('maraithon_activation_operator', 'public', 'USAGE')
+      ) THEN
+        RETURN false;
+      END IF;
+
+      FOREACH relation_name IN ARRAY ARRAY[
+        'runtime_coordination_protocols', 'runtime_coordination_manifests',
+        'runtime_node_incarnations', 'runtime_leader_authorities', 'runtime_partitions',
+        'runtime_partition_transitions', 'runtime_task_assignments',
+        'runtime_task_outcome_evidence', 'runtime_task_termination_proofs',
+        'runtime_tenant_fairness', 'runtime_partition_rebalance_requests',
+        'effect_execution_protocols', 'effect_execution_protocol_manifests',
+        'effect_termination_attestations', 'effects', 'agent_runtime_leases',
+        'agent_directives', 'agent_runs', 'agent_run_steps', 'background_jobs',
+        'scheduled_jobs', 'schema_migrations'
+      ] LOOP
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_catalog.pg_class AS relation
+          JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+          JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = relation.relowner
+          WHERE namespace.nspname = 'public' AND relation.relname = relation_name
+            AND owner_role.rolname = 'maraithon_object_owner'
+        ) THEN
+          RETURN false;
+        END IF;
+      END LOOP;
+
+      FOREACH function_name IN ARRAY ARRAY[
+        'runtime_partition_for(text)', 'runtime_coordination_roles_ready()',
+        'runtime_role_topology_fingerprint()', 'runtime_coordination_acl_ready()',
+        'runtime_catalog_table_fingerprint(regclass)',
+        'populate_runtime_work_partition()', 'enforce_effect_activation_evidence()',
+        'enforce_runtime_coordination_protocol()',
+        'reject_runtime_coordination_evidence_mutation()',
+        'enforce_runtime_partition_transition()', 'enforce_runtime_node_incarnation()',
+        'enforce_runtime_leader_authority()', 'enforce_runtime_partition_authority()',
+        'enforce_runtime_task_assignment()', 'enforce_runtime_task_outcome_evidence()',
+        'enforce_runtime_task_termination_proof()',
+        'runtime_task_authority_valid(uuid,uuid,smallint,bigint,uuid,uuid)',
+        'enforce_runtime_work_role()',
+        'enforce_coordinated_background_job()', 'enforce_coordinated_scheduled_job()',
+        'enforce_coordinated_agent_directive()', 'enforce_coordinated_agent_lease()',
+        'enforce_coordinated_effect()', 'runtime_coordination_catalog_ready_count()'
+      ] LOOP
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = procedure.proowner
+          WHERE procedure.oid = ('public.' || function_name)::regprocedure
+            AND owner_role.rolname = 'maraithon_object_owner'
+        ) OR EXISTS (
+          SELECT 1
+          FROM pg_catalog.aclexplode(COALESCE(
+            (SELECT procedure.proacl FROM pg_catalog.pg_proc AS procedure
+             WHERE procedure.oid = ('public.' || function_name)::regprocedure),
+            pg_catalog.acldefault('f',
+              (SELECT procedure.proowner FROM pg_catalog.pg_proc AS procedure
+               WHERE procedure.oid = ('public.' || function_name)::regprocedure))
+          )) AS privilege
+          WHERE privilege.grantee = 0
+        ) THEN
+          RETURN false;
+        END IF;
+      END LOOP;
+
+      -- PUBLIC receives no authority over the durable coordination ledger.
+      IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+          COALESCE(relation.relacl, pg_catalog.acldefault('r', relation.relowner))) AS privilege
+        WHERE namespace.nspname = 'public'
+          AND relation.relname = ANY(ARRAY[
+            'runtime_coordination_protocols', 'runtime_coordination_manifests',
+            'runtime_node_incarnations', 'runtime_leader_authorities', 'runtime_partitions',
+            'runtime_partition_transitions', 'runtime_task_assignments',
+            'runtime_task_outcome_evidence', 'runtime_task_termination_proofs',
+            'runtime_tenant_fairness', 'runtime_partition_rebalance_requests',
+            'effect_execution_protocols', 'effect_execution_protocol_manifests',
+            'effect_termination_attestations', 'effects', 'agent_runtime_leases',
+            'agent_directives', 'agent_runs', 'agent_run_steps', 'background_jobs',
+            'scheduled_jobs', 'schema_migrations'
+          ]) AND privilege.grantee = 0
+      ) THEN
+        RETURN false;
+      END IF;
+
+      -- All allowed privileges are relation-level and reviewed below. Any
+      -- column-specific ACL can bypass a negative table privilege proof.
+      IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_attribute AS attribute
+        JOIN pg_catalog.pg_class AS relation ON relation.oid = attribute.attrelid
+        JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'public' AND attribute.attnum > 0
+          AND NOT attribute.attisdropped AND attribute.attacl IS NOT NULL
+          AND relation.relname = ANY(ARRAY[
+            'runtime_coordination_protocols', 'runtime_coordination_manifests',
+            'runtime_node_incarnations', 'runtime_leader_authorities', 'runtime_partitions',
+            'runtime_partition_transitions', 'runtime_task_assignments',
+            'runtime_task_outcome_evidence', 'runtime_task_termination_proofs',
+            'runtime_tenant_fairness', 'runtime_partition_rebalance_requests',
+            'effect_execution_protocols', 'effect_execution_protocol_manifests',
+            'effect_termination_attestations', 'effects', 'agent_runtime_leases',
+            'agent_directives', 'agent_runs', 'agent_run_steps', 'background_jobs',
+            'scheduled_jobs', 'schema_migrations'
+          ])
+      ) THEN
+        RETURN false;
+      END IF;
+
+      -- Runtime has only worker ledger access. Row triggers further restrict
+      -- local proof/outcome inserts to the exact live task incarnation.
+      IF NOT (
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'SELECT') AND
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_manifests', 'SELECT') AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_node_incarnations', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_node_incarnations', 'INSERT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_node_incarnations', 'UPDATE')) AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_leader_authorities', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_leader_authorities', 'UPDATE')) AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_partitions', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_partitions', 'UPDATE')) AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_partition_transitions', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_partition_transitions', 'INSERT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_partition_transitions', 'UPDATE')) AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_task_assignments', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_task_assignments', 'INSERT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_task_assignments', 'UPDATE')) AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_task_outcome_evidence', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_task_outcome_evidence', 'INSERT')) AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_task_termination_proofs', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_task_termination_proofs', 'INSERT')) AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_tenant_fairness', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_tenant_fairness', 'INSERT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_tenant_fairness', 'UPDATE')) AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_partition_rebalance_requests', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_partition_rebalance_requests', 'INSERT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_partition_rebalance_requests', 'UPDATE')) AND
+        has_table_privilege('maraithon_runtime', 'public.effect_execution_protocols', 'SELECT') AND
+        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'SELECT')
+      ) OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_manifests', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_task_outcome_evidence', 'UPDATE,DELETE,TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_task_termination_proofs', 'UPDATE,DELETE,TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations',
+          'INSERT,UPDATE,DELETE,TRUNCATE') THEN
+        RETURN false;
+      END IF;
+
+      IF NOT (
+        has_table_privilege('maraithon_incident_operator',
+          'public.runtime_coordination_protocols', 'SELECT') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.runtime_node_incarnations', 'SELECT') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.runtime_partitions', 'SELECT') AND
+        (has_table_privilege('maraithon_incident_operator', 'public.runtime_task_assignments', 'SELECT') AND
+          has_table_privilege('maraithon_incident_operator', 'public.runtime_task_assignments', 'UPDATE')) AND
+        (has_table_privilege('maraithon_incident_operator', 'public.runtime_task_termination_proofs', 'SELECT') AND
+          has_table_privilege('maraithon_incident_operator', 'public.runtime_task_termination_proofs', 'INSERT')) AND
+        (has_table_privilege('maraithon_incident_operator', 'public.effect_termination_attestations', 'SELECT') AND
+          has_table_privilege('maraithon_incident_operator', 'public.effect_termination_attestations', 'INSERT'))
+      ) OR has_table_privilege('maraithon_incident_operator',
+             'public.runtime_task_outcome_evidence', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_coordination_protocols', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.effect_termination_attestations', 'UPDATE,DELETE,TRUNCATE') THEN
+        RETURN false;
+      END IF;
+
+      IF NOT (
+        (has_table_privilege('maraithon_activation_operator', 'public.runtime_coordination_protocols', 'SELECT') AND
+          has_table_privilege('maraithon_activation_operator', 'public.runtime_coordination_protocols', 'UPDATE')) AND
+        has_table_privilege('maraithon_activation_operator',
+          'public.runtime_coordination_manifests', 'SELECT') AND
+        (has_table_privilege('maraithon_activation_operator', 'public.runtime_node_incarnations', 'SELECT') AND
+          has_table_privilege('maraithon_activation_operator', 'public.runtime_node_incarnations', 'UPDATE')) AND
+        (has_table_privilege('maraithon_activation_operator', 'public.runtime_task_assignments', 'SELECT') AND
+          has_table_privilege('maraithon_activation_operator', 'public.runtime_task_assignments', 'UPDATE')) AND
+        (has_table_privilege('maraithon_activation_operator', 'public.effect_execution_protocols', 'SELECT') AND
+          has_table_privilege('maraithon_activation_operator', 'public.effect_execution_protocols', 'UPDATE')) AND
+        has_table_privilege('maraithon_activation_operator',
+          'public.schema_migrations', 'SELECT') AND
+        has_table_privilege('maraithon_runtime',
+          'public.schema_migrations', 'SELECT') AND
+        has_table_privilege('maraithon_runtime',
+          'public.effect_execution_protocol_manifests', 'SELECT')
+      ) OR has_table_privilege('maraithon_activation_operator',
+             'public.runtime_task_assignments', 'INSERT,DELETE,TRUNCATE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.runtime_task_termination_proofs', 'INSERT,UPDATE,DELETE,TRUNCATE') THEN
+        RETURN false;
+      END IF;
+
+      IF NOT (
+        has_table_privilege('maraithon_payload_verifier',
+          'public.runtime_coordination_protocols', 'SELECT') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.runtime_coordination_manifests', 'SELECT') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.runtime_task_assignments', 'SELECT') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.runtime_task_outcome_evidence', 'SELECT') AND
+        has_table_privilege('maraithon_payload_verifier',
+          'public.runtime_task_termination_proofs', 'SELECT')
+      ) OR has_table_privilege('maraithon_payload_verifier',
+             'public.runtime_task_outcome_evidence', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.runtime_task_termination_proofs', 'INSERT,UPDATE,DELETE,TRUNCATE') THEN
+        RETURN false;
+      END IF;
+
+      RETURN true;
+    END;
+    $function$;
+    """)
+
     execute("""
     CREATE OR REPLACE FUNCTION public.enforce_effect_activation_evidence()
     RETURNS trigger
@@ -528,6 +1008,14 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     SET search_path = pg_catalog, public
     AS $function$
     BEGIN
+      IF (NEW.activation_evidence_id IS DISTINCT FROM OLD.activation_evidence_id OR
+          NEW.activation_evidence_digest IS DISTINCT FROM OLD.activation_evidence_digest OR
+          NEW.activated_by IS DISTINCT FROM OLD.activated_by OR
+          NEW.exact_revision IS DISTINCT FROM OLD.exact_revision) AND
+         current_user IS DISTINCT FROM 'maraithon_activation_operator' THEN
+        RAISE EXCEPTION 'Effect activation evidence requires activation operator role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       IF OLD.activation_evidence_digest IS NOT NULL AND (
         NEW.activation_evidence_id IS DISTINCT FROM OLD.activation_evidence_id OR
         NEW.activation_evidence_digest IS DISTINCT FROM OLD.activation_evidence_digest OR
@@ -548,6 +1036,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_effect_activation_evidence_trigger ON public.effect_execution_protocols"
+    )
+
     execute("""
     CREATE TRIGGER enforce_effect_activation_evidence_trigger
       BEFORE UPDATE ON public.effect_execution_protocols
@@ -566,6 +1058,11 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       effect_activated_by text;
       effect_exact_revision text;
     BEGIN
+      IF TG_OP IN ('UPDATE', 'DELETE') AND
+         current_user IS DISTINCT FROM 'maraithon_activation_operator' THEN
+        RAISE EXCEPTION 'runtime coordination protocol requires activation operator role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
         RAISE EXCEPTION 'runtime coordination protocol is irreversible'
           USING ERRCODE = 'check_violation';
@@ -637,15 +1134,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
 
           IF (SELECT count(*) FROM public.schema_migrations
               WHERE version = 20260810140004) <> 1 OR
-             public.runtime_coordination_catalog_ready_count() <> 65 OR
+             public.runtime_coordination_catalog_ready_count() <> 95 OR
+             NOT public.runtime_coordination_roles_ready() OR
+             NOT public.runtime_coordination_acl_ready() OR
              NEW.manifest_digest IS DISTINCT FROM (
-               SELECT decode(
-                 md5(manifest.constraint_fingerprints::text ||
-                     manifest.function_fingerprints::text ||
-                     manifest.trigger_fingerprints::text || manifest.index_fingerprints::text) ||
-                 md5('v1:' || manifest.constraint_fingerprints::text ||
-                     manifest.function_fingerprints::text ||
-                     manifest.trigger_fingerprints::text || manifest.index_fingerprints::text), 'hex')
+               SELECT public.digest(convert_to(pg_catalog.jsonb_build_object(
+                 'constraints', manifest.constraint_fingerprints,
+                 'functions', manifest.function_fingerprints,
+                 'triggers', manifest.trigger_fingerprints,
+                 'indexes', manifest.index_fingerprints,
+                 'catalogs', manifest.catalog_fingerprints
+               )::text, 'UTF8'), 'sha256')
                FROM public.runtime_coordination_manifests AS manifest
                WHERE manifest.name = 'runtime'
              ) THEN
@@ -690,11 +1189,19 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_runtime_coordination_protocol_trigger ON public.runtime_coordination_protocols"
+    )
+
     execute("""
     CREATE TRIGGER enforce_runtime_coordination_protocol_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_coordination_protocols
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_coordination_protocol()
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_runtime_coordination_protocol_truncate_trigger ON public.runtime_coordination_protocols"
+    )
 
     execute("""
     CREATE TRIGGER reject_runtime_coordination_protocol_truncate_trigger
@@ -719,11 +1226,15 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           "runtime_coordination_manifests",
           "runtime_task_termination_proofs"
         ] do
+      execute("DROP TRIGGER IF EXISTS reject_#{table}_mutation_trigger ON public.#{table}")
+
       execute("""
       CREATE TRIGGER reject_#{table}_mutation_trigger
         BEFORE UPDATE OR DELETE ON public.#{table}
         FOR EACH ROW EXECUTE FUNCTION public.reject_runtime_coordination_evidence_mutation()
       """)
+
+      execute("DROP TRIGGER IF EXISTS reject_#{table}_truncate_trigger ON public.#{table}")
 
       execute("""
       CREATE TRIGGER reject_#{table}_truncate_trigger
@@ -739,6 +1250,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     SET search_path = pg_catalog, public
     AS $function$
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' THEN
+        RAISE EXCEPTION 'runtime coordination mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'runtime partition transition history is irreversible'
           USING ERRCODE = 'check_violation';
@@ -767,11 +1282,19 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_runtime_partition_transition_trigger ON public.runtime_partition_transitions"
+    )
+
     execute("""
     CREATE TRIGGER enforce_runtime_partition_transition_trigger
       BEFORE UPDATE OR DELETE ON public.runtime_partition_transitions
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_partition_transition()
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_runtime_partition_transitions_truncate_trigger ON public.runtime_partition_transitions"
+    )
 
     execute("""
     CREATE TRIGGER reject_runtime_partition_transitions_truncate_trigger
@@ -788,7 +1311,13 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     DECLARE
       requested_id uuid;
       leader_authorized boolean;
+      unresolved_tasks bigint;
+      live_leases bigint;
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' THEN
+        RAISE EXCEPTION 'runtime coordination mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'runtime node incarnation history is immutable'
           USING ERRCODE = 'check_violation';
@@ -818,6 +1347,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           SELECT 1 FROM public.runtime_coordination_protocols AS protocol
           WHERE protocol.name = 'runtime' AND protocol.mode = 'partition_fenced_v1'
             AND protocol.activation_epoch = NEW.activation_epoch
+            AND protocol.exact_revision = NEW.revision
         ) THEN
           RAISE EXCEPTION 'runtime node cannot join an inactive protocol'
             USING ERRCODE = 'check_violation';
@@ -841,11 +1371,29 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           RAISE EXCEPTION 'expired runtime node incarnation cannot be revived'
             USING ERRCODE = 'check_violation';
         END IF;
+        IF NEW.state = 'revoked' AND OLD.state <> 'revoked' THEN
+          SELECT count(*) INTO unresolved_tasks
+          FROM public.runtime_task_assignments
+          WHERE node_incarnation_id = OLD.id
+            AND state IN ('reserved', 'running', 'termination_requested', 'termination_proven');
+          SELECT count(*) INTO live_leases
+          FROM public.agent_runtime_leases
+          WHERE coordination_node_incarnation_id = OLD.id
+            AND lease_until > timezone('UTC', clock_timestamp());
+          IF unresolved_tasks <> 0 OR live_leases <> 0 THEN
+            RAISE EXCEPTION 'node revocation requires exact task proof and Agent lease drain'
+              USING ERRCODE = 'check_violation';
+          END IF;
+        END IF;
       END IF;
       RETURN NEW;
     END;
     $function$;
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_runtime_node_incarnation_trigger ON public.runtime_node_incarnations"
+    )
 
     execute("""
     CREATE TRIGGER enforce_runtime_node_incarnation_trigger
@@ -861,6 +1409,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     AS $function$
     DECLARE node_valid boolean;
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' THEN
+        RAISE EXCEPTION 'runtime coordination mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'runtime leader authority is irreversible'
           USING ERRCODE = 'check_violation';
@@ -902,6 +1454,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_runtime_leader_authority_trigger ON public.runtime_leader_authorities"
+    )
+
     execute("""
     CREATE TRIGGER enforce_runtime_leader_authority_trigger
       BEFORE UPDATE OR DELETE ON public.runtime_leader_authorities
@@ -920,6 +1476,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       unresolved_tasks bigint;
       live_agents bigint;
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' THEN
+        RAISE EXCEPTION 'runtime coordination mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'runtime partition authority is irreversible'
           USING ERRCODE = 'check_violation';
@@ -973,8 +1533,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         SELECT count(*) INTO live_agents
         FROM public.agent_runtime_leases AS lease
         WHERE lease.coordination_partition_id = OLD.partition_id
-          AND lease.coordination_partition_epoch = OLD.ownership_epoch
-          AND lease.lease_until > timezone('UTC', clock_timestamp());
+          AND lease.coordination_partition_epoch = OLD.ownership_epoch;
         IF unresolved_tasks <> 0 OR live_agents <> 0 THEN
           RAISE EXCEPTION 'partition cannot move before exact task proof and Agent lease drain'
             USING ERRCODE = 'check_violation';
@@ -1001,6 +1560,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_runtime_partition_authority_trigger ON public.runtime_partitions"
+    )
+
     execute("""
     CREATE TRIGGER enforce_runtime_partition_authority_trigger
       BEFORE UPDATE OR DELETE ON public.runtime_partitions
@@ -1016,6 +1579,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     DECLARE
       assignment_row public.runtime_task_assignments%ROWTYPE;
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' THEN
+        RAISE EXCEPTION 'runtime coordination mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'runtime task outcome evidence is immutable'
           USING ERRCODE = 'check_violation';
@@ -1055,11 +1622,19 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_runtime_task_outcome_evidence_trigger ON public.runtime_task_outcome_evidence"
+    )
+
     execute("""
     CREATE TRIGGER enforce_runtime_task_outcome_evidence_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_task_outcome_evidence
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_task_outcome_evidence()
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_runtime_task_outcome_evidence_truncate_trigger ON public.runtime_task_outcome_evidence"
+    )
 
     execute("""
     CREATE TRIGGER reject_runtime_task_outcome_evidence_truncate_trigger
@@ -1077,7 +1652,19 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       authority_valid boolean;
       proof_valid boolean;
       outcome_evidence_valid boolean;
+      ready_authority_required boolean;
     BEGIN
+      IF current_user NOT IN ('maraithon_runtime', 'maraithon_incident_operator') THEN
+        RAISE EXCEPTION 'runtime task assignment mutation requires an authorized exact role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF current_user = 'maraithon_incident_operator' AND
+         (TG_OP <> 'UPDATE' OR OLD.state <> 'termination_requested' OR
+          NEW.state <> 'termination_proven') THEN
+        RAISE EXCEPTION 'incident operator may only attach external termination proof'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'runtime task assignment history is immutable'
           USING ERRCODE = 'check_violation';
@@ -1137,7 +1724,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         IF OLD.state = 'reserved' AND NEW.state NOT IN ('reserved', 'running', 'termination_requested', 'settled') OR
            OLD.state = 'running' AND NEW.state NOT IN ('running', 'termination_requested', 'settled') OR
            OLD.state = 'termination_requested' AND
-             NEW.state NOT IN ('termination_requested', 'termination_proven') OR
+             NEW.state NOT IN ('termination_requested', 'termination_proven', 'settled') OR
            OLD.state = 'termination_proven' AND
              NEW.state NOT IN ('termination_proven', 'settled', 'outcome_ambiguous') OR
            OLD.state IN ('settled', 'outcome_ambiguous') AND NEW IS DISTINCT FROM OLD THEN
@@ -1148,6 +1735,13 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         IF OLD.provider_boundary = 'not_entered' AND NEW.provider_boundary = 'entered' AND
            NEW.state <> 'running' THEN
           RAISE EXCEPTION 'provider entry requires a running exact task'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF ((OLD.state = 'reserved' AND NEW.state = 'running') OR
+            (OLD.provider_boundary = 'not_entered' AND NEW.provider_boundary = 'entered')) AND
+           NEW.lease_expires_at <= timezone('UTC', clock_timestamp()) THEN
+          RAISE EXCEPTION 'expired task incarnation cannot activate or enter a provider'
             USING ERRCODE = 'check_violation';
         END IF;
 
@@ -1208,22 +1802,34 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
            (OLD.provider_boundary = 'not_entered' AND NEW.provider_boundary = 'entered') OR
            (OLD.provider_boundary = 'entered' AND NEW.provider_boundary = 'outcome_known') OR
            NEW.lease_expires_at > OLD.lease_expires_at THEN
+          ready_authority_required :=
+            (NEW.state = 'running' AND NEW.state IS DISTINCT FROM OLD.state) OR
+            (OLD.provider_boundary = 'not_entered' AND NEW.provider_boundary = 'entered') OR
+            NEW.lease_expires_at > OLD.lease_expires_at;
+
           SELECT EXISTS (
             SELECT 1 FROM public.runtime_partitions AS partition
             JOIN public.runtime_node_incarnations AS node
               ON node.id = NEW.node_incarnation_id
              AND node.activation_epoch = NEW.activation_epoch
-             AND node.state IN ('ready', 'draining')
+             AND node.state = ANY(
+                   CASE WHEN ready_authority_required THEN ARRAY['ready']::text[]
+                        ELSE ARRAY['ready', 'draining']::text[] END)
+             AND (NOT ready_authority_required OR node.ready_at IS NOT NULL)
              AND node.lease_expires_at > timezone('UTC', clock_timestamp())
             WHERE partition.partition_id = NEW.partition_id
               AND partition.activation_epoch = NEW.activation_epoch
               AND partition.ownership_epoch = NEW.partition_epoch
               AND partition.owner_node_incarnation_id = NEW.node_incarnation_id
-              AND partition.state IN ('ready', 'draining')
+              AND partition.state = ANY(
+                    CASE WHEN ready_authority_required THEN ARRAY['ready']::text[]
+                         ELSE ARRAY['ready', 'draining']::text[] END)
+              AND (NOT ready_authority_required OR partition.ready_at IS NOT NULL)
               AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+            FOR SHARE OF partition, node
           ) INTO authority_valid;
           IF NOT authority_valid THEN
-            RAISE EXCEPTION 'stale runtime task cannot activate or settle'
+            RAISE EXCEPTION 'stale runtime task cannot activate, enter, renew, or settle'
               USING ERRCODE = 'check_violation';
           END IF;
         END IF;
@@ -1255,6 +1861,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_runtime_task_assignment_trigger ON public.runtime_task_assignments"
+    )
+
     execute("""
     CREATE TRIGGER enforce_runtime_task_assignment_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_task_assignments
@@ -1271,6 +1881,13 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       proof_valid boolean;
       confirmation text;
     BEGIN
+      IF (NEW.proof_kind = 'supervisor_down' AND
+          current_user IS DISTINCT FROM 'maraithon_runtime') OR
+         (NEW.proof_kind = 'external_destroyed' AND
+          current_user IS DISTINCT FROM 'maraithon_incident_operator') THEN
+        RAISE EXCEPTION 'task termination proof kind is not authorized for current role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       confirmation := current_setting('maraithon.runtime_task_termination_proof', true);
       IF NEW.proof_kind = 'supervisor_down' THEN
         IF confirmation IS DISTINCT FROM 'LOCAL_TASK_SUPERVISOR_PROOF' THEN
@@ -1302,6 +1919,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     END;
     $function$;
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_runtime_task_termination_proof_trigger ON public.runtime_task_termination_proofs"
+    )
 
     execute("""
     CREATE TRIGGER enforce_runtime_task_termination_proof_trigger
@@ -1350,6 +1971,37 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     """)
 
     execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_runtime_work_role()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' AND NOT (
+        current_user = 'maraithon_migrator' AND EXISTS (
+          SELECT 1 FROM public.runtime_coordination_protocols
+          WHERE name = 'runtime' AND mode = 'dark'
+        )
+      ) THEN
+        RAISE EXCEPTION 'durable runtime work mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+      RETURN COALESCE(NEW, OLD);
+    END;
+    $function$;
+    """)
+
+    for table <- ["agent_runs", "agent_run_steps"] do
+      execute("DROP TRIGGER IF EXISTS enforce_#{table}_runtime_role_trigger ON public.#{table}")
+
+      execute("""
+      CREATE TRIGGER enforce_#{table}_runtime_role_trigger
+        BEFORE INSERT OR UPDATE OR DELETE ON public.#{table}
+        FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_work_role()
+      """)
+    end
+
+    execute("""
     CREATE OR REPLACE FUNCTION public.enforce_coordinated_background_job()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1361,6 +2013,15 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       terminal_state text;
       terminal_outcome text;
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' AND NOT (
+        current_user = 'maraithon_migrator' AND EXISTS (
+          SELECT 1 FROM public.runtime_coordination_protocols
+          WHERE name = 'runtime' AND mode = 'dark'
+        )
+      ) THEN
+        RAISE EXCEPTION 'coordinated work mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       SELECT mode INTO STRICT protocol_mode
       FROM public.runtime_coordination_protocols WHERE name = 'runtime';
       IF protocol_mode = 'dark' THEN RETURN NEW; END IF;
@@ -1448,6 +2109,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_coordinated_background_job_trigger ON public.background_jobs"
+    )
+
     execute("""
     CREATE TRIGGER enforce_coordinated_background_job_trigger
       BEFORE UPDATE ON public.background_jobs
@@ -1460,8 +2125,20 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     LANGUAGE plpgsql
     SET search_path = pg_catalog, public
     AS $function$
-    DECLARE protocol_mode text; authority_valid boolean;
+    DECLARE
+      protocol_mode text;
+      authority_valid boolean;
+      ready_authority_required boolean;
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' AND NOT (
+        current_user = 'maraithon_migrator' AND EXISTS (
+          SELECT 1 FROM public.runtime_coordination_protocols
+          WHERE name = 'runtime' AND mode = 'dark'
+        )
+      ) THEN
+        RAISE EXCEPTION 'coordinated work mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       SELECT mode INTO STRICT protocol_mode
       FROM public.runtime_coordination_protocols WHERE name = 'runtime';
       IF protocol_mode = 'dark' THEN RETURN NEW; END IF;
@@ -1472,7 +2149,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       END IF;
 
       IF NEW.status IS DISTINCT FROM OLD.status AND
-         (OLD.status IN ('pending', 'dispatched') OR NEW.status = 'delivered') THEN
+         (NEW.status IN ('dispatched', 'delivered') OR OLD.status = 'dispatched') THEN
         IF NEW.dispatch_token IS NULL OR
            current_setting('maraithon.runtime_schedule_action', true)
              IS DISTINCT FROM NEW.dispatch_token::text OR
@@ -1482,19 +2159,28 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           RAISE EXCEPTION 'scheduled action requires exact dispatch and partition incarnation'
             USING ERRCODE = 'check_violation';
         END IF;
+
+        ready_authority_required := OLD.status <> 'dispatched';
         SELECT EXISTS (
           SELECT 1 FROM public.runtime_partitions AS partition
           JOIN public.runtime_node_incarnations AS node
             ON node.id = NEW.coordination_node_incarnation_id
            AND node.activation_epoch = NEW.coordination_activation_epoch
-           AND node.state = 'ready' AND node.ready_at IS NOT NULL
+           AND node.state = ANY(
+                 CASE WHEN ready_authority_required THEN ARRAY['ready']::text[]
+                      ELSE ARRAY['ready', 'draining']::text[] END)
+           AND (NOT ready_authority_required OR node.ready_at IS NOT NULL)
            AND node.lease_expires_at > timezone('UTC', clock_timestamp())
           WHERE partition.partition_id = NEW.partition_id
             AND partition.activation_epoch = NEW.coordination_activation_epoch
             AND partition.ownership_epoch = NEW.coordination_partition_epoch
             AND partition.owner_node_incarnation_id = NEW.coordination_node_incarnation_id
-            AND partition.state = 'ready' AND partition.ready_at IS NOT NULL
+            AND partition.state = ANY(
+                  CASE WHEN ready_authority_required THEN ARRAY['ready']::text[]
+                       ELSE ARRAY['ready', 'draining']::text[] END)
+            AND (NOT ready_authority_required OR partition.ready_at IS NOT NULL)
             AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+          FOR SHARE OF partition, node
         ) INTO authority_valid;
         IF NOT authority_valid THEN
           RAISE EXCEPTION 'stale scheduler action cannot mutate after partition epoch loss'
@@ -1509,6 +2195,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_coordinated_scheduled_job_trigger ON public.scheduled_jobs"
+    )
+
     execute("""
     CREATE TRIGGER enforce_coordinated_scheduled_job_trigger
       BEFORE UPDATE ON public.scheduled_jobs
@@ -1521,15 +2211,32 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     LANGUAGE plpgsql
     SET search_path = pg_catalog, public
     AS $function$
-    DECLARE protocol_mode text; authority_valid boolean;
+    DECLARE
+      protocol_mode text;
+      authority_valid boolean;
+      reconciler_valid boolean;
+      activating boolean := false;
+      directive_row public.agent_directives%ROWTYPE;
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' AND NOT (
+        current_user = 'maraithon_migrator' AND EXISTS (
+          SELECT 1 FROM public.runtime_coordination_protocols
+          WHERE name = 'runtime' AND mode = 'dark'
+        )
+      ) THEN
+        RAISE EXCEPTION 'coordinated work mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       SELECT mode INTO STRICT protocol_mode
       FROM public.runtime_coordination_protocols WHERE name = 'runtime';
-      IF protocol_mode = 'dark' OR TG_OP = 'INSERT' OR TG_OP = 'DELETE' THEN
-        RETURN COALESCE(NEW, OLD);
+      IF protocol_mode = 'dark' THEN RETURN COALESCE(NEW, OLD); END IF;
+      IF TG_OP = 'INSERT' THEN RETURN NEW; END IF;
+      directive_row := CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+      IF TG_OP = 'UPDATE' THEN
+        activating := OLD.status <> 'processing' AND NEW.status = 'processing';
       END IF;
 
-      IF OLD.status = 'processing' OR NEW.status = 'processing' THEN
+      IF OLD.status = 'processing' OR activating THEN
         SELECT EXISTS (
           SELECT 1 FROM public.agent_runtime_leases AS lease
           JOIN public.runtime_partitions AS partition
@@ -1537,25 +2244,58 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
            AND partition.activation_epoch = lease.coordination_activation_epoch
            AND partition.ownership_epoch = lease.coordination_partition_epoch
            AND partition.owner_node_incarnation_id = lease.coordination_node_incarnation_id
-           AND partition.state IN ('ready', 'draining')
+           AND partition.state = ANY(
+                 CASE WHEN activating THEN ARRAY['ready']::text[]
+                      ELSE ARRAY['ready', 'draining']::text[] END)
+           AND (NOT activating OR partition.ready_at IS NOT NULL)
            AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
-          WHERE lease.agent_id = NEW.agent_id
-            AND lease.owner_token = COALESCE(NEW.claimed_by_generation,
+          JOIN public.runtime_node_incarnations AS node
+            ON node.id = lease.coordination_node_incarnation_id
+           AND node.activation_epoch = lease.coordination_activation_epoch
+           AND node.state = ANY(
+                 CASE WHEN activating THEN ARRAY['ready']::text[]
+                      ELSE ARRAY['ready', 'draining']::text[] END)
+           AND (NOT activating OR node.ready_at IS NOT NULL)
+           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+          WHERE lease.agent_id = directive_row.agent_id
+            AND lease.owner_token = COALESCE(directive_row.claimed_by_generation,
                                              OLD.claimed_by_generation)
             AND lease.lease_until > timezone('UTC', clock_timestamp())
+            AND (NOT activating OR (lease.ready_at IS NOT NULL AND lease.draining_at IS NULL))
         ) INTO authority_valid;
-        IF NOT authority_valid THEN
+
+        SELECT EXISTS (
+          SELECT 1 FROM public.runtime_partitions AS partition
+          JOIN public.runtime_node_incarnations AS node
+            ON node.id = partition.owner_node_incarnation_id
+           AND node.activation_epoch = partition.activation_epoch
+           AND node.state = 'ready' AND node.ready_at IS NOT NULL
+           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+          WHERE partition.partition_id = public.runtime_partition_for('user:' || directive_row.user_id)
+            AND partition.state = 'ready' AND partition.ready_at IS NOT NULL
+            AND partition.owner_node_incarnation_id::text =
+                  current_setting('maraithon.runtime_node_action', true)
+            AND current_setting('maraithon.runtime_agent_reconciliation', true) =
+                  directive_row.agent_id::text
+            AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+        ) INTO reconciler_valid;
+
+        IF NOT authority_valid AND NOT reconciler_valid THEN
           RAISE EXCEPTION 'stale Agent Directive owner cannot mutate after partition epoch loss'
             USING ERRCODE = 'check_violation';
         END IF;
       END IF;
-      RETURN NEW;
+      RETURN COALESCE(NEW, OLD);
     EXCEPTION WHEN no_data_found THEN
       RAISE EXCEPTION 'runtime coordination protocol row is missing'
         USING ERRCODE = 'check_violation';
     END;
     $function$;
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_coordinated_agent_directive_trigger ON public.agent_directives"
+    )
 
     execute("""
     CREATE TRIGGER enforce_coordinated_agent_directive_trigger
@@ -1572,36 +2312,68 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     DECLARE
       protocol_mode text;
       authority_valid boolean;
+      reconciler_valid boolean;
+      ready_authority_required boolean;
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' AND NOT (
+        current_user = 'maraithon_migrator' AND EXISTS (
+          SELECT 1 FROM public.runtime_coordination_protocols
+          WHERE name = 'runtime' AND mode = 'dark'
+        )
+      ) THEN
+        RAISE EXCEPTION 'coordinated work mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       SELECT mode INTO STRICT protocol_mode
       FROM public.runtime_coordination_protocols WHERE name = 'runtime';
       IF protocol_mode = 'dark' THEN RETURN COALESCE(NEW, OLD); END IF;
-      IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+
+      IF TG_OP = 'DELETE' THEN
+        SELECT EXISTS (
+          SELECT 1 FROM public.runtime_partitions AS partition
+          JOIN public.runtime_node_incarnations AS node
+            ON node.id = OLD.coordination_node_incarnation_id
+           AND node.activation_epoch = OLD.coordination_activation_epoch
+           AND node.state IN ('ready', 'draining')
+           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+          WHERE partition.partition_id = OLD.coordination_partition_id
+            AND partition.activation_epoch = OLD.coordination_activation_epoch
+            AND partition.ownership_epoch = OLD.coordination_partition_epoch
+            AND partition.owner_node_incarnation_id = OLD.coordination_node_incarnation_id
+            AND partition.state IN ('ready', 'draining')
+            AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+        ) INTO authority_valid;
+
+        SELECT EXISTS (
+          SELECT 1 FROM public.agents AS agent
+          JOIN public.runtime_partitions AS partition
+            ON partition.partition_id = public.runtime_partition_for('user:' || agent.user_id)
+          JOIN public.runtime_node_incarnations AS node
+            ON node.id = partition.owner_node_incarnation_id
+           AND node.activation_epoch = partition.activation_epoch
+           AND node.state = 'ready' AND node.ready_at IS NOT NULL
+           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+          WHERE agent.id = OLD.agent_id AND partition.state = 'ready'
+            AND partition.ready_at IS NOT NULL
+            AND partition.owner_node_incarnation_id::text =
+                  current_setting('maraithon.runtime_node_action', true)
+            AND current_setting('maraithon.runtime_agent_reconciliation', true) =
+                  OLD.agent_id::text
+            AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+        ) INTO reconciler_valid;
+
+        IF NOT authority_valid AND NOT reconciler_valid THEN
+          RAISE EXCEPTION 'Agent lease deletion requires live owner or current partition reconciler'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN OLD;
+      END IF;
 
       IF NEW.coordination_activation_epoch IS NULL OR
          NEW.coordination_partition_id IS NULL OR
          NEW.coordination_partition_epoch IS NULL OR
          NEW.coordination_node_incarnation_id IS NULL THEN
         RAISE EXCEPTION 'exact Agent lease requires partition incarnation authority'
-          USING ERRCODE = 'check_violation';
-      END IF;
-
-      SELECT EXISTS (
-        SELECT 1 FROM public.runtime_partitions AS partition
-        JOIN public.runtime_node_incarnations AS node
-          ON node.id = NEW.coordination_node_incarnation_id
-         AND node.activation_epoch = NEW.coordination_activation_epoch
-         AND node.state IN ('ready', 'draining')
-         AND node.lease_expires_at > timezone('UTC', clock_timestamp())
-        WHERE partition.partition_id = NEW.coordination_partition_id
-          AND partition.activation_epoch = NEW.coordination_activation_epoch
-          AND partition.ownership_epoch = NEW.coordination_partition_epoch
-          AND partition.owner_node_incarnation_id = NEW.coordination_node_incarnation_id
-          AND partition.state IN ('ready', 'draining')
-          AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
-      ) INTO authority_valid;
-      IF NOT authority_valid THEN
-        RAISE EXCEPTION 'stale partition cannot mutate Agent lease'
           USING ERRCODE = 'check_violation';
       END IF;
 
@@ -1614,6 +2386,42 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         RAISE EXCEPTION 'Agent lease partition incarnation is immutable'
           USING ERRCODE = 'check_violation';
       END IF;
+
+      ready_authority_required := TG_OP = 'INSERT' OR (
+        TG_OP = 'UPDATE' AND (
+          NEW.lease_until > OLD.lease_until OR
+          (OLD.ready_at IS NULL AND NEW.ready_at IS NOT NULL) OR
+          (OLD.draining_at IS NOT NULL AND NEW.draining_at IS NULL)
+        )
+      );
+
+      SELECT EXISTS (
+        SELECT 1 FROM public.agents AS agent
+        JOIN public.runtime_partitions AS partition
+          ON partition.partition_id = NEW.coordination_partition_id
+         AND partition.partition_id = public.runtime_partition_for('user:' || agent.user_id)
+        JOIN public.runtime_node_incarnations AS node
+          ON node.id = NEW.coordination_node_incarnation_id
+         AND node.activation_epoch = NEW.coordination_activation_epoch
+         AND node.state = ANY(
+               CASE WHEN ready_authority_required THEN ARRAY['ready']::text[]
+                    ELSE ARRAY['ready', 'draining']::text[] END)
+         AND (NOT ready_authority_required OR node.ready_at IS NOT NULL)
+         AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+        WHERE agent.id = NEW.agent_id
+          AND partition.activation_epoch = NEW.coordination_activation_epoch
+          AND partition.ownership_epoch = NEW.coordination_partition_epoch
+          AND partition.owner_node_incarnation_id = NEW.coordination_node_incarnation_id
+          AND partition.state = ANY(
+                CASE WHEN ready_authority_required THEN ARRAY['ready']::text[]
+                     ELSE ARRAY['ready', 'draining']::text[] END)
+          AND (NOT ready_authority_required OR partition.ready_at IS NOT NULL)
+          AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+      ) INTO authority_valid;
+      IF NOT authority_valid THEN
+        RAISE EXCEPTION 'stale or mismatched partition cannot mutate Agent lease'
+          USING ERRCODE = 'check_violation';
+      END IF;
       RETURN NEW;
     EXCEPTION WHEN no_data_found THEN
       RAISE EXCEPTION 'runtime coordination protocol row is missing'
@@ -1621,6 +2429,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     END;
     $function$;
     """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS enforce_coordinated_agent_lease_trigger ON public.agent_runtime_leases"
+    )
 
     execute("""
     CREATE TRIGGER enforce_coordinated_agent_lease_trigger
@@ -1636,8 +2448,18 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     AS $function$
     DECLARE
       protocol_mode text;
+      pending_authority_valid boolean;
       reservation_valid boolean;
     BEGIN
+      IF current_user IS DISTINCT FROM 'maraithon_runtime' AND NOT (
+        current_user = 'maraithon_migrator' AND EXISTS (
+          SELECT 1 FROM public.runtime_coordination_protocols
+          WHERE name = 'runtime' AND mode = 'dark'
+        )
+      ) THEN
+        RAISE EXCEPTION 'coordinated work mutation requires executor role'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
       SELECT mode INTO STRICT protocol_mode
       FROM public.runtime_coordination_protocols WHERE name = 'runtime';
       IF protocol_mode = 'dark' THEN RETURN NEW; END IF;
@@ -1651,6 +2473,38 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           USING ERRCODE = 'check_violation';
       END IF;
 
+      IF TG_OP = 'INSERT' OR
+         (TG_OP = 'UPDATE' AND OLD.status = 'pending' AND NEW.status = 'pending') THEN
+        SELECT EXISTS (
+          SELECT 1
+          FROM public.agent_runtime_leases AS lease
+          JOIN public.runtime_partitions AS partition
+            ON partition.partition_id = lease.coordination_partition_id
+           AND partition.activation_epoch = lease.coordination_activation_epoch
+           AND partition.ownership_epoch = lease.coordination_partition_epoch
+           AND partition.owner_node_incarnation_id = lease.coordination_node_incarnation_id
+           AND partition.state = 'ready' AND partition.ready_at IS NOT NULL
+           AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+          JOIN public.runtime_node_incarnations AS node
+            ON node.id = lease.coordination_node_incarnation_id
+           AND node.activation_epoch = lease.coordination_activation_epoch
+           AND node.state = 'ready' AND node.ready_at IS NOT NULL
+           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+          WHERE lease.agent_id = NEW.agent_id
+            AND lease.owner_token = NEW.runtime_owner_generation
+            AND lease.ready_at IS NOT NULL AND lease.draining_at IS NULL
+            AND lease.lease_until > timezone('UTC', clock_timestamp())
+            AND lease.coordination_activation_epoch = NEW.coordination_activation_epoch
+            AND lease.coordination_partition_id = NEW.coordination_partition_id
+            AND lease.coordination_partition_epoch = NEW.coordination_partition_epoch
+            AND lease.coordination_node_incarnation_id = NEW.coordination_node_incarnation_id
+        ) INTO pending_authority_valid;
+        IF NOT pending_authority_valid THEN
+          RAISE EXCEPTION 'exact pending Effect lacks a live ready Agent partition authority'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+
       IF TG_OP = 'UPDATE' AND OLD.status = 'pending' AND NEW.status = 'claimed' THEN
         SELECT EXISTS (
           SELECT 1 FROM public.runtime_task_assignments AS assignment
@@ -1661,6 +2515,20 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
            AND partition.owner_node_incarnation_id = assignment.node_incarnation_id
            AND partition.state = 'ready' AND partition.ready_at IS NOT NULL
            AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+          JOIN public.runtime_node_incarnations AS node
+            ON node.id = assignment.node_incarnation_id
+           AND node.activation_epoch = assignment.activation_epoch
+           AND node.state = 'ready' AND node.ready_at IS NOT NULL
+           AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+          JOIN public.agent_runtime_leases AS lease
+            ON lease.agent_id = NEW.agent_id
+           AND lease.owner_token = NEW.runtime_owner_generation
+           AND lease.ready_at IS NOT NULL AND lease.draining_at IS NULL
+           AND lease.lease_until > timezone('UTC', clock_timestamp())
+           AND lease.coordination_activation_epoch = assignment.activation_epoch
+           AND lease.coordination_partition_id = assignment.partition_id
+           AND lease.coordination_partition_epoch = assignment.partition_epoch
+           AND lease.coordination_node_incarnation_id = assignment.node_incarnation_id
           WHERE assignment.id = NEW.coordination_task_assignment_id
             AND assignment.work_kind = 'effect' AND assignment.work_id = NEW.id
             AND assignment.claim_token = NEW.claim_token
@@ -1671,23 +2539,34 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
             AND assignment.supervisor_id = NEW.claim_supervisor_id
             AND assignment.local_task_id = NEW.claim_task_id
             AND assignment.state = 'reserved'
+            AND assignment.lease_expires_at > timezone('UTC', clock_timestamp())
         ) INTO reservation_valid;
         IF NOT reservation_valid THEN
           RAISE EXCEPTION 'Effect claim is not coupled to an exact supervised task reservation'
             USING ERRCODE = 'check_violation';
         END IF;
       ELSIF TG_OP = 'UPDATE' AND OLD.status = 'claimed' AND
-            NEW.status IN ('pending', 'completed', 'failed') THEN
+            NEW.status IN ('claimed', 'pending', 'completed', 'failed', 'cancelled') THEN
         IF NOT public.runtime_task_authority_valid(
           OLD.coordination_task_assignment_id, OLD.coordination_activation_epoch,
           OLD.coordination_partition_id, OLD.coordination_partition_epoch,
-          OLD.coordination_node_incarnation_id, OLD.claim_token) THEN
+          OLD.coordination_node_incarnation_id, OLD.claim_token) AND NOT EXISTS (
+            SELECT 1 FROM public.runtime_task_assignments AS terminal_assignment
+            WHERE terminal_assignment.id = OLD.coordination_task_assignment_id
+              AND terminal_assignment.activation_epoch = OLD.coordination_activation_epoch
+              AND terminal_assignment.claim_token = OLD.claim_token
+              AND terminal_assignment.node_incarnation_id = OLD.coordination_node_incarnation_id
+              AND terminal_assignment.supervisor_id = OLD.claim_supervisor_id
+              AND terminal_assignment.local_task_id = OLD.claim_task_id
+              AND terminal_assignment.state IN ('settled', 'outcome_ambiguous')
+          ) THEN
           RAISE EXCEPTION 'stale Effect task cannot mutate after partition epoch loss'
             USING ERRCODE = 'check_violation';
         END IF;
       END IF;
 
-      IF TG_OP = 'UPDATE' AND OLD.coordination_activation_epoch IS NOT NULL AND (
+      IF TG_OP = 'UPDATE' AND OLD.coordination_activation_epoch IS NOT NULL AND
+         NOT (OLD.status = 'pending' AND NEW.status = 'claimed') AND (
         NEW.coordination_activation_epoch IS DISTINCT FROM OLD.coordination_activation_epoch OR
         NEW.coordination_partition_id IS DISTINCT FROM OLD.coordination_partition_id OR
         NEW.coordination_partition_epoch IS DISTINCT FROM OLD.coordination_partition_epoch OR
@@ -1706,10 +2585,152 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
+    execute("DROP TRIGGER IF EXISTS enforce_coordinated_effect_trigger ON public.effects")
+
     execute("""
     CREATE TRIGGER enforce_coordinated_effect_trigger
       BEFORE INSERT OR UPDATE ON public.effects
       FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_effect()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.runtime_catalog_table_fingerprint(requested regclass)
+    RETURNS text
+    LANGUAGE sql
+    STABLE
+    STRICT
+    SET search_path = pg_catalog, public
+    AS $function$
+      SELECT encode(public.digest(convert_to(pg_catalog.jsonb_build_object(
+        'schema', namespace.nspname,
+        'schema_owner', schema_owner.rolname,
+        'schema_acl', namespace.nspacl,
+        'relation', relation.relname,
+        'kind', relation.relkind,
+        'persistence', relation.relpersistence,
+        'owner', owner_row.rolname,
+        'acl', relation.relacl,
+        'row_security', relation.relrowsecurity,
+        'force_row_security', relation.relforcerowsecurity,
+        'replica_identity', relation.relreplident,
+        'options', relation.reloptions,
+        'tablespace', tablespace.spcname,
+        'columns', COALESCE((
+          SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'position', attribute.attnum,
+            'name', attribute.attname,
+            'type', pg_catalog.format_type(attribute.atttypid, attribute.atttypmod),
+            'not_null', attribute.attnotnull,
+            'identity', attribute.attidentity,
+            'generated', attribute.attgenerated,
+            'acl', attribute.attacl,
+            'storage', attribute.attstorage,
+            'compression', attribute.attcompression,
+            'default', pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid, true),
+            'collation_schema', collation_namespace.nspname,
+            'collation', collation_row.collname
+          ) ORDER BY attribute.attnum)
+          FROM pg_catalog.pg_attribute AS attribute
+          LEFT JOIN pg_catalog.pg_attrdef AS default_row
+            ON default_row.adrelid = attribute.attrelid AND default_row.adnum = attribute.attnum
+          LEFT JOIN pg_catalog.pg_collation AS collation_row
+            ON collation_row.oid = attribute.attcollation
+          LEFT JOIN pg_catalog.pg_namespace AS collation_namespace
+            ON collation_namespace.oid = collation_row.collnamespace
+          WHERE attribute.attrelid = relation.oid AND attribute.attnum > 0
+            AND NOT attribute.attisdropped
+        ), '[]'::jsonb),
+        'constraints', COALESCE((
+          SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'name', constraint_row.conname,
+            'type', constraint_row.contype,
+            'deferrable', constraint_row.condeferrable,
+            'deferred', constraint_row.condeferred,
+            'validated', constraint_row.convalidated,
+            'local', constraint_row.conislocal,
+            'inherit_count', constraint_row.coninhcount,
+            'no_inherit', constraint_row.connoinherit,
+            'parent', parent_constraint.conname,
+            'index', constraint_index.relname,
+            'definition', pg_catalog.pg_get_constraintdef(constraint_row.oid, true)
+          ) ORDER BY constraint_row.conname)
+          FROM pg_catalog.pg_constraint AS constraint_row
+          LEFT JOIN pg_catalog.pg_constraint AS parent_constraint
+            ON parent_constraint.oid = constraint_row.conparentid
+          LEFT JOIN pg_catalog.pg_class AS constraint_index
+            ON constraint_index.oid = constraint_row.conindid
+          WHERE constraint_row.conrelid = relation.oid
+        ), '[]'::jsonb),
+        'indexes', COALESCE((
+          SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'name', index_relation.relname,
+            'definition', pg_catalog.pg_get_indexdef(index_relation.oid),
+            'owner', index_owner.rolname,
+            'acl', index_relation.relacl,
+            'options', index_relation.reloptions,
+            'tablespace', index_tablespace.spcname,
+            'unique', index_row.indisunique,
+            'primary', index_row.indisprimary,
+            'exclusion', index_row.indisexclusion,
+            'immediate', index_row.indimmediate,
+            'clustered', index_row.indisclustered,
+            'replica_identity', index_row.indisreplident,
+            'nulls_not_distinct', index_row.indnullsnotdistinct,
+            'valid', index_row.indisvalid,
+            'ready', index_row.indisready,
+            'live', index_row.indislive
+          ) ORDER BY index_relation.relname)
+          FROM pg_catalog.pg_index AS index_row
+          JOIN pg_catalog.pg_class AS index_relation
+            ON index_relation.oid = index_row.indexrelid
+          JOIN pg_catalog.pg_roles AS index_owner
+            ON index_owner.oid = index_relation.relowner
+          LEFT JOIN pg_catalog.pg_tablespace AS index_tablespace
+            ON index_tablespace.oid = index_relation.reltablespace
+          WHERE index_row.indrelid = relation.oid
+        ), '[]'::jsonb),
+        'triggers', COALESCE((
+          SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'name', trigger_row.tgname,
+            'definition', pg_catalog.pg_get_triggerdef(trigger_row.oid, true),
+            'enabled', trigger_row.tgenabled,
+            'type', trigger_row.tgtype,
+            'function', trigger_function.oid::regprocedure::text
+          ) ORDER BY trigger_row.tgname)
+          FROM pg_catalog.pg_trigger AS trigger_row
+          JOIN pg_catalog.pg_proc AS trigger_function
+            ON trigger_function.oid = trigger_row.tgfoid
+          WHERE trigger_row.tgrelid = relation.oid AND NOT trigger_row.tgisinternal
+        ), '[]'::jsonb),
+        'rules', COALESCE((
+          SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'name', rewrite_row.rulename,
+            'enabled', rewrite_row.ev_enabled,
+            'definition', pg_catalog.pg_get_ruledef(rewrite_row.oid, true)
+          ) ORDER BY rewrite_row.rulename)
+          FROM pg_catalog.pg_rewrite AS rewrite_row
+          WHERE rewrite_row.ev_class = relation.oid AND rewrite_row.rulename <> '_RETURN'
+        ), '[]'::jsonb),
+        'sequence', CASE WHEN relation.relkind = 'S' THEN (
+          SELECT pg_catalog.jsonb_build_object(
+            'type', pg_catalog.format_type(sequence_row.seqtypid, NULL),
+            'start', sequence_row.seqstart,
+            'increment', sequence_row.seqincrement,
+            'maximum', sequence_row.seqmax,
+            'minimum', sequence_row.seqmin,
+            'cache', sequence_row.seqcache,
+            'cycle', sequence_row.seqcycle
+          ) FROM pg_catalog.pg_sequence AS sequence_row
+          WHERE sequence_row.seqrelid = relation.oid
+        ) ELSE NULL END
+      )::text, 'UTF8'), 'sha256'), 'hex')
+      FROM pg_catalog.pg_class AS relation
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+      JOIN pg_catalog.pg_roles AS schema_owner ON schema_owner.oid = namespace.nspowner
+      JOIN pg_catalog.pg_roles AS owner_row ON owner_row.oid = relation.relowner
+      LEFT JOIN pg_catalog.pg_tablespace AS tablespace ON tablespace.oid = relation.reltablespace
+      WHERE relation.oid = requested AND namespace.nspname = 'public'
+    $function$;
     """)
 
     execute("""
@@ -1722,6 +2743,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       WITH required_functions(function_id) AS (
         VALUES
           ('public.runtime_partition_for(text)'::regprocedure),
+          ('public.runtime_coordination_roles_ready()'::regprocedure),
+          ('public.runtime_role_topology_fingerprint()'::regprocedure),
+          ('public.runtime_coordination_acl_ready()'::regprocedure),
+          ('public.runtime_catalog_table_fingerprint(regclass)'::regprocedure),
           ('public.populate_runtime_work_partition()'::regprocedure),
           ('public.enforce_effect_activation_evidence()'::regprocedure),
           ('public.enforce_runtime_coordination_protocol()'::regprocedure),
@@ -1734,6 +2759,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           ('public.enforce_runtime_task_outcome_evidence()'::regprocedure),
           ('public.enforce_runtime_task_termination_proof()'::regprocedure),
           ('public.runtime_task_authority_valid(uuid,uuid,smallint,bigint,uuid,uuid)'::regprocedure),
+          ('public.enforce_runtime_work_role()'::regprocedure),
           ('public.enforce_coordinated_background_job()'::regprocedure),
           ('public.enforce_coordinated_scheduled_job()'::regprocedure),
           ('public.enforce_coordinated_agent_directive()'::regprocedure),
@@ -1745,11 +2771,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         FROM required_functions AS required
         JOIN pg_catalog.pg_proc AS function_row ON function_row.oid = required.function_id
         JOIN pg_catalog.pg_language AS language_row ON language_row.oid = function_row.prolang
+        JOIN pg_catalog.pg_roles AS owner_row ON owner_row.oid = function_row.proowner
         JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = 'runtime'
         WHERE NOT function_row.prosecdef
           AND function_row.proconfig = ARRAY['search_path=pg_catalog, public']::text[]
           AND language_row.lanname IN ('sql', 'plpgsql')
-          AND manifest.function_fingerprints ->> function_row.proname = md5(function_row.prosrc)
+          AND manifest.function_fingerprints ->> function_row.proname =
+            encode(public.digest(convert_to(pg_catalog.jsonb_build_object(
+              'definition', pg_catalog.pg_get_functiondef(function_row.oid),
+              'owner', owner_row.rolname,
+              'acl', function_row.proacl
+            )::text, 'UTF8'), 'sha256'), 'hex')
       ), required_constraints(relation_id, constraint_name) AS (
         VALUES
           ('public.runtime_coordination_protocols'::regclass, 'runtime_coordination_protocol_shape'),
@@ -1775,7 +2807,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
          AND constraint_row.contype = 'c' AND constraint_row.convalidated
         JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = 'runtime'
         WHERE manifest.constraint_fingerprints ->> required.constraint_name =
-              md5(pg_catalog.pg_get_constraintdef(constraint_row.oid, true))
+              encode(public.digest(convert_to(regexp_replace(pg_catalog.pg_get_constraintdef(constraint_row.oid, true), ' NOT VALID$', ''), 'UTF8'), 'sha256'), 'hex')
       ), required_triggers(relation_id, trigger_name) AS (
         VALUES
           ('public.runtime_coordination_protocols'::regclass, 'enforce_runtime_coordination_protocol_trigger'),
@@ -1796,7 +2828,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           ('public.runtime_task_termination_proofs'::regclass, 'enforce_runtime_task_termination_proof_trigger'),
           ('public.background_jobs'::regclass, 'enforce_coordinated_background_job_trigger'),
           ('public.scheduled_jobs'::regclass, 'enforce_coordinated_scheduled_job_trigger'),
-          ('public.agent_directives'::regclass, 'enforce_coordinated_agent_directive_trigger'),
+          ('public.agent_runs'::regclass, 'enforce_agent_runs_runtime_role_trigger'),
+          ('public.agent_run_steps'::regclass, 'enforce_agent_run_steps_runtime_role_trigger'),
+        ('public.agent_directives'::regclass, 'enforce_coordinated_agent_directive_trigger'),
           ('public.agent_runtime_leases'::regclass, 'enforce_coordinated_agent_lease_trigger'),
           ('public.effects'::regclass, 'enforce_coordinated_effect_trigger')
       ), trigger_matches AS (
@@ -1808,7 +2842,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
          AND NOT trigger_row.tgisinternal AND trigger_row.tgenabled IN ('O', 'A')
         JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = 'runtime'
         WHERE manifest.trigger_fingerprints ->> required.trigger_name =
-              md5(pg_catalog.pg_get_triggerdef(trigger_row.oid, true))
+              encode(public.digest(convert_to(pg_catalog.pg_get_triggerdef(trigger_row.oid, true), 'UTF8'), 'sha256'), 'hex')
       ), required_indexes(index_name) AS (
         VALUES
           ('runtime_task_assignments_claim_token_index'),
@@ -1828,25 +2862,281 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         JOIN pg_catalog.pg_class AS index_relation ON index_relation.relname = required.index_name
         JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = index_relation.relnamespace
           AND namespace.nspname = 'public'
+        JOIN pg_catalog.pg_roles AS index_owner ON index_owner.oid = index_relation.relowner
         JOIN pg_catalog.pg_index AS index_row ON index_row.indexrelid = index_relation.oid
           AND index_row.indisvalid AND index_row.indisready AND index_row.indislive
         JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = 'runtime'
         WHERE manifest.index_fingerprints ->> required.index_name =
-              md5(pg_catalog.pg_get_indexdef(index_relation.oid))
+              encode(public.digest(convert_to(pg_catalog.jsonb_build_object(
+              'definition', pg_catalog.pg_get_indexdef(index_relation.oid),
+              'owner', index_owner.rolname,
+              'acl', index_relation.relacl
+            )::text, 'UTF8'), 'sha256'), 'hex')
+      ), required_catalogs(relation_id, relation_name) AS (
+        VALUES
+          ('public.runtime_coordination_protocols'::regclass, 'runtime_coordination_protocols'),
+          ('public.runtime_coordination_manifests'::regclass, 'runtime_coordination_manifests'),
+          ('public.schema_migrations'::regclass, 'schema_migrations'),
+          ('public.effect_execution_protocols'::regclass, 'effect_execution_protocols'),
+          ('public.effect_execution_protocol_manifests'::regclass,
+           'effect_execution_protocol_manifests'),
+          ('public.effect_termination_attestations'::regclass,
+           'effect_termination_attestations'),
+          ('public.runtime_node_incarnations'::regclass, 'runtime_node_incarnations'),
+          ('public.runtime_leader_authorities'::regclass, 'runtime_leader_authorities'),
+          ('public.runtime_partitions'::regclass, 'runtime_partitions'),
+          ('public.runtime_partition_transitions'::regclass, 'runtime_partition_transitions'),
+          ('public.runtime_task_assignments'::regclass, 'runtime_task_assignments'),
+          ('public.runtime_task_outcome_evidence'::regclass, 'runtime_task_outcome_evidence'),
+          ('public.runtime_task_termination_proofs'::regclass, 'runtime_task_termination_proofs'),
+          ('public.runtime_tenant_fairness'::regclass, 'runtime_tenant_fairness'),
+          ('public.runtime_partition_rebalance_requests'::regclass, 'runtime_partition_rebalance_requests'),
+          ('public.background_jobs'::regclass, 'background_jobs'),
+          ('public.scheduled_jobs'::regclass, 'scheduled_jobs'),
+          ('public.agent_runtime_leases'::regclass, 'agent_runtime_leases'),
+          ('public.agent_directives'::regclass, 'agent_directives'),
+          ('public.agent_runs'::regclass, 'agent_runs'),
+          ('public.agent_run_steps'::regclass, 'agent_run_steps'),
+          ('public.effects'::regclass, 'effects')
+      ), catalog_matches AS (
+        SELECT count(*) AS count
+        FROM required_catalogs AS required
+        JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = 'runtime'
+        WHERE manifest.catalog_fingerprints ->> required.relation_name =
+              public.runtime_catalog_table_fingerprint(required.relation_id)
+      ), topology_matches AS (
+        SELECT count(*) AS count
+        FROM public.runtime_coordination_manifests AS manifest
+        WHERE manifest.name = 'runtime'
+          AND manifest.catalog_fingerprints ->> 'role_topology' =
+              public.runtime_role_topology_fingerprint()
       )
       SELECT function_matches.count + constraint_matches.count + trigger_matches.count +
-             index_matches.count
-      FROM function_matches, constraint_matches, trigger_matches, index_matches
+             index_matches.count + catalog_matches.count + topology_matches.count
+      FROM function_matches, constraint_matches, trigger_matches, index_matches,
+           catalog_matches, topology_matches
     $function$;
+    """)
+
+    # Roles are cluster-level security principals and must be provisioned before
+    # expansion by infrastructure. The migration never creates or links them;
+    # the early topology gate prevents a half-secured expansion from being
+    # recorded. Activation continuously re-attests the graph and ACLs below.
+    execute("""
+    DO $block$
+    DECLARE
+      relation_name text;
+      function_name text;
+      column_name text;
+      grantee_name text;
+    BEGIN
+      IF public.runtime_coordination_roles_ready() THEN
+        REVOKE ALL ON SCHEMA public FROM PUBLIC;
+        GRANT USAGE ON SCHEMA public TO
+          maraithon_migrator, maraithon_runtime, maraithon_payload_verifier,
+          maraithon_incident_operator, maraithon_activation_operator;
+        ALTER SCHEMA public OWNER TO maraithon_object_owner;
+
+        FOREACH relation_name IN ARRAY ARRAY[
+          'runtime_coordination_protocols', 'runtime_coordination_manifests',
+          'runtime_node_incarnations', 'runtime_leader_authorities', 'runtime_partitions',
+          'runtime_partition_transitions', 'runtime_task_assignments',
+          'runtime_task_outcome_evidence', 'runtime_task_termination_proofs',
+          'runtime_tenant_fairness', 'runtime_partition_rebalance_requests'
+        ] LOOP
+          EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier, maraithon_incident_operator, maraithon_activation_operator', relation_name);
+          EXECUTE format('GRANT ALL ON TABLE public.%I TO maraithon_migrator', relation_name);
+          EXECUTE format('ALTER TABLE public.%I OWNER TO maraithon_object_owner', relation_name);
+        END LOOP;
+
+        GRANT SELECT ON TABLE
+          public.runtime_coordination_protocols, public.runtime_coordination_manifests
+          TO maraithon_runtime;
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.runtime_node_incarnations
+          TO maraithon_runtime;
+        GRANT SELECT, UPDATE ON TABLE public.runtime_leader_authorities,
+          public.runtime_partitions TO maraithon_runtime;
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.runtime_partition_transitions,
+          public.runtime_task_assignments, public.runtime_tenant_fairness,
+          public.runtime_partition_rebalance_requests TO maraithon_runtime;
+        GRANT SELECT, INSERT ON TABLE public.runtime_task_outcome_evidence,
+          public.runtime_task_termination_proofs TO maraithon_runtime;
+
+        GRANT SELECT ON TABLE public.runtime_coordination_protocols,
+          public.runtime_coordination_manifests, public.runtime_task_assignments,
+          public.runtime_task_outcome_evidence, public.runtime_task_termination_proofs
+          TO maraithon_payload_verifier;
+        GRANT SELECT ON TABLE public.runtime_coordination_protocols,
+          public.runtime_node_incarnations, public.runtime_partitions
+          TO maraithon_incident_operator;
+        GRANT SELECT, UPDATE ON TABLE public.runtime_task_assignments
+          TO maraithon_incident_operator;
+        GRANT SELECT, INSERT ON TABLE public.runtime_task_termination_proofs
+          TO maraithon_incident_operator;
+        GRANT SELECT ON TABLE public.runtime_coordination_protocols,
+          public.runtime_coordination_manifests TO maraithon_activation_operator;
+        GRANT SELECT, UPDATE ON TABLE public.runtime_node_incarnations,
+          public.runtime_task_assignments TO maraithon_activation_operator;
+        GRANT UPDATE ON TABLE public.runtime_coordination_protocols
+          TO maraithon_activation_operator;
+
+        -- The executor is the ordinary application database role. Grant
+        -- standard DML across application tables, excluding every protocol,
+        -- immutable evidence root, and migration ledger handled explicitly.
+        FOR relation_name IN
+          SELECT relation.relname
+          FROM pg_catalog.pg_class AS relation
+          JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+          WHERE namespace.nspname = 'public' AND relation.relkind IN ('r', 'p')
+            AND relation.relname <> ALL(ARRAY[
+              'schema_migrations', 'effect_execution_protocols',
+              'effect_execution_protocol_manifests', 'effect_termination_attestations',
+              'runtime_coordination_protocols', 'runtime_coordination_manifests',
+              'runtime_node_incarnations', 'runtime_leader_authorities', 'runtime_partitions',
+              'runtime_partition_transitions', 'runtime_task_assignments',
+              'runtime_task_outcome_evidence', 'runtime_task_termination_proofs',
+              'runtime_tenant_fairness', 'runtime_partition_rebalance_requests'
+            ])
+        LOOP
+          EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO maraithon_runtime', relation_name);
+        END LOOP;
+        REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC,
+          maraithon_runtime, maraithon_payload_verifier,
+          maraithon_incident_operator, maraithon_activation_operator;
+        GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO maraithon_migrator;
+        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO maraithon_runtime;
+
+        -- Preserve existing application ACLs, but place all attested roots
+        -- under the non-login owner and add only the canonical group grants.
+        REVOKE ALL ON TABLE public.effect_execution_protocols,
+          public.effect_execution_protocol_manifests,
+          public.effect_termination_attestations
+          FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier,
+               maraithon_incident_operator, maraithon_activation_operator;
+
+        FOREACH relation_name IN ARRAY ARRAY[
+          'effect_execution_protocols', 'effect_execution_protocol_manifests',
+          'effect_termination_attestations', 'effects', 'agent_runtime_leases',
+          'agent_directives', 'agent_runs', 'agent_run_steps',
+          'background_jobs', 'scheduled_jobs', 'schema_migrations'
+        ] LOOP
+          EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier, maraithon_incident_operator, maraithon_activation_operator', relation_name);
+          EXECUTE format('GRANT ALL ON TABLE public.%I TO maraithon_migrator', relation_name);
+          EXECUTE format('ALTER TABLE public.%I OWNER TO maraithon_object_owner', relation_name);
+        END LOOP;
+
+        FOR relation_name, column_name, grantee_name IN
+          SELECT DISTINCT relation.relname, attribute.attname,
+                 CASE WHEN privilege.grantee = 0 THEN 'PUBLIC' ELSE grantee.rolname END
+          FROM pg_catalog.pg_attribute AS attribute
+          JOIN pg_catalog.pg_class AS relation ON relation.oid = attribute.attrelid
+          JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+          CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS privilege
+          LEFT JOIN pg_catalog.pg_roles AS grantee ON grantee.oid = privilege.grantee
+          WHERE namespace.nspname = 'public' AND attribute.attnum > 0
+            AND NOT attribute.attisdropped AND attribute.attacl IS NOT NULL
+            AND relation.relname = ANY(ARRAY[
+              'runtime_coordination_protocols', 'runtime_coordination_manifests',
+              'runtime_node_incarnations', 'runtime_leader_authorities', 'runtime_partitions',
+              'runtime_partition_transitions', 'runtime_task_assignments',
+              'runtime_task_outcome_evidence', 'runtime_task_termination_proofs',
+              'runtime_tenant_fairness', 'runtime_partition_rebalance_requests',
+              'effect_execution_protocols', 'effect_execution_protocol_manifests',
+              'effect_termination_attestations', 'effects', 'agent_runtime_leases',
+              'agent_directives', 'agent_runs', 'agent_run_steps', 'background_jobs',
+              'scheduled_jobs', 'schema_migrations'
+            ])
+        LOOP
+          IF grantee_name = 'PUBLIC' THEN
+            EXECUTE format('REVOKE ALL PRIVILEGES (%I) ON TABLE public.%I FROM PUBLIC',
+                           column_name, relation_name);
+          ELSE
+            EXECUTE format('REVOKE ALL PRIVILEGES (%I) ON TABLE public.%I FROM %I',
+                           column_name, relation_name, grantee_name);
+          END IF;
+        END LOOP;
+
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.effects,
+          public.agent_runtime_leases, public.agent_directives, public.agent_runs,
+          public.agent_run_steps, public.background_jobs, public.scheduled_jobs
+          TO maraithon_runtime;
+        -- Regrant Effect protocol access after the blanket revocation above.
+        -- This ordering is required on partial expansion retries as well as on
+        -- a fresh catalog.
+        GRANT SELECT ON TABLE public.effect_execution_protocols,
+          public.effect_execution_protocol_manifests TO maraithon_runtime;
+        GRANT SELECT ON TABLE public.effect_execution_protocols,
+          public.effect_execution_protocol_manifests,
+          public.effect_termination_attestations TO maraithon_payload_verifier;
+        GRANT SELECT ON TABLE public.effect_termination_attestations
+          TO maraithon_runtime;
+        GRANT SELECT, INSERT ON TABLE public.effect_termination_attestations
+          TO maraithon_incident_operator;
+        GRANT SELECT, UPDATE ON TABLE public.effect_execution_protocols
+          TO maraithon_activation_operator;
+        GRANT SELECT ON TABLE public.schema_migrations,
+          public.effect_execution_protocol_manifests,
+          public.effect_termination_attestations
+          TO maraithon_runtime, maraithon_payload_verifier,
+             maraithon_activation_operator;
+        -- UPDATE is needed by PostgreSQL for SHARE table locks. Row triggers
+        -- reject activation-role DML on every locked work root.
+        GRANT SELECT, UPDATE ON TABLE public.effects, public.agent_runtime_leases,
+          public.agent_directives, public.agent_runs, public.agent_run_steps,
+          public.background_jobs, public.scheduled_jobs
+          TO maraithon_activation_operator;
+
+        FOREACH function_name IN ARRAY ARRAY[
+          'runtime_partition_for(text)', 'runtime_coordination_roles_ready()',
+          'runtime_role_topology_fingerprint()', 'runtime_coordination_acl_ready()',
+          'runtime_catalog_table_fingerprint(regclass)',
+          'populate_runtime_work_partition()', 'enforce_effect_activation_evidence()',
+          'enforce_runtime_coordination_protocol()',
+          'reject_runtime_coordination_evidence_mutation()',
+          'enforce_runtime_partition_transition()', 'enforce_runtime_node_incarnation()',
+          'enforce_runtime_leader_authority()', 'enforce_runtime_partition_authority()',
+          'enforce_runtime_task_assignment()', 'enforce_runtime_task_outcome_evidence()',
+          'enforce_runtime_task_termination_proof()',
+          'runtime_task_authority_valid(uuid,uuid,smallint,bigint,uuid,uuid)',
+          'enforce_runtime_work_role()', 'enforce_coordinated_background_job()',
+          'enforce_coordinated_scheduled_job()', 'enforce_coordinated_agent_directive()',
+          'enforce_coordinated_agent_lease()', 'enforce_coordinated_effect()',
+          'runtime_coordination_catalog_ready_count()'
+        ] LOOP
+          EXECUTE format('REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier, maraithon_incident_operator, maraithon_activation_operator', function_name);
+          EXECUTE format('GRANT ALL ON FUNCTION public.%s TO maraithon_migrator', function_name);
+          EXECUTE format('ALTER FUNCTION public.%s OWNER TO maraithon_object_owner', function_name);
+        END LOOP;
+
+        GRANT EXECUTE ON FUNCTION public.runtime_partition_for(text),
+          public.runtime_task_authority_valid(uuid,uuid,smallint,bigint,uuid,uuid),
+          public.runtime_coordination_roles_ready(),
+          public.runtime_role_topology_fingerprint(),
+          public.runtime_coordination_acl_ready(),
+          public.runtime_catalog_table_fingerprint(regclass),
+          public.runtime_coordination_catalog_ready_count()
+          TO maraithon_runtime;
+        GRANT EXECUTE ON FUNCTION public.runtime_coordination_roles_ready(),
+          public.runtime_coordination_acl_ready(),
+          public.runtime_catalog_table_fingerprint(regclass),
+          public.runtime_coordination_catalog_ready_count()
+          TO maraithon_payload_verifier, maraithon_activation_operator;
+      END IF;
+    END;
+    $block$;
     """)
 
     execute("""
     INSERT INTO public.runtime_coordination_manifests
       (name, constraint_fingerprints, function_fingerprints, trigger_fingerprints,
-       index_fingerprints, inserted_at, updated_at)
+       index_fingerprints, catalog_fingerprints, inserted_at, updated_at)
     WITH required_functions(function_id) AS (
       VALUES
         ('public.runtime_partition_for(text)'::regprocedure),
+        ('public.runtime_coordination_roles_ready()'::regprocedure),
+        ('public.runtime_role_topology_fingerprint()'::regprocedure),
+        ('public.runtime_coordination_acl_ready()'::regprocedure),
+        ('public.runtime_catalog_table_fingerprint(regclass)'::regprocedure),
         ('public.populate_runtime_work_partition()'::regprocedure),
         ('public.enforce_effect_activation_evidence()'::regprocedure),
         ('public.enforce_runtime_coordination_protocol()'::regprocedure),
@@ -1859,6 +3149,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.enforce_runtime_task_outcome_evidence()'::regprocedure),
         ('public.enforce_runtime_task_termination_proof()'::regprocedure),
         ('public.runtime_task_authority_valid(uuid,uuid,smallint,bigint,uuid,uuid)'::regprocedure),
+        ('public.enforce_runtime_work_role()'::regprocedure),
         ('public.enforce_coordinated_background_job()'::regprocedure),
         ('public.enforce_coordinated_scheduled_job()'::regprocedure),
         ('public.enforce_coordinated_agent_directive()'::regprocedure),
@@ -1866,9 +3157,15 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.enforce_coordinated_effect()'::regprocedure),
         ('public.runtime_coordination_catalog_ready_count()'::regprocedure)
     ), functions AS (
-      SELECT jsonb_object_agg(function_row.proname, md5(function_row.prosrc)) AS value
+      SELECT jsonb_object_agg(function_row.proname,
+               encode(public.digest(convert_to(pg_catalog.jsonb_build_object(
+                 'definition', pg_catalog.pg_get_functiondef(function_row.oid),
+                 'owner', owner_row.rolname,
+                 'acl', function_row.proacl
+               )::text, 'UTF8'), 'sha256'), 'hex')) AS value
       FROM required_functions AS required
       JOIN pg_catalog.pg_proc AS function_row ON function_row.oid = required.function_id
+      JOIN pg_catalog.pg_roles AS owner_row ON owner_row.oid = function_row.proowner
     ), required_constraints(relation_id, constraint_name) AS (
       VALUES
         ('public.runtime_coordination_protocols'::regclass, 'runtime_coordination_protocol_shape'),
@@ -1887,7 +3184,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.scheduled_jobs'::regclass, 'scheduled_jobs_partition_shape')
     ), constraints AS (
       SELECT jsonb_object_agg(required.constraint_name,
-               md5(pg_catalog.pg_get_constraintdef(constraint_row.oid, true))) AS value
+               encode(public.digest(convert_to(regexp_replace(pg_catalog.pg_get_constraintdef(constraint_row.oid, true), ' NOT VALID$', ''), 'UTF8'), 'sha256'), 'hex')) AS value
       FROM required_constraints AS required
       JOIN pg_catalog.pg_constraint AS constraint_row
         ON constraint_row.conrelid = required.relation_id
@@ -1912,12 +3209,14 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('public.runtime_task_termination_proofs'::regclass, 'enforce_runtime_task_termination_proof_trigger'),
         ('public.background_jobs'::regclass, 'enforce_coordinated_background_job_trigger'),
         ('public.scheduled_jobs'::regclass, 'enforce_coordinated_scheduled_job_trigger'),
+        ('public.agent_runs'::regclass, 'enforce_agent_runs_runtime_role_trigger'),
+        ('public.agent_run_steps'::regclass, 'enforce_agent_run_steps_runtime_role_trigger'),
         ('public.agent_directives'::regclass, 'enforce_coordinated_agent_directive_trigger'),
         ('public.agent_runtime_leases'::regclass, 'enforce_coordinated_agent_lease_trigger'),
         ('public.effects'::regclass, 'enforce_coordinated_effect_trigger')
     ), triggers AS (
       SELECT jsonb_object_agg(required.trigger_name,
-               md5(pg_catalog.pg_get_triggerdef(trigger_row.oid, true))) AS value
+               encode(public.digest(convert_to(pg_catalog.pg_get_triggerdef(trigger_row.oid, true), 'UTF8'), 'sha256'), 'hex')) AS value
       FROM required_triggers AS required
       JOIN pg_catalog.pg_trigger AS trigger_row
         ON trigger_row.tgrelid = required.relation_id
@@ -1938,15 +3237,54 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         ('effects_coordination_partition_pending_index')
     ), indexes AS (
       SELECT jsonb_object_agg(required.index_name,
-               md5(pg_catalog.pg_get_indexdef(index_relation.oid))) AS value
+               encode(public.digest(convert_to(pg_catalog.jsonb_build_object(
+              'definition', pg_catalog.pg_get_indexdef(index_relation.oid),
+              'owner', index_owner.rolname,
+              'acl', index_relation.relacl
+            )::text, 'UTF8'), 'sha256'), 'hex')) AS value
       FROM required_indexes AS required
       JOIN pg_catalog.pg_class AS index_relation ON index_relation.relname = required.index_name
       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = index_relation.relnamespace
        AND namespace.nspname = 'public'
+      JOIN pg_catalog.pg_roles AS index_owner ON index_owner.oid = index_relation.relowner
+    ), required_catalogs(relation_id, relation_name) AS (
+      VALUES
+        ('public.runtime_coordination_protocols'::regclass, 'runtime_coordination_protocols'),
+        ('public.runtime_coordination_manifests'::regclass, 'runtime_coordination_manifests'),
+        ('public.schema_migrations'::regclass, 'schema_migrations'),
+        ('public.effect_execution_protocols'::regclass, 'effect_execution_protocols'),
+        ('public.effect_execution_protocol_manifests'::regclass,
+         'effect_execution_protocol_manifests'),
+        ('public.effect_termination_attestations'::regclass,
+         'effect_termination_attestations'),
+        ('public.runtime_node_incarnations'::regclass, 'runtime_node_incarnations'),
+        ('public.runtime_leader_authorities'::regclass, 'runtime_leader_authorities'),
+        ('public.runtime_partitions'::regclass, 'runtime_partitions'),
+        ('public.runtime_partition_transitions'::regclass, 'runtime_partition_transitions'),
+        ('public.runtime_task_assignments'::regclass, 'runtime_task_assignments'),
+        ('public.runtime_task_outcome_evidence'::regclass, 'runtime_task_outcome_evidence'),
+        ('public.runtime_task_termination_proofs'::regclass, 'runtime_task_termination_proofs'),
+        ('public.runtime_tenant_fairness'::regclass, 'runtime_tenant_fairness'),
+        ('public.runtime_partition_rebalance_requests'::regclass, 'runtime_partition_rebalance_requests'),
+        ('public.background_jobs'::regclass, 'background_jobs'),
+        ('public.scheduled_jobs'::regclass, 'scheduled_jobs'),
+        ('public.agent_runtime_leases'::regclass, 'agent_runtime_leases'),
+        ('public.agent_directives'::regclass, 'agent_directives'),
+        ('public.agent_runs'::regclass, 'agent_runs'),
+        ('public.agent_run_steps'::regclass, 'agent_run_steps'),
+        ('public.effects'::regclass, 'effects')
+    ), catalogs AS (
+      SELECT jsonb_object_agg(required.relation_name,
+               public.runtime_catalog_table_fingerprint(required.relation_id)) ||
+             jsonb_build_object('role_topology',
+               public.runtime_role_topology_fingerprint()) AS value
+      FROM required_catalogs AS required
     )
     SELECT 'runtime', constraints.value, functions.value, triggers.value, indexes.value,
-           timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp())
-    FROM constraints, functions, triggers, indexes
+           catalogs.value, timezone('UTC', clock_timestamp()),
+           timezone('UTC', clock_timestamp())
+    FROM constraints, functions, triggers, indexes, catalogs
+    ON CONFLICT (name) DO NOTHING
     """)
 
     execute("""
@@ -1955,14 +3293,13 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
        activation_evidence_id, activation_evidence_digest, activated_by, exact_revision,
        manifest_digest, inserted_at, updated_at)
     SELECT 'runtime', 'dark', #{@partition_count}, NULL, NULL, NULL, NULL, NULL, NULL,
-       decode(
-         md5(manifest.constraint_fingerprints::text || manifest.function_fingerprints::text ||
-             manifest.trigger_fingerprints::text || manifest.index_fingerprints::text) ||
-         md5('v1:' || manifest.constraint_fingerprints::text ||
-             manifest.function_fingerprints::text || manifest.trigger_fingerprints::text ||
-             manifest.index_fingerprints::text),
-         'hex'
-       ),
+       public.digest(convert_to(pg_catalog.jsonb_build_object(
+         'constraints', manifest.constraint_fingerprints,
+         'functions', manifest.function_fingerprints,
+         'triggers', manifest.trigger_fingerprints,
+         'indexes', manifest.index_fingerprints,
+         'catalogs', manifest.catalog_fingerprints
+       )::text, 'UTF8'), 'sha256'),
        timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp())
     FROM public.runtime_coordination_manifests AS manifest
     WHERE manifest.name = 'runtime'
@@ -1985,5 +3322,36 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     FROM generate_series(0, #{@partition_count - 1}) AS partition_id
     ON CONFLICT (partition_id) DO NOTHING
     """)
+  end
+
+  defp drop_invalid_index(name) when is_binary(name) do
+    name = String.slice(name, 0, 63)
+
+    unless Regex.match?(~r/\A[a-z0-9_]+\z/, name),
+      do: raise(Ecto.MigrationError, "unsafe runtime coordination index name")
+
+    execute("""
+    DO $index_recovery$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS index_relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = index_relation.relnamespace
+        JOIN pg_catalog.pg_index AS index_row
+          ON index_row.indexrelid = index_relation.oid
+        WHERE namespace.nspname = 'public' AND index_relation.relname = '#{name}'
+          AND (NOT index_row.indisvalid OR NOT index_row.indisready OR NOT index_row.indislive)
+      ) THEN
+        EXECUTE format('DROP INDEX public.%I', '#{name}');
+      END IF;
+    END;
+    $index_recovery$;
+    """)
+  end
+
+  def down do
+    raise Ecto.MigrationError,
+          "runtime coordination authority is irreversible after durable expansion"
   end
 end
