@@ -749,11 +749,13 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     checkpointed = Todos.get_for_user(user_id, todo.id)
     assert checkpointed.action_draft["subject"] == "Re: Checkpointed renewal"
 
-    assert get_in(checkpointed.metadata, ["telegram_todo_action_checkpoint"]) == %{
-             "action" => "draft_email",
-             "callback_id" => "cb-draft-retry-stable",
-             "status" => "draft_ready"
-           }
+    checkpoint = checkpointed.metadata["telegram_todo_action_checkpoint"]
+    assert checkpoint["checkpoint_version"] == 2
+    assert checkpoint["action"] == "draft_email"
+    assert checkpoint["callback_id"] == "cb-draft-retry-stable"
+    assert checkpoint["status"] == "draft_ready"
+    assert get_in(checkpoint, ["generation", "status"]) == "completed"
+    assert get_in(checkpoint, ["preview_delivery", "status"]) == "failed"
 
     assert Agent.get(generation_counter, & &1) == 1
 
@@ -858,6 +860,258 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     assert :ok = InsightNotifications.process_telegram_event_durable(event)
     assert telegram_message_count(:send) == 1
+  end
+
+  test "concurrent draft callback retries share generation and preview owner claims", %{
+    user_id: user_id
+  } do
+    parent = self()
+
+    generation_counter =
+      start_supervised!(%{
+        id: :todo_draft_claim_generation_counter,
+        start: {Agent, :start_link, [fn -> 0 end]}
+      })
+
+    preview_counter =
+      start_supervised!(%{
+        id: :todo_draft_claim_preview_counter,
+        start: {Agent, :start_link, [fn -> 0 end]}
+      })
+
+    original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_capture = Application.get_env(:maraithon, :capturing_telegram, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(original_assistant, :draft_opts,
+        llm_complete: fn _params ->
+          Agent.update(generation_counter, &(&1 + 1))
+          owner = self()
+          send(parent, {:draft_generation_claimed, owner})
+
+          receive do
+            {:release_draft_generation, ^owner} ->
+              {:ok,
+               %{
+                 content:
+                   Jason.encode!(%{
+                     "subject" => "Re: Claimed draft",
+                     "body" => "Only the callback-scoped generation owner produced this draft."
+                   })
+               }}
+          after
+            5_000 -> {:error, :test_generation_timeout}
+          end
+        end
+      )
+    )
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(original_capture, :send_result, fn event ->
+        Agent.update(preview_counter, &(&1 + 1))
+        owner = self()
+        send(parent, {:draft_preview_claimed, owner, event})
+
+        receive do
+          {:release_draft_preview, ^owner} -> :ok
+        after
+          5_000 -> {:error, :test_preview_timeout}
+        end
+      end)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+      Application.put_env(:maraithon, :capturing_telegram, original_capture)
+    end)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Draft under one callback owner",
+          "summary" => "Concurrent durable workers must not generate or present twice.",
+          "next_action" => "Reply with the claimed draft.",
+          "dedupe_key" => "todo-actions:claimed-draft-concurrency"
+        }
+      ])
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-draft-claimed",
+        callback_id: "cb-draft-claimed",
+        data: "tgtodo:#{todo.id}:draft_email"
+      }
+    }
+
+    owner = Task.async(fn -> InsightNotifications.process_telegram_event_durable(event) end)
+    assert_receive {:draft_generation_claimed, generation_pid}, 2_000
+
+    assert {:error, {:todo_draft_generation_in_progress, generation_key}} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    assert generation_key == "todo-draft-generation:#{todo.id}:cb-draft-claimed"
+    send(generation_pid, {:release_draft_generation, generation_pid})
+
+    assert_receive {:draft_preview_claimed, preview_pid, preview_event}, 2_000
+    assert preview_event.text =~ "callback-scoped generation owner"
+
+    assert {:error, {:todo_draft_delivery_in_progress, delivery_key}} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    assert delivery_key == "todo-draft-preview:#{todo.id}:cb-draft-claimed"
+    send(preview_pid, {:release_draft_preview, preview_pid})
+    assert :ok = Task.await(owner, 5_000)
+
+    assert Agent.get(generation_counter, & &1) == 1
+    assert Agent.get(preview_counter, & &1) == 1
+
+    checkpoint =
+      Todos.get_for_user(user_id, todo.id).metadata["telegram_todo_action_checkpoint"]
+
+    assert get_in(checkpoint, ["generation", "status"]) == "completed"
+    assert get_in(checkpoint, ["preview_delivery", "status"]) == "delivered"
+    assert get_in(checkpoint, ["preview_delivery", "receipt_version"]) == 1
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Agent.get(generation_counter, & &1) == 1
+    assert Agent.get(preview_counter, & &1) == 1
+  end
+
+  test "ambiguous draft preview response is quarantined without an automatic resend", %{
+    user_id: user_id
+  } do
+    send_attempts =
+      start_supervised!(%{
+        id: :todo_draft_ambiguous_send_attempts,
+        start: {Agent, :start_link, [fn -> 0 end]}
+      })
+
+    original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_capture = Application.get_env(:maraithon, :capturing_telegram, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(original_assistant, :draft_opts,
+        llm_complete: fn _params ->
+          {:ok,
+           %{
+             content:
+               Jason.encode!(%{
+                 "subject" => "Re: Ambiguous preview",
+                 "body" => "Telegram may have accepted this preview before the response was lost."
+               })
+           }}
+        end
+      )
+    )
+
+    reason = {:error, %{reason: :timeout, detail: "token=preview-secret"}}
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(original_capture, :send_result, fn _event ->
+        Agent.update(send_attempts, &(&1 + 1))
+        {:error, reason}
+      end)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+      Application.put_env(:maraithon, :capturing_telegram, original_capture)
+    end)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Quarantine an ambiguous draft preview",
+          "summary" => "A lost provider response must never create an automatic duplicate.",
+          "next_action" => "Reply with the ambiguity-safe preview.",
+          "dedupe_key" => "todo-actions:ambiguous-draft-preview"
+        }
+      ])
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-draft-ambiguous",
+        callback_id: "cb-draft-ambiguous",
+        data: "tgtodo:#{todo.id}:draft_email"
+      }
+    }
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Agent.get(send_attempts, & &1) == 1
+
+    checkpoint =
+      Todos.get_for_user(user_id, todo.id).metadata["telegram_todo_action_checkpoint"]
+
+    assert get_in(checkpoint, ["preview_delivery", "status"]) == "outcome_unknown"
+    assert get_in(checkpoint, ["preview_delivery", "error_class"]) == "transport"
+    assert get_in(checkpoint, ["preview_delivery", "error_code"]) == "response_lost"
+    refute inspect(checkpoint) =~ "preview-secret"
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Agent.get(send_attempts, & &1) == 1
+  end
+
+  test "legacy draft completion without a versioned preview receipt is treated delivered", %{
+    user_id: user_id
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Honor the rollout-era draft receipt",
+          "summary" => "The old checkpoint predates explicit preview receipts.",
+          "next_action" => "Reply using the existing draft.",
+          "dedupe_key" => "todo-actions:legacy-draft-receipt",
+          "action_draft" => %{
+            "kind" => "reply",
+            "channel" => "gmail",
+            "subject" => "Re: Existing rollout draft",
+            "text" => "This rollout-era preview must not be sent again.",
+            "body" => "This rollout-era preview must not be sent again."
+          },
+          "metadata" => %{
+            "telegram_todo_action_checkpoint" => %{
+              "callback_id" => "cb-legacy-draft-receipt",
+              "action" => "draft_email",
+              "status" => "draft_ready"
+            }
+          }
+        }
+      ])
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-legacy-draft-receipt",
+        callback_id: "cb-legacy-draft-receipt",
+        data: "tgtodo:#{todo.id}:draft_email"
+      }
+    }
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert telegram_message_count(:send) == 0
+    assert telegram_message_count(:edit) == 1
   end
 
   test "send callback prepares a confirmable action for a slack-sourced todo and requires explicit confirmation",

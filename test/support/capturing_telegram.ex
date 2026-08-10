@@ -44,7 +44,7 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
   def answer_callback_query(callback_query_id, opts \\ []) do
     event = %{type: :callback, callback_query_id: callback_query_id, opts: opts}
 
-    case callback_result() do
+    case callback_result(event) do
       {:error, reason} ->
         notify_watcher({:capturing_telegram_callback_failed, event, reason})
         {:error, reason}
@@ -64,7 +64,7 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
       opts: opts
     }
 
-    case edit_result() do
+    case edit_result(event) do
       {:error, reason} ->
         notify_watcher({:capturing_telegram_edit_failed, event, reason})
         {:error, reason}
@@ -96,14 +96,20 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
     end
   end
 
-  defp callback_result do
-    Application.get_env(:maraithon, :capturing_telegram, [])
-    |> Keyword.get(:callback_result, :ok)
+  defp callback_result(event) do
+    case Application.get_env(:maraithon, :capturing_telegram, [])
+         |> Keyword.get(:callback_result, :ok) do
+      fun when is_function(fun, 1) -> fun.(event)
+      result -> result
+    end
   end
 
-  defp edit_result do
-    Application.get_env(:maraithon, :capturing_telegram, [])
-    |> Keyword.get(:edit_result, :ok)
+  defp edit_result(event) do
+    case Application.get_env(:maraithon, :capturing_telegram, [])
+         |> Keyword.get(:edit_result, :ok) do
+      fun when is_function(fun, 1) -> fun.(event)
+      result -> result
+    end
   end
 
   defp record_event(event) do

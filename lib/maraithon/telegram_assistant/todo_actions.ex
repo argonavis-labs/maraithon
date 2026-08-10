@@ -15,6 +15,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ActionFailureCopy
   alias Maraithon.TelegramAssistant.BriefTodoReview
+  alias Maraithon.TelegramAssistant.ProviderWriteOutcome
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
@@ -33,6 +34,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   @feedback_values ~w(important helpful not_helpful see_less)
   @record_feedback_values ~w(helpful not_helpful)
   @staleness_resolution_actions ~w(important done dismiss)
+  @draft_checkpoint_version 2
+  @draft_generation_lease_seconds 120
+  @draft_preview_lease_seconds 30
+  @checkpoint_finalize_attempts 3
+  @max_delivery_attempt 1_000
 
   def telegram_payload(todo) when is_map(todo) do
     telegram_payload(todo, [])
@@ -103,20 +109,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          action,
          _original_todo
        ) do
-    case staleness_batch_for(chat_id, message_id) do
-      %StalenessBatch{} = batch ->
-        with :ok <- resolve_staleness_batch_item(user_id, batch, updated_todo, action),
-             :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
-          :ok
-        end
-
-      nil ->
-        with :ok <- refresh_message(chat_id, message_id, updated_todo),
-             :ok <- maybe_answer_callback(callback_id, callback_notice(action)),
-             result <- BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action) do
-          normalize_follow_up_result(result)
-        end
-    end
+    handle_committed_todo_callback(
+      user_id,
+      chat_id,
+      message_id,
+      callback_id,
+      action,
+      updated_todo
+    )
   end
 
   defp handle_callback_result(
@@ -128,20 +128,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          action,
          _original_todo
        ) do
-    case staleness_batch_for(chat_id, message_id) do
-      %StalenessBatch{} = batch ->
-        with :ok <- resolve_staleness_batch_item(user_id, batch, updated_todo, action),
-             :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
-          :ok
-        end
-
-      nil ->
-        with :ok <- refresh_message(chat_id, message_id, updated_todo),
-             :ok <- maybe_answer_callback(callback_id, callback_notice(action)),
-             result <- BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action) do
-          normalize_follow_up_result(result)
-        end
-    end
+    handle_committed_todo_callback(
+      user_id,
+      chat_id,
+      message_id,
+      callback_id,
+      action,
+      updated_todo
+    )
   end
 
   defp handle_callback_result(
@@ -196,6 +190,35 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
        ),
        do: {:error, {:invalid_todo_callback_result, other}}
 
+  # The todo mutation is already committed when this runs. Advance the
+  # row-locked Brief state first so a fallible Telegram edit/ack can never
+  # strand the review on the item that was just changed.
+  defp handle_committed_todo_callback(
+         user_id,
+         chat_id,
+         message_id,
+         callback_id,
+         action,
+         %Todo{} = updated_todo
+       ) do
+    with result <- BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action),
+         :ok <- normalize_follow_up_result(result) do
+      case staleness_batch_for(chat_id, message_id) do
+        %StalenessBatch{} = batch ->
+          with :ok <- resolve_staleness_batch_item(user_id, batch, updated_todo, action),
+               :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
+            :ok
+          end
+
+        nil ->
+          with :ok <- refresh_message(chat_id, message_id, updated_todo),
+               :ok <- maybe_answer_callback(callback_id, callback_notice(action)) do
+            :ok
+          end
+      end
+    end
+  end
+
   defp normalize_follow_up_result(:ok), do: :ok
   defp normalize_follow_up_result(:ignored), do: :ok
   defp normalize_follow_up_result({:noop, _reason}), do: :ok
@@ -224,11 +247,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
        when action in ["draft_email", "draft_slack"] do
     channel = if(action == "draft_email", do: "gmail", else: "slack")
 
-    if draft_callback_checkpoint?(todo, callback_id, action) do
-      {:ok, {:draft_ready, render_persisted_draft(todo, channel), todo}}
-    else
-      generate_todo_draft(user_id, todo, channel, callback_id, action)
-    end
+    generate_todo_draft(user_id, todo, channel, callback_id, action)
   end
 
   defp dispatch_callback_action(user_id, chat_id, todo, action, _callback_id),
@@ -368,14 +387,12 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          {:ok, batch} <- maybe_complete_staleness_batch(batch) do
       payload = StalenessTriage.batch_payload(user_id, batch)
 
-      case TelegramResponder.edit(batch.chat_id, batch.message_id, payload.text,
-             parse_mode: "HTML",
-             reply_markup: payload.reply_markup
-           ) do
-        {:ok, _result} -> :ok
-        {:error, reason} -> {:error, {:telegram_edit_failed, reason}}
-        other -> {:error, {:invalid_telegram_edit_result, other}}
-      end
+      normalize_telegram_edit_result(
+        TelegramResponder.edit(batch.chat_id, batch.message_id, payload.text,
+          parse_mode: "HTML",
+          reply_markup: payload.reply_markup
+        )
+      )
     end
   end
 
@@ -431,13 +448,12 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
        when is_binary(chat_id) and is_binary(message_id) do
     payload = telegram_payload(todo)
 
-    case TelegramResponder.edit(chat_id, message_id, payload.text,
-           parse_mode: "HTML",
-           reply_markup: payload.reply_markup
-         ) do
-      {:ok, _result} -> :ok
-      {:error, reason} -> {:error, {:telegram_edit_failed, reason}}
-    end
+    normalize_telegram_edit_result(
+      TelegramResponder.edit(chat_id, message_id, payload.text,
+        parse_mode: "HTML",
+        reply_markup: payload.reply_markup
+      )
+    )
   end
 
   defp refresh_message(_chat_id, _message_id, _todo), do: :ok
@@ -451,102 +467,476 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          draft_text,
          %Todo{} = todo
        ) do
-    cond do
-      draft_preview_delivered?(todo, callback_id, action) ->
-        {:ok, todo}
+    if valid_draft_callback_scope?(callback_id, action) do
+      case claim_draft_preview(user_id, todo, callback_id, action) do
+        {:terminal, current} ->
+          {:ok, current}
 
-      true ->
-        with {:ok, result} <- send_draft(chat_id, message_id, draft_text),
-             {:ok, checkpointed} <-
-               checkpoint_draft_preview(user_id, todo, callback_id, action, result) do
-          {:ok, checkpointed}
-        end
+        {:in_progress, delivery_key} ->
+          {:error, {:todo_draft_delivery_in_progress, delivery_key}}
+
+        {:claimed, current, claim_token} ->
+          deliver_claimed_draft_preview(
+            user_id,
+            current,
+            callback_id,
+            action,
+            claim_token,
+            chat_id,
+            message_id,
+            draft_text
+          )
+
+        {:error, reason} ->
+          {:error, {:todo_draft_delivery_checkpoint_failed, reason}}
+      end
+    else
+      case send_draft(chat_id, message_id, draft_text) do
+        {:ok, _result} -> {:ok, todo}
+        {:error, reason} -> {:error, {:telegram_send_failed, reason}}
+        _other -> {:error, {:telegram_send_failed, :invalid_provider_result}}
+      end
     end
   end
 
-  defp draft_preview_delivered?(%Todo{} = todo, callback_id, action)
-       when is_binary(callback_id) and is_binary(action) do
-    checkpoint = read_map(todo.metadata || %{}, "telegram_todo_action_checkpoint")
-    delivery = read_map(checkpoint, "preview_delivery")
+  defp claim_draft_preview(user_id, %Todo{} = todo, callback_id, action) do
+    Repo.transaction(fn ->
+      current = lock_todo(user_id, todo.id) || Repo.rollback(:not_found)
+      checkpoint = todo_action_checkpoint(current)
+      delivery = read_map(checkpoint, "preview_delivery")
+      delivery_key = draft_preview_delivery_key(current.id, callback_id)
 
-    read_string(checkpoint, "callback_id") == callback_id and
-      read_string(checkpoint, "action") == action and
-      read_string(checkpoint, "status") == "draft_ready" and
-      read_string(delivery, "status") == "delivered"
+      cond do
+        not matching_draft_checkpoint?(checkpoint, callback_id, action, "draft_ready") ->
+          Repo.rollback(:stale_draft_checkpoint)
+
+        draft_preview_terminal?(checkpoint, callback_id, action) ->
+          {:terminal, current}
+
+        active_delivery_claim?(delivery, delivery_key) ->
+          {:in_progress, delivery_key}
+
+        expired_started_delivery?(delivery, delivery_key) ->
+          unknown =
+            delivery
+            |> terminal_draft_delivery("outcome_unknown")
+            |> Map.merge(ProviderWriteOutcome.expired_write_error_fields())
+            |> Map.put("unknown_at", todo_action_now_iso8601())
+
+          updated_checkpoint = Map.put(checkpoint, "preview_delivery", unknown)
+
+          case put_todo_action_checkpoint(current, updated_checkpoint) do
+            {:ok, updated} -> {:terminal, updated}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        true ->
+          claim_token = Ecto.UUID.generate()
+          now = DateTime.utc_now()
+
+          claimed = %{
+            "status" => "claimed",
+            "delivery_key" => delivery_key,
+            "claim_token" => claim_token,
+            "attempt" => next_delivery_attempt(delivery),
+            "claimed_at" => DateTime.to_iso8601(now),
+            "lease_until" =>
+              now
+              |> DateTime.add(@draft_preview_lease_seconds, :second)
+              |> DateTime.to_iso8601()
+          }
+
+          updated_checkpoint = Map.put(checkpoint, "preview_delivery", claimed)
+
+          case put_todo_action_checkpoint(current, updated_checkpoint) do
+            {:ok, updated} -> {:claimed, updated, claim_token}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+    |> unwrap_draft_claim_result()
   end
 
-  defp draft_preview_delivered?(_todo, _callback_id, _action), do: false
+  defp unwrap_draft_claim_result({:ok, {:terminal, %Todo{} = current}}),
+    do: {:terminal, current}
 
-  defp checkpoint_draft_preview(user_id, %Todo{} = todo, callback_id, action, result)
-       when is_binary(user_id) and is_binary(callback_id) and is_binary(action) do
+  defp unwrap_draft_claim_result({:ok, {:in_progress, delivery_key}}),
+    do: {:in_progress, delivery_key}
+
+  defp unwrap_draft_claim_result({:ok, {:claimed, %Todo{} = current, claim_token}}),
+    do: {:claimed, current, claim_token}
+
+  defp unwrap_draft_claim_result({:error, reason}), do: {:error, reason}
+
+  defp deliver_claimed_draft_preview(
+         user_id,
+         %Todo{} = todo,
+         callback_id,
+         action,
+         claim_token,
+         chat_id,
+         message_id,
+         draft_text
+       ) do
+    case arm_draft_preview_write(user_id, todo, callback_id, action, claim_token) do
+      {:terminal, current} ->
+        {:ok, current}
+
+      {:ok, armed} ->
+        case send_draft(chat_id, message_id, draft_text) do
+          {:ok, result} ->
+            finalize_draft_preview_after_write(
+              user_id,
+              armed,
+              callback_id,
+              action,
+              claim_token,
+              result
+            )
+
+          {:error, reason} ->
+            resolve_draft_preview_write_error(
+              user_id,
+              armed,
+              callback_id,
+              action,
+              claim_token,
+              reason
+            )
+
+          _other ->
+            mark_draft_preview_unknown(
+              user_id,
+              armed,
+              callback_id,
+              action,
+              claim_token,
+              ProviderWriteOutcome.invalid_response_error_fields()
+            )
+        end
+
+      {:error, reason} ->
+        {:error, {:todo_draft_delivery_checkpoint_failed, reason}}
+    end
+  end
+
+  defp arm_draft_preview_write(user_id, %Todo{} = todo, callback_id, action, claim_token) do
     Repo.transaction(fn ->
-      current =
-        Todo
-        |> where([candidate], candidate.id == ^todo.id and candidate.user_id == ^user_id)
-        |> lock("FOR UPDATE")
-        |> Repo.one()
+      current = lock_todo(user_id, todo.id) || Repo.rollback(:not_found)
+      checkpoint = todo_action_checkpoint(current)
+      delivery = read_map(checkpoint, "preview_delivery")
+      delivery_key = draft_preview_delivery_key(current.id, callback_id)
 
-      case current do
-        nil ->
-          Repo.rollback(:not_found)
+      cond do
+        draft_preview_terminal?(checkpoint, callback_id, action) ->
+          {:terminal, current}
 
-        %Todo{} = current ->
-          checkpoint = read_map(current.metadata || %{}, "telegram_todo_action_checkpoint")
+        not matching_draft_checkpoint?(checkpoint, callback_id, action, "draft_ready") ->
+          Repo.rollback(:stale_draft_checkpoint)
 
-          cond do
-            draft_preview_delivered?(current, callback_id, action) ->
-              current
+        read_string(delivery, "delivery_key") != delivery_key or
+          read_string(delivery, "status") != "claimed" or
+            read_string(delivery, "claim_token") != claim_token ->
+          Repo.rollback(:draft_preview_claim_lost)
 
-            read_string(checkpoint, "callback_id") != callback_id or
-              read_string(checkpoint, "action") != action or
-                read_string(checkpoint, "status") != "draft_ready" ->
-              Repo.rollback(:stale_draft_checkpoint)
+        true ->
+          now = DateTime.utc_now()
 
-            true ->
-              preview_delivery = %{
-                "status" => "delivered",
-                "delivery_key" => "todo-draft-preview:#{current.id}:#{callback_id}",
-                "provider_message_id" => read_id_string(result, "message_id"),
-                "delivered_at" => DateTime.to_iso8601(DateTime.utc_now())
-              }
+          armed_delivery =
+            delivery
+            |> Map.put("status", "delivering")
+            |> Map.put("write_started_at", DateTime.to_iso8601(now))
+            |> Map.put(
+              "lease_until",
+              now
+              |> DateTime.add(@draft_preview_lease_seconds, :second)
+              |> DateTime.to_iso8601()
+            )
 
-              updated_checkpoint = Map.put(checkpoint, "preview_delivery", preview_delivery)
+          updated_checkpoint = Map.put(checkpoint, "preview_delivery", armed_delivery)
 
-              metadata =
-                (current.metadata || %{})
-                |> Map.put("telegram_todo_action_checkpoint", updated_checkpoint)
+          case put_todo_action_checkpoint(current, updated_checkpoint) do
+            {:ok, updated} -> {:ok, updated}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+    |> case do
+      {:ok, {:terminal, %Todo{} = current}} -> {:terminal, current}
+      {:ok, {:ok, %Todo{} = updated}} -> {:ok, updated}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-              case current
-                   |> Todo.changeset(%{metadata: metadata})
-                   |> Repo.update() do
-                {:ok, updated} -> updated
-                {:error, reason} -> Repo.rollback(reason)
-              end
+  defp finalize_draft_preview_after_write(
+         user_id,
+         %Todo{} = todo,
+         callback_id,
+         action,
+         claim_token,
+         result
+       ) do
+    finalizer = fn ->
+      finalize_draft_preview(user_id, todo, callback_id, action, claim_token, result)
+    end
+
+    case retry_checkpoint(finalizer, @checkpoint_finalize_attempts) do
+      {:ok, %Todo{} = updated} ->
+        {:ok, updated}
+
+      {:error, _reason} ->
+        mark_draft_preview_unknown(
+          user_id,
+          todo,
+          callback_id,
+          action,
+          claim_token,
+          ProviderWriteOutcome.local_checkpoint_error_fields()
+        )
+    end
+  end
+
+  defp finalize_draft_preview(user_id, %Todo{} = todo, callback_id, action, claim_token, result) do
+    mutate_claimed_draft_preview(
+      user_id,
+      todo,
+      callback_id,
+      action,
+      claim_token,
+      fn delivery ->
+        delivery
+        |> terminal_draft_delivery("delivered")
+        |> Map.put("receipt_version", 1)
+        |> Map.put("provider_message_id", read_id_string(result, "message_id"))
+        |> Map.put("delivered_at", todo_action_now_iso8601())
+      end
+    )
+  end
+
+  defp resolve_draft_preview_write_error(
+         user_id,
+         %Todo{} = todo,
+         callback_id,
+         action,
+         claim_token,
+         reason
+       ) do
+    if ProviderWriteOutcome.ambiguous_write_error?(reason) do
+      mark_draft_preview_unknown(
+        user_id,
+        todo,
+        callback_id,
+        action,
+        claim_token,
+        ProviderWriteOutcome.error_fields(reason)
+      )
+    else
+      case fail_draft_preview(user_id, todo, callback_id, action, claim_token, reason) do
+        {:ok, _updated} ->
+          {:error, {:telegram_send_failed, reason}}
+
+        {:error, _checkpoint_reason} ->
+          {:error, {:todo_draft_delivery_checkpoint_failed, :failure_not_committed}}
+      end
+    end
+  end
+
+  defp mark_draft_preview_unknown(
+         user_id,
+         %Todo{} = todo,
+         callback_id,
+         action,
+         claim_token,
+         error_fields
+       ) do
+    marker = fn ->
+      mutate_claimed_draft_preview(
+        user_id,
+        todo,
+        callback_id,
+        action,
+        claim_token,
+        fn delivery ->
+          delivery
+          |> terminal_draft_delivery("outcome_unknown")
+          |> Map.merge(error_fields)
+          |> Map.put("receipt_version", 1)
+          |> Map.put("unknown_at", todo_action_now_iso8601())
+        end
+      )
+    end
+
+    case retry_checkpoint(marker, @checkpoint_finalize_attempts) do
+      {:ok, %Todo{} = updated} ->
+        {:ok, updated}
+
+      {:error, _reason} ->
+        {:error, {:todo_draft_delivery_checkpoint_failed, :outcome_unknown_not_committed}}
+    end
+  end
+
+  defp fail_draft_preview(user_id, %Todo{} = todo, callback_id, action, claim_token, reason) do
+    mutate_claimed_draft_preview(
+      user_id,
+      todo,
+      callback_id,
+      action,
+      claim_token,
+      fn delivery ->
+        delivery
+        |> terminal_draft_delivery("failed")
+        |> Map.merge(ProviderWriteOutcome.error_fields(reason))
+        |> Map.put("failed_at", todo_action_now_iso8601())
+      end
+    )
+  end
+
+  defp mutate_claimed_draft_preview(
+         user_id,
+         %Todo{} = todo,
+         callback_id,
+         action,
+         claim_token,
+         mutation
+       )
+       when is_function(mutation, 1) do
+    Repo.transaction(fn ->
+      current = lock_todo(user_id, todo.id) || Repo.rollback(:not_found)
+      checkpoint = todo_action_checkpoint(current)
+      delivery = read_map(checkpoint, "preview_delivery")
+      delivery_key = draft_preview_delivery_key(current.id, callback_id)
+
+      cond do
+        draft_preview_terminal?(checkpoint, callback_id, action) ->
+          current
+
+        not matching_draft_checkpoint?(checkpoint, callback_id, action, "draft_ready") ->
+          Repo.rollback(:stale_draft_checkpoint)
+
+        read_string(delivery, "delivery_key") != delivery_key or
+          read_string(delivery, "status") != "delivering" or
+            read_string(delivery, "claim_token") != claim_token ->
+          Repo.rollback(:draft_preview_claim_lost)
+
+        true ->
+          updated_checkpoint = Map.put(checkpoint, "preview_delivery", mutation.(delivery))
+
+          case put_todo_action_checkpoint(current, updated_checkpoint) do
+            {:ok, updated} -> updated
+            {:error, reason} -> Repo.rollback(reason)
           end
       end
     end)
     |> case do
       {:ok, %Todo{} = updated} -> {:ok, updated}
-      {:error, reason} -> {:error, {:todo_draft_delivery_checkpoint_failed, reason}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp checkpoint_draft_preview(_user_id, %Todo{} = todo, _callback_id, _action, _result),
-    do: {:ok, todo}
+  defp terminal_draft_delivery(delivery, status) do
+    delivery
+    |> Map.take(["delivery_key", "attempt", "claimed_at", "write_started_at"])
+    |> Map.put("status", status)
+  end
+
+  defp draft_preview_terminal?(checkpoint, callback_id, action) do
+    delivery = read_map(checkpoint, "preview_delivery")
+
+    matching_draft_checkpoint?(checkpoint, callback_id, action, "draft_ready") and
+      (read_string(delivery, "status") in ["delivered", "outcome_unknown"] or
+         (legacy_draft_checkpoint?(checkpoint) and map_size(delivery) == 0))
+  end
+
+  defp legacy_draft_checkpoint?(checkpoint) do
+    case Map.get(checkpoint, "checkpoint_version") do
+      version when is_integer(version) and version >= @draft_checkpoint_version -> false
+      _legacy -> true
+    end
+  end
+
+  defp matching_draft_checkpoint?(checkpoint, callback_id, action, status) do
+    read_string(checkpoint, "callback_id") == callback_id and
+      read_string(checkpoint, "action") == action and
+      read_string(checkpoint, "status") == status
+  end
+
+  defp active_delivery_claim?(delivery, delivery_key) do
+    read_string(delivery, "delivery_key") == delivery_key and
+      read_string(delivery, "status") in ["claimed", "delivering"] and
+      future_iso8601?(read_string(delivery, "lease_until"))
+  end
+
+  defp expired_started_delivery?(delivery, delivery_key) do
+    read_string(delivery, "delivery_key") == delivery_key and
+      read_string(delivery, "status") == "delivering" and
+      not future_iso8601?(read_string(delivery, "lease_until"))
+  end
+
+  defp next_delivery_attempt(delivery) do
+    case Map.get(delivery, "attempt") do
+      attempt when is_integer(attempt) and attempt >= 0 -> min(attempt + 1, @max_delivery_attempt)
+      _missing -> 1
+    end
+  end
+
+  defp retry_checkpoint(fun, attempts) when is_function(fun, 0) and attempts > 1 do
+    case fun.() do
+      {:ok, _value} = ok -> ok
+      {:error, _reason} -> retry_checkpoint(fun, attempts - 1)
+    end
+  end
+
+  defp retry_checkpoint(fun, 1) when is_function(fun, 0), do: fun.()
+
+  defp lock_todo(user_id, todo_id) do
+    Todo
+    |> where([candidate], candidate.id == ^todo_id and candidate.user_id == ^user_id)
+    |> lock("FOR UPDATE")
+    |> Repo.one()
+  end
+
+  defp todo_action_checkpoint(%Todo{} = todo) do
+    read_map(todo.metadata || %{}, "telegram_todo_action_checkpoint")
+  end
+
+  defp put_todo_action_checkpoint(%Todo{} = todo, checkpoint) when is_map(checkpoint) do
+    metadata = Map.put(todo.metadata || %{}, "telegram_todo_action_checkpoint", checkpoint)
+
+    todo
+    |> Todo.changeset(%{metadata: metadata})
+    |> Repo.update()
+  end
+
+  defp draft_preview_delivery_key(todo_id, callback_id),
+    do: "todo-draft-preview:#{todo_id}:#{callback_id}"
+
+  defp valid_draft_callback_scope?(callback_id, action) do
+    is_binary(callback_id) and callback_id != "" and byte_size(callback_id) <= 512 and
+      is_binary(action) and action in ["draft_email", "draft_slack"]
+  end
+
+  defp future_iso8601?(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> DateTime.compare(datetime, DateTime.utc_now()) == :gt
+      _invalid -> false
+    end
+  end
+
+  defp future_iso8601?(_value), do: false
+
+  defp todo_action_now_iso8601 do
+    DateTime.utc_now()
+    |> DateTime.truncate(:second)
+    |> DateTime.to_iso8601()
+  end
 
   defp send_draft(chat_id, message_id, text)
        when is_binary(chat_id) and is_binary(message_id) and is_binary(text) do
-    case TelegramResponder.reply(chat_id, message_id, text, parse_mode: "HTML") do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
-    end
+    TelegramResponder.reply(chat_id, message_id, text, parse_mode: "HTML")
   end
 
   defp send_draft(chat_id, _message_id, text) when is_binary(chat_id) and is_binary(text) do
-    case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, {:telegram_send_failed, reason}}
-    end
+    TelegramResponder.send(chat_id, text, parse_mode: "HTML")
   end
 
   # Resolves the todo's action_draft + source destination into a prepared
@@ -1279,17 +1669,6 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp raw_next_action(todo) when is_map(todo), do: map_string(todo, "next_action")
   defp raw_next_action(_todo), do: nil
 
-  defp draft_callback_checkpoint?(%Todo{} = todo, callback_id, action)
-       when is_binary(callback_id) and is_binary(action) do
-    checkpoint = read_map(todo.metadata || %{}, "telegram_todo_action_checkpoint")
-
-    read_string(checkpoint, "callback_id") == callback_id and
-      read_string(checkpoint, "action") == action and
-      read_string(checkpoint, "status") == "draft_ready"
-  end
-
-  defp draft_callback_checkpoint?(_todo, _callback_id, _action), do: false
-
   defp render_persisted_draft(%Todo{} = todo, "gmail") do
     draft = todo_action_draft(todo)
 
@@ -1306,7 +1685,143 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     render_draft_result("slack", %{draft: %{"text" => read_string(draft, "text", "")}})
   end
 
-  defp generate_todo_draft(user_id, %Todo{} = todo, channel, callback_id \\ nil, action \\ nil) do
+  defp generate_todo_draft(user_id, todo, channel, callback_id \\ nil, action \\ nil)
+
+  defp generate_todo_draft(user_id, %Todo{} = todo, channel, callback_id, action)
+       when is_binary(user_id) and is_binary(channel) do
+    if valid_draft_callback_scope?(callback_id, action) do
+      case claim_draft_generation(user_id, todo, channel, callback_id, action) do
+        {:ready, current} ->
+          {:ok, {:draft_ready, render_persisted_draft(current, channel), current}}
+
+        {:in_progress, generation_key} ->
+          {:error, {:todo_draft_generation_in_progress, generation_key}}
+
+        {:claimed, current, claim_token} ->
+          generate_claimed_todo_draft(
+            user_id,
+            current,
+            channel,
+            callback_id,
+            action,
+            claim_token
+          )
+
+        {:error, reason} ->
+          {:error, {:todo_draft_generation_checkpoint_failed, reason}}
+      end
+    else
+      generate_unclaimed_todo_draft(user_id, todo, channel)
+    end
+  end
+
+  defp claim_draft_generation(user_id, %Todo{} = todo, channel, callback_id, action) do
+    Repo.transaction(fn ->
+      current = lock_todo(user_id, todo.id) || Repo.rollback(:not_found)
+      checkpoint = todo_action_checkpoint(current)
+      generation = read_map(checkpoint, "generation")
+      preview_delivery = read_map(checkpoint, "preview_delivery")
+      generation_key = draft_generation_key(current.id, callback_id)
+
+      cond do
+        matching_draft_checkpoint?(checkpoint, callback_id, action, "draft_ready") ->
+          {:ready, current}
+
+        active_any_draft_preview_claim?(preview_delivery) ->
+          {:in_progress, read_string(preview_delivery, "delivery_key", generation_key)}
+
+        expired_any_started_delivery?(preview_delivery) ->
+          unknown =
+            preview_delivery
+            |> terminal_draft_delivery("outcome_unknown")
+            |> Map.merge(ProviderWriteOutcome.expired_write_error_fields())
+            |> Map.put("receipt_version", 1)
+            |> Map.put("unknown_at", todo_action_now_iso8601())
+
+          case put_todo_action_checkpoint(
+                 current,
+                 Map.put(checkpoint, "preview_delivery", unknown)
+               ) do
+            {:ok, _updated} ->
+              {:in_progress, read_string(unknown, "delivery_key", generation_key)}
+
+            {:error, reason} ->
+              Repo.rollback(reason)
+          end
+
+        active_draft_generation_claim?(checkpoint, generation) ->
+          {:in_progress, read_string(generation, "generation_key", generation_key)}
+
+        true ->
+          claim_token = Ecto.UUID.generate()
+          now = DateTime.utc_now()
+
+          claimed_generation = %{
+            "status" => "generating",
+            "generation_key" => generation_key,
+            "claim_token" => claim_token,
+            "attempt" => next_delivery_attempt(generation),
+            "claimed_at" => DateTime.to_iso8601(now),
+            "lease_until" =>
+              now
+              |> DateTime.add(@draft_generation_lease_seconds, :second)
+              |> DateTime.to_iso8601()
+          }
+
+          claimed_checkpoint = %{
+            "checkpoint_version" => @draft_checkpoint_version,
+            "callback_id" => callback_id,
+            "action" => action,
+            "channel" => channel,
+            "status" => "generating",
+            "generation" => claimed_generation
+          }
+
+          case put_todo_action_checkpoint(current, claimed_checkpoint) do
+            {:ok, updated} -> {:claimed, updated, claim_token}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+    |> case do
+      {:ok, {:ready, %Todo{} = current}} ->
+        {:ready, current}
+
+      {:ok, {:in_progress, generation_key}} ->
+        {:in_progress, generation_key}
+
+      {:ok, {:claimed, %Todo{} = current, claim_token}} ->
+        {:claimed, current, claim_token}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp active_draft_generation_claim?(checkpoint, generation) do
+    read_string(checkpoint, "status") == "generating" and
+      read_string(generation, "status") == "generating" and
+      future_iso8601?(read_string(generation, "lease_until"))
+  end
+
+  defp active_any_draft_preview_claim?(delivery) do
+    read_string(delivery, "status") in ["claimed", "delivering"] and
+      future_iso8601?(read_string(delivery, "lease_until"))
+  end
+
+  defp expired_any_started_delivery?(delivery) do
+    read_string(delivery, "status") == "delivering" and
+      not future_iso8601?(read_string(delivery, "lease_until"))
+  end
+
+  defp generate_claimed_todo_draft(
+         user_id,
+         %Todo{} = todo,
+         channel,
+         callback_id,
+         action,
+         claim_token
+       ) do
     card = ActionCards.for_todo(todo, include_disconnected: false)
 
     attrs =
@@ -1317,14 +1832,53 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
     case Drafts.create(user_id, attrs, draft_opts()) do
       {:ok, result} ->
-        # SPEC 06 R5: persist the regenerated draft onto the todo's
-        # `action_draft` (previously this only rendered a one-off preview
-        # reply) and re-render the card so the buttons offer "Send" instead
-        # of "Draft" going forward. Do not present an uncheckpointed provider
-        # draft: durable retries must have a row state they can resume.
-        with {:ok, updated_todo} <-
-               persist_generated_draft(user_id, todo, channel, result, callback_id, action) do
-          {:ok, {:draft_ready, render_draft_result(channel, result), updated_todo}}
+        case persist_claimed_generated_draft(
+               user_id,
+               todo,
+               channel,
+               result,
+               callback_id,
+               action,
+               claim_token
+             ) do
+          {:ok, updated_todo} ->
+            {:ok, {:draft_ready, render_draft_result(channel, result), updated_todo}}
+
+          {:error, reason} ->
+            {:error, {:todo_draft_generation_checkpoint_failed, reason}}
+        end
+
+      {:error, reason} ->
+        case fail_draft_generation(user_id, todo, callback_id, action, claim_token) do
+          {:ok, _updated} ->
+            {:error, reason}
+
+          {:error, _checkpoint_reason} ->
+            {:error, {:todo_draft_generation_checkpoint_failed, :failure_not_committed}}
+        end
+    end
+  end
+
+  defp generate_unclaimed_todo_draft(user_id, %Todo{} = todo, channel) do
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+
+    attrs =
+      todo
+      |> draft_attrs(channel, card)
+      |> Map.put("channel", channel)
+      |> Map.put("save_to_provider", false)
+
+    case Drafts.create(user_id, attrs, draft_opts()) do
+      {:ok, result} ->
+        draft_map = generated_action_draft(channel, result) |> compact_map()
+
+        if map_size(draft_map) == 0 do
+          {:error, :invalid_generated_todo_draft}
+        else
+          with {:ok, updated} <-
+                 Todos.update_for_user(user_id, todo.id, %{"action_draft" => draft_map}) do
+            {:ok, {:draft_ready, render_draft_result(channel, result), updated}}
+          end
         end
 
       {:error, reason} ->
@@ -1332,41 +1886,118 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp persist_generated_draft(
+  defp persist_claimed_generated_draft(
          user_id,
          %Todo{} = todo,
          channel,
          result,
          callback_id,
-         action
+         action,
+         claim_token
        ) do
-    draft_map = generated_action_draft(channel, result)
+    draft_map = generated_action_draft(channel, result) |> compact_map()
 
-    case compact_map(draft_map) do
-      empty when map_size(empty) == 0 ->
-        {:error, :invalid_generated_todo_draft}
+    if map_size(draft_map) == 0 do
+      _ = fail_draft_generation(user_id, todo, callback_id, action, claim_token)
+      {:error, :invalid_generated_todo_draft}
+    else
+      Repo.transaction(fn ->
+        current = lock_todo(user_id, todo.id) || Repo.rollback(:not_found)
+        checkpoint = todo_action_checkpoint(current)
+        generation = read_map(checkpoint, "generation")
 
-      draft_map ->
-        update_attrs = %{"action_draft" => draft_map}
+        cond do
+          matching_draft_checkpoint?(checkpoint, callback_id, action, "draft_ready") ->
+            current
 
-        update_attrs =
-          if is_binary(callback_id) and is_binary(action) do
-            checkpoint = %{
-              "callback_id" => callback_id,
-              "action" => action,
-              "status" => "draft_ready"
-            }
+          not matching_draft_checkpoint?(checkpoint, callback_id, action, "generating") ->
+            Repo.rollback(:stale_draft_checkpoint)
 
-            Map.put(update_attrs, "metadata", %{
-              "telegram_todo_action_checkpoint" => checkpoint
-            })
-          else
-            update_attrs
-          end
+          read_string(checkpoint, "channel") != channel or
+            read_string(generation, "status") != "generating" or
+              read_string(generation, "claim_token") != claim_token ->
+            Repo.rollback(:draft_generation_claim_lost)
 
-        Todos.update_for_user(user_id, todo.id, update_attrs)
+          true ->
+            completed_generation =
+              generation
+              |> Map.take(["generation_key", "attempt", "claimed_at"])
+              |> Map.put("status", "completed")
+              |> Map.put("completed_at", todo_action_now_iso8601())
+
+            completed_checkpoint =
+              checkpoint
+              |> Map.put("checkpoint_version", @draft_checkpoint_version)
+              |> Map.put("status", "draft_ready")
+              |> Map.put("generation", completed_generation)
+              |> Map.delete("preview_delivery")
+
+            metadata =
+              Map.put(
+                current.metadata || %{},
+                "telegram_todo_action_checkpoint",
+                completed_checkpoint
+              )
+
+            case current
+                 |> Todo.changeset(%{action_draft: draft_map, metadata: metadata})
+                 |> Repo.update() do
+              {:ok, updated} -> updated
+              {:error, reason} -> Repo.rollback(reason)
+            end
+        end
+      end)
+      |> case do
+        {:ok, %Todo{} = updated} -> {:ok, updated}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
+
+  defp fail_draft_generation(user_id, %Todo{} = todo, callback_id, action, claim_token) do
+    Repo.transaction(fn ->
+      current = lock_todo(user_id, todo.id) || Repo.rollback(:not_found)
+      checkpoint = todo_action_checkpoint(current)
+      generation = read_map(checkpoint, "generation")
+
+      cond do
+        matching_draft_checkpoint?(checkpoint, callback_id, action, "draft_ready") ->
+          current
+
+        not matching_draft_checkpoint?(checkpoint, callback_id, action, "generating") ->
+          Repo.rollback(:stale_draft_checkpoint)
+
+        read_string(generation, "status") != "generating" or
+            read_string(generation, "claim_token") != claim_token ->
+          Repo.rollback(:draft_generation_claim_lost)
+
+        true ->
+          failed_generation =
+            generation
+            |> Map.take(["generation_key", "attempt", "claimed_at"])
+            |> Map.put("status", "failed")
+            |> Map.merge(ProviderWriteOutcome.draft_generation_error_fields())
+            |> Map.put("failed_at", todo_action_now_iso8601())
+
+          failed_checkpoint =
+            checkpoint
+            |> Map.put("status", "generation_failed")
+            |> Map.put("generation", failed_generation)
+
+          case put_todo_action_checkpoint(current, failed_checkpoint) do
+            {:ok, updated} -> updated
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+    |> case do
+      {:ok, %Todo{} = updated} -> {:ok, updated}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp draft_generation_key(todo_id, callback_id),
+    do: "todo-draft-generation:#{todo_id}:#{callback_id}"
 
   defp generated_action_draft("gmail", %{draft: %{"subject" => subject, "body" => body}}) do
     %{
@@ -1819,12 +2450,34 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp callback_data(todo_id, action), do: "#{@callback_prefix}:#{todo_id}:#{action}"
 
+  defp normalize_telegram_edit_result({:ok, _result}), do: :ok
+
+  defp normalize_telegram_edit_result({:error, reason}) do
+    if ProviderWriteOutcome.edit_terminal_drained?(reason) do
+      :ok
+    else
+      {:error, {:telegram_edit_failed, reason}}
+    end
+  end
+
+  defp normalize_telegram_edit_result(other),
+    do: {:error, {:invalid_telegram_edit_result, other}}
+
   defp maybe_answer_callback(callback_id, text)
        when is_binary(callback_id) and is_binary(text) and text != "" do
     case TelegramResponder.answer_callback(callback_id, text) do
-      {:ok, _result} -> :ok
-      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
-      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
+      {:ok, _result} ->
+        :ok
+
+      {:error, reason} ->
+        if ProviderWriteOutcome.callback_terminal_drained?(reason) do
+          :ok
+        else
+          {:error, {:telegram_callback_answer_failed, reason}}
+        end
+
+      other ->
+        {:error, {:invalid_telegram_callback_answer_result, other}}
     end
   end
 

@@ -1797,6 +1797,114 @@ defmodule Maraithon.TelegramAssistantTest do
     assert List.last(sends).text =~ "Done and dismissed items are off future briefs"
   end
 
+  test "todo review advances before realistic drained edit and callback responses", %{
+    user_id: user_id
+  } do
+    assert {:ok, [first, second]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "manual",
+                 "title" => "Advance before editing the first card",
+                 "summary" => "The committed decision must move the durable cursor first.",
+                 "next_action" => "Mark this item done.",
+                 "priority" => 98,
+                 "dedupe_key" => "telegram-assistant:review-drained-terminal:1"
+               },
+               %{
+                 "source" => "manual",
+                 "title" => "Present the next item after drained responses",
+                 "summary" => "Telegram can report an already-drained edit and callback.",
+                 "next_action" => "Review this second item.",
+                 "priority" => 94,
+                 "dedupe_key" => "telegram-assistant:review-drained-terminal:2"
+               }
+             ])
+
+    assert :ok =
+             InsightNotifications.handle_telegram_event(%{
+               type: "message",
+               data: %{
+                 chat_id: 12_345,
+                 message_id: 9224,
+                 text: "Let's review my todos one at a time"
+               }
+             })
+
+    capture_config = Application.get_env(:maraithon, :capturing_telegram, [])
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.merge(capture_config,
+        edit_result:
+          {:error,
+           {:telegram_error, 400,
+            "Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message"}},
+        callback_result:
+          {:error,
+           {:telegram_error, 400,
+            "Bad Request: query is too old and response timeout expired or query ID is invalid"}}
+      )
+    )
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-review-drained-terminal",
+        callback_id: "todo-review-drained-terminal-callback",
+        data: "tgtodo:#{first.id}:done"
+      }
+    }
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Todos.get_for_user(user_id, first.id).status == "done"
+
+    review = latest_todo_review_brief(user_id).metadata["todo_review"]
+    assert review["current_todo_id"] == second.id
+    assert Enum.any?(review["reviewed"], &(&1["todo_id"] == first.id))
+
+    assert List.last(Enum.filter(telegram_events(), &(&1.type == :send))).text =~
+             "Review this second item."
+  end
+
+  test "todo callback does not drain an unrelated Telegram 400", %{user_id: user_id} do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "manual",
+                 "title" => "Keep unrelated provider errors visible",
+                 "summary" => "Only exact terminal Telegram responses are safe to drain.",
+                 "next_action" => "Mark this item done.",
+                 "dedupe_key" => "telegram-assistant:unrelated-telegram-400"
+               }
+             ])
+
+    capture_config = Application.get_env(:maraithon, :capturing_telegram, [])
+    reason = {:telegram_error, 400, "Bad Request: message cannot be edited"}
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(capture_config, :edit_result, {:error, reason})
+    )
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-unrelated-400",
+        callback_id: "todo-unrelated-400-callback",
+        data: "tgtodo:#{todo.id}:done"
+      }
+    }
+
+    assert {:error, {:telegram_edit_failed, ^reason}} =
+             InsightNotifications.process_telegram_event_durable(event)
+  end
+
   test "todo review retries resume checkpointed advancement without duplicating previews", %{
     user_id: user_id
   } do
@@ -1866,6 +1974,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Enum.any?(review["reviewed"], &(&1["todo_id"] == first.id))
     assert get_in(review, ["presentation", "status"]) == "failed"
     assert get_in(review, ["presentation", "item_id"]) == second.id
+    assert get_in(review, ["presentation", "error_class"]) == "provider_unavailable"
+    assert get_in(review, ["presentation", "error_code"]) == "server_error"
+    refute inspect(review) =~ "next review preview unavailable"
 
     Application.put_env(:maraithon, :capturing_telegram, capture_config)
 
@@ -2011,6 +2122,292 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert :ok = InsightNotifications.process_telegram_event_durable(event)
     assert Enum.count(telegram_events(), &(&1.type == :send)) == 2
+  end
+
+  test "ambiguous todo review write is outcome_unknown and never resent", %{
+    user_id: user_id
+  } do
+    assert {:ok, [first, second]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "manual",
+                 "title" => "Commit the first ambiguity-safe review choice",
+                 "summary" => "The next card may be accepted before its response is lost.",
+                 "next_action" => "Mark the first item done.",
+                 "priority" => 98,
+                 "dedupe_key" => "telegram-assistant:review-ambiguity:1"
+               },
+               %{
+                 "source" => "manual",
+                 "title" => "Never resend the uncertain next card",
+                 "summary" => "An ambiguous provider write is a terminal quarantine.",
+                 "next_action" => "Review the uncertain second item once.",
+                 "priority" => 94,
+                 "dedupe_key" => "telegram-assistant:review-ambiguity:2"
+               }
+             ])
+
+    assert :ok =
+             InsightNotifications.handle_telegram_event(%{
+               type: "message",
+               data: %{
+                 chat_id: 12_345,
+                 message_id: 9240,
+                 text: "Let's review my todos one at a time"
+               }
+             })
+
+    attempts =
+      start_supervised!(%{
+        id: :todo_review_ambiguous_write_attempts,
+        start: {Agent, :start_link, [fn -> 0 end]}
+      })
+
+    capture_config = Application.get_env(:maraithon, :capturing_telegram, [])
+    reason = {:transport_error, %{reason: :timeout, detail: "Bearer review-secret"}}
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(capture_config, :send_result, fn _event ->
+        Agent.update(attempts, &(&1 + 1))
+        {:error, reason}
+      end)
+    )
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-review-ambiguous",
+        callback_id: "todo-review-ambiguous-done",
+        data: "tgtodo:#{first.id}:done"
+      }
+    }
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Agent.get(attempts, & &1) == 1
+    assert Todos.get_for_user(user_id, first.id).status == "done"
+
+    review = latest_todo_review_brief(user_id).metadata["todo_review"]
+    presentation = review["presentation"]
+
+    assert review["current_todo_id"] == second.id
+    assert presentation["item_id"] == second.id
+    assert presentation["status"] == "outcome_unknown"
+    assert presentation["receipt_version"] == 1
+    assert presentation["error_class"] == "transport"
+    assert presentation["error_code"] == "response_lost"
+    assert byte_size(Jason.encode!(presentation)) < 1_024
+    refute inspect(review) =~ "review-secret"
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Agent.get(attempts, & &1) == 1
+  end
+
+  test "todo review pins an eligible current item and its bounded payload snapshot", %{
+    user_id: user_id
+  } do
+    assert {:ok, [first, second]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "manual",
+                 "title" => "Pinned original review item",
+                 "summary" => "This original context must survive a provider retry.",
+                 "next_action" => "Use the original pinned next action.",
+                 "priority" => 99,
+                 "dedupe_key" => "telegram-assistant:review-item-snapshot:1"
+               },
+               %{
+                 "source" => "manual",
+                 "title" => "Do not reorder ahead of the pin",
+                 "summary" => "Priority changes must not replace the eligible current item.",
+                 "next_action" => "Review the second item later.",
+                 "priority" => 80,
+                 "dedupe_key" => "telegram-assistant:review-item-snapshot:2"
+               }
+             ])
+
+    capture_config = Application.get_env(:maraithon, :capturing_telegram, [])
+    failure = {:telegram_error, 503, "initial item presentation unavailable"}
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(capture_config, :send_result, {:error, failure})
+    )
+
+    request = %{
+      type: "message",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: 9241,
+        text: "Let's review my todos one at a time"
+      }
+    }
+
+    assert {:error, :durable_telegram_router_failed} =
+             InsightNotifications.process_telegram_event_durable(request)
+
+    review = latest_todo_review_brief(user_id).metadata["todo_review"]
+    snapshot = review["current_item_snapshot"]
+
+    assert review["current_todo_id"] == first.id
+    assert snapshot["todo_id"] == first.id
+    assert byte_size(get_in(snapshot, ["payload", "text"])) <= 3_800
+    assert byte_size(Jason.encode!(snapshot)) < 8_000
+
+    assert {:ok, _updated_first} =
+             Todos.update_for_user(user_id, first.id, %{
+               "title" => "MUTATED ITEM MUST NOT REPLACE SNAPSHOT",
+               "summary" => "MUTATED CONTEXT MUST NOT LEAK INTO THE RETRY",
+               "next_action" => "MUTATED NEXT ACTION MUST NOT BE SENT",
+               "priority" => 1
+             })
+
+    assert {:ok, _updated_second} =
+             Todos.update_for_user(user_id, second.id, %{"priority" => 100})
+
+    Application.put_env(:maraithon, :capturing_telegram, capture_config)
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(request)
+
+    sent = List.last(Enum.filter(telegram_events(), &(&1.type == :send)))
+    assert sent.text =~ "Use the original pinned next action."
+    refute sent.text =~ "MUTATED"
+    refute sent.text =~ "Review the second item later."
+
+    retried_review = latest_todo_review_brief(user_id).metadata["todo_review"]
+    assert retried_review["current_todo_id"] == first.id
+    assert retried_review["current_item_snapshot"] == snapshot
+  end
+
+  test "completed todo review retries use the immutable bounded summary snapshot", %{
+    user_id: user_id
+  } do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "manual",
+                 "title" => "Finish before snapshotting the summary",
+                 "summary" => "The completion rollup must not drift on retry.",
+                 "next_action" => "Mark the only review item done.",
+                 "priority" => 99,
+                 "dedupe_key" => "telegram-assistant:review-summary-snapshot"
+               }
+             ])
+
+    assert :ok =
+             InsightNotifications.handle_telegram_event(%{
+               type: "message",
+               data: %{
+                 chat_id: 12_345,
+                 message_id: 9242,
+                 text: "Let's review my todos one at a time"
+               }
+             })
+
+    capture_config = Application.get_env(:maraithon, :capturing_telegram, [])
+    failure = {:telegram_error, 503, "summary presentation unavailable"}
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(capture_config, :send_result, {:error, failure})
+    )
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-review-summary-snapshot",
+        callback_id: "todo-review-summary-snapshot-done",
+        data: "tgtodo:#{todo.id}:done"
+      }
+    }
+
+    assert {:error, {:telegram_send_failed, ^failure}} =
+             InsightNotifications.process_telegram_event_durable(event)
+
+    completed = latest_todo_review_brief(user_id)
+    review = completed.metadata["todo_review"]
+    summary_payload = review["summary_payload"]
+
+    assert review["status"] == "completed"
+    assert summary_payload["snapshot_version"] == 1
+    assert summary_payload["text"] =~ "Still open: 0"
+    assert byte_size(summary_payload["text"]) <= 3_800
+    assert byte_size(Jason.encode!(summary_payload)) < 4_096
+
+    assert {:ok, reopened} =
+             Todos.update_for_user(user_id, todo.id, %{
+               "status" => "open",
+               "title" => "MUTATED OPEN ITEM MUST NOT ENTER SUMMARY",
+               "next_action" => "MUTATED SUMMARY ACTION"
+             })
+
+    Application.put_env(:maraithon, :capturing_telegram, capture_config)
+
+    assert :ok =
+             Maraithon.TelegramAssistant.BriefTodoReview.after_todo_action(
+               user_id,
+               "12345",
+               reopened,
+               "done"
+             )
+
+    summary = List.last(Enum.filter(telegram_events(), &(&1.type == :send)))
+    assert summary.text =~ "Still open: 0"
+    refute summary.text =~ "MUTATED"
+  end
+
+  test "legacy review step without a versioned presentation receipt is treated delivered", %{
+    user_id: user_id
+  } do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "manual",
+                 "title" => "Do not replay a rollout-era review card",
+                 "summary" => "Missing old receipts are conservatively treated as delivered.",
+                 "next_action" => "Keep the legacy presentation single-copy.",
+                 "dedupe_key" => "telegram-assistant:legacy-review-receipt"
+               }
+             ])
+
+    request = %{
+      type: "message",
+      data: %{
+        chat_id: 12_345,
+        message_id: 9243,
+        text: "Let's review my todos one at a time"
+      }
+    }
+
+    assert :ok = InsightNotifications.handle_telegram_event(request)
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 1
+
+    brief = latest_todo_review_brief(user_id)
+
+    legacy_review =
+      brief.metadata["todo_review"]
+      |> Map.delete("presentation")
+      |> Map.delete("presentation_receipt_version")
+      |> Map.delete("current_item_snapshot")
+
+    metadata = Map.put(brief.metadata, "todo_review", legacy_review)
+    Repo.update!(Ecto.Changeset.change(brief, metadata: metadata))
+
+    assert :ok = InsightNotifications.handle_telegram_event(request)
+    assert Enum.count(telegram_events(), &(&1.type == :send)) == 1
+
+    persisted = latest_todo_review_brief(user_id).metadata["todo_review"]
+    assert persisted["current_todo_id"] == todo.id
+    refute Map.has_key?(persisted, "presentation_receipt_version")
+    refute Map.has_key?(persisted, "presentation")
   end
 
   test "todo list replies with dense bullets are converted to contextual todo cards", %{

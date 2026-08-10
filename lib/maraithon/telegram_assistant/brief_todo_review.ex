@@ -10,6 +10,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant.ProviderWriteOutcome
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
@@ -22,6 +23,12 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   @open_statuses ["open", "snoozed"]
   @text_review_limit 12
   @presentation_lease_seconds 30
+  @presentation_receipt_version 1
+  @payload_snapshot_version 1
+  @snapshot_text_max_bytes 3_800
+  @snapshot_markup_max_bytes 4_000
+  @checkpoint_finalize_attempts 3
+  @max_presentation_attempt 1_000
   @why_now_keys ~w(why_now why_it_matters due_context)
   @evidence_keys ~w(
     source_quote quote source_excerpt body_excerpt excerpt source_evidence checked_evidence
@@ -591,30 +598,27 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   defp send_review_todo(chat_id, %Brief{} = brief, %Todo{} = todo, position, total) do
     case claim_review_presentation(brief, "todo", todo.id) do
-      {:delivered, _current} ->
+      {:terminal, _current} ->
         :ok
 
       {:in_progress, delivery_key} ->
         {:error, {:brief_review_delivery_in_progress, delivery_key}}
 
       {:claimed, current, claim_token} ->
-        payload =
-          TodoActions.telegram_payload(todo,
-            prefix_text: "Open work decision #{position} of #{total}"
-          )
+        deliver_claimed_review_presentation(
+          current,
+          "todo",
+          todo.id,
+          claim_token,
+          fn armed ->
+            payload = review_item_payload(armed, todo, position, total)
 
-        case TelegramResponder.send(chat_id, payload.text,
-               parse_mode: "HTML",
-               reply_markup: payload.reply_markup
-             ) do
-          {:ok, result} ->
-            finalize_review_presentation(current, "todo", todo.id, claim_token, result)
-
-          {:error, reason} ->
-            with :ok <- release_review_presentation(current, claim_token, reason) do
-              {:error, {:telegram_send_failed, reason}}
-            end
-        end
+            TelegramResponder.send(chat_id, payload.text,
+              parse_mode: "HTML",
+              reply_markup: payload.reply_markup
+            )
+          end
+        )
 
       {:error, reason} ->
         {:error, {:brief_review_delivery_checkpoint_failed, reason}}
@@ -623,24 +627,20 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   defp send_summary(chat_id, %Brief{} = brief) do
     case claim_review_presentation(brief, "summary", brief.id) do
-      {:delivered, _current} ->
+      {:terminal, _current} ->
         :ok
 
       {:in_progress, delivery_key} ->
         {:error, {:brief_review_delivery_in_progress, delivery_key}}
 
       {:claimed, current, claim_token} ->
-        text = summary_text(current)
-
-        case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
-          {:ok, result} ->
-            finalize_review_presentation(current, "summary", current.id, claim_token, result)
-
-          {:error, reason} ->
-            with :ok <- release_review_presentation(current, claim_token, reason) do
-              {:error, {:telegram_send_failed, reason}}
-            end
-        end
+        deliver_claimed_review_presentation(
+          current,
+          "summary",
+          current.id,
+          claim_token,
+          fn armed -> TelegramResponder.send(chat_id, summary_text(armed), parse_mode: "HTML") end
+        )
 
       {:error, reason} ->
         {:error, {:brief_review_delivery_checkpoint_failed, reason}}
@@ -741,11 +741,25 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp summary_text(%Brief{} = brief) do
+    review = review_metadata(brief)
+    payload = read_map(review, "summary_payload")
+
+    case {Map.get(payload, "snapshot_version"), read_string(payload, "text")} do
+      {@payload_snapshot_version, text}
+      when is_binary(text) and byte_size(text) <= @snapshot_text_max_bytes ->
+        text
+
+      _missing ->
+        build_summary_text(brief, review)
+    end
+  end
+
+  defp build_summary_text(%Brief{} = brief, review) when is_map(review) do
     todos = all_review_todos(brief)
     done = Enum.filter(todos, &(&1.status == "done"))
     dismissed = Enum.filter(todos, &(&1.status == "dismissed"))
     open = Enum.filter(todos, &(&1.status in @open_statuses))
-    reviewed_count = length(reviewed_entries(brief))
+    reviewed_count = length(reviewed_entries_from_review(review))
 
     remaining =
       case open do
@@ -780,22 +794,30 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     Done and dismissed items are off future briefs. Anything still open remains visible until it is marked done, snoozed, kept active, or dismissed.
     """
     |> String.trim()
+    |> Maraithon.PromptBudget.truncate_utf8(@snapshot_text_max_bytes)
   end
 
   defp next_unreviewed_open_todo(%Brief{} = brief) do
     todos = review_todos(brief)
     reviewed_ids = reviewed_ids(brief)
+    review = review_metadata(brief)
 
     open_todos =
       Enum.reject(todos, fn todo ->
         todo.status not in @open_statuses or MapSet.member?(reviewed_ids, todo.id)
       end)
 
-    case open_todos do
-      [] ->
+    pinned_todo =
+      case read_string(review, "current_todo_id") do
+        todo_id when is_binary(todo_id) -> Enum.find(open_todos, &(&1.id == todo_id))
+        _missing -> nil
+      end
+
+    case pinned_todo || List.first(open_todos) do
+      nil ->
         nil
 
-      [todo | _] ->
+      %Todo{} = todo ->
         total = review_total(brief)
         position = MapSet.size(reviewed_ids) + 1
         {todo, min(position, max(total, 1)), max(total, 1)}
@@ -1007,63 +1029,197 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   defp same_text?(_left, _right), do: false
 
+  defp review_item_payload(%Brief{} = brief, %Todo{} = todo, position, total) do
+    review = review_metadata(brief)
+    snapshot = read_map(review, "current_item_snapshot")
+
+    if valid_item_payload_snapshot?(snapshot, todo.id) do
+      payload = read_map(snapshot, "payload")
+
+      %{
+        text: read_string(payload, "text"),
+        reply_markup: read_map_or_nil(payload, "reply_markup")
+      }
+    else
+      live_review_item_payload(todo, position, total)
+    end
+  end
+
+  defp live_review_item_payload(%Todo{} = todo, position, total) do
+    TodoActions.telegram_payload(todo,
+      prefix_text: "Open work decision #{position} of #{total}"
+    )
+  end
+
+  defp item_payload_snapshot(%Todo{} = todo, position, total) do
+    payload = live_review_item_payload(todo, position, total)
+
+    text =
+      if is_binary(payload.text) and byte_size(payload.text) <= @snapshot_text_max_bytes do
+        payload.text
+      else
+        fallback_review_item_text(todo, position, total)
+      end
+
+    %{
+      "snapshot_version" => @payload_snapshot_version,
+      "todo_id" => todo.id,
+      "position" => position,
+      "total" => total,
+      "payload" => %{
+        "text" => text,
+        "reply_markup" => bounded_reply_markup(payload.reply_markup)
+      }
+    }
+  end
+
+  defp fallback_review_item_text(%Todo{} = todo, position, total) do
+    title = todo |> todo_title() |> Maraithon.PromptBudget.truncate_utf8(800) |> safe()
+
+    "Open work decision #{position} of #{total}\n#{title}"
+    |> Maraithon.PromptBudget.truncate_utf8(@snapshot_text_max_bytes)
+  end
+
+  defp bounded_reply_markup(%{"inline_keyboard" => rows}) when is_list(rows) do
+    keyboard =
+      rows
+      |> Enum.take(8)
+      |> Enum.map(fn row ->
+        row
+        |> List.wrap()
+        |> Enum.take(4)
+        |> Enum.map(&bounded_reply_button/1)
+        |> Enum.reject(&is_nil/1)
+      end)
+      |> Enum.reject(&(&1 == []))
+
+    markup = if keyboard == [], do: nil, else: %{"inline_keyboard" => keyboard}
+
+    if bounded_json?(markup, @snapshot_markup_max_bytes), do: markup
+  end
+
+  defp bounded_reply_markup(_markup), do: nil
+
+  defp bounded_reply_button(button) when is_map(button) do
+    text =
+      button
+      |> read_string("text")
+      |> bounded_snapshot_string(96)
+
+    callback_data =
+      button
+      |> read_string("callback_data")
+      |> bounded_snapshot_string(256)
+
+    url =
+      button
+      |> read_string("url")
+      |> bounded_snapshot_string(1_024)
+
+    cond do
+      is_nil(text) -> nil
+      is_binary(callback_data) -> %{"text" => text, "callback_data" => callback_data}
+      is_binary(url) -> %{"text" => text, "url" => url}
+      true -> nil
+    end
+  end
+
+  defp bounded_reply_button(_button), do: nil
+
+  defp bounded_snapshot_string(value, max_bytes) when is_binary(value) do
+    value = Maraithon.PromptBudget.truncate_utf8(value, max_bytes)
+    if value == "", do: nil, else: value
+  end
+
+  defp bounded_snapshot_string(_value, _max_bytes), do: nil
+
+  defp bounded_json?(nil, _max_bytes), do: true
+
+  defp bounded_json?(value, max_bytes) do
+    case Jason.encode(value) do
+      {:ok, encoded} -> byte_size(encoded) <= max_bytes
+      {:error, _reason} -> false
+    end
+  end
+
+  defp valid_item_payload_snapshot?(snapshot, todo_id) do
+    payload = read_map(snapshot, "payload")
+    text = read_string(payload, "text")
+    markup = Map.get(payload, "reply_markup")
+
+    Map.get(snapshot, "snapshot_version") == @payload_snapshot_version and
+      read_string(snapshot, "todo_id") == todo_id and is_binary(text) and text != "" and
+      byte_size(text) <= @snapshot_text_max_bytes and
+      bounded_json?(markup, @snapshot_markup_max_bytes)
+  end
+
+  defp read_map_or_nil(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      value when is_map(value) -> value
+      _missing -> nil
+    end
+  end
+
   defp claim_review_presentation(%Brief{} = brief, kind, item_id) do
     Repo.transaction(fn ->
-      current = lock_brief(brief.id)
+      current = lock_brief(brief.id) || Repo.rollback(:brief_not_found)
+      review = review_metadata(current)
+      presentation = review_presentation(review)
+      delivery_key = review_delivery_key(current.id, kind, item_id)
 
-      case current do
-        nil ->
-          Repo.rollback(:brief_not_found)
+      cond do
+        not valid_review_presentation?(current, review, kind, item_id) ->
+          Repo.rollback(:review_presentation_not_current)
 
-        %Brief{} = current ->
-          review = review_metadata(current)
-          presentation = review_presentation(review)
-          delivery_key = "brief-review:#{current.id}:#{kind}:#{item_id}"
+        terminal_review_presentation?(presentation, delivery_key) ->
+          {:terminal, current}
 
-          cond do
-            not valid_review_presentation?(current, review, kind, item_id) ->
-              Repo.rollback(:review_presentation_not_current)
+        legacy_missing_review_receipt?(review, presentation) ->
+          {:terminal, current}
 
-            delivered_review_presentation?(presentation, delivery_key) ->
-              {:delivered, current}
+        active_review_presentation_claim?(presentation, delivery_key) ->
+          {:in_progress, delivery_key}
 
-            active_review_presentation_claim?(presentation, delivery_key) ->
-              {:in_progress, delivery_key}
+        expired_started_review_presentation?(presentation, delivery_key) ->
+          unknown =
+            presentation
+            |> terminal_review_presentation("outcome_unknown")
+            |> Map.merge(ProviderWriteOutcome.expired_write_error_fields())
+            |> Map.put("receipt_version", @presentation_receipt_version)
+            |> Map.put("unknown_at", now_iso8601())
 
-            true ->
-              claim_token = Ecto.UUID.generate()
-              now = DateTime.utc_now()
+          case put_review_presentation(current, review, unknown) do
+            {:ok, updated} -> {:terminal, updated}
+            {:error, reason} -> Repo.rollback(reason)
+          end
 
-              attempt =
-                case Map.get(presentation, "attempt") do
-                  value when is_integer(value) and value >= 0 -> value + 1
-                  _missing -> 1
-                end
+        true ->
+          claim_token = Ecto.UUID.generate()
+          now = DateTime.utc_now()
 
-              claimed = %{
-                "kind" => kind,
-                "item_id" => item_id,
-                "status" => "delivering",
-                "delivery_key" => delivery_key,
-                "claim_token" => claim_token,
-                "attempt" => attempt,
-                "claimed_at" => DateTime.to_iso8601(now),
-                "lease_until" =>
-                  now
-                  |> DateTime.add(@presentation_lease_seconds, :second)
-                  |> DateTime.to_iso8601()
-              }
+          claimed = %{
+            "kind" => kind,
+            "item_id" => item_id,
+            "status" => "claimed",
+            "delivery_key" => delivery_key,
+            "claim_token" => claim_token,
+            "attempt" => next_presentation_attempt(presentation),
+            "claimed_at" => DateTime.to_iso8601(now),
+            "lease_until" =>
+              now
+              |> DateTime.add(@presentation_lease_seconds, :second)
+              |> DateTime.to_iso8601()
+          }
 
-              case put_review_presentation(current, review, claimed) do
-                {:ok, updated} -> {:claimed, updated, claim_token}
-                {:error, reason} -> Repo.rollback(reason)
-              end
+          case put_review_presentation(current, review, claimed) do
+            {:ok, updated} -> {:claimed, updated, claim_token}
+            {:error, reason} -> Repo.rollback(reason)
           end
       end
     end)
     |> case do
-      {:ok, {:delivered, %Brief{} = current}} ->
-        {:delivered, current}
+      {:ok, {:terminal, %Brief{} = current}} ->
+        {:terminal, current}
 
       {:ok, {:in_progress, delivery_key}} ->
         {:in_progress, delivery_key}
@@ -1076,6 +1232,107 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     end
   end
 
+  defp deliver_claimed_review_presentation(
+         %Brief{} = brief,
+         kind,
+         item_id,
+         claim_token,
+         writer
+       )
+       when is_function(writer, 1) do
+    case arm_review_presentation_write(brief, kind, item_id, claim_token) do
+      {:terminal, _current} ->
+        :ok
+
+      {:ok, armed} ->
+        case writer.(armed) do
+          {:ok, result} ->
+            finalize_review_presentation_after_write(
+              armed,
+              kind,
+              item_id,
+              claim_token,
+              result
+            )
+
+          {:error, reason} ->
+            resolve_review_presentation_write_error(
+              armed,
+              kind,
+              item_id,
+              claim_token,
+              reason
+            )
+
+          _other ->
+            mark_review_presentation_unknown(
+              armed,
+              kind,
+              item_id,
+              claim_token,
+              ProviderWriteOutcome.invalid_response_error_fields()
+            )
+        end
+
+      {:error, reason} ->
+        {:error, {:brief_review_delivery_checkpoint_failed, reason}}
+    end
+  end
+
+  defp arm_review_presentation_write(%Brief{} = brief, kind, item_id, claim_token) do
+    mutate_claimed_review_presentation(
+      brief,
+      kind,
+      item_id,
+      claim_token,
+      "claimed",
+      fn presentation ->
+        now = DateTime.utc_now()
+
+        presentation
+        |> Map.put("status", "delivering")
+        |> Map.put("write_started_at", DateTime.to_iso8601(now))
+        |> Map.put(
+          "lease_until",
+          now
+          |> DateTime.add(@presentation_lease_seconds, :second)
+          |> DateTime.to_iso8601()
+        )
+      end
+    )
+    |> case do
+      {:ok, %Brief{} = updated} -> {:ok, updated}
+      {:terminal, %Brief{} = current} -> {:terminal, current}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp finalize_review_presentation_after_write(
+         %Brief{} = brief,
+         kind,
+         item_id,
+         claim_token,
+         result
+       ) do
+    finalizer = fn ->
+      finalize_review_presentation(brief, kind, item_id, claim_token, result)
+    end
+
+    case retry_review_checkpoint(finalizer, @checkpoint_finalize_attempts) do
+      :ok ->
+        :ok
+
+      {:error, _reason} ->
+        mark_review_presentation_unknown(
+          brief,
+          kind,
+          item_id,
+          claim_token,
+          ProviderWriteOutcome.local_checkpoint_error_fields()
+        )
+    end
+  end
+
   defp finalize_review_presentation(
          %Brief{} = brief,
          kind,
@@ -1083,88 +1340,188 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
          claim_token,
          result
        ) do
-    Repo.transaction(fn ->
-      current = lock_brief(brief.id)
-
-      case current do
-        nil ->
-          Repo.rollback(:brief_not_found)
-
-        %Brief{} = current ->
-          review = review_metadata(current)
-          presentation = review_presentation(review)
-          delivery_key = "brief-review:#{current.id}:#{kind}:#{item_id}"
-
-          cond do
-            delivered_review_presentation?(presentation, delivery_key) ->
-              :ok
-
-            not valid_review_presentation?(current, review, kind, item_id) ->
-              Repo.rollback(:review_presentation_not_current)
-
-            read_string(presentation, "delivery_key") != delivery_key or
-                read_string(presentation, "claim_token") != claim_token ->
-              Repo.rollback(:review_presentation_claim_lost)
-
-            true ->
-              delivered =
-                presentation
-                |> Map.put("status", "delivered")
-                |> Map.put("provider_message_id", read_id_string(result, "message_id"))
-                |> Map.put("delivered_at", now_iso8601())
-                |> Map.delete("claim_token")
-                |> Map.delete("lease_until")
-
-              case put_review_presentation(current, review, delivered) do
-                {:ok, _updated} -> :ok
-                {:error, reason} -> Repo.rollback(reason)
-              end
-          end
+    mutate_claimed_review_presentation(
+      brief,
+      kind,
+      item_id,
+      claim_token,
+      "delivering",
+      fn presentation ->
+        presentation
+        |> terminal_review_presentation("delivered")
+        |> Map.put("receipt_version", @presentation_receipt_version)
+        |> Map.put("provider_message_id", read_id_string(result, "message_id"))
+        |> Map.put("delivered_at", now_iso8601())
       end
-    end)
-    |> case do
-      {:ok, :ok} -> :ok
-      {:error, reason} -> {:error, {:brief_review_delivery_checkpoint_failed, reason}}
+    )
+    |> normalize_review_mutation_result()
+  end
+
+  defp resolve_review_presentation_write_error(
+         %Brief{} = brief,
+         kind,
+         item_id,
+         claim_token,
+         reason
+       ) do
+    if ProviderWriteOutcome.ambiguous_write_error?(reason) do
+      mark_review_presentation_unknown(
+        brief,
+        kind,
+        item_id,
+        claim_token,
+        ProviderWriteOutcome.error_fields(reason)
+      )
+    else
+      case fail_review_presentation(brief, kind, item_id, claim_token, reason) do
+        :ok -> {:error, {:telegram_send_failed, reason}}
+        {:error, _checkpoint_reason} = error -> error
+      end
     end
   end
 
-  defp release_review_presentation(%Brief{} = brief, claim_token, reason) do
+  defp mark_review_presentation_unknown(
+         %Brief{} = brief,
+         kind,
+         item_id,
+         claim_token,
+         error_fields
+       ) do
+    marker = fn ->
+      mutate_claimed_review_presentation(
+        brief,
+        kind,
+        item_id,
+        claim_token,
+        "delivering",
+        fn presentation ->
+          presentation
+          |> terminal_review_presentation("outcome_unknown")
+          |> Map.merge(error_fields)
+          |> Map.put("receipt_version", @presentation_receipt_version)
+          |> Map.put("unknown_at", now_iso8601())
+        end
+      )
+      |> normalize_review_mutation_result()
+    end
+
+    case retry_review_checkpoint(marker, @checkpoint_finalize_attempts) do
+      :ok ->
+        :ok
+
+      {:error, _reason} ->
+        {:error, {:brief_review_delivery_checkpoint_failed, :outcome_unknown_not_committed}}
+    end
+  end
+
+  defp fail_review_presentation(%Brief{} = brief, kind, item_id, claim_token, reason) do
+    mutate_claimed_review_presentation(
+      brief,
+      kind,
+      item_id,
+      claim_token,
+      "delivering",
+      fn presentation ->
+        presentation
+        |> terminal_review_presentation("failed")
+        |> Map.merge(ProviderWriteOutcome.error_fields(reason))
+        |> Map.put("failed_at", now_iso8601())
+      end
+    )
+    |> normalize_review_mutation_result()
+  end
+
+  defp mutate_claimed_review_presentation(
+         %Brief{} = brief,
+         kind,
+         item_id,
+         claim_token,
+         expected_status,
+         mutation
+       )
+       when is_function(mutation, 1) do
     Repo.transaction(fn ->
-      current = lock_brief(brief.id)
+      current = lock_brief(brief.id) || Repo.rollback(:brief_not_found)
+      review = review_metadata(current)
+      presentation = review_presentation(review)
+      delivery_key = review_delivery_key(current.id, kind, item_id)
 
-      case current do
-        nil ->
-          Repo.rollback(:brief_not_found)
+      cond do
+        terminal_review_presentation?(presentation, delivery_key) ->
+          {:terminal, current}
 
-        %Brief{} = current ->
-          review = review_metadata(current)
-          presentation = review_presentation(review)
+        not valid_review_presentation?(current, review, kind, item_id) ->
+          Repo.rollback(:review_presentation_not_current)
 
-          if read_string(presentation, "claim_token") == claim_token do
-            failed =
-              presentation
-              |> Map.put("status", "failed")
-              |> Map.put("last_error", inspect(reason, limit: 10, printable_limit: 500))
-              |> Map.put("failed_at", now_iso8601())
-              |> Map.delete("claim_token")
-              |> Map.delete("lease_until")
+        read_string(presentation, "delivery_key") != delivery_key or
+          read_string(presentation, "status") != expected_status or
+            read_string(presentation, "claim_token") != claim_token ->
+          Repo.rollback(:review_presentation_claim_lost)
 
-            case put_review_presentation(current, review, failed) do
-              {:ok, _updated} -> :ok
-              {:error, checkpoint_reason} -> Repo.rollback(checkpoint_reason)
-            end
-          else
-            :ok
+        true ->
+          case put_review_presentation(current, review, mutation.(presentation)) do
+            {:ok, updated} -> {:ok, updated}
+            {:error, reason} -> Repo.rollback(reason)
           end
       end
     end)
     |> case do
-      {:ok, :ok} ->
-        :ok
-
-      {:error, checkpoint_reason} ->
-        {:error, {:brief_review_delivery_checkpoint_failed, checkpoint_reason}}
+      {:ok, {:ok, %Brief{} = updated}} -> {:ok, updated}
+      {:ok, {:terminal, %Brief{} = current}} -> {:terminal, current}
+      {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp normalize_review_mutation_result({:ok, %Brief{}}), do: :ok
+  defp normalize_review_mutation_result({:terminal, %Brief{}}), do: :ok
+
+  defp normalize_review_mutation_result({:error, reason}),
+    do: {:error, {:brief_review_delivery_checkpoint_failed, reason}}
+
+  defp retry_review_checkpoint(fun, attempts) when is_function(fun, 0) and attempts > 1 do
+    case fun.() do
+      :ok -> :ok
+      {:error, _reason} -> retry_review_checkpoint(fun, attempts - 1)
+    end
+  end
+
+  defp retry_review_checkpoint(fun, 1) when is_function(fun, 0), do: fun.()
+
+  defp terminal_review_presentation(presentation, status) do
+    presentation
+    |> Map.take([
+      "kind",
+      "item_id",
+      "delivery_key",
+      "attempt",
+      "claimed_at",
+      "write_started_at"
+    ])
+    |> Map.put("status", status)
+  end
+
+  defp review_delivery_key(brief_id, kind, item_id),
+    do: "brief-review:#{brief_id}:#{kind}:#{item_id}"
+
+  defp next_presentation_attempt(presentation) do
+    case Map.get(presentation, "attempt") do
+      attempt when is_integer(attempt) and attempt >= 0 ->
+        min(attempt + 1, @max_presentation_attempt)
+
+      _missing ->
+        1
+    end
+  end
+
+  defp legacy_missing_review_receipt?(review, presentation) do
+    not is_integer(Map.get(review, "presentation_receipt_version")) and
+      map_size(presentation) == 0
+  end
+
+  defp expired_started_review_presentation?(presentation, delivery_key) do
+    read_string(presentation, "delivery_key") == delivery_key and
+      read_string(presentation, "status") == "delivering" and
+      not future_iso8601?(read_string(presentation, "lease_until"))
   end
 
   defp valid_review_presentation?(%Brief{} = brief, review, kind, item_id) do
@@ -1181,14 +1538,14 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     end
   end
 
-  defp delivered_review_presentation?(presentation, delivery_key) do
+  defp terminal_review_presentation?(presentation, delivery_key) do
     read_string(presentation, "delivery_key") == delivery_key and
-      read_string(presentation, "status") == "delivered"
+      read_string(presentation, "status") in ["delivered", "outcome_unknown"]
   end
 
   defp active_review_presentation_claim?(presentation, delivery_key) do
     read_string(presentation, "delivery_key") == delivery_key and
-      read_string(presentation, "status") == "delivering" and
+      read_string(presentation, "status") in ["claimed", "delivering"] and
       future_iso8601?(read_string(presentation, "lease_until"))
   end
 
@@ -1274,6 +1631,8 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
       else
         case next_unreviewed_open_todo(current) do
           {%Todo{} = todo, position, total} ->
+            same_current? = read_string(review, "current_todo_id") == todo.id
+
             updated_review =
               review
               |> Map.put("status", "active")
@@ -1281,10 +1640,32 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
               |> Map.put("updated_at", now_iso8601())
 
             updated_review =
-              if read_string(review, "current_todo_id") == todo.id do
-                updated_review
-              else
-                Map.delete(updated_review, "presentation")
+              cond do
+                not same_current? ->
+                  updated_review
+                  |> Map.put("presentation_receipt_version", @presentation_receipt_version)
+                  |> Map.put(
+                    "current_item_snapshot",
+                    item_payload_snapshot(todo, position, total)
+                  )
+                  |> Map.delete("presentation")
+
+                is_integer(Map.get(review, "presentation_receipt_version")) and
+                    not valid_item_payload_snapshot?(
+                      read_map(review, "current_item_snapshot"),
+                      todo.id
+                    ) ->
+                  Map.put(
+                    updated_review,
+                    "current_item_snapshot",
+                    item_payload_snapshot(todo, position, total)
+                  )
+
+                true ->
+                  # Missing version/snapshot is a rollout-era completion
+                  # receipt. Preserve it so replay drains instead of sending a
+                  # card which may already have reached Telegram.
+                  updated_review
               end
 
             metadata = Map.put(current.metadata || %{}, @review_key, updated_review)
@@ -1300,10 +1681,19 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
             completed_review =
               review
               |> Map.put("status", "completed")
+              |> Map.put("presentation_receipt_version", @presentation_receipt_version)
               |> Map.delete("current_todo_id")
+              |> Map.delete("current_item_snapshot")
               |> Map.delete("presentation")
               |> Map.put("completed_at", now_iso8601())
               |> Map.put("summary", summary_snapshot(current))
+
+            completed_review =
+              Map.put(
+                completed_review,
+                "summary_payload",
+                summary_payload_snapshot(current, completed_review)
+              )
 
             metadata = Map.put(current.metadata || %{}, @review_key, completed_review)
 
@@ -1421,6 +1811,13 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     }
   end
 
+  defp summary_payload_snapshot(%Brief{} = brief, review) when is_map(review) do
+    %{
+      "snapshot_version" => @payload_snapshot_version,
+      "text" => build_summary_text(brief, review)
+    }
+  end
+
   defp reviewed_ids(%Brief{} = brief) do
     brief
     |> reviewed_entries()
@@ -1430,11 +1827,19 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp reviewed_entries(%Brief{} = brief) do
-    case Map.get(review_metadata(brief), "reviewed") do
+    brief
+    |> review_metadata()
+    |> reviewed_entries_from_review()
+  end
+
+  defp reviewed_entries_from_review(review) when is_map(review) do
+    case Map.get(review, "reviewed") do
       entries when is_list(entries) -> Enum.filter(entries, &is_map/1)
       _ -> []
     end
   end
+
+  defp reviewed_entries_from_review(_review), do: []
 
   defp review_metadata(%Brief{metadata: metadata}) when is_map(metadata) do
     case Map.get(metadata, @review_key) do
@@ -1477,9 +1882,18 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp maybe_answer_callback(callback_id, text)
        when is_binary(callback_id) and is_binary(text) and text != "" do
     case TelegramResponder.answer_callback(callback_id, text) do
-      {:ok, _result} -> :ok
-      {:error, reason} -> {:error, {:telegram_callback_answer_failed, reason}}
-      other -> {:error, {:invalid_telegram_callback_answer_result, other}}
+      {:ok, _result} ->
+        :ok
+
+      {:error, reason} ->
+        if ProviderWriteOutcome.callback_terminal_drained?(reason) do
+          :ok
+        else
+          {:error, {:telegram_callback_answer_failed, reason}}
+        end
+
+      other ->
+        {:error, {:invalid_telegram_callback_answer_result, other}}
     end
   end
 
@@ -1511,6 +1925,15 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp read_string(_map, _key, default), do: default
+
+  defp read_map(map, key) when is_map(map) and is_binary(key) do
+    case Map.get(map, key) do
+      value when is_map(value) -> value
+      _missing -> %{}
+    end
+  end
+
+  defp read_map(_map, _key), do: %{}
 
   defp existing_atom_key(key) when is_binary(key) do
     String.to_existing_atom(key)
