@@ -3,10 +3,10 @@ defmodule Maraithon.Repo.Migrations.CreateSnapshotQuarantines do
 
   def change do
     create table(:snapshot_quarantines) do
-      # The source row is deleted after quarantine, so this is intentionally
-      # not a foreign key. It is the idempotency key for resumable batches.
+      # The source snapshot is deleted after quarantine, but the sanitized
+      # report remains owned by the Agent and must follow Agent erasure.
       add :snapshot_id, :bigint, null: false
-      add :agent_id, :binary_id, null: false
+      add :agent_id, references(:agents, type: :binary_id, on_delete: :delete_all), null: false
       add :sequence_num, :bigint, null: false
       add :failure_code, :string, null: false
       add :status, :string, null: false
