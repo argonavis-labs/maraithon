@@ -240,7 +240,13 @@ defmodule Maraithon.Runtime.Coordination.Session do
     case EffectTaskSupervisor.terminate_exact(claim) do
       {:ok, proof} ->
         evidence = "effect-task-supervisor:#{proof}:#{assignment.local_task_id}"
-        _ = TaskClaims.record_local_termination(assignment, "supervisor_down", evidence)
+
+        _ =
+          Maraithon.Effects.Cancellation.record_local_coordination_termination(
+            assignment,
+            evidence
+          )
+
         :ok
 
       {:unknown, _reason} ->
