@@ -82,6 +82,11 @@ config :maraithon, Maraithon.PrivacyRetention,
   critical_grace_hours:
     privacy_retention_integer.("PRIVACY_RETENTION_CRITICAL_GRACE_HOURS", 168, 24, 720)
 
+# Public verification key only. The matching Ed25519 private key must remain in
+# the external incident-operator system and must never be present in this app.
+config :maraithon, Maraithon.Runtime.AgentTerminations,
+  external_attestation_public_key: System.get_env("AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY", "")
+
 # App Store review demo account. When both are set, the reviewer email skips
 # Postmark delivery and the listed code acts as the magic code (see
 # Accounts.app_review_bypass_config/0). Leave unset in dev/test — the bypass
