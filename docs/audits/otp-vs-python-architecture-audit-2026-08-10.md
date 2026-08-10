@@ -1,8 +1,8 @@
 # Maraithon architecture audit refresh
 
-**Status:** Final release-candidate audit. The exact deployed SHA is reported in the accompanying release record because a file cannot contain the hash of the commit that contains itself.  
-**Production baseline at audit time:** Fly release 1430, commit `48b72a75b81b522ae80da9900c3ad454470c37fb`.  
-**Candidate code anchor before this report:** `73b842c` on the fresh production-lineage integration worktree.  
+**Status:** Final release-candidate audit. The exact deployed SHA is reported in the accompanying release record because a file cannot contain the hash of the commit that contains itself.
+**Production baseline at audit time:** Fly release 1430, commit `48b72a75b81b522ae80da9900c3ad454470c37fb`.
+**Candidate code anchor before this report:** `73b842c` on the fresh production-lineage integration worktree.
 **Method:** Source/history review, independent P0/P1 reviews of immutable component SHAs, focused OTP 26 validation, migration proofs, and production postflight evidence. Candidate statements below are not claims about production until the release record confirms deployment.
 
 ## Executive conclusion
@@ -53,51 +53,51 @@ That hybrid is reasonable, but each durable-work substrate must share the same s
 
 ### P0 — Telegram ingress and end-to-end durable processing
 
-**Production baseline:** not present on release 1430; the earlier product direction had retired Telegram ingress.  
-**Release candidate:** restores a static `/webhooks/telegram` endpoint with exact header-secret authentication before body parsing, bounded body/gzip handling, permanent sanitized update receipts, durable processing, per-bot ordering, and claim fencing. Independent P0/P1 review accepted Insight at `4e781a2`, Todo/Brief at `c2ff9f9`, and PreparedAction at `31bd99f`. Ambiguous non-idempotent provider outcomes become non-resendable manual-reconciliation states; Telegram presentation uses durable pre-send ownership.  
+**Production baseline:** not present on release 1430; the earlier product direction had retired Telegram ingress.
+**Release candidate:** restores a static `/webhooks/telegram` endpoint with exact header-secret authentication before body parsing, bounded body/gzip handling, permanent sanitized update receipts, durable processing, per-bot ordering, and claim fencing. Independent P0/P1 review accepted Insight at `4e781a2`, Todo/Brief at `c2ff9f9`, and PreparedAction at `31bd99f`. Ambiguous non-idempotent provider outcomes become non-resendable manual-reconciliation states; Telegram presentation uses durable pre-send ownership.
 **Disposition:** resolved in the candidate, subject to exact-deployment and webhook postflight. Registration remains a release operation: a freshly staged secret, static URL, `max_connections=1`, and `getWebhookInfo` verification.
 
 ### P0 — Background-job generation fencing
 
-**Production baseline:** terminal/retry/cancel writes are not fully fenced by an immutable claim generation.  
-**Release candidate:** `23fe1eb` + `dd629c7`, followed by the reviewed Telegram ordering blob union, introduce UUID claim tokens, exact owned terminal/retry writes, stale-reclaim fencing, exact task termination on ownership loss, cancellation CAS, protected Telegram job ordering, and permanent receipt deduplication.  
+**Production baseline:** terminal/retry/cancel writes are not fully fenced by an immutable claim generation.
+**Release candidate:** `23fe1eb` + `dd629c7`, followed by the reviewed Telegram ordering blob union, introduce UUID claim tokens, exact owned terminal/retry writes, stale-reclaim fencing, exact task termination on ownership loss, cancellation CAS, protected Telegram job ordering, and permanent receipt deduplication.
 **Disposition:** resolved in the candidate. The non-rolling old-runner drain remains mandatory because the protocol is not mixed-fleet compatible.
 
 ### P1 — Durable two-phase messages, connector events and wakeups
 
-**Production:** generic Scheduler/PubSub/mailbox admission can still be treated as completion; capped deferred mailboxes remain volatile.  
-**Successor work:** the accepted feature-dark foundation through `b92b5ea` adds durable directive/ownership primitives, but ordinary `Runtime.send_message`, Scheduler and connector producers are not yet cut over ACK-last.  
+**Production:** generic Scheduler/PubSub/mailbox admission can still be treated as completion; capped deferred mailboxes remain volatile.
+**Successor work:** the accepted feature-dark foundation through `b92b5ea` adds durable directive/ownership primitives, but ordinary `Runtime.send_message`, Scheduler and connector producers are not yet cut over ACK-last.
 **Disposition:** open architectural work. Do not claim completion merely because the Telegram path is durable.
 
 ### P1 — Bootstrap/restart/desired-state authority
 
-**Production baseline:** temporary Bootstrap, transient Agent restart and Watcher recovery remain competing policies.  
-**Reviewed work:** the accepted foundation through `b92b5ea` supplies feature-dark leases, guards, database clock, and directives. Successive lifecycle candidates (`2f1b5d6`, `faa4f7a`, and `2016093`) exposed composite races, consent/legacy-fleet problems, forged terminal timestamps, and mixed-key terminal crashes. A later narrow descendant `dbde557` was still under review when the release decision was made.  
+**Production baseline:** temporary Bootstrap, transient Agent restart and Watcher recovery remain competing policies.
+**Reviewed work:** the accepted foundation through `b92b5ea` supplies feature-dark leases, guards, database clock, and directives. Successive lifecycle candidates (`2f1b5d6`, `faa4f7a`, and `2016093`) exposed composite races, consent/legacy-fleet problems, forged terminal timestamps, and mixed-key terminal crashes. A later narrow descendant `dbde557` was still under review when the release decision was made.
 **Disposition:** deliberately deferred from this release. No lifecycle delta from `2f1b5d6` onward is integrated, `exact_agent_runtime_enabled` remains false, and activation requires a separately reviewed release and non-rolling cutover. This finding remains open rather than being hidden behind green partial tests.
 
 ### P1 — Effect cancellation and exact ownership
 
-**Reviewed work:** the accepted foundation retains durable terminal envelopes and database-authoritative terminal results. The raw cancellation tip `e8ff71d` was rejected because its migrations/cutover were not retry-safe and mixed legacy/exact fleet modes could mutate each other's rows; its repair did not reach clean independent review before the release decision.  
+**Reviewed work:** the accepted foundation retains durable terminal envelopes and database-authoritative terminal results. The raw cancellation tip `e8ff71d` was rejected because its migrations/cutover were not retry-safe and mixed legacy/exact fleet modes could mutate each other's rows; its repair did not reach clean independent review before the release decision.
 **Disposition:** deliberately deferred. Neither `e8ff71d` nor its dirty repair is integrated; `durable_effect_cancellation_enabled` remains false, the epoch remains nil, and protocol version remains 2. A future release must prove retry-safe migrations, DB-authoritative cutover, nil-lineage isolation, and no mixed-fleet mutation.
 
 ### P1 — Chief durable lineage
 
-**Reviewed work:** the raw `f7c1a33` tip exposed seven data-contract holes. The complete descendant through `e0f8eac` and documentation correction `a061585` closes terminal-page extension, composable-write, cursor-CAS, semantic-closure, acquisition-identity, Directive-correlation, and immutable provider-account/retry facts. It passed independent executable and migration review.  
+**Reviewed work:** the raw `f7c1a33` tip exposed seven data-contract holes. The complete descendant through `e0f8eac` and documentation correction `a061585` closes terminal-page extension, composable-write, cursor-CAS, semantic-closure, acquisition-identity, Directive-correlation, and immutable provider-account/retry facts. It passed independent executable and migration review.
 **Disposition:** resolved as an additive, old-code-safe, feature-dark data foundation in the candidate. It has no live acquisition/Todo/SurfaceQuality activation wiring; activation remains a separate product/runtime decision.
 
 ### P1 — Sensitive data and snapshot safety
 
-Snapshots remain base64 ETF in JSONB and decode without `[:safe]`; several events/effects/run-step/turn payloads remain broad plaintext maps. Memory encryption alone does not close the retention problem.  
+Snapshots remain base64 ETF in JSONB and decode without `[:safe]`; several events/effects/run-step/turn payloads remain broad plaintext maps. Memory encryption alone does not close the retention problem.
 **Disposition:** open. Define field-level retention/redaction/encryption, bounded payload schemas and a safe snapshot migration before calling this complete.
 
 ### P2 — Periodic service consolidation and multi-node authority
 
-The supervisor still starts many cron-like GenServers. One production Machine limits immediate split-brain exposure but is not a scaling design.  
+The supervisor still starts many cron-like GenServers. One production Machine limits immediate split-brain exposure but is not a scaling design.
 **Disposition:** deliberate pre-scale debt. Consolidate ordinary schedules/jobs and introduce explicit leader/partition authority before multi-node scaling.
 
 ### P2 — Terminology and module reviewability
 
-The README still uses “event sourcing” although snapshots, not replayable reducers, are the recovery boundary. Several runtime and LiveView modules remain very large.  
+The README still uses “event sourcing” although snapshots, not replayable reducers, are the recovery boundary. Several runtime and LiveView modules remain very large.
 **Disposition:** open documentation/decomposition work. Rename the architecture honestly and split modules along transition/repository/presentation boundaries without weakening safety semantics.
 
 ## Release-candidate disposition manifest
