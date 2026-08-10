@@ -1227,7 +1227,6 @@ defmodule Maraithon.Runtime.EffectRunner do
          %Effect{
            id: effect_id,
            agent_id: agent_id,
-           owner_user_id: owner_user_id,
            agent_run_id: nil,
            claimed_by: claimed_by,
            claimed_at: claimed_at
@@ -1258,7 +1257,6 @@ defmodule Maraithon.Runtime.EffectRunner do
          %Effect{
            id: effect_id,
            agent_id: agent_id,
-           owner_user_id: owner_user_id,
            agent_run_id: run_id,
            agent_run_step_id: step_id,
            claimed_by: claimed_by,
@@ -1302,6 +1300,8 @@ defmodule Maraithon.Runtime.EffectRunner do
       {:error, :stale_effect_context}
     end
   end
+
+  defp authorize_effect_claim(_effect), do: {:error, :stale_effect_context}
 
   defp authorize_effect_owner(
          query,
@@ -1362,8 +1362,6 @@ defmodule Maraithon.Runtime.EffectRunner do
   defp authorize_effect_protocol(query, %Effect{}) do
     where(query, [stored], stored.effect_protocol_version == 2)
   end
-
-  defp authorize_effect_claim(_effect), do: {:error, :stale_effect_context}
 
   # This exact CAS is the final authoritative pre-command boundary. It prevents
   # a cancellation committed before activation from reaching provider code; a
