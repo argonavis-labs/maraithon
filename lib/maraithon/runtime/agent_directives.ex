@@ -32,59 +32,40 @@ defmodule Maraithon.Runtime.AgentDirectives do
   @max_payload_bytes 128_000
   @max_batch 500
   @redacted_payload %{"redacted" => true}
-  @error_codes ~w(execution_failed runtime_crash lease_lost timeout cancelled invalid_directive effect_failed unknown)
+  @error_codes ~w(execution_failed runtime_crash lease_lost timeout cancelled invalid_directive effect_failed effect_outcome_ambiguous owner_lost_after_effect unknown)
+  @settlement_statuses ~w(completed dead_letter cancelled)
 
   def enqueue(agent_id, user_id, kind, payload, dedupe_key, opts \\ [])
 
   def enqueue(agent_id, user_id, kind, payload, dedupe_key, opts) when is_list(opts) do
-    with {:ok, agent_id} <- cast_uuid(agent_id),
-         {:ok, user_id} <- user_id(user_id),
-         {:ok, kind} <- kind(kind),
-         {:ok, dedupe_key} <- dedupe_key(dedupe_key),
-         {:ok, payload} <- prepare_payload(payload),
-         {:ok, enqueue_opts} <- enqueue_opts(opts) do
-      fingerprint = fingerprint(kind, payload)
-
-      Repo.transaction(fn ->
-        agent = lock_agent!(agent_id)
-        binding = lock_binding(agent)
-        _guard = lock_guard(agent_id)
-        _lease = lock_lease(agent_id)
-        operation = lock_operation(agent_id)
-        if operation, do: Repo.rollback(:agent_drain_pending)
-        ensure_runnable_owner!(agent, user_id, binding)
-        now = DatabaseClock.now!()
-
-        case lock_by_dedupe(agent_id, dedupe_key) do
-          nil ->
-            available_at = DateTime.add(now, enqueue_opts.delay_ms, :millisecond)
-
-            insert!(%{
-              agent_id: agent_id,
-              user_id: user_id,
-              kind: kind,
-              payload: payload,
-              dedupe_key: dedupe_key,
-              request_fingerprint: fingerprint,
-              status: "pending",
-              available_at: available_at,
-              attempts: 0,
-              max_attempts: enqueue_opts.max_attempts,
-              inserted_at: now,
-              updated_at: now
-            })
-
-          %AgentDirective{request_fingerprint: ^fingerprint} = existing ->
-            existing
-
-          _changed_request ->
-            Repo.rollback(:directive_idempotency_conflict)
-        end
-      end)
+    with {:ok, prepared} <- prepare_enqueue(agent_id, user_id, kind, payload, dedupe_key, opts) do
+      Repo.transaction(fn -> enqueue_prepared!(prepared) end)
     end
   end
 
   def enqueue(_agent_id, _user_id, _kind, _payload, _dedupe_key, _opts),
+    do: {:error, :invalid_directive}
+
+  @doc """
+  Enqueues one directive inside a caller-owned transaction.
+
+  The caller must acquire no lower-order work locks before calling this
+  function: it obtains the canonical Agent authority prefix and Directive lock.
+  """
+  def enqueue_in_transaction(agent_id, user_id, kind, payload, dedupe_key, opts \\ [])
+
+  def enqueue_in_transaction(agent_id, user_id, kind, payload, dedupe_key, opts)
+      when is_list(opts) do
+    with true <- Repo.in_transaction?(),
+         {:ok, prepared} <- prepare_enqueue(agent_id, user_id, kind, payload, dedupe_key, opts) do
+      {:ok, enqueue_prepared!(prepared)}
+    else
+      false -> {:error, :transaction_required}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def enqueue_in_transaction(_agent_id, _user_id, _kind, _payload, _dedupe_key, _opts),
     do: {:error, :invalid_directive}
 
   def claim_next(agent_id, user_id, owner_generation, opts \\ [])
@@ -124,6 +105,10 @@ defmodule Maraithon.Runtime.AgentDirectives do
                   terminal_claim_token: nil,
                   terminal_by_generation: nil,
                   last_error_code: nil,
+                  active_run_id: nil,
+                  effect_admitted_at: nil,
+                  effect_count: 0,
+                  ambiguity_code: nil,
                   updated_at: now
                 })
             end
@@ -134,6 +119,201 @@ defmodule Maraithon.Runtime.AgentDirectives do
 
   def claim_next(_agent_id, _user_id, _owner_generation, _opts),
     do: {:error, :invalid_directive}
+
+  @doc """
+  Executes a durable write while holding the exact lease and Directive claim.
+
+  `:ready` is required for new work or effect admission. `:owner` is reserved
+  for closing already-admitted work while the lease is draining.
+  """
+  def with_live_claim(
+        agent_id,
+        directive_id,
+        owner_generation,
+        claim_token,
+        mode,
+        fun
+      )
+      when mode in [:ready, :owner] and is_function(fun, 2) do
+    with {:ok, ids} <- exact_ids(agent_id, directive_id, owner_generation, claim_token) do
+      Repo.transaction(fn ->
+        fence_claim_mode!(ids.agent_id, ids.owner_generation, mode)
+        directive = lock_directive!(ids)
+        now = DatabaseClock.now!()
+        ensure_live_claim!(directive, ids, now)
+        run_claim_callback!(fun, directive, now)
+      end)
+    end
+  end
+
+  def with_live_claim(
+        _agent_id,
+        _directive_id,
+        _owner_generation,
+        _claim_token,
+        _mode,
+        _fun
+      ),
+      do: {:error, :invalid_directive}
+
+  @doc false
+  def renew_claim_in_transaction(
+        agent_id,
+        directive_id,
+        owner_generation,
+        claim_token,
+        opts \\ []
+      )
+
+  def renew_claim_in_transaction(
+        agent_id,
+        directive_id,
+        owner_generation,
+        claim_token,
+        opts
+      )
+      when is_list(opts) do
+    with true <- Repo.in_transaction?(),
+         {:ok, ids} <- exact_ids(agent_id, directive_id, owner_generation, claim_token),
+         {:ok, ttl_ms} <- claim_opts(opts) do
+      AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
+      lease = Repo.get!(AgentRuntimeLease, ids.agent_id)
+      directive = lock_directive!(ids)
+      now = DatabaseClock.now!()
+      ensure_live_claim!(directive, ids, now)
+      deadline = claim_deadline!(now, ttl_ms, lease.lease_until)
+
+      {:ok,
+       update!(directive, %{
+         claim_expires_at: deadline,
+         updated_at: now
+       })}
+    else
+      false -> {:error, :transaction_required}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def renew_claim_in_transaction(
+        _agent_id,
+        _directive_id,
+        _owner_generation,
+        _claim_token,
+        _opts
+      ),
+      do: {:error, :invalid_directive}
+
+  @doc false
+  def bind_run_locked(%AgentDirective{} = directive, run_id, now) do
+    with true <- Repo.in_transaction?(),
+         {:ok, run_id} <- cast_uuid(run_id),
+         true <- directive.status == "processing",
+         true <- is_nil(directive.active_run_id) or directive.active_run_id == run_id do
+      {:ok,
+       update!(directive, %{
+         active_run_id: run_id,
+         updated_at: now
+       })}
+    else
+      false -> {:error, :directive_run_conflict}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def bind_run_locked(_directive, _run_id, _now), do: {:error, :invalid_directive}
+
+  @doc false
+  def admit_effect_locked(%AgentDirective{} = directive, run_id, now) do
+    with true <- Repo.in_transaction?(),
+         {:ok, run_id} <- cast_uuid(run_id),
+         true <- directive.status == "processing",
+         true <- directive.active_run_id == run_id do
+      effect_count = directive.effect_count + 1
+
+      {:ok,
+       update!(directive, %{
+         effect_admitted_at: directive.effect_admitted_at || now,
+         effect_count: effect_count,
+         updated_at: now
+       }), effect_count}
+    else
+      false -> {:error, :directive_run_conflict}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def admit_effect_locked(_directive, _run_id, _now), do: {:error, :invalid_directive}
+
+  @doc """
+  Atomically settles a claim and caller-owned terminal writes.
+
+  The callback runs at most once, only while the exact processing claim is
+  locked. Immutable terminal proof makes retries return without rerunning it.
+  """
+  def settle_with(
+        agent_id,
+        directive_id,
+        owner_generation,
+        claim_token,
+        terminal_status,
+        error_code,
+        fun
+      )
+      when terminal_status in @settlement_statuses and is_function(fun, 2) do
+    with {:ok, ids} <- exact_ids(agent_id, directive_id, owner_generation, claim_token),
+         {:ok, error_code} <- settlement_error_code(terminal_status, error_code) do
+      case get_terminal_proof(ids, terminal_status) do
+        %AgentDirective{} = terminal ->
+          {:ok, %{directive: terminal, result: nil, newly_terminal?: false}}
+
+        nil ->
+          Repo.transaction(fn ->
+            AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
+            directive = lock_directive!(ids)
+            now = DatabaseClock.now!()
+
+            case settlement_state!(directive, ids, terminal_status, now) do
+              :idempotent ->
+                %{directive: directive, result: nil, newly_terminal?: false}
+
+              :processing ->
+                result = run_claim_callback!(fun, directive, now)
+
+                terminal =
+                  update!(directive, terminal_attrs(directive, terminal_status, now, error_code))
+
+                %{directive: terminal, result: result, newly_terminal?: true}
+            end
+          end)
+      end
+    end
+  end
+
+  def settle_with(
+        _agent_id,
+        _directive_id,
+        _owner_generation,
+        _claim_token,
+        _terminal_status,
+        _error_code,
+        _fun
+      ),
+      do: {:error, :invalid_directive}
+
+  def cancel(agent_id, directive_id, owner_generation, claim_token) do
+    case settle_with(
+           agent_id,
+           directive_id,
+           owner_generation,
+           claim_token,
+           "cancelled",
+           "cancelled",
+           fn _directive, _now -> {:ok, :cancelled} end
+         ) do
+      {:ok, %{directive: directive}} -> {:ok, directive}
+      {:error, _reason} = error -> error
+    end
+  end
 
   def renew_claim(agent_id, directive_id, owner_generation, claim_token, opts \\ [])
 
@@ -161,23 +341,17 @@ defmodule Maraithon.Runtime.AgentDirectives do
     do: {:error, :invalid_directive}
 
   def complete(agent_id, directive_id, owner_generation, claim_token) do
-    with {:ok, ids} <- exact_ids(agent_id, directive_id, owner_generation, claim_token) do
-      case get_terminal_proof(ids, "completed") do
-        %AgentDirective{} = terminal ->
-          {:ok, terminal}
-
-        nil ->
-          Repo.transaction(fn ->
-            AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
-            directive = lock_directive!(ids)
-            now = DatabaseClock.now!()
-
-            case settlement_state!(directive, ids, "completed", now) do
-              :idempotent -> directive
-              :processing -> update!(directive, terminal_attrs(directive, "completed", now, nil))
-            end
-          end)
-      end
+    case settle_with(
+           agent_id,
+           directive_id,
+           owner_generation,
+           claim_token,
+           "completed",
+           nil,
+           fn _directive, _now -> {:ok, :completed} end
+         ) do
+      {:ok, %{directive: directive}} -> {:ok, directive}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -203,27 +377,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
                 directive
 
               :processing ->
-                attrs =
-                  if directive.attempts >= directive.max_attempts do
-                    terminal_attrs(directive, "dead_letter", now, error_code)
-                  else
-                    %{
-                      status: "pending",
-                      available_at: DateTime.add(now, retry_delay_ms, :millisecond),
-                      claim_token: nil,
-                      claimed_by_generation: nil,
-                      claimed_at: nil,
-                      claim_expires_at: nil,
-                      processing_started_at: nil,
-                      terminal_at: nil,
-                      terminal_claim_token: nil,
-                      terminal_by_generation: nil,
-                      last_error_code: error_code,
-                      updated_at: now
-                    }
-                  end
-
-                update!(directive, attrs)
+                update!(directive, failure_attrs(directive, now, retry_delay_ms, error_code))
             end
           end)
       end
@@ -259,27 +413,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
           directive ->
             now = DatabaseClock.now!()
 
-            attrs =
-              if directive.attempts >= directive.max_attempts do
-                terminal_attrs(directive, "dead_letter", now, "runtime_crash")
-              else
-                %{
-                  status: "pending",
-                  available_at: DateTime.add(now, retry_delay_ms, :millisecond),
-                  claim_token: nil,
-                  claimed_by_generation: nil,
-                  claimed_at: nil,
-                  claim_expires_at: nil,
-                  processing_started_at: nil,
-                  terminal_at: nil,
-                  terminal_claim_token: nil,
-                  terminal_by_generation: nil,
-                  last_error_code: "runtime_crash",
-                  updated_at: now
-                }
-              end
-
-            update!(directive, attrs)
+            update!(directive, failure_attrs(directive, now, retry_delay_ms, "runtime_crash"))
         end
       end)
     end
@@ -500,6 +634,64 @@ defmodule Maraithon.Runtime.AgentDirectives do
     )
   end
 
+  defp prepare_enqueue(agent_id, user_id, kind, payload, dedupe_key, opts) do
+    with {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, user_id} <- user_id(user_id),
+         {:ok, kind} <- kind(kind),
+         {:ok, dedupe_key} <- dedupe_key(dedupe_key),
+         {:ok, payload} <- prepare_payload(payload),
+         {:ok, enqueue_opts} <- enqueue_opts(opts) do
+      {:ok,
+       %{
+         agent_id: agent_id,
+         user_id: user_id,
+         kind: kind,
+         payload: payload,
+         dedupe_key: dedupe_key,
+         request_fingerprint: fingerprint(kind, payload),
+         delay_ms: enqueue_opts.delay_ms,
+         max_attempts: enqueue_opts.max_attempts
+       }}
+    end
+  end
+
+  defp enqueue_prepared!(prepared) do
+    agent = lock_agent!(prepared.agent_id)
+    binding = lock_binding(agent)
+    _guard = lock_guard(prepared.agent_id)
+    _lease = lock_lease(prepared.agent_id)
+    operation = lock_operation(prepared.agent_id)
+    if operation, do: Repo.rollback(:agent_drain_pending)
+    ensure_runnable_owner!(agent, prepared.user_id, binding)
+    now = DatabaseClock.now!()
+
+    case lock_by_dedupe(prepared.agent_id, prepared.dedupe_key) do
+      nil ->
+        insert!(%{
+          agent_id: prepared.agent_id,
+          user_id: prepared.user_id,
+          kind: prepared.kind,
+          payload: prepared.payload,
+          dedupe_key: prepared.dedupe_key,
+          request_fingerprint: prepared.request_fingerprint,
+          status: "pending",
+          available_at: DateTime.add(now, prepared.delay_ms, :millisecond),
+          attempts: 0,
+          max_attempts: prepared.max_attempts,
+          effect_count: 0,
+          inserted_at: now,
+          updated_at: now
+        })
+
+      %AgentDirective{request_fingerprint: fingerprint} = existing
+      when fingerprint == prepared.request_fingerprint ->
+        existing
+
+      _changed_request ->
+        Repo.rollback(:directive_idempotency_conflict)
+    end
+  end
+
   defp lock_agent!(agent_id) do
     case Repo.one(from(agent in Agent, where: agent.id == ^agent_id, lock: "FOR UPDATE")) do
       nil -> Repo.rollback(:agent_not_found)
@@ -587,24 +779,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
   end
 
   defp settle_expired_directive!(directive, now, retry_delay_ms) do
-    if directive.attempts >= directive.max_attempts do
-      update!(directive, terminal_attrs(directive, "dead_letter", now, "timeout"))
-    else
-      update!(directive, %{
-        status: "pending",
-        available_at: DateTime.add(now, retry_delay_ms, :millisecond),
-        claim_token: nil,
-        claimed_by_generation: nil,
-        claimed_at: nil,
-        claim_expires_at: nil,
-        processing_started_at: nil,
-        terminal_at: nil,
-        terminal_claim_token: nil,
-        terminal_by_generation: nil,
-        last_error_code: "timeout",
-        updated_at: now
-      })
-    end
+    update!(directive, failure_attrs(directive, now, retry_delay_ms, "timeout"))
   end
 
   defp lock_next_due(agent_id) do
@@ -751,6 +926,62 @@ defmodule Maraithon.Runtime.AgentDirectives do
     end
   end
 
+  defp failure_attrs(directive, now, retry_delay_ms, error_code) do
+    cond do
+      directive.effect_count > 0 ->
+        ambiguous? = error_code in ~w(runtime_crash lease_lost timeout unknown)
+        terminal_error = if ambiguous?, do: "owner_lost_after_effect", else: error_code
+
+        directive
+        |> terminal_attrs("dead_letter", now, terminal_error)
+        |> Map.put(:ambiguity_code, if(ambiguous?, do: "effect_outcome_ambiguous", else: nil))
+
+      directive.attempts >= directive.max_attempts ->
+        terminal_attrs(directive, "dead_letter", now, error_code)
+
+      true ->
+        %{
+          status: "pending",
+          available_at: DateTime.add(now, retry_delay_ms, :millisecond),
+          claim_token: nil,
+          claimed_by_generation: nil,
+          claimed_at: nil,
+          claim_expires_at: nil,
+          processing_started_at: nil,
+          terminal_at: nil,
+          terminal_claim_token: nil,
+          terminal_by_generation: nil,
+          last_error_code: error_code,
+          active_run_id: nil,
+          effect_admitted_at: nil,
+          effect_count: 0,
+          ambiguity_code: nil,
+          updated_at: now
+        }
+    end
+  end
+
+  defp fence_claim_mode!(agent_id, owner_generation, :ready),
+    do: AgentLeases.fence_ready!(agent_id, owner_generation)
+
+  defp fence_claim_mode!(agent_id, owner_generation, :owner),
+    do: AgentLeases.fence_owner!(agent_id, owner_generation)
+
+  defp run_claim_callback!(fun, directive, now) do
+    case fun.(directive, now) do
+      {:ok, result} -> result
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+      _invalid -> Repo.rollback(:invalid_directive_callback)
+    end
+  end
+
+  defp settlement_error_code("completed", nil), do: {:ok, nil}
+  defp settlement_error_code("cancelled", nil), do: {:ok, "cancelled"}
+  defp settlement_error_code("cancelled", "cancelled"), do: {:ok, "cancelled"}
+  defp settlement_error_code("dead_letter", value), do: error_code(value)
+  defp settlement_error_code(_status, _value), do: {:error, :invalid_directive}
+
   defp terminal_attrs(directive, status, now, error_code) do
     %{
       status: status,
@@ -764,6 +995,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
       terminal_claim_token: directive.claim_token,
       terminal_by_generation: directive.claimed_by_generation,
       last_error_code: error_code,
+      ambiguity_code: nil,
       updated_at: now
     }
   end

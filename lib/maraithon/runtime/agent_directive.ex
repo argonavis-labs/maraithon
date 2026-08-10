@@ -34,6 +34,10 @@ defmodule Maraithon.Runtime.AgentDirective do
     field :terminal_claim_token, Ecto.UUID
     field :terminal_by_generation, Ecto.UUID
     field :last_error_code, :string
+    field :active_run_id, :binary_id
+    field :effect_admitted_at, :utc_datetime_usec
+    field :effect_count, :integer, default: 0
+    field :ambiguity_code, :string
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -64,6 +68,10 @@ defmodule Maraithon.Runtime.AgentDirective do
       :terminal_claim_token,
       :terminal_by_generation,
       :last_error_code,
+      :active_run_id,
+      :effect_admitted_at,
+      :effect_count,
+      :ambiguity_code,
       :inserted_at,
       :updated_at
     ])
@@ -86,6 +94,9 @@ defmodule Maraithon.Runtime.AgentDirective do
     |> validate_length(:request_fingerprint, is: 32, count: :bytes)
     |> validate_number(:attempts, greater_than_or_equal_to: 0)
     |> validate_number(:max_attempts, greater_than_or_equal_to: 1, less_than_or_equal_to: 100)
+    |> validate_number(:effect_count, greater_than_or_equal_to: 0)
+    |> validate_length(:ambiguity_code, min: 1, max: 64, count: :bytes)
+    |> validate_format(:ambiguity_code, ~r/^[a-z0-9_]+$/)
     |> validate_payload()
     |> unique_constraint([:agent_id, :dedupe_key])
     |> unique_constraint(:claim_token, name: :agent_directives_claim_token_index)
@@ -94,6 +105,9 @@ defmodule Maraithon.Runtime.AgentDirective do
       name: :agent_directives_terminal_claim_token_index
     )
     |> foreign_key_constraint(:agent_id, name: :agent_directives_agent_owner_fkey)
+    |> foreign_key_constraint(:active_run_id,
+      name: :agent_directives_active_run_owner_fkey
+    )
     |> check_constraint(:kind, name: :agent_directives_kind_check)
     |> check_constraint(:status, name: :agent_directives_status_check)
     |> check_constraint(:request_fingerprint, name: :agent_directives_fingerprint_check)
@@ -103,6 +117,13 @@ defmodule Maraithon.Runtime.AgentDirective do
     |> check_constraint(:claim_token, name: :agent_directives_claim_check)
     |> check_constraint(:terminal_at, name: :agent_directives_terminal_check)
     |> check_constraint(:last_error_code, name: :agent_directives_error_check)
+    |> check_constraint(:effect_count, name: :agent_directives_effect_count_check)
+    |> check_constraint(:effect_admitted_at,
+      name: :agent_directives_effect_boundary_check
+    )
+    |> check_constraint(:ambiguity_code,
+      name: :agent_directives_ambiguity_code_check
+    )
   end
 
   defp validate_payload(changeset) do

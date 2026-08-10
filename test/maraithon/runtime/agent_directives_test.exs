@@ -5,6 +5,7 @@ defmodule Maraithon.Runtime.AgentDirectivesTest do
   alias Maraithon.AgentIsolation
   alias Maraithon.Agents
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentRestartGuard
@@ -465,6 +466,205 @@ defmodule Maraithon.Runtime.AgentDirectivesTest do
     assert terminal.terminal_claim_token == claimed.claim_token
     assert {:ok, reset} = AgentRestartGuards.reset_for_operator(agent.id)
     refute reset.needs_recovery
+  end
+
+  test "transaction-aware enqueue participates in the caller commit", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    assert {:error, :transaction_required} =
+             AgentDirectives.enqueue_in_transaction(
+               agent.id,
+               user_id,
+               "message",
+               %{"body" => "outside"},
+               "outside"
+             )
+
+    assert {:error, :forced_rollback} =
+             Repo.transaction(fn ->
+               assert {:ok, _directive} =
+                        AgentDirectives.enqueue_in_transaction(
+                          agent.id,
+                          user_id,
+                          "message",
+                          %{"body" => "atomic"},
+                          "atomic"
+                        )
+
+               Repo.rollback(:forced_rollback)
+             end)
+
+    refute Repo.get_by(AgentDirective, agent_id: agent.id, dedupe_key: "atomic")
+  end
+
+  test "settle_with runs terminal writes once and immutable proof survives lease release", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    assert {:ok, _directive} =
+             AgentDirectives.enqueue(agent.id, user_id, "message", %{}, "settle-once")
+
+    assert {:ok, lease} = AgentLeases.claim(agent.id)
+    assert {:ok, _ready} = AgentLeases.mark_ready(agent.id, lease.owner_token)
+    assert {:ok, claimed} = AgentDirectives.claim_next(agent.id, user_id, lease.owner_token)
+    caller = self()
+
+    terminal_callback = fn _directive, _now ->
+      send(caller, :terminal_callback_ran)
+      {:ok, :terminal_write}
+    end
+
+    assert {:ok,
+            %{newly_terminal?: true, result: :terminal_write, directive: %{status: "completed"}}} =
+             AgentDirectives.settle_with(
+               agent.id,
+               claimed.id,
+               lease.owner_token,
+               claimed.claim_token,
+               "completed",
+               nil,
+               terminal_callback
+             )
+
+    assert_receive :terminal_callback_ran
+    assert {:ok, :released} = AgentLeases.release(agent.id, lease.owner_token)
+
+    assert {:ok, %{newly_terminal?: false, result: nil}} =
+             AgentDirectives.settle_with(
+               agent.id,
+               claimed.id,
+               lease.owner_token,
+               claimed.claim_token,
+               "completed",
+               nil,
+               terminal_callback
+             )
+
+    refute_receive :terminal_callback_ran
+  end
+
+  test "ready and owner claim fences differ only for draining settlement", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    assert {:ok, _directive} =
+             AgentDirectives.enqueue(agent.id, user_id, "message", %{}, "claim-modes")
+
+    assert {:ok, lease} = AgentLeases.claim(agent.id)
+    assert {:ok, _ready} = AgentLeases.mark_ready(agent.id, lease.owner_token)
+    assert {:ok, claimed} = AgentDirectives.claim_next(agent.id, user_id, lease.owner_token)
+    assert {:ok, _draining} = AgentLeases.begin_draining(agent.id, lease.owner_token)
+
+    assert {:error, :runtime_not_ready} =
+             AgentDirectives.with_live_claim(
+               agent.id,
+               claimed.id,
+               lease.owner_token,
+               claimed.claim_token,
+               :ready,
+               fn _directive, _now -> {:ok, :unsafe_new_work} end
+             )
+
+    assert {:ok, :terminal_closure} =
+             AgentDirectives.with_live_claim(
+               agent.id,
+               claimed.id,
+               lease.owner_token,
+               claimed.claim_token,
+               :owner,
+               fn _directive, _now -> {:ok, :terminal_closure} end
+             )
+
+    assert {:ok, _terminal} =
+             AgentDirectives.complete(
+               agent.id,
+               claimed.id,
+               lease.owner_token,
+               claimed.claim_token
+             )
+  end
+
+  test "lease and claim renewal can be rolled back as one authority transaction", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    assert {:ok, _directive} =
+             AgentDirectives.enqueue(agent.id, user_id, "message", %{}, "joint-renewal")
+
+    assert {:ok, lease} = AgentLeases.claim(agent.id, ttl_ms: 60_000)
+    assert {:ok, _ready} = AgentLeases.mark_ready(agent.id, lease.owner_token)
+
+    assert {:ok, claimed} =
+             AgentDirectives.claim_next(agent.id, user_id, lease.owner_token, ttl_ms: 30_000)
+
+    original_lease_until = AgentLeases.get(agent.id).lease_until
+    original_claim_until = Repo.get!(AgentDirective, claimed.id).claim_expires_at
+
+    assert {:error, :forced_rollback} =
+             Repo.transaction(fn ->
+               assert {:ok, _renewed_lease} =
+                        AgentLeases.renew(agent.id, lease.owner_token, ttl_ms: 120_000)
+
+               assert {:ok, _renewed_claim} =
+                        AgentDirectives.renew_claim_in_transaction(
+                          agent.id,
+                          claimed.id,
+                          lease.owner_token,
+                          claimed.claim_token,
+                          ttl_ms: 90_000
+                        )
+
+               Repo.rollback(:forced_rollback)
+             end)
+
+    assert AgentLeases.get(agent.id).lease_until == original_lease_until
+    assert Repo.get!(AgentDirective, claimed.id).claim_expires_at == original_claim_until
+  end
+
+  test "owner loss after effect admission dead-letters instead of replaying", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    assert {:ok, _directive} =
+             AgentDirectives.enqueue(agent.id, user_id, "message", %{}, "effect-boundary")
+
+    assert {:ok, lease} = AgentLeases.claim(agent.id)
+    assert {:ok, _ready} = AgentLeases.mark_ready(agent.id, lease.owner_token)
+    assert {:ok, claimed} = AgentDirectives.claim_next(agent.id, user_id, lease.owner_token)
+
+    assert {:ok, %{run_id: run_id, ordinal: 1}} =
+             AgentDirectives.with_live_claim(
+               agent.id,
+               claimed.id,
+               lease.owner_token,
+               claimed.claim_token,
+               :ready,
+               fn directive, now ->
+                 with {:ok, run} <-
+                        Agents.start_runtime_agent_run(agent, %{trigger_type: "message"}),
+                      {:ok, directive} <- AgentDirectives.bind_run_locked(directive, run.id, now),
+                      {:ok, _directive, ordinal} <-
+                        AgentDirectives.admit_effect_locked(directive, run.id, now) do
+                   {:ok, %{run_id: run.id, ordinal: ordinal}}
+                 end
+               end
+             )
+
+    assert is_binary(run_id)
+
+    assert {:recorded, _guard} =
+             AgentRestartGuards.record_crash(agent.id, lease.owner_token, :runtime_crash,
+               backoffs_ms: [0]
+             )
+
+    assert {:ok, terminal} = AgentDirectives.recover_generation(agent.id, lease.owner_token)
+    assert terminal.status == "dead_letter"
+    assert terminal.last_error_code == "owner_lost_after_effect"
+    assert terminal.ambiguity_code == "effect_outcome_ambiguous"
+    assert terminal.effect_count == 1
+    assert terminal.active_run_id == run_id
+    refute agent.id in AgentDirectives.list_due_agent_ids()
   end
 
   defp expire_claim!(directive_id) do
