@@ -7,6 +7,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
   alias Maraithon.Memory
   alias Maraithon.TelegramAssistant.PreparedAction
   alias Maraithon.TelegramAssistant.TodoActions
+  alias Maraithon.TestSupport.BoundedHTTPTimeout
   alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.Todos
 
@@ -986,7 +987,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert Agent.get(preview_counter, & &1) == 1
   end
 
-  test "ambiguous draft preview response is quarantined without an automatic resend", %{
+  test "bounded HTTP timeout quarantines a draft preview without an automatic resend", %{
     user_id: user_id
   } do
     send_attempts =
@@ -995,6 +996,9 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
         start: {Agent, :start_link, [fn -> 0 end]}
       })
 
+    bypass = Bypass.open()
+    BoundedHTTPTimeout.expect_once(bypass, "/todo-draft-preview")
+    test_pid = self()
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
     original_capture = Application.get_env(:maraithon, :capturing_telegram, [])
 
@@ -1015,14 +1019,14 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
       )
     )
 
-    reason = {:error, %{reason: :timeout, detail: "token=preview-secret"}}
-
     Application.put_env(
       :maraithon,
       :capturing_telegram,
       Keyword.put(original_capture, :send_result, fn _event ->
         Agent.update(send_attempts, &(&1 + 1))
-        {:error, reason}
+        result = BoundedHTTPTimeout.get(bypass, "/todo-draft-preview")
+        send(test_pid, {:todo_preview_http_result, result})
+        result
       end)
     )
 
@@ -1055,6 +1059,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     }
 
     assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert_receive {:todo_preview_http_result, {:error, {:http_error, "unknown_error"}}}
     assert Agent.get(send_attempts, & &1) == 1
 
     checkpoint =
@@ -1063,7 +1068,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert get_in(checkpoint, ["preview_delivery", "status"]) == "outcome_unknown"
     assert get_in(checkpoint, ["preview_delivery", "error_class"]) == "transport"
     assert get_in(checkpoint, ["preview_delivery", "error_code"]) == "response_lost"
-    refute inspect(checkpoint) =~ "preview-secret"
+    refute Map.has_key?(checkpoint["preview_delivery"], "reason")
 
     assert :ok = InsightNotifications.process_telegram_event_durable(event)
     assert Agent.get(send_attempts, & &1) == 1

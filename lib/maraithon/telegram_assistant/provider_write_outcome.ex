@@ -45,7 +45,10 @@ defmodule Maraithon.TelegramAssistant.ProviderWriteOutcome do
     "socket_closed_remotely",
     "timeout",
     "unexpected_eof",
-    "unexpected_response"
+    "unexpected_response",
+    # BoundedResponse timeouts currently reduce through Redaction to this
+    # closed class, after the provider may already have accepted the write.
+    "unknown_error"
   ]
 
   def edit_terminal_drained?(reason) do

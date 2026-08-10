@@ -16,6 +16,7 @@ defmodule Maraithon.TelegramAssistantTest do
   alias Maraithon.TelegramAssistant.{PreparedAction, PushReceipt, Run, Step}
   alias Maraithon.TelegramConversations.{Conversation, Turn}
   alias Maraithon.Todos
+  alias Maraithon.TestSupport.BoundedHTTPTimeout
   alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.TestSupport.TelegramAssistantClientStub
   alias Maraithon.UserMemory.Profile
@@ -2124,7 +2125,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Enum.count(telegram_events(), &(&1.type == :send)) == 2
   end
 
-  test "ambiguous todo review write is outcome_unknown and never resent", %{
+  test "bounded HTTP timeout quarantines a review item and never resends it", %{
     user_id: user_id
   } do
     assert {:ok, [first, second]} =
@@ -2163,15 +2164,19 @@ defmodule Maraithon.TelegramAssistantTest do
         start: {Agent, :start_link, [fn -> 0 end]}
       })
 
+    bypass = Bypass.open()
+    BoundedHTTPTimeout.expect_once(bypass, "/brief-review-item")
+    test_pid = self()
     capture_config = Application.get_env(:maraithon, :capturing_telegram, [])
-    reason = {:transport_error, %{reason: :timeout, detail: "Bearer review-secret"}}
 
     Application.put_env(
       :maraithon,
       :capturing_telegram,
       Keyword.put(capture_config, :send_result, fn _event ->
         Agent.update(attempts, &(&1 + 1))
-        {:error, reason}
+        result = BoundedHTTPTimeout.get(bypass, "/brief-review-item")
+        send(test_pid, {:brief_item_http_result, result})
+        result
       end)
     )
 
@@ -2187,6 +2192,7 @@ defmodule Maraithon.TelegramAssistantTest do
     }
 
     assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert_receive {:brief_item_http_result, {:error, {:http_error, "unknown_error"}}}
     assert Agent.get(attempts, & &1) == 1
     assert Todos.get_for_user(user_id, first.id).status == "done"
 
@@ -2200,7 +2206,86 @@ defmodule Maraithon.TelegramAssistantTest do
     assert presentation["error_class"] == "transport"
     assert presentation["error_code"] == "response_lost"
     assert byte_size(Jason.encode!(presentation)) < 1_024
-    refute inspect(review) =~ "review-secret"
+    refute Map.has_key?(presentation, "reason")
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert Agent.get(attempts, & &1) == 1
+  end
+
+  test "bounded HTTP timeout quarantines a review summary and never resends it", %{
+    user_id: user_id
+  } do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "manual",
+                 "title" => "Finish the ambiguity-safe review",
+                 "summary" => "The final recap may be accepted before its response is lost.",
+                 "next_action" => "Mark the only review item done.",
+                 "priority" => 99,
+                 "dedupe_key" => "telegram-assistant:review-summary-ambiguity"
+               }
+             ])
+
+    assert :ok =
+             InsightNotifications.handle_telegram_event(%{
+               type: "message",
+               data: %{
+                 chat_id: 12_345,
+                 message_id: 9244,
+                 text: "Let's review my todos one at a time"
+               }
+             })
+
+    attempts =
+      start_supervised!(%{
+        id: :todo_review_summary_ambiguous_write_attempts,
+        start: {Agent, :start_link, [fn -> 0 end]}
+      })
+
+    bypass = Bypass.open()
+    BoundedHTTPTimeout.expect_once(bypass, "/brief-review-summary")
+    test_pid = self()
+    capture_config = Application.get_env(:maraithon, :capturing_telegram, [])
+
+    Application.put_env(
+      :maraithon,
+      :capturing_telegram,
+      Keyword.put(capture_config, :send_result, fn _event ->
+        Agent.update(attempts, &(&1 + 1))
+        result = BoundedHTTPTimeout.get(bypass, "/brief-review-summary")
+        send(test_pid, {:brief_summary_http_result, result})
+        result
+      end)
+    )
+
+    event = %{
+      type: "callback_query",
+      source: "telegram",
+      data: %{
+        chat_id: 12_345,
+        message_id: "todo-review-summary-ambiguous",
+        callback_id: "todo-review-summary-ambiguous-done",
+        data: "tgtodo:#{todo.id}:done"
+      }
+    }
+
+    assert :ok = InsightNotifications.process_telegram_event_durable(event)
+    assert_receive {:brief_summary_http_result, {:error, {:http_error, "unknown_error"}}}
+    assert Agent.get(attempts, & &1) == 1
+    assert Todos.get_for_user(user_id, todo.id).status == "done"
+
+    review = latest_todo_review_brief(user_id).metadata["todo_review"]
+    presentation = review["presentation"]
+
+    assert review["status"] == "completed"
+    assert presentation["kind"] == "summary"
+    assert presentation["status"] == "outcome_unknown"
+    assert presentation["receipt_version"] == 1
+    assert presentation["error_class"] == "transport"
+    assert presentation["error_code"] == "response_lost"
+    assert byte_size(Jason.encode!(presentation)) < 1_024
+    refute Map.has_key?(presentation, "reason")
 
     assert :ok = InsightNotifications.process_telegram_event_durable(event)
     assert Agent.get(attempts, & &1) == 1
