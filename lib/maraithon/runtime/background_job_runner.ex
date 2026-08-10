@@ -6,10 +6,10 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   runner. It handles user-scoped application work that can be retried and
   observed without blocking request-handling processes.
 
-  A claim token fences one execution generation from the next. This protection
-  assumes the production deployment invariant remains immediate and
-  single-machine: never overlap this token-aware runner with an older runner
-  that can mutate jobs by id without the token predicate.
+  A claim token fences one execution generation from the next. Fair-lane claims
+  additionally take transaction-scoped partition/rate advisory authority, so
+  multiple token-aware application nodes can contend safely. Never overlap this
+  runner with a legacy revision that mutates jobs by id without claim fencing.
 
   Orderly shutdown stops tracked handler tasks. An untrappable runner death can
   still leave handler work in flight, so recovery relies on token fencing,
@@ -33,6 +33,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   alias Maraithon.DurablePayload
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobHandler
+  alias Maraithon.Runtime.BackgroundJobPartition
+  alias Maraithon.Runtime.BackgroundJobRateLimit
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.RecurringJobs
@@ -118,6 +120,16 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
         _invalid -> default_recurring_reconcile_interval_ms
       end
 
+    queues = normalize_queue_names(Keyword.get(opts, :queues))
+    exclude_queues = normalize_queue_names(Keyword.get(opts, :exclude_queues))
+    fair? = Keyword.get(opts, :fair?, false) == true
+
+    max_partition_concurrency =
+      positive_integer_option(opts, :max_partition_concurrency, 1)
+
+    max_rate_limit_concurrency =
+      positive_integer_option(opts, :max_rate_limit_concurrency, max_concurrency)
+
     schedule_poll(poll_interval_ms)
     renew_timer = schedule_renewal(renew_interval_ms)
 
@@ -132,6 +144,11 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
        renew_timer: renew_timer,
        batch_size: batch_size,
        max_concurrency: max_concurrency,
+       queues: queues,
+       exclude_queues: exclude_queues,
+       fair?: fair?,
+       max_partition_concurrency: max_partition_concurrency,
+       max_rate_limit_concurrency: max_rate_limit_concurrency,
        poll_retry_attempts: 0,
        reconcile_recurring_jobs?:
          Keyword.get(
@@ -166,13 +183,13 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       limit = min(state.batch_size, available_slots)
 
       case DbResilience.with_database("background job runner poll", fn ->
-             reclaim_stale_jobs(state.claim_timeout_ms)
-             fetch_pending_jobs(limit)
+             reclaim_stale_jobs(state.claim_timeout_ms, state)
+             fetch_pending_jobs(limit, state)
            end) do
         {:ok, jobs} ->
           state =
             Enum.reduce(jobs, state, fn job, acc ->
-              case claim_job(job) do
+              case claim_job(job, acc) do
                 {:ok, claimed} -> start_tracked_job(acc, claimed, nil)
                 :already_claimed -> acc
                 {:error, _reason} -> acc
@@ -312,8 +329,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp start_drain(from, state, limit) do
     case DbResilience.with_database("background job runner drain once", fn ->
-           reclaim_stale_jobs(state.claim_timeout_ms)
-           fetch_pending_jobs(limit)
+           reclaim_stale_jobs(state.claim_timeout_ms, state)
+           fetch_pending_jobs(limit, state)
          end) do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -333,7 +350,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
         {state, drain} =
           Enum.reduce(jobs, {state, drain}, fn job, {acc_state, acc_drain} ->
-            case claim_job(job) do
+            case claim_job(job, acc_state) do
               {:ok, claimed} ->
                 key = claim_key(claimed)
 
@@ -467,7 +484,97 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     end
   end
 
-  defp fetch_pending_jobs(limit) do
+  defp fetch_pending_jobs(limit, %{fair?: true} = state) do
+    include_queues? = state.queues != []
+    exclude_queues? = state.exclude_queues != []
+
+    ids =
+      Repo.query!(
+        """
+        WITH partition_heads AS (
+          SELECT job.id,
+                 job.queue,
+                 job.rate_limit_key,
+                 job.scheduled_at,
+                 job.inserted_at,
+                 partition.last_started_at,
+                 row_number() OVER (
+                   PARTITION BY job.queue, COALESCE(job.partition_key, job.id::text)
+                   ORDER BY job.scheduled_at, job.inserted_at, job.id
+                 ) AS partition_rank
+          FROM background_jobs AS job
+          LEFT JOIN background_job_partitions AS partition
+            ON partition.queue = job.queue
+           AND partition.partition_key = job.partition_key
+          LEFT JOIN background_job_rate_limits AS rate_limit
+            ON rate_limit.queue = job.queue
+           AND rate_limit.rate_limit_key = job.rate_limit_key
+          WHERE job.status = 'pending'
+            AND job.scheduled_at <= timezone('UTC', clock_timestamp())
+            AND ($1::boolean = false OR job.queue = ANY($2::text[]))
+            AND ($3::boolean = false OR NOT (job.queue = ANY($4::text[])))
+            AND (
+              job.partition_key IS NULL OR NOT EXISTS (
+                SELECT 1
+                FROM background_jobs AS running
+                WHERE running.queue = job.queue
+                  AND running.partition_key = job.partition_key
+                  AND running.status = 'running'
+              )
+            )
+            AND (
+              job.rate_limit_key IS NULL OR
+              rate_limit.blocked_until IS NULL OR
+              rate_limit.blocked_until <= timezone('UTC', clock_timestamp())
+            )
+        ),
+        ranked AS (
+          SELECT *,
+                 row_number() OVER (
+                   PARTITION BY queue, COALESCE(rate_limit_key, id::text)
+                   ORDER BY last_started_at ASC NULLS FIRST,
+                            scheduled_at,
+                            inserted_at,
+                            id
+                 ) AS rate_rank
+          FROM partition_heads
+          WHERE partition_rank = 1
+        )
+        SELECT id::text
+        FROM ranked
+        ORDER BY rate_rank ASC,
+                 last_started_at ASC NULLS FIRST,
+                 scheduled_at ASC,
+                 inserted_at ASC,
+                 id ASC
+        LIMIT $5
+        """,
+        [
+          include_queues?,
+          state.queues,
+          exclude_queues?,
+          state.exclude_queues,
+          limit
+        ],
+        log: false
+      ).rows
+      |> Enum.map(fn [id] -> id end)
+
+    jobs_by_id =
+      BackgroundJob
+      |> where([job], job.id in ^ids)
+      |> Repo.all()
+      |> Map.new(&{&1.id, &1})
+
+    Enum.flat_map(ids, fn id ->
+      case Map.fetch(jobs_by_id, id) do
+        {:ok, job} -> [job]
+        :error -> []
+      end
+    end)
+  end
+
+  defp fetch_pending_jobs(limit, state) do
     ordered_head_id =
       from(head in BackgroundJob,
         where: head.job_type == "telegram_webhook_event",
@@ -493,20 +600,29 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       candidate.job_type != "telegram_webhook_event" or
         candidate.id == subquery(ordered_head_id)
     )
+    |> filter_runner_queues(state)
     |> order_by([candidate], asc: candidate.scheduled_at, asc: candidate.inserted_at)
     |> limit(^limit)
     |> Repo.all()
     |> Enum.map(&BackgroundJob.hydrate_payloads/1)
   end
 
-  defp claim_job(%BackgroundJob{job_type: "telegram_webhook_event"} = job),
+  defp claim_job(%BackgroundJob{job_type: "telegram_webhook_event"} = job, _state),
     do: claim_ordered_telegram_job(job)
 
-  defp claim_job(%BackgroundJob{} = job), do: claim_unordered_job(job)
+  defp claim_job(%BackgroundJob{} = job, state), do: claim_unordered_job(job, state)
 
-  defp claim_unordered_job(%BackgroundJob{} = job) do
+  defp claim_unordered_job(%BackgroundJob{} = job, state) do
     claim_with_transaction("background job runner claim job", fn ->
-      claim_pending_job(job)
+      with :ok <- take_execution_authority(job),
+           :ok <- ensure_partition_capacity(job, state),
+           :ok <- ensure_rate_limit_capacity(job, state) do
+        claimed = claim_pending_job(job, require_due?: true)
+        record_partition_start(claimed)
+        claimed
+      else
+        :unavailable -> Repo.rollback(:already_claimed)
+      end
     end)
   end
 
@@ -533,7 +649,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     end
   end
 
-  defp claim_pending_job(%BackgroundJob{} = job, opts \\ []) do
+  defp claim_pending_job(%BackgroundJob{} = job, opts) do
     node_id = node() |> to_string()
     claim_token = Ecto.UUID.generate()
     now = database_now!()
@@ -579,6 +695,101 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
       {0, _rows} ->
         Repo.rollback(:already_claimed)
     end
+  end
+
+  defp take_execution_authority(%BackgroundJob{} = job) do
+    keys =
+      [
+        execution_lock_key("partition", job.queue, job.partition_key),
+        execution_lock_key("rate", job.queue, job.rate_limit_key)
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sort()
+
+    if Enum.all?(keys, &take_execution_lock/1), do: :ok, else: :unavailable
+  end
+
+  defp execution_lock_key(_kind, _queue, nil), do: nil
+
+  defp execution_lock_key(kind, queue, key)
+       when is_binary(kind) and is_binary(queue) and is_binary(key),
+       do: "maraithon:background-job:#{kind}:#{queue}:#{key}"
+
+  defp take_execution_lock(key) do
+    case Repo.query!(
+           "SELECT pg_try_advisory_xact_lock(hashtextextended($1::text, 0))",
+           [key],
+           log: false
+         ).rows do
+      [[true]] -> true
+      _unavailable -> false
+    end
+  end
+
+  defp ensure_partition_capacity(%BackgroundJob{partition_key: nil}, _state), do: :ok
+
+  defp ensure_partition_capacity(%BackgroundJob{} = job, state) do
+    running =
+      Repo.aggregate(
+        from(candidate in BackgroundJob,
+          where: candidate.queue == ^job.queue,
+          where: candidate.partition_key == ^job.partition_key,
+          where: candidate.status == "running"
+        ),
+        :count
+      )
+
+    if running < state.max_partition_concurrency, do: :ok, else: :unavailable
+  end
+
+  defp ensure_rate_limit_capacity(%BackgroundJob{rate_limit_key: nil}, _state), do: :ok
+
+  defp ensure_rate_limit_capacity(%BackgroundJob{} = job, state) do
+    now = database_now!()
+
+    blocked? =
+      BackgroundJobRateLimit
+      |> where([limit], limit.queue == ^job.queue)
+      |> where([limit], limit.rate_limit_key == ^job.rate_limit_key)
+      |> where([limit], not is_nil(limit.blocked_until) and limit.blocked_until > ^now)
+      |> Repo.exists?()
+
+    running =
+      Repo.aggregate(
+        from(candidate in BackgroundJob,
+          where: candidate.queue == ^job.queue,
+          where: candidate.rate_limit_key == ^job.rate_limit_key,
+          where: candidate.status == "running"
+        ),
+        :count
+      )
+
+    if not blocked? and running < state.max_rate_limit_concurrency,
+      do: :ok,
+      else: :unavailable
+  end
+
+  defp record_partition_start(%BackgroundJob{partition_key: nil}), do: :ok
+
+  defp record_partition_start(%BackgroundJob{} = job) do
+    now = database_now!()
+
+    Repo.insert_all(
+      BackgroundJobPartition,
+      [
+        %{
+          queue: job.queue,
+          partition_key: job.partition_key,
+          last_started_at: now,
+          inserted_at: now,
+          updated_at: now
+        }
+      ],
+      on_conflict: [set: [last_started_at: now, updated_at: now]],
+      conflict_target: [:queue, :partition_key]
+    )
+
+    :ok
   end
 
   defp take_telegram_order_lock(bot_id) do
@@ -662,6 +873,9 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
         when is_integer(delay_ms) and delay_ms > 0 ->
           mark_rescheduled(job, data, delay_ms)
 
+        {:ok, data, {:reschedule_at, %DateTime{} = scheduled_at}} ->
+          mark_rescheduled_at(job, data, scheduled_at)
+
         {:ok, data} ->
           mark_completed(job, data)
 
@@ -713,24 +927,34 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     DbResilience.with_database("background job runner self-reschedule", fn ->
       now = database_now!()
       scheduled_at = DateTime.add(now, delay_ms, :millisecond)
-
-      durable_result = normalize_result(result)
-
-      private_update_all(
-        owned_claim(job),
-        set:
-          [
-            status: "pending",
-            attempts: 0,
-            scheduled_at: scheduled_at,
-            claimed_by: nil,
-            claimed_at: nil,
-            claim_token: nil,
-            last_error: nil,
-            updated_at: now
-          ] ++ result_payload_updates(job, durable_result)
-      )
+      reschedule_claim(job, result, scheduled_at, now)
     end)
+  end
+
+  defp mark_rescheduled_at(%BackgroundJob{} = job, result, %DateTime{} = scheduled_at) do
+    DbResilience.with_database("background job runner wall-clock reschedule", fn ->
+      now = database_now!()
+      reschedule_claim(job, result, scheduled_at, now)
+    end)
+  end
+
+  defp reschedule_claim(job, result, scheduled_at, now) do
+    durable_result = normalize_result(result)
+
+    private_update_all(
+      owned_claim(job),
+      set:
+        [
+          status: "pending",
+          attempts: 0,
+          scheduled_at: scheduled_at,
+          claimed_by: nil,
+          claimed_at: nil,
+          claim_token: nil,
+          last_error: nil,
+          updated_at: now
+        ] ++ result_payload_updates(job, durable_result)
+    )
   end
 
   defp mark_completed(%BackgroundJob{} = job, result) do
@@ -798,25 +1022,60 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
        )
        when is_integer(retry_after_seconds) and retry_after_seconds >= 0 do
     DbResilience.with_database("background job runner mark rate-limited retry", fn ->
-      now = database_now!()
-      retry_at = DateTime.add(now, retry_after_seconds, :second)
+      {:ok, transition} =
+        Repo.transaction(fn ->
+          now = database_now!()
+          retry_at = DateTime.add(now, retry_after_seconds, :second)
 
-      durable_result = Map.put(job.result || %{}, "retry_after_count", retry_after_count)
+          durable_result =
+            job.result
+            |> Kernel.||(%{})
+            |> Map.put("retry_after_count", retry_after_count)
 
-      private_update_all(
-        owned_claim(job),
-        set:
-          [
-            status: "pending",
-            scheduled_at: retry_at,
-            claimed_by: nil,
-            claimed_at: nil,
-            claim_token: nil,
-            last_error: error_text(reason),
-            updated_at: now
-          ] ++ result_payload_updates(job, durable_result)
-      )
+          transition =
+            private_update_all(
+              owned_claim(job),
+              set:
+                [
+                  status: "pending",
+                  scheduled_at: retry_at,
+                  claimed_by: nil,
+                  claimed_at: nil,
+                  claim_token: nil,
+                  last_error: error_text(reason),
+                  updated_at: now
+                ] ++ result_payload_updates(job, durable_result)
+            )
+
+          case transition do
+            {1, _rows} -> block_rate_limit(job, retry_at, now)
+            {0, _rows} -> :ok
+          end
+
+          transition
     end)
+  end
+
+  defp block_rate_limit(%BackgroundJob{rate_limit_key: nil}, _retry_at, _now), do: :ok
+
+  defp block_rate_limit(%BackgroundJob{} = job, retry_at, now) do
+    Repo.query!(
+      """
+      INSERT INTO background_job_rate_limits
+        (queue, rate_limit_key, blocked_until, inserted_at, updated_at)
+      VALUES ($1, $2, $3, $4, $4)
+      ON CONFLICT (queue, rate_limit_key) DO UPDATE
+      SET blocked_until = GREATEST(
+            background_job_rate_limits.blocked_until,
+            EXCLUDED.blocked_until
+          ),
+          updated_at = EXCLUDED.updated_at
+      """,
+      [job.queue, job.rate_limit_key, retry_at, now],
+      log: false
+    )
+
+    :ok
   end
 
   defp mark_pending_retry(%BackgroundJob{} = job, reason, attempts) do
@@ -868,7 +1127,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp terminal_payload(%BackgroundJob{job_type: "telegram_webhook_event"}), do: %{}
   defp terminal_payload(%BackgroundJob{payload: payload}), do: payload || %{}
 
-  defp reclaim_stale_jobs(claim_timeout_ms) do
+  defp reclaim_stale_jobs(claim_timeout_ms, _state) do
     %{rows: [[count]]} =
       private_query!(
         """
@@ -1053,6 +1312,38 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     error -> {:error, {:reconcile_exception, error.__struct__}}
   catch
     kind, _reason -> {:error, {:reconcile_exit, kind}}
+  end
+
+  defp filter_runner_queues(query, %{queues: queues, exclude_queues: excluded}) do
+    query =
+      case queues do
+        [] -> query
+        values -> where(query, [candidate], candidate.queue in ^values)
+      end
+
+    case excluded do
+      [] -> query
+      values -> where(query, [candidate], candidate.queue not in ^values)
+    end
+  end
+
+  defp normalize_queue_names(values) when is_list(values) do
+    values
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.take(32)
+  end
+
+  defp normalize_queue_names(value) when is_binary(value), do: normalize_queue_names([value])
+  defp normalize_queue_names(_value), do: []
+
+  defp positive_integer_option(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_integer(value) and value > 0 -> value
+      _invalid -> default
+    end
   end
 
   defp schedule_poll(ms), do: Process.send_after(self(), :poll, ms)
