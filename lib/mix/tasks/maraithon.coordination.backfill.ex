@@ -3,11 +3,19 @@ defmodule Mix.Tasks.Maraithon.Coordination.Backfill do
   alias Maraithon.Runtime.Coordination.Backfill
   @shortdoc "Backfills runtime partitions in bounded SKIP LOCKED batches"
 
+  @moduledoc """
+  Runs the additive partition backfill without starting runtime workers.
+  Production requires `MARAITHON_MIGRATOR_DATABASE_URL` using the canonical
+  migrator role and independently rebuilt verified TLS.
+  """
+
   @impl Mix.Task
   def run(args) do
     {opts, rest, invalid} = OptionParser.parse(args, strict: [batch_size: :integer])
     if rest != [] or invalid != [], do: Mix.raise("unexpected backfill arguments")
     limit = opts[:batch_size] || 100
+
+    configure_operator_storage!("MARAITHON_MIGRATOR_DATABASE_URL")
 
     result = Ecto.Migrator.with_repo(Maraithon.Repo, fn _ -> drain(limit, 0) end)
 
@@ -18,6 +26,11 @@ defmodule Mix.Tasks.Maraithon.Coordination.Backfill do
       {:error, reason} ->
         Mix.raise("Runtime partition backfill failed: #{inspect(reason)}")
     end
+  end
+
+  defp configure_operator_storage!(env_name) do
+    Mix.Task.run("app.config")
+    Maraithon.DatabaseTLS.configure_operator_repo_from_env!(env_name, Mix.env() == :prod)
   end
 
   defp drain(limit, batches) do

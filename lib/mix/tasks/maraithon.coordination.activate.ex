@@ -3,6 +3,12 @@ defmodule Mix.Tasks.Maraithon.Coordination.Activate do
   alias Maraithon.Runtime.Coordination.Protocol
   @shortdoc "Irreversibly activates partition-fenced runtime coordination"
 
+  @moduledoc """
+  Performs the one-way, stopped-fleet runtime-coordination activation.
+  Production requires `MARAITHON_ACTIVATION_DATABASE_URL` using the canonical
+  activation-operator role and independently rebuilt verified TLS.
+  """
+
   @impl Mix.Task
   def run(args) do
     {opts, rest, invalid} =
@@ -19,6 +25,8 @@ defmodule Mix.Tasks.Maraithon.Coordination.Activate do
       )
 
     if rest != [] or invalid != [], do: Mix.raise("unexpected activation arguments")
+
+    configure_operator_storage!("MARAITHON_ACTIVATION_DATABASE_URL")
 
     activation_opts =
       [
@@ -43,6 +51,11 @@ defmodule Mix.Tasks.Maraithon.Coordination.Activate do
       {:error, reason} ->
         Mix.raise("Repository start failed: #{inspect(reason)}")
     end
+  end
+
+  defp configure_operator_storage!(env_name) do
+    Mix.Task.run("app.config")
+    Maraithon.DatabaseTLS.configure_operator_repo_from_env!(env_name, Mix.env() == :prod)
   end
 
   defp maybe_put(opts, _key, nil), do: opts

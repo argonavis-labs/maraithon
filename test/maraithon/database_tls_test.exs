@@ -7,15 +7,16 @@ defmodule Maraithon.DatabaseTLSTest do
     audit = Application.get_env(:maraithon, :database_tls_audit)
     repo = Application.get_env(:maraithon, Maraithon.Repo)
     ca_path = System.get_env("DATABASE_TLS_CA_CERT_PATH")
+    runtime_url = System.get_env("DATABASE_URL")
+    activation_url = System.get_env("MARAITHON_ACTIVATION_DATABASE_URL")
     System.delete_env("DATABASE_TLS_CA_CERT_PATH")
 
     on_exit(fn ->
       restore_env(:database_tls_audit, audit)
       restore_env(Maraithon.Repo, repo)
-
-      if ca_path,
-        do: System.put_env("DATABASE_TLS_CA_CERT_PATH", ca_path),
-        else: System.delete_env("DATABASE_TLS_CA_CERT_PATH")
+      restore_system_env("DATABASE_TLS_CA_CERT_PATH", ca_path)
+      restore_system_env("DATABASE_URL", runtime_url)
+      restore_system_env("MARAITHON_ACTIVATION_DATABASE_URL", activation_url)
     end)
 
     :ok
@@ -78,6 +79,47 @@ defmodule Maraithon.DatabaseTLSTest do
     end
   end
 
+  test "production operator configuration requires its canonical role URL" do
+    System.put_env("DATABASE_URL", "ecto://maraithon_runtime:runtime-secret@db.example/app")
+    System.delete_env("MARAITHON_ACTIVATION_DATABASE_URL")
+
+    assert_raise RuntimeError, ~r/required in production/, fn ->
+      DatabaseTLS.configure_operator_repo_from_env!(
+        "MARAITHON_ACTIVATION_DATABASE_URL",
+        true
+      )
+    end
+
+    System.put_env(
+      "MARAITHON_ACTIVATION_DATABASE_URL",
+      "ecto://maraithon_runtime:other-secret@db.example/app"
+    )
+
+    assert_raise RuntimeError, ~r/canonical maraithon_activation_operator/, fn ->
+      DatabaseTLS.configure_operator_repo_from_env!(
+        "MARAITHON_ACTIVATION_DATABASE_URL",
+        true
+      )
+    end
+
+    System.put_env(
+      "MARAITHON_ACTIVATION_DATABASE_URL",
+      "ecto://maraithon_activation_operator:operator-secret@db.example/app"
+    )
+
+    assert :ok =
+             DatabaseTLS.configure_operator_repo_from_env!(
+               "MARAITHON_ACTIVATION_DATABASE_URL",
+               true
+             )
+  end
+
+  test "operator configuration rejects unreviewed environment names" do
+    assert_raise ArgumentError, ~r/unsupported operator database URL/, fn ->
+      DatabaseTLS.configure_operator_repo_from_env!("ARBITRARY_DATABASE_URL", false)
+    end
+  end
+
   test "configuring an operator URL drops stale runtime transport options" do
     Application.put_env(:maraithon, :database_tls_audit, %{mode: :insecure_override})
 
@@ -103,4 +145,7 @@ defmodule Maraithon.DatabaseTLSTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:maraithon, key)
   defp restore_env(key, value), do: Application.put_env(:maraithon, key, value)
+
+  defp restore_system_env(name, nil), do: System.delete_env(name)
+  defp restore_system_env(name, value), do: System.put_env(name, value)
 end
