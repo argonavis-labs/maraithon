@@ -169,7 +169,8 @@ defmodule Maraithon.TelegramConversationsTest do
     assert source_item_id == turn.id
     assert event.source == "telegram"
     assert event.event_type == "conversation_turn.recorded"
-    assert event.payload["text"] == "What matters today?"
+    refute Map.has_key?(event.payload, "text")
+    assert event.payload["text_bytes"] == byte_size("What matters today?")
   end
 
   describe "compact_old_turns/2" do
