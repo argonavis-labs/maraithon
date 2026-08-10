@@ -106,6 +106,51 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert {:ok, :activated} = activate_coordination!()
   end
 
+  test "ACL readiness rejects every single forbidden privilege" do
+    forbidden = [
+      {"maraithon_runtime", "runtime_coordination_protocols", ~w(INSERT DELETE TRUNCATE)},
+      {"maraithon_runtime", "effect_execution_protocols", ~w(INSERT DELETE TRUNCATE)},
+      {"maraithon_runtime", "runtime_coordination_manifests", ~w(INSERT UPDATE DELETE TRUNCATE)},
+      {"maraithon_runtime", "runtime_task_outcome_evidence", ~w(UPDATE DELETE TRUNCATE)},
+      {"maraithon_runtime", "runtime_task_termination_proofs", ~w(UPDATE DELETE TRUNCATE)},
+      {"maraithon_runtime", "effect_termination_attestations", ~w(INSERT UPDATE DELETE TRUNCATE)},
+      {"maraithon_incident_operator", "runtime_task_outcome_evidence",
+       ~w(INSERT UPDATE DELETE TRUNCATE)},
+      {"maraithon_incident_operator", "runtime_coordination_protocols",
+       ~w(INSERT DELETE TRUNCATE)},
+      {"maraithon_incident_operator", "runtime_node_incarnations", ~w(INSERT DELETE TRUNCATE)},
+      {"maraithon_incident_operator", "runtime_partitions", ~w(INSERT DELETE TRUNCATE)},
+      {"maraithon_incident_operator", "effect_termination_attestations",
+       ~w(UPDATE DELETE TRUNCATE)},
+      {"maraithon_activation_operator", "runtime_task_assignments", ~w(INSERT DELETE TRUNCATE)},
+      {"maraithon_activation_operator", "runtime_task_termination_proofs",
+       ~w(INSERT UPDATE DELETE TRUNCATE)},
+      {"maraithon_payload_verifier", "runtime_task_outcome_evidence",
+       ~w(INSERT UPDATE DELETE TRUNCATE)},
+      {"maraithon_payload_verifier", "runtime_task_termination_proofs",
+       ~w(INSERT UPDATE DELETE TRUNCATE)}
+    ]
+
+    assert [[true]] = Repo.query!("SELECT public.runtime_coordination_acl_ready()", []).rows
+
+    Enum.each(forbidden, fn {role, table, privileges} ->
+      Enum.each(privileges, fn privilege ->
+        in_role!("maraithon_migrator", fn ->
+          Repo.query!("GRANT #{privilege} ON TABLE public.#{table} TO #{role}", [])
+        end)
+
+        assert [[false]] = Repo.query!("SELECT public.runtime_coordination_acl_ready()", []).rows,
+               "ACL readiness accepted #{privilege} on #{table} for #{role}"
+
+        in_role!("maraithon_migrator", fn ->
+          Repo.query!("REVOKE #{privilege} ON TABLE public.#{table} FROM #{role}", [])
+        end)
+
+        assert [[true]] = Repo.query!("SELECT public.runtime_coordination_acl_ready()", []).rows
+      end)
+    end)
+  end
+
   test "exact Agent readiness stays closed while coordination is dark" do
     activate_effect_protocol!()
     old = Application.get_env(:maraithon, Maraithon.Runtime, [])
@@ -172,10 +217,10 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert recovered_job.status == "pending"
     assert is_nil(recovered_job.claim_token)
     assert is_nil(recovered_job.coordination_task_assignment_id)
-    assert {:ok, :terminated} = TaskSupervisor.terminate_exact(identity)
+    assert {:ok, :never_activated} = TaskSupervisor.terminate_exact(identity)
   end
 
-  test "coupled supervisor restart can prove an exact predecessor task incarnation" do
+  test "coupled supervisor restart proves a predecessor reservation never activated" do
     %{node: node, partitions: [partition]} = active_authority!(["tenant-a"])
     insert_user!("tenant-a")
     job = insert_job!("tenant-a", "predecessor")
@@ -195,7 +240,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert {:ok, new_supervisor_id} = TaskAuthority.identity()
     refute new_supervisor_id == identity.supervisor_id
 
-    assert {:ok, :supervisor_restarted} = TaskSupervisor.terminate_exact(identity)
+    assert {:ok, :never_activated} = TaskSupervisor.terminate_exact(identity)
     final = TaskClaims.get(assignment.id)
     assert final.state == "settled"
     assert final.outcome == "cancelled_before_provider"
@@ -209,19 +254,17 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert {:ok, {reserved_job, assignment, identity}} =
              FairScheduler.reserve_next(node, partitions)
 
-    assert {:ok, {running_job, running_assignment}} =
-             FairScheduler.activate_job(reserved_job, assignment)
-
     parent = self()
 
     task =
       Task.Supervisor.async_nolink(TaskSupervisor.task_supervisor(), fn ->
         :ok = TaskSupervisor.register_current!(identity)
-        send(parent, :renewal_task_started)
+        result = FairScheduler.activate_job(reserved_job, assignment)
+        send(parent, {:renewal_task_started, result})
         receive do: (:finish -> :ok)
       end)
 
-    assert_receive :renewal_task_started
+    assert_receive {:renewal_task_started, {:ok, {running_job, running_assignment}}}
     test_pid = self()
 
     runner =
@@ -265,15 +308,28 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     insert_user!("tenant-a")
     job = insert_job!("tenant-a", "provider-work")
 
-    assert {:ok, {reserved_job, assignment, _identity}} =
+    assert {:ok, {reserved_job, assignment, identity}} =
              FairScheduler.reserve_next(node, [partition])
 
     assert reserved_job.id == job.id
+    parent = self()
 
-    assert {:ok, {running_job, running_assignment}} =
-             FairScheduler.activate_job(reserved_job, assignment)
+    task =
+      Task.Supervisor.async_nolink(TaskSupervisor.task_supervisor(), fn ->
+        :ok = TaskSupervisor.register_current!(identity)
 
-    assert {:ok, entered} = TaskClaims.mark_provider_entered(running_assignment)
+        result =
+          with {:ok, {running_job, running_assignment}} <-
+                 FairScheduler.activate_job(reserved_job, assignment),
+               {:ok, entered} <- TaskClaims.mark_provider_entered(running_assignment) do
+            {:ok, running_job, entered}
+          end
+
+        send(parent, {:provider_entered, result})
+        receive do: (:finish -> :ok)
+      end)
+
+    assert_receive {:provider_entered, {:ok, running_job, entered}}
 
     # A normal settlement without immutable outcome evidence is rejected even
     # when direct SQL knows the assignment UUID/GUC.
@@ -312,6 +368,9 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert final.state == "outcome_ambiguous"
     assert final.outcome == "provider_outcome_ambiguous"
     assert Repo.get!(BackgroundJob, running_job.id).last_error == "provider_outcome_ambiguous"
+
+    send(task.pid, :finish)
+    assert_receive {:DOWN, ref, :process, _pid, :normal} when ref == task.ref
   end
 
   defp active_authority!(user_ids) do

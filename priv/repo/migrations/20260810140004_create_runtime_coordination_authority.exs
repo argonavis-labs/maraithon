@@ -895,7 +895,8 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       -- Runtime has only worker ledger access. Row triggers further restrict
       -- local proof/outcome inserts to the exact live task incarnation.
       IF NOT (
-        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'SELECT') AND
+        (has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'UPDATE')) AND
         has_table_privilege('maraithon_runtime', 'public.runtime_coordination_manifests', 'SELECT') AND
         (has_table_privilege('maraithon_runtime', 'public.runtime_node_incarnations', 'SELECT') AND
           has_table_privilege('maraithon_runtime', 'public.runtime_node_incarnations', 'INSERT') AND
@@ -920,25 +921,46 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         (has_table_privilege('maraithon_runtime', 'public.runtime_partition_rebalance_requests', 'SELECT') AND
           has_table_privilege('maraithon_runtime', 'public.runtime_partition_rebalance_requests', 'INSERT') AND
           has_table_privilege('maraithon_runtime', 'public.runtime_partition_rebalance_requests', 'UPDATE')) AND
-        has_table_privilege('maraithon_runtime', 'public.effect_execution_protocols', 'SELECT') AND
+        (has_table_privilege('maraithon_runtime', 'public.effect_execution_protocols', 'SELECT') AND
+          has_table_privilege('maraithon_runtime', 'public.effect_execution_protocols', 'UPDATE')) AND
         has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'SELECT')
       ) OR
-        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
-        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_manifests', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
-        has_table_privilege('maraithon_runtime', 'public.runtime_task_outcome_evidence', 'UPDATE,DELETE,TRUNCATE') OR
-        has_table_privilege('maraithon_runtime', 'public.runtime_task_termination_proofs', 'UPDATE,DELETE,TRUNCATE') OR
-        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations',
-          'INSERT,UPDATE,DELETE,TRUNCATE') THEN
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'INSERT') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'DELETE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_protocols', 'TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.effect_execution_protocols', 'INSERT') OR
+        has_table_privilege('maraithon_runtime', 'public.effect_execution_protocols', 'DELETE') OR
+        has_table_privilege('maraithon_runtime', 'public.effect_execution_protocols', 'TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_manifests', 'INSERT') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_manifests', 'UPDATE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_manifests', 'DELETE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_coordination_manifests', 'TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_task_outcome_evidence', 'UPDATE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_task_outcome_evidence', 'DELETE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_task_outcome_evidence', 'TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_task_termination_proofs', 'UPDATE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_task_termination_proofs', 'DELETE') OR
+        has_table_privilege('maraithon_runtime', 'public.runtime_task_termination_proofs', 'TRUNCATE') OR
+        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'INSERT') OR
+        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'UPDATE') OR
+        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'DELETE') OR
+        has_table_privilege('maraithon_runtime', 'public.effect_termination_attestations', 'TRUNCATE') THEN
         RETURN false;
       END IF;
 
       IF NOT (
-        has_table_privilege('maraithon_incident_operator',
+        (has_table_privilege('maraithon_incident_operator',
           'public.runtime_coordination_protocols', 'SELECT') AND
-        has_table_privilege('maraithon_incident_operator',
+          has_table_privilege('maraithon_incident_operator',
+            'public.runtime_coordination_protocols', 'UPDATE')) AND
+        (has_table_privilege('maraithon_incident_operator',
           'public.runtime_node_incarnations', 'SELECT') AND
-        has_table_privilege('maraithon_incident_operator',
+          has_table_privilege('maraithon_incident_operator',
+            'public.runtime_node_incarnations', 'UPDATE')) AND
+        (has_table_privilege('maraithon_incident_operator',
           'public.runtime_partitions', 'SELECT') AND
+          has_table_privilege('maraithon_incident_operator',
+            'public.runtime_partitions', 'UPDATE')) AND
         (has_table_privilege('maraithon_incident_operator', 'public.runtime_task_assignments', 'SELECT') AND
           has_table_privilege('maraithon_incident_operator', 'public.runtime_task_assignments', 'UPDATE')) AND
         (has_table_privilege('maraithon_incident_operator', 'public.runtime_task_termination_proofs', 'SELECT') AND
@@ -946,11 +968,37 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         (has_table_privilege('maraithon_incident_operator', 'public.effect_termination_attestations', 'SELECT') AND
           has_table_privilege('maraithon_incident_operator', 'public.effect_termination_attestations', 'INSERT'))
       ) OR has_table_privilege('maraithon_incident_operator',
-             'public.runtime_task_outcome_evidence', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
+             'public.runtime_task_outcome_evidence', 'INSERT') OR
            has_table_privilege('maraithon_incident_operator',
-             'public.runtime_coordination_protocols', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
+             'public.runtime_task_outcome_evidence', 'UPDATE') OR
            has_table_privilege('maraithon_incident_operator',
-             'public.effect_termination_attestations', 'UPDATE,DELETE,TRUNCATE') THEN
+             'public.runtime_task_outcome_evidence', 'DELETE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_task_outcome_evidence', 'TRUNCATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_coordination_protocols', 'INSERT') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_coordination_protocols', 'DELETE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_coordination_protocols', 'TRUNCATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_node_incarnations', 'INSERT') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_node_incarnations', 'DELETE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_node_incarnations', 'TRUNCATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_partitions', 'INSERT') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_partitions', 'DELETE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.runtime_partitions', 'TRUNCATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.effect_termination_attestations', 'UPDATE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.effect_termination_attestations', 'DELETE') OR
+           has_table_privilege('maraithon_incident_operator',
+             'public.effect_termination_attestations', 'TRUNCATE') THEN
         RETURN false;
       END IF;
 
@@ -972,9 +1020,19 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         has_table_privilege('maraithon_runtime',
           'public.effect_execution_protocol_manifests', 'SELECT')
       ) OR has_table_privilege('maraithon_activation_operator',
-             'public.runtime_task_assignments', 'INSERT,DELETE,TRUNCATE') OR
+             'public.runtime_task_assignments', 'INSERT') OR
            has_table_privilege('maraithon_activation_operator',
-             'public.runtime_task_termination_proofs', 'INSERT,UPDATE,DELETE,TRUNCATE') THEN
+             'public.runtime_task_assignments', 'DELETE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.runtime_task_assignments', 'TRUNCATE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.runtime_task_termination_proofs', 'INSERT') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.runtime_task_termination_proofs', 'UPDATE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.runtime_task_termination_proofs', 'DELETE') OR
+           has_table_privilege('maraithon_activation_operator',
+             'public.runtime_task_termination_proofs', 'TRUNCATE') THEN
         RETURN false;
       END IF;
 
@@ -990,9 +1048,21 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         has_table_privilege('maraithon_payload_verifier',
           'public.runtime_task_termination_proofs', 'SELECT')
       ) OR has_table_privilege('maraithon_payload_verifier',
-             'public.runtime_task_outcome_evidence', 'INSERT,UPDATE,DELETE,TRUNCATE') OR
+             'public.runtime_task_outcome_evidence', 'INSERT') OR
            has_table_privilege('maraithon_payload_verifier',
-             'public.runtime_task_termination_proofs', 'INSERT,UPDATE,DELETE,TRUNCATE') THEN
+             'public.runtime_task_outcome_evidence', 'UPDATE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.runtime_task_outcome_evidence', 'DELETE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.runtime_task_outcome_evidence', 'TRUNCATE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.runtime_task_termination_proofs', 'INSERT') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.runtime_task_termination_proofs', 'UPDATE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.runtime_task_termination_proofs', 'DELETE') OR
+           has_table_privilege('maraithon_payload_verifier',
+             'public.runtime_task_termination_proofs', 'TRUNCATE') THEN
         RETURN false;
       END IF;
 
@@ -2949,8 +3019,11 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           EXECUTE format('ALTER TABLE public.%I OWNER TO maraithon_object_owner', relation_name);
         END LOOP;
 
-        GRANT SELECT ON TABLE
-          public.runtime_coordination_protocols, public.runtime_coordination_manifests
+        -- PostgreSQL requires UPDATE privilege for SELECT ... FOR SHARE.
+        -- Triggers still reject every runtime-role protocol mutation.
+        GRANT SELECT, UPDATE ON TABLE public.runtime_coordination_protocols
+          TO maraithon_runtime;
+        GRANT SELECT ON TABLE public.runtime_coordination_manifests
           TO maraithon_runtime;
         GRANT SELECT, INSERT, UPDATE ON TABLE public.runtime_node_incarnations
           TO maraithon_runtime;
@@ -2966,7 +3039,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           public.runtime_coordination_manifests, public.runtime_task_assignments,
           public.runtime_task_outcome_evidence, public.runtime_task_termination_proofs
           TO maraithon_payload_verifier;
-        GRANT SELECT ON TABLE public.runtime_coordination_protocols,
+        -- Exact external proof uses the same canonical FOR SHARE authority
+        -- locks; mutation triggers keep the incident role settlement-only.
+        GRANT SELECT, UPDATE ON TABLE public.runtime_coordination_protocols,
           public.runtime_node_incarnations, public.runtime_partitions
           TO maraithon_incident_operator;
         GRANT SELECT, UPDATE ON TABLE public.runtime_task_assignments
@@ -3063,8 +3138,10 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
         -- Regrant Effect protocol access after the blanket revocation above.
         -- This ordering is required on partial expansion retries as well as on
         -- a fresh catalog.
-        GRANT SELECT ON TABLE public.effect_execution_protocols,
-          public.effect_execution_protocol_manifests TO maraithon_runtime;
+        GRANT SELECT, UPDATE ON TABLE public.effect_execution_protocols
+          TO maraithon_runtime;
+        GRANT SELECT ON TABLE public.effect_execution_protocol_manifests
+          TO maraithon_runtime;
         GRANT SELECT ON TABLE public.effect_execution_protocols,
           public.effect_execution_protocol_manifests,
           public.effect_termination_attestations TO maraithon_payload_verifier;
@@ -3117,6 +3194,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           public.runtime_coordination_catalog_ready_count()
           TO maraithon_runtime;
         GRANT EXECUTE ON FUNCTION public.runtime_coordination_roles_ready(),
+          public.runtime_role_topology_fingerprint(),
           public.runtime_coordination_acl_ready(),
           public.runtime_catalog_table_fingerprint(regclass),
           public.runtime_coordination_catalog_ready_count()
