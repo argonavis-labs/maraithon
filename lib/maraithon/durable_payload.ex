@@ -5,6 +5,47 @@ defmodule Maraithon.DurablePayload do
 
   alias Maraithon.BoundedJSON
 
+  @protocol_cutover Maraithon.Runtime.ProtocolCutover
+
+  @doc false
+  def legacy_write? do
+    case protocol_mode() do
+      :legacy -> true
+      :exact -> false
+      {:blocked, _mismatch} -> raise "durable payload protocol is blocked"
+      _invalid -> raise "invalid durable payload protocol mode"
+    end
+  end
+
+  @doc false
+  def require_legacy_mutation! do
+    if Code.ensure_loaded?(@protocol_cutover) and
+         function_exported?(@protocol_cutover, :require_legacy_mutation!, 0) do
+      apply(@protocol_cutover, :require_legacy_mutation!, [])
+    else
+      :ok
+    end
+  end
+
+  @doc false
+  def require_current_mutation! do
+    if Code.ensure_loaded?(@protocol_cutover) and
+         function_exported?(@protocol_cutover, :require_current_mutation!, 0) do
+      apply(@protocol_cutover, :require_current_mutation!, [])
+    else
+      :ok
+    end
+  end
+
+  defp protocol_mode do
+    if Code.ensure_loaded?(@protocol_cutover) and
+         function_exported?(@protocol_cutover, :mode, 0) do
+      apply(@protocol_cutover, :mode, [])
+    else
+      :legacy
+    end
+  end
+
   @doc false
   def put_bounded_map(changeset, field, max_bytes, opts \\ [])
       when is_atom(field) and is_integer(max_bytes) and max_bytes > 0 and is_list(opts) do

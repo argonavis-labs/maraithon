@@ -96,31 +96,11 @@ defmodule Maraithon.Repo.Migrations.AddEncryptedEventAndRunStepPayloads do
   end
 
   def down do
-    execute("DROP INDEX CONCURRENTLY IF EXISTS agent_run_steps_unpurged_payload_retention_idx")
-
-    execute("DROP INDEX CONCURRENTLY IF EXISTS events_unpurged_payload_retention_idx")
-
-    execute(
-      "ALTER TABLE agent_run_steps DROP CONSTRAINT IF EXISTS agent_run_steps_purged_payloads_are_empty"
-    )
-
-    execute(
-      "ALTER TABLE agent_run_steps DROP CONSTRAINT IF EXISTS agent_run_steps_encrypted_payload_storage_bound"
-    )
-
-    execute("ALTER TABLE events DROP CONSTRAINT IF EXISTS events_spend_facts_are_bounded")
-    execute("ALTER TABLE events DROP CONSTRAINT IF EXISTS events_purged_payload_is_empty")
-    execute("ALTER TABLE events DROP CONSTRAINT IF EXISTS events_encrypted_payload_storage_bound")
-
-    execute("ALTER TABLE agent_run_steps DROP COLUMN IF EXISTS payload_purged_at")
-    execute("ALTER TABLE agent_run_steps DROP COLUMN IF EXISTS response_payload_ciphertext")
-    execute("ALTER TABLE agent_run_steps DROP COLUMN IF EXISTS request_payload_ciphertext")
-    execute("ALTER TABLE events DROP COLUMN IF EXISTS spend_llm_calls")
-    execute("ALTER TABLE events DROP COLUMN IF EXISTS spend_output_tokens")
-    execute("ALTER TABLE events DROP COLUMN IF EXISTS spend_input_tokens")
-    execute("ALTER TABLE events DROP COLUMN IF EXISTS spend_total_cost")
-    execute("ALTER TABLE events DROP COLUMN IF EXISTS payload_purged_at")
-    execute("ALTER TABLE events DROP COLUMN IF EXISTS payload_ciphertext")
+    raise """
+    irreversible migration: Event and AgentRunStep legacy plaintext may have
+    been cleared after ciphertext promotion; dropping these columns would
+    destroy the only retained payload copy
+    """
   end
 
   defp add_constraint_unless_present(table, name, expression) do

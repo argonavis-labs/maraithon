@@ -56,6 +56,7 @@ defmodule Maraithon.Events.Event do
       max_map_entries: 2_000,
       max_list_items: 2_000
     )
+    |> mirror_legacy_payload()
     |> put_spend_facts()
   end
 
@@ -79,10 +80,24 @@ defmodule Maraithon.Events.Event do
   @doc false
   def hydrate_payload!(%__MODULE__{} = event), do: %{event | payload: read_payload!(event)}
 
+  defp mirror_legacy_payload(changeset) do
+    case fetch_change(changeset, :payload) do
+      {:ok, payload} ->
+        if DurablePayload.legacy_write?(),
+          do: put_change(changeset, :legacy_payload, payload),
+          else: changeset
+
+      :error ->
+        changeset
+    end
+  end
+
   defp put_new_payload_default(%__MODULE__{id: nil}, attrs) when is_map(attrs) do
-    if Map.has_key?(attrs, :payload) or Map.has_key?(attrs, "payload"),
-      do: attrs,
-      else: Map.put(attrs, :payload, %{})
+    cond do
+      Map.has_key?(attrs, :payload) or Map.has_key?(attrs, "payload") -> attrs
+      Enum.any?(Map.keys(attrs), &is_binary/1) -> Map.put(attrs, "payload", %{})
+      true -> Map.put(attrs, :payload, %{})
+    end
   end
 
   defp put_new_payload_default(_event, attrs), do: attrs

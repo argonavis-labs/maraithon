@@ -97,9 +97,23 @@ defmodule Maraithon.Agents.AgentRunStep do
       max_map_entries: 2_000,
       max_list_items: 2_000
     )
+    |> mirror_legacy_payload(:request_payload, :legacy_request_payload)
+    |> mirror_legacy_payload(:response_payload, :legacy_response_payload)
     |> foreign_key_constraint(:agent_run_id)
     |> foreign_key_constraint(:agent_id)
     |> unique_constraint([:agent_run_id, :sequence])
+  end
+
+  defp mirror_legacy_payload(changeset, payload_field, legacy_field) do
+    case fetch_change(changeset, payload_field) do
+      {:ok, payload} ->
+        if DurablePayload.legacy_write?(),
+          do: put_change(changeset, legacy_field, payload),
+          else: changeset
+
+      :error ->
+        changeset
+    end
   end
 
   defp put_new_payload_defaults(%__MODULE__{id: nil}, attrs) when is_map(attrs) do
@@ -111,9 +125,18 @@ defmodule Maraithon.Agents.AgentRunStep do
   defp put_new_payload_defaults(_step, attrs), do: attrs
 
   defp put_attr_default(attrs, field, default) do
-    if Map.has_key?(attrs, field) or Map.has_key?(attrs, Atom.to_string(field)),
-      do: attrs,
-      else: Map.put(attrs, field, default)
+    string_field = Atom.to_string(field)
+
+    cond do
+      Map.has_key?(attrs, field) or Map.has_key?(attrs, string_field) ->
+        attrs
+
+      Enum.any?(Map.keys(attrs), &is_binary/1) ->
+        Map.put(attrs, string_field, default)
+
+      true ->
+        Map.put(attrs, field, default)
+    end
   end
 
   @doc false

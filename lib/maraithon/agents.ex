@@ -10,6 +10,7 @@ defmodule Maraithon.Agents do
   alias Maraithon.AgentHarness.MarkdownSkill
   alias Maraithon.AgentIsolation.Binding
   alias Maraithon.AgentSubscriptions
+  alias Maraithon.DurablePayload
   alias Maraithon.Effects.Effect
   alias Maraithon.Projects
   alias Maraithon.Repo
@@ -27,6 +28,11 @@ defmodule Maraithon.Agents do
 
   @agent_run_cancel_timeout_ms 2_000
   @closed_step_reason "agent_run_closed_without_step_result"
+  @default_run_step_payload_purge_batch 100
+  @max_run_step_payload_purge_batch 500
+  @default_run_step_payload_backfill_batch 25
+  @max_run_step_payload_backfill_batch 100
+  @run_step_payload_backfill_timeout_ms 30_000
   @run_identity_fields [
     :agent_id,
     :user_id,
@@ -446,6 +452,169 @@ defmodule Maraithon.Agents do
     |> Enum.map(&hydrate_run_step_payloads!/1)
   end
 
+  @doc """
+  Returns eligible and deferred legacy AgentRunStep ciphertext backlog counts.
+
+  Deferred rows are requested, belong to a running run, or belong to a run
+  still pointed to as active. This preflight reads no payload content.
+  """
+  def legacy_run_step_payload_encryption_backlogs do
+    %{rows: [[eligible, deferred]]} =
+      Repo.query!(
+        """
+        SELECT
+          COUNT(*) FILTER (
+            WHERE steps.status IN ('completed', 'failed')
+              AND steps.completed_at IS NOT NULL
+              AND runs.status IN ('completed', 'failed', 'cancelled')
+              AND runs.completed_at IS NOT NULL
+              AND agents.active_run_id IS DISTINCT FROM runs.id
+          )::bigint AS eligible,
+          COUNT(*) FILTER (
+            WHERE NOT (
+              steps.status IN ('completed', 'failed')
+              AND steps.completed_at IS NOT NULL
+              AND runs.status IN ('completed', 'failed', 'cancelled')
+              AND runs.completed_at IS NOT NULL
+              AND agents.active_run_id IS DISTINCT FROM runs.id
+            )
+          )::bigint AS deferred
+        FROM agent_run_steps AS steps
+        JOIN agent_runs AS runs
+          ON runs.id = steps.agent_run_id
+         AND runs.agent_id = steps.agent_id
+        JOIN agents
+          ON agents.id = steps.agent_id
+        WHERE steps.payload_purged_at IS NULL
+          AND (
+            steps.request_payload_ciphertext IS NULL
+            OR steps.response_payload_ciphertext IS NULL
+            OR steps.request_payload <> '{}'::jsonb
+            OR steps.response_payload <> '{}'::jsonb
+          )
+        """,
+        [],
+        timeout: @run_step_payload_backfill_timeout_ms,
+        log: false
+      )
+
+    %{eligible: eligible, deferred: deferred}
+  end
+
+  @doc false
+  def legacy_run_step_payload_encryption_backlog,
+    do: legacy_run_step_payload_encryption_backlogs().eligible
+
+  @doc """
+  Promotes one bounded batch of terminal, inactive AgentRunStep payloads.
+
+  Candidate step rows use `FOR UPDATE ... SKIP LOCKED`; active/requested work is
+  deferred, payload headers and timestamps are preserved, and plaintext JSONB
+  is cleared only after both encrypted maps validate and persist. The result
+  contains migrated counts and blocked IDs with closed error codes; deferred
+  rows become eligible after their run closes.
+  """
+  def backfill_legacy_run_step_payload_encryption(opts \\ [])
+
+  def backfill_legacy_run_step_payload_encryption(opts) when is_list(opts) do
+    with {:ok, {limit, skip}} <- run_step_payload_backfill_options(opts) do
+      Repo.transaction(
+        fn ->
+          :ok = DurablePayload.require_legacy_mutation!()
+          step_ids = lock_legacy_run_step_payload_ids(limit, skip)
+
+          steps =
+            AgentRunStep
+            |> where([step], step.id in ^step_ids)
+            |> Repo.all(log: false)
+
+          if length(steps) != length(step_ids) do
+            Repo.rollback(:agent_run_step_payload_backfill_race)
+          end
+
+          Enum.reduce(
+            steps,
+            %{migrated_run_steps: 0, blocked_run_steps: []},
+            fn step, result ->
+              case promote_legacy_run_step_payloads(step) do
+                :ok ->
+                  %{result | migrated_run_steps: result.migrated_run_steps + 1}
+
+                {:blocked, blocked} ->
+                  %{result | blocked_run_steps: [blocked | result.blocked_run_steps]}
+              end
+            end
+          )
+          |> Map.update!(:blocked_run_steps, &Enum.reverse/1)
+        end,
+        timeout: @run_step_payload_backfill_timeout_ms
+      )
+    end
+  end
+
+  def backfill_legacy_run_step_payload_encryption(_opts),
+    do: {:error, :invalid_agent_run_step_payload_backfill}
+
+  @doc """
+  Purges one bounded batch of terminal AgentRunStep payload bodies.
+
+  A step is eligible only after both it and its parent run are terminal and
+  older than `cutoff`, and only while no Agent points at that run as active.
+  Step identity, sequence, status, timing, and other headers are preserved.
+  Repeated calls returning `{:ok, count}` are suitable for a durable job.
+  """
+  def purge_agent_run_step_payloads_before(cutoff, opts \\ [])
+
+  def purge_agent_run_step_payloads_before(%DateTime{} = cutoff, opts) when is_list(opts) do
+    with :ok <- validate_run_step_retention_cutoff(cutoff),
+         {:ok, limit} <- run_step_payload_purge_limit(opts) do
+      Repo.transaction(fn ->
+        :ok = DurablePayload.require_current_mutation!()
+
+        candidate_ids =
+          from(candidate in AgentRunStep,
+            join: run in AgentRun,
+            on: run.id == candidate.agent_run_id and run.agent_id == candidate.agent_id,
+            join: agent in Agent,
+            on: agent.id == candidate.agent_id,
+            where: is_nil(candidate.payload_purged_at),
+            where: candidate.status in ["completed", "failed"],
+            where: run.status in ["completed", "failed", "cancelled"],
+            where: not is_nil(candidate.completed_at),
+            where: candidate.completed_at < ^cutoff,
+            where: not is_nil(run.completed_at),
+            where: run.completed_at < ^cutoff,
+            where: fragment("? IS DISTINCT FROM ?", agent.active_run_id, run.id),
+            order_by: [asc: candidate.completed_at, asc: candidate.id],
+            limit: ^limit,
+            select: candidate.id
+          )
+
+        now = DatabaseClock.now!()
+
+        {count, _rows} =
+          Repo.update_all(
+            from(step in AgentRunStep,
+              where: is_nil(step.payload_purged_at),
+              where: step.id in subquery(candidate_ids)
+            ),
+            set: [
+              request_payload: nil,
+              response_payload: nil,
+              legacy_request_payload: %{},
+              legacy_response_payload: %{},
+              payload_purged_at: now
+            ]
+          )
+
+        count
+      end)
+    end
+  end
+
+  def purge_agent_run_step_payloads_before(_cutoff, _opts),
+    do: {:error, :invalid_agent_run_step_payload_retention}
+
   def record_agent_run_step(run_id, agent_id, attrs)
       when is_binary(run_id) and is_binary(agent_id) and is_map(attrs) do
     with :ok <-
@@ -574,6 +743,8 @@ defmodule Maraithon.Agents do
           [
             status: "completed",
             response_payload: response_payload,
+            legacy_response_payload:
+              if(DurablePayload.legacy_write?(), do: response_payload, else: %{}),
             completed_at: now,
             updated_at: now
           ]
@@ -582,6 +753,8 @@ defmodule Maraithon.Agents do
             status: "failed",
             error: error,
             response_payload: response_payload,
+            legacy_response_payload:
+              if(DurablePayload.legacy_write?(), do: response_payload, else: %{}),
             completed_at: now,
             updated_at: now
           ]
@@ -1444,6 +1617,107 @@ defmodule Maraithon.Agents do
     case Repo.update(changeset) do
       {:ok, record} -> record
       {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp lock_legacy_run_step_payload_ids(limit, skip) do
+    %{rows: rows} =
+      Repo.query!(
+        """
+        SELECT steps.id
+        FROM agent_run_steps AS steps
+        JOIN agent_runs AS runs
+          ON runs.id = steps.agent_run_id
+         AND runs.agent_id = steps.agent_id
+        JOIN agents
+          ON agents.id = steps.agent_id
+        WHERE steps.payload_purged_at IS NULL
+          AND (
+            steps.request_payload_ciphertext IS NULL
+            OR steps.response_payload_ciphertext IS NULL
+            OR steps.request_payload <> '{}'::jsonb
+            OR steps.response_payload <> '{}'::jsonb
+          )
+          AND steps.status IN ('completed', 'failed')
+          AND steps.completed_at IS NOT NULL
+          AND runs.status IN ('completed', 'failed', 'cancelled')
+          AND runs.completed_at IS NOT NULL
+          AND agents.active_run_id IS DISTINCT FROM runs.id
+        ORDER BY steps.completed_at NULLS LAST, steps.id
+        OFFSET $2
+        LIMIT $1
+        FOR UPDATE OF steps SKIP LOCKED
+        """,
+        [limit, skip],
+        timeout: @run_step_payload_backfill_timeout_ms,
+        log: false
+      )
+
+    Enum.map(rows, fn [id] -> load_run_step_uuid!(id) end)
+  end
+
+  defp load_run_step_uuid!(value) do
+    case Ecto.UUID.load(value) do
+      {:ok, uuid} -> uuid
+      :error -> Repo.rollback(:invalid_agent_run_step_payload_backfill_id)
+    end
+  end
+
+  defp promote_legacy_run_step_payloads(%AgentRunStep{} = step) do
+    {request_payload, response_payload} = AgentRunStep.read_payloads!(step)
+
+    changeset =
+      step
+      |> AgentRunStep.changeset(%{
+        request_payload: request_payload,
+        response_payload: response_payload
+      })
+      |> Ecto.Changeset.put_change(:legacy_request_payload, %{})
+      |> Ecto.Changeset.put_change(:legacy_response_payload, %{})
+      |> Ecto.Changeset.put_change(:updated_at, step.updated_at)
+
+    if changeset.valid? do
+      case Repo.update(changeset, log: false) do
+        {:ok, _step} -> :ok
+        {:error, _changeset} -> {:blocked, %{id: step.id, errors: [:persistence_failed]}}
+      end
+    else
+      {:blocked, %{id: step.id, errors: [:payload_out_of_bounds]}}
+    end
+  end
+
+  defp run_step_payload_backfill_options(opts) do
+    if Keyword.keyword?(opts) do
+      limit = Keyword.get(opts, :limit, @default_run_step_payload_backfill_batch)
+      skip = Keyword.get(opts, :skip, 0)
+
+      if is_integer(limit) and limit in 1..@max_run_step_payload_backfill_batch and
+           is_integer(skip) and skip in 0..10_000 do
+        {:ok, {limit, skip}}
+      else
+        {:error, :invalid_agent_run_step_payload_backfill}
+      end
+    else
+      {:error, :invalid_agent_run_step_payload_backfill}
+    end
+  end
+
+  defp validate_run_step_retention_cutoff(%DateTime{utc_offset: 0, std_offset: 0}), do: :ok
+
+  defp validate_run_step_retention_cutoff(_cutoff),
+    do: {:error, :invalid_agent_run_step_payload_retention}
+
+  defp run_step_payload_purge_limit(opts) do
+    if Keyword.keyword?(opts) do
+      case Keyword.get(opts, :limit, @default_run_step_payload_purge_batch) do
+        limit when is_integer(limit) and limit in 1..@max_run_step_payload_purge_batch ->
+          {:ok, limit}
+
+        _invalid ->
+          {:error, :invalid_agent_run_step_payload_retention}
+      end
+    else
+      {:error, :invalid_agent_run_step_payload_retention}
     end
   end
 
