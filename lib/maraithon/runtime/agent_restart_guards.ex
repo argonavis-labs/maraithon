@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
 
   import Ecto.Query
 
+  alias Ecto.Adapters.SQL
   alias Maraithon.AgentIsolation.Binding
   alias Maraithon.Agents.Agent
   alias Maraithon.Effects.Effect
@@ -19,8 +20,10 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
   alias Maraithon.Runtime.AgentLifecycleOperation
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
+  alias Maraithon.Runtime.AgentTerminationIncident
+  alias Maraithon.Runtime.AgentTerminationProof
   alias Maraithon.Runtime.DatabaseClock
-  alias Maraithon.Runtime.Coordination.Scope
+  alias Maraithon.Runtime.Coordination.{Protocol, Scope}
 
   @default_window_ms 600_000
   @default_max_crashes 3
@@ -29,101 +32,130 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
   @max_backoff_ms 3_600_000
   @max_crashes 100
 
-  def record_crash(agent_id, owner_token, reason, opts \\ [])
+  @doc "Unproven crash reports are never physical termination evidence."
+  def record_crash(agent_id, owner_token, _reason, opts \\ [])
 
-  def record_crash(agent_id, owner_token, reason, opts) when is_list(opts) do
-    record_loss(agent_id, owner_token, reason, opts, false)
+  def record_crash(agent_id, owner_token, _reason, opts) when is_list(opts) do
+    with {:ok, _agent_id} <- cast_uuid(agent_id),
+         {:ok, _owner_token} <- cast_uuid(owner_token),
+         {:ok, _policy} <- policy(opts) do
+      {:ignored, :termination_proof_required}
+    end
   end
 
   def record_crash(_agent_id, _owner_token, _reason, _opts),
     do: {:error, :invalid_restart_guard}
 
   @doc """
-  Records an expired generation only after rechecking expiry while holding the
-  exact Agent -> Binding -> Guard -> Lease locks. A stale sweeper hint can
-  therefore never delete a lease that renewed before its transaction began.
+  Requests reconciliation for an expired generation.
+
+  Expiry is only an authority fence.  This function deliberately does not
+  create a restart guard, recover work, delete the lease, or admit a successor.
   """
   def record_expired(agent_id, owner_token, opts \\ [])
 
   def record_expired(agent_id, owner_token, opts) when is_list(opts) do
-    record_loss(agent_id, owner_token, :lease_expired, opts, true)
+    Maraithon.Runtime.AgentTerminations.request_expired(agent_id, owner_token, opts)
   end
 
   def record_expired(_agent_id, _owner_token, _opts),
     do: {:error, :invalid_restart_guard}
 
-  defp record_loss(agent_id, owner_token, reason, opts, require_expired?) do
-    protocol_mode = ProtocolCutover.mode()
+  @doc false
+  def record_termination(incident_id, opts \\ [])
 
-    with {:ok, agent_id} <- cast_uuid(agent_id),
-         {:ok, owner_token} <- cast_uuid(owner_token),
-         {:ok, policy} <- policy(opts) do
+  def record_termination(incident_id, opts) when is_binary(incident_id) and is_list(opts) do
+    with {:ok, incident_id} <- cast_uuid(incident_id),
+         %AgentTerminationIncident{} = candidate <-
+           Repo.get(AgentTerminationIncident, incident_id),
+         {:ok, policy} <- termination_policy(candidate, opts) do
       Repo.transaction(fn ->
-        if protocol_mode == :exact, do: ProtocolCutover.require_exact_reconciliation!()
+        if ProtocolCutover.mode() == :exact,
+          do: ProtocolCutover.require_exact_reconciliation!()
 
-        agent = lock_agent!(agent_id)
-        coordination = Scope.authorize_reconciliation!(agent)
+        agent = lock_agent!(candidate.agent_id)
         _binding = lock_binding(agent)
-        guard = lock_guard(agent_id)
-        lease = lock_lease(agent_id)
-        _operation = lock_operation(agent_id)
+        guard = lock_guard(candidate.agent_id)
+        lease = lock_lease(candidate.agent_id)
+        _operation = lock_operation(candidate.agent_id)
+        incident = lock_termination_incident!(incident_id)
+        proof = lock_termination_proof!(incident)
         now = DatabaseClock.now!()
 
-        case matching_owner(lease, guard, owner_token) do
+        validate_termination_identity!(candidate, incident, proof)
+
+        case matching_proven_owner(lease, guard, incident) do
           {:duplicate, %AgentRestartGuard{} = duplicate} ->
+            mark_incident_reconciled!(incident, proof, now)
             {:duplicate, duplicate}
+
+          :already_released ->
+            reconciled = mark_incident_reconciled!(incident, proof, now)
+            {:reconciled_without_loss, reconciled}
 
           :stale ->
             {:ignored, :stale_owner}
 
           {:exact, %AgentRuntimeLease{} = exact_lease} ->
-            if require_expired? and DateTime.compare(exact_lease.lease_until, now) == :gt do
-              {:ignored, :lease_renewed}
-            else
-              {window_started_at, crash_count} = next_window(guard, now, policy.window_ms)
-              tripped = crash_count >= policy.max_crashes
+            {window_started_at, crash_count} = next_window(guard, now, policy.window_ms)
+            tripped = crash_count >= policy.max_crashes
 
-              blocked_until =
-                if tripped, do: nil, else: deadline(now, backoff(policy, crash_count))
+            blocked_until =
+              if tripped, do: nil, else: deadline(now, backoff(policy, crash_count))
 
-              attrs = %{
-                agent_id: agent_id,
-                generation: Ecto.UUID.generate(),
-                last_owner_token: owner_token,
-                blocked_until: blocked_until,
-                window_started_at: window_started_at,
-                crash_count: crash_count,
-                tripped: tripped,
-                needs_recovery: true,
-                last_reason: safe_reason(reason)
-              }
+            attrs = %{
+              agent_id: incident.agent_id,
+              generation: Ecto.UUID.generate(),
+              last_owner_token: incident.lease_token,
+              blocked_until: blocked_until,
+              window_started_at: window_started_at,
+              crash_count: crash_count,
+              tripped: tripped,
+              needs_recovery: true,
+              last_reason: safe_reason(proof_reason(proof))
+            }
 
-              stored_guard = put_guard!(guard, attrs, now)
+            stored_guard = put_guard!(guard, attrs, now)
 
-              if tripped and agent.status not in ["stopped", "terminated"] do
-                agent
-                |> Ecto.Changeset.change(%{
-                  status: "stopped",
-                  stopped_at: now,
-                  updated_at: now
-                })
-                |> Repo.update!()
-              end
-
-              if tripped and protocol_mode == :exact do
-                cancel_pending_for_tripped_agent!(agent_id, now, coordination)
-              end
-
-              # Guard evidence and pending-work settlement are durable before the
-              # exact matching lease vanishes.
-              Repo.delete!(exact_lease)
-              {:recorded, stored_guard}
+            if tripped and agent.status not in ["stopped", "terminated"] do
+              agent
+              |> Ecto.Changeset.change(%{
+                status: "stopped",
+                stopped_at: now,
+                updated_at: now
+              })
+              |> Repo.update!()
             end
+
+            coordination = maybe_coordination_scope(agent, exact_lease)
+
+            if tripped and ProtocolCutover.mode() == :exact and coordination != :deferred do
+              cancel_pending_for_tripped_agent!(incident.agent_id, now, coordination)
+            end
+
+            # The immutable proof and durable restart guard exist before the
+            # exact lease row can disappear. Expiry alone never reaches here;
+            # the transaction-local incident ID also lets the database trigger
+            # bind this delete to the same immutable proof identity.
+            SQL.query!(
+              Repo,
+              "SELECT set_config('maraithon.agent_termination_reconciliation', $1, true)",
+              [incident.id]
+            )
+
+            Repo.delete!(exact_lease)
+            mark_incident_reconciled!(incident, proof, now)
+            {:recorded, stored_guard}
         end
       end)
       |> unwrap_transaction()
+    else
+      nil -> {:error, :termination_incident_not_found}
+      {:error, _reason} = error -> error
     end
   end
+
+  def record_termination(_incident_id, _opts), do: {:error, :invalid_restart_guard}
 
   @doc "Settles pending exact work left behind by tripped crash-loop guards."
   def reconcile_tripped_pending(limit \\ 100)
@@ -180,10 +212,12 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
         operation = lock_operation(agent_id)
+        termination_incident = lock_open_termination_incident(agent_id)
         now = DatabaseClock.now!()
 
         if operation, do: Repo.rollback(:agent_drain_pending)
         if lease, do: Repo.rollback(:runtime_lease_owned)
+        if termination_incident, do: Repo.rollback(:agent_termination_unproven)
         ensure_no_processing_directive!(agent_id)
 
         put_guard!(
@@ -212,20 +246,143 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
     end
   end
 
-  defp matching_owner(nil, %AgentRestartGuard{} = guard, owner_token) do
-    if guard.last_owner_token == owner_token and (guard.needs_recovery or guard.tripped),
-      do: {:duplicate, guard},
-      else: :stale
+  defp matching_proven_owner(
+         nil,
+         %AgentRestartGuard{last_owner_token: token} = guard,
+         %AgentTerminationIncident{lease_token: token}
+       ) do
+    if guard.needs_recovery or guard.tripped, do: {:duplicate, guard}, else: :already_released
   end
 
-  defp matching_owner(
-         %AgentRuntimeLease{owner_token: owner_token} = lease,
+  defp matching_proven_owner(nil, _guard, _incident), do: :already_released
+
+  defp matching_proven_owner(
+         %AgentRuntimeLease{owner_token: token} = lease,
          _guard,
-         owner_token
+         %AgentTerminationIncident{lease_token: token}
        ),
        do: {:exact, lease}
 
-  defp matching_owner(_lease, _guard, _owner_token), do: :stale
+  defp matching_proven_owner(_lease, _guard, _incident), do: :stale
+
+  defp termination_policy(incident, []) do
+    stored = incident.reconciliation_policy || %{}
+
+    policy(
+      window_ms: stored["window_ms"] || @default_window_ms,
+      max_crashes: stored["max_crashes"] || @default_max_crashes,
+      backoffs_ms: stored["backoffs_ms"] || @default_backoffs_ms
+    )
+  end
+
+  defp termination_policy(_incident, opts), do: policy(opts)
+
+  defp validate_termination_identity!(candidate, incident, proof) do
+    candidate_identity =
+      {candidate.id, candidate.activation_epoch, candidate.node_incarnation_id,
+       candidate.partition_id, candidate.partition_epoch, candidate.agent_id,
+       candidate.lease_token}
+
+    incident_identity =
+      {incident.id, incident.activation_epoch, incident.node_incarnation_id,
+       incident.partition_id, incident.partition_epoch, incident.agent_id, incident.lease_token}
+
+    proof_identity =
+      {proof.incident_id, proof.activation_epoch, proof.node_incarnation_id, proof.partition_id,
+       proof.partition_epoch, proof.agent_id, proof.lease_token}
+
+    if candidate_identity == incident_identity and
+         incident_identity == proof_identity and
+         incident.status in ["proven", "reconciled"] and
+         incident.proof_id == proof.id do
+      :ok
+    else
+      Repo.rollback(:termination_proof_mismatch)
+    end
+  end
+
+  defp lock_termination_incident!(incident_id) do
+    case Repo.one(
+           from(incident in AgentTerminationIncident,
+             where: incident.id == ^incident_id,
+             lock: "FOR UPDATE"
+           )
+         ) do
+      %AgentTerminationIncident{} = incident -> incident
+      nil -> Repo.rollback(:termination_incident_not_found)
+    end
+  end
+
+  defp lock_termination_proof!(incident) do
+    case Repo.one(
+           from(proof in AgentTerminationProof,
+             where: proof.id == ^incident.proof_id,
+             where: proof.incident_id == ^incident.id,
+             lock: "FOR SHARE"
+           )
+         ) do
+      %AgentTerminationProof{} = proof -> proof
+      nil -> Repo.rollback(:termination_proof_required)
+    end
+  end
+
+  defp mark_incident_reconciled!(
+         %AgentTerminationIncident{status: "proven"} = incident,
+         proof,
+         now
+       ) do
+    incident
+    |> Ecto.Changeset.change(%{
+      status: "reconciled",
+      proof_id: proof.id,
+      proof_kind: proof.proof_kind,
+      proved_at: proof.proved_at,
+      reconciled_at: now,
+      retry_at: now,
+      last_error: nil,
+      updated_at: now
+    })
+    |> Repo.update!()
+  end
+
+  defp mark_incident_reconciled!(
+         %AgentTerminationIncident{status: "reconciled"} = incident,
+         _proof,
+         _now
+       ),
+       do: incident
+
+  defp mark_incident_reconciled!(_incident, _proof, _now),
+    do: Repo.rollback(:termination_proof_required)
+
+  defp proof_reason(%AgentTerminationProof{proof_kind: "local_down", down_reason: reason}),
+    do: reason || "agent_down"
+
+  defp proof_reason(%AgentTerminationProof{proof_kind: "external_node_destroyed"}),
+    do: "external_node_destroyed"
+
+  defp maybe_coordination_scope(agent, lease) do
+    case Protocol.mode() do
+      :dark ->
+        :legacy
+
+      :active ->
+        case Scope.partition_for_user(agent.user_id) do
+          {:ok, session, partition}
+          when session.id == lease.coordination_node_incarnation_id and
+                 session.activation_epoch == lease.coordination_activation_epoch and
+                 partition.partition_id == lease.coordination_partition_id and
+                 partition.ownership_epoch == lease.coordination_partition_epoch ->
+            Scope.authorize_reconciliation!(agent)
+
+          _stale_partition ->
+            :deferred
+        end
+
+      _blocked ->
+        :deferred
+    end
+  end
 
   defp next_window(nil, now, _window_ms), do: {now, 1}
 
@@ -383,6 +540,16 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
     Repo.one(
       from(lease in AgentRuntimeLease,
         where: lease.agent_id == ^agent_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_open_termination_incident(agent_id) do
+    Repo.one(
+      from(incident in AgentTerminationIncident,
+        where: incident.agent_id == ^agent_id,
+        where: incident.status in ["requested", "proven"],
         lock: "FOR UPDATE"
       )
     )

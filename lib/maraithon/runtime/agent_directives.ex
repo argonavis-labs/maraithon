@@ -22,8 +22,9 @@ defmodule Maraithon.Runtime.AgentDirectives do
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentLifecycleOperation
   alias Maraithon.Runtime.AgentRestartGuard
-  alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentRuntimeLease
+  alias Maraithon.Runtime.AgentTerminationIncident
+  alias Maraithon.Runtime.AgentTerminations
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Coordination.Scope
@@ -526,19 +527,13 @@ defmodule Maraithon.Runtime.AgentDirectives do
 
   def reconcile_expired_ownership(limit, opts)
       when is_integer(limit) and limit in 1..@max_batch and is_list(opts) do
-    with {:ok, guard_opts, retry_opts} <- reconciliation_opts(opts) do
-      expired_lease_candidates(limit)
-      |> Enum.map(fn {agent_id, owner_generation} ->
-        guard_result = AgentRestartGuards.record_expired(agent_id, owner_generation, guard_opts)
+    with {:ok, guard_opts, _retry_opts} <- reconciliation_opts(opts),
+         requested when is_list(requested) <-
+           AgentTerminations.request_expired_batch(limit, guard_opts) do
+      Enum.map(requested, fn {status, incident} ->
+        guard_result = {status, incident}
 
-        recovery_result =
-          case guard_result do
-            {:recorded, _guard} -> recover_generation(agent_id, owner_generation, retry_opts)
-            {:duplicate, _guard} -> recover_generation(agent_id, owner_generation, retry_opts)
-            _ignored_or_error -> :not_recorded
-          end
-
-        {agent_id, owner_generation, guard_result, recovery_result}
+        {incident.agent_id, incident.lease_token, guard_result, :termination_proof_required}
       end)
     end
   end
@@ -574,6 +569,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
       on: guard.agent_id == agent.id,
       left_join: operation in AgentLifecycleOperation,
       on: operation.agent_id == agent.id,
+      left_join: termination in AgentTerminationIncident,
+      on: termination.agent_id == agent.id and termination.status in ["requested", "proven"],
       where: directive.status == "pending",
       where: directive.available_at <= fragment("timezone('UTC', clock_timestamp())"),
       where: directive.attempts < directive.max_attempts,
@@ -582,6 +579,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
       where: binding.status == "active",
       where: is_nil(lease.agent_id),
       where: is_nil(operation.agent_id),
+      where: is_nil(termination.id),
       where:
         is_nil(guard.agent_id) or
           (guard.tripped == false and guard.needs_recovery == false and
@@ -610,6 +608,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
       on: lease.agent_id == agent.id,
       left_join: operation in AgentLifecycleOperation,
       on: operation.agent_id == agent.id,
+      left_join: termination in AgentTerminationIncident,
+      on: termination.agent_id == agent.id and termination.status in ["requested", "proven"],
       where: guard.needs_recovery == true,
       where: guard.tripped == false,
       where:
@@ -620,6 +620,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
       where: binding.status == "active",
       where: is_nil(lease.agent_id),
       where: is_nil(operation.agent_id),
+      where: is_nil(termination.id),
       order_by: [asc: guard.blocked_until, asc: guard.updated_at, asc: agent.id],
       limit: ^limit,
       select: agent.id
@@ -655,20 +656,6 @@ defmodule Maraithon.Runtime.AgentDirectives do
       }
     )
     |> Scope.all_ready_agent_lease()
-  end
-
-  defp expired_lease_candidates(limit) do
-    from(lease in AgentRuntimeLease,
-      as: :expired_lease,
-      join: agent in Agent,
-      as: :agent,
-      on: agent.id == lease.agent_id,
-      where: lease.lease_until <= fragment("timezone('UTC', clock_timestamp())"),
-      order_by: [asc: lease.lease_until, asc: lease.agent_id],
-      limit: ^limit,
-      select: {lease.agent_id, lease.owner_token}
-    )
-    |> Scope.all_ready_agent()
   end
 
   defp recorded_generation_candidates(limit) do

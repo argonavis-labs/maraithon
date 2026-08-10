@@ -24,6 +24,10 @@ defmodule Maraithon.Application do
       # Encryption vault (must start before Repo for encrypted fields)
       Maraithon.Vault,
       Maraithon.Repo,
+      # Stable exact-Agent guardian. It must outlive Runtime.Supervisor so an
+      # AgentSupervisor subtree restart/shutdown still yields the original
+      # monitor's exact DOWN proof.
+      Supervisor.child_spec(Maraithon.Runtime.AgentWatcher, shutdown: 30_000),
       Maraithon.Accounts.AdminBootstrap,
       {DNSCluster, query: Application.get_env(:maraithon, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Maraithon.PubSub},

@@ -9,10 +9,9 @@ defmodule Maraithon.Runtime.AgentSupervisor do
 
   alias Maraithon.Agents.Agent, as: AgentRecord
   alias Maraithon.Runtime.Agent
-  alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentRegistry
-  alias Maraithon.Runtime.AgentRestartGuards
+  alias Maraithon.Runtime.AgentTerminations
   alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.BootGate
   alias Maraithon.Runtime.Config, as: RuntimeConfig
@@ -43,6 +42,7 @@ defmodule Maraithon.Runtime.AgentSupervisor do
          :ok <- ensure_admission(opts),
          {:ok, launch_config} <- launch_config(opts),
          :ok <- AgentWatcher.ensure_available(launch_config.watcher),
+         :ok <- ensure_supervisor_available(launch_config.supervisor),
          {:ok, lease} <-
            claim(agent.id, launch_config.recovery_generation, launch_config.ttl_ms) do
       start_claimed_agent(agent, lease, launch_config)
@@ -99,16 +99,37 @@ defmodule Maraithon.Runtime.AgentSupervisor do
 
       send(pid, {:agent_dispatch, stop_message})
 
-      receive do
-        {:DOWN, ^ref, :process, ^pid, _reason} ->
+      case await_down(ref, pid, timeout_ms) do
+        :down ->
           :ok
-      after
-        timeout_ms ->
-          Process.demonitor(ref, [:flush])
-          DynamicSupervisor.terminate_child(supervisor, pid)
+
+        :timeout ->
+          # DynamicSupervisor return values are routing results, never physical
+          # proof. Keep the monitor installed and wait for its actual DOWN.
+          _termination_attempt = DynamicSupervisor.terminate_child(supervisor, pid)
+
+          case await_down(ref, pid, timeout_ms) do
+            :down ->
+              :ok
+
+            :timeout ->
+              Process.demonitor(ref, [:flush])
+              {:error, :termination_unproven}
+          end
       end
     else
-      DynamicSupervisor.terminate_child(supervisor, pid)
+      # A Registry/supervisor miss and :not_found are deliberately non-proving.
+      {:error, :not_found}
+    end
+  catch
+    :exit, _reason -> {:error, :termination_unproven}
+  end
+
+  defp await_down(ref, pid, timeout_ms) do
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :down
+    after
+      timeout_ms -> :timeout
     end
   end
 
@@ -205,20 +226,12 @@ defmodule Maraithon.Runtime.AgentSupervisor do
       {:ok, pid} ->
         finish_tracked_start(config, pid, agent.id, lease.owner_token)
 
-      {:error, {:already_started, _pid}} = error ->
-        release_unspawned(config.watcher, agent.id, lease.owner_token)
-        error
-
-      {:error, reason} = error when reason in [:already_present, :max_children, :noproc] ->
-        release_unspawned(config.watcher, agent.id, lease.owner_token)
-        error
-
       {:error, reason} = error ->
-        record_failed_start(config.watcher, agent.id, lease.owner_token, reason)
+        request_failed_start(agent.id, lease.owner_token, reason)
         error
 
       :ignore ->
-        record_failed_start(config.watcher, agent.id, lease.owner_token, :agent_start_ignored)
+        request_failed_start(agent.id, lease.owner_token, :agent_start_ignored)
         {:error, :agent_start_ignored}
     end
   end
@@ -232,59 +245,61 @@ defmodule Maraithon.Runtime.AgentSupervisor do
   end
 
   defp finish_tracked_start(config, pid, agent_id, owner_token) do
+    # This caller-side monitor closes the spawn-to-guardian handoff gap.  It is
+    # removed only after AgentWatcher has synchronously installed its monitor.
+    monitor_started_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    ref = Process.monitor(pid)
+
     case AgentWatcher.track(config.watcher, pid, agent_id, owner_token) do
       :ok ->
+        Process.demonitor(ref, [:flush])
         Agent.activate_exact(pid, owner_token)
         {:ok, pid}
 
       {:error, reason} ->
-        case DynamicSupervisor.terminate_child(config.supervisor, pid) do
-          :ok -> :ok
-          _not_a_child -> Process.exit(pid, :kill)
-        end
+        _termination_attempt = DynamicSupervisor.terminate_child(config.supervisor, pid)
 
-        record_failed_start(config.watcher, agent_id, owner_token, {:track_failed, reason})
+        proof_result =
+          case await_down(ref, pid, @default_stop_timeout_ms) do
+            :down ->
+              AgentTerminations.record_local_down(
+                agent_id,
+                owner_token,
+                pid,
+                {:watcher_handoff_failed, reason},
+                monitor_started_at
+              )
+
+            :timeout ->
+              Process.demonitor(ref, [:flush])
+              request_failed_start(agent_id, owner_token, {:track_failed, reason})
+          end
+
+        _ = proof_result
         {:error, :agent_watcher_unavailable}
     end
   end
 
-  defp release_unspawned(watcher, agent_id, owner_token) do
-    case AgentLeases.release(agent_id, owner_token) do
-      {:ok, :released} -> :ok
-      _lost_or_unavailable -> record_failed_start(watcher, agent_id, owner_token, :release_failed)
-    end
-  end
-
-  defp record_failed_start(watcher, agent_id, owner_token, reason) do
-    case AgentWatcher.record_owner_down(
-           watcher,
+  defp request_failed_start(agent_id, owner_token, reason) do
+    case AgentTerminations.request_ambiguous(
            agent_id,
            owner_token,
-           self(),
-           {:agent_start_failed, reason}
+           {:agent_start_ambiguous, reason}
          ) do
-      {:ok, _result} ->
+      result when elem(result, 0) in [:requested, :duplicate, :ignored] ->
         :ok
 
-      {:error, _watcher_reason} ->
-        record_failed_start_without_watcher(agent_id, owner_token, reason)
-    end
-  end
+      {:error, error} ->
+        Logger.error("Failed to request exact Agent start reconciliation",
+          agent_reference: Maraithon.Redaction.fingerprint(agent_id),
+          failure_code: Maraithon.Redaction.error_class(error)
+        )
 
-  # The watcher is required before claim. This fallback only closes the tiny
-  # race where it exits after admission but before failure reconciliation.
-  defp record_failed_start_without_watcher(agent_id, owner_token, reason) do
-    case AgentRestartGuards.record_crash(agent_id, owner_token, {:agent_start_failed, reason}) do
-      result when elem(result, 0) in [:recorded, :duplicate] ->
-        _ = AgentDirectives.recover_generation(agent_id, owner_token)
-        :ok
-
-      _stale_or_error ->
         :ok
     end
   rescue
     error ->
-      Logger.error("Failed to reconcile exact Agent start",
+      Logger.error("Failed to request exact Agent start reconciliation",
         agent_reference: Maraithon.Redaction.fingerprint(agent_id),
         failure_code: Maraithon.Redaction.error_class(error)
       )
@@ -292,7 +307,7 @@ defmodule Maraithon.Runtime.AgentSupervisor do
       :ok
   catch
     :exit, reason ->
-      Logger.error("Exact Agent start reconciliation exited",
+      Logger.error("Exact Agent start reconciliation request exited",
         agent_reference: Maraithon.Redaction.fingerprint(agent_id),
         failure_code: Maraithon.Redaction.error_class(reason)
       )
