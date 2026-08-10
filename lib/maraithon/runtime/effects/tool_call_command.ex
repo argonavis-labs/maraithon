@@ -7,11 +7,54 @@ defmodule Maraithon.Runtime.Effects.ToolCallCommand do
 
   alias Maraithon.Agents
   alias Maraithon.Effects.Effect
+  alias Maraithon.ToolPolicy
+  alias Maraithon.ToolPolicy.Decision
   alias Maraithon.Tools
 
   @impl true
+  def prepare(%Effect{} = effect) do
+    context = execution_context(effect)
+
+    with {:ok, tool_module} <- Tools.fetch(context.tool_name),
+         :ok <- authorize_package_tool(context.agent, context.tool_name),
+         {:ok, decision} <- authorize_policy(context.policy_context) do
+      {:ok,
+       %{
+         tool_module: tool_module,
+         args: context.args,
+         policy_context: context.policy_context,
+         policy_decision: decision
+       }}
+    end
+  end
+
+  @impl true
+  def execute_prepared(
+        %Effect{},
+        %{
+          tool_module: tool_module,
+          args: args,
+          policy_context: policy_context,
+          policy_decision: %Decision{status: :allow} = decision
+        }
+      )
+      when is_atom(tool_module) and is_map(args) and is_map(policy_context) do
+    Tools.execute_prepared(tool_module, args, policy_context, decision)
+  end
+
+  def execute_prepared(%Effect{}, _prepared), do: {:error, :invalid_tool_preflight}
+
+  @impl true
   def execute(%Effect{} = effect) do
-    tool_name = effect.params["tool"]
+    context = execution_context(effect)
+
+    with :ok <- authorize_package_tool(context.agent, context.tool_name) do
+      Tools.execute(context.tool_name, context.args, context.policy_context)
+    end
+  end
+
+  defp execution_context(%Effect{} = effect) do
+    tool_name = if is_map(effect.params), do: effect.params["tool"]
 
     agent =
       case effect.agent_id do
@@ -23,21 +66,33 @@ defmodule Maraithon.Runtime.Effects.ToolCallCommand do
       end
 
     user_id = trusted_effect_user_id(effect, agent)
-    args = bind_user_id(effect.params["args"], user_id)
+    raw_args = if is_map(effect.params), do: effect.params["args"]
+    args = bind_user_id(raw_args, user_id)
 
     policy_context = %{
       surface: "runtime",
       agent_id: effect.agent_id,
       user_id: user_id,
-      confirmed?: effect.params["confirmed"] == true,
-      confirmation_state: effect.params["confirmation_state"]
+      confirmed?: is_map(effect.params) and effect.params["confirmed"] == true,
+      confirmation_state: if(is_map(effect.params), do: effect.params["confirmation_state"]),
+      tool_name: tool_name,
+      arguments: args,
+      tool_metadata: Tools.policy_metadata_for(tool_name)
     }
 
-    with :ok <- authorize_package_tool(agent, tool_name) do
-      case Tools.execute(tool_name, args, policy_context) do
-        {:ok, result} -> {:ok, result}
-        {:error, reason} -> {:error, reason}
-      end
+    %{agent: agent, tool_name: tool_name, args: args, policy_context: policy_context}
+  end
+
+  defp authorize_policy(policy_context) do
+    case ToolPolicy.authorize(policy_context) do
+      %Decision{status: :allow} = decision ->
+        {:ok, decision}
+
+      %Decision{status: :deny} = decision ->
+        {:error, {:tool_policy_denied, Decision.to_map(decision)}}
+
+      %Decision{status: :needs_confirmation} = decision ->
+        {:error, {:tool_policy_needs_confirmation, Decision.to_map(decision)}}
     end
   end
 

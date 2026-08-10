@@ -4,6 +4,7 @@ defmodule Maraithon.Tools do
   """
 
   alias Maraithon.{Capabilities, ToolPolicy}
+  alias Maraithon.ToolPolicy.Decision
 
   @doc """
   Execute a tool by name.
@@ -35,6 +36,21 @@ defmodule Maraithon.Tools do
           {:error, reason} -> {:error, reason}
         end
       end)
+    end)
+  end
+
+  @doc false
+  def execute_prepared(
+        module,
+        args,
+        context,
+        %Decision{status: :allow} = decision
+      )
+      when is_atom(module) and is_map(args) and is_map(context) do
+    preserve_provider_errors? = Map.get(context, :preserve_provider_errors, false) == true
+
+    with_provider_error_mode(preserve_provider_errors?, fn ->
+      ToolPolicy.enforce_prepared(context, decision, fn -> module.execute(args) end)
     end)
   end
 

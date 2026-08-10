@@ -43,7 +43,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   @max_usage_cost_usd 1_000_000
 
   @impl true
-  def execute(%Effect{} = effect) do
+  def prepare(%Effect{} = effect) do
     bounded =
       with {:ok, canonical_params} <-
              effect.params
@@ -59,7 +59,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
     case bounded do
       {:ok, params} ->
-        do_execute(effect, params)
+        {:ok, params}
 
       {:error, reason} = error ->
         Logger.warning("LLM effect request rejected",
@@ -68,6 +68,19 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
         )
 
         error
+    end
+  end
+
+  @impl true
+  def execute_prepared(%Effect{} = effect, params) when is_map(params),
+    do: do_execute(effect, params)
+
+  def execute_prepared(%Effect{}, _prepared), do: {:error, :invalid_request}
+
+  @impl true
+  def execute(%Effect{} = effect) do
+    with {:ok, params} <- prepare(effect) do
+      execute_prepared(effect, params)
     end
   end
 
