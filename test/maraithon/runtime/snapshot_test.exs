@@ -2,7 +2,9 @@ defmodule Maraithon.Runtime.SnapshotTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.Agents
+  alias Maraithon.Repo
   alias Maraithon.Runtime.Snapshot
+  alias Maraithon.Runtime.SnapshotFormat
 
   setup do
     {:ok, agent} =
@@ -31,8 +33,8 @@ defmodule Maraithon.Runtime.SnapshotTest do
     loaded = Snapshot.latest(agent.id)
     assert loaded.sequence_num == 42
     assert loaded.state_name == "idle"
-    # Atoms, nested maps, and atom-keyed maps all survive — a plain JSON
-    # round-trip would have turned these into strings.
+    # Symbols, nested maps, and symbol-keyed maps survive through the tagged,
+    # language-neutral JSON representation.
     assert loaded.behavior_state == behavior_state
     assert loaded.budget == budget
     # SPEC 08 R1: the behavior's schema version rides alongside the snapshot.
@@ -71,7 +73,76 @@ defmodule Maraithon.Runtime.SnapshotTest do
 
     loaded = Snapshot.latest(agent.id)
     assert loaded.schema_version == 0
-    # Unrecognized (non-ETF-wrapped) state shapes are returned as-is.
+    # Reader-first compatibility retains bounded raw-JSON v0 rows.
     assert loaded.behavior_state == %{"legacy" => true}
+  end
+
+  test "fresh checkpoints use format v1 and retention is transactionally bounded", %{agent: agent} do
+    Enum.each(1..15, fn sequence ->
+      assert {:ok, _snapshot} =
+               Snapshot.persist(agent.id, sequence, :idle, %{sequence: sequence}, %{}, 1)
+    end)
+
+    snapshots =
+      Snapshot
+      |> Ecto.Query.where([snapshot], snapshot.agent_id == ^agent.id)
+      |> Ecto.Query.order_by([snapshot], desc: snapshot.sequence_num)
+      |> Repo.all()
+
+    assert length(snapshots) == Snapshot.retention_count()
+    assert Enum.map(snapshots, & &1.sequence_num) == Enum.to_list(15..6//-1)
+
+    assert Enum.all?(snapshots, fn snapshot ->
+             snapshot.state_data["format"] == SnapshotFormat.format() and
+               snapshot.state_data["format_version"] == SnapshotFormat.version() and
+               snapshot.budget["format"] == SnapshotFormat.format()
+           end)
+  end
+
+  test "a corrupt newest checkpoint falls back to the prior retained checkpoint", %{agent: agent} do
+    assert {:ok, _snapshot} = Snapshot.persist(agent.id, 1, :idle, %{healthy: true}, %{}, 0)
+
+    {1, _rows} =
+      Repo.insert_all(Snapshot, [
+        %{
+          agent_id: agent.id,
+          sequence_num: 2,
+          state_name: "idle",
+          state_data: %{
+            "format" => SnapshotFormat.format(),
+            "format_version" => 999,
+            "value" => %{}
+          },
+          budget: %{},
+          schema_version: 0,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+
+    loaded = Snapshot.latest(agent.id)
+    assert loaded.sequence_num == 1
+    assert loaded.behavior_state == %{healthy: true}
+  end
+
+  test "legacy compressed ETF is rejected before decoding", %{agent: agent} do
+    compressed =
+      :erlang.term_to_binary(%{unsafe: String.duplicate("compressed", 10_000)}, compressed: 9)
+
+    assert <<131, 80, _rest::binary>> = compressed
+
+    {1, _rows} =
+      Repo.insert_all(Snapshot, [
+        %{
+          agent_id: agent.id,
+          sequence_num: 1,
+          state_name: "idle",
+          state_data: %{"format" => "etf_base64", "data" => Base.encode64(compressed)},
+          budget: %{"format" => "etf_base64", "data" => Base.encode64(compressed)},
+          schema_version: 0,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+
+    assert Snapshot.latest(agent.id) == nil
   end
 end

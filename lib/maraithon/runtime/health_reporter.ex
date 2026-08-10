@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.HealthReporter do
   require Logger
 
   alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.Snapshot
 
   # Every minute
   @default_report_interval_ms 60_000
@@ -33,14 +34,41 @@ defmodule Maraithon.Runtime.HealthReporter do
 
   defp report_health do
     health = Maraithon.Health.check()
+    snapshot_stats = snapshot_stats(health.checks.database)
 
     Logger.info("Health report",
       status: health.status,
       agents_running: health.checks.agents.running,
       agents_degraded: health.checks.agents.degraded,
       memory_mb: health.checks.memory_mb,
-      uptime_seconds: health.checks.uptime_seconds
+      uptime_seconds: health.checks.uptime_seconds,
+      snapshot_count: snapshot_stats.retained_snapshot_count,
+      snapshot_bytes: snapshot_stats.retained_encoded_bytes,
+      agents_without_snapshot: snapshot_stats.active_agents_without_snapshot,
+      max_checkpoint_age_ms: snapshot_stats.max_checkpoint_age_ms,
+      max_snapshot_bytes: snapshot_stats.max_latest_encoded_bytes
     )
+  end
+
+  defp snapshot_stats(:ok) do
+    case Snapshot.emit_health_telemetry() do
+      {:ok, stats} -> stats
+      {:error, _reason} -> empty_snapshot_stats()
+    end
+  rescue
+    _error -> empty_snapshot_stats()
+  end
+
+  defp snapshot_stats(_database_status), do: empty_snapshot_stats()
+
+  defp empty_snapshot_stats do
+    %{
+      retained_snapshot_count: 0,
+      retained_encoded_bytes: 0,
+      active_agents_without_snapshot: 0,
+      max_checkpoint_age_ms: 0,
+      max_latest_encoded_bytes: 0
+    }
   end
 
   defp schedule_report(interval_ms) do
