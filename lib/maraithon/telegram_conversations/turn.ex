@@ -12,6 +12,7 @@ defmodule Maraithon.TelegramConversations.Turn do
   import Ecto.Changeset
 
   alias Maraithon.BoundedJSON
+  alias Maraithon.DurablePayload
   alias Maraithon.TelegramConversations.Conversation
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -41,15 +42,26 @@ defmodule Maraithon.TelegramConversations.Turn do
     field :delivery_state, :string, default: "delivered"
     field :reply_to_message_id, :string
 
-    # New writes use only these Cloak-backed columns. The legacy physical
-    # columns remain mapped under separate names for a safe expansion/backfill
-    # rollout and are tombstoned whenever a row is written through this schema.
-    field :text, Maraithon.Encrypted.Binary, source: :text_ciphertext
-    field :legacy_text, :string, source: :text, default: @legacy_text_tombstone
+    field :text, Maraithon.Encrypted.Binary, source: :text_ciphertext, redact: true
 
-    field :structured_data, Maraithon.Encrypted.Map, source: :structured_data_ciphertext
+    field :legacy_text, :string,
+      source: :text,
+      default: @legacy_text_tombstone,
+      redact: true
 
-    field :legacy_structured_data, :map, source: :structured_data, default: %{}
+    field :structured_data, Maraithon.Encrypted.Map,
+      source: :structured_data_ciphertext,
+      redact: true
+
+    field :legacy_structured_data, :map,
+      source: :structured_data,
+      default: %{},
+      redact: true
+
+    field :payload_encryption_version, :integer
+    field :payload_binding_version, :integer
+    field :payload_binding_key_tag, :string
+    field :payload_binding_mac, :binary, redact: true
 
     field :intent, :string
     field :confidence, :float
@@ -87,12 +99,25 @@ defmodule Maraithon.TelegramConversations.Turn do
     :structured_data
   ]
 
+  @doc false
+  def payload_binding_spec do
+    %{
+      table: "telegram_conversation_turns",
+      identity_fields: [:id],
+      scope_fields: [:conversation_id],
+      fields: [:text, :structured_data],
+      purge_field: :content_scrubbed_at
+    }
+  end
+
   def max_text_bytes, do: @max_text_bytes
   def max_structured_data_bytes, do: @max_structured_data_bytes
   def structured_data_bounds, do: @structured_data_bounds
   def legacy_text_tombstone, do: @legacy_text_tombstone
 
   def changeset(turn, attrs) do
+    attrs = put_new_structured_data(turn, attrs || %{})
+
     turn
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> put_default_turn_kind()
@@ -106,8 +131,11 @@ defmodule Maraithon.TelegramConversations.Turn do
     |> validate_sensitive_text()
     |> validate_structured_data()
     |> promote_query_metadata()
-    |> tombstone_legacy_payload()
+    |> mirror_legacy_payload()
+    |> put_payload_encryption_version()
     |> reactivate_sensitive_content()
+    |> DurablePayload.put_binding(payload_binding_spec())
+    |> DurablePayload.require_current_mutation()
     |> foreign_key_constraint(:conversation_id)
     # Postgres truncates identifiers to 63 bytes (NAMEDATALEN), so the
     # actual index names in the DB are NOT the full
@@ -132,14 +160,17 @@ defmodule Maraithon.TelegramConversations.Turn do
   end
 
   @doc """
-  Hydrates a row written before the ciphertext rollout.
+  Hydrates a Turn through the database-owned payload protocol.
 
-  Ciphertext wins whenever present. A corrupt ciphertext value fails while
-  Ecto loads it and is never silently replaced by the legacy plaintext copy.
+  Legacy mode permits a plaintext fallback only when ciphertext is absent.
+  Exact mode requires ciphertext for every unredacted payload. Cloak raises
+  while loading malformed ciphertext, so corruption can never fall back.
   """
-  def hydrate(%__MODULE__{} = turn) do
-    text = turn.text || legacy_text(turn.legacy_text)
-    structured_data = turn.structured_data || legacy_map(turn.legacy_structured_data)
+  def hydrate(turn, mode \\ DurablePayload.mode!())
+
+  def hydrate(%__MODULE__{} = turn, mode) when mode in [:legacy, :exact] do
+    :ok = DurablePayload.verify_binding!(turn, payload_binding_spec(), mode)
+    {text, structured_data} = read_payloads!(turn, mode)
     promoted = promoted_metadata(structured_data, text)
 
     %{
@@ -156,7 +187,40 @@ defmodule Maraithon.TelegramConversations.Turn do
     }
   end
 
-  def hydrate(other), do: other
+  def hydrate(other, _mode), do: other
+
+  @doc false
+  def read_payloads!(%__MODULE__{content_scrubbed_at: %DateTime{}} = turn, _mode) do
+    if is_nil(turn.text) and is_nil(turn.structured_data) and
+         turn.legacy_text == @legacy_text_tombstone and
+         legacy_map(turn.legacy_structured_data) == %{} do
+      {nil, %{}}
+    else
+      raise ArgumentError, "scrubbed Turn payload is corrupt or inconsistent"
+    end
+  end
+
+  def read_payloads!(%__MODULE__{} = turn, :legacy) do
+    text = turn.text || legacy_text(turn.legacy_text)
+    structured_data = turn.structured_data || legacy_map_or_nil(turn.legacy_structured_data)
+
+    if is_binary(text) and is_map(structured_data) and not is_struct(structured_data) do
+      {text, structured_data}
+    else
+      raise ArgumentError, "Turn payload is corrupt or inconsistent"
+    end
+  end
+
+  def read_payloads!(%__MODULE__{} = turn, :exact) do
+    if turn.payload_encryption_version == 1 and is_binary(turn.text) and
+         is_map(turn.structured_data) and not is_struct(turn.structured_data) and
+         turn.legacy_text == @legacy_text_tombstone and
+         legacy_map(turn.legacy_structured_data) == %{} do
+      {turn.text, turn.structured_data}
+    else
+      raise ArgumentError, "exact Turn payload is not ciphertext-only"
+    end
+  end
 
   @doc false
   def legacy_payload?(%__MODULE__{} = turn) do
@@ -229,10 +293,21 @@ defmodule Maraithon.TelegramConversations.Turn do
     }
   end
 
-  defp tombstone_legacy_payload(changeset) do
+  defp mirror_legacy_payload(changeset) do
+    legacy? = DurablePayload.legacy_write?()
+
     changeset
-    |> maybe_tombstone_text()
-    |> maybe_tombstone_structured_data()
+    |> mirror_legacy_text(legacy?)
+    |> mirror_legacy_structured_data(legacy?)
+  end
+
+  defp put_payload_encryption_version(changeset) do
+    if Map.has_key?(changeset.changes, :text) or
+         Map.has_key?(changeset.changes, :structured_data) do
+      put_change(changeset, :payload_encryption_version, 1)
+    else
+      changeset
+    end
   end
 
   defp reactivate_sensitive_content(changeset) do
@@ -245,17 +320,39 @@ defmodule Maraithon.TelegramConversations.Turn do
     end
   end
 
-  defp maybe_tombstone_text(changeset) do
-    if Map.has_key?(changeset.changes, :text),
-      do: put_change(changeset, :legacy_text, @legacy_text_tombstone),
-      else: changeset
+  defp mirror_legacy_text(changeset, legacy?) do
+    case fetch_change(changeset, :text) do
+      {:ok, text} ->
+        put_change(
+          changeset,
+          :legacy_text,
+          if(legacy?, do: text, else: @legacy_text_tombstone)
+        )
+
+      :error ->
+        changeset
+    end
   end
 
-  defp maybe_tombstone_structured_data(changeset) do
-    if Map.has_key?(changeset.changes, :structured_data),
-      do: put_change(changeset, :legacy_structured_data, %{}),
-      else: changeset
+  defp mirror_legacy_structured_data(changeset, legacy?) do
+    case fetch_change(changeset, :structured_data) do
+      {:ok, payload} ->
+        put_change(changeset, :legacy_structured_data, if(legacy?, do: payload, else: %{}))
+
+      :error ->
+        changeset
+    end
   end
+
+  defp put_new_structured_data(%__MODULE__{id: nil}, attrs) when is_map(attrs) do
+    cond do
+      Map.has_key?(attrs, :structured_data) or Map.has_key?(attrs, "structured_data") -> attrs
+      Enum.any?(Map.keys(attrs), &is_binary/1) -> Map.put(attrs, "structured_data", %{})
+      true -> Map.put(attrs, :structured_data, %{})
+    end
+  end
+
+  defp put_new_structured_data(_turn, attrs), do: attrs
 
   defp put_default_turn_kind(changeset) do
     case get_field(changeset, :turn_kind) do
@@ -340,6 +437,9 @@ defmodule Maraithon.TelegramConversations.Turn do
 
   defp legacy_map(value) when is_map(value), do: value
   defp legacy_map(_value), do: %{}
+
+  defp legacy_map_or_nil(value) when is_map(value) and not is_struct(value), do: value
+  defp legacy_map_or_nil(_value), do: nil
 
   defp effective_terminal_response(value, _fallback) when is_boolean(value), do: value
   defp effective_terminal_response(_value, fallback), do: fallback

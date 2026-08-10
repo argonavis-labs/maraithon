@@ -11,6 +11,7 @@ defmodule Maraithon.TelegramConversations.Conversation do
   import Ecto.Changeset
 
   alias Maraithon.BoundedJSON
+  alias Maraithon.DurablePayload
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights.Insight
   alias Maraithon.TelegramConversations.Turn
@@ -37,9 +38,17 @@ defmodule Maraithon.TelegramConversations.Conversation do
     field :root_message_id, :string
     field :status, :string, default: "open"
 
-    field :summary, Maraithon.Encrypted.Binary, source: :summary_ciphertext
-    field :legacy_summary, :string, source: :summary
-    field :historical_summary, Maraithon.Encrypted.Binary, source: :historical_summary_ciphertext
+    field :summary, Maraithon.Encrypted.Binary, source: :summary_ciphertext, redact: true
+    field :legacy_summary, :string, source: :summary, redact: true
+
+    field :historical_summary, Maraithon.Encrypted.Binary,
+      source: :historical_summary_ciphertext,
+      redact: true
+
+    field :payload_encryption_version, :integer
+    field :payload_binding_version, :integer
+    field :payload_binding_key_tag, :string
+    field :payload_binding_mac, :binary, redact: true
 
     field :last_intent, :string
     field :last_turn_at, :utc_datetime_usec
@@ -66,12 +75,24 @@ defmodule Maraithon.TelegramConversations.Conversation do
     :metadata
   ]
 
+  @doc false
+  def payload_binding_spec do
+    %{
+      table: "telegram_conversations",
+      identity_fields: [:id],
+      scope_fields: [:user_id],
+      fields: [:summary, :historical_summary],
+      purge_field: :content_scrubbed_at
+    }
+  end
+
   def max_summary_bytes, do: @max_summary_bytes
   def max_metadata_bytes, do: @max_metadata_bytes
   def metadata_bounds, do: @metadata_bounds
 
   def changeset(conversation, attrs) do
-    attrs = extract_historical_summary(attrs)
+    mode = DurablePayload.mode!()
+    attrs = extract_historical_summary(attrs, mode)
 
     conversation
     |> cast(attrs, @required_fields ++ @optional_fields)
@@ -82,8 +103,11 @@ defmodule Maraithon.TelegramConversations.Conversation do
     |> validate_sensitive_text(:summary)
     |> validate_sensitive_text(:historical_summary)
     |> validate_metadata()
-    |> clear_legacy_summary()
+    |> mirror_legacy_summary(mode)
+    |> put_payload_encryption_version()
     |> reactivate_sensitive_content()
+    |> DurablePayload.put_binding(payload_binding_spec())
+    |> DurablePayload.require_current_mutation()
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:linked_delivery_id)
     |> foreign_key_constraint(:linked_insight_id)
@@ -91,41 +115,76 @@ defmodule Maraithon.TelegramConversations.Conversation do
   end
 
   @doc """
-  Hydrates pre-encryption summary fields for the rollout window.
+  Hydrates summaries through the database-owned payload protocol.
 
-  Ciphertext always wins. Cloak load failures therefore fail closed rather than
-  silently falling back to a potentially stale plaintext copy.
+  Exact mode rejects every legacy summary copy. A malformed Cloak value fails
+  while Ecto loads the row and therefore cannot fall back to plaintext.
   """
-  def hydrate(%__MODULE__{} = conversation) do
-    if conversation.content_scrubbed_at do
-      %{
-        conversation
-        | summary: nil,
-          historical_summary: nil,
-          metadata: drop_historical_summary(conversation.metadata || %{}),
-          turns: hydrate_turns(conversation.turns)
-      }
+  def hydrate(conversation, mode \\ DurablePayload.mode!())
+
+  def hydrate(%__MODULE__{} = conversation, mode) when mode in [:legacy, :exact] do
+    :ok = DurablePayload.verify_binding!(conversation, payload_binding_spec(), mode)
+    {summary, historical_summary, metadata} = read_summaries!(conversation, mode)
+
+    %{
+      conversation
+      | summary: summary,
+        historical_summary: historical_summary,
+        metadata: metadata,
+        turns: hydrate_turns(conversation.turns, mode)
+    }
+  end
+
+  def hydrate(other, _mode), do: other
+
+  @doc false
+  def read_summaries!(%__MODULE__{content_scrubbed_at: %DateTime{}} = conversation, _mode) do
+    metadata = drop_historical_summary(conversation.metadata || %{})
+
+    if is_nil(conversation.summary) and is_nil(conversation.historical_summary) and
+         is_nil(conversation.legacy_summary) and metadata == (conversation.metadata || %{}) do
+      {nil, nil, metadata}
     else
-      historical_summary =
-        conversation.historical_summary || metadata_historical_summary(conversation.metadata)
-
-      metadata =
-        conversation.metadata
-        |> Kernel.||(%{})
-        |> drop_historical_summary()
-        |> maybe_put_historical_summary(historical_summary)
-
-      %{
-        conversation
-        | summary: conversation.summary || conversation.legacy_summary,
-          historical_summary: historical_summary,
-          metadata: metadata,
-          turns: hydrate_turns(conversation.turns)
-      }
+      raise ArgumentError, "scrubbed Conversation summaries are corrupt or inconsistent"
     end
   end
 
-  def hydrate(other), do: other
+  def read_summaries!(%__MODULE__{} = conversation, :legacy) do
+    summary = conversation.summary || conversation.legacy_summary
+
+    historical_summary =
+      conversation.historical_summary || metadata_historical_summary(conversation.metadata)
+
+    metadata =
+      conversation.metadata
+      |> Kernel.||(%{})
+      |> drop_historical_summary()
+      |> maybe_put_historical_summary(historical_summary)
+
+    if (is_nil(summary) or is_binary(summary)) and
+         (is_nil(historical_summary) or is_binary(historical_summary)) do
+      {summary, historical_summary, metadata}
+    else
+      raise ArgumentError, "Conversation summaries are corrupt or inconsistent"
+    end
+  end
+
+  def read_summaries!(%__MODULE__{} = conversation, :exact) do
+    historical_copy = metadata_historical_summary(conversation.metadata)
+    encrypted? = is_binary(conversation.summary) or is_binary(conversation.historical_summary)
+
+    if is_nil(conversation.legacy_summary) and is_nil(historical_copy) and
+         (not encrypted? or conversation.payload_encryption_version == 1) do
+      metadata =
+        conversation.metadata
+        |> Kernel.||(%{})
+        |> maybe_put_historical_summary(conversation.historical_summary)
+
+      {conversation.summary, conversation.historical_summary, metadata}
+    else
+      raise ArgumentError, "exact Conversation summaries are not ciphertext-only"
+    end
+  end
 
   @doc false
   def legacy_summary_payload?(%__MODULE__{} = conversation) do
@@ -136,7 +195,7 @@ defmodule Maraithon.TelegramConversations.Conversation do
 
   def legacy_summary_payload?(_conversation), do: false
 
-  defp extract_historical_summary(attrs) when is_map(attrs) do
+  defp extract_historical_summary(attrs, mode) when is_map(attrs) and mode in [:legacy, :exact] do
     case fetch_attr(attrs, :metadata) do
       {:ok, metadata} when is_map(metadata) ->
         historical =
@@ -145,8 +204,13 @@ defmodule Maraithon.TelegramConversations.Conversation do
             :error -> metadata_historical_summary(metadata)
           end
 
+        stored_metadata =
+          if mode == :legacy and is_binary(historical),
+            do: maybe_put_historical_summary(metadata, historical),
+            else: drop_historical_summary(metadata)
+
         attrs
-        |> put_attr(:metadata, drop_historical_summary(metadata))
+        |> put_attr(:metadata, stored_metadata)
         |> maybe_put_attr(:historical_summary, historical)
 
       _missing_or_invalid ->
@@ -154,7 +218,7 @@ defmodule Maraithon.TelegramConversations.Conversation do
     end
   end
 
-  defp extract_historical_summary(attrs), do: attrs
+  defp extract_historical_summary(attrs, _mode), do: attrs
 
   defp validate_sensitive_text(changeset, field) do
     validate_change(changeset, field, fn ^field, value ->
@@ -190,10 +254,20 @@ defmodule Maraithon.TelegramConversations.Conversation do
     end)
   end
 
-  defp clear_legacy_summary(changeset) do
-    if Map.has_key?(changeset.changes, :summary),
-      do: put_change(changeset, :legacy_summary, nil),
-      else: changeset
+  defp mirror_legacy_summary(changeset, mode) do
+    case fetch_change(changeset, :summary) do
+      {:ok, summary} -> put_change(changeset, :legacy_summary, if(mode == :legacy, do: summary))
+      :error -> changeset
+    end
+  end
+
+  defp put_payload_encryption_version(changeset) do
+    if Map.has_key?(changeset.changes, :summary) or
+         Map.has_key?(changeset.changes, :historical_summary) do
+      put_change(changeset, :payload_encryption_version, 1)
+    else
+      changeset
+    end
   end
 
   defp reactivate_sensitive_content(changeset) do
@@ -246,7 +320,10 @@ defmodule Maraithon.TelegramConversations.Conversation do
 
   defp maybe_put_historical_summary(metadata, _value), do: metadata
 
-  defp hydrate_turns(%Ecto.Association.NotLoaded{} = turns), do: turns
-  defp hydrate_turns(turns) when is_list(turns), do: Enum.map(turns, &Turn.hydrate/1)
-  defp hydrate_turns(turns), do: turns
+  defp hydrate_turns(%Ecto.Association.NotLoaded{} = turns, _mode), do: turns
+
+  defp hydrate_turns(turns, mode) when is_list(turns),
+    do: Enum.map(turns, &Turn.hydrate(&1, mode))
+
+  defp hydrate_turns(turns, _mode), do: turns
 end
