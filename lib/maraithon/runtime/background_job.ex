@@ -40,6 +40,8 @@ defmodule Maraithon.Runtime.BackgroundJob do
     field :payload_purged_at, :utc_datetime_usec
     field :status, :string, default: "pending"
     field :dedupe_key, :string
+    field :partition_key, :string
+    field :rate_limit_key, :string
     field :telegram_bot_id, :string
     field :telegram_update_id, :integer
     field :attempts, :integer, default: 0
@@ -64,6 +66,8 @@ defmodule Maraithon.Runtime.BackgroundJob do
     :payload,
     :status,
     :dedupe_key,
+    :partition_key,
+    :rate_limit_key,
     :telegram_bot_id,
     :telegram_update_id,
     :attempts,
@@ -106,6 +110,8 @@ defmodule Maraithon.Runtime.BackgroundJob do
     |> normalize_string(:job_type)
     |> normalize_string(:user_id)
     |> normalize_string(:dedupe_key)
+    |> normalize_string(:partition_key)
+    |> normalize_string(:rate_limit_key)
     |> normalize_string(:telegram_bot_id)
     |> DurablePayload.put_bounded_map(:payload, @max_payload_bytes, @payload_bounds)
     |> DurablePayload.put_bounded_map(:result, @max_result_bytes, @payload_bounds)
