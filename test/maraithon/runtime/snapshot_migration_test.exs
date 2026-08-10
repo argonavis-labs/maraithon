@@ -92,7 +92,7 @@ defmodule Maraithon.Runtime.SnapshotMigrationTest do
     report = Repo.get_by!(SnapshotQuarantine, snapshot_id: invalid.id)
     assert report.status == "blocked_active"
     assert report.quarantined_at == nil
-    assert is_binary(report.payload_digest)
+    refute Map.has_key?(Map.from_struct(report), :payload_digest)
     refute Map.has_key?(Map.from_struct(report), :state_data)
     refute Map.has_key?(Map.from_struct(report), :budget)
 

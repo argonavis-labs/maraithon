@@ -519,7 +519,6 @@ defmodule Maraithon.Runtime.SnapshotMigration do
       status: status,
       state_bytes: row.state_bytes,
       budget_bytes: row.budget_bytes,
-      payload_digest: payload_digest(row),
       snapshot_inserted_at: as_utc_datetime(row.inserted_at),
       quarantined_at: if(removable?, do: now, else: nil),
       inserted_at: now
@@ -534,7 +533,6 @@ defmodule Maraithon.Runtime.SnapshotMigration do
              :status,
              :state_bytes,
              :budget_bytes,
-             :payload_digest,
              :quarantined_at
            ]},
         conflict_target: [:snapshot_id]
@@ -945,18 +943,6 @@ defmodule Maraithon.Runtime.SnapshotMigration do
     WHERE snapshot.id = stale.id
     """
   end
-
-  defp payload_digest(%{state_data: state_data, budget: budget})
-       when not is_nil(state_data) and not is_nil(budget) do
-    case Jason.encode([state_data, budget]) do
-      {:ok, json} -> :crypto.hash(:sha256, json)
-      _other -> nil
-    end
-  rescue
-    _error -> nil
-  end
-
-  defp payload_digest(_row), do: nil
 
   defp failure_code({field, reason}) when is_atom(field) do
     "#{field}_#{Maraithon.Redaction.error_class(reason)}"

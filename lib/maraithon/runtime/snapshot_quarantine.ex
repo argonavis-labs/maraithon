@@ -20,7 +20,6 @@ defmodule Maraithon.Runtime.SnapshotQuarantine do
     field :status, :string
     field :state_bytes, :integer
     field :budget_bytes, :integer
-    field :payload_digest, :binary
     field :snapshot_inserted_at, :utc_datetime_usec
     field :quarantined_at, :utc_datetime_usec
 

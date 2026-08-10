@@ -12,7 +12,6 @@ defmodule Maraithon.Repo.Migrations.CreateSnapshotQuarantines do
       add :status, :string, null: false
       add :state_bytes, :bigint, null: false
       add :budget_bytes, :bigint, null: false
-      add :payload_digest, :binary
       add :snapshot_inserted_at, :utc_datetime_usec, null: false
       add :quarantined_at, :utc_datetime_usec
 
