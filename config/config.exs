@@ -90,6 +90,31 @@ config :maraithon, Maraithon.Runtime,
   openai_reasoning_effort: "high",
   llm_primary_max_tokens: 32_000
 
+# Conservative maximum content-retention windows. Runtime overrides are
+# strictly range-checked by Maraithon.PrivacyRetention; invalid values fail the
+# durable handler closed rather than silently falling back.
+config :maraithon, Maraithon.PrivacyRetention,
+  effects_days: 30,
+  directives_days: 30,
+  events_days: 90,
+  run_steps_days: 30,
+  agent_runs_days: 30,
+  assistant_runs_days: 30,
+  assistant_steps_days: 30,
+  prepared_actions_days: 30,
+  operator_events_days: 90,
+  background_jobs_days: 30,
+  scheduled_jobs_days: 30,
+  ingress_receipts_days: 90,
+  work_results_days: 30,
+  conversation_days: 90,
+  snapshot_quarantine_days: 30,
+  erasure_receipts_days: 365,
+  batch_size: 100,
+  per_tenant: 5,
+  alert_grace_hours: 24,
+  critical_grace_hours: 168
+
 config :maraithon, :telegram_assistant,
   chat_reasoning_effort: "none",
   telegram_proactive_checkins_enabled: false,
