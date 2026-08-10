@@ -4,6 +4,7 @@ defmodule Maraithon.TelegramConversationPrivacyTest do
   import Ecto.Query
 
   alias Maraithon.Accounts
+  alias Maraithon.DurablePayload
   alias Maraithon.OperatorEvents
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.Run
@@ -11,7 +12,9 @@ defmodule Maraithon.TelegramConversationPrivacyTest do
   alias Maraithon.TelegramConversations.{Conversation, Privacy, Turn}
   alias Maraithon.Todos.Todo
 
-  test "new turns and derived summaries persist only ciphertext plus promoted query metadata" do
+  @stopped_fleet [confirmation: "NON_ROLLING_FLEET_DRAINED"]
+
+  test "legacy rollout dual-writes ciphertext plus bounded promoted query metadata" do
     %{user_id: user_id, conversation: conversation} = conversation_fixture("ciphertext")
     run_id = Ecto.UUID.generate()
     action_id = Ecto.UUID.generate()
@@ -45,14 +48,14 @@ defmodule Maraithon.TelegramConversationPrivacyTest do
     assert [[legacy_text, text_ciphertext, legacy_structured, structured_ciphertext]] =
              raw_turn_payload(turn.id)
 
-    assert legacy_text == Turn.legacy_text_tombstone()
-    assert legacy_structured == %{}
+    assert legacy_text == "private reply text"
+    assert legacy_structured == structured_data
     assert is_binary(text_ciphertext)
     assert is_binary(structured_ciphertext)
     refute text_ciphertext =~ "private reply text"
 
     assert [[legacy_summary, summary_ciphertext]] = raw_conversation_summary(conversation.id)
-    assert is_nil(legacy_summary)
+    assert is_binary(legacy_summary)
     assert is_binary(summary_ciphertext)
     assert updated_conversation.summary =~ "private reply text"
 
@@ -77,7 +80,7 @@ defmodule Maraithon.TelegramConversationPrivacyTest do
              |> Repo.update()
 
     assert encrypted.historical_summary == "A private historical digest."
-    refute Map.has_key?(encrypted.metadata, "historical_summary")
+    assert encrypted.metadata["historical_summary"] == "A private historical digest."
 
     assert [[metadata, ciphertext]] =
              Repo.query!(
@@ -85,12 +88,94 @@ defmodule Maraithon.TelegramConversationPrivacyTest do
                [Ecto.UUID.dump!(conversation.id)]
              ).rows
 
-    refute Map.has_key?(metadata, "historical_summary")
+    assert metadata["historical_summary"] == "A private historical digest."
     assert is_binary(ciphertext)
+
+    assert {:ok, %{migrated_conversations: 1}} =
+             Privacy.backfill_batch(Keyword.merge(@stopped_fleet, batch_size: 10))
+
+    assert [[contracted_metadata, ^ciphertext]] =
+             Repo.query!(
+               "SELECT metadata, historical_summary_ciphertext FROM telegram_conversations WHERE id = $1",
+               [Ecto.UUID.dump!(conversation.id)]
+             ).rows
+
+    refute Map.has_key?(contracted_metadata, "historical_summary")
 
     hydrated = TelegramConversations.latest_for_chat(conversation.chat_id)
     assert hydrated.metadata["historical_summary"] == "A private historical digest."
     assert hydrated.historical_summary == "A private historical digest."
+  end
+
+  test "payload binding rejects a cross-row ciphertext and MAC substitution" do
+    %{conversation: conversation} = conversation_fixture("binding-swap")
+
+    assert {:ok, {conversation, first}} =
+             TelegramConversations.append_turn(conversation, %{
+               "role" => "user",
+               "client_message_id" => "binding-first",
+               "text" => "first private body",
+               "structured_data" => %{"message_class" => "first"}
+             })
+
+    assert {:ok, {_conversation, second}} =
+             TelegramConversations.append_turn(conversation, %{
+               "role" => "user",
+               "client_message_id" => "binding-second",
+               "text" => "second private body",
+               "structured_data" => %{"message_class" => "second"}
+             })
+
+    assert {:ok, :swapped} =
+             Repo.transaction(fn ->
+               :ok = DurablePayload.require_current_mutation!()
+
+               Repo.query!(
+                 """
+                 UPDATE telegram_conversation_turns AS target
+                 SET text_ciphertext = source.text_ciphertext,
+                     structured_data_ciphertext = source.structured_data_ciphertext,
+                     payload_encryption_version = source.payload_encryption_version,
+                     payload_binding_version = source.payload_binding_version,
+                     payload_binding_key_tag = source.payload_binding_key_tag,
+                     payload_binding_mac = source.payload_binding_mac
+                 FROM telegram_conversation_turns AS source
+                 WHERE target.id = $1 AND source.id = $2
+                 """,
+                 [Ecto.UUID.dump!(second.id), Ecto.UUID.dump!(first.id)]
+               )
+
+               :swapped
+             end)
+
+    swapped = Repo.get!(Turn, second.id)
+    assert_raise ArgumentError, fn -> Turn.hydrate(swapped) end
+  end
+
+  test "corrupt ciphertext fails closed without a legacy plaintext fallback" do
+    %{conversation: conversation} = conversation_fixture("corrupt-ciphertext")
+
+    assert {:ok, {_conversation, turn}} =
+             TelegramConversations.append_turn(conversation, %{
+               "role" => "user",
+               "client_message_id" => "corrupt-turn",
+               "text" => "private fallback must not survive",
+               "structured_data" => %{}
+             })
+
+    assert {:ok, :corrupted} =
+             Repo.transaction(fn ->
+               :ok = DurablePayload.require_current_mutation!()
+
+               Repo.query!(
+                 "UPDATE telegram_conversation_turns SET text_ciphertext = $1 WHERE id = $2",
+                 [<<0, 1, 2, 3, 4>>, Ecto.UUID.dump!(turn.id)]
+               )
+
+               :corrupted
+             end)
+
+    assert_raise ArgumentError, fn -> Repo.get!(Turn, turn.id) end
   end
 
   test "turn and summary changesets reject oversized or non-JSON payloads" do
@@ -178,7 +263,7 @@ defmodule Maraithon.TelegramConversationPrivacyTest do
               migrated_conversations: 1,
               blocked_turns: [],
               blocked_conversations: []
-            }} = Privacy.backfill_batch(batch_size: 10)
+            }} = Privacy.backfill_batch(Keyword.merge(@stopped_fleet, batch_size: 10))
 
     assert %{legacy_turns: 0, legacy_conversations: 0} = Privacy.preflight()
 
@@ -203,7 +288,7 @@ defmodule Maraithon.TelegramConversationPrivacyTest do
     assert hydrated_conversation.updated_at == original_conversation_updated_at
 
     assert {:ok, %{migrated_turns: 0, migrated_conversations: 0}} =
-             Privacy.backfill_batch(batch_size: 10)
+             Privacy.backfill_batch(Keyword.merge(@stopped_fleet, batch_size: 10))
   end
 
   test "multi-batch backfill reports oversized rows without starving later rows" do
@@ -239,7 +324,7 @@ defmodule Maraithon.TelegramConversationPrivacyTest do
               migrated_turns: 1,
               blocked_turns: [%{id: ^blocked_id}],
               remaining: %{legacy_turns: 1}
-            }} = Privacy.backfill(batch_size: 1, max_batches: 5)
+            }} = Privacy.backfill(Keyword.merge(@stopped_fleet, batch_size: 1, max_batches: 5))
 
     assert valid_id |> then(&Repo.get!(Turn, &1)) |> Turn.hydrate() |> Map.fetch!(:text) ==
              "valid legacy text"

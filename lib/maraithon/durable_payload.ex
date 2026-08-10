@@ -3,6 +3,7 @@ defmodule Maraithon.DurablePayload do
 
   import Ecto.Changeset,
     only: [
+      add_error: 3,
       add_error: 4,
       fetch_change: 2,
       get_field: 2,
@@ -91,6 +92,8 @@ defmodule Maraithon.DurablePayload do
 
   @doc false
   def put_binding(changeset, spec) when is_map(spec) do
+    changeset = ensure_binding_identity(changeset, spec)
+
     prepare_changes(changeset, fn prepared ->
       purge_marker = get_field(prepared, Map.fetch!(spec, :purge_field))
 
@@ -166,7 +169,13 @@ defmodule Maraithon.DurablePayload do
     identity =
       spec
       |> Map.fetch!(:identity_fields)
-      |> Enum.map(&context_value!(getter.(&1)))
+      |> Enum.map(fn field ->
+        case getter.(field) do
+          value when is_binary(value) and value != "" -> value
+          value when is_integer(value) and value > 0 -> Integer.to_string(value)
+          _missing -> raise ArgumentError, "durable payload stable identity is missing"
+        end
+      end)
       |> encode_context!()
 
     scope =
@@ -181,6 +190,27 @@ defmodule Maraithon.DurablePayload do
       end)
 
     {table, identity, scope, fields}
+  end
+
+  defp ensure_binding_identity(changeset, spec) do
+    Enum.reduce(Map.fetch!(spec, :identity_fields), changeset, fn field, prepared ->
+      case get_field(prepared, field) do
+        value when is_binary(value) and value != "" ->
+          prepared
+
+        nil when field == :id ->
+          case Map.get(prepared.types, field) do
+            type when type in [:binary_id, Ecto.UUID] ->
+              put_change(prepared, field, Ecto.UUID.generate())
+
+            _other ->
+              add_error(prepared, field, "must be assigned before payload binding")
+          end
+
+        _missing_or_invalid ->
+          add_error(prepared, field, "must be assigned before payload binding")
+      end
+    end)
   end
 
   defp binding_for_changeset!(changeset, spec), do: binding_for!(changeset, spec)
