@@ -640,12 +640,17 @@ config :maraithon, :notaui,
   timeout_ms: String.to_integer(System.get_env("NOTAUI_TIMEOUT_MS", "10000")),
   topic_prefix: System.get_env("NOTAUI_TOPIC_PREFIX", "notaui")
 
-# Telegram Connector. TELEGRAM_WEBHOOK_SECRET is registered with Telegram as
-# setWebhook.secret_token and arrives in X-Telegram-Bot-Api-Secret-Token.
+# Telegram Connector. TELEGRAM_WEBHOOK_SECRET_TOKEN is registered with Telegram
+# as setWebhook.secret_token and arrives in X-Telegram-Bot-Api-Secret-Token.
+# Keep the legacy key as a rollout fallback until operators have rotated it away.
 config :maraithon, :telegram,
   bot_token: System.get_env("TELEGRAM_BOT_TOKEN", ""),
   bot_username: System.get_env("TELEGRAM_BOT_USERNAME", ""),
-  webhook_secret_token: System.get_env("TELEGRAM_WEBHOOK_SECRET", "")
+  webhook_secret_token:
+    System.get_env(
+      "TELEGRAM_WEBHOOK_SECRET_TOKEN",
+      System.get_env("TELEGRAM_WEBHOOK_SECRET", "")
+    )
 
 fly_log_apps =
   System.get_env("FLY_LOG_APPS", System.get_env("FLY_APP_NAME", ""))
