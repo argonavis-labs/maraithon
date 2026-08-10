@@ -102,26 +102,45 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
 
   def activate(_), do: {:error, :invalid_coordination_activation}
 
-  @doc "One-way stopped-fleet evidence attestation for an already exact Effect cutover."
+  @doc "Attests stopped-fleet evidence before the irreversible Effect cutover."
   def attest_effect_activation_evidence(opts) when is_list(opts) do
     with {:ok, evidence} <- activation_evidence(opts) do
       Repo.transaction(fn ->
-        SQL.query!(
-          Repo,
-          "SELECT set_config('maraithon.effect_activation_evidence', 'ATTEST_STOPPED_FLEET_EVIDENCE', true)",
-          []
-        )
+        runtime_mode =
+          case SQL.query!(
+                 Repo,
+                 "SELECT mode FROM public.runtime_coordination_protocols WHERE name = $1 FOR UPDATE",
+                 [@name]
+               ).rows do
+            [[mode]] when mode in [@dark, @active] -> mode
+            [[mode]] -> Repo.rollback({:coordination_protocol_invalid, mode})
+            [] -> Repo.rollback(:coordination_protocol_missing)
+          end
 
-        case SQL.query!(
-               Repo,
-               """
-               SELECT mode, activation_evidence_id, activation_evidence_digest, activated_by,
-                      exact_revision
-               FROM public.effect_execution_protocols WHERE name = 'effects' FOR UPDATE
-               """,
-               []
-             ).rows do
-          [["generation_fenced_v1", nil, nil, nil, nil]] ->
+        effect_row =
+          case SQL.query!(
+                 Repo,
+                 """
+                 SELECT mode, activation_evidence_id, activation_evidence_digest, activated_by,
+                        exact_revision
+                 FROM public.effect_execution_protocols
+                 WHERE name = 'effects'
+                 FOR UPDATE
+                 """,
+                 []
+               ).rows do
+            [row] -> row
+            [] -> Repo.rollback(:effect_protocol_missing)
+          end
+
+        case {runtime_mode, effect_row} do
+          {@dark, ["legacy", nil, nil, nil, nil]} ->
+            SQL.query!(
+              Repo,
+              "SELECT set_config('maraithon.effect_activation_evidence', 'ATTEST_STOPPED_FLEET_EVIDENCE', true)",
+              []
+            )
+
             %{num_rows: 1} =
               SQL.query!(
                 Repo,
@@ -130,7 +149,7 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
                 SET activation_evidence_id = $1, activation_evidence_digest = $2,
                     activated_by = $3, exact_revision = $4,
                     updated_at = timezone('UTC', clock_timestamp())
-                WHERE name = 'effects' AND mode = 'generation_fenced_v1'
+                WHERE name = 'effects' AND mode = 'legacy'
                   AND activation_evidence_digest IS NULL
                 """,
                 [evidence.id, evidence.digest, evidence.activated_by, evidence.revision]
@@ -138,19 +157,23 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
 
             :attested
 
-          [["generation_fenced_v1", id, digest, by, revision]]
-          when id == evidence.id and digest == evidence.digest and
+          {runtime_mode, [effect_mode, id, digest, by, revision]}
+          when runtime_mode in [@dark, @active] and
+                 effect_mode in ["legacy", "generation_fenced_v1"] and
+                 id == evidence.id and digest == evidence.digest and
                  by == evidence.activated_by and revision == evidence.revision ->
             :already_attested
 
-          [["generation_fenced_v1", _, _, _, _]] ->
+          {@dark, ["legacy", _id, _digest, _by, _revision]} ->
             Repo.rollback(:effect_activation_evidence_mismatch)
 
-          [[mode, _, _, _, _]] ->
-            Repo.rollback({:exact_effect_protocol_required, mode})
+          {_runtime_mode, ["generation_fenced_v1", _id, _digest, _by, _revision]} ->
+            # Exact protocol identity is immutable. Missing or different evidence
+            # must never be repaired after activation.
+            Repo.rollback(:effect_activation_evidence_mismatch)
 
-          [] ->
-            Repo.rollback(:effect_protocol_missing)
+          {mode, [effect_mode, _id, _digest, _by, _revision]} ->
+            Repo.rollback({:runtime_effect_protocol_pair_mismatch, mode, effect_mode})
         end
       end)
     end
@@ -158,7 +181,8 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
 
   def attest_effect_activation_evidence(_), do: {:error, :invalid_effect_activation_attestation}
 
-  def locked_active! do
+  @doc false
+  def locked_mode! do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "coordination fence requires transaction")
 
@@ -167,9 +191,37 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
            "SELECT mode, activation_epoch FROM public.runtime_coordination_protocols WHERE name = $1 FOR SHARE",
            [@name]
          ).rows do
-      [[@active, epoch]] when not is_nil(epoch) -> Ecto.UUID.load!(epoch)
-      [[mode, _]] -> Repo.rollback({:coordination_protocol_not_active, mode})
+      [[@dark, nil]] -> :dark
+      [[@active, epoch]] when not is_nil(epoch) -> {:active, Ecto.UUID.load!(epoch)}
+      [[mode, _epoch]] -> Repo.rollback({:coordination_protocol_invalid, mode})
       [] -> Repo.rollback(:coordination_protocol_missing)
+    end
+  end
+
+  @doc "Locks runtime before Effect protocol and rejects mixed cutover states."
+  def locked_pair! do
+    runtime_mode = locked_mode!()
+    effect_mode = EffectProtocol.locked_mode!()
+
+    case {runtime_mode, effect_mode} do
+      {:dark, :legacy} ->
+        :legacy
+
+      {{:active, _epoch}, :exact} ->
+        # Marks the transaction as an exact Effect writer after both protocol
+        # rows are locked in their canonical runtime -> Effect order.
+        :ok = EffectProtocol.require_current_mutation!()
+        :exact
+
+      mismatch ->
+        Repo.rollback({:runtime_effect_protocol_pair_mismatch, mismatch})
+    end
+  end
+
+  def locked_active! do
+    case locked_mode!() do
+      {:active, epoch} -> epoch
+      :dark -> Repo.rollback({:coordination_protocol_not_active, @dark})
     end
   end
 
