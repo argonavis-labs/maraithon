@@ -1384,11 +1384,6 @@ defmodule Maraithon.Runtime.EffectRunner do
       fn ->
         register_effect_task!(effect)
 
-        case activate_coordinated_effect_task(effect) do
-          :ok -> :ok
-          {:error, reason} -> exit(reason)
-        end
-
         result = execute_effect(effect, completion_writer, completion_sleeper)
 
         send(
@@ -1652,12 +1647,13 @@ defmodule Maraithon.Runtime.EffectRunner do
   defp execute_with_command(effect) do
     effect = Effect.materialize_legacy_payload(effect)
 
-    with :ok <- authorize_effect_claim(effect),
-         {:ok, command_module} <- CommandFactory.fetch(effect.effect_type) do
-      command_module.execute(effect)
+    with {:ok, command_module} <- CommandFactory.fetch(effect.effect_type),
+         {:ok, prepared} <- command_module.prepare(effect),
+         :ok <- activate_coordinated_effect_task(effect),
+         :ok <- authorize_effect_claim(effect) do
+      command_module.execute_prepared(effect, prepared)
     else
-      {:error, :unknown_effect_type} -> {:error, :unknown_effect_type}
-      {:error, :stale_effect_context} -> {:error, :stale_effect_context}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -2376,7 +2372,7 @@ defmodule Maraithon.Runtime.EffectRunner do
 
              now = Maraithon.Runtime.DatabaseClock.now!()
              updates = Keyword.put(updates, :updated_at, now)
-             result = Repo.update_all(claimed_effect_query(effect), set: updates)
+             result = Repo.update_all(claimed_effect_query(effect, locked.status), set: updates)
 
              if not match?({1, _rows}, result), do: Repo.rollback(:effect_claim_lost)
              result
@@ -2431,7 +2427,7 @@ defmodule Maraithon.Runtime.EffectRunner do
 
              now = Maraithon.Runtime.DatabaseClock.now!()
              updates = Keyword.put(updates, :updated_at, now)
-             result = Repo.update_all(claimed_effect_query(effect), set: updates)
+             result = Repo.update_all(claimed_effect_query(effect, locked.status), set: updates)
 
              if not match?({1, _rows}, result), do: Repo.rollback(:effect_claim_lost)
              result
@@ -2490,15 +2486,7 @@ defmodule Maraithon.Runtime.EffectRunner do
     if legacy_effect_struct?(effect) do
       effect
     else
-      lock_exact_effect_claim_in_transaction!(effect, [effect_execution_status(effect)])
-    end
-  end
-
-  defp effect_execution_status(%Effect{} = effect) do
-    case coordination_assignment(effect) do
-      {:ok, _assignment} -> "executing"
-      :uncoordinated -> "claimed"
-      :mismatched -> Repo.rollback(:coordination_task_authority_lost)
+      lock_exact_effect_claim_in_transaction!(effect, ["claimed", "executing"])
     end
   end
 
@@ -2516,37 +2504,63 @@ defmodule Maraithon.Runtime.EffectRunner do
         :ok
 
       {:ok, assignment} ->
-        case TaskClaims.settle_effect_in_transaction(
-               assignment,
-               effect.agent_id,
-               effect.runtime_owner_generation,
-               outcome
-             ) do
-          %TaskAssignment{state: "settled", outcome: ^outcome} = settled ->
-            if exact_coordination_assignment?(settled, assignment),
-              do: :ok,
-              else: Repo.rollback(:coordination_task_settlement_lost)
-
-          %TaskAssignment{state: "outcome_ambiguous"} ->
-            Repo.rollback(:coordination_task_outcome_already_ambiguous)
-
-          _mismatched ->
-            Repo.rollback(:coordination_task_settlement_lost)
-        end
+        settle_exact_coordination_assignment!(effect, assignment, outcome)
 
       :mismatched ->
         Repo.rollback(:coordination_task_authority_lost)
     end
   end
 
-  defp claimed_effect_query(%Effect{} = effect) do
-    expected_status =
-      case coordination_assignment(effect) do
-        {:ok, _assignment} -> "executing"
-        :uncoordinated -> "claimed"
-        :mismatched -> "__coordination_identity_mismatched__"
-      end
+  defp settle_exact_coordination_assignment!(
+         %Effect{status: "claimed"} = effect,
+         assignment,
+         _outcome
+       ) do
+    case TaskClaims.settle_effect_before_provider_in_transaction!(
+           assignment,
+           effect.agent_id,
+           effect.runtime_owner_generation
+         ) do
+      %TaskAssignment{
+        state: "settled",
+        provider_boundary: "not_entered",
+        outcome: "cancelled_before_provider"
+      } = settled ->
+        if exact_coordination_assignment?(settled, assignment),
+          do: :ok,
+          else: Repo.rollback(:coordination_task_settlement_lost)
 
+      _mismatched ->
+        Repo.rollback(:coordination_task_settlement_lost)
+    end
+  end
+
+  defp settle_exact_coordination_assignment!(
+         %Effect{status: "executing"} = effect,
+         assignment,
+         outcome
+       ) do
+    case TaskClaims.settle_effect_in_transaction(
+           assignment,
+           effect.agent_id,
+           effect.runtime_owner_generation,
+           outcome
+         ) do
+      %TaskAssignment{state: "settled", outcome: ^outcome} = settled ->
+        if exact_coordination_assignment?(settled, assignment),
+          do: :ok,
+          else: Repo.rollback(:coordination_task_settlement_lost)
+
+      %TaskAssignment{state: "outcome_ambiguous"} ->
+        Repo.rollback(:coordination_task_outcome_already_ambiguous)
+
+      _mismatched ->
+        Repo.rollback(:coordination_task_settlement_lost)
+    end
+  end
+
+  defp claimed_effect_query(%Effect{} = effect, expected_status)
+       when expected_status in ["claimed", "executing"] do
     from(e in Effect,
       where: e.id == ^effect.id,
       where: e.status == ^expected_status,
