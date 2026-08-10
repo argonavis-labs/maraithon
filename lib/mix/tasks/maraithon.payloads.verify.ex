@@ -72,8 +72,7 @@ defmodule Mix.Tasks.Maraithon.Payloads.Verify do
         Mix.raise("payload verifier credentials must be distinct from runtime DATABASE_URL")
       end
 
-      config = Application.get_env(:maraithon, Maraithon.Repo, [])
-      Application.put_env(:maraithon, Maraithon.Repo, Keyword.put(config, :url, url))
+      :ok = Maraithon.DatabaseTLS.configure_repo!(url, "DURABLE_PAYLOAD_VERIFIER_DATABASE_URL")
     end
   end
 
