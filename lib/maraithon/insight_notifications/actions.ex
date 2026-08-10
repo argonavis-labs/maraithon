@@ -30,9 +30,21 @@ defmodule Maraithon.InsightNotifications.Actions do
   @expected_delivery_revision_key "_maraithon_expected_delivery_revision"
   @callback_replay_key "_maraithon_callback_replay"
   @execution_claim_lease_seconds 300
+  @default_provider_execution_timeout_ms 240_000
+  @execution_lease_safety_margin_ms 30_000
   @execution_owner_key "execution_owner"
   @execution_claimed_at_key "execution_claimed_at"
   @execution_lease_expires_at_key "execution_lease_expires_at"
+  @execution_phase_key "execution_phase"
+  @pre_provider_phase "pre_provider"
+  @provider_started_phase "provider_started"
+  @provider_checkpointed_phase "provider_checkpointed"
+  @provider_started_at_key "provider_started_at"
+  @provider_timeout_key "provider_timeout_ms"
+  @outcome_unknown_at_key "outcome_unknown_at"
+  @outcome_evidence_key "outcome_evidence"
+  @max_provider_result_string_length 255
+  @max_provider_label_ids 20
   @max_preview_length 900
   @chief_message_max_length 700
   @section_text_max_length 180
@@ -242,7 +254,7 @@ defmodule Maraithon.InsightNotifications.Actions do
           ]
         ]
 
-      %{"status" => "executed"} ->
+      %{"status" => status} when status in ["executed", "outcome_unknown"] ->
         []
 
       %{"status" => "dismissed"} ->
@@ -344,15 +356,22 @@ defmodule Maraithon.InsightNotifications.Actions do
           {:executed, checkpointed_delivery} ->
             finish_executed_action(checkpointed_delivery)
 
+          {:outcome_unknown, unknown_delivery} ->
+            finish_outcome_unknown_action(unknown_delivery)
+
           {:error, _reason} = error ->
             error
         end
 
       %{"status" => "executed"} ->
         # The provider mutation is already checkpointed. A durable callback
-        # retry must only drain local insight/todo acknowledgement and Telegram
-        # presentation; never call the provider again.
+        # retry drains only local acknowledgement and Telegram presentation.
         finish_executed_action(delivery)
+
+      %{"status" => "outcome_unknown"} ->
+        # No stable provider idempotency key exists. Unknown is terminal until
+        # a human reconciles the sent thread in Gmail or Slack.
+        finish_outcome_unknown_action(delivery)
 
       _missing_or_stale ->
         {:error, :draft_not_ready}
@@ -363,7 +382,6 @@ defmodule Maraithon.InsightNotifications.Actions do
     expected_revision = expected_delivery_revision(delivery)
     expected_spec = delivery |> action_state() |> read_map("spec")
     owner_token = Ecto.UUID.generate()
-    claimed_at = DateTime.utc_now() |> DateTime.truncate(:second)
 
     Repo.transaction(fn ->
       current =
@@ -380,41 +398,20 @@ defmodule Maraithon.InsightNotifications.Actions do
           current = Repo.preload(current, :insight)
           current_state = action_state(current)
 
-          case current_state do
-            %{"status" => "executed"} = executed_state ->
-              if read_map(executed_state, "spec") == expected_spec and
-                   action_state_kind(executed_state) in ["gmail_reply", "slack_reply"] do
-                {:executed, current}
-              else
-                Repo.rollback(:stale_action_revision)
-              end
+          # clock_timestamp/0 is read only after FOR UPDATE succeeds. Both the
+          # claim and its expiry therefore come from the shared database clock,
+          # never from a node clock sampled while waiting for this row.
+          {database_now, new_lease_expires_at} = database_execution_window!()
 
-            %{"status" => status, "spec" => %{} = spec}
-            when status in ["drafted", "executing"] ->
-              desired_state = execution_claim_state(current_state, owner_token, claimed_at)
-
-              # The row lock makes a live claim exclusive. An expired claim (or
-              # a legacy executing state without lease fields) is reclaimable.
-              # Providers offer no idempotency key here, so acceptance before a
-              # crashed owner's checkpoint retains the documented ambiguity.
-              cond do
-                execution_claim_live?(current_state, claimed_at) ->
-                  Repo.rollback(:action_in_progress)
-
-                delivery_state_revision(current) != expected_revision ->
-                  Repo.rollback(:stale_action_revision)
-
-                not monotone_action_transition?(current_state, desired_state) ->
-                  Repo.rollback(:stale_action_revision)
-
-                true ->
-                  updated = persist_action_state(current, desired_state)
-                  {:claimed, updated, spec, owner_token}
-              end
-
-            _missing_or_stale ->
-              Repo.rollback(:draft_not_ready)
-          end
+          claim_locked_action(
+            current,
+            current_state,
+            expected_revision,
+            expected_spec,
+            owner_token,
+            database_now,
+            new_lease_expires_at
+          )
       end
     end)
     |> case do
@@ -424,57 +421,619 @@ defmodule Maraithon.InsightNotifications.Actions do
       {:ok, {:executed, %Delivery{} = updated}} ->
         {:executed, updated}
 
+      {:ok, {:outcome_unknown, %Delivery{} = updated}} ->
+        {:outcome_unknown, updated}
+
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp execution_claim_state(state, owner_token, claimed_at) do
+  defp claim_locked_action(
+         current,
+         %{"status" => "executed"} = state,
+         _expected_revision,
+         expected_spec,
+         _owner_token,
+         _database_now,
+         _new_lease_expires_at
+       ) do
+    if frozen_provider_spec?(state, expected_spec) do
+      {:executed, current}
+    else
+      Repo.rollback(:stale_action_revision)
+    end
+  end
+
+  defp claim_locked_action(
+         current,
+         %{"status" => "outcome_unknown"} = state,
+         _expected_revision,
+         expected_spec,
+         _owner_token,
+         _database_now,
+         _new_lease_expires_at
+       ) do
+    if frozen_provider_spec?(state, expected_spec) do
+      {:outcome_unknown, current}
+    else
+      Repo.rollback(:stale_action_revision)
+    end
+  end
+
+  defp claim_locked_action(
+         current,
+         %{"status" => "drafted", "spec" => %{} = spec} = state,
+         expected_revision,
+         expected_spec,
+         owner_token,
+         database_now,
+         lease_expires_at
+       ) do
+    desired_state =
+      execution_claim_state(state, owner_token, database_now, lease_expires_at)
+
+    cond do
+      not frozen_provider_spec?(state, expected_spec) ->
+        Repo.rollback(:stale_action_revision)
+
+      delivery_state_revision(current) != expected_revision ->
+        Repo.rollback(:stale_action_revision)
+
+      not monotone_action_transition?(state, desired_state) ->
+        Repo.rollback(:stale_action_revision)
+
+      true ->
+        updated = persist_action_state(current, desired_state)
+        {:claimed, updated, spec, owner_token}
+    end
+  end
+
+  defp claim_locked_action(
+         current,
+         %{"status" => "executing", "spec" => %{} = spec} = state,
+         expected_revision,
+         expected_spec,
+         owner_token,
+         database_now,
+         new_lease_expires_at
+       ) do
+    cond do
+      not frozen_provider_spec?(state, expected_spec) ->
+        Repo.rollback(:stale_action_revision)
+
+      execution_claim_live?(state, database_now) ->
+        Repo.rollback(:action_in_progress)
+
+      delivery_state_revision(current) != expected_revision ->
+        Repo.rollback(:stale_action_revision)
+
+      reclaimable_pre_provider_claim?(state) ->
+        desired_state =
+          execution_claim_state(state, owner_token, database_now, new_lease_expires_at)
+
+        if monotone_action_transition?(state, desired_state) do
+          updated = persist_action_state(current, desired_state)
+          {:claimed, updated, spec, owner_token}
+        else
+          Repo.rollback(:stale_action_revision)
+        end
+
+      true ->
+        # A durable provider_started marker, or the absence of affirmative
+        # pre-provider proof, makes the outcome ambiguous forever. Never call
+        # a non-idempotent provider from this state again.
+        desired_state =
+          outcome_unknown_state(state, expired_claim_evidence_code(state), database_now)
+
+        if monotone_action_transition?(state, desired_state) do
+          {:outcome_unknown, persist_action_state(current, desired_state)}
+        else
+          Repo.rollback(:stale_action_revision)
+        end
+    end
+  end
+
+  defp claim_locked_action(
+         _current,
+         _state,
+         _expected_revision,
+         _expected_spec,
+         _owner_token,
+         _database_now,
+         _new_lease_expires_at
+       ),
+       do: Repo.rollback(:draft_not_ready)
+
+  defp execution_claim_state(state, owner_token, claimed_at, lease_expires_at) do
     state
+    |> Map.drop([
+      @provider_started_at_key,
+      @provider_timeout_key,
+      @outcome_unknown_at_key,
+      @outcome_evidence_key,
+      "result",
+      "executed_at",
+      "acknowledged_at"
+    ])
     |> Map.put("status", "executing")
     |> Map.put("started_at", DateTime.to_iso8601(claimed_at))
     |> Map.put(@execution_owner_key, owner_token)
     |> Map.put(@execution_claimed_at_key, DateTime.to_iso8601(claimed_at))
-    |> Map.put(
-      @execution_lease_expires_at_key,
-      claimed_at
-      |> DateTime.add(@execution_claim_lease_seconds, :second)
-      |> DateTime.to_iso8601()
-    )
+    |> Map.put(@execution_lease_expires_at_key, DateTime.to_iso8601(lease_expires_at))
+    |> Map.put(@execution_phase_key, @pre_provider_phase)
   end
 
-  defp execution_claim_live?(%{"status" => "executing"} = state, now) do
-    owner_token = read_string(state, @execution_owner_key)
-    lease_expires_at = read_string(state, @execution_lease_expires_at_key)
-
-    with true <- present?(owner_token),
-         true <- present?(lease_expires_at),
-         {:ok, expires_at, _offset} <- DateTime.from_iso8601(lease_expires_at) do
-      DateTime.compare(expires_at, now) == :gt
+  defp execution_claim_live?(%{"status" => "executing"} = state, database_now) do
+    with owner_token when is_binary(owner_token) <- read_string(state, @execution_owner_key),
+         {:ok, expires_at} <- execution_datetime(state, @execution_lease_expires_at_key) do
+      present?(owner_token) and DateTime.compare(expires_at, database_now) == :gt
     else
       _missing_or_invalid -> false
     end
   end
 
-  defp execution_claim_live?(_state, _now), do: false
+  defp execution_claim_live?(_state, _database_now), do: false
+
+  defp reclaimable_pre_provider_claim?(state) do
+    with true <- read_string(state, @execution_phase_key) == @pre_provider_phase,
+         owner_token when is_binary(owner_token) <- read_string(state, @execution_owner_key),
+         true <- present?(owner_token),
+         {:ok, claimed_at} <- execution_datetime(state, @execution_claimed_at_key),
+         {:ok, expires_at} <- execution_datetime(state, @execution_lease_expires_at_key),
+         :gt <- DateTime.compare(expires_at, claimed_at),
+         nil <- read_string(state, @provider_started_at_key),
+         evidence when evidence == %{} <- read_map(state, @outcome_evidence_key) do
+      true
+    else
+      _not_proven_pre_provider -> false
+    end
+  end
+
+  defp expired_claim_evidence_code(state) do
+    if read_string(state, @execution_phase_key) == @provider_started_phase or
+         present?(read_string(state, @provider_started_at_key)) do
+      "provider_claim_expired"
+    else
+      "execution_phase_unverifiable"
+    end
+  end
 
   defp execute_claimed_action(%Delivery{} = delivery, spec, owner_token) do
-    # The owner check and claim-state revision fence a late provider response
-    # after another caller has reclaimed the lease.
-    with {:ok, result} <- run_action(spec, delivery.insight),
-         {:ok, checkpointed_delivery} <-
-           put_action_state(
-             delivery,
-             %{
-               "status" => "executed",
-               "spec" => spec,
-               "result" => stringify_map_keys(result),
-               "executed_at" => now_iso8601(),
-               @execution_owner_key => owner_token
-             },
-             execution_owner: owner_token
-           ) do
-      finish_executed_action(checkpointed_delivery)
+    with {:ok, started_delivery, hard_deadline} <-
+           checkpoint_provider_started(delivery, spec, owner_token) do
+      case run_action_bounded(spec, started_delivery.insight, hard_deadline) do
+        {:ok, result} ->
+          checkpoint_provider_success(started_delivery, spec, owner_token, result)
+
+        {:error, evidence_code} ->
+          checkpoint_provider_outcome_unknown(
+            started_delivery,
+            spec,
+            owner_token,
+            evidence_code
+          )
+      end
+    end
+  end
+
+  defp checkpoint_provider_started(%Delivery{} = delivery, spec, owner_token) do
+    expected_revision = expected_delivery_revision(delivery)
+
+    Repo.transaction(fn ->
+      current =
+        Delivery
+        |> where([candidate], candidate.id == ^delivery.id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case current do
+        nil ->
+          Repo.rollback(:delivery_not_found)
+
+        %Delivery{} = current ->
+          current = Repo.preload(current, :insight)
+          state = action_state(current)
+          database_now = database_now!()
+
+          with true <- execution_owner_matches?(state, owner_token),
+               true <- delivery_state_revision(current) == expected_revision,
+               true <- frozen_provider_spec?(state, spec),
+               true <- read_string(state, "status") == "executing",
+               true <- read_string(state, @execution_phase_key) == @pre_provider_phase,
+               true <- execution_claim_live?(state, database_now),
+               {:ok, budget_ms} <- provider_execution_budget(state, database_now) do
+            # The monotonic deadline is fixed before the durable marker is
+            # committed, so commit/scheduling delay consumes (never extends)
+            # the provider's lease-relative execution budget.
+            hard_deadline = System.monotonic_time(:millisecond) + budget_ms
+
+            desired_state =
+              state
+              |> Map.put(@execution_phase_key, @provider_started_phase)
+              |> Map.put(@provider_started_at_key, DateTime.to_iso8601(database_now))
+              |> Map.put(@provider_timeout_key, budget_ms)
+
+            if monotone_action_transition?(state, desired_state) do
+              updated = persist_action_state(current, desired_state)
+              {updated, hard_deadline}
+            else
+              Repo.rollback(:stale_action_revision)
+            end
+          else
+            false -> Repo.rollback(:execution_claim_lost)
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+    |> case do
+      {:ok, {%Delivery{} = updated, hard_deadline}} ->
+        {:ok, updated, hard_deadline}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp provider_execution_budget(state, database_now) do
+    with {:ok, lease_expires_at} <-
+           execution_datetime(state, @execution_lease_expires_at_key) do
+      remaining_ms =
+        DateTime.diff(lease_expires_at, database_now, :millisecond) -
+          @execution_lease_safety_margin_ms
+
+      budget_ms = min(provider_execution_timeout_ms(), remaining_ms)
+
+      if budget_ms > 0 do
+        {:ok, budget_ms}
+      else
+        {:error, :execution_claim_expiring}
+      end
+    else
+      _invalid -> {:error, :execution_claim_expiring}
+    end
+  end
+
+  defp provider_execution_timeout_ms do
+    configured =
+      case Application.get_env(:maraithon, __MODULE__, []) do
+        opts when is_list(opts) ->
+          Keyword.get(
+            opts,
+            :provider_execution_timeout_ms,
+            @default_provider_execution_timeout_ms
+          )
+
+        _invalid ->
+          @default_provider_execution_timeout_ms
+      end
+
+    configured =
+      if is_integer(configured) and configured > 0 do
+        min(configured, @default_provider_execution_timeout_ms)
+      else
+        @default_provider_execution_timeout_ms
+      end
+
+    min(
+      configured,
+      @execution_claim_lease_seconds * 1_000 - @execution_lease_safety_margin_ms
+    )
+  end
+
+  defp run_action_bounded(spec, insight, hard_deadline) do
+    with {:ok, task} <- start_owned_provider_task(spec, insight) do
+      remaining_ms = max(hard_deadline - System.monotonic_time(:millisecond), 0)
+      task_result = if remaining_ms > 0, do: Task.yield(task, remaining_ms), else: nil
+
+      case task_result do
+        {:ok, result} ->
+          result
+
+        {:exit, _reason} ->
+          {:error, :provider_task_failed}
+
+        nil ->
+          terminate_and_confirm_provider_task(task)
+          {:error, :provider_deadline_exceeded}
+      end
+    end
+  end
+
+  defp start_owned_provider_task(spec, insight) do
+    task =
+      Task.Supervisor.async(Maraithon.Runtime.ToolCallSupervisor, fn ->
+        safely_run_action(spec, insight)
+      end)
+
+    {:ok, task}
+  rescue
+    _exception -> {:error, :provider_task_unavailable}
+  catch
+    :exit, _reason -> {:error, :provider_task_unavailable}
+  end
+
+  defp safely_run_action(spec, insight) do
+    case call_provider_action(spec, insight) do
+      {:ok, %{} = result} -> {:ok, closed_provider_result(spec, result)}
+      {:ok, _invalid_result} -> {:error, :provider_invalid_result}
+      {:error, _reason} -> {:error, :provider_call_failed}
+      _invalid_result -> {:error, :provider_invalid_result}
+    end
+  rescue
+    _exception -> {:error, :provider_task_failed}
+  catch
+    _kind, _reason -> {:error, :provider_task_failed}
+  end
+
+  defp call_provider_action(spec, insight) do
+    case Application.get_env(:maraithon, __MODULE__, []) do
+      opts when is_list(opts) ->
+        case Keyword.get(opts, :provider_execution_runner) do
+          runner when is_function(runner, 2) -> runner.(spec, insight)
+          _default -> run_action(spec, insight)
+        end
+
+      _invalid ->
+        run_action(spec, insight)
+    end
+  end
+
+  defp terminate_and_confirm_provider_task(%Task{pid: pid} = task) do
+    down_ref = Process.monitor(pid)
+    _ = Task.shutdown(task, :brutal_kill)
+
+    receive do
+      {:DOWN, ^down_ref, :process, ^pid, _reason} -> :ok
+    end
+  end
+
+  defp checkpoint_provider_success(delivery, spec, owner_token, result) do
+    case safely_checkpoint_provider_success(delivery, spec, owner_token, result) do
+      {:ok, checkpointed_delivery} ->
+        finish_executed_action(checkpointed_delivery)
+
+      {:error, _checkpoint_reason} ->
+        # Provider success without a durable success checkpoint is ambiguous.
+        # The fallback is fenced identically; if the database is unavailable,
+        # provider_started remains durable and is itself never reclaimable.
+        checkpoint_provider_outcome_unknown(
+          delivery,
+          spec,
+          owner_token,
+          :success_checkpoint_failed
+        )
+    end
+  end
+
+  defp safely_checkpoint_provider_success(delivery, spec, owner_token, result) do
+    state = action_state(delivery) || %{}
+
+    desired_state =
+      state
+      |> Map.put("status", "executed")
+      |> Map.put("spec", spec)
+      |> Map.put("result", result)
+      |> Map.put("executed_at", database_now_iso8601())
+      |> Map.put(@execution_phase_key, @provider_checkpointed_phase)
+      |> Map.put(@execution_owner_key, owner_token)
+
+    safely_put_provider_state(delivery, desired_state, owner_token)
+  rescue
+    _exception -> {:error, :provider_state_checkpoint_failed}
+  catch
+    _kind, _reason -> {:error, :provider_state_checkpoint_failed}
+  end
+
+  defp checkpoint_provider_outcome_unknown(delivery, spec, owner_token, evidence_code) do
+    state = action_state(delivery) || %{}
+
+    if frozen_provider_spec?(state, spec) do
+      desired_state =
+        outcome_unknown_state(state, outcome_evidence_code(evidence_code), database_now_iso8601())
+
+      case safely_put_provider_state(delivery, desired_state, owner_token) do
+        {:ok, unknown_delivery} ->
+          {:ok, unknown_delivery, reconciliation_notice(spec)}
+
+        {:error, _checkpoint_reason} ->
+          {:error, :provider_outcome_unknown}
+      end
+    else
+      {:error, :provider_outcome_unknown}
+    end
+  rescue
+    _exception -> {:error, :provider_outcome_unknown}
+  catch
+    _kind, _reason -> {:error, :provider_outcome_unknown}
+  end
+
+  defp safely_put_provider_state(delivery, desired_state, owner_token) do
+    put_action_state(delivery, desired_state, execution_owner: owner_token)
+  rescue
+    _exception -> {:error, :provider_state_checkpoint_failed}
+  catch
+    _kind, _reason -> {:error, :provider_state_checkpoint_failed}
+  end
+
+  defp outcome_evidence_code(code)
+       when code in [
+              :provider_call_failed,
+              :provider_deadline_exceeded,
+              :provider_invalid_result,
+              :provider_task_failed,
+              :provider_task_unavailable,
+              :success_checkpoint_failed
+            ],
+       do: Atom.to_string(code)
+
+  defp outcome_evidence_code(_code), do: "provider_outcome_unverifiable"
+
+  defp outcome_unknown_state(state, evidence_code, database_now) when is_binary(evidence_code) do
+    %{
+      "status" => "outcome_unknown",
+      "spec" => read_map(state, "spec"),
+      "started_at" => bounded_protocol_string(state, "started_at"),
+      @execution_owner_key => bounded_protocol_string(state, @execution_owner_key),
+      @execution_claimed_at_key => bounded_protocol_string(state, @execution_claimed_at_key),
+      @execution_lease_expires_at_key =>
+        bounded_protocol_string(state, @execution_lease_expires_at_key),
+      @execution_phase_key => bounded_protocol_string(state, @execution_phase_key),
+      @provider_started_at_key => bounded_protocol_string(state, @provider_started_at_key),
+      @provider_timeout_key => bounded_protocol_integer(state, @provider_timeout_key),
+      @outcome_unknown_at_key => database_iso8601(database_now),
+      @outcome_evidence_key => %{
+        "code" => String.slice(evidence_code, 0, 64),
+        "manual_reconciliation_required" => true
+      }
+    }
+    |> compact_map()
+  end
+
+  defp finish_outcome_unknown_action(%Delivery{} = delivery) do
+    state = action_state(delivery) || %{}
+    spec = read_map(state, "spec")
+    evidence = read_map(state, @outcome_evidence_key)
+
+    if read_string(state, "status") == "outcome_unknown" and
+         action_state_kind(state) in ["gmail_reply", "slack_reply"] and
+         read_boolean(evidence, "manual_reconciliation_required", false) do
+      {:ok, delivery, reconciliation_notice(spec)}
+    else
+      {:error, :draft_not_ready}
+    end
+  end
+
+  defp frozen_provider_spec?(state, expected_spec)
+       when is_map(state) and is_map(expected_spec) and map_size(expected_spec) > 0 do
+    read_map(state, "spec") == expected_spec and
+      action_state_kind(state) in ["gmail_reply", "slack_reply"]
+  end
+
+  defp frozen_provider_spec?(_state, _expected_spec), do: false
+
+  defp execution_datetime(state, key) do
+    case read_string(state, key) do
+      value when is_binary(value) ->
+        case DateTime.from_iso8601(value) do
+          {:ok, datetime, _offset} -> {:ok, datetime}
+          _invalid -> :error
+        end
+
+      _missing ->
+        :error
+    end
+  end
+
+  defp database_execution_window! do
+    case Repo.query!(
+           """
+           WITH db_clock AS MATERIALIZED (
+             SELECT timezone('UTC', clock_timestamp()) AS claimed_at
+           )
+           SELECT claimed_at,
+                  claimed_at + ($1::bigint * interval '1 second') AS lease_expires_at
+           FROM db_clock
+           """,
+           [@execution_claim_lease_seconds],
+           log: false
+         ).rows do
+      [[claimed_at, lease_expires_at]] ->
+        {database_datetime!(claimed_at), database_datetime!(lease_expires_at)}
+    end
+  end
+
+  defp database_now! do
+    case Repo.query!("SELECT timezone('UTC', clock_timestamp())", [], log: false).rows do
+      [[value]] -> database_datetime!(value)
+    end
+  end
+
+  defp database_now_iso8601 do
+    database_now!() |> DateTime.to_iso8601()
+  end
+
+  defp database_datetime!(%NaiveDateTime{} = value), do: DateTime.from_naive!(value, "Etc/UTC")
+  defp database_datetime!(%DateTime{} = value), do: value
+
+  defp database_iso8601(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp database_iso8601(value) when is_binary(value), do: String.slice(value, 0, 64)
+
+  defp bounded_protocol_string(state, key) do
+    case read_string(state, key) do
+      value when is_binary(value) -> String.slice(value, 0, 64)
+      _missing -> nil
+    end
+  end
+
+  defp bounded_protocol_integer(state, key) do
+    case read_integer(state, key) do
+      value when is_integer(value) and value > 0 ->
+        min(value, @execution_claim_lease_seconds * 1_000)
+
+      _missing_or_invalid ->
+        nil
+    end
+  end
+
+  defp closed_provider_result(%{"kind" => "gmail_reply"}, result) do
+    result = stringify_map_keys(result)
+
+    compact_map(%{
+      "source" => "gmail",
+      "provider" => bounded_result_string(result, "provider"),
+      "message_id" => bounded_result_string(result, "message_id"),
+      "thread_id" => bounded_result_string(result, "thread_id"),
+      "label_ids" => bounded_result_strings(result, "label_ids")
+    })
+  end
+
+  defp closed_provider_result(%{"kind" => "slack_reply"}, result) do
+    result = stringify_map_keys(result)
+
+    compact_map(%{
+      "source" => "slack",
+      "team_id" => bounded_result_string(result, "team_id"),
+      "channel" => bounded_result_string(result, "channel"),
+      "token_provider" => bounded_result_string(result, "token_provider"),
+      "ts" => bounded_result_string(result, "ts"),
+      "ok" => bounded_result_boolean(result, "ok")
+    })
+  end
+
+  defp bounded_result_string(result, key) do
+    case fetch(result, key) do
+      value when is_binary(value) ->
+        String.slice(value, 0, @max_provider_result_string_length)
+
+      value when is_integer(value) ->
+        Integer.to_string(value)
+
+      value when is_atom(value) ->
+        value |> Atom.to_string() |> String.slice(0, @max_provider_result_string_length)
+
+      _invalid ->
+        nil
+    end
+  end
+
+  defp bounded_result_strings(result, key) do
+    case fetch(result, key) do
+      values when is_list(values) ->
+        values
+        |> Enum.take(@max_provider_label_ids)
+        |> Enum.map(fn value -> bounded_result_string(%{"value" => value}, "value") end)
+        |> Enum.reject(&is_nil/1)
+
+      _invalid ->
+        []
+    end
+  end
+
+  defp bounded_result_boolean(result, key) do
+    case fetch(result, key) do
+      value when value in [true, false] -> value
+      _invalid -> nil
     end
   end
 
@@ -965,7 +1524,13 @@ defmodule Maraithon.InsightNotifications.Actions do
          %{"status" => "executing"} = current,
          %{"status" => desired_status} = desired
        )
-       when desired_status in ["executing", "executed"],
+       when desired_status in ["executing", "executed", "outcome_unknown"],
+       do: read_map(current, "spec") == read_map(desired, "spec")
+
+  defp monotone_action_transition?(
+         %{"status" => "outcome_unknown"} = current,
+         %{"status" => "outcome_unknown"} = desired
+       ),
        do: read_map(current, "spec") == read_map(desired, "spec")
 
   defp monotone_action_transition?(
@@ -1008,6 +1573,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp refresh_telegram_message(%Delivery{} = delivery, chat_id, message_id) do
     payload = telegram_payload(delivery)
     module = telegram_module()
+    _ = Code.ensure_loaded(module)
 
     cond do
       function_exported?(module, :edit_message_text, 4) and present?(message_id) ->
@@ -1081,6 +1647,17 @@ defmodule Maraithon.InsightNotifications.Actions do
       end
 
     "\n\n<b>#{heading}</b>\n#{details}#{title_line}"
+  end
+
+  defp render_action_state(%{"status" => "outcome_unknown"} = state, _insight) do
+    provider =
+      case action_state_kind(state) do
+        "gmail_reply" -> "Gmail"
+        "slack_reply" -> "Slack"
+        _other -> "The provider"
+      end
+
+    "\n\n<b>Send needs review</b>\n#{provider} may have accepted this message. Check the sent thread before sending anything else."
   end
 
   defp render_action_state(%{"status" => "snoozed"} = state, _insight) do
@@ -1863,7 +2440,7 @@ defmodule Maraithon.InsightNotifications.Actions do
         true
 
       {"send", %{"status" => status, "spec" => %{} = spec}}
-      when status in ["executing", "executed"] ->
+      when status in ["executing", "executed", "outcome_unknown"] ->
         read_string(spec, "kind") in ["gmail_reply", "slack_reply"]
 
       {"cancel", %{"status" => "cancelled"}} ->
@@ -2119,6 +2696,14 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp execution_notice(%{"kind" => "manual_ack"}), do: "Acknowledged"
   defp execution_notice(_), do: "Action completed"
 
+  defp reconciliation_notice(%{"kind" => "gmail_reply"}),
+    do: "Check Gmail before sending again"
+
+  defp reconciliation_notice(%{"kind" => "slack_reply"}),
+    do: "Check Slack before sending again"
+
+  defp reconciliation_notice(_spec), do: "Check the provider before sending again"
+
   defp action_notice_label(state) do
     state
     |> read_map("spec")
@@ -2134,8 +2719,11 @@ defmodule Maraithon.InsightNotifications.Actions do
       "No quick action is available for this item. Use the latest message or handle it in the source app."
 
   defp callback_error_text(reason)
-       when reason in [:action_in_progress, :execution_claim_lost],
+       when reason in [:action_in_progress, :execution_claim_expiring, :execution_claim_lost],
        do: "This send is already in progress. Check again shortly."
+
+  defp callback_error_text(:provider_outcome_unknown),
+    do: "This send may have completed. Check Gmail or Slack before sending again."
 
   defp callback_error_text(:draft_not_ready), do: "Draft first, then choose Send Now."
 

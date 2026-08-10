@@ -22,6 +22,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
     original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
     original_google = Application.get_env(:maraithon, :gmail, [])
     original_slack = Application.get_env(:maraithon, :slack, [])
+    original_action_execution = Application.get_env(:maraithon, Actions, [])
 
     Application.put_env(
       :maraithon,
@@ -46,6 +47,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
       Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
       Application.put_env(:maraithon, :gmail, original_google)
       Application.put_env(:maraithon, :slack, original_slack)
+      Application.put_env(:maraithon, Actions, original_action_execution)
     end)
 
     user_id = "telegram-actions@example.com"
@@ -417,8 +419,18 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     callback = last_telegram_message(:callback)
 
-    assert callback.opts[:text] ==
-             "Action did not complete. No change was made; use the latest message before deciding."
+    assert callback.opts[:text] == "Check Gmail before sending again"
+
+    state =
+      Repo.get!(Delivery, delivery.id).metadata
+      |> get_in(["telegram_action"])
+
+    assert state["status"] == "outcome_unknown"
+
+    assert state["outcome_evidence"] == %{
+             "code" => "provider_call_failed",
+             "manual_reconciliation_required" => true
+           }
 
     refute callback.opts[:text] =~ "Req.TransportError"
     refute callback.opts[:text] =~ "token"
@@ -886,7 +898,68 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute completed.text =~ "<b>Completed</b>"
   end
 
-  test "a live provider execution claim allows only its owner to send", %{
+  test "provider claims use the database clock after the delivery row lock", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    bypass = Bypass.open()
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}")
+    delivery = create_slack_send_delivery(agent, user_id, "database-clock")
+    test_pid = self()
+
+    Bypass.stub(bypass, "POST", "/chat.postMessage", fn conn ->
+      send(test_pid, {:database_clock_provider_called, self()})
+
+      receive do
+        :release_database_clock_provider -> :ok
+      after
+        2_000 -> raise "timed out waiting to release the database-clock provider"
+      end
+
+      slack_success(conn, "database-clock-result")
+    end)
+
+    lock_holder =
+      Task.async(fn ->
+        Repo.transaction(fn ->
+          _locked =
+            Delivery
+            |> where([candidate], candidate.id == ^delivery.id)
+            |> lock("FOR UPDATE")
+            |> Repo.one!()
+
+          send(test_pid, {:delivery_row_locked, self()})
+
+          receive do
+            {:release_delivery_row, recipient} ->
+              released_at = database_now()
+              send(recipient, {:delivery_row_released_at, released_at})
+              :released
+          end
+        end)
+      end)
+
+    assert_receive {:delivery_row_locked, lock_pid}, 1_000
+    claimant = Task.async(fn -> Actions.perform_action(delivery, "send") end)
+    send(lock_pid, {:release_delivery_row, self()})
+
+    assert_receive {:delivery_row_released_at, lock_released_at}, 1_000
+    assert {:ok, :released} = Task.await(lock_holder, 1_000)
+    assert_receive {:database_clock_provider_called, provider_pid}, 1_000
+
+    state = execution_state(delivery)
+    claimed_at = parse_datetime!(state["execution_claimed_at"])
+    lease_expires_at = parse_datetime!(state["execution_lease_expires_at"])
+
+    assert DateTime.compare(claimed_at, lock_released_at) in [:eq, :gt]
+    assert DateTime.diff(lease_expires_at, claimed_at, :millisecond) == 300_000
+    assert state["execution_phase"] == "provider_started"
+
+    send(provider_pid, :release_database_clock_provider)
+    assert {:ok, _completed, "Slack reply sent"} = Task.await(claimant, 2_000)
+  end
+
+  test "a live provider execution claim allows only one provider call", %{
     agent: agent,
     user_id: user_id
   } do
@@ -906,20 +979,15 @@ defmodule Maraithon.InsightNotificationActionsTest do
         2_000 -> raise "timed out waiting to release Slack provider"
       end
 
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "ts" => "live-owner-result"}))
+      slack_success(conn, "live-owner-result")
     end)
 
     owner_send = Task.async(fn -> Actions.perform_action(delivery, "send") end)
-
     assert_receive {:slack_provider_called, 1, provider_pid}, 1_000
 
-    live_state =
-      Repo.get!(Delivery, delivery.id).metadata
-      |> get_in(["telegram_action"])
-
+    live_state = execution_state(delivery)
     assert live_state["status"] == "executing"
+    assert live_state["execution_phase"] == "provider_started"
     assert is_binary(live_state["execution_owner"])
     assert is_binary(live_state["execution_lease_expires_at"])
 
@@ -930,89 +998,229 @@ defmodule Maraithon.InsightNotificationActionsTest do
     send(provider_pid, {:release_slack_provider, 1})
     assert {:ok, _completed, "Slack reply sent"} = Task.await(owner_send, 2_000)
 
-    final_state =
-      Repo.get!(Delivery, delivery.id).metadata
-      |> get_in(["telegram_action"])
-
+    final_state = execution_state(delivery)
     assert final_state["status"] == "executed"
+    assert final_state["execution_phase"] == "provider_checkpointed"
     assert final_state["result"]["ts"] == "live-owner-result"
     assert final_state["execution_owner"] == live_state["execution_owner"]
   end
 
-  test "an expired provider claim is reclaimed and fences the late owner checkpoint", %{
+  test "provider execution reaches its natural deadline below the lease and terminates the task",
+       %{
+         agent: agent,
+         user_id: user_id
+       } do
+    test_pid = self()
+    provider_calls = :atomics.new(1, [])
+
+    provider_runner = fn _spec, _insight ->
+      call_number = :atomics.add_get(provider_calls, 1, 1)
+      send(test_pid, {:deadline_provider_called, call_number, self()})
+
+      receive do
+        :unexpected_release -> {:ok, %{ts: "must-not-complete"}}
+      end
+    end
+
+    Application.put_env(:maraithon, Actions,
+      provider_execution_timeout_ms: 500,
+      provider_execution_runner: provider_runner
+    )
+
+    delivery = create_slack_send_delivery(agent, user_id, "natural-deadline")
+    send_task = Task.async(fn -> Actions.perform_action(delivery, "send") end)
+    assert_receive {:deadline_provider_called, 1, provider_task_pid}, 1_000
+
+    provider_task_ref = Process.monitor(provider_task_pid)
+
+    assert_receive {:DOWN, ^provider_task_ref, :process, ^provider_task_pid, _reason}, 1_000
+
+    assert {:ok, unknown_delivery, "Check Slack before sending again"} =
+             Task.await(send_task, 2_000)
+
+    state = Actions.action_state_for_delivery(unknown_delivery)
+    claimed_at = parse_datetime!(state["execution_claimed_at"])
+    lease_expires_at = parse_datetime!(state["execution_lease_expires_at"])
+
+    assert state["status"] == "outcome_unknown"
+    assert state["provider_timeout_ms"] == 500
+
+    assert state["provider_timeout_ms"] <
+             DateTime.diff(lease_expires_at, claimed_at, :millisecond)
+
+    assert state["outcome_evidence"] == %{
+             "code" => "provider_deadline_exceeded",
+             "manual_reconciliation_required" => true
+           }
+
+    assert :atomics.get(provider_calls, 1) == 1
+    refute_receive {:deadline_provider_called, 2, _provider_task_pid}, 100
+  end
+
+  test "an expired provider-started claim becomes terminal unknown without re-sending", %{
     agent: agent,
     user_id: user_id
   } do
     bypass = Bypass.open()
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}")
-    delivery = create_slack_send_delivery(agent, user_id, "expired-claim")
+    delivery = create_slack_send_delivery(agent, user_id, "expired-provider-started")
     test_pid = self()
     provider_calls = :atomics.new(1, [])
 
     Bypass.stub(bypass, "POST", "/chat.postMessage", fn conn ->
       call_number = :atomics.add_get(provider_calls, 1, 1)
-      send(test_pid, {:slack_provider_called, call_number, self()})
+      send(test_pid, {:unexpected_expired_provider_call, call_number})
+      slack_success(conn, "must-not-send")
+    end)
 
-      if call_number == 1 do
-        receive do
-          {:release_slack_provider, 1} -> :ok
-        after
-          3_000 -> raise "timed out waiting to release the original Slack provider call"
-        end
+    now = database_now()
+    original_spec = execution_state(delivery)["spec"]
+
+    provider_started_state = %{
+      "status" => "executing",
+      "spec" => original_spec,
+      "started_at" => now |> DateTime.add(-301, :second) |> DateTime.to_iso8601(),
+      "execution_owner" => Ecto.UUID.generate(),
+      "execution_claimed_at" => now |> DateTime.add(-301, :second) |> DateTime.to_iso8601(),
+      "execution_lease_expires_at" => now |> DateTime.add(-1, :second) |> DateTime.to_iso8601(),
+      "execution_phase" => "provider_started",
+      "provider_started_at" => now |> DateTime.add(-10, :second) |> DateTime.to_iso8601(),
+      "provider_timeout_ms" => 240_000
+    }
+
+    put_execution_state(delivery, provider_started_state)
+
+    assert {:ok, unknown_delivery, "Check Slack before sending again"} =
+             Actions.perform_action(delivery, "send")
+
+    unknown_state = Actions.action_state_for_delivery(unknown_delivery)
+    assert unknown_state["status"] == "outcome_unknown"
+    assert unknown_state["spec"] == original_spec
+    assert unknown_state["execution_owner"] == provider_started_state["execution_owner"]
+
+    assert unknown_state["outcome_evidence"] == %{
+             "code" => "provider_claim_expired",
+             "manual_reconciliation_required" => true
+           }
+
+    assert Map.keys(unknown_state["outcome_evidence"]) |> Enum.sort() ==
+             ["code", "manual_reconciliation_required"]
+
+    refute_receive {:unexpected_expired_provider_call, _call_number}, 100
+    assert :atomics.get(provider_calls, 1) == 0
+
+    unknown_at = unknown_state["outcome_unknown_at"]
+
+    assert {:ok, replayed, "Check Slack before sending again"} =
+             Actions.perform_action(delivery, "send")
+
+    assert Actions.action_state_for_delivery(replayed)["outcome_unknown_at"] == unknown_at
+    refute_receive {:unexpected_expired_provider_call, _call_number}, 100
+  end
+
+  test "an expired pre-provider claim with no started marker may be reclaimed", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    bypass = Bypass.open()
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}")
+    delivery = create_slack_send_delivery(agent, user_id, "expired-pre-provider")
+    test_pid = self()
+    provider_calls = :atomics.new(1, [])
+
+    Bypass.stub(bypass, "POST", "/chat.postMessage", fn conn ->
+      call_number = :atomics.add_get(provider_calls, 1, 1)
+      send(test_pid, {:reclaimed_provider_called, call_number})
+      slack_success(conn, "reclaimed-once")
+    end)
+
+    now = database_now()
+    original_spec = execution_state(delivery)["spec"]
+    expired_owner = Ecto.UUID.generate()
+
+    pre_provider_state = %{
+      "status" => "executing",
+      "spec" => original_spec,
+      "started_at" => now |> DateTime.add(-301, :second) |> DateTime.to_iso8601(),
+      "execution_owner" => expired_owner,
+      "execution_claimed_at" => now |> DateTime.add(-301, :second) |> DateTime.to_iso8601(),
+      "execution_lease_expires_at" => now |> DateTime.add(-1, :second) |> DateTime.to_iso8601(),
+      "execution_phase" => "pre_provider"
+    }
+
+    put_execution_state(delivery, pre_provider_state)
+
+    assert {:ok, completed, "Slack reply sent"} = Actions.perform_action(delivery, "send")
+    assert_receive {:reclaimed_provider_called, 1}, 1_000
+    refute_receive {:reclaimed_provider_called, 2}, 100
+
+    state = Actions.action_state_for_delivery(completed)
+    assert state["status"] == "executed"
+    assert state["spec"] == original_spec
+    assert state["result"]["ts"] == "reclaimed-once"
+    assert state["execution_phase"] == "provider_checkpointed"
+    refute state["execution_owner"] == expired_owner
+    assert :atomics.get(provider_calls, 1) == 1
+  end
+
+  test "a late provider owner cannot checkpoint over a newer terminal generation", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    bypass = Bypass.open()
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}")
+    delivery = create_slack_send_delivery(agent, user_id, "late-owner")
+    test_pid = self()
+    provider_calls = :atomics.new(1, [])
+
+    Bypass.stub(bypass, "POST", "/chat.postMessage", fn conn ->
+      call_number = :atomics.add_get(provider_calls, 1, 1)
+      send(test_pid, {:late_owner_provider_called, call_number, self()})
+
+      receive do
+        :release_late_owner_provider -> :ok
+      after
+        2_000 -> raise "timed out waiting to release late owner provider"
       end
 
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(
-        200,
-        Jason.encode!(%{"ok" => true, "ts" => "owner-result-#{call_number}"})
-      )
+      slack_success(conn, "late-owner-result")
     end)
 
     original_send = Task.async(fn -> Actions.perform_action(delivery, "send") end)
-    assert_receive {:slack_provider_called, 1, original_provider_pid}, 1_000
+    assert_receive {:late_owner_provider_called, 1, provider_pid}, 1_000
 
-    live_delivery = Repo.get!(Delivery, delivery.id)
-    live_state = get_in(live_delivery.metadata, ["telegram_action"])
-    original_owner = live_state["execution_owner"]
+    provider_started_state = execution_state(delivery)
+    original_owner = provider_started_state["execution_owner"]
+    replacement_owner = Ecto.UUID.generate()
 
-    expired_state =
-      Map.put(
-        live_state,
-        "execution_lease_expires_at",
-        DateTime.utc_now()
-        |> DateTime.add(-1, :second)
-        |> DateTime.truncate(:second)
-        |> DateTime.to_iso8601()
-      )
+    replacement_state =
+      provider_started_state
+      |> Map.put("status", "outcome_unknown")
+      |> Map.put("execution_owner", replacement_owner)
+      |> Map.put("outcome_unknown_at", database_now() |> DateTime.to_iso8601())
+      |> Map.put("outcome_evidence", %{
+        "code" => "provider_claim_expired",
+        "manual_reconciliation_required" => true
+      })
 
-    live_delivery
-    |> Ecto.Changeset.change(
-      metadata: put_in(live_delivery.metadata, ["telegram_action"], expired_state)
-    )
-    |> Repo.update!()
+    put_execution_state(delivery, replacement_state)
+    send(provider_pid, :release_late_owner_provider)
 
-    # Reclaiming after the bounded lease can repeat an accepted provider
-    # mutation. The new owner may checkpoint; the old late owner may not.
-    assert {:ok, reclaimed, "Slack reply sent"} = Actions.perform_action(delivery, "send")
-    assert_receive {:slack_provider_called, 2, _reclaim_provider_pid}, 1_000
+    assert {:error, :provider_outcome_unknown} = Task.await(original_send, 2_000)
+    assert :atomics.get(provider_calls, 1) == 1
 
-    reclaimed_state = Actions.action_state_for_delivery(reclaimed)
-    assert reclaimed_state["status"] == "executed"
-    assert reclaimed_state["result"]["ts"] == "owner-result-2"
-    refute reclaimed_state["execution_owner"] == original_owner
+    final_state = execution_state(delivery)
+    assert final_state["status"] == "outcome_unknown"
+    assert final_state["execution_owner"] == replacement_owner
+    refute final_state["execution_owner"] == original_owner
+    refute Map.has_key?(final_state, "result")
+    refute Map.has_key?(final_state, "executed_at")
 
-    send(original_provider_pid, {:release_slack_provider, 1})
-    assert {:error, :execution_claim_lost} = Task.await(original_send, 2_000)
-    assert :atomics.get(provider_calls, 1) == 2
+    assert {:ok, replayed, "Check Slack before sending again"} =
+             Actions.perform_action(delivery, "send")
 
-    final_state =
-      Repo.get!(Delivery, delivery.id).metadata
-      |> get_in(["telegram_action"])
-
-    assert final_state["status"] == "executed"
-    assert final_state["result"]["ts"] == "owner-result-2"
-    assert final_state["execution_owner"] == reclaimed_state["execution_owner"]
+    assert Actions.action_state_for_delivery(replayed)["execution_owner"] == replacement_owner
+    refute_receive {:late_owner_provider_called, 2, _provider_pid}, 100
   end
 
   test "an executed provider checkpoint resumes acknowledgement and presentation without re-sending",
@@ -1409,6 +1617,39 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute button_labels(sent.opts) |> Enum.member?("Draft Email")
     refute button_labels(sent.opts) |> Enum.member?("Mark Done")
     refute button_labels(sent.opts) |> Enum.member?("Ack")
+  end
+
+  defp execution_state(%Delivery{} = delivery) do
+    Repo.get!(Delivery, delivery.id).metadata
+    |> get_in(["telegram_action"])
+  end
+
+  defp put_execution_state(%Delivery{} = delivery, state) do
+    current = Repo.get!(Delivery, delivery.id)
+
+    current
+    |> Ecto.Changeset.change(
+      metadata: put_in(current.metadata || %{}, ["telegram_action"], state)
+    )
+    |> Repo.update!()
+  end
+
+  defp database_now do
+    case Repo.query!("SELECT timezone('UTC', clock_timestamp())", [], log: false).rows do
+      [[%NaiveDateTime{} = value]] -> DateTime.from_naive!(value, "Etc/UTC")
+      [[%DateTime{} = value]] -> value
+    end
+  end
+
+  defp parse_datetime!(value) when is_binary(value) do
+    {:ok, datetime, _offset} = DateTime.from_iso8601(value)
+    datetime
+  end
+
+  defp slack_success(conn, timestamp) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "ts" => timestamp}))
   end
 
   defp create_slack_send_delivery(agent, user_id, suffix) do
