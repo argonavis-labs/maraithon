@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.RuntimeIncident
+  alias Maraithon.Runtime.ScheduledJob
   alias Maraithon.Runtime.StuckStateWatchdog
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.PreparedAction
@@ -273,6 +274,78 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
     assert Repo.get!(Delivery, delivery.id).status == "pending"
   end
 
+  test "scheduled-job dead letters advance one durable alert frontier across UTC days",
+       %{operator_id: operator_id, agent: agent, opts: opts} do
+    # A stopped Agent does not make a dead letter harmless: lifecycle stop is
+    # responsible for cancelling its schedules, so a later failure is useful
+    # evidence. It should alert once, not once per observation day.
+    assert agent.status == "stopped"
+
+    first_now =
+      Date.utc_today()
+      |> Date.add(-1)
+      |> DateTime.new!(~T[23:59:00], "Etc/UTC")
+
+    second_now = DateTime.add(first_now, 2, :minute)
+    third_now = DateTime.add(second_now, 1, :minute)
+    fire_at = DateTime.add(first_now, -2, :hour)
+
+    first_job = insert_failed_scheduled_job(agent.id, "wakeup", fire_at)
+
+    assert StuckStateWatchdog.run_cycle(Keyword.put(opts, :now, first_now)) == %{
+             detected: 1,
+             swept: 0,
+             alerted: 1
+           }
+
+    assert StuckStateWatchdog.run_cycle(Keyword.put(opts, :now, second_now)) == %{
+             detected: 1,
+             swept: 0,
+             alerted: 0
+           }
+
+    second_job =
+      insert_failed_scheduled_job(agent.id, "heartbeat", DateTime.add(fire_at, 1, :minute))
+
+    assert StuckStateWatchdog.run_cycle(Keyword.put(opts, :now, third_now)) == %{
+             detected: 1,
+             swept: 0,
+             alerted: 1
+           }
+
+    assert StuckStateWatchdog.run_cycle(Keyword.put(opts, :now, third_now)) == %{
+             detected: 1,
+             swept: 0,
+             alerted: 0
+           }
+
+    emails = Agent.get(:capturing_email_recorder, &Enum.reverse/1)
+    assert Enum.count(emails, &(&1.content.subject =~ "scheduled_jobs")) == 2
+
+    dedupe_keys =
+      Maraithon.OperatorEvents.list_events(
+        user_id: operator_id,
+        source: "stuck_state_watchdog",
+        limit: 10
+      )
+      |> Enum.map(& &1.dedupe_key)
+      |> MapSet.new()
+
+    assert dedupe_keys ==
+             MapSet.new([
+               "stuck_state_watchdog:scheduled_jobs:dead_letter:#{first_job.id}",
+               "stuck_state_watchdog:scheduled_jobs:dead_letter:#{second_job.id}"
+             ])
+
+    incidents =
+      RuntimeIncident
+      |> where([incident], incident.kind == "stuck_state_detected")
+      |> where([incident], fragment("?->>'table' = ?", incident.metadata, "scheduled_jobs"))
+      |> Repo.all()
+
+    assert length(incidents) == 2
+  end
+
   test "held candidates past the TTL are expired with a self-heal ledger entry",
        %{operator_id: operator_id, opts: opts} do
     {:ok, candidate} =
@@ -439,6 +512,19 @@ defmodule Maraithon.Runtime.StuckStateWatchdogTest do
       |> Repo.update_all(set: [inserted_at: backdated, updated_at: backdated])
 
     Repo.get!(ProactiveCandidate, candidate.id)
+  end
+
+  defp insert_failed_scheduled_job(agent_id, job_type, fire_at) do
+    %ScheduledJob{}
+    |> ScheduledJob.changeset(%{
+      agent_id: agent_id,
+      job_type: job_type,
+      fire_at: fire_at,
+      payload: %{},
+      status: "failed",
+      attempts: 5
+    })
+    |> Repo.insert!()
   end
 
   defp stale_background_job(hours_old: hours_old) do
