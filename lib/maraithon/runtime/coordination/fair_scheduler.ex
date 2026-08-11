@@ -4,9 +4,10 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   alias Ecto.Adapters.SQL
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
-  alias Maraithon.Runtime.Coordination.{NodeIncarnation, TaskClaims, TaskSupervisor}
+  alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, TaskClaims, TaskSupervisor}
 
   @microunits 1_000_000
+  @pending_physical_key {__MODULE__, :pending_physical_reservation}
 
   def reserve_next(%NodeIncarnation{} = session, partitions, opts \\ [])
       when is_list(partitions) do
@@ -74,16 +75,40 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   defp do_reserve(_session, _partitions, _ttl, 0), do: {:error, :fair_claim_conflict_limit}
 
   defp do_reserve(session, partitions, task_ttl_ms, attempts) do
+    Process.delete(@pending_physical_key)
     result = Repo.transaction(fn -> reserve_locked(session, partitions, task_ttl_ms) end)
 
     case result do
-      {:ok, value} -> {:ok, value}
-      {:error, :fair_claim_conflict} -> do_reserve(session, partitions, task_ttl_ms, attempts - 1)
-      other -> other
+      {:ok, value} ->
+        Process.delete(@pending_physical_key)
+        {:ok, value}
+
+      {:error, :fair_claim_conflict} ->
+        Process.delete(@pending_physical_key)
+        do_reserve(session, partitions, task_ttl_ms, attempts - 1)
+
+      other ->
+        case Process.delete(@pending_physical_key) do
+          nil -> :ok
+          identity -> handoff_commit_unknown_reservation!(identity)
+        end
+
+        other
     end
   end
 
   defp reserve_locked(session, partitions, task_ttl_ms) do
+    partitions
+    |> Enum.sort_by(& &1.partition_id)
+    |> Enum.each(fn partition ->
+      Authority.fence_partition!(
+        session,
+        partition.partition_id,
+        partition.ownership_epoch,
+        :ready
+      )
+    end)
+
     partition_ids = Enum.map(partitions, & &1.partition_id)
     partition_epochs = Enum.map(partitions, & &1.ownership_epoch)
     ensure_tenants!(session, partition_ids, partition_epochs)
@@ -187,6 +212,8 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
 
     case TaskSupervisor.reserve("background_job", candidate.id, claim_token, assignment_id) do
       {:ok, physical} ->
+        Process.put(@pending_physical_key, physical)
+
         partition = %{
           partition_id: candidate.partition_id,
           ownership_epoch: candidate.ownership_epoch
@@ -273,13 +300,45 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
           {load_job!(result), assignment, identity}
         catch
           kind, reason ->
-            _ = TaskSupervisor.release(identity)
+            case safe_release_physical(identity) do
+              :ok ->
+                Process.delete(@pending_physical_key)
+
+              {:error, _release_failed} ->
+                handoff_commit_unknown_reservation!(identity)
+                Process.delete(@pending_physical_key)
+            end
+
             :erlang.raise(kind, reason, __STACKTRACE__)
         end
 
       {:error, reason} ->
         Repo.rollback({:task_supervisor_reservation_failed, reason})
     end
+  end
+
+  defp safe_release_physical(identity) do
+    case TaskSupervisor.release(identity) do
+      :ok -> :ok
+      _not_released -> {:error, :task_release_failed}
+    end
+  rescue
+    _error -> {:error, :task_release_failed}
+  catch
+    :exit, _reason -> {:error, :task_release_failed}
+  end
+
+  defp handoff_commit_unknown_reservation!(identity) do
+    case TaskSupervisor.terminate_exact(identity) do
+      {:ok, _disposition} -> :ok
+      {:unknown, _retry_owned} -> :ok
+      {:error, :task_reservation_lost} -> :ok
+      _unexpected -> exit(:background_job_commit_unknown_handoff_failed)
+    end
+  rescue
+    _error -> exit(:background_job_commit_unknown_handoff_failed)
+  catch
+    :exit, reason -> exit({:background_job_commit_unknown_handoff_failed, reason})
   end
 
   defp ensure_tenants!(session, ids, epochs) do

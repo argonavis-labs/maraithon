@@ -8,6 +8,7 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentRuntimeLease
+  alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.DatabaseClock
 
   setup do
@@ -27,7 +28,7 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
     %{agent: agent, binding: binding}
   end
 
-  test "claims one unready generation and fences readiness with current consent", %{
+  test "watcherless claim is external-proof-only and still fences readiness", %{
     agent: agent,
     binding: binding
   } do
@@ -35,6 +36,12 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
     assert Ecto.UUID.cast(lease.owner_token) == {:ok, lease.owner_token}
     assert lease.owner_node == Atom.to_string(node())
     assert lease.ready_at == nil
+    assert lease.termination_capability_digest == nil
+    refute Map.has_key?(lease, :termination_capability)
+
+    persisted = AgentLeases.get(agent.id)
+    assert persisted.termination_capability_digest == nil
+    refute inspect(lease) =~ "termination_capability:"
     assert AgentLeases.owner?(agent.id, lease.owner_token)
     refute AgentLeases.ready?(agent.id, lease.owner_token)
 
@@ -43,6 +50,7 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
 
     assert {:ok, ready} = AgentLeases.mark_ready(agent.id, lease.owner_token)
     assert ready.ready_at != nil
+    refute Map.has_key?(ready, :termination_capability)
     assert AgentLeases.ready?(agent.id, lease.owner_token)
 
     binding |> Ecto.Changeset.change(status: "revoked") |> Repo.update!()
@@ -57,10 +65,17 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
 
   test "concurrent claimers serialize to one exact generation", %{agent: agent} do
     parent = self()
+    watcher_name = :"lease_claim_watcher_#{System.unique_integer([:positive])}"
+
+    watcher =
+      start_supervised!(
+        {AgentWatcher, name: watcher_name, reconcile?: false, recover?: false},
+        id: watcher_name
+      )
 
     claim = fn ->
       send(parent, {:claim_ready, self()})
-      receive do: (:claim_go -> AgentLeases.claim(agent.id))
+      receive do: (:claim_go -> AgentLeases.claim(agent.id, watcher: watcher))
     end
 
     first = Task.async(claim)
@@ -76,6 +91,29 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
     results = [Task.await(first), Task.await(second)]
     assert Enum.count(results, &match?({:ok, %AgentRuntimeLease{}}, &1)) == 1
     assert Enum.count(results, &(&1 == {:error, :runtime_lease_owned})) == 1
+
+    {:ok, _lease} = Enum.find(results, &match?({:ok, %AgentRuntimeLease{}}, &1))
+
+    assert_eventually(fn ->
+      state = :sys.get_state(watcher)
+
+      state.preparations == %{} and state.preparation_controller_refs == %{} and
+        state.preparation_counts == %{} and
+        :ets.info(state.prepared_lease_capabilities, :size) == 0
+    end)
+  end
+
+  test "claim accepts capability digests only from a real AgentWatcher", %{agent: agent} do
+    chosen_digest = :crypto.hash(:sha256, :crypto.strong_rand_bytes(32))
+    test_pid = self()
+    fake_watcher = spawn(fn -> fake_watcher_loop(chosen_digest, test_pid) end)
+    on_exit(fn -> if Process.alive?(fake_watcher), do: Process.exit(fake_watcher, :kill) end)
+
+    assert {:error, :watcher_unavailable} =
+             AgentLeases.claim(agent.id, watcher: fake_watcher)
+
+    assert_receive {:fake_watcher_discarded, ^fake_watcher}, 1_000
+    assert AgentLeases.get(agent.id) == nil
   end
 
   test "a cross-user Binding never grants runtime authority", %{agent: agent, binding: binding} do
@@ -93,7 +131,10 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
     assert {:error, :runtime_lease_lost} = AgentLeases.renew(agent.id, stale_token)
     assert {:error, :runtime_lease_lost} = AgentLeases.mark_ready(agent.id, stale_token)
     assert {:error, :runtime_lease_lost} = AgentLeases.begin_draining(agent.id, stale_token)
-    assert {:error, :runtime_lease_lost} = AgentLeases.release(agent.id, stale_token)
+
+    assert {:error, :termination_proof_required} =
+             AgentLeases.release(agent.id, stale_token)
+
     assert AgentLeases.owner?(agent.id, lease.owner_token)
   end
 
@@ -109,9 +150,11 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
     assert {:error, :expired_lease_requires_reconciliation} =
              AgentLeases.claim(agent.id)
 
-    # Expiry revoked even the old token's release authority. The row remains
-    # durable evidence until the restart guard records the ownership loss.
-    assert {:error, :runtime_lease_expired} = AgentLeases.release(agent.id, lease.owner_token)
+    # Expiry revokes release authority but is not physical-termination proof.
+    # The row remains durable evidence until an exact proof path reconciles it.
+    assert {:error, :termination_proof_required} =
+             AgentLeases.release(agent.id, lease.owner_token)
+
     assert Repo.get!(AgentRuntimeLease, agent.id).owner_token == lease.owner_token
   end
 
@@ -157,19 +200,60 @@ defmodule Maraithon.Runtime.AgentLeasesTest do
     assert {:error, :agent_binding_not_active} = AgentLeases.claim(stopped.id)
   end
 
+  defp fake_watcher_loop(chosen_digest, test_pid) do
+    receive do
+      {:"$gen_call", from, {:prepare_lease_capability, _agent_id, _owner_token}} ->
+        GenServer.reply(
+          from,
+          {:ok, chosen_digest, make_ref(), fn _supplied -> :ok end}
+        )
+
+        fake_watcher_loop(chosen_digest, test_pid)
+
+      {:"$gen_call", from, {:discard_lease_capability, _agent_id, _owner_token}} ->
+        GenServer.reply(from, :ok)
+        send(test_pid, {:fake_watcher_discarded, self()})
+        fake_watcher_loop(chosen_digest, test_pid)
+    end
+  end
+
+  defp assert_eventually(fun, attempts \\ 100)
+
+  defp assert_eventually(fun, attempts) when attempts > 0 do
+    if fun.() do
+      :ok
+    else
+      receive do
+      after
+        5 -> assert_eventually(fun, attempts - 1)
+      end
+    end
+  end
+
+  defp assert_eventually(_fun, 0), do: flunk("condition was not met before timeout")
+
   defp expire_lease!(agent_id) do
-    Repo.query!(
-      """
-      UPDATE agent_runtime_leases
-      SET claimed_at = timezone('UTC', clock_timestamp()) - interval '3 minutes',
-          renewed_at = timezone('UTC', clock_timestamp()) - interval '2 minutes',
-          lease_until = timezone('UTC', clock_timestamp()) - interval '1 minute',
-          ready_at = NULL,
-          draining_at = NULL,
-          updated_at = timezone('UTC', clock_timestamp())
-      WHERE agent_id = $1::uuid
-      """,
-      [Ecto.UUID.dump!(agent_id)]
-    )
+    # Runtime intentionally cannot rewrite immutable claim time. The reviewed
+    # migrator role may repair lease chronology only while the protocol is dark,
+    # which is the exact fixture boundary this database-time test needs.
+    Repo.query!("SET LOCAL ROLE maraithon_migrator", [], log: false)
+
+    try do
+      Repo.query!(
+        """
+        UPDATE agent_runtime_leases
+        SET claimed_at = timezone('UTC', clock_timestamp()) - interval '3 minutes',
+            renewed_at = timezone('UTC', clock_timestamp()) - interval '2 minutes',
+            lease_until = timezone('UTC', clock_timestamp()) - interval '1 minute',
+            ready_at = NULL,
+            draining_at = NULL,
+            updated_at = timezone('UTC', clock_timestamp())
+        WHERE agent_id = $1::uuid
+        """,
+        [Ecto.UUID.dump!(agent_id)]
+      )
+    after
+      Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    end
   end
 end

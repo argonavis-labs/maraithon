@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentLifecycleOperations
+  alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentRuntimeLease
@@ -26,10 +27,16 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
     Session
   }
 
-  @revision "wake-scope-test"
+  @revision String.duplicate("b", 40)
   @evidence_id "fly:machines-destroyed:wake-scope-test"
   @activated_by "wake-scope@example.test"
-  @evidence_digest Base.encode16(:crypto.hash(:sha256, "wake-scope-test-evidence"))
+  @evidence_digest :crypto.hash(:sha256, "wake-scope-test-evidence")
+  @activation_evidence [
+    evidence_id: @evidence_id,
+    evidence_digest: @evidence_digest,
+    activated_by: @activated_by,
+    revision: @revision
+  ]
 
   setup do
     old_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
@@ -89,9 +96,9 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
 
     Enum.each([:stop, :pause, :update, :upgrade, :remove, :delete], fn kind ->
       agent = create_bound_agent!(user_a)
-      lease = AgentLeases.claim(agent.id, ttl_ms: 300_000) |> ok!()
+      lease = AgentLeases.claim(agent.id, ttl_ms: 300_000, watcher: watcher) |> ok!()
       _ready = AgentLeases.mark_ready(agent.id, lease.owner_token) |> ok!()
-      pid = parked_process()
+      pid = registered_owner(agent.id, lease.owner_token)
 
       assert :ok = AgentWatcher.track(watcher, pid, agent.id, lease.owner_token)
 
@@ -108,8 +115,7 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
       Process.exit(pid, :kill)
       assert_receive {:DOWN, ^down_ref, :process, ^pid, :killed}, 1_000
 
-      # This system call is a mailbox barrier behind the Watcher's exact DOWN
-      # proof, proof-gated lease deletion, and closed-admission Wake pass.
+      await_lifecycle_watcher_release(watcher, pid, 100)
       watcher_state = :sys.get_state(watcher)
       assert MapSet.size(watcher_state.recoveries) == 0
 
@@ -177,7 +183,7 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
              MapSet.new([agent_b.id, recovery_b.id])
   end
 
-  test "expired claim, ownership, and recorded-generation reconciliation is partition exact" do
+  test "expired claims and recorded generations are partition exact while lease discovery is global" do
     {user_a, user_b} = distinct_partition_users("reconciliation")
     %{node_a: node_a, node_b: node_b} = active_two_node_authority!(user_a, user_b)
 
@@ -212,18 +218,32 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
 
     put_session!(node_a)
 
-    assert [{^ownership_a_agent_id, ^ownership_a_token, {:recorded, _}, {:ok, nil}}] =
-             AgentDirectives.reconcile_expired_ownership(1, backoffs_ms: [0])
+    # Expired lease discovery is deliberately global and non-authorizing: the
+    # oldest lease is found even though it belongs to node_b. The exact
+    # guard/lease transaction below still rechecks every identity and DB clock.
+    assert [
+             {^ownership_b_agent_id, ^ownership_b_token, {:requested, incident_b},
+              :termination_proof_required}
+           ] = AgentDirectives.reconcile_expired_ownership(1, backoffs_ms: [0])
 
-    refute Repo.get(AgentRuntimeLease, ownership_a.agent.id)
-
-    assert Repo.get!(AgentRuntimeLease, ownership_b.agent.id).owner_token ==
-             ownership_b.lease.owner_token
+    assert incident_b.agent_id == ownership_b_agent_id
+    assert incident_b.lease_token == ownership_b_token
+    assert Repo.get!(AgentRuntimeLease, ownership_b.agent.id).owner_token == ownership_b_token
+    assert Repo.get!(AgentRuntimeLease, ownership_a.agent.id).owner_token == ownership_a_token
 
     put_session!(node_b)
 
-    assert [{^ownership_b_agent_id, ^ownership_b_token, {:recorded, _}, {:ok, nil}}] =
-             AgentDirectives.reconcile_expired_ownership(1, backoffs_ms: [0])
+    assert [
+             {^ownership_b_agent_id, ^ownership_b_token, {:duplicate, duplicate_b},
+              :termination_proof_required},
+             {^ownership_a_agent_id, ^ownership_a_token, {:requested, incident_a},
+              :termination_proof_required}
+           ] = AgentDirectives.reconcile_expired_ownership(2, backoffs_ms: [0])
+
+    assert duplicate_b.id == incident_b.id
+    assert incident_a.agent_id == ownership_a_agent_id
+    assert incident_a.lease_token == ownership_a_token
+    assert Repo.get!(AgentRuntimeLease, ownership_a.agent.id).owner_token == ownership_a_token
 
     recorded_b = create_recorded_generation!(node_b, user_b, "recorded-b", 120)
     recorded_a = create_recorded_generation!(node_a, user_a, "recorded-a", 60)
@@ -348,30 +368,24 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
   defp activate_protocols! do
     set_role!("maraithon_activation_operator")
 
-    assert {:ok, effect_status} =
-             ProtocolCutover.activate(confirmation: ProtocolCutover.activation_confirmation())
-
-    assert effect_status in [:activated, :already_active]
-
     assert {:ok, evidence_status} =
-             Protocol.attest_effect_activation_evidence(
-               Keyword.delete(coordination_activation_opts(), :confirmation)
-             )
+             Protocol.attest_effect_activation_evidence(@activation_evidence)
 
     assert evidence_status in [:attested, :already_attested]
+
+    assert {:ok, effect_status} =
+             ProtocolCutover.activate(
+               [confirmation: ProtocolCutover.activation_confirmation()] ++ @activation_evidence
+             )
+
+    assert effect_status in [:activated, :already_active]
     assert {:ok, coordination_status} = Protocol.activate(coordination_activation_opts())
     assert coordination_status in [:activated, :already_active]
     reset_role!()
   end
 
   defp coordination_activation_opts do
-    [
-      confirmation: Protocol.activation_confirmation(),
-      evidence_id: @evidence_id,
-      evidence_digest: @evidence_digest,
-      activated_by: @activated_by,
-      exact_revision: @revision
-    ]
+    [confirmation: Protocol.activation_confirmation()] ++ @activation_evidence
   end
 
   defp create_bound_agent!(user_id) do
@@ -456,25 +470,38 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
     claimed = AgentDirectives.claim_next(agent.id, user_id, lease.owner_token) |> ok!()
     expire_lease!(agent.id, age_seconds)
 
-    assert {:recorded, _guard} =
+    assert {:requested, incident} =
              AgentRestartGuards.record_expired(agent.id, lease.owner_token, backoffs_ms: [0])
+
+    attest_external_termination!(incident)
+    assert {:recorded, _guard} = AgentTerminations.reconcile_incident(incident.id)
 
     %{agent: agent, directive: claimed, lease: lease}
   end
 
   defp expire_lease!(agent_id, age_seconds) do
-    Repo.query!(
-      """
-      UPDATE public.agent_runtime_leases
-      SET claimed_at = timezone('UTC', clock_timestamp()) - (($2::bigint + 2) * interval '1 second'),
-          renewed_at = timezone('UTC', clock_timestamp()) - (($2::bigint + 1) * interval '1 second'),
-          lease_until = timezone('UTC', clock_timestamp()) - ($2::bigint * interval '1 second'),
-          ready_at = NULL, draining_at = NULL,
-          updated_at = timezone('UTC', clock_timestamp())
-      WHERE agent_id = $1::uuid
-      """,
-      [Ecto.UUID.dump!(agent_id), age_seconds]
-    )
+    # Expiry is a test-only clock fixture. The runtime role intentionally has no
+    # table-wide UPDATE grant after the exact column-ACL hardening.
+    reset_role!()
+    Repo.query!("SET LOCAL session_replication_role = replica", [])
+
+    try do
+      Repo.query!(
+        """
+        UPDATE public.agent_runtime_leases
+        SET claimed_at = timezone('UTC', clock_timestamp()) - (($2::bigint + 2) * interval '1 second'),
+            renewed_at = timezone('UTC', clock_timestamp()) - (($2::bigint + 1) * interval '1 second'),
+            lease_until = timezone('UTC', clock_timestamp()) - ($2::bigint * interval '1 second'),
+            ready_at = NULL, draining_at = NULL,
+            updated_at = timezone('UTC', clock_timestamp())
+        WHERE agent_id = $1::uuid
+        """,
+        [Ecto.UUID.dump!(agent_id), age_seconds]
+      )
+    after
+      Repo.query!("SET LOCAL session_replication_role = origin", [])
+      set_role!("maraithon_runtime")
+    end
   end
 
   defp order_directives!(older_id, newer_id) do
@@ -535,12 +562,66 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
     name
   end
 
-  defp parked_process do
-    spawn(fn ->
-      receive do
-        :stop -> :ok
-      end
-    end)
+  defp registered_owner(agent_id, owner_token) do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        result = Registry.register(AgentRegistry, agent_id, owner_token)
+        send(parent, {:owner_registered, self(), result})
+        receive do: (:stop -> :ok)
+      end)
+
+    assert_receive {:owner_registered, ^pid, {:ok, _owner}}, 1_000
+    pid
+  end
+
+  defp await_lifecycle_watcher_release(_watcher, _pid, 0),
+    do: flunk("AgentWatcher did not reconcile the exact lifecycle DOWN")
+
+  defp await_lifecycle_watcher_release(watcher, pid, attempts) do
+    case :sys.get_state(watcher) do
+      %{pids: pids, pending_downs: pending} when not is_map_key(pids, pid) ->
+        if map_size(pending) == 0,
+          do: :ok,
+          else: await_lifecycle_watcher_release(watcher, pid, attempts - 1)
+
+      _state ->
+        await_lifecycle_watcher_release(watcher, pid, attempts - 1)
+    end
+  end
+
+  defp attest_external_termination!(incident) do
+    {public_key, private_key} = :crypto.generate_key(:eddsa, :ed25519)
+    previous = Application.get_env(:maraithon, AgentTerminations)
+
+    Application.put_env(:maraithon, AgentTerminations,
+      external_attestation_public_key: public_key
+    )
+
+    try do
+      evidence_id = "wake-scope-destroyed:#{incident.lease_token}"
+      digest = :crypto.hash(:sha256, "wake scope exact node destruction")
+      proved_by = "wake-scope@example.test"
+      payload = AgentTerminations.attestation_payload(incident, evidence_id, digest, proved_by)
+      signature = :crypto.sign(:eddsa, :none, payload, [private_key, :ed25519])
+
+      set_role!("maraithon_incident_operator")
+
+      assert {:attested, _proof} =
+               AgentTerminations.attest_external(incident.id, %{
+                 evidence_id: evidence_id,
+                 evidence_digest: digest,
+                 signature: signature,
+                 proved_by: proved_by
+               })
+    after
+      set_role!("maraithon_runtime")
+
+      if previous,
+        do: Application.put_env(:maraithon, AgentTerminations, previous),
+        else: Application.delete_env(:maraithon, AgentTerminations)
+    end
   end
 
   defp lifecycle_mutation(agent, kind) when kind in [:update, :upgrade] do
@@ -556,7 +637,11 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
   defp lifecycle_mutation(_agent, kind), do: %{"action" => Atom.to_string(kind)}
 
   defp set_role!(role)
-       when role in ["maraithon_runtime", "maraithon_activation_operator"] do
+       when role in [
+              "maraithon_runtime",
+              "maraithon_activation_operator",
+              "maraithon_incident_operator"
+            ] do
     Repo.query!("SET LOCAL ROLE " <> role, [])
     :ok
   end

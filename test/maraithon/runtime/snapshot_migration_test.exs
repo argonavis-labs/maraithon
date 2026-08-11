@@ -219,6 +219,7 @@ defmodule Maraithon.Runtime.SnapshotMigrationTest do
     end)
   end
 
+  @tag database_role: :session
   test "format proof refuses a same-name permissive format constraint" do
     Repo.query!("ALTER TABLE snapshots DROP CONSTRAINT IF EXISTS snapshots_tagged_v1_payloads")
 
@@ -231,6 +232,7 @@ defmodule Maraithon.Runtime.SnapshotMigrationTest do
              SnapshotMigration.finalize()
   end
 
+  @tag database_role: :session
   test "format proof refuses a missing storage-bound constraint" do
     Repo.query!("ALTER TABLE snapshots DROP CONSTRAINT snapshots_payload_storage_bound")
 

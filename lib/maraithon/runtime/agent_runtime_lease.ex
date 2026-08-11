@@ -5,6 +5,10 @@ defmodule Maraithon.Runtime.AgentRuntimeLease do
   A non-nil `ready_at` is workload authority only while the lease is live and
   the Agent and its isolation Binding remain runnable. `owner_node` is routing
   and observability data; `owner_token` is the immutable authority generation.
+  A non-NULL `termination_capability_digest` commits to a preimage held only by
+  the local watcher; that preimage is never represented by this schema. NULL is
+  an explicit external-proof-only owner generation and can never authorize a
+  local physical-DOWN proof.
   """
 
   use Ecto.Schema
@@ -21,6 +25,7 @@ defmodule Maraithon.Runtime.AgentRuntimeLease do
 
     field :owner_token, Ecto.UUID
     field :owner_node, :string
+    field :termination_capability_digest, :binary
     field :claimed_at, :utc_datetime_usec
     field :lease_until, :utc_datetime_usec
     field :renewed_at, :utc_datetime_usec
@@ -43,6 +48,7 @@ defmodule Maraithon.Runtime.AgentRuntimeLease do
     :renewed_at
   ]
   @optional_fields [
+    :termination_capability_digest,
     :ready_at,
     :draining_at,
     :coordination_activation_epoch,
@@ -55,6 +61,17 @@ defmodule Maraithon.Runtime.AgentRuntimeLease do
     lease
     |> cast(attrs || %{}, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
+    |> validate_change(:termination_capability_digest, fn
+      :termination_capability_digest, nil ->
+        []
+
+      :termination_capability_digest, digest
+      when is_binary(digest) and byte_size(digest) == 32 ->
+        []
+
+      :termination_capability_digest, _digest ->
+        [termination_capability_digest: "must be NULL or exactly 32 bytes"]
+    end)
     |> validate_length(:owner_node, min: 1, max: @max_owner_node_bytes, count: :bytes)
     |> validate_format(:owner_node, ~r/^[^\s\x00-\x1F\x7F]+$/u)
     |> foreign_key_constraint(:agent_id)

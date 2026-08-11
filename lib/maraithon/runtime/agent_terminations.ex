@@ -14,10 +14,12 @@ defmodule Maraithon.Runtime.AgentTerminations do
   alias Ecto.Adapters.SQL
   alias Maraithon.Agents.Agent
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentLocalDownWitness
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.AgentTerminationIncident
   alias Maraithon.Runtime.AgentTerminationProof
+  alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.IncidentLog
 
@@ -99,80 +101,99 @@ defmodule Maraithon.Runtime.AgentTerminations do
   def request_ambiguous(_agent_id, _lease_token, _reason, _opts),
     do: {:error, :invalid_agent_termination}
 
-  @doc """
-  Records the one local proof accepted by the runtime: the original monitor's
-  exact `{ref, pid, Agent id, lease token}` DOWN observation.
-  """
-  def record_local_down(agent_id, lease_token, pid, reason, monitor_started_at, opts \\ [])
+  @doc "Direct local-DOWN reports are never accepted as physical proof."
+  def record_local_down(_agent_id, _lease_token, _pid, _reason, _monitor_started_at, _opts \\ [])
 
-  def record_local_down(
+  def record_local_down(_agent_id, _lease_token, _pid, _reason, _monitor_started_at, _opts),
+    do: {:error, :local_down_witness_required}
+
+  @doc false
+  def record_watcher_down(witness, opts \\ [])
+
+  def record_watcher_down(%AgentLocalDownWitness{} = witness, opts) when is_list(opts) do
+    with {:ok, agent_id} <- uuid(witness.agent_id),
+         {:ok, lease_token} <- uuid(witness.lease_token),
+         {:ok, policy} <- policy(opts),
+         {:ok, termination_capability} <- AgentWatcher.consume_local_down_witness(witness) do
+      persist_local_down(
         agent_id,
         lease_token,
-        pid,
-        reason,
-        %DateTime{} = monitor_started_at,
+        witness.pid,
+        witness.down_reason,
+        witness.monitor_started_at,
+        termination_capability,
+        policy,
         opts
       )
-      when is_pid(pid) and is_list(opts) do
-    with {:ok, agent_id} <- uuid(agent_id),
-         {:ok, lease_token} <- uuid(lease_token),
-         {:ok, policy} <- policy(opts) do
-      proof_result =
-        Repo.transaction(fn ->
-          agent = lock_agent(agent_id)
-          lease = lock_lease(agent_id)
-          incident = lock_incident_by_lease(lease_token)
-          now = DatabaseClock.now!()
-
-          with :ok <- exact_identity_present(lease, incident, agent_id, lease_token) do
-            {incident, _inserted?} =
-              ensure_incident!(
-                incident,
-                agent,
-                lease,
-                lease_token,
-                safe_label(reason, "agent_down"),
-                policy,
-                now
-              )
-
-            proof =
-              case lock_proof(incident.id) do
-                nil ->
-                  set_local!("maraithon.agent_local_down_proof", incident.id)
-
-                  insert_proof!(incident, %{
-                    proof_kind: "local_down",
-                    local_pid: inspect(pid),
-                    monitor_started_at: monitor_started_at,
-                    down_reason: safe_label(reason, "agent_down"),
-                    proved_by: Atom.to_string(node()),
-                    proved_at: now
-                  })
-
-                %AgentTerminationProof{proof_kind: "local_down", local_pid: local_pid} = proof ->
-                  if local_pid == inspect(pid),
-                    do: proof,
-                    else: Repo.rollback(:termination_proof_mismatch)
-
-                _other ->
-                  Repo.rollback(:termination_proof_mismatch)
-              end
-
-            incident = mark_proven!(incident, proof, now, policy)
-            {incident, proof}
-          end
-        end)
-
-      case proof_result do
-        {:ok, {incident, _proof}} -> reconcile_incident(incident.id, opts)
-        {:error, reason} -> {:error, reason}
-      end
     end
   end
 
-  def record_local_down(_agent_id, _lease_token, _pid, _reason, _started_at, _opts),
-    do: {:error, :invalid_agent_termination}
+  def record_watcher_down(_witness, _opts),
+    do: {:error, :local_down_witness_required}
+
+  defp persist_local_down(
+         agent_id,
+         lease_token,
+         pid,
+         reason,
+         monitor_started_at,
+         termination_capability,
+         policy,
+         opts
+       ) do
+    proof_result =
+      Repo.transaction(fn ->
+        agent = lock_agent(agent_id)
+        lease = lock_lease(agent_id)
+        incident = lock_incident_by_lease(lease_token)
+        now = DatabaseClock.now!()
+
+        with :ok <- exact_identity_present(lease, incident, agent_id, lease_token) do
+          {incident, _inserted?} =
+            ensure_incident!(
+              incident,
+              agent,
+              lease,
+              lease_token,
+              safe_label(reason, "agent_down"),
+              policy,
+              now
+            )
+
+          proof =
+            case lock_proof(incident.id) do
+              nil ->
+                set_local!("maraithon.agent_local_down_proof", incident.id)
+                set_termination_capability_local!(termination_capability)
+
+                insert_proof!(incident, %{
+                  proof_kind: "local_down",
+                  local_pid: inspect(pid),
+                  monitor_started_at: monitor_started_at,
+                  down_reason: safe_label(reason, "agent_down"),
+                  proved_by: Atom.to_string(node()),
+                  proved_at: now
+                })
+
+              %AgentTerminationProof{proof_kind: "local_down", local_pid: local_pid} = proof ->
+                if local_pid == inspect(pid),
+                  do: proof,
+                  else: Repo.rollback(:termination_proof_mismatch)
+
+              _other ->
+                Repo.rollback(:termination_proof_mismatch)
+            end
+
+          incident = mark_proven!(incident, proof, now, policy)
+          {incident, proof}
+        end
+      end)
+
+    case proof_result do
+      {:ok, {incident, _proof}} -> reconcile_incident(incident.id, opts)
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   @doc """
   Accepts a detached Ed25519 operator signature over the complete stored
@@ -274,41 +295,37 @@ defmodule Maraithon.Runtime.AgentTerminations do
 
   def request_expired_batch(limit, opts)
       when is_integer(limit) and limit in 1..@max_batch and is_list(opts) do
-    with {:ok, policy} <- policy(opts) do
-      Repo.transaction(fn ->
-        now = DatabaseClock.now!()
+    with {:ok, _policy} <- policy(opts),
+         {:ok, hints} <-
+           Repo.transaction(fn ->
+             now = DatabaseClock.now!()
 
-        rows =
-          Repo.all(
-            from(agent in Agent,
-              join: lease in AgentRuntimeLease,
-              on: lease.agent_id == agent.id,
-              where: lease.lease_until <= ^now,
-              order_by: [asc: lease.lease_until, asc: lease.agent_id],
-              limit: ^limit,
-              lock: "FOR UPDATE SKIP LOCKED",
-              select: {agent, lease}
-            )
-          )
+             Repo.all(
+               from(lease in AgentRuntimeLease,
+                 where: lease.lease_until <= ^now,
+                 order_by: [asc: lease.lease_until, asc: lease.agent_id],
+                 limit: ^limit,
+                 lock: "FOR UPDATE SKIP LOCKED",
+                 select: {lease.agent_id, lease.owner_token}
+               )
+             )
+           end) do
+      Enum.reduce_while(hints, [], fn {agent_id, lease_token}, rows ->
+        case request_expired(agent_id, lease_token, opts) do
+          {status, %AgentTerminationIncident{} = incident}
+          when status in [:requested, :duplicate] ->
+            {:cont, [{status, incident} | rows]}
 
-        Enum.map(rows, fn {agent, lease} ->
-          {incident, inserted?} =
-            put_request!(agent, lease, "lease_expired", policy, now)
+          {:ignored, _reason} ->
+            {:cont, rows}
 
-          {if(inserted?, do: :requested, else: :duplicate), incident}
-        end)
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
       end)
       |> case do
-        {:ok, rows} ->
-          Enum.each(rows, fn
-            {:requested, incident} -> record_incident(incident)
-            _ -> :ok
-          end)
-
-          rows
-
-        {:error, reason} ->
-          {:error, reason}
+        {:error, _reason} = error -> error
+        rows -> Enum.reverse(rows)
       end
     end
   end
@@ -621,10 +638,13 @@ defmodule Maraithon.Runtime.AgentTerminations do
   end
 
   defp lock_lease(agent_id) do
+    # Termination discovery and proof paths observe but never mutate this row.
+    # SHARE still serializes lease renewal/deletion while preserving the
+    # incident operator's read-only least-privilege contract.
     Repo.one(
       from lease in AgentRuntimeLease,
         where: lease.agent_id == ^agent_id,
-        lock: "FOR UPDATE"
+        lock: "FOR SHARE"
     )
   end
 
@@ -650,13 +670,54 @@ defmodule Maraithon.Runtime.AgentTerminations do
   defp lock_proof(incident_id) do
     Repo.one(
       from proof in AgentTerminationProof,
-        where: proof.incident_id == ^incident_id,
-        lock: "FOR SHARE"
+        where: proof.incident_id == ^incident_id
     )
   end
 
   defp set_local!(key, value) do
     SQL.query!(Repo, "SELECT set_config($1, $2, true)", [key, to_string(value)])
+  end
+
+  defp set_termination_capability_local!(termination_capability)
+       when is_binary(termination_capability) and byte_size(termination_capability) == 32 do
+    require_secret_sql_logging_disabled!()
+
+    SQL.query!(
+      Repo,
+      "SELECT set_config($1, $2, true) IS NOT NULL",
+      [
+        "maraithon.agent_termination_capability",
+        Base.encode64(termination_capability)
+      ],
+      log: false,
+      telemetry_event: false
+    )
+
+    :ok
+  end
+
+  defp set_termination_capability_local!(_termination_capability),
+    do: Repo.rollback(:local_down_witness_required)
+
+  defp require_secret_sql_logging_disabled! do
+    result =
+      SQL.query!(
+        Repo,
+        """
+        SELECT
+          set_config('log_parameter_max_length_on_error', '0', true) = '0'
+          AND current_setting('log_parameter_max_length') = '0'
+          AND current_setting('log_parameter_max_length_on_error') = '0'
+        """,
+        [],
+        log: false,
+        telemetry_event: false
+      )
+
+    unless result.rows == [[true]],
+      do: Repo.rollback(:local_proof_database_logging_policy_unsafe)
+
+    :ok
   end
 
   defp unwrap_request({:ok, {:ignored, reason}}), do: {:ignored, reason}

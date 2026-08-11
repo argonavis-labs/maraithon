@@ -86,13 +86,7 @@ defmodule Maraithon.DurablePayloadBindingLifecycle do
 
   @doc false
   def lock_source_tables! do
-    targets()
-    |> Enum.map(& &1.table)
-    |> Enum.uniq()
-    |> Enum.each(fn table ->
-      Repo.query!("LOCK TABLE public.#{table} IN SHARE MODE", [], log: false)
-    end)
-
+    Repo.query!("SELECT public.lock_durable_payload_binding_sources()", [], log: false)
     :ok
   end
 
@@ -121,13 +115,19 @@ defmodule Maraithon.DurablePayloadBindingLifecycle do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "payload lifecycle protocol fence requires a transaction")
 
-    runtime_mode =
+    runtime_row =
       case Repo.query!(
-             "SELECT mode FROM public.runtime_coordination_protocols WHERE name = 'runtime' FOR SHARE",
+             """
+             SELECT mode, activation_evidence_id, activation_evidence_digest,
+                    activated_by, exact_revision
+             FROM public.runtime_coordination_protocols
+             WHERE name = 'runtime'
+             FOR SHARE
+             """,
              [],
              log: false
            ).rows do
-        [[mode]] -> mode
+        [row] -> row
         [] -> Repo.rollback(:runtime_coordination_protocol_missing)
       end
 
@@ -147,8 +147,11 @@ defmodule Maraithon.DurablePayloadBindingLifecycle do
         [] -> Repo.rollback(:effect_execution_protocol_missing)
       end
 
-    case {runtime_mode, effect_row} do
-      {"partition_fenced_v1", ["generation_fenced_v1", id, digest, operator, revision]}
+    case {runtime_row, effect_row} do
+      {
+        ["partition_fenced_v1", id, digest, operator, revision],
+        ["generation_fenced_v1", id, digest, operator, revision]
+      }
       when is_binary(id) and is_binary(digest) and byte_size(digest) == 32 and
              is_binary(operator) and is_binary(revision) ->
         %{id: id, digest: digest, operator: operator, revision: revision}
@@ -173,13 +176,7 @@ defmodule Maraithon.DurablePayloadBindingLifecycle do
 
   defp process_row(target, mode, target_tag, operation_kind, evidence, row, report) do
     parsed = parse_row(target, row)
-
-    result =
-      with :ok <- validate_unpurged(parsed),
-           {:ok, fields} <- decrypt_fields(target.fields, parsed.ciphertexts),
-           {:ok, action} <- binding_action(target, parsed, fields, mode, target_tag) do
-        apply_action(target, parsed, fields, action)
-      end
+    result = process_row_with_savepoint(target, mode, target_tag, parsed)
 
     case result do
       {:ok, :already_current, digest} ->
@@ -226,42 +223,26 @@ defmodule Maraithon.DurablePayloadBindingLifecycle do
 
         add_failure(report, parsed.row_ref, failure)
     end
+  end
+
+  defp process_row_with_savepoint(target, mode, target_tag, parsed) do
+    case Repo.transaction(
+           fn ->
+             with :ok <- validate_unpurged(parsed),
+                  {:ok, fields} <- decrypt_fields(target.fields, parsed.ciphertexts),
+                  {:ok, action} <- binding_action(target, parsed, fields, mode, target_tag) do
+               apply_action(target, parsed, fields, action)
+             end
+           end,
+           mode: :savepoint
+         ) do
+      {:ok, result} -> result
+      {:error, _reason} -> {:error, :payload_schema_invalid}
+    end
   rescue
-    _error ->
-      # Candidate rows carry no plaintext in reports. A row-local exception is
-      # durably classified while the locked source row remains unchanged.
-      parsed = parse_row(target, row)
-      failure = :payload_schema_invalid
-
-      store_operation!(
-        operation_kind,
-        target,
-        parsed.row_identity,
-        parsed.source_digest,
-        target_tag,
-        :failed,
-        failure,
-        evidence
-      )
-
-      add_failure(report, parsed.row_ref, failure)
+    _error -> {:error, :payload_schema_invalid}
   catch
-    :exit, _reason ->
-      parsed = parse_row(target, row)
-      failure = :payload_schema_invalid
-
-      store_operation!(
-        operation_kind,
-        target,
-        parsed.row_identity,
-        parsed.source_digest,
-        target_tag,
-        :failed,
-        failure,
-        evidence
-      )
-
-      add_failure(report, parsed.row_ref, failure)
+    :exit, _reason -> {:error, :payload_schema_invalid}
   end
 
   defp parse_row(target, [ctid, row_identity, row_ref, source_digest, purged_at | values]) do

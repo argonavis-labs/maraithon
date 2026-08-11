@@ -6,6 +6,7 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
   alias Maraithon.Agents
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentLeases
+  alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.AgentTerminations
@@ -14,17 +15,18 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
   alias Maraithon.Runtime.DatabaseClock
 
   setup do
-    # This shared test database was migrated by a parallel hardened-role branch.
-    # Disable only its role-enforcement triggers transactionally so these tests
-    # can focus on convergence; 140004 itself attests the canonical ACL/trigger
-    # fingerprints before activation.
-    Repo.query!(
-      "ALTER TABLE agent_runtime_leases DISABLE TRIGGER enforce_coordinated_agent_lease_trigger"
-    )
+    # DataCase enters maraithon_runtime, while ALTER TABLE remains owner-only.
+    # Disable only these role-enforcement triggers transactionally so this suite
+    # can focus on convergence; 140004 separately attests their fingerprints.
+    as_database_owner(fn ->
+      Repo.query!(
+        "ALTER TABLE agent_runtime_leases DISABLE TRIGGER enforce_coordinated_agent_lease_trigger"
+      )
 
-    Repo.query!(
-      "ALTER TABLE agent_termination_proofs DISABLE TRIGGER enforce_agent_termination_proof_trigger"
-    )
+      Repo.query!(
+        "ALTER TABLE agent_termination_proofs DISABLE TRIGGER enforce_agent_termination_proof_trigger"
+      )
+    end)
 
     :ok
   end
@@ -52,9 +54,9 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
 
   test "the original exact monitor DOWN records proof and converges the lease" do
     agent = running_agent("local-down")
-    lease = manual_lease(agent)
     watcher = watcher(recover?: false)
-    pid = parked_process()
+    lease = manual_lease(agent, watcher: watcher)
+    pid = registered_owner(agent.id, lease.owner_token)
 
     as_migrator(fn ->
       assert :ok = AgentWatcher.track(watcher, pid, agent.id, lease.owner_token)
@@ -62,8 +64,7 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
       Process.exit(pid, :kill)
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 1_000
 
-      # The system call is a mailbox barrier behind the watcher's DOWN handling.
-      _ = :sys.get_state(watcher)
+      await_watcher_release(watcher, pid, 100)
     end)
 
     assert %{last_owner_token: owner_token, needs_recovery: true} =
@@ -83,9 +84,9 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
 
   test "watcher restart gap remains ambiguous and requires external evidence" do
     agent = running_agent("watcher-gap")
-    lease = manual_lease(agent)
     watcher = watcher(recover?: false)
-    pid = parked_process()
+    lease = manual_lease(agent, watcher: watcher)
+    pid = registered_owner(agent.id, lease.owner_token)
 
     assert :ok = AgentWatcher.track(watcher, pid, agent.id, lease.owner_token)
     watcher_ref = Process.monitor(watcher)
@@ -174,44 +175,30 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
     assert AgentTerminations.proof_for(incident.id).proof_kind == "external_node_destroyed"
   end
 
-  test "proof commit response loss is idempotent" do
+  test "duplicate exact watcher DOWN is durably idempotent" do
     agent = running_agent("proof-idempotent")
-    lease = manual_lease(agent)
-    pid = parked_process()
-    started_at = DatabaseClock.now!()
+    watcher = watcher(recover?: false)
+    lease = manual_lease(agent, watcher: watcher)
+    pid = registered_owner(agent.id, lease.owner_token)
+    assert :ok = AgentWatcher.track(watcher, pid, agent.id, lease.owner_token)
+    watcher_ref = watcher |> :sys.get_state() |> Map.fetch!(:pids) |> Map.fetch!(pid)
+
     ref = Process.monitor(pid)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 1_000
+    await_watcher_release(watcher, pid, 100)
 
-    opts = [backoffs_ms: [0]]
+    first_guard = AgentRestartGuards.get(agent.id)
+    assert first_guard.last_owner_token == lease.owner_token
+    assert first_guard.crash_count == 1
 
-    assert {:recorded, first_guard} =
-             as_migrator(fn ->
-               AgentTerminations.record_local_down(
-                 agent.id,
-                 lease.owner_token,
-                 pid,
-                 :killed,
-                 started_at,
-                 opts
-               )
-             end)
+    send(watcher, {:DOWN, watcher_ref, :process, pid, :killed})
+    _ = :sys.get_state(watcher)
 
-    # Simulates a committed response being lost and the exact proof request
-    # being replayed by durable reconciliation.
-    assert {:duplicate, duplicate_guard} =
-             as_migrator(fn ->
-               AgentTerminations.record_local_down(
-                 agent.id,
-                 lease.owner_token,
-                 pid,
-                 :killed,
-                 started_at,
-                 opts
-               )
-             end)
-
+    duplicate_guard = AgentRestartGuards.get(agent.id)
     assert duplicate_guard.generation == first_guard.generation
+    assert duplicate_guard.crash_count == 1
+
     incident = AgentTerminations.get_by_lease(lease.owner_token)
     assert Repo.aggregate(AgentTerminationProof, :count, :id) == 1
     assert incident.request_count == 1
@@ -350,6 +337,18 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
     expired? = Keyword.get(opts, :expired?, false)
     claimed_at = DateTime.add(now, -180, :second)
     renewed_at = DateTime.add(now, -120, :second)
+    owner_token = Ecto.UUID.generate()
+    watcher = Keyword.get(opts, :watcher)
+
+    termination_capability_digest =
+      if watcher do
+        {:ok, digest} =
+          AgentWatcher.prepare_lease_capability(watcher, agent.id, owner_token)
+
+        digest
+      else
+        :crypto.hash(:sha256, :crypto.strong_rand_bytes(32))
+      end
 
     lease_until =
       if expired?, do: DateTime.add(now, -60, :second), else: DateTime.add(now, 60, :second)
@@ -376,8 +375,9 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
     attrs =
       Map.merge(coordination, %{
         agent_id: agent.id,
-        owner_token: Ecto.UUID.generate(),
+        owner_token: owner_token,
         owner_node: Atom.to_string(node()),
+        termination_capability_digest: termination_capability_digest,
         claimed_at: claimed_at,
         renewed_at: renewed_at,
         lease_until: lease_until,
@@ -385,15 +385,37 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
         draining_at: nil
       })
 
-    as_migrator(fn ->
-      %AgentRuntimeLease{}
-      |> AgentRuntimeLease.changeset(attrs)
-      |> Repo.insert!()
-    end)
+    try do
+      as_migrator(fn ->
+        %AgentRuntimeLease{}
+        |> AgentRuntimeLease.changeset(attrs)
+        |> Repo.insert!()
+      end)
+    rescue
+      error ->
+        if watcher,
+          do: AgentWatcher.discard_lease_capability(watcher, agent.id, owner_token)
+
+        reraise error, __STACKTRACE__
+    end
   end
 
   defp parked_process do
     spawn(fn -> receive do: (:stop -> :ok) end)
+  end
+
+  defp registered_owner(agent_id, owner_token) do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        result = Registry.register(AgentRegistry, agent_id, owner_token)
+        send(parent, {:owner_registered, self(), result})
+        receive do: (:stop -> :ok)
+      end)
+
+    assert_receive {:owner_registered, ^pid, {:ok, _owner}}, 1_000
+    pid
   end
 
   defp watcher(opts) do
@@ -411,6 +433,21 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
        shutdown_down_barrier_ms: 0},
       id: name
     )
+  end
+
+  defp await_watcher_release(_watcher, _pid, 0),
+    do: flunk("AgentWatcher did not reconcile the exact DOWN")
+
+  defp await_watcher_release(watcher, pid, attempts) do
+    case :sys.get_state(watcher) do
+      %{pids: pids, pending_downs: pending} when not is_map_key(pids, pid) ->
+        if map_size(pending) == 0,
+          do: :ok,
+          else: await_watcher_release(watcher, pid, attempts - 1)
+
+      _state ->
+        await_watcher_release(watcher, pid, attempts - 1)
+    end
   end
 
   defp expire_lease!(agent_id) do
@@ -431,20 +468,34 @@ defmodule Maraithon.Runtime.AgentTerminationConvergenceTest do
 
   defp as_migrator(fun) when is_function(fun, 0), do: fun.()
 
-  defp disable_partition_triggers! do
-    Repo.query!(
-      "ALTER TABLE runtime_partitions DISABLE TRIGGER enforce_runtime_partition_authority_trigger"
-    )
+  defp as_database_owner(fun) when is_function(fun, 0) do
+    Repo.query!("RESET ROLE", [], log: false)
 
-    Repo.query!(
-      "ALTER TABLE runtime_partitions DISABLE TRIGGER enforce_agent_termination_partition_release_trigger"
-    )
+    try do
+      fun.()
+    after
+      Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    end
+  end
+
+  defp disable_partition_triggers! do
+    as_database_owner(fn ->
+      Repo.query!(
+        "ALTER TABLE runtime_partitions DISABLE TRIGGER enforce_runtime_partition_authority_trigger"
+      )
+
+      Repo.query!(
+        "ALTER TABLE runtime_partitions DISABLE TRIGGER enforce_agent_termination_partition_release_trigger"
+      )
+    end)
   end
 
   defp enable_termination_partition_trigger! do
-    Repo.query!(
-      "ALTER TABLE runtime_partitions ENABLE TRIGGER enforce_agent_termination_partition_release_trigger"
-    )
+    as_database_owner(fn ->
+      Repo.query!(
+        "ALTER TABLE runtime_partitions ENABLE TRIGGER enforce_agent_termination_partition_release_trigger"
+      )
+    end)
   end
 
   defp release_partition_in_savepoint(partition_id) do

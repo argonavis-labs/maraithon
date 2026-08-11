@@ -1,7 +1,7 @@
 defmodule Maraithon.Runtime.Coordination.TaskAuthorityGuardianTest do
   use ExUnit.Case, async: false
 
-  alias Maraithon.Runtime.Coordination.{TaskAuthority, TaskSupervisor}
+  alias Maraithon.Runtime.Coordination.TaskAuthority
   alias Maraithon.Runtime.TaskGuardian
 
   setup do
@@ -10,144 +10,150 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthorityGuardianTest do
     :ok
   end
 
-  test "an exact task DOWN survives a database persistence outage and is retried" do
-    store =
-      start_supervised!(
-        {Agent, fn -> %{available: false, persisted: []} end},
-        id: :task_proof_outage_store
-      )
+  test "Task capability vault is private and authority/public terms contain digest only" do
+    authority = start_isolated_authority()
+    identity = reserve(authority)
+    authority_state = :sys.get_state(authority)
+    guardian_state = :sys.get_state(TaskGuardian)
 
-    persist_down = fn identity, proof ->
-      Agent.get_and_update(store, fn state ->
-        if state.available do
-          {:ok, %{state | persisted: [{identity, proof} | state.persisted]}}
-        else
-          {{:error, :database_unavailable}, state}
-        end
-      end)
+    assert_raise ArgumentError, fn ->
+      :ets.tab2list(guardian_state.termination_capabilities)
     end
 
-    authority = start_isolated_authority(persist_down: persist_down)
-    identity = reserve(authority)
+    reservation = Map.fetch!(authority_state.reservations, identity.local_task_id)
+    assert reservation.termination_capability_digest == identity.termination_capability_digest
+    refute Map.has_key?(reservation, :termination_capability_id)
+    refute secret_bearing_term?(authority_state)
+    refute secret_bearing_term?(guardian_state)
+
+    assert identity.termination_capability_digest in collect_32_byte_binaries(authority_state)
+    assert identity.termination_capability_digest in collect_32_byte_binaries(guardian_state)
+  end
+
+  test "Guardian retains and retries exact task DOWN independently of Authority state" do
+    owner = start_isolated_authority()
+    identity = reserve(owner)
     test_pid = self()
 
     task =
-      Task.Supervisor.async_nolink(TaskSupervisor.task_supervisor(), fn ->
-        :ok = GenServer.call(authority, {:activate, identity})
+      start_bound_task(owner, identity, fn ->
         send(test_pid, {:coordinated_task_registered, self()})
-
-        receive do
-          :finish -> :ok
-        end
+        receive do: (:finish -> :ok)
       end)
 
     assert_receive {:coordinated_task_registered, task_pid}, 2_000
-    assert task.pid == task_pid
+    send(task_pid, :finish)
+    assert_receive {:DOWN, ref, :process, ^task_pid, :normal} when ref == task.ref, 2_000
+
+    guardian_state = :sys.get_state(TaskGuardian)
+    assert MapSet.size(guardian_state.pending_persistence_set) > 0
 
     assert {:unknown, :termination_proof_persistence_failed} =
-             GenServer.call(authority, {:terminate_exact, identity}, 5_000)
+             GenServer.call(owner, {:terminate_exact, identity})
 
-    assert_receive {:DOWN, ref, :process, ^task_pid, _reason} when ref == task.ref, 2_000
-    Agent.update(store, &%{&1 | available: true})
-
-    assert {:ok, %{persisted: persisted, remaining: 0}} =
-             TaskAuthority.retry_pending_proofs(authority)
-
-    assert persisted in [0, 1]
-    assert [{^identity, %{evidence_id: evidence_id}}] = Agent.get(store, & &1.persisted)
-    assert evidence_id == "task-down:#{identity.local_task_id}"
+    guardian_state = :sys.get_state(TaskGuardian)
+    assert MapSet.size(guardian_state.pending_persistence_set) > 0
+    refute secret_bearing_term?(guardian_state)
   end
 
-  test "one_for_all Authority restart retains exact task DOWN proof" do
-    persist_down = fn _identity, _proof -> :ok end
-    owner = start_isolated_authority(persist_down: persist_down)
-    observer = start_isolated_authority(persist_down: persist_down)
-    identity = reserve(owner)
+  test "only the owner-bound coordinated child PID may activate" do
+    authority = start_isolated_authority()
+    identity = reserve(authority)
+    test_pid = self()
+
+    foreign =
+      Task.Supervisor.async_nolink(:sys.get_state(authority).supervisor_pid, fn ->
+        send(
+          test_pid,
+          {:foreign_coordination_activation, GenServer.call(authority, {:activate, identity})}
+        )
+      end)
+
+    assert_receive {:foreign_coordination_activation, {:error, :task_reservation_lost}}, 2_000
+    assert_receive {:DOWN, ref, :process, _pid, :normal} when ref == foreign.ref, 2_000
+
+    task = start_bound_task(authority, identity, fn -> :ok end)
+    assert_receive {:DOWN, ref, :process, _pid, :normal} when ref == task.ref, 2_000
+  end
+
+  test "forged Authority owner and task DOWN tuples cannot create proof" do
+    authority = start_isolated_authority()
+    identity = reserve(authority)
+    reservation = :sys.get_state(authority).reservations[identity.local_task_id]
+    old_owner_ref = reservation.owner_ref
+    send(authority, {:DOWN, old_owner_ref, :process, self(), :killed})
+    reservation = :sys.get_state(authority).reservations[identity.local_task_id]
+    refute reservation.owner_ref == old_owner_ref
+
     test_pid = self()
 
     task =
-      Task.Supervisor.async_nolink(TaskSupervisor.task_supervisor(), fn ->
-        :ok = GenServer.call(owner, {:activate, identity})
-        send(test_pid, {:restart_task_registered, self()})
-
-        receive do
-          :finish -> :ok
-        end
+      start_bound_task(authority, identity, fn ->
+        send(test_pid, {:spoof_authority_task_ready, self()})
+        receive do: (:finish -> :ok)
       end)
 
-    assert_receive {:restart_task_registered, task_pid}, 2_000
-    authority = Process.whereis(TaskAuthority)
-    physical_supervisor = Process.whereis(TaskSupervisor.task_supervisor())
-    authority_ref = Process.monitor(authority)
-    supervisor_ref = Process.monitor(physical_supervisor)
-    Process.exit(authority, :kill)
+    assert_receive {:spoof_authority_task_ready, task_pid}, 2_000
+    reservation = :sys.get_state(authority).reservations[identity.local_task_id]
+    old_task_ref = reservation.task_ref
+    send(authority, {:DOWN, old_task_ref, :process, task_pid, :killed})
+    reservation = :sys.get_state(authority).reservations[identity.local_task_id]
+    assert Process.alive?(task_pid)
+    refute reservation.task_ref == old_task_ref
 
-    assert_receive {:DOWN, ^authority_ref, :process, ^authority, _reason}, 2_000
-    assert_receive {:DOWN, ^supervisor_ref, :process, ^physical_supervisor, _reason}, 2_000
-    assert_receive {:DOWN, ref, :process, ^task_pid, _reason} when ref == task.ref, 2_000
-    _ = :sys.get_state(TaskGuardian)
+    guardian = :sys.get_state(TaskGuardian)
+    generation = Map.fetch!(guardian.generations, {:coordination, identity.supervisor_id})
 
-    assert {:ok, :terminated} = GenServer.call(observer, {:terminate_exact, identity})
+    identity_key =
+      {:coordination, identity.assignment_id, identity.claim_token, identity.supervisor_id,
+       identity.local_task_id}
+
+    assert generation.identities[identity_key].down == nil
+
+    send(task_pid, :finish)
+    assert_receive {:DOWN, ref, :process, ^task_pid, :normal} when ref == task.ref, 2_000
   end
 
-  test "reserved/not_entered persistence requires the monitored supervisor barrier" do
-    store =
-      start_supervised!(
-        {Agent,
-         fn ->
-           %{
-             identity: nil,
-             state: "reserved",
-             provider_boundary: "not_entered",
-             outcome: nil
-           }
-         end},
-        id: :reserved_assignment_store
-      )
-
-    persist_never_activated = fn identity ->
-      Agent.get_and_update(store, fn state ->
-        if state.identity == identity and state.state == "reserved" and
-             state.provider_boundary == "not_entered" do
-          {:ok, %{state | state: "settled", outcome: "cancelled_before_provider"}}
-        else
-          {{:error, :assignment_not_canonical}, state}
-        end
-      end)
-    end
-
-    owner = start_isolated_authority(persist_never_activated: persist_never_activated)
-    observer = start_isolated_authority(persist_never_activated: persist_never_activated)
+  test "cancelled reserved work remains canonical never_activated across supervisor DOWN" do
+    owner = start_isolated_authority()
     identity = reserve(owner)
-    Agent.update(store, &%{&1 | identity: identity})
 
-    assert {:unknown, :task_termination_unproven} =
-             GenServer.call(observer, {:terminate_exact, identity})
+    assert {:unknown, :termination_proof_persistence_failed} =
+             GenServer.call(owner, {:terminate_exact, identity})
 
-    assert Agent.get(store, & &1.state) == "reserved"
-
-    physical_supervisor = Process.whereis(TaskSupervisor.task_supervisor())
+    physical_supervisor = :sys.get_state(owner).supervisor_pid
     supervisor_ref = Process.monitor(physical_supervisor)
     Process.exit(physical_supervisor, :kill)
 
     assert_receive {:DOWN, ^supervisor_ref, :process, ^physical_supervisor, _reason}, 2_000
     _ = :sys.get_state(TaskGuardian)
 
-    assert {:ok, :never_activated} =
-             GenServer.call(observer, {:terminate_exact, identity})
-
-    assert %{
-             state: "settled",
-             provider_boundary: "not_entered",
-             outcome: "cancelled_before_provider"
-           } = Agent.get(store, &Map.take(&1, [:state, :provider_boundary, :outcome]))
+    assert {:unknown, :termination_proof_persistence_failed} =
+             GenServer.call(owner, {:terminate_exact, identity})
   end
 
-  defp start_isolated_authority(overrides) do
-    opts = Keyword.merge([name: nil], overrides)
+  defp start_bound_task(authority, identity, fun) when is_function(fun, 0) do
+    gate = make_ref()
+
+    task =
+      Task.Supervisor.async_nolink(:sys.get_state(authority).supervisor_pid, fn ->
+        receive do: ({:bound, ^gate} -> :ok)
+        :ok = GenServer.call(authority, {:activate, identity})
+        fun.()
+      end)
+
+    assert :ok = GenServer.call(authority, {:bind_task, identity, task.pid})
+    send(task.pid, {:bound, gate})
+    task
+  end
+
+  defp start_isolated_authority do
+    physical_supervisor =
+      start_supervised!(Supervisor.child_spec({Task.Supervisor, []}, id: make_ref()))
 
     spec =
-      Supervisor.child_spec({TaskAuthority, opts},
+      Supervisor.child_spec(
+        {TaskAuthority, name: nil, task_supervisor_pid: physical_supervisor},
         id: make_ref(),
         restart: :temporary
       )
@@ -165,6 +171,39 @@ defmodule Maraithon.Runtime.Coordination.TaskAuthorityGuardianTest do
     }
 
     assert {:ok, identity} = GenServer.call(authority, {:reserve, base})
+    assert byte_size(identity.termination_capability_digest) == 32
+    refute Map.has_key?(identity, :termination_capability)
+    refute Map.has_key?(identity, :termination_capability_secret)
     identity
   end
+
+  defp collect_32_byte_binaries(term) when is_binary(term) do
+    if byte_size(term) == 32, do: [term], else: []
+  end
+
+  defp collect_32_byte_binaries(term) when is_map(term) do
+    term |> Map.to_list() |> Enum.flat_map(&collect_32_byte_binaries/1)
+  end
+
+  defp collect_32_byte_binaries(term) when is_tuple(term) do
+    term |> Tuple.to_list() |> Enum.flat_map(&collect_32_byte_binaries/1)
+  end
+
+  defp collect_32_byte_binaries(term) when is_list(term),
+    do: Enum.flat_map(term, &collect_32_byte_binaries/1)
+
+  defp collect_32_byte_binaries(_term), do: []
+
+  defp secret_bearing_term?(term) when is_map(term) do
+    Map.has_key?(term, :secret) or Map.has_key?(term, :termination_capability) or
+      Enum.any?(Map.to_list(term), &secret_bearing_term?/1)
+  end
+
+  defp secret_bearing_term?(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.any?(&secret_bearing_term?/1)
+
+  defp secret_bearing_term?(term) when is_list(term),
+    do: Enum.any?(term, &secret_bearing_term?/1)
+
+  defp secret_bearing_term?(_term), do: false
 end

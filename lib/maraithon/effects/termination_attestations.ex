@@ -11,9 +11,11 @@ defmodule Maraithon.Effects.TerminationAttestations do
 
   alias Ecto.Adapters.SQL
   alias Maraithon.Effects.ProtocolCutover
-  alias Maraithon.Effects.TerminationAttestation
+  alias Maraithon.Effects.{Effect, TerminationAttestation}
   alias Maraithon.Repo
   alias Maraithon.Runtime.DatabaseClock
+  alias Maraithon.Runtime.Coordination.{TaskAssignment, TaskClaims}
+  alias Maraithon.Runtime.Coordination.Protocol, as: CoordinationProtocol
 
   @confirmation "PHYSICAL_TASK_TERMINATED"
 
@@ -28,6 +30,7 @@ defmodule Maraithon.Effects.TerminationAttestations do
       evidence_digest = :crypto.hash(:sha256, evidence_id)
 
       Repo.transaction(fn ->
+        runtime_mode = CoordinationProtocol.locked_mode!()
         ProtocolCutover.require_exact_reconciliation!()
         now = DatabaseClock.now!()
 
@@ -37,36 +40,49 @@ defmodule Maraithon.Effects.TerminationAttestations do
           [@confirmation]
         )
 
-        existing = lock_existing(identity)
+        lock_identity!(identity)
 
-        case existing do
+        case find_existing(identity) do
           %TerminationAttestation{} = attestation ->
-            if attestation.evidence_digest == evidence_digest and
-                 attestation.evidence_id == evidence_id and
-                 attestation.attested_by == attested_by do
-              attestation
-            else
-              Repo.rollback(:effect_termination_attestation_conflict)
-            end
+            verify_existing_attestation!(
+              attestation,
+              evidence_id,
+              evidence_digest,
+              attested_by
+            )
+
+            lock_effect_row!(attestation.effect_id)
+            assignment = lock_historical_assignment_or_uncoordinated!(identity)
+            validate_runtime_binding!(runtime_mode, assignment)
+            proven = maybe_prove_external_assignment!(assignment, evidence_id, attested_by)
+            %{attestation: attestation, task_assignment: proven}
 
           nil ->
-            %TerminationAttestation{}
-            |> TerminationAttestation.changeset(%{
-              effect_id: identity.effect_id,
-              claim_token: identity.claim_token,
-              owner_node: identity.owner_node,
-              supervisor_id: identity.supervisor_id,
-              task_id: identity.task_id,
-              evidence_id: evidence_id,
-              evidence_digest: evidence_digest,
-              attested_by: attested_by,
-              attested_at: now
-            })
-            |> Repo.insert!()
+            effect = lock_exact_effect!(identity)
+            assignment = lock_exact_assignment_or_uncoordinated!(effect, identity)
+            validate_runtime_binding!(runtime_mode, assignment)
+
+            attestation =
+              %TerminationAttestation{}
+              |> TerminationAttestation.changeset(%{
+                effect_id: identity.effect_id,
+                claim_token: identity.claim_token,
+                owner_node: identity.owner_node,
+                supervisor_id: identity.supervisor_id,
+                task_id: identity.task_id,
+                evidence_id: evidence_id,
+                evidence_digest: evidence_digest,
+                attested_by: attested_by,
+                attested_at: now
+              })
+              |> Repo.insert!()
+
+            proven = maybe_prove_external_assignment!(assignment, evidence_id, attested_by)
+            %{attestation: attestation, task_assignment: proven}
         end
       end)
       |> case do
-        {:ok, attestation} -> {:ok, attestation}
+        {:ok, result} -> {:ok, result}
         {:error, reason} -> {:error, reason}
       end
     end
@@ -102,15 +118,247 @@ defmodule Maraithon.Effects.TerminationAttestations do
 
   def proof?(_identity), do: false
 
-  defp lock_existing(identity) do
+  defp lock_identity!(identity) do
+    SQL.query!(
+      Repo,
+      """
+      SELECT pg_catalog.pg_advisory_xact_lock(
+        pg_catalog.hashtextextended(
+          pg_catalog.concat_ws(
+            pg_catalog.chr(31), $1::text::uuid::text, $2::text::uuid::text, $3::text,
+            $4::text::uuid::text, $5::text::uuid::text
+          ),
+          20260811
+        )
+      )
+      """,
+      [
+        identity.effect_id,
+        identity.claim_token,
+        identity.owner_node,
+        identity.supervisor_id,
+        identity.task_id
+      ]
+    )
+
+    :ok
+  end
+
+  defp verify_existing_attestation!(attestation, evidence_id, evidence_digest, attested_by) do
+    unless attestation.evidence_digest == evidence_digest and
+             attestation.evidence_id == evidence_id and
+             attestation.attested_by == attested_by,
+           do: Repo.rollback(:effect_termination_attestation_conflict)
+
+    :ok
+  end
+
+  defp lock_historical_assignment_or_uncoordinated!(identity) do
+    case Repo.one(
+           from assignment in TaskAssignment,
+             where: assignment.work_kind == "effect",
+             where: assignment.work_id == ^identity.effect_id,
+             where: assignment.claim_token == ^identity.claim_token,
+             where: assignment.supervisor_id == ^identity.supervisor_id,
+             where: assignment.local_task_id == ^identity.task_id
+         ) do
+      %TaskAssignment{} = candidate ->
+        actual = TaskClaims.lock_effect_assignment_in_transaction!(candidate)
+
+        if exact_historical_assignment?(actual, identity),
+          do: actual,
+          else: Repo.rollback(:effect_termination_attestation_assignment_lost)
+
+      nil ->
+        case Repo.one(
+               from effect in Effect,
+                 where: effect.id == ^identity.effect_id,
+                 where: is_nil(effect.coordination_activation_epoch),
+                 where: is_nil(effect.coordination_partition_id),
+                 where: is_nil(effect.coordination_partition_epoch),
+                 where: is_nil(effect.coordination_node_incarnation_id),
+                 where: is_nil(effect.coordination_task_assignment_id),
+                 lock: "FOR UPDATE"
+             ) do
+          %Effect{} -> :uncoordinated
+          nil -> Repo.rollback(:effect_termination_attestation_assignment_lost)
+        end
+    end
+  end
+
+  defp exact_historical_assignment?(assignment, identity) do
+    assignment.work_kind == "effect" and
+      assignment.work_id == identity.effect_id and
+      assignment.claim_token == identity.claim_token and
+      assignment.supervisor_id == identity.supervisor_id and
+      assignment.local_task_id == identity.task_id
+  end
+
+  defp lock_effect_row!(effect_id) do
+    case Repo.one(from effect in Effect, where: effect.id == ^effect_id, lock: "FOR UPDATE") do
+      %Effect{} -> :ok
+      nil -> Repo.rollback(:effect_termination_attestation_effect_lost)
+    end
+  end
+
+  defp lock_exact_effect!(identity) do
+    case Repo.one(
+           from effect in Effect,
+             where: effect.id == ^identity.effect_id,
+             where: effect.claim_token == ^identity.claim_token,
+             where: effect.claim_owner_node == ^identity.owner_node,
+             where: effect.claim_supervisor_id == ^identity.supervisor_id,
+             where: effect.claim_task_id == ^identity.task_id,
+             where: effect.status == "cancelling",
+             where: effect.cancellation_state == "requested",
+             lock: "FOR UPDATE"
+         ) do
+      %Effect{} = effect -> effect
+      nil -> Repo.rollback(:effect_termination_attestation_identity_lost)
+    end
+  end
+
+  defp lock_exact_assignment_or_uncoordinated!(effect, identity) do
+    expected =
+      case effect do
+        %Effect{
+          id: work_id,
+          claim_token: claim_token,
+          coordination_activation_epoch: activation_epoch,
+          coordination_partition_id: partition_id,
+          coordination_partition_epoch: partition_epoch,
+          coordination_node_incarnation_id: node_incarnation_id,
+          coordination_task_assignment_id: assignment_id
+        }
+        when is_binary(activation_epoch) and is_integer(partition_id) and
+               is_integer(partition_epoch) and is_binary(node_incarnation_id) and
+               is_binary(assignment_id) ->
+          %TaskAssignment{
+            id: assignment_id,
+            activation_epoch: activation_epoch,
+            work_kind: "effect",
+            work_id: work_id,
+            claim_token: claim_token,
+            partition_id: partition_id,
+            partition_epoch: partition_epoch,
+            node_incarnation_id: node_incarnation_id,
+            supervisor_id: identity.supervisor_id,
+            local_task_id: identity.task_id
+          }
+
+        %Effect{
+          coordination_activation_epoch: nil,
+          coordination_partition_id: nil,
+          coordination_partition_epoch: nil,
+          coordination_node_incarnation_id: nil,
+          coordination_task_assignment_id: nil
+        } ->
+          :uncoordinated
+
+        _mismatched ->
+          Repo.rollback(:effect_termination_attestation_assignment_required)
+      end
+
+    case expected do
+      :uncoordinated ->
+        :uncoordinated
+
+      %TaskAssignment{} ->
+        actual = TaskClaims.lock_effect_assignment_in_transaction!(expected)
+
+        fields = [
+          :id,
+          :activation_epoch,
+          :work_kind,
+          :work_id,
+          :claim_token,
+          :partition_id,
+          :partition_epoch,
+          :node_incarnation_id,
+          :supervisor_id,
+          :local_task_id
+        ]
+
+        if Map.take(actual, fields) == Map.take(expected, fields),
+          do: actual,
+          else: Repo.rollback(:effect_termination_attestation_assignment_lost)
+    end
+  end
+
+  defp validate_runtime_binding!(:dark, :uncoordinated), do: :ok
+
+  defp validate_runtime_binding!(
+         {:active, epoch},
+         %TaskAssignment{activation_epoch: epoch}
+       ),
+       do: :ok
+
+  defp validate_runtime_binding!(runtime_mode, assignment_shape),
+    do:
+      Repo.rollback(
+        {:effect_termination_attestation_runtime_mismatch, runtime_mode, assignment_shape}
+      )
+
+  defp maybe_prove_external_assignment!(:uncoordinated, _evidence_id, _attested_by),
+    do: nil
+
+  defp maybe_prove_external_assignment!(%TaskAssignment{} = assignment, evidence_id, attested_by),
+    do: prove_external_assignment!(assignment, evidence_id, attested_by)
+
+  defp prove_external_assignment!(assignment, evidence_id, attested_by) do
+    case assignment.state do
+      state when state in ["reserved", "termination_requested"] ->
+        case TaskClaims.record_external_termination(assignment, evidence_id, attested_by) do
+          {:ok, %TaskAssignment{state: "termination_proven"} = proven} -> proven
+          _lost -> Repo.rollback(:effect_external_task_proof_lost)
+        end
+
+      state when state in ["termination_proven", "settled", "outcome_ambiguous"] ->
+        if matching_external_task_proof?(assignment, evidence_id),
+          do: assignment,
+          else: Repo.rollback(:effect_external_task_proof_lost)
+
+      _not_provable ->
+        Repo.rollback(:effect_external_task_proof_requires_termination_request)
+    end
+  end
+
+  defp matching_external_task_proof?(assignment, evidence_id) do
+    case SQL.query!(
+           Repo,
+           """
+           SELECT 1
+           FROM public.runtime_task_termination_proofs
+           WHERE assignment_id = $1::uuid AND activation_epoch = $2::uuid
+             AND claim_token = $3::uuid AND node_incarnation_id = $4::uuid
+             AND supervisor_id = $5::uuid AND local_task_id = $6::uuid
+             AND proof_kind = 'external_destroyed' AND evidence_id = $7
+             AND evidence_digest = $8
+           """,
+           [
+             Ecto.UUID.dump!(assignment.id),
+             Ecto.UUID.dump!(assignment.activation_epoch),
+             Ecto.UUID.dump!(assignment.claim_token),
+             Ecto.UUID.dump!(assignment.node_incarnation_id),
+             Ecto.UUID.dump!(assignment.supervisor_id),
+             Ecto.UUID.dump!(assignment.local_task_id),
+             evidence_id,
+             :crypto.hash(:sha256, evidence_id)
+           ]
+         ).rows do
+      [[1]] -> true
+      _missing -> false
+    end
+  end
+
+  defp find_existing(identity) do
     Repo.one(
       from(attestation in TerminationAttestation,
         where: attestation.effect_id == ^identity.effect_id,
         where: attestation.claim_token == ^identity.claim_token,
         where: attestation.owner_node == ^identity.owner_node,
         where: attestation.supervisor_id == ^identity.supervisor_id,
-        where: attestation.task_id == ^identity.task_id,
-        lock: "FOR UPDATE"
+        where: attestation.task_id == ^identity.task_id
       )
     )
   end

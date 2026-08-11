@@ -37,7 +37,8 @@ DROP TRIGGER IF EXISTS enforce_runtime_task_assignment_trigger
 DROP INDEX CONCURRENTLY IF EXISTS public.background_jobs_partition_due_index;
 ALTER TABLE public.background_jobs
   DROP CONSTRAINT IF EXISTS background_jobs_partition_shape;
-DELETE FROM public.schema_migrations WHERE version = 20260810140004;
+DELETE FROM public.schema_migrations
+WHERE version IN (20260810140004, 20260810140005, 20260810140007);
 SQL
 
 mix ecto.migrate --quiet
@@ -51,11 +52,27 @@ SELECT
   (SELECT count(*) FROM public.runtime_leader_authorities WHERE role = 'partition_planner'),
   public.runtime_coordination_roles_ready(),
   public.runtime_coordination_acl_ready(),
-  public.runtime_coordination_catalog_ready_count();
+  public.runtime_coordination_catalog_ready_count(),
+  public.durable_payload_roles_ready(),
+  public.durable_payload_catalog_ready(),
+  public.privacy_protocol_catalog_ready(),
+  EXISTS (
+    SELECT 1
+    FROM public.runtime_coordination_protocols AS protocol
+    JOIN public.runtime_coordination_manifests AS manifest ON manifest.name = protocol.name
+    WHERE protocol.name = 'runtime'
+      AND protocol.manifest_digest = public.digest(convert_to(jsonb_build_object(
+        'constraints', manifest.constraint_fingerprints,
+        'functions', manifest.function_fingerprints,
+        'triggers', manifest.trigger_fingerprints,
+        'indexes', manifest.index_fingerprints,
+        'catalogs', manifest.catalog_fingerprints
+      )::text, 'UTF8'), 'sha256')
+  );
 SQL
 )"
 
-if [[ "$result" != "1|1|1|64|1|t|t|117" ]]; then
+if [[ "$result" != "1|1|1|64|1|t|t|120|t|t|t|t" ]]; then
   echo "partial expansion retry verification failed: $result" >&2
   exit 1
 fi

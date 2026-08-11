@@ -5,6 +5,7 @@ defmodule Maraithon.Runtime.Coordination.Partition do
   schema "runtime_partitions" do
     field :activation_epoch, Ecto.UUID
     field :ownership_epoch, :integer
+    field :effects_drained_epoch, :integer
     field :owner_node_incarnation_id, Ecto.UUID
     field :transition_id, Ecto.UUID
     field :state, :string

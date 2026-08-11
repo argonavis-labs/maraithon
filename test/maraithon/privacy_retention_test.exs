@@ -4,13 +4,38 @@ defmodule Maraithon.PrivacyRetentionTest do
   alias Maraithon.Accounts
   alias Maraithon.AgentIsolation
   alias Maraithon.Agents
+  alias Maraithon.DurablePayloadContraction
+  alias Maraithon.DurablePayloadVerification
   alias Maraithon.Effects
   alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Effects.TerminalEnvelope
   alias Maraithon.PrivacyRetention
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirectives
+  alias Maraithon.Runtime.Coordination.Protocol, as: CoordinationProtocol
   alias Maraithon.Runtime.DatabaseClock
+
+  @moduletag database_role: :session
+
+  @evidence_id "test:stopped-fleet:privacy-retention"
+  @evidence_digest :crypto.hash(:sha256, "test privacy retention stopped fleet")
+  @evidence_operator "privacy-retention@example.test"
+  @revision String.duplicate("e", 40)
+  @activation_evidence [
+    evidence_id: @evidence_id,
+    evidence_digest: @evidence_digest,
+    activated_by: @evidence_operator,
+    revision: @revision
+  ]
+  @contraction_evidence [
+    confirmation: "NON_ROLLING_FLEET_DRAINED",
+    evidence_id: @evidence_id,
+    evidence_digest: @evidence_digest,
+    operator: @evidence_operator,
+    revision: @revision
+  ]
+
+  @retired_key_guard "guard_durable_payload_retired_key_write_trigger"
 
   setup do
     original = Application.get_env(:maraithon, PrivacyRetention)
@@ -46,6 +71,13 @@ defmodule Maraithon.PrivacyRetentionTest do
       end
     end)
 
+    assert ProtocolCutover.mode() == :legacy
+
+    assert {:ok, attestation} =
+             CoordinationProtocol.attest_effect_activation_evidence(@activation_evidence)
+
+    assert attestation in [:attested, :already_attested]
+    set_runtime_role!()
     :ok
   end
 
@@ -138,32 +170,68 @@ defmodule Maraithon.PrivacyRetentionTest do
         %{agent: agent, effect_id: effect_id, directive_id: directive.id}
       end
 
-    assert {:ok, 2} = Effects.backfill_legacy_payload_encryption(10)
+    assert {:ok, %{effects: 2, directives: 2}} =
+             contract_effect_and_directive_payloads!(10)
 
-    assert {:ok, 2} = AgentDirectives.backfill_legacy_payload_encryption(10)
+    assert {:ok, verification} =
+             DurablePayloadVerification.verify(
+               tables: ["effects", "agent_directives"],
+               limit: 10,
+               max_batches: 10
+             )
 
-    Enum.each(rows, fn row ->
-      # Raw corruption is deliberate: loading either Ecto schema would raise.
-      Repo.query!(
-        """
-        UPDATE effects
-        SET params_ciphertext = $2, result_ciphertext = $2
-        WHERE id = $1
-        """,
-        [Ecto.UUID.dump!(row.effect_id), <<0, 1, 2, 3, 4>>]
-      )
+    assert verification.failures == []
+    assert {:ok, %{failures: 0}} = DurablePayloadVerification.preflight()
 
-      Repo.query!(
-        "UPDATE agent_directives SET payload_ciphertext = $2 WHERE id = $1",
-        [Ecto.UUID.dump!(row.directive_id), <<0, 1, 2, 3, 4>>]
-      )
+    # The sandbox keeps deferred events from the valid legacy setup rows in the
+    # outer transaction; discharge them while the protocol pair is still canonical.
+    Repo.query!("SET CONSTRAINTS ALL IMMEDIATE", [], log: false)
+
+    assert {:ok, effect_status} =
+             ProtocolCutover.activate(
+               [
+                 confirmation: ProtocolCutover.activation_confirmation(),
+                 lock_timeout_ms: 5_000
+               ] ++ @activation_evidence
+             )
+
+    assert effect_status in [:activated, :already_active]
+
+    Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
+
+    assert {:ok, runtime_status} =
+             CoordinationProtocol.activate(
+               [confirmation: CoordinationProtocol.activation_confirmation()] ++
+                 @activation_evidence
+             )
+
+    assert runtime_status in [:activated, :already_active]
+    set_runtime_role!()
+
+    # The rows are valid at activation. This tightly scoped bypass models
+    # corruption that predates this retention cycle, then restores every
+    # production writer fence before retention runs.
+    seed_preexisting_ciphertext!("effects", fn ->
+      Enum.each(rows, fn row ->
+        Repo.query!(
+          """
+          UPDATE effects
+          SET params_ciphertext = $2, result_ciphertext = $2
+          WHERE id = $1
+          """,
+          [Ecto.UUID.dump!(row.effect_id), <<0, 1, 2, 3, 4>>]
+        )
+      end)
     end)
 
-    assert {:ok, :activated} =
-             ProtocolCutover.activate(
-               confirmation: ProtocolCutover.activation_confirmation(),
-               lock_timeout_ms: 5_000
-             )
+    seed_preexisting_ciphertext!("agent_directives", fn ->
+      Enum.each(rows, fn row ->
+        Repo.query!(
+          "UPDATE agent_directives SET payload_ciphertext = $2 WHERE id = $1",
+          [Ecto.UUID.dump!(row.directive_id), <<0, 1, 2, 3, 4>>]
+        )
+      end)
+    end)
 
     # A global batch of two with a per-tenant cap of one must service both users.
     assert {:ok, %{purged: 2, backlog_count: 0}} =
@@ -292,19 +360,23 @@ defmodule Maraithon.PrivacyRetentionTest do
       ]
     )
 
-    for id <- [pending_effect, unacked_effect] do
-      Repo.query!("UPDATE effects SET params_ciphertext = $2 WHERE id = $1", [
-        Ecto.UUID.dump!(id),
-        <<0, 1, 2, 3, 4>>
-      ])
-    end
+    seed_preexisting_ciphertext!("effects", fn ->
+      for id <- [pending_effect, unacked_effect] do
+        Repo.query!("UPDATE effects SET params_ciphertext = $2 WHERE id = $1", [
+          Ecto.UUID.dump!(id),
+          <<0, 1, 2, 3, 4>>
+        ])
+      end
+    end)
 
-    for directive <- [requested, unacked, ambiguous] do
-      Repo.query!("UPDATE agent_directives SET payload_ciphertext = $2 WHERE id = $1", [
-        Ecto.UUID.dump!(directive.id),
-        <<0, 1, 2, 3, 4>>
-      ])
-    end
+    seed_preexisting_ciphertext!("agent_directives", fn ->
+      for directive <- [requested, unacked, ambiguous] do
+        Repo.query!("UPDATE agent_directives SET payload_ciphertext = $2 WHERE id = $1", [
+          Ecto.UUID.dump!(directive.id),
+          <<0, 1, 2, 3, 4>>
+        ])
+      end
+    end)
 
     assert {:error, {:effect_protocol_mismatch, :legacy}} =
              PrivacyRetention.run_handler(:effects, batch_size: 10)
@@ -352,5 +424,96 @@ defmodule Maraithon.PrivacyRetentionTest do
              "future_privacy_retention_cutoff",
              "aggressive_privacy_retention_cutoff"
            ]
+  end
+
+  defp contract_effect_and_directive_payloads!(limit) do
+    try do
+      DurablePayloadContraction.transaction(@contraction_evidence, fn ->
+        assert {:ok, effects} = Effects.backfill_legacy_payload_encryption(limit)
+        assert {:ok, directives} = AgentDirectives.backfill_legacy_payload_encryption(limit)
+        %{effects: effects, directives: directives}
+      end)
+    after
+      set_runtime_role!()
+    end
+  end
+
+  defp seed_preexisting_ciphertext!(table, fun)
+       when table in ["effects", "agent_directives"] and is_function(fun, 0) do
+    protocol_mode = ProtocolCutover.mode()
+
+    error =
+      assert_raise Postgrex.Error, fn ->
+        Repo.transaction(fun, mode: :savepoint)
+      end
+
+    assert error.postgres.code == :check_violation
+    assert error.postgres.message in writer_fence_rejections(table, protocol_mode)
+
+    # Deferred integrity triggers from the valid setup rows must fire before
+    # PostgreSQL will permit the narrowly scoped ALTER TABLE below.
+    Repo.query!("SET CONSTRAINTS ALL IMMEDIATE", [], log: false)
+    Repo.query!("SET LOCAL ROLE maraithon_migrator", [], log: false)
+    triggers = writer_fence_triggers(table, protocol_mode)
+
+    try do
+      Enum.each(triggers, fn {trigger, _restore} ->
+        Repo.query!("ALTER TABLE public.#{table} DISABLE TRIGGER #{trigger}", [], log: false)
+      end)
+
+      # Keep all remaining exact coordination fences live: only the executor
+      # role may perform the deliberately malformed row update.
+      set_runtime_role!()
+      fun.()
+    after
+      Repo.query!("SET LOCAL ROLE maraithon_migrator", [], log: false)
+
+      Enum.each(Enum.reverse(triggers), fn {trigger, restore} ->
+        Repo.query!("ALTER TABLE public.#{table} #{restore} TRIGGER #{trigger}", [], log: false)
+      end)
+
+      set_runtime_role!()
+    end
+  end
+
+  defp writer_fence_rejections(_table, :legacy) do
+    ["Changed durable ciphertext has an invalid key tag envelope"]
+  end
+
+  defp writer_fence_rejections("effects", :exact) do
+    [
+      "Legacy Effect rows are read-only after exact activation",
+      "Changed durable ciphertext has an invalid key tag envelope"
+    ]
+  end
+
+  defp writer_fence_rejections("agent_directives", :exact) do
+    [
+      "Exact Agent Directive mutation requires generation-fenced writer marker",
+      "Changed durable ciphertext has an invalid key tag envelope"
+    ]
+  end
+
+  defp writer_fence_triggers(_table, :legacy) do
+    [{@retired_key_guard, "ENABLE ALWAYS"}]
+  end
+
+  defp writer_fence_triggers("effects", :exact) do
+    [
+      {@retired_key_guard, "ENABLE ALWAYS"},
+      {"enforce_effect_execution_protocol_trigger", "ENABLE"}
+    ]
+  end
+
+  defp writer_fence_triggers("agent_directives", :exact) do
+    [
+      {@retired_key_guard, "ENABLE ALWAYS"},
+      {"enforce_agent_directive_protocol_trigger", "ENABLE"}
+    ]
+  end
+
+  defp set_runtime_role! do
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    :ok
   end
 end

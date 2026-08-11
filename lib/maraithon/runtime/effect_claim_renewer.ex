@@ -9,7 +9,7 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
 
   import Ecto.Query
 
-  alias Maraithon.Effects.Effect
+  alias Maraithon.Effects.{Cancellation, Effect}
   alias Maraithon.Repo
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.EffectTaskSupervisor
@@ -107,7 +107,11 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
         deadline_ms = earliest_renewal_deadline!(state, identities)
 
         case renew_identities(identities, state.ttl_ms, deadline_ms) do
-          {:ok, lost_identities} ->
+          {:ok,
+           %{
+             lost: lost_identities,
+             preactivation: preactivation_identities
+           }} ->
             if deadline_ms <= monotonic_ms() do
               renewal_failed(state, :effect_claim_heartbeat_deadline_exceeded)
             else
@@ -117,7 +121,13 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
                     renewal_failed(state, :effect_claim_heartbeat_deadline_exceeded)
                   else
                     state =
-                      record_successful_renewal(state, identities, lost_identities, now_ms)
+                      record_successful_renewal(
+                        state,
+                        identities,
+                        lost_identities,
+                        preactivation_identities,
+                        now_ms
+                      )
 
                     {{:ok, %{active: length(identities), lost: length(lost_identities)}}, state}
                   end
@@ -173,7 +183,7 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
 
   defp terminate_lost_identities(identities) do
     Enum.reduce_while(identities, :ok, fn identity, :ok ->
-      case EffectTaskSupervisor.terminate_exact(identity) do
+      case Cancellation.terminate_physical_identity_on_owner(identity) do
         {:ok, _physical_termination_proof} -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
         other -> {:halt, {:error, {:unexpected_termination_result, other}}}
@@ -183,14 +193,32 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
     :exit, reason -> {:error, {:termination_exit, reason}}
   end
 
-  defp record_successful_renewal(state, identities, lost_identities, now_ms) do
+  defp record_successful_renewal(
+         state,
+         identities,
+         lost_identities,
+         preactivation_identities,
+         now_ms
+       ) do
     lost_keys = MapSet.new(lost_identities, &identity_key/1)
+    preactivation_keys = MapSet.new(preactivation_identities, &identity_key/1)
     deadline_ms = max(state.ttl_ms - @physical_teardown_margin_ms, 1)
 
     deadlines =
       identities
       |> Enum.reject(&MapSet.member?(lost_keys, identity_key(&1)))
-      |> Map.new(fn identity -> {identity_key(identity), {identity, now_ms + deadline_ms}} end)
+      |> Map.new(fn identity ->
+        key = identity_key(identity)
+
+        if MapSet.member?(preactivation_keys, key) do
+          # A pristine reserved handoff is recognized, not renewed. Keep its
+          # original physical-teardown deadline aligned with its finite durable
+          # leases instead of manufacturing a fresh local renewal window.
+          {key, Map.fetch!(state.renewal_deadlines, key)}
+        else
+          {key, {identity, now_ms + deadline_ms}}
+        end
+      end)
 
     %{state | renewal_deadlines: deadlines}
   end
@@ -215,6 +243,7 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
       identity.effect_id,
       identity.agent_id,
       identity.claim_token,
+      identity.assignment_id,
       identity.supervisor_id,
       identity.task_id
     }
@@ -222,7 +251,8 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
 
   defp monotonic_ms, do: System.monotonic_time(:millisecond)
 
-  defp renew_identities([], _ttl_ms, _deadline_ms), do: {:ok, []}
+  defp renew_identities([], _ttl_ms, _deadline_ms),
+    do: {:ok, %{lost: [], preactivation: []}}
 
   defp renew_identities(identities, ttl_ms, deadline_ms) do
     transaction_timeout_ms = max(deadline_ms - monotonic_ms(), 1)
@@ -239,10 +269,10 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
 
              owner_node = Atom.to_string(node())
 
-             lost =
+             {lost, preactivation} =
                identities
                |> Enum.sort_by(&identity_key/1)
-               |> Enum.reduce([], fn identity, lost ->
+               |> Enum.reduce({[], []}, fn identity, {lost, preactivation} ->
                  configure_renewal_statement_timeout!(deadline_ms)
 
                  case renew_identity_in_transaction!(
@@ -251,16 +281,20 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
                         ttl_ms,
                         coordination_mode
                       ) do
-                   :ok -> lost
-                   :lost -> [identity | lost]
+                   :renewed -> {lost, preactivation}
+                   :preactivation -> {lost, [identity | preactivation]}
+                   :lost -> {[identity | lost], preactivation}
                  end
                end)
 
-             lost
+             %{
+               lost: Enum.reverse(lost),
+               preactivation: Enum.reverse(preactivation)
+             }
            end,
            timeout: transaction_timeout_ms
          ) do
-      {:ok, lost} -> {:ok, Enum.reverse(lost)}
+      {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -276,6 +310,7 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
           where: effect.claim_owner_node == ^owner_node,
           where: effect.claim_supervisor_id == ^identity.supervisor_id,
           where: effect.claim_task_id == ^identity.task_id,
+          where: effect.coordination_task_assignment_id == ^identity.assignment_id,
           where: is_nil(effect.cancellation_state),
           where: effect.claim_expires_at > fragment("timezone('UTC', clock_timestamp())"),
           where:
@@ -292,30 +327,40 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
         :lost
 
       %Effect{} = effect ->
-        expires_at = renew_coordination_assignment!(effect, ttl_ms, coordination_mode)
+        case renew_coordination_assignment!(effect, ttl_ms, coordination_mode) do
+          :preactivation when effect.status == "claimed" ->
+            # Both finite durable leases were checked under their exact row
+            # locks. Do not heartbeat or extend either one before activation.
+            :preactivation
 
-        query =
-          from(stored in Effect,
-            where: stored.id == ^effect.id,
-            where: stored.agent_id == ^effect.agent_id,
-            where: stored.status == ^effect.status,
-            where: stored.claim_token == ^effect.claim_token,
-            where: stored.claim_owner_node == ^owner_node,
-            where: stored.claim_supervisor_id == ^effect.claim_supervisor_id,
-            where: stored.claim_task_id == ^effect.claim_task_id,
-            where: is_nil(stored.cancellation_state),
-            update: [
-              set: [
-                claim_heartbeat_at: fragment("timezone('UTC', clock_timestamp())"),
-                claim_expires_at: ^expires_at,
-                updated_at: fragment("timezone('UTC', clock_timestamp())")
-              ]
-            ]
-          )
+          :preactivation ->
+            Repo.rollback(:coordination_task_authority_lost)
 
-        case Repo.update_all(query, []) do
-          {1, _rows} -> :ok
-          _lost_or_mismatched -> Repo.rollback(:coordination_task_authority_lost)
+          {:renewed, expires_at} ->
+            query =
+              from(stored in Effect,
+                where: stored.id == ^effect.id,
+                where: stored.agent_id == ^effect.agent_id,
+                where: stored.status == ^effect.status,
+                where: stored.claim_token == ^effect.claim_token,
+                where: stored.claim_owner_node == ^owner_node,
+                where: stored.claim_supervisor_id == ^effect.claim_supervisor_id,
+                where: stored.claim_task_id == ^effect.claim_task_id,
+                where: stored.coordination_task_assignment_id == ^identity.assignment_id,
+                where: is_nil(stored.cancellation_state),
+                update: [
+                  set: [
+                    claim_heartbeat_at: fragment("timezone('UTC', clock_timestamp())"),
+                    claim_expires_at: ^expires_at,
+                    updated_at: fragment("timezone('UTC', clock_timestamp())")
+                  ]
+                ]
+              )
+
+            case Repo.update_all(query, []) do
+              {1, _rows} -> :renewed
+              _lost_or_mismatched -> Repo.rollback(:coordination_task_authority_lost)
+            end
         end
     end
   end
@@ -330,7 +375,7 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
 
     assignment = effect_assignment!(effect)
 
-    renewed =
+    result =
       TaskClaims.renew_effect_in_transaction!(
         assignment,
         effect.agent_id,
@@ -338,12 +383,23 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
         ttl_ms
       )
 
-    case renewed do
-      %TaskAssignment{state: "running"} = value ->
+    case result do
+      {:renewed, %TaskAssignment{state: "running"} = value} ->
         unless exact_assignment?(value, assignment),
           do: Repo.rollback(:coordination_task_authority_lost)
 
-        value.lease_expires_at
+        {:renewed, value.lease_expires_at}
+
+      {:preactivation,
+       %TaskAssignment{
+         state: "reserved",
+         provider_boundary: "not_entered",
+         ready_at: nil
+       } = value} ->
+        unless exact_assignment?(value, assignment),
+          do: Repo.rollback(:coordination_task_authority_lost)
+
+        :preactivation
 
       _mismatched ->
         Repo.rollback(:coordination_task_authority_lost)

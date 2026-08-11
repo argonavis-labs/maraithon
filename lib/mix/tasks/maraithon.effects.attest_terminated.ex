@@ -1,8 +1,6 @@
 defmodule Mix.Tasks.Maraithon.Effects.AttestTerminated do
   use Mix.Task
 
-  alias Maraithon.Effects.Cancellation
-  alias Maraithon.Effects.Effect
   alias Maraithon.Effects.TerminationAttestations
   alias Maraithon.Repo
 
@@ -21,8 +19,9 @@ defmodule Mix.Tasks.Maraithon.Effects.AttestTerminated do
   task incarnation cannot still execute. Production requires
   `MARAITHON_INCIDENT_DATABASE_URL` using the canonical incident-operator role
   and independently rebuilt verified TLS. The task starts only Repo dependencies,
-  records an immutable attestation, and retries conservative cancellation
-  settlement. It never claims to know the provider outcome.
+  atomically records an immutable attestation plus the exact external Task proof.
+  Ordinary runtime reconciliation later settles the Effect; this incident command
+  never receives ordinary Effect settlement DML and never claims provider outcome.
   """
 
   @switches [
@@ -56,41 +55,29 @@ defmodule Mix.Tasks.Maraithon.Effects.AttestTerminated do
 
     result =
       case Ecto.Migrator.with_repo(Repo, fn _repo ->
-             with {:ok, attestation} <-
-                    TerminationAttestations.record(
-                      identity,
-                      required!(opts, :evidence_id),
-                      required!(opts, :attested_by),
-                      opts[:confirm]
-                    ),
-                  %Effect{agent_id: agent_id} <- Repo.get(Effect, attestation.effect_id),
-                  settlement <- Cancellation.reconcile_agent(agent_id, 100) do
-               {:ok, attestation, settlement}
-             else
-               nil -> {:error, :effect_not_found}
-               {:error, _reason} = error -> error
-             end
+             TerminationAttestations.record(
+               identity,
+               required!(opts, :evidence_id),
+               required!(opts, :attested_by),
+               opts[:confirm]
+             )
            end) do
         {:ok, task_result, _started_apps} -> task_result
         {:error, reason} -> {:error, {:repository_start_failed, reason}}
       end
 
     case result do
-      {:ok, attestation, {:ok, summary}} ->
+      {:ok, %{attestation: attestation, task_assignment: nil}} ->
+        Mix.shell().info(
+          "Recorded uncoordinated termination attestation #{attestation.id}. " <>
+            "Ordinary runtime reconciliation will settle the Effect."
+        )
+
+      {:ok, %{attestation: attestation, task_assignment: assignment}} ->
         Mix.shell().info(
           "Recorded termination attestation #{attestation.id}; " <>
-            "settled=#{summary.claims_settled} unresolved=#{length(summary.unresolved)}"
-        )
-
-      {:ok, _attestation, {:pending, summary}} ->
-        Mix.raise(
-          "Termination attestation recorded but cancellation remains pending: " <>
-            inspect(summary.unresolved)
-        )
-
-      {:ok, _attestation, {:error, reason}} ->
-        Mix.raise(
-          "Termination attestation recorded but reconciliation failed: #{inspect(reason)}"
+            "assignment=#{assignment.id} proof=external_destroyed state=#{assignment.state}. " <>
+            "Ordinary runtime reconciliation will settle the Effect."
         )
 
       {:error, reason} ->

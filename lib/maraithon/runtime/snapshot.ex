@@ -258,6 +258,13 @@ defmodule Maraithon.Runtime.Snapshot do
   def retention_count, do: @keep_snapshots
 
   defp prune_old!(agent_id) do
+    Repo.query!(
+      "SELECT set_config('maraithon.snapshot_history_prune', " <>
+        "'PRUNE_BEYOND_RECOVERY_WINDOW_V1', true)",
+      [],
+      log: false
+    )
+
     stale_ids =
       from(snapshot in __MODULE__,
         where: snapshot.agent_id == ^agent_id,

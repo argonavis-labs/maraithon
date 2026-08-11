@@ -114,6 +114,21 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 
 **Tools** are actions agents can take to interact with the world, constrained by explicit allowlists per agent.
 
+### Durable runtime operations
+
+These documents describe the repository-staged authority model and the guarded
+operator procedure. Their presence is not evidence that the revision was
+deployed or that either one-way database protocol was activated. The staged
+implementation includes the local Agent/Task capability-digest path described
+in the architecture and cutover guides; production activation remains blocked
+until that path and the full evidence envelope are independently reviewed.
+
+- [Durable resident Agent runtime and local-proof contract](docs/architecture/durable-agent-runtime.md)
+- [Exact Agent runtime production cutover](docs/exact-agent-runtime-cutover.md)
+- [Durable payload rotation and key retirement](docs/operations/durable-payload-lifecycle.md)
+- [Privacy retention, erasure, and cutover deferral](docs/operations/privacy-retention-erasure.md)
+- [Database TLS, forward repair, backup, and restore](docs/operations/database-tls-backup-restore.md)
+
 ## Quick Start
 
 ```bash
@@ -184,11 +199,21 @@ The current production shape is intentionally simple:
 - Phoenix, the admin control center, the API, and the OTP runtime all run in the same release
 - Database-backed runtime state in PostgreSQL
 - Fly Managed Postgres in the same region
-- `DATABASE_URL` should be the pooled runtime URL
-- `DIRECT_DATABASE_URL` should be the direct connection URL used only for migrations and admin tasks
+- `DATABASE_URL` is the pooled `maraithon_runtime` URL
+- `DIRECT_DATABASE_URL` is the verified direct `maraithon_migrator` transport
+  used only by the release command
+- `MARAITHON_MIGRATOR_DATABASE_URL` is the separate storage-only migrator
+  credential; Snapshot migration selects it directly and must not be run by
+  overriding pooled runtime `DATABASE_URL`
+- Named verifier and activation URLs remain role-specific;
+  `MARAITHON_INCIDENT_DATABASE_URL` is termination-only, while Vault,
+  payload-binding, and key-retirement CLIs use `VAULT_ROTATION_DATABASE_URL`
 - `POOL_SIZE=8`, `DB_QUEUE_TARGET_MS=250`, and `DB_QUEUE_INTERVAL_MS=2000` for the current single-machine footprint
 
-This is the right shape for a single-user or small-team ambient agent deployment. Do not scale app machines horizontally until the database capacity and runtime polling strategy are adjusted to match.
+This is the right shape for a single-user or small-team ambient agent
+deployment. Scale app Machines horizontally only after the one-way coordination
+cutover and after adjusting database capacity for the additional node and
+worker pools.
 
 ### Why This Shape Wins
 
@@ -689,7 +714,8 @@ Recommended shape:
 - One always-on `shared-cpu-1x` 1 GB machine
 - Fly Managed Postgres in the same region
 - Runtime traffic goes through the pooled `DATABASE_URL`
-- Migrations use `DIRECT_DATABASE_URL`
+- Release migrations use `DIRECT_DATABASE_URL` authenticated as
+  `maraithon_migrator`; storage-only tasks use their named URLs
 - `POOL_SIZE=8`, `DB_QUEUE_TARGET_MS=250`, `DB_QUEUE_INTERVAL_MS=2000`
 
 Local deploys should use a production Fly token instead of the active
@@ -722,8 +748,8 @@ Initial app and secret setup still uses Fly commands:
 fly mpg create --name maraithon-pg -r yyz
 fly mpg attach maraithon-pg -a maraithon
 
-# Set the direct connection string from the managed cluster in Fly secrets.
-# Keep DATABASE_URL as the pooled URL for runtime traffic.
+# After provisioning the canonical roles, set a direct maraithon_migrator URL.
+# Keep DATABASE_URL as the pooled maraithon_runtime URL for runtime traffic.
 flyctl secrets set -a maraithon \
   DIRECT_DATABASE_URL="postgres://..."
 
@@ -770,29 +796,38 @@ If you still have the old unmanaged Postgres app, migrate before changing produc
 fly mpg create --name maraithon-pg -r yyz
 fly mpg attach maraithon-pg -a maraithon
 
-# 2. Capture the managed cluster's direct connection string
-flyctl secrets set -a maraithon DIRECT_DATABASE_URL="postgres://..."
+# 2. Obtain a short-lived provider/bootstrap restore credential outside app
+# secrets. Do not reuse DATABASE_URL, DIRECT_DATABASE_URL, or an operator URL.
 
 # 3. Proxy the managed cluster locally
 fly mpg proxy 15433 -a maraithon-pg
 ```
 
-Then restore the legacy database into the managed cluster from another shell. Use the credentials from `DIRECT_DATABASE_URL`, but point the host to `127.0.0.1:15433` while the proxy is running:
+Restore the legacy database from another shell with that short-lived credential,
+pointed at `127.0.0.1:15433`. Revoke it after import. Then provision the
+canonical roles and bind pooled `DATABASE_URL` as `maraithon_runtime` and direct
+`DIRECT_DATABASE_URL` as `maraithon_migrator` for the release command only:
 
 ```bash
 pg_dump --no-owner --no-acl "$LEGACY_DATABASE_URL" | \
-  psql "postgres://USER:PASSWORD@127.0.0.1:15433/DATABASE?sslmode=disable"
+  psql "postgres://RESTORE_USER:RESTORE_PASSWORD@127.0.0.1:15433/DATABASE?sslmode=disable"
+
+flyctl secrets set --app "$MARAITHON_FLY_APP" \
+  DATABASE_URL="postgres://maraithon_runtime:..." \
+  DIRECT_DATABASE_URL="postgres://maraithon_migrator:..."
 ```
 
 After import:
 
 ```bash
 # 4. Deploy once so release migrations run against DIRECT_DATABASE_URL
-flyctl deploy -a maraithon
+: "${FLY_API_TOKEN:?scoped Fly token required}"
+: "${MARAITHON_FLY_APP:?pinned production app required}"
+make deploy
 
 # 5. Verify app and DB health
 curl https://maraithon.com/health
-flyctl logs -a maraithon
+flyctl logs --app "$MARAITHON_FLY_APP"
 
 # 6. When you are satisfied with the cutover, destroy the old unmanaged DB app
 # only after taking a final backup.
@@ -815,9 +850,11 @@ After deploy:
 Operational checks:
 
 ```bash
-flyctl status -a maraithon
-flyctl machine list -a maraithon
-flyctl logs -a maraithon
+: "${FLY_API_TOKEN:?scoped Fly token required}"
+: "${MARAITHON_FLY_APP:?pinned production app required}"
+flyctl status --app "$MARAITHON_FLY_APP"
+flyctl machine list --app "$MARAITHON_FLY_APP"
+flyctl logs --app "$MARAITHON_FLY_APP"
 curl https://maraithon.com/health
 ```
 
@@ -830,7 +867,8 @@ Never commit deployment secrets.
 - Keep production secrets in Fly secrets
 - Keep local operator credentials in a file outside the repo, such as `~/.config/maraithon/fly-prod.env`
 - Do not commit `.env`, `.env.*`, service-account JSON, or copied API tokens
-- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `DIRECT_DATABASE_URL`, `MARAITHON_INCIDENT_DATABASE_URL`, `CLOAK_KEY`, `FLY_API_TOKEN`, the Agent-termination private signing key, and third-party OAuth secrets as production credentials
+- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `DIRECT_DATABASE_URL`, `MARAITHON_MIGRATOR_DATABASE_URL`, `DURABLE_PAYLOAD_VERIFIER_DATABASE_URL`, `MARAITHON_ACTIVATION_DATABASE_URL`, `MARAITHON_INCIDENT_DATABASE_URL`, `VAULT_ROTATION_DATABASE_URL`, `CLOAK_KEY`, `FLY_API_TOKEN`, the Agent-termination private signing key, and third-party OAuth secrets as production credentials
+- Reserve `MARAITHON_INCIDENT_DATABASE_URL` for physical-termination commands. Vault re-encryption, payload-binding rotation, and key retirement use the separately named `VAULT_ROTATION_DATABASE_URL` even though both authenticate the incident-operator role.
 - Configure `AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY` on every runtime node; keep the matching private key only in the external incident-attestation system
 
 ## Configuration
@@ -867,7 +905,7 @@ export GITHUB_CLIENT_ID="your_oauth_app_client_id"
 export GITHUB_CLIENT_SECRET="your_oauth_app_client_secret"
 export GITHUB_REDIRECT_URI="https://your-domain.com/auth/github/callback"
 export DATABASE_URL="postgres://..." # pooled runtime URL
-export DIRECT_DATABASE_URL="postgres://..." # direct URL for migrations
+export DIRECT_DATABASE_URL="postgres://..." # direct maraithon_migrator URL; release command only
 
 # Google OAuth (required for Calendar/Gmail/Contacts)
 export GOOGLE_CLIENT_ID="your_client_id"

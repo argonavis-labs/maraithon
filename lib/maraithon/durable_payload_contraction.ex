@@ -8,7 +8,6 @@ defmodule Maraithon.DurablePayloadContraction do
   Reports and errors contain counts and closed classes only.
   """
 
-  alias Maraithon.DurablePayloadRegistry
   alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Repo
 
@@ -16,16 +15,6 @@ defmodule Maraithon.DurablePayloadContraction do
   @marker "STOPPED_FLEET_EVIDENCE_V1"
   @revision_regex ~r/^[0-9a-f]{40}([0-9a-f]{24})?$/
   @max_timeout 180_000
-
-  @coordination_tables ~w(
-    runtime_leader_authorities
-    runtime_node_incarnations
-    runtime_partitions
-    runtime_partition_transitions
-    agent_runtime_leases
-    runtime_task_assignments
-    runtime_partition_rebalance_requests
-  )
 
   @doc "Runs one contraction batch behind the authoritative stopped-fleet barrier."
   def transaction(opts, fun) when is_list(opts) and is_function(fun, 0) do
@@ -140,15 +129,15 @@ defmodule Maraithon.DurablePayloadContraction do
   end
 
   defp lock_payload_registry! do
-    Enum.each(DurablePayloadRegistry.tables(), fn table ->
-      Repo.query!("LOCK TABLE public.#{table} IN SHARE ROW EXCLUSIVE MODE", [], log: false)
-    end)
+    Repo.query!("SELECT public.lock_durable_payload_contraction_sources()", [], log: false)
   end
 
   defp lock_coordination_authority! do
-    Enum.each(@coordination_tables, fn table ->
-      Repo.query!("LOCK TABLE public.#{table} IN SHARE MODE", [], log: false)
-    end)
+    Repo.query!(
+      "SELECT public.lock_durable_payload_contraction_coordination()",
+      [],
+      log: false
+    )
   end
 
   defp assert_stopped_fleet! do
@@ -207,7 +196,69 @@ defmodule Maraithon.DurablePayloadContraction do
       (SELECT COUNT(*) FROM public.telegram_assistant_steps WHERE status = 'running'),
       (SELECT COUNT(*) FROM public.telegram_prepared_actions
        WHERE status IS NULL OR status NOT IN ('executed', 'rejected', 'expired', 'failed')),
-      (SELECT COUNT(*) FROM public.background_jobs WHERE status IN ('pending', 'running')),
+      (SELECT COUNT(*)
+       FROM public.background_jobs AS job
+       WHERE job.status IN ('pending', 'running')
+         AND NOT (
+           job.status = 'pending'
+           AND job.queue = 'privacy'
+           AND job.job_type = 'privacy_erasure'
+           AND job.payload_purged_at IS NULL
+           AND job.claim_token IS NULL
+           AND job.claimed_by IS NULL
+           AND job.claimed_at IS NULL
+           AND job.partition_id IS NULL
+           AND job.coordination_activation_epoch IS NULL
+           AND job.coordination_partition_epoch IS NULL
+           AND job.coordination_node_incarnation_id IS NULL
+           AND job.coordination_task_assignment_id IS NULL
+           AND job.coordination_task_supervisor_id IS NULL
+           AND job.coordination_local_task_id IS NULL
+           AND (
+             EXISTS (
+               SELECT 1
+               FROM public.privacy_erasure_job_deferral_receipts AS receipt
+               JOIN public.privacy_erasure_requests AS request
+                 ON request.id = receipt.request_id
+               WHERE receipt.job_id = job.id
+                 AND receipt.queue = job.queue
+                 AND receipt.job_type = job.job_type
+                 AND receipt.dedupe_key = job.dedupe_key
+                 AND receipt.classification = 'privacy_erasure_job_deferral_v1'
+                 AND job.payload = '{}'::jsonb
+                 AND job.result = '{}'::jsonb
+                 AND job.payload_encryption_version = 1
+                 AND job.payload_ciphertext IS NOT NULL
+                 AND job.result_ciphertext IS NOT NULL
+                 AND job.payload_binding_version = 1
+                 AND job.payload_binding_key_tag ~
+                       '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+                 AND pg_catalog.octet_length(job.payload_binding_mac) = 32
+                 AND job.dedupe_key = 'privacy-erasure:' || request.id::text
+                 AND request.state <> 'completed'
+             )
+             OR EXISTS (
+               SELECT 1
+               FROM public.privacy_erasure_requests AS request
+               WHERE request.id::text =
+                       pg_catalog.substring(job.dedupe_key, 17)
+                 AND job.dedupe_key = 'privacy-erasure:' || request.id::text
+                 AND job.payload = pg_catalog.jsonb_build_object(
+                       'request_id', request.id::text
+                     )
+                 AND request.state <> 'completed'
+             )
+           )
+           AND EXISTS (
+             SELECT 1
+             FROM public.runtime_coordination_protocols AS runtime_protocol
+             CROSS JOIN public.effect_execution_protocols AS effect_protocol
+             WHERE runtime_protocol.name = 'runtime'
+               AND runtime_protocol.mode = 'dark'
+               AND effect_protocol.name = 'effects'
+               AND effect_protocol.mode = 'legacy'
+           )
+         )),
       (SELECT COUNT(*) FROM public.scheduled_jobs WHERE status IN ('pending', 'dispatched')),
       (SELECT COUNT(*) FROM public.agent_work_results WHERE status = 'provisional'),
       (SELECT COUNT(*) FROM public.runtime_node_incarnations WHERE state <> 'revoked'),

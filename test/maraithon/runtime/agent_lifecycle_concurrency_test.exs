@@ -46,13 +46,16 @@ defmodule Maraithon.Runtime.AgentLifecycleConcurrencyTest do
       end)
 
     on_exit(fn ->
-      unboxed(fn ->
+      unboxed_with_trigger_bypass(fn ->
         Repo.delete_all(from(lease in AgentRuntimeLease, where: lease.agent_id == ^agent.id))
 
         Repo.delete_all(
           from(operation in AgentLifecycleOperation, where: operation.agent_id == ^agent.id)
         )
 
+        Repo.delete_all(from(step in AgentRunStep, where: step.agent_id == ^agent.id))
+        Repo.delete_all(from(run in AgentRun, where: run.agent_id == ^agent.id))
+        Repo.delete_all(from(job in ScheduledJob, where: job.agent_id == ^agent.id))
         Repo.delete_all(from(stored in Agent, where: stored.id == ^agent.id))
         Repo.delete_all(from(user in User, where: user.id == ^agent.user_id))
       end)
@@ -128,7 +131,7 @@ defmodule Maraithon.Runtime.AgentLifecycleConcurrencyTest do
     assert {:ok, successor} = unboxed(fn -> AgentLeases.claim(agent.id) end)
     assert unboxed(fn -> Agents.get_agent(agent.id).config["revision"] end) == "new"
 
-    assert {:ok, :released} =
+    assert {:error, :termination_proof_required} =
              unboxed(fn -> AgentLeases.release(agent.id, successor.owner_token) end)
   end
 
@@ -200,11 +203,11 @@ defmodule Maraithon.Runtime.AgentLifecycleConcurrencyTest do
     assert unboxed(fn -> Repo.reload!(new_job).status end) == "pending"
     assert unboxed(fn -> Agents.get_agent(agent.id).config["revision"] end) == "new"
 
-    assert {:ok, :released} =
+    assert {:error, :termination_proof_required} =
              unboxed(fn -> AgentLeases.release(agent.id, lease.owner_token) end)
   end
 
-  test "new RunStep admission queues behind the Agent prefix and rejects a lifecycle marker", %{
+  test "new RunStep admission queues behind finalization and rejects the cancelled Run", %{
     agent: agent
   } do
     assert {:ok, run} = unboxed(fn -> Agents.start_agent_run(agent) end)
@@ -260,10 +263,10 @@ defmodule Maraithon.Runtime.AgentLifecycleConcurrencyTest do
 
     assert {:ok, :ok} = Task.await(run_blocker, 5_000)
 
-    assert {:ok, %{status: :reconciliation_pending, reason: :running_agent_run}} =
-             Task.await(finalizer, 5_000)
+    assert {:ok, %{status: :finalized}} = Task.await(finalizer, 5_000)
 
-    assert {:error, :agent_drain_pending} = Task.await(step_admission, 5_000)
+    assert {:error, {:run_not_running, "cancelled"}} =
+             Task.await(step_admission, 5_000)
 
     assert unboxed(fn ->
              Repo.aggregate(
@@ -271,14 +274,6 @@ defmodule Maraithon.Runtime.AgentLifecycleConcurrencyTest do
                :count
              )
            end) == 0
-
-    assert {:ok, %{cancelled: true}} =
-             unboxed(fn -> Agents.cancel_agent_run(run.id, agent.id, "test_quiesced") end)
-
-    assert {:ok, %{status: :finalized}} =
-             unboxed(fn ->
-               AgentLifecycleOperations.finalize(agent.id, fence.operation_token)
-             end)
   end
 
   test "subscription sync cannot resurrect delivery after concurrent consent revocation", %{
@@ -378,5 +373,30 @@ defmodule Maraithon.Runtime.AgentLifecycleConcurrencyTest do
     |> Repo.insert!()
   end
 
-  defp unboxed(fun), do: Sandbox.unboxed_run(Repo, fun)
+  defp unboxed(fun) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.query!("SET ROLE maraithon_runtime", [], log: false)
+
+      try do
+        fun.()
+      after
+        Repo.query!("RESET ROLE", [], log: false)
+      end
+    end)
+  end
+
+  defp unboxed_with_trigger_bypass(fun) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.query!("RESET ROLE", [], log: false)
+
+      try do
+        Repo.transaction(fn ->
+          Repo.query!("SET LOCAL session_replication_role = replica", [], log: false)
+          fun.()
+        end)
+      after
+        Repo.query!("RESET ROLE", [], log: false)
+      end
+    end)
+  end
 end

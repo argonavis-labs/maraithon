@@ -16,8 +16,17 @@ defmodule Maraithon.Runtime.TaskGuardian do
   @default_max_open_generations 32
   @default_max_identities 8_192
   @default_max_waiters 1_024
+  @persistence_retry_ms 1_000
+  @max_persistence_retry_batch 32
+  @persistence_retry_callback_budget_ms 500
+  @completion_fallback_errors [
+    :coordination_task_completion_not_durable,
+    :task_termination_proof_conflict
+  ]
+  @test_persistence_decisions Mix.env() == :test
 
   @effect_fields [:effect_id, :agent_id, :claim_token, :supervisor_id, :task_id]
+  @coordinated_effect_fields [:assignment_id | @effect_fields]
   @coordination_fields [
     :work_kind,
     :work_id,
@@ -39,7 +48,11 @@ defmodule Maraithon.Runtime.TaskGuardian do
     GenServer.call(guardian_pid, {:open_generation, kind, supervisor_pid}, @call_timeout)
   end
 
-  def reserve(access, identity), do: call(access, {:reserve, identity})
+  def reserve(access, identity), do: call(access, {:reserve, identity, :without_capability})
+
+  def reserve_with_termination_capability(access, identity),
+    do: call(access, {:reserve, identity, :issue_termination_capability})
+
   def release(access, identity), do: call(access, {:release, identity})
   def cancel_reserved(access, identity), do: call(access, {:cancel_reserved, identity})
   def activate(access, identity, task_pid), do: call(access, {:activate, identity, task_pid})
@@ -54,6 +67,18 @@ defmodule Maraithon.Runtime.TaskGuardian do
       when is_integer(timeout) and timeout >= 0 do
     call(access, {:await_proof, identity, timeout}, timeout + @call_timeout)
   end
+
+  def persist_termination(access, identity),
+    do: call(access, {:persist_termination, identity}, @call_timeout * 2)
+
+  def expect_completion(access, identity),
+    do: call(access, {:expect_completion, identity})
+
+  def cancel_expected_completion(access, identity),
+    do: call(access, {:cancel_expected_completion, identity})
+
+  def acknowledge_completion(access, identity),
+    do: call(access, {:acknowledge_completion, identity}, @call_timeout * 2)
 
   defp call(%{guardian_pid: guardian_pid} = access, request) when is_pid(guardian_pid) do
     call(access, request, @call_timeout)
@@ -71,12 +96,18 @@ defmodule Maraithon.Runtime.TaskGuardian do
        generations: %{},
        supervisor_pids: %{},
        supervisor_monitors: %{},
+       controller_monitors: %{},
        task_monitors: %{},
+       termination_capabilities: :ets.new(:task_termination_capabilities, [:set, :private]),
        completed_order: [],
        terminal_identity_order: [],
        identity_count: 0,
        waiters: %{},
        waiter_count: 0,
+       pending_persistence: :queue.new(),
+       pending_persistence_set: MapSet.new(),
+       persistence_retry_timer: nil,
+       test_persistence: test_persistence_config(opts),
        max_completed_generations:
          Keyword.get(opts, :max_completed_generations, @default_max_completed_generations),
        max_open_generations:
@@ -87,7 +118,7 @@ defmodule Maraithon.Runtime.TaskGuardian do
   end
 
   @impl true
-  def handle_call({:open_generation, kind, supervisor_pid}, _from, state)
+  def handle_call({:open_generation, kind, supervisor_pid}, {controller_pid, _tag}, state)
       when kind in [:effect, :coordination] and is_pid(supervisor_pid) do
     pid_key = {kind, supervisor_pid}
 
@@ -99,12 +130,16 @@ defmodule Maraithon.Runtime.TaskGuardian do
           supervisor_id = Ecto.UUID.generate()
           token = make_ref()
           monitor_ref = Process.monitor(supervisor_pid)
+          controller_ref = Process.monitor(controller_pid)
           generation_key = {kind, supervisor_id}
 
           generation = %{
             kind: kind,
             supervisor_id: supervisor_id,
             supervisor_pid: supervisor_pid,
+            controller_pid: controller_pid,
+            controller_ref: controller_ref,
+            controller_down: nil,
             supervisor_ref: monitor_ref,
             supervisor_down: nil,
             token: token,
@@ -116,7 +151,10 @@ defmodule Maraithon.Runtime.TaskGuardian do
             state
             | generations: Map.put(state.generations, generation_key, generation),
               supervisor_pids: Map.put(state.supervisor_pids, pid_key, generation_key),
-              supervisor_monitors: Map.put(state.supervisor_monitors, monitor_ref, generation_key)
+              supervisor_monitors:
+                Map.put(state.supervisor_monitors, monitor_ref, generation_key),
+              controller_monitors:
+                Map.put(state.controller_monitors, controller_ref, generation_key)
           }
 
           access = %{
@@ -133,7 +171,7 @@ defmodule Maraithon.Runtime.TaskGuardian do
       generation_key ->
         generation = Map.fetch!(state.generations, generation_key)
 
-        if is_nil(generation.supervisor_down) do
+        if is_nil(generation.supervisor_down) and generation.controller_pid == controller_pid do
           access = %{
             guardian_pid: self(),
             kind: generation.kind,
@@ -144,7 +182,12 @@ defmodule Maraithon.Runtime.TaskGuardian do
 
           {:reply, {:ok, access}, state}
         else
-          {:reply, {:error, :task_supervisor_already_down}, state}
+          reason =
+            if generation.controller_pid == controller_pid,
+              do: :task_supervisor_already_down,
+              else: :task_guardian_controller_mismatch
+
+          {:reply, {:error, reason}, state}
         end
     end
   end
@@ -153,8 +196,8 @@ defmodule Maraithon.Runtime.TaskGuardian do
     {:reply, {:error, :invalid_task_supervisor}, state}
   end
 
-  def handle_call({:access, access, request}, from, state) do
-    case authorized_generation(state, access) do
+  def handle_call({:access, access, request}, {caller, _tag} = from, state) do
+    case authorized_generation(state, access, caller) do
       {:ok, generation_key, generation} ->
         handle_access_call(request, from, generation_key, generation, state)
 
@@ -164,17 +207,42 @@ defmodule Maraithon.Runtime.TaskGuardian do
   end
 
   @impl true
+  def handle_info(:retry_pending_task_terminations, state) do
+    if is_reference(state.persistence_retry_timer),
+      do: Process.cancel_timer(state.persistence_retry_timer)
+
+    state =
+      state
+      |> Map.put(:persistence_retry_timer, nil)
+      |> compact_pending_persistence()
+
+    # Each production persistence call has its own 500 ms outer/PG bound. The
+    # aggregate start deadline prevents one callback from serially spending
+    # that bound on all 32 entries and monopolizing the Guardian for ~16 s.
+    deadline_ms =
+      System.monotonic_time(:millisecond) + @persistence_retry_callback_budget_ms
+
+    work_count = min(MapSet.size(state.pending_persistence_set), @max_persistence_retry_batch)
+    state = retry_pending_persistence(state, work_count, deadline_ms)
+    {:noreply, schedule_persistence_retry(state)}
+  end
+
+  @impl true
   def handle_info({:DOWN, ref, :process, pid, reason}, state) do
-    cond do
-      generation_key = Map.get(state.supervisor_monitors, ref) ->
-        state = supervisor_down(state, generation_key, ref, pid, reason)
+    case authenticate_down(state, ref, pid) do
+      {:supervisor, generation_key, state} ->
+        {:noreply, supervisor_down(state, generation_key, ref, pid, reason)}
+
+      {:task, task_location, state} ->
+        {:noreply, task_down(state, task_location, ref, pid, reason)}
+
+      {:controller, generation_key, state} ->
+        {:noreply, controller_down(state, generation_key, ref, pid, reason)}
+
+      {:spoofed, state} ->
         {:noreply, state}
 
-      task_location = Map.get(state.task_monitors, ref) ->
-        state = task_down(state, task_location, ref, pid, reason)
-        {:noreply, state}
-
-      true ->
+      :unknown ->
         {:noreply, state}
     end
   end
@@ -184,14 +252,23 @@ defmodule Maraithon.Runtime.TaskGuardian do
       {nil, state} ->
         {:noreply, state}
 
-      {%{from: from}, state} ->
-        GenServer.reply(from, proof_result(state, waiter_key))
+      {%{from: from, identity: identity}, state} ->
+        GenServer.reply(from, proof_result(state, waiter_key, identity))
         {:noreply, state}
     end
   end
 
-  defp handle_access_call({:reserve, identity}, _from, generation_key, generation, state) do
-    with {:ok, identity, identity_key} <- normalize_identity(generation.kind, identity),
+  defp handle_access_call(
+         {:reserve, identity, capability_mode},
+         _from,
+         generation_key,
+         generation,
+         state
+       )
+       when capability_mode in [:without_capability, :issue_termination_capability] do
+    with nil <- generation.supervisor_down,
+         nil <- generation.controller_down,
+         {:ok, identity, identity_key} <- normalize_identity(generation.kind, identity),
          :ok <- identity_belongs_to_generation(identity, generation),
          :ok <- ensure_identity_absent_or_exact(generation, identity_key, identity) do
       case Map.get(generation.identities, identity_key) do
@@ -202,24 +279,35 @@ defmodule Maraithon.Runtime.TaskGuardian do
           if state.identity_count >= state.max_identities do
             {:reply, {:error, :task_guardian_identity_history_full}, state}
           else
+            {capability_id, capability_digest} =
+              issue_termination_capability(state, capability_mode)
+
             record = %{
               identity: identity,
               phase: :reserved,
               task_pid: nil,
               task_ref: nil,
-              down: nil
+              down: nil,
+              completion_requested: false,
+              termination_capability_id: capability_id,
+              termination_capability_digest: capability_digest,
+              durable_disposition: if(is_nil(capability_id), do: :uncoordinated, else: nil)
             }
 
             generation = put_in(generation.identities[identity_key], record)
             state = put_generation(state, generation_key, generation)
-            {:reply, :ok, %{state | identity_count: state.identity_count + 1}}
+            state = %{state | identity_count: state.identity_count + 1}
+
+            reply = reservation_capability_reply(capability_id, capability_digest)
+            {:reply, reply, state}
           end
 
-        _record ->
-          {:reply, :ok, state}
+        record ->
+          {:reply, existing_reservation_reply(record, capability_mode), state}
       end
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
+      _closed_generation -> {:reply, {:error, :task_guardian_generation_closed}, state}
     end
   end
 
@@ -227,7 +315,7 @@ defmodule Maraithon.Runtime.TaskGuardian do
     with {:ok, identity, identity_key} <- normalize_identity(generation.kind, identity),
          :ok <- identity_belongs_to_generation(identity, generation),
          {:ok, %{phase: :reserved} = record} <- exact_record(generation, identity_key, identity) do
-      _ = record
+      clear_capability_entry(state, record)
       generation = %{generation | identities: Map.delete(generation.identities, identity_key)}
       state = put_generation(state, generation_key, generation)
       state = drop_terminal_order(state, {generation_key, identity_key})
@@ -258,6 +346,7 @@ defmodule Maraithon.Runtime.TaskGuardian do
             state
             |> put_generation(generation_key, generation)
             |> remember_terminal_identity({generation_key, identity_key})
+            |> enqueue_pending_persistence({generation_key, identity_key})
             |> resolve_waiters({generation_key, identity_key})
 
           {:reply, :ok, state}
@@ -375,6 +464,87 @@ defmodule Maraithon.Runtime.TaskGuardian do
          generation,
          state
        ) do
+    await_result(identity, timeout, from, generation, state)
+  end
+
+  defp handle_access_call(
+         {:expect_completion, identity},
+         _from,
+         generation_key,
+         generation,
+         state
+       ) do
+    with {:ok, normalized, identity_key} <- normalize_identity(generation.kind, identity),
+         :ok <- identity_belongs_to_generation(normalized, generation),
+         {:ok, record} <- exact_record(generation, identity_key, normalized) do
+      record = %{record | completion_requested: true}
+      generation = put_in(generation.identities[identity_key], record)
+      {:reply, :ok, put_generation(state, generation_key, generation)}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp handle_access_call(
+         {:cancel_expected_completion, identity},
+         _from,
+         generation_key,
+         generation,
+         state
+       ) do
+    with {:ok, normalized, identity_key} <- normalize_identity(generation.kind, identity),
+         :ok <- identity_belongs_to_generation(normalized, generation),
+         {:ok, record} <- exact_record(generation, identity_key, normalized) do
+      record = %{record | completion_requested: false}
+      generation = put_in(generation.identities[identity_key], record)
+      {:reply, :ok, put_generation(state, generation_key, generation)}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp handle_access_call(
+         {:acknowledge_completion, identity},
+         _from,
+         _authorized_generation_key,
+         authorized_generation,
+         state
+       ) do
+    case acknowledge_completion_result(state, authorized_generation.kind, identity) do
+      {:ok, state} -> {:reply, :ok, state}
+      {:error, reason, state} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp handle_access_call(
+         {:persist_termination, identity},
+         _from,
+         _authorized_generation_key,
+         authorized_generation,
+         state
+       ) do
+    case persist_termination_result(state, authorized_generation.kind, identity) do
+      {:ok, proof_kind, state} -> {:reply, {:ok, proof_kind}, state}
+      {:error, reason, state} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp handle_access_call(:tracked_active_identities, _from, generation_key, generation, state) do
+    identities =
+      generation.identities
+      |> Enum.flat_map(fn {_identity_key, record} ->
+        if record.phase == :active and is_nil(record.down), do: [record.identity], else: []
+      end)
+
+    _ = generation_key
+    {:reply, {:ok, identities}, state}
+  end
+
+  defp handle_access_call(_request, _from, _key, _generation, state) do
+    {:reply, {:error, :unsupported_task_guardian_request}, state}
+  end
+
+  defp await_result(identity, timeout, from, generation, state) do
     with {:ok, waiter_key, normalized} <- proof_lookup_key(generation.kind, identity) do
       result = proof_result(state, waiter_key, normalized)
 
@@ -398,32 +568,130 @@ defmodule Maraithon.Runtime.TaskGuardian do
     end
   end
 
-  defp handle_access_call(:tracked_active_identities, _from, generation_key, generation, state) do
-    identities =
-      generation.identities
-      |> Enum.flat_map(fn {_identity_key, record} ->
-        if record.phase == :active and is_nil(record.down), do: [record.identity], else: []
-      end)
-
-    _ = generation_key
-    {:reply, {:ok, identities}, state}
-  end
-
-  defp handle_access_call(_request, _from, _key, _generation, state) do
-    {:reply, {:error, :unsupported_task_guardian_request}, state}
-  end
-
-  defp authorized_generation(state, access) when is_map(access) do
+  defp authorized_generation(state, access, caller) when is_map(access) and is_pid(caller) do
     with kind when kind in [:effect, :coordination] <- Map.get(access, :kind),
          supervisor_id when is_binary(supervisor_id) <- Map.get(access, :supervisor_id),
          token when is_reference(token) <- Map.get(access, :token),
          generation_key = {kind, supervisor_id},
          %{} = generation <- Map.get(state.generations, generation_key),
          true <- generation.token == token,
+         true <- generation.controller_pid == caller,
          true <- generation.supervisor_pid == Map.get(access, :supervisor_pid) do
       {:ok, generation_key, generation}
     else
       _ -> {:error, :task_guardian_access_lost}
+    end
+  end
+
+  defp authenticate_down(state, ref, pid) do
+    cond do
+      generation_key = Map.get(state.supervisor_monitors, ref) ->
+        authenticate_supervisor_down(state, generation_key, ref, pid)
+
+      task_location = Map.get(state.task_monitors, ref) ->
+        authenticate_task_down(state, task_location, ref, pid)
+
+      generation_key = Map.get(state.controller_monitors, ref) ->
+        authenticate_controller_down(state, generation_key, ref, pid)
+
+      true ->
+        :unknown
+    end
+  end
+
+  defp authenticate_supervisor_down(state, generation_key, ref, pid) do
+    case Map.get(state.generations, generation_key) do
+      %{supervisor_ref: ^ref, supervisor_pid: ^pid} = generation ->
+        if Process.demonitor(ref, [:info]) do
+          new_ref = Process.monitor(pid)
+          generation = %{generation | supervisor_ref: new_ref}
+
+          state = %{
+            state
+            | generations: Map.put(state.generations, generation_key, generation),
+              supervisor_monitors:
+                state.supervisor_monitors
+                |> Map.delete(ref)
+                |> Map.put(new_ref, generation_key)
+          }
+
+          {:spoofed, state}
+        else
+          {:supervisor, generation_key, state}
+        end
+
+      _mismatch ->
+        :unknown
+    end
+  end
+
+  defp authenticate_controller_down(state, generation_key, ref, pid) do
+    case Map.get(state.generations, generation_key) do
+      %{controller_ref: ^ref, controller_pid: ^pid} = generation ->
+        if Process.demonitor(ref, [:info]) do
+          new_ref = Process.monitor(pid)
+          generation = %{generation | controller_ref: new_ref}
+
+          state = %{
+            state
+            | generations: Map.put(state.generations, generation_key, generation),
+              controller_monitors:
+                state.controller_monitors
+                |> Map.delete(ref)
+                |> Map.put(new_ref, generation_key)
+          }
+
+          {:spoofed, state}
+        else
+          {:controller, generation_key, state}
+        end
+
+      _mismatch ->
+        :unknown
+    end
+  end
+
+  defp authenticate_task_down(state, {generation_key, identity_key} = location, ref, pid) do
+    with %{} = generation <- Map.get(state.generations, generation_key),
+         %{task_ref: ^ref, task_pid: ^pid} = record <-
+           Map.get(generation.identities, identity_key) do
+      if Process.demonitor(ref, [:info]) do
+        new_ref = Process.monitor(pid)
+        record = %{record | task_ref: new_ref}
+        generation = put_in(generation.identities[identity_key], record)
+
+        state = %{
+          state
+          | generations: Map.put(state.generations, generation_key, generation),
+            task_monitors: state.task_monitors |> Map.delete(ref) |> Map.put(new_ref, location)
+        }
+
+        {:spoofed, state}
+      else
+        {:task, location, state}
+      end
+    else
+      _mismatch -> :unknown
+    end
+  end
+
+  defp controller_down(state, generation_key, ref, pid, reason) do
+    case Map.get(state.generations, generation_key) do
+      %{controller_ref: ^ref, controller_pid: ^pid} = generation ->
+        generation = %{
+          generation
+          | controller_ref: nil,
+            controller_down: %{reason: proof_reason(reason)}
+        }
+
+        %{
+          state
+          | generations: Map.put(state.generations, generation_key, generation),
+            controller_monitors: Map.delete(state.controller_monitors, ref)
+        }
+
+      _mismatch ->
+        %{state | controller_monitors: Map.delete(state.controller_monitors, ref)}
     end
   end
 
@@ -479,6 +747,7 @@ defmodule Maraithon.Runtime.TaskGuardian do
 
       state
       |> remember_terminal_identity({generation_key, identity_key})
+      |> enqueue_pending_persistence({generation_key, identity_key})
       |> maybe_complete_generation(generation_key)
       |> resolve_waiters({generation_key, identity_key})
       |> resolve_generation_waiters(generation_key)
@@ -507,7 +776,9 @@ defmodule Maraithon.Runtime.TaskGuardian do
 
       state =
         Enum.reduce(generation.identities, state, fn {identity_key, _record}, acc ->
-          remember_terminal_identity(acc, {generation_key, identity_key})
+          acc
+          |> remember_terminal_identity({generation_key, identity_key})
+          |> enqueue_pending_persistence({generation_key, identity_key})
         end)
 
       trim_completed_generations(state)
@@ -542,6 +813,421 @@ defmodule Maraithon.Runtime.TaskGuardian do
     end
   end
 
+  defp acknowledge_completion_result(state, kind, identity) do
+    with {:ok, {generation_key, identity_key} = waiter_key, normalized} <-
+           proof_lookup_key(kind, identity),
+         %{} = generation <- Map.get(state.generations, generation_key),
+         {:ok, record} <- exact_record(generation, identity_key, normalized),
+         {:ok, {:task_down, _proof}} <- proof_result(state, waiter_key, normalized),
+         {:ok, disposition} <- acknowledge_completion_record(state, generation.kind, record) do
+      clear_capability_entry(state, record)
+      record = %{record | termination_capability_id: nil, durable_disposition: disposition}
+      generation = put_in(generation.identities[identity_key], record)
+
+      location = {generation_key, identity_key}
+
+      state =
+        state
+        |> put_generation(generation_key, generation)
+        |> remember_terminal_identity(location)
+        |> drop_pending_persistence(location)
+
+      {:ok, state}
+    else
+      nil -> {:error, :task_identity_untracked, state}
+      {:pending, reason} -> {:error, reason, state}
+      {:unknown, reason} -> {:error, reason, state}
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp acknowledge_completion_record(_state, _kind, %{
+         termination_capability_id: nil,
+         durable_disposition: disposition
+       })
+       when disposition in [
+              :completion,
+              :never_activated,
+              :supervisor_down,
+              :external_destroyed,
+              :uncoordinated,
+              :uncommitted
+            ],
+       do: {:ok, disposition}
+
+  defp acknowledge_completion_record(_state, _kind, %{termination_capability_id: nil}),
+    do: {:error, :task_termination_disposition_unavailable}
+
+  if @test_persistence_decisions do
+    defp acknowledge_completion_record(state, :effect, record) do
+      case test_persistence_decision(state, {:completion, record.identity}) do
+        :continue -> acknowledge_capability_completion_record(state, record)
+        {:error, _reason} = error -> error
+      end
+    end
+  else
+    defp acknowledge_completion_record(state, :effect, record),
+      do: acknowledge_capability_completion_record(state, record)
+  end
+
+  defp acknowledge_completion_record(_state, _kind, _record),
+    do: {:error, :unsupported_task_guardian_completion}
+
+  defp acknowledge_capability_completion_record(state, record) do
+    with {:ok, secret} <- fetch_termination_secret(state, record) do
+      run_persistence(fn ->
+        Maraithon.Effects.Cancellation.acknowledge_guardian_completion(
+          record.identity,
+          secret
+        )
+      end)
+    end
+  end
+
+  defp persist_termination_result(state, kind, identity) do
+    with {:ok, {generation_key, identity_key} = waiter_key, normalized} <-
+           proof_lookup_key(kind, identity),
+         %{} = generation <- Map.get(state.generations, generation_key),
+         {:ok, record} <- exact_record(generation, identity_key, normalized) do
+      case proof_result(state, waiter_key, normalized) do
+        {:ok, {:task_down, proof}} ->
+          persist_record(
+            state,
+            generation_key,
+            identity_key,
+            generation,
+            record,
+            "supervisor_down",
+            proof.evidence_id
+          )
+
+        {:ok, :activation_cancelled} ->
+          persist_record(
+            state,
+            generation_key,
+            identity_key,
+            generation,
+            record,
+            "never_activated",
+            never_activated_evidence_id(generation.kind, record.identity)
+          )
+
+        {:ok, {:supervisor_down_before_activation, _proof}} ->
+          persist_record(
+            state,
+            generation_key,
+            identity_key,
+            generation,
+            record,
+            "never_activated",
+            never_activated_evidence_id(generation.kind, record.identity)
+          )
+
+        {:pending, reason} ->
+          {:error, reason, state}
+
+        {:unknown, reason} ->
+          {:error, reason, state}
+      end
+    else
+      nil -> {:error, :task_identity_untracked, state}
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp persist_record(
+         state,
+         generation_key,
+         identity_key,
+         _generation,
+         %{termination_capability_id: nil, durable_disposition: disposition},
+         _proof_kind,
+         _evidence_id
+       )
+       when disposition in [
+              :completion,
+              :never_activated,
+              :supervisor_down,
+              :external_destroyed,
+              :uncoordinated,
+              :uncommitted
+            ] do
+    location = {generation_key, identity_key}
+
+    state =
+      state
+      |> remember_terminal_identity(location)
+      |> drop_pending_persistence(location)
+
+    {:ok, disposition, state}
+  end
+
+  defp persist_record(
+         state,
+         _generation_key,
+         _identity_key,
+         _generation,
+         %{termination_capability_id: nil},
+         _proof_kind,
+         _evidence_id
+       ),
+       do: {:error, :task_termination_disposition_unavailable, state}
+
+  if @test_persistence_decisions do
+    defp persist_record(
+           state,
+           generation_key,
+           identity_key,
+           generation,
+           record,
+           proof_kind,
+           evidence_id
+         ) do
+      decision =
+        test_persistence_decision(
+          state,
+          {:termination, generation.kind, record.identity, proof_kind, evidence_id}
+        )
+
+      case decision do
+        :continue ->
+          persist_capability_record(
+            state,
+            generation_key,
+            identity_key,
+            generation,
+            record,
+            proof_kind,
+            evidence_id
+          )
+
+        {:error, reason} ->
+          {:error, reason, state}
+      end
+    end
+  else
+    defp persist_record(
+           state,
+           generation_key,
+           identity_key,
+           generation,
+           record,
+           proof_kind,
+           evidence_id
+         ) do
+      persist_capability_record(
+        state,
+        generation_key,
+        identity_key,
+        generation,
+        record,
+        proof_kind,
+        evidence_id
+      )
+    end
+  end
+
+  defp persist_capability_record(
+         state,
+         generation_key,
+         identity_key,
+         generation,
+         record,
+         proof_kind,
+         evidence_id
+       ) do
+    with {:ok, secret} <- fetch_termination_secret(state, record),
+         {:ok, disposition} <-
+           run_persistence(fn ->
+             persist_guardian_proof(
+               generation.kind,
+               record.identity,
+               proof_kind,
+               evidence_id,
+               secret
+             )
+           end) do
+      clear_capability_entry(state, record)
+      record = %{record | termination_capability_id: nil, durable_disposition: disposition}
+      generation = put_in(generation.identities[identity_key], record)
+
+      location = {generation_key, identity_key}
+
+      state =
+        state
+        |> put_generation(generation_key, generation)
+        |> remember_terminal_identity(location)
+        |> drop_pending_persistence(location)
+
+      {:ok, disposition, state}
+    else
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp fetch_termination_secret(state, %{termination_capability_id: capability_id})
+       when is_reference(capability_id) do
+    case :ets.lookup(state.termination_capabilities, capability_id) do
+      [{^capability_id, secret, digest}]
+      when is_binary(secret) and byte_size(secret) == 32 and is_binary(digest) ->
+        {:ok, secret}
+
+      [] ->
+        {:error, :task_termination_capability_unavailable}
+    end
+  end
+
+  defp fetch_termination_secret(_state, _record),
+    do: {:error, :task_termination_capability_unavailable}
+
+  defp clear_capability_entry(_state, %{termination_capability_id: nil}), do: :ok
+
+  defp clear_capability_entry(state, %{termination_capability_id: capability_id})
+       when is_reference(capability_id) do
+    _ = :ets.delete(state.termination_capabilities, capability_id)
+    :ok
+  end
+
+  defp never_activated_evidence_id(:effect, identity),
+    do: "task-supervisor:never_activated:#{identity.task_id}"
+
+  defp never_activated_evidence_id(:coordination, identity),
+    do: "task-supervisor:never_activated:#{identity.local_task_id}"
+
+  defp run_persistence(fun) do
+    case fun.() do
+      :ok ->
+        :ok
+
+      {:ok, disposition}
+      when disposition in [
+             :completion,
+             :never_activated,
+             :supervisor_down,
+             :external_destroyed,
+             :uncoordinated,
+             :uncommitted
+           ] ->
+        {:ok, disposition}
+
+      {:error, _reason} = error ->
+        error
+
+      _unexpected ->
+        {:error, :task_termination_persistence_failed}
+    end
+  rescue
+    _error -> {:error, :task_termination_persistence_failed}
+  catch
+    _kind, _reason -> {:error, :task_termination_persistence_failed}
+  end
+
+  defp persist_guardian_proof(:coordination, identity, proof_kind, evidence_id, secret) do
+    Maraithon.Runtime.Coordination.TaskClaims.persist_guardian_termination(
+      identity,
+      proof_kind,
+      evidence_id,
+      secret
+    )
+  end
+
+  defp persist_guardian_proof(:effect, identity, proof_kind, evidence_id, secret) do
+    Maraithon.Effects.Cancellation.persist_guardian_termination(
+      identity,
+      proof_kind,
+      evidence_id,
+      secret
+    )
+  end
+
+  defp persist_guardian_proof(_kind, _identity, _proof_kind, _evidence_id, _secret),
+    do: {:error, :unsupported_task_guardian_persistence}
+
+  if @test_persistence_decisions do
+    defp test_persistence_config(opts) do
+      # The named application Guardian never accepts test decisions. This seam
+      # exists only in MIX_ENV=test isolated processes, can inject errors/delay
+      # only, and runs before any private ETS capability lookup.
+      if Keyword.get(opts, :name, __MODULE__) == nil do
+        case Keyword.get(opts, :test_persistence) do
+          %{
+            test_pid: test_pid,
+            acknowledge_error: acknowledge_error,
+            persist_error: persist_error,
+            delay_ms: delay_ms
+          } = config
+          when is_pid(test_pid) and
+                 (is_nil(acknowledge_error) or is_atom(acknowledge_error)) and
+                 (is_nil(persist_error) or is_atom(persist_error)) and is_integer(delay_ms) and
+                 delay_ms in 0..1_000 ->
+            config
+
+          _disabled_or_invalid ->
+            nil
+        end
+      end
+    end
+
+    defp test_persistence_decision(%{test_persistence: nil}, _event), do: :continue
+
+    defp test_persistence_decision(
+           %{
+             test_persistence: %{
+               test_pid: test_pid,
+               acknowledge_error: acknowledge_error,
+               persist_error: persist_error,
+               delay_ms: delay_ms
+             }
+           },
+           event
+         ) do
+      error =
+        case event do
+          {:completion, _identity} -> acknowledge_error
+          {:termination, _kind, _identity, _proof_kind, _evidence_id} -> persist_error
+        end
+
+      if is_pid(test_pid) and is_atom(error) and not is_nil(error) and is_integer(delay_ms) and
+           delay_ms in 0..1_000 do
+        notify_test_persistence_attempt(test_pid, event)
+        delay_test_persistence(delay_ms)
+        {:error, error}
+      else
+        :continue
+      end
+    end
+
+    defp test_persistence_decision(_state, _event), do: :continue
+
+    defp notify_test_persistence_attempt(test_pid, {:completion, identity}) do
+      send(test_pid, {:guardian_persistence_attempt, self(), :completion, identity})
+    end
+
+    defp notify_test_persistence_attempt(
+           test_pid,
+           {:termination, kind, identity, proof_kind, evidence_id}
+         ) do
+      send(
+        test_pid,
+        {:guardian_persistence_attempt, self(), :termination, kind, identity, proof_kind,
+         evidence_id}
+      )
+    end
+
+    defp delay_test_persistence(0), do: :ok
+
+    defp delay_test_persistence(delay_ms) do
+      tag = make_ref()
+      _timer = Process.send_after(self(), {:guardian_persistence_delay_elapsed, tag}, delay_ms)
+
+      receive do
+        {:guardian_persistence_delay_elapsed, ^tag} -> :ok
+      end
+    end
+  else
+    defp test_persistence_config(_opts), do: nil
+  end
+
   defp proof_lookup_key(kind, identity) do
     with {:ok, normalized, identity_key} <- normalize_identity(kind, identity) do
       waiter_key = {{kind, Map.fetch!(normalized, :supervisor_id)}, identity_key}
@@ -560,6 +1246,7 @@ defmodule Maraithon.Runtime.TaskGuardian do
       {waiters, remaining} ->
         Enum.each(waiters, fn waiter ->
           _ = Process.cancel_timer(waiter.timer_ref)
+
           GenServer.reply(waiter.from, proof_result(state, waiter_key, waiter.identity))
         end)
 
@@ -614,6 +1301,39 @@ defmodule Maraithon.Runtime.TaskGuardian do
     end
   end
 
+  defp issue_termination_capability(_state, :without_capability), do: {nil, nil}
+
+  defp issue_termination_capability(state, :issue_termination_capability) do
+    capability_id = make_ref()
+    secret = :crypto.strong_rand_bytes(32)
+    digest = :crypto.hash(:sha256, secret)
+    true = :ets.insert(state.termination_capabilities, {capability_id, secret, digest})
+    {capability_id, digest}
+  end
+
+  defp reservation_capability_reply(nil, nil), do: :ok
+
+  defp reservation_capability_reply(_capability_id, capability_digest),
+    do: {:ok, %{termination_capability_digest: capability_digest}}
+
+  defp existing_reservation_reply(
+         %{termination_capability_id: nil},
+         :without_capability
+       ),
+       do: :ok
+
+  defp existing_reservation_reply(
+         %{
+           termination_capability_id: capability_id,
+           termination_capability_digest: capability_digest
+         },
+         :issue_termination_capability
+       ),
+       do: reservation_capability_reply(capability_id, capability_digest)
+
+  defp existing_reservation_reply(_record, _mode),
+    do: {:error, :task_termination_capability_mismatch}
+
   defp exact_record(generation, identity_key, identity) do
     case Map.get(generation.identities, identity_key) do
       %{identity: ^identity} = record -> {:ok, record}
@@ -640,7 +1360,12 @@ defmodule Maraithon.Runtime.TaskGuardian do
   end
 
   defp normalize_identity(:effect, identity) when is_map(identity) do
-    normalize_fields(identity, @effect_fields, :effect)
+    fields =
+      if Map.has_key?(identity, :assignment_id),
+        do: @coordinated_effect_fields,
+        else: @effect_fields
+
+    normalize_fields(identity, fields, :effect)
   end
 
   defp normalize_identity(:coordination, identity) when is_map(identity) do
@@ -667,7 +1392,9 @@ defmodule Maraithon.Runtime.TaskGuardian do
   end
 
   defp valid_uuid_fields?(:effect, identity) do
-    Enum.all?(@effect_fields, fn field -> valid_uuid?(Map.get(identity, field)) end)
+    identity
+    |> Map.keys()
+    |> Enum.all?(fn field -> valid_uuid?(Map.get(identity, field)) end)
   end
 
   defp valid_uuid_fields?(:coordination, identity) do
@@ -680,7 +1407,8 @@ defmodule Maraithon.Runtime.TaskGuardian do
   defp valid_uuid?(value), do: match?({:ok, _uuid}, Ecto.UUID.cast(value))
 
   defp identity_key(:effect, identity) do
-    {:effect, identity.effect_id, identity.claim_token, identity.supervisor_id, identity.task_id}
+    {:effect, Map.get(identity, :assignment_id), identity.effect_id, identity.claim_token,
+     identity.supervisor_id, identity.task_id}
   end
 
   defp identity_key(:coordination, identity) do
@@ -718,6 +1446,191 @@ defmodule Maraithon.Runtime.TaskGuardian do
     }
   end
 
+  defp enqueue_pending_persistence(state, location) do
+    case record_at(state, location) do
+      %{termination_capability_id: capability_id} when is_reference(capability_id) ->
+        if MapSet.member?(state.pending_persistence_set, location) do
+          state
+        else
+          state = %{
+            state
+            | pending_persistence: :queue.in(location, state.pending_persistence),
+              pending_persistence_set: MapSet.put(state.pending_persistence_set, location)
+          }
+
+          schedule_persistence_retry(state)
+        end
+
+      _without_capability ->
+        state
+    end
+  end
+
+  defp drop_pending_persistence(state, location) do
+    if MapSet.member?(state.pending_persistence_set, location) do
+      queue =
+        state.pending_persistence
+        |> :queue.to_list()
+        |> Enum.reject(&(&1 == location))
+        |> :queue.from_list()
+
+      %{
+        state
+        | pending_persistence: queue,
+          pending_persistence_set: MapSet.delete(state.pending_persistence_set, location)
+      }
+    else
+      state
+    end
+  end
+
+  defp compact_pending_persistence(state) do
+    # Direct acknowledgements can retire work before its tick. Keep the queue
+    # physically aligned with the dedupe set so those tombstones never consume
+    # the live batch budget or starve a later proof.
+    {reversed, seen} =
+      state.pending_persistence
+      |> :queue.to_list()
+      |> Enum.reduce({[], MapSet.new()}, fn location, {locations, seen} ->
+        if MapSet.member?(state.pending_persistence_set, location) and
+             not MapSet.member?(seen, location) do
+          {[location | locations], MapSet.put(seen, location)}
+        else
+          {locations, seen}
+        end
+      end)
+
+    missing =
+      state.pending_persistence_set
+      |> MapSet.difference(seen)
+      |> Enum.sort()
+
+    queue = reversed |> Enum.reverse() |> Kernel.++(missing) |> :queue.from_list()
+    %{state | pending_persistence: queue}
+  end
+
+  defp retry_pending_persistence(state, 0, _deadline_ms), do: state
+
+  defp retry_pending_persistence(state, remaining, deadline_ms) do
+    if System.monotonic_time(:millisecond) >= deadline_ms do
+      state
+    else
+      retry_next_pending_persistence(state, remaining, deadline_ms)
+    end
+  end
+
+  defp retry_next_pending_persistence(state, remaining, deadline_ms) do
+    case :queue.out(state.pending_persistence) do
+      {:empty, _queue} ->
+        state
+
+      {{:value, location}, queue} ->
+        state = %{state | pending_persistence: queue}
+
+        if MapSet.member?(state.pending_persistence_set, location) do
+          state = %{
+            state
+            | pending_persistence_set: MapSet.delete(state.pending_persistence_set, location)
+          }
+
+          state = retry_persistence_at(state, location)
+          retry_pending_persistence(state, remaining - 1, deadline_ms)
+        else
+          retry_pending_persistence(state, remaining, deadline_ms)
+        end
+    end
+  end
+
+  defp retry_persistence_at(state, location) do
+    case record_at(state, location) do
+      %{identity: identity} = record ->
+        {generation_key, _identity_key} = location
+        {kind, _supervisor_id} = generation_key
+
+        result = retry_persistence_result(state, kind, identity, location, record)
+
+        case result do
+          {:ok, _proof_kind, persisted} -> persisted
+          {:error, _reason, retained} -> requeue_pending_persistence(retained, location)
+        end
+
+      nil ->
+        state
+    end
+  end
+
+  defp retry_persistence_result(
+         state,
+         kind,
+         identity,
+         location,
+         %{completion_requested: true}
+       ) do
+    case acknowledge_completion_result(state, kind, identity) do
+      {:ok, persisted} ->
+        {:ok, :completion, persisted}
+
+      {:error, reason, retained} when reason in @completion_fallback_errors ->
+        retained = cancel_completion_expectation_at(retained, location)
+        persist_termination_result(retained, kind, identity)
+
+      {:error, reason, retained} ->
+        {:error, reason, retained}
+    end
+  end
+
+  defp retry_persistence_result(state, kind, identity, _location, _record),
+    do: persist_termination_result(state, kind, identity)
+
+  defp cancel_completion_expectation_at(state, {generation_key, identity_key}) do
+    case Map.get(state.generations, generation_key) do
+      %{identities: identities} = generation ->
+        case Map.get(identities, identity_key) do
+          %{} = record ->
+            record = %{record | completion_requested: false}
+            generation = put_in(generation.identities[identity_key], record)
+            put_generation(state, generation_key, generation)
+
+          nil ->
+            state
+        end
+
+      nil ->
+        state
+    end
+  end
+
+  defp requeue_pending_persistence(state, location) do
+    if MapSet.member?(state.pending_persistence_set, location) do
+      state
+    else
+      %{
+        state
+        | pending_persistence: :queue.in(location, state.pending_persistence),
+          pending_persistence_set: MapSet.put(state.pending_persistence_set, location)
+      }
+    end
+  end
+
+  defp schedule_persistence_retry(state) do
+    if MapSet.size(state.pending_persistence_set) > 0 and
+         is_nil(state.persistence_retry_timer) do
+      timer = Process.send_after(self(), :retry_pending_task_terminations, @persistence_retry_ms)
+      %{state | persistence_retry_timer: timer}
+    else
+      state
+    end
+  end
+
+  defp record_at(state, {generation_key, identity_key}) do
+    with %{} = generation <- Map.get(state.generations, generation_key),
+         %{} = record <- Map.get(generation.identities, identity_key) do
+      record
+    else
+      _ -> nil
+    end
+  end
+
   defp make_identity_capacity(state) do
     if state.identity_count < state.max_identities do
       state
@@ -729,35 +1642,51 @@ defmodule Maraithon.Runtime.TaskGuardian do
   defp evict_oldest_terminal_identity(%{terminal_identity_order: []} = state), do: state
 
   defp evict_oldest_terminal_identity(state) do
-    location = List.last(state.terminal_identity_order)
-    order = List.delete(state.terminal_identity_order, location)
+    evict_oldest_terminal_identity(state, length(state.terminal_identity_order))
+  end
+
+  defp evict_oldest_terminal_identity(state, 0), do: state
+
+  defp evict_oldest_terminal_identity(state, remaining) do
+    {location, order} = List.pop_at(state.terminal_identity_order, -1)
     {generation_key, identity_key} = location
 
     case Map.get(state.generations, generation_key) do
       nil ->
-        evict_oldest_terminal_identity(%{state | terminal_identity_order: order})
+        evict_oldest_terminal_identity(%{state | terminal_identity_order: order}, remaining - 1)
 
       generation ->
         case Map.get(generation.identities, identity_key) do
-          %{phase: :active, down: %{} = _down} ->
+          %{phase: :active, down: %{} = _down, termination_capability_id: nil} ->
             drop_identity(state, generation_key, generation, identity_key, order)
 
-          %{phase: :cancelled} ->
+          %{phase: :cancelled, termination_capability_id: nil} ->
             drop_identity(state, generation_key, generation, identity_key, order)
 
-          %{phase: :reserved} when generation.proven ->
+          %{phase: :reserved, termination_capability_id: nil} when generation.proven ->
             drop_identity(state, generation_key, generation, identity_key, order)
 
           nil ->
-            evict_oldest_terminal_identity(%{state | terminal_identity_order: order})
+            evict_oldest_terminal_identity(
+              %{state | terminal_identity_order: order},
+              remaining - 1
+            )
 
-          _not_terminal ->
-            evict_oldest_terminal_identity(%{state | terminal_identity_order: order})
+          _temporarily_not_evictable ->
+            # A terminal record that still carries its capability is retained,
+            # but rotated to the newest end so other durable records can make
+            # capacity. Successful persistence re-remembers it for later eviction.
+            evict_oldest_terminal_identity(
+              %{state | terminal_identity_order: [location | order]},
+              remaining - 1
+            )
         end
     end
   end
 
   defp drop_identity(state, generation_key, generation, identity_key, order) do
+    record = Map.fetch!(generation.identities, identity_key)
+    clear_capability_entry(state, record)
     generation = %{generation | identities: Map.delete(generation.identities, identity_key)}
 
     %{
@@ -772,20 +1701,46 @@ defmodule Maraithon.Runtime.TaskGuardian do
     if length(state.completed_order) <= state.max_completed_generations do
       state
     else
-      generation_key = List.last(state.completed_order)
-      generation = Map.fetch!(state.generations, generation_key)
-      identity_locations = Enum.map(Map.keys(generation.identities), &{generation_key, &1})
+      case oldest_clearable_generation(state) do
+        nil ->
+          state
 
-      state = %{
-        state
-        | generations: Map.delete(state.generations, generation_key),
-          completed_order: List.delete(state.completed_order, generation_key),
-          terminal_identity_order:
-            Enum.reject(state.terminal_identity_order, &(&1 in identity_locations)),
-          identity_count: state.identity_count - map_size(generation.identities)
-      }
+        generation_key ->
+          generation = Map.fetch!(state.generations, generation_key)
+          identity_locations = Enum.map(Map.keys(generation.identities), &{generation_key, &1})
 
-      trim_completed_generations(state)
+          if is_reference(generation.controller_ref),
+            do: Process.demonitor(generation.controller_ref, [:flush])
+
+          controller_monitors =
+            if is_reference(generation.controller_ref),
+              do: Map.delete(state.controller_monitors, generation.controller_ref),
+              else: state.controller_monitors
+
+          state = %{
+            state
+            | generations: Map.delete(state.generations, generation_key),
+              controller_monitors: controller_monitors,
+              completed_order: List.delete(state.completed_order, generation_key),
+              terminal_identity_order:
+                Enum.reject(state.terminal_identity_order, &(&1 in identity_locations)),
+              identity_count: state.identity_count - map_size(generation.identities)
+          }
+
+          trim_completed_generations(state)
+      end
     end
+  end
+
+  defp oldest_clearable_generation(state) do
+    state.completed_order
+    |> Enum.reverse()
+    |> Enum.find(fn generation_key ->
+      generation = Map.fetch!(state.generations, generation_key)
+
+      Enum.all?(generation.identities, fn {_key, record} ->
+        is_nil(record.termination_capability_id)
+      end)
+    end)
   end
 end

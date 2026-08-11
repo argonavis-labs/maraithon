@@ -5,7 +5,11 @@ defmodule Maraithon.Runtime.AgentLeases do
   Registry, PID, node name, and `agents.status` are never ownership proof. The
   immutable UUID token plus a live database lease is lifecycle authority;
   workload authority additionally requires readiness, current desired-state,
-  Binding consent, an open exact-runtime gate, and no lifecycle marker.
+  Binding consent, an open exact-runtime gate, and no lifecycle marker. When a
+  watcher is supplied, local termination authority is prepared inside that
+  AgentWatcher and only its digest is inserted or returned by this module. A
+  watcherless claim is explicitly external-proof-only and persists a NULL
+  termination capability digest; it never creates an orphaned local preimage.
   """
 
   import Ecto.Query
@@ -19,6 +23,8 @@ defmodule Maraithon.Runtime.AgentLeases do
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.AgentTerminationIncident
+  alias Maraithon.Runtime.AgentTerminationProof
+  alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, Protocol, Scope}
@@ -28,35 +34,52 @@ defmodule Maraithon.Runtime.AgentLeases do
   @max_ttl_ms 300_000
   @runnable_statuses ~w(running degraded)
 
+  @doc """
+  Claims an unready exact owner generation.
+
+  Passing `:watcher` prepares local physical-DOWN authority in that watcher.
+  Omitting it deliberately creates an external-proof-only lease whose
+  `termination_capability_digest` is NULL.
+  """
   def claim(agent_id, opts \\ [])
 
   def claim(agent_id, opts) when is_list(opts) do
     with :ok <- exact_runtime_enabled(),
          {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, owner_node} <- owner_node(opts),
-         {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms, :owner_node]) do
+         {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms, :owner_node, :watcher]) do
       owner_token = Ecto.UUID.generate()
 
-      Repo.transaction(fn ->
-        coordination = prelock_new_agent!(agent_id, :admission)
-        agent = lock_agent!(agent_id)
-        ensure_scope_agent!(agent, coordination)
-        binding = lock_active_binding!(agent)
-        guard = lock_guard(agent_id)
-        lease = lock_lease(agent_id)
-        operation = lock_operation(agent_id)
-        termination_incident = lock_open_termination_incident(agent_id)
-        {now, lease_until} = DatabaseClock.window!(ttl_ms)
+      with_termination_capability(agent_id, owner_token, opts, fn termination_capability_digest ->
+        Repo.transaction(fn ->
+          coordination = prelock_new_agent!(agent_id, :admission)
+          agent = lock_agent!(agent_id)
+          ensure_scope_agent!(agent, coordination)
+          binding = lock_active_binding!(agent)
+          guard = lock_guard(agent_id)
+          lease = lock_lease(agent_id)
+          operation = lock_operation(agent_id)
+          termination_incident = lock_open_termination_incident(agent_id)
+          {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
-        ensure_no_lifecycle_operation!(operation)
-        ensure_no_open_termination_incident!(termination_incident)
-        ensure_runnable!(agent)
-        ensure_binding_matches!(agent, binding)
-        ensure_initial_guard_allows_claim!(guard, now)
-        ensure_no_existing_lease!(lease, now)
-        ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
+          ensure_no_lifecycle_operation!(operation)
+          ensure_no_open_termination_incident!(termination_incident)
+          ensure_runnable!(agent)
+          ensure_binding_matches!(agent, binding)
+          ensure_initial_guard_allows_claim!(guard, now)
+          ensure_no_existing_lease!(lease, now)
+          ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
 
-        insert_lease!(agent_id, owner_token, owner_node, now, lease_until, coordination)
+          insert_lease!(
+            agent_id,
+            owner_token,
+            owner_node,
+            termination_capability_digest,
+            now,
+            lease_until,
+            coordination
+          )
+        end)
       end)
     end
   end
@@ -70,29 +93,39 @@ defmodule Maraithon.Runtime.AgentLeases do
          {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, guard_generation} <- cast_uuid(guard_generation),
          {:ok, owner_node} <- owner_node(opts),
-         {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms, :owner_node]) do
+         {:ok, ttl_ms} <- ttl_ms(opts, [:ttl_ms, :owner_node, :watcher]) do
       owner_token = Ecto.UUID.generate()
 
-      Repo.transaction(fn ->
-        coordination = prelock_new_agent!(agent_id, :admission)
-        agent = lock_agent!(agent_id)
-        ensure_scope_agent!(agent, coordination)
-        binding = lock_active_binding!(agent)
-        guard = lock_guard(agent_id)
-        lease = lock_lease(agent_id)
-        operation = lock_operation(agent_id)
-        termination_incident = lock_open_termination_incident(agent_id)
-        {now, lease_until} = DatabaseClock.window!(ttl_ms)
+      with_termination_capability(agent_id, owner_token, opts, fn termination_capability_digest ->
+        Repo.transaction(fn ->
+          coordination = prelock_new_agent!(agent_id, :admission)
+          agent = lock_agent!(agent_id)
+          ensure_scope_agent!(agent, coordination)
+          binding = lock_active_binding!(agent)
+          guard = lock_guard(agent_id)
+          lease = lock_lease(agent_id)
+          operation = lock_operation(agent_id)
+          termination_incident = lock_open_termination_incident(agent_id)
+          {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
-        ensure_no_lifecycle_operation!(operation)
-        ensure_no_open_termination_incident!(termination_incident)
-        ensure_runnable!(agent)
-        ensure_binding_matches!(agent, binding)
-        ensure_due_recovery_guard!(guard, guard_generation, now)
-        ensure_no_existing_lease!(lease, now)
-        ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
+          ensure_no_lifecycle_operation!(operation)
+          ensure_no_open_termination_incident!(termination_incident)
+          ensure_runnable!(agent)
+          ensure_binding_matches!(agent, binding)
+          ensure_due_recovery_guard!(guard, guard_generation, now)
+          ensure_no_existing_lease!(lease, now)
+          ensure_no_processing_directive!(agent_id, :runtime_work_requires_reconciliation)
 
-        insert_lease!(agent_id, owner_token, owner_node, now, lease_until, coordination)
+          insert_lease!(
+            agent_id,
+            owner_token,
+            owner_node,
+            termination_capability_digest,
+            now,
+            lease_until,
+            coordination
+          )
+        end)
       end)
     end
   end
@@ -397,6 +430,34 @@ defmodule Maraithon.Runtime.AgentLeases do
     end
   end
 
+  @doc """
+  Fences only terminal settlement of work already admitted by an exact owner.
+
+  Unlike `fence_owner!/2`, this does not admit progress or renewal. It accepts an
+  expired/draining exact lease, or the immutable reconciled termination proof for
+  that generation after the lease was deleted or replaced. The row trigger on
+  the terminal work record remains the final topology/claim identity check.
+  """
+  def fence_settlement!(agent_id, owner_token) do
+    require_transaction!()
+    ensure_exact_runtime_enabled!()
+
+    with {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, owner_token} <- cast_uuid(owner_token) do
+      user_id = prelock_settlement_agent!(agent_id)
+      agent = lock_agent!(agent_id)
+      ensure_scope_agent!(agent, %{user_id: user_id})
+      _binding = lock_binding(agent)
+      _guard = lock_guard(agent_id)
+      lease = lock_lease(agent_id)
+      _operation = lock_operation(agent_id)
+
+      ensure_settlement_authority!(lease, agent_id, owner_token)
+    else
+      _invalid -> Repo.rollback(:runtime_lease_lost)
+    end
+  end
+
   def fence_ready!(agent_id, owner_token) do
     require_transaction!()
     ensure_exact_runtime_enabled!()
@@ -418,6 +479,14 @@ defmodule Maraithon.Runtime.AgentLeases do
       ensure_initial_guard_allows_claim!(guard, now)
       ensure_exact_ready_lease!(lease, owner_token, now)
       ensure_coordination_lease!(lease, :ready)
+
+      SQL.query!(
+        Repo,
+        "SELECT set_config('maraithon.agent_lease_owner_token', $1, true)",
+        [owner_token],
+        log: false
+      )
+
       :ok
     else
       _invalid -> Repo.rollback(:runtime_not_ready)
@@ -545,10 +614,182 @@ defmodule Maraithon.Runtime.AgentLeases do
     )
   end
 
-  defp insert_lease!(agent_id, owner_token, owner_node, now, lease_until, coordination) do
+  defp with_termination_capability(agent_id, owner_token, opts, fun)
+       when is_function(fun, 1) do
+    with {:ok, digest, prepared} <-
+           prepare_termination_capability(agent_id, owner_token, opts) do
+      try do
+        case fun.(digest) do
+          {:ok,
+           %AgentRuntimeLease{
+             agent_id: ^agent_id,
+             owner_token: ^owner_token,
+             termination_capability_digest: ^digest
+           }} = result ->
+            result
+
+          {:error, reason} = result ->
+            if definite_claim_rollback?(reason) do
+              discard_termination_capability(prepared)
+              result
+            else
+              settle_uncertain_claim(
+                agent_id,
+                owner_token,
+                digest,
+                prepared,
+                {:returned, result}
+              )
+            end
+
+          uncertain_result ->
+            settle_uncertain_claim(
+              agent_id,
+              owner_token,
+              digest,
+              prepared,
+              {:returned, uncertain_result}
+            )
+        end
+      rescue
+        error ->
+          settle_uncertain_claim(
+            agent_id,
+            owner_token,
+            digest,
+            prepared,
+            {:raised, :error, error, __STACKTRACE__}
+          )
+      catch
+        kind, reason ->
+          settle_uncertain_claim(
+            agent_id,
+            owner_token,
+            digest,
+            prepared,
+            {:raised, kind, reason, __STACKTRACE__}
+          )
+      end
+    end
+  end
+
+  # Repo.rollback/1 returns its business reason only after rollback completes.
+  # Adapter-level rollback/connection errors are not evidence that COMMIT failed.
+  defp definite_claim_rollback?(:rollback), do: false
+  defp definite_claim_rollback?(%DBConnection.ConnectionError{}), do: false
+  defp definite_claim_rollback?(%DBConnection.TransactionError{}), do: false
+  defp definite_claim_rollback?(_business_reason), do: true
+
+  defp settle_uncertain_claim(agent_id, owner_token, digest, prepared, original_outcome) do
+    case authoritative_claim_resolution(agent_id, owner_token, digest) do
+      {:committed, lease} ->
+        {:ok, lease}
+
+      :confirmed_absent ->
+        discard_termination_capability(prepared)
+        resume_confirmed_absence(original_outcome)
+
+      status when status in [:mismatch, :unavailable] ->
+        # A live caller must not proactively orphan a possibly committed digest.
+        # The caller-bound preparation remains bounded by controller DOWN and TTL.
+        fail_uncertain_claim(original_outcome)
+    end
+  end
+
+  defp authoritative_claim_resolution(agent_id, owner_token, digest) do
+    # Claim holds the existing Agent row through COMMIT. Reacquiring that lock is
+    # a commit barrier: an in-flight original transaction must first commit or
+    # abort, so a subsequent missing lease is authoritative rather than a
+    # snapshot racing an unresolved COMMIT.
+    case Repo.transaction(fn ->
+           _agent = lock_agent!(agent_id)
+           lock_lease(agent_id)
+         end) do
+      {:ok,
+       %AgentRuntimeLease{
+         agent_id: ^agent_id,
+         owner_token: ^owner_token,
+         termination_capability_digest: ^digest
+       } = lease} ->
+        {:committed, lease}
+
+      {:ok, nil} ->
+        :confirmed_absent
+
+      {:ok, %AgentRuntimeLease{}} ->
+        :mismatch
+
+      {:error, _reason} ->
+        :unavailable
+    end
+  rescue
+    _error -> :unavailable
+  catch
+    _kind, _reason -> :unavailable
+  end
+
+  defp resume_confirmed_absence({:raised, kind, reason, stacktrace}) do
+    :erlang.raise(kind, reason, stacktrace)
+  end
+
+  defp resume_confirmed_absence({:returned, {:error, _reason} = result}), do: result
+
+  defp resume_confirmed_absence({:returned, _unexpected}) do
+    {:error, :runtime_lease_claim_failed}
+  end
+
+  defp fail_uncertain_claim({:raised, kind, reason, stacktrace}) do
+    :erlang.raise(kind, reason, stacktrace)
+  end
+
+  defp fail_uncertain_claim({:returned, _unexpected}) do
+    {:error, :runtime_lease_claim_ambiguous}
+  end
+
+  defp prepare_termination_capability(agent_id, owner_token, opts) do
+    case Keyword.fetch(opts, :watcher) do
+      {:ok, watcher} ->
+        case AgentWatcher.prepare_lease_capability(watcher, agent_id, owner_token) do
+          {:ok, digest} when is_binary(digest) and byte_size(digest) == 32 ->
+            {:ok, digest, {watcher, agent_id, owner_token}}
+
+          {:ok, _invalid_digest} ->
+            discard_termination_capability({watcher, agent_id, owner_token})
+            {:error, :invalid_agent_termination_capability}
+
+          {:error, _reason} = error ->
+            discard_termination_capability({watcher, agent_id, owner_token})
+            error
+
+          _other ->
+            discard_termination_capability({watcher, agent_id, owner_token})
+            {:error, :watcher_unavailable}
+        end
+
+      :error ->
+        {:ok, nil, :external_proof_only}
+    end
+  end
+
+  defp discard_termination_capability(:external_proof_only), do: :ok
+
+  defp discard_termination_capability({watcher, agent_id, owner_token}) do
+    _ = AgentWatcher.discard_lease_capability(watcher, agent_id, owner_token)
+    :ok
+  end
+
+  defp insert_lease!(
+         agent_id,
+         owner_token,
+         owner_node,
+         termination_capability_digest,
+         now,
+         lease_until,
+         coordination
+       ) do
     coordination_attrs =
       case coordination do
-        nil ->
+        %{legacy?: true} ->
           %{}
 
         %{session: session, partition: partition} ->
@@ -567,6 +808,7 @@ defmodule Maraithon.Runtime.AgentLeases do
           agent_id: agent_id,
           owner_token: owner_token,
           owner_node: owner_node,
+          termination_capability_digest: termination_capability_digest,
           claimed_at: now,
           renewed_at: now,
           lease_until: lease_until,
@@ -588,15 +830,20 @@ defmodule Maraithon.Runtime.AgentLeases do
 
     coordination = coordination_scope!(user_id)
 
-    Authority.fence_partition!(
-      coordination.session,
-      coordination.partition.partition_id,
-      coordination.partition.ownership_epoch,
-      :ready
-    )
+    if coordination do
+      Authority.fence_partition!(
+        coordination.session,
+        coordination.partition.partition_id,
+        coordination.partition.ownership_epoch,
+        :ready
+      )
+    end
 
     lock_user_privacy!(user_id, privacy_mode)
-    Map.put(coordination, :user_id, user_id)
+
+    if coordination,
+      do: Map.put(coordination, :user_id, user_id),
+      else: %{legacy?: true, user_id: user_id}
   end
 
   defp prelock_existing_or_new!(agent_id, authority_mode, privacy_mode) do
@@ -620,34 +867,44 @@ defmodule Maraithon.Runtime.AgentLeases do
         nil -> Repo.rollback(:runtime_lease_lost)
       end
 
-    if is_nil(lease.coordination_activation_epoch) or
-         is_nil(lease.coordination_partition_id) or
-         is_nil(lease.coordination_partition_epoch) or
-         is_nil(lease.coordination_node_incarnation_id),
-       do: Repo.rollback(:partition_authority_lost)
+    coordination_fields? =
+      not is_nil(lease.coordination_activation_epoch) and
+        not is_nil(lease.coordination_partition_id) and
+        not is_nil(lease.coordination_partition_epoch) and
+        not is_nil(lease.coordination_node_incarnation_id)
 
-    session = %NodeIncarnation{
-      id: lease.coordination_node_incarnation_id,
-      activation_epoch: lease.coordination_activation_epoch
-    }
+    case {Scope.active_or_legacy(), coordination_fields?} do
+      {:legacy, false} ->
+        lock_user_privacy!(user_id, privacy_mode)
+        %{legacy?: true, user_id: user_id}
 
-    Authority.fence_partition!(
-      session,
-      lease.coordination_partition_id,
-      lease.coordination_partition_epoch,
-      authority_mode
-    )
+      {{:ok, _current_session}, true} ->
+        session = %NodeIncarnation{
+          id: lease.coordination_node_incarnation_id,
+          activation_epoch: lease.coordination_activation_epoch
+        }
 
-    lock_user_privacy!(user_id, privacy_mode)
+        Authority.fence_partition!(
+          session,
+          lease.coordination_partition_id,
+          lease.coordination_partition_epoch,
+          authority_mode
+        )
 
-    %{
-      session: session,
-      partition: %{
-        partition_id: lease.coordination_partition_id,
-        ownership_epoch: lease.coordination_partition_epoch
-      },
-      user_id: user_id
-    }
+        lock_user_privacy!(user_id, privacy_mode)
+
+        %{
+          session: session,
+          partition: %{
+            partition_id: lease.coordination_partition_id,
+            ownership_epoch: lease.coordination_partition_epoch
+          },
+          user_id: user_id
+        }
+
+      _ ->
+        Repo.rollback(:partition_authority_lost)
+    end
   end
 
   defp lock_user_privacy!(user_id, privacy_mode) do
@@ -669,18 +926,110 @@ defmodule Maraithon.Runtime.AgentLeases do
   defp ensure_scope_agent!(%Agent{user_id: user_id}, %{user_id: user_id}), do: :ok
   defp ensure_scope_agent!(_agent, _scope), do: Repo.rollback(:agent_authority_changed)
 
-  defp coordination_scope!(user_id) do
-    case Protocol.mode() do
-      :dark ->
-        Repo.rollback(:runtime_coordination_not_active)
+  defp prelock_settlement_agent!(agent_id) do
+    user_id =
+      case Repo.one(from(agent in Agent, where: agent.id == ^agent_id, select: agent.user_id)) do
+        user_id when is_binary(user_id) -> user_id
+        _ -> Repo.rollback(:agent_not_found)
+      end
 
-      :active ->
+    lock_user_privacy!(user_id, :settlement)
+    user_id
+  end
+
+  defp ensure_settlement_authority!(
+         %AgentRuntimeLease{agent_id: agent_id, owner_token: owner_token} = lease,
+         agent_id,
+         owner_token
+       ) do
+    if (not is_nil(lease.ready_at) or not is_nil(lease.draining_at)) and
+         not is_nil(lease.coordination_activation_epoch) and
+         not is_nil(lease.coordination_partition_id) and
+         not is_nil(lease.coordination_partition_epoch) and
+         not is_nil(lease.coordination_node_incarnation_id) do
+      :ok
+    else
+      Repo.rollback(:runtime_lease_lost)
+    end
+  end
+
+  defp ensure_settlement_authority!(lease, agent_id, owner_token) do
+    if is_nil(lease) or lease.owner_token != owner_token do
+      lock_reconciled_settlement_proof!(agent_id, owner_token)
+    else
+      Repo.rollback(:runtime_lease_lost)
+    end
+  end
+
+  defp lock_reconciled_settlement_proof!(agent_id, owner_token) do
+    incident =
+      Repo.one(
+        from(incident in AgentTerminationIncident,
+          where: incident.agent_id == ^agent_id,
+          where: incident.lease_token == ^owner_token,
+          where: incident.status == "reconciled",
+          where: not is_nil(incident.reconciled_at),
+          lock: "FOR SHARE"
+        )
+      )
+
+    proof =
+      case incident do
+        %AgentTerminationIncident{proof_id: proof_id} when is_binary(proof_id) ->
+          Repo.one(
+            from(proof in AgentTerminationProof,
+              where: proof.id == ^proof_id,
+              where: proof.incident_id == ^incident.id,
+              lock: "FOR SHARE"
+            )
+          )
+
+        _ ->
+          nil
+      end
+
+    if exact_reconciled_settlement_proof?(incident, proof, agent_id, owner_token) do
+      :ok
+    else
+      Repo.rollback(:runtime_lease_lost)
+    end
+  end
+
+  defp exact_reconciled_settlement_proof?(
+         %AgentTerminationIncident{} = incident,
+         %AgentTerminationProof{} = proof,
+         agent_id,
+         owner_token
+       ) do
+    not is_nil(incident.activation_epoch) and
+      not is_nil(incident.node_incarnation_id) and
+      not is_nil(incident.partition_id) and
+      not is_nil(incident.partition_epoch) and
+      incident.agent_id == agent_id and incident.lease_token == owner_token and
+      incident.proof_id == proof.id and proof.incident_id == incident.id and
+      proof.agent_id == incident.agent_id and proof.lease_token == incident.lease_token and
+      proof.activation_epoch == incident.activation_epoch and
+      proof.node_incarnation_id == incident.node_incarnation_id and
+      proof.partition_id == incident.partition_id and
+      proof.partition_epoch == incident.partition_epoch and
+      proof.proof_kind == incident.proof_kind and proof.proved_at == incident.proved_at
+  end
+
+  defp exact_reconciled_settlement_proof?(_incident, _proof, _agent_id, _owner_token),
+    do: false
+
+  defp coordination_scope!(user_id) do
+    case Scope.active_or_legacy() do
+      :legacy ->
+        nil
+
+      {:ok, _session} ->
         case Scope.partition_for_user(user_id) do
           {:ok, session, partition} -> %{session: session, partition: partition}
           _ -> Repo.rollback(:partition_not_owned)
         end
 
-      blocked ->
+      {:error, blocked} ->
         Repo.rollback({:coordination_protocol_blocked, blocked})
     end
   end
@@ -895,7 +1244,7 @@ defmodule Maraithon.Runtime.AgentLeases do
 
   defp owner_node(opts) do
     if Keyword.keyword?(opts) and
-         Enum.all?(Keyword.keys(opts), &(&1 in [:owner_node, :ttl_ms])) do
+         Enum.all?(Keyword.keys(opts), &(&1 in [:owner_node, :ttl_ms, :watcher])) do
       current_owner = Atom.to_string(node())
       owner_node = Keyword.get(opts, :owner_node, current_owner)
 

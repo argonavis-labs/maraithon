@@ -32,6 +32,14 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
   defp migrate do
     execute("CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public")
 
+    # Exact PreparedAction writes clear the legacy preview projection. The
+    # original schema made that projection NOT NULL, so relax it before any
+    # stopped-fleet contraction can make ciphertext-only rows authoritative.
+    execute(
+      "ALTER TABLE public.telegram_prepared_actions " <>
+        "ALTER COLUMN preview_text DROP NOT NULL"
+    )
+
     execute("ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS state_data_ciphertext bytea")
     execute("ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS budget_ciphertext bytea")
 
@@ -495,6 +503,133 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       """
     )
 
+    create_if_not_exists table(:durable_payload_key_fence_state, primary_key: false) do
+      add :singleton, :boolean, null: false
+      add :generation, :bigint, null: false, default: 0
+      add :fences, :map, null: false
+      add :updated_at, :utc_datetime_usec, null: false
+    end
+
+    ensure_index(
+      "durable_payload_key_fence_state",
+      "durable_payload_key_fence_state_pkey",
+      ~w(singleton),
+      true
+    )
+
+    add_valid_constraint(
+      "durable_payload_key_fence_state",
+      "durable_payload_key_fence_state_shape",
+      """
+      singleton IS TRUE
+      AND generation >= 0
+      AND pg_catalog.jsonb_typeof(fences) = 'object'
+      AND pg_catalog.jsonb_typeof(fences -> 'vault') = 'object'
+      AND pg_catalog.jsonb_typeof(fences -> 'binding') = 'object'
+      AND fences = pg_catalog.jsonb_build_object(
+        'vault', fences -> 'vault', 'binding', fences -> 'binding'
+      )
+      """
+    )
+
+    execute("""
+    DO $key_fence_seed$
+    DECLARE
+      state_count bigint;
+    BEGIN
+      SELECT count(*) INTO STRICT state_count
+      FROM public.durable_payload_key_fence_state;
+
+      IF state_count = 0 THEN
+        IF EXISTS (SELECT 1 FROM public.key_retirement_zero_proofs) THEN
+          RAISE EXCEPTION 'Durable payload key fence state is missing for existing zero proofs'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        INSERT INTO public.durable_payload_key_fence_state (
+          singleton, generation, fences, updated_at
+        ) VALUES (
+          true, 0, '{"vault": {}, "binding": {}}'::jsonb,
+          timezone('UTC', clock_timestamp())
+        );
+      ELSIF state_count <> 1 OR NOT EXISTS (
+        SELECT 1
+        FROM public.durable_payload_key_fence_state
+        WHERE singleton IS TRUE
+      ) THEN
+        RAISE EXCEPTION 'Durable payload key fence singleton is invalid'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF EXISTS (
+        SELECT 1
+        FROM public.key_retirement_zero_proofs AS proof
+        CROSS JOIN public.durable_payload_key_fence_state AS state
+        WHERE state.singleton IS TRUE
+          AND NOT ((state.fences -> proof.key_kind) ? proof.old_tag)
+      ) OR EXISTS (
+        SELECT 1
+        FROM public.durable_payload_key_fence_state AS state
+        CROSS JOIN LATERAL (
+          SELECT 'vault'::text AS key_kind, key AS old_tag, value AS proof_id
+          FROM pg_catalog.jsonb_each_text(state.fences -> 'vault')
+          UNION ALL
+          SELECT 'binding'::text AS key_kind, key AS old_tag, value AS proof_id
+          FROM pg_catalog.jsonb_each_text(state.fences -> 'binding')
+        ) AS fence
+        WHERE state.singleton IS TRUE
+          AND NOT EXISTS (
+            SELECT 1
+            FROM public.key_retirement_zero_proofs AS proof
+            WHERE proof.key_kind = fence.key_kind
+              AND proof.old_tag = fence.old_tag
+              AND proof.proof_id::text = fence.proof_id
+          )
+      ) THEN
+        RAISE EXCEPTION 'Durable payload key fence state does not match zero-proof history'
+          USING ERRCODE = 'check_violation';
+      END IF;
+    END
+    $key_fence_seed$;
+    """)
+
+    create_if_not_exists table(:retired_durable_payload_keys, primary_key: false) do
+      add :key_kind, :string, null: false
+      add :old_tag, :string, null: false
+      add :zero_proof_id, :uuid, null: false
+      add :backup_evidence_id, :string, null: false
+      add :source_digest, :binary, null: false
+      add :fence_generation, :bigint, null: false
+      add :evidence_id, :string, null: false
+      add :evidence_digest, :binary, null: false
+      add :evidence_operator, :string, null: false
+      add :exact_revision, :string, null: false
+      add :authorized_at, :utc_datetime_usec, null: false
+    end
+
+    ensure_index(
+      "retired_durable_payload_keys",
+      "retired_durable_payload_keys_pkey",
+      ~w(key_kind old_tag),
+      true
+    )
+
+    add_not_valid_constraint(
+      "retired_durable_payload_keys",
+      "retired_durable_payload_keys_shape",
+      """
+      key_kind IN ('vault', 'binding')
+      AND old_tag ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+      AND octet_length(backup_evidence_id) BETWEEN 1 AND 128
+      AND octet_length(source_digest) = 32
+      AND fence_generation > 0
+      AND octet_length(evidence_id) BETWEEN 1 AND 256
+      AND octet_length(evidence_digest) = 32
+      AND octet_length(evidence_operator) BETWEEN 1 AND 320
+      AND exact_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'
+      """
+    )
+
     execute("""
     DO $constraint$
     BEGIN
@@ -516,6 +651,47 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     execute("""
     ALTER TABLE public.vault_backup_retirement_evidence
       VALIDATE CONSTRAINT vault_backup_retirement_evidence_zero_proof_fkey
+    """)
+
+    execute("""
+    DO $constraint$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+        WHERE conrelid = 'public.retired_durable_payload_keys'::regclass
+          AND conname = 'retired_durable_payload_keys_zero_proof_fkey'
+      ) THEN
+        ALTER TABLE public.retired_durable_payload_keys
+          ADD CONSTRAINT retired_durable_payload_keys_zero_proof_fkey
+          FOREIGN KEY (key_kind, old_tag, zero_proof_id)
+          REFERENCES public.key_retirement_zero_proofs (key_kind, old_tag, proof_id)
+          NOT VALID;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+        WHERE conrelid = 'public.retired_durable_payload_keys'::regclass
+          AND conname = 'retired_durable_payload_keys_backup_evidence_fkey'
+      ) THEN
+        ALTER TABLE public.retired_durable_payload_keys
+          ADD CONSTRAINT retired_durable_payload_keys_backup_evidence_fkey
+          FOREIGN KEY (key_kind, old_tag, zero_proof_id, backup_evidence_id)
+          REFERENCES public.vault_backup_retirement_evidence
+            (key_kind, old_tag, zero_proof_id, evidence_id)
+          NOT VALID;
+      END IF;
+    END
+    $constraint$;
+    """)
+
+    execute("""
+    ALTER TABLE public.retired_durable_payload_keys
+      VALIDATE CONSTRAINT retired_durable_payload_keys_zero_proof_fkey
+    """)
+
+    execute("""
+    ALTER TABLE public.retired_durable_payload_keys
+      VALIDATE CONSTRAINT retired_durable_payload_keys_backup_evidence_fkey
     """)
 
     execute("""
@@ -632,7 +808,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
                     WHEN 'background_jobs' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id')
                     WHEN 'scheduled_jobs' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'agent_id')
                     WHEN 'runtime_ingress_receipts' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'agent_id', source_row -> 'connected_account_id')
-                    WHEN 'agent_work_results' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'agent_id', source_row -> 'agent_directive_id', source_row -> 'agent_run_id', source_row -> 'result_digest_version', source_row -> 'result_digest_key_tag', source_row -> 'result_digest')
+                    WHEN 'agent_work_results' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'user_id', source_row -> 'agent_id', source_row -> 'agent_directive_id', source_row -> 'agent_run_id', source_row -> 'result_digest_version', source_row -> 'result_digest_key_tag', source_row -> 'result_digest', source_row -> 'result_content_digest_version', source_row -> 'result_content_digest')
                     WHEN 'snapshots' THEN jsonb_build_array(source_row -> 'payload_encryption_version', source_row -> 'payload_binding_version', source_row -> 'payload_binding_key_tag', source_row -> 'payload_binding_mac', source_row -> 'id', source_row -> 'agent_id', source_row -> 'sequence_num', source_row -> 'schema_version', source_row -> 'state_name')
                   END
                 WHEN 'purge' THEN
@@ -1143,6 +1319,157 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     """)
 
     execute("""
+    CREATE OR REPLACE FUNCTION public.durable_payload_source_acl_ready()
+    RETURNS boolean
+    LANGUAGE sql
+    STABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+      WITH source_relations(table_name, relation_id) AS (
+        VALUES
+          ('connected_accounts', 'public.connected_accounts'),
+          ('oauth_tokens', 'public.oauth_tokens'),
+          ('local_browser_visits', 'public.local_browser_visits'),
+          ('local_calendar_events', 'public.local_calendar_events'),
+          ('local_files', 'public.local_files'),
+          ('memory_items', 'public.memory_items'),
+          ('effects', 'public.effects'),
+          ('agent_directives', 'public.agent_directives'),
+          ('events', 'public.events'),
+          ('agent_run_steps', 'public.agent_run_steps'),
+          ('telegram_conversation_turns', 'public.telegram_conversation_turns'),
+          ('telegram_conversations', 'public.telegram_conversations'),
+          ('telegram_assistant_runs', 'public.telegram_assistant_runs'),
+          ('telegram_assistant_steps', 'public.telegram_assistant_steps'),
+          ('telegram_prepared_actions', 'public.telegram_prepared_actions'),
+          ('agent_runs', 'public.agent_runs'),
+          ('operator_events', 'public.operator_events'),
+          ('user_memory_profiles', 'public.user_memory_profiles'),
+          ('operator_memory_summaries', 'public.operator_memory_summaries'),
+          ('background_jobs', 'public.background_jobs'),
+          ('scheduled_jobs', 'public.scheduled_jobs'),
+          ('runtime_ingress_receipts', 'public.runtime_ingress_receipts'),
+          ('agent_work_results', 'public.agent_work_results'),
+          ('snapshots', 'public.snapshots')
+      ), expected_table_acl_groups(grantee, table_names) AS (
+        VALUES
+          ('maraithon_payload_verifier', ARRAY['effects', 'agent_directives', 'events', 'agent_run_steps', 'telegram_conversation_turns', 'telegram_conversations', 'telegram_assistant_runs', 'telegram_assistant_steps', 'telegram_prepared_actions', 'agent_runs', 'operator_events', 'user_memory_profiles', 'operator_memory_summaries', 'background_jobs', 'scheduled_jobs', 'runtime_ingress_receipts', 'agent_work_results', 'snapshots']::text[]),
+          ('maraithon_incident_operator', ARRAY['connected_accounts', 'oauth_tokens', 'local_browser_visits', 'local_calendar_events', 'local_files', 'memory_items', 'effects', 'agent_directives', 'events', 'agent_run_steps', 'telegram_conversation_turns', 'telegram_conversations', 'telegram_assistant_runs', 'telegram_assistant_steps', 'telegram_prepared_actions', 'agent_runs', 'operator_events', 'user_memory_profiles', 'operator_memory_summaries', 'background_jobs', 'scheduled_jobs', 'runtime_ingress_receipts', 'agent_work_results', 'snapshots']::text[]),
+          ('maraithon_activation_operator', ARRAY['effects', 'agent_directives', 'events', 'agent_run_steps', 'telegram_conversation_turns', 'telegram_conversations', 'telegram_assistant_runs', 'telegram_assistant_steps', 'telegram_prepared_actions', 'agent_runs', 'operator_events', 'user_memory_profiles', 'operator_memory_summaries', 'background_jobs', 'scheduled_jobs', 'runtime_ingress_receipts', 'agent_work_results', 'snapshots']::text[])
+      ), expected_table_acls AS (
+        SELECT expected.grantee,
+               table_name,
+               NULL::text AS column_name,
+               'SELECT'::text AS privilege_type,
+               false AS is_grantable
+        FROM expected_table_acl_groups AS expected
+        CROSS JOIN LATERAL pg_catalog.unnest(expected.table_names) AS expanded(table_name)
+      ), actual_table_acls AS (
+        SELECT COALESCE(grantee.rolname, 'PUBLIC') AS grantee,
+               source.table_name,
+               NULL::text AS column_name,
+               acl.privilege_type,
+               acl.is_grantable
+        FROM source_relations AS source
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = source.relation_id::regclass
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+          COALESCE(relation.relacl, pg_catalog.acldefault('r', relation.relowner))
+        ) AS acl
+        LEFT JOIN pg_catalog.pg_roles AS grantee ON grantee.oid = acl.grantee
+        WHERE acl.grantee = 0
+           OR grantee.rolname IN (
+             'maraithon_payload_verifier',
+             'maraithon_incident_operator',
+             'maraithon_activation_operator'
+           )
+      ), expected_column_acl_groups(grantee, table_name, column_names) AS (
+        VALUES
+          ('maraithon_incident_operator', 'connected_accounts', ARRAY['access_token', 'refresh_token']::text[]),
+          ('maraithon_incident_operator', 'oauth_tokens', ARRAY['access_token', 'refresh_token']::text[]),
+          ('maraithon_incident_operator', 'local_browser_visits', ARRAY['title']::text[]),
+          ('maraithon_incident_operator', 'local_calendar_events', ARRAY['title', 'notes']::text[]),
+          ('maraithon_incident_operator', 'local_files', ARRAY['filename', 'text_content']::text[]),
+          ('maraithon_incident_operator', 'memory_items', ARRAY['content', 'summary', 'metadata']::text[]),
+          ('maraithon_incident_operator', 'effects', ARRAY['params_ciphertext', 'result_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'agent_directives', ARRAY['payload_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'events', ARRAY['payload_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'agent_run_steps', ARRAY['request_payload_ciphertext', 'response_payload_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'telegram_conversation_turns', ARRAY['text_ciphertext', 'structured_data_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'telegram_conversations', ARRAY['summary_ciphertext', 'historical_summary_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'telegram_assistant_runs', ARRAY['prompt_snapshot_ciphertext', 'result_summary_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'telegram_assistant_steps', ARRAY['request_payload_ciphertext', 'response_payload_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'telegram_prepared_actions', ARRAY['payload_ciphertext', 'preview_text_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'agent_runs', ARRAY['trigger_ciphertext', 'metadata_ciphertext', 'private_payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'operator_events', ARRAY['payload_ciphertext', 'metadata_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'user_memory_profiles', ARRAY['summary_ciphertext', 'profile_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'operator_memory_summaries', ARRAY['content_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'background_jobs', ARRAY['payload_ciphertext', 'result_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'scheduled_jobs', ARRAY['payload_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'runtime_ingress_receipts', ARRAY['payload_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_incident_operator', 'agent_work_results', ARRAY['result_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac', 'result_digest', 'result_digest_version', 'result_digest_key_tag']::text[]),
+          ('maraithon_incident_operator', 'snapshots', ARRAY['state_data_ciphertext', 'budget_ciphertext', 'payload_encryption_version', 'payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'effects', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac', 'params', 'params_ciphertext', 'result', 'result_ciphertext', 'error', 'payload_encryption_version', 'updated_at']::text[]),
+          ('maraithon_activation_operator', 'agent_directives', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac', 'payload', 'payload_ciphertext', 'payload_encryption_version', 'payload_purged_at', 'updated_at']::text[]),
+          ('maraithon_activation_operator', 'events', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac', 'payload', 'payload_ciphertext', 'payload_encryption_version', 'spend_total_cost', 'spend_input_tokens', 'spend_output_tokens', 'spend_llm_calls']::text[]),
+          ('maraithon_activation_operator', 'agent_run_steps', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac', 'request_payload', 'request_payload_ciphertext', 'response_payload', 'response_payload_ciphertext', 'payload_encryption_version', 'updated_at']::text[]),
+          ('maraithon_activation_operator', 'telegram_conversation_turns', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'telegram_conversations', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'telegram_assistant_runs', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'telegram_assistant_steps', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'telegram_prepared_actions', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'agent_runs', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'operator_events', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'user_memory_profiles', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'operator_memory_summaries', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'background_jobs', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac', 'payload', 'payload_ciphertext', 'result', 'result_ciphertext', 'payload_encryption_version', 'updated_at']::text[]),
+          ('maraithon_activation_operator', 'scheduled_jobs', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'runtime_ingress_receipts', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac']::text[]),
+          ('maraithon_activation_operator', 'agent_work_results', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac', 'result_digest', 'result_digest_version', 'result_digest_key_tag']::text[]),
+          ('maraithon_activation_operator', 'snapshots', ARRAY['payload_binding_version', 'payload_binding_key_tag', 'payload_binding_mac', 'state_data', 'state_data_ciphertext', 'budget', 'budget_ciphertext', 'payload_encryption_version']::text[])
+      ), expected_column_acls AS (
+        SELECT expected.grantee,
+               expected.table_name,
+               column_name,
+               'UPDATE'::text AS privilege_type,
+               false AS is_grantable
+        FROM expected_column_acl_groups AS expected
+        CROSS JOIN LATERAL pg_catalog.unnest(expected.column_names) AS expanded(column_name)
+      ), actual_column_acls AS (
+        SELECT COALESCE(grantee.rolname, 'PUBLIC') AS grantee,
+               source.table_name,
+               attribute.attname AS column_name,
+               acl.privilege_type,
+               acl.is_grantable
+        FROM source_relations AS source
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = source.relation_id::regclass
+        JOIN pg_catalog.pg_attribute AS attribute
+          ON attribute.attrelid = relation.oid
+         AND attribute.attnum > 0
+         AND NOT attribute.attisdropped
+        CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS acl
+        LEFT JOIN pg_catalog.pg_roles AS grantee ON grantee.oid = acl.grantee
+        WHERE acl.grantee = 0
+           OR grantee.rolname IN (
+             'maraithon_payload_verifier',
+             'maraithon_incident_operator',
+             'maraithon_activation_operator'
+           )
+      ), acl_differences AS (
+        (SELECT * FROM actual_table_acls EXCEPT SELECT * FROM expected_table_acls)
+        UNION ALL
+        (SELECT * FROM expected_table_acls EXCEPT SELECT * FROM actual_table_acls)
+        UNION ALL
+        (SELECT * FROM actual_column_acls EXCEPT SELECT * FROM expected_column_acls)
+        UNION ALL
+        (SELECT * FROM expected_column_acls EXCEPT SELECT * FROM actual_column_acls)
+      )
+      SELECT NOT EXISTS (SELECT 1 FROM acl_differences)
+    $function$;
+    """)
+
+    execute("""
     CREATE OR REPLACE FUNCTION public.durable_payload_roles_ready()
     RETURNS boolean
     LANGUAGE plpgsql
@@ -1156,7 +1483,8 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       incident_oid oid;
       activation_oid oid;
     BEGIN
-      IF NOT public.runtime_coordination_roles_ready() THEN
+      IF NOT public.runtime_coordination_roles_ready()
+         OR NOT public.durable_payload_source_acl_ready() THEN
         RETURN false;
       END IF;
 
@@ -1180,7 +1508,9 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
             ('public.vault_reencryption_failures'::regclass),
             ('public.vault_backup_retirement_evidence'::regclass),
             ('public.durable_payload_binding_operations'::regclass),
-            ('public.key_retirement_zero_proofs'::regclass)
+            ('public.key_retirement_zero_proofs'::regclass),
+            ('public.durable_payload_key_fence_state'::regclass),
+            ('public.retired_durable_payload_keys'::regclass)
         ) AS controlled(relation_id)
         JOIN pg_catalog.pg_class AS relation ON relation.oid = controlled.relation_id
         WHERE relation.relowner <> owner_oid
@@ -1206,6 +1536,14 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         has_table_privilege('maraithon_payload_verifier',
           'public.durable_payload_verification_failures', 'DELETE') AND
         has_table_privilege('maraithon_activation_operator',
+          'public.durable_payload_verifications', 'SELECT') AND
+        has_table_privilege('maraithon_activation_operator',
+          'public.durable_payload_verifications', 'UPDATE') AND
+        has_table_privilege('maraithon_activation_operator',
+          'public.durable_payload_verification_failures', 'SELECT') AND
+        has_table_privilege('maraithon_activation_operator',
+          'public.durable_payload_verification_failures', 'UPDATE') AND
+        has_table_privilege('maraithon_activation_operator',
           'public.durable_payload_binding_operations', 'SELECT') AND
         has_table_privilege('maraithon_activation_operator',
           'public.durable_payload_binding_operations', 'INSERT') AND
@@ -1229,6 +1567,22 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           'public.key_retirement_zero_proofs', 'UPDATE') AND
         NOT has_table_privilege('maraithon_incident_operator',
           'public.key_retirement_zero_proofs', 'DELETE') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.retired_durable_payload_keys', 'SELECT') AND
+        has_table_privilege('maraithon_incident_operator',
+          'public.retired_durable_payload_keys', 'INSERT') AND
+        NOT has_table_privilege('maraithon_incident_operator',
+          'public.retired_durable_payload_keys', 'UPDATE') AND
+        NOT has_table_privilege('maraithon_incident_operator',
+          'public.retired_durable_payload_keys', 'DELETE') AND
+        NOT has_table_privilege('maraithon_runtime',
+          'public.durable_payload_key_fence_state', 'SELECT') AND
+        NOT has_table_privilege('maraithon_payload_verifier',
+          'public.durable_payload_key_fence_state', 'SELECT') AND
+        NOT has_table_privilege('maraithon_incident_operator',
+          'public.durable_payload_key_fence_state', 'SELECT') AND
+        NOT has_table_privilege('maraithon_activation_operator',
+          'public.durable_payload_key_fence_state', 'SELECT') AND
         has_table_privilege('maraithon_incident_operator',
           'public.vault_backup_retirement_evidence', 'SELECT') AND
         has_table_privilege('maraithon_incident_operator',
@@ -1287,6 +1641,10 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
             ('public.durable_payload_binding_operations'::regclass,
              ARRAY[owner_oid, incident_oid, activation_oid]),
             ('public.key_retirement_zero_proofs'::regclass,
+             ARRAY[owner_oid, incident_oid]),
+            ('public.durable_payload_key_fence_state'::regclass,
+             ARRAY[owner_oid]),
+            ('public.retired_durable_payload_keys'::regclass,
              ARRAY[owner_oid, incident_oid])
         ) AS controlled(relation_id, allowed_grantees)
         JOIN pg_catalog.pg_class AS relation ON relation.oid = controlled.relation_id
@@ -1300,6 +1658,22 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
 
       IF NOT (
         has_function_privilege('maraithon_runtime',
+          'public.durable_payload_key_write_fenced(text,text)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_payload_verifier',
+          'public.durable_payload_key_write_fenced(text,text)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_incident_operator',
+          'public.durable_payload_key_write_fenced(text,text)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_activation_operator',
+          'public.durable_payload_key_write_fenced(text,text)', 'EXECUTE') AND
+        has_function_privilege('maraithon_runtime',
+          'public.snapshot_writer_authority_valid(uuid,uuid)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_payload_verifier',
+          'public.snapshot_writer_authority_valid(uuid,uuid)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_incident_operator',
+          'public.snapshot_writer_authority_valid(uuid,uuid)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_activation_operator',
+          'public.snapshot_writer_authority_valid(uuid,uuid)', 'EXECUTE') AND
+        has_function_privilege('maraithon_runtime',
           'public.delete_durable_payload_verification(text,text)', 'EXECUTE') AND
         has_function_privilege('maraithon_payload_verifier',
           'public.delete_durable_payload_verification(text,text)', 'EXECUTE') AND
@@ -1308,9 +1682,45 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         has_function_privilege('maraithon_activation_operator',
           'public.delete_durable_payload_verification(text,text)', 'EXECUTE') AND
         has_function_privilege('maraithon_incident_operator',
+          'public.durable_payload_source_acl_ready()', 'EXECUTE') AND
+        has_function_privilege('maraithon_incident_operator',
+          'public.durable_payload_roles_ready()', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_incident_operator',
+          'public.durable_payload_operator_mutation_authorized()', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_activation_operator',
+          'public.durable_payload_operator_mutation_authorized()', 'EXECUTE') AND
+        has_function_privilege('maraithon_incident_operator',
+          'public.durable_payload_operator_row_mutation_authorized(regclass,text,jsonb,jsonb)',
+          'EXECUTE') AND
+        has_function_privilege('maraithon_activation_operator',
+          'public.durable_payload_operator_row_mutation_authorized(regclass,text,jsonb,jsonb)',
+          'EXECUTE') AND
+        NOT has_function_privilege('maraithon_incident_operator',
+          'public.guard_durable_payload_operator_source_mutation()', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_activation_operator',
+          'public.guard_durable_payload_operator_source_mutation()', 'EXECUTE') AND
+        has_function_privilege('maraithon_incident_operator',
+          'public.lock_durable_payload_binding_sources()', 'EXECUTE') AND
+        has_function_privilege('maraithon_activation_operator',
+          'public.lock_durable_runtime_activation_sources()', 'EXECUTE') AND
+        has_function_privilege('maraithon_activation_operator',
+          'public.lock_durable_payload_contraction_sources()', 'EXECUTE') AND
+        has_function_privilege('maraithon_activation_operator',
+          'public.lock_durable_payload_contraction_coordination()', 'EXECUTE') AND
+        has_function_privilege('maraithon_incident_operator',
           'public.durable_payload_old_key_live_count(text,text)', 'EXECUTE') AND
         has_function_privilege('maraithon_incident_operator',
-          'public.durable_payload_old_key_source_digest(text,text)', 'EXECUTE')
+          'public.durable_payload_key_registry_definition(text)', 'EXECUTE') AND
+        has_function_privilege('maraithon_incident_operator',
+          'public.durable_payload_old_key_source_digest(text,text)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_incident_operator',
+          'public.advance_durable_payload_key_fence_epoch(text,text,uuid)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_runtime',
+          'public.advance_durable_payload_key_fence_epoch(text, text, uuid)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_payload_verifier',
+          'public.advance_durable_payload_key_fence_epoch(text, text, uuid)', 'EXECUTE') AND
+        NOT has_function_privilege('maraithon_activation_operator',
+          'public.advance_durable_payload_key_fence_epoch(text, text, uuid)', 'EXECUTE')
       ) THEN
         RETURN false;
       END IF;
@@ -1332,7 +1742,12 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       protocol_mode text;
       writer_protocol text;
       valid_shape boolean;
+      new_row jsonb;
+      old_row jsonb;
     BEGIN
+      new_row := to_jsonb(NEW);
+      old_row := to_jsonb(OLD);
+
       SELECT mode INTO STRICT protocol_mode
       FROM public.effect_execution_protocols
       WHERE name = 'effects'
@@ -1363,60 +1778,62 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
          AND current_setting('maraithon.vault_reencryption', true) = 'VAULT_REENCRYPT_V1'
          AND (
            (TG_TABLE_NAME = 'events'
-            AND (NEW.payload_ciphertext IS NULL) = (OLD.payload_ciphertext IS NULL)
-            AND (to_jsonb(NEW) - ARRAY['payload_ciphertext']::text[])
+            AND (new_row ->> 'payload_ciphertext' IS NULL) =
+                  (old_row ->> 'payload_ciphertext' IS NULL)
+            AND (new_row - ARRAY['payload_ciphertext']::text[])
                   IS NOT DISTINCT FROM
-                (to_jsonb(OLD) - ARRAY['payload_ciphertext']::text[])
-            AND NEW.payload_ciphertext IS DISTINCT FROM OLD.payload_ciphertext) OR
+                (old_row - ARRAY['payload_ciphertext']::text[])
+            AND new_row -> 'payload_ciphertext' IS DISTINCT FROM
+                  old_row -> 'payload_ciphertext') OR
            (TG_TABLE_NAME = 'agent_run_steps'
-            AND (NEW.request_payload_ciphertext IS NULL) =
-                  (OLD.request_payload_ciphertext IS NULL)
-            AND (NEW.response_payload_ciphertext IS NULL) =
-                  (OLD.response_payload_ciphertext IS NULL)
-            AND (to_jsonb(NEW) - ARRAY[
+            AND (new_row ->> 'request_payload_ciphertext' IS NULL) =
+                  (old_row ->> 'request_payload_ciphertext' IS NULL)
+            AND (new_row ->> 'response_payload_ciphertext' IS NULL) =
+                  (old_row ->> 'response_payload_ciphertext' IS NULL)
+            AND (new_row - ARRAY[
                   'request_payload_ciphertext', 'response_payload_ciphertext', 'updated_at'
                 ]::text[]) IS NOT DISTINCT FROM
-                (to_jsonb(OLD) - ARRAY[
+                (old_row - ARRAY[
                   'request_payload_ciphertext', 'response_payload_ciphertext', 'updated_at'
                 ]::text[])
-            AND (NEW.request_payload_ciphertext IS DISTINCT FROM
-                   OLD.request_payload_ciphertext OR
-                 NEW.response_payload_ciphertext IS DISTINCT FROM
-                   OLD.response_payload_ciphertext))
+            AND (new_row -> 'request_payload_ciphertext' IS DISTINCT FROM
+                   old_row -> 'request_payload_ciphertext' OR
+                 new_row -> 'response_payload_ciphertext' IS DISTINCT FROM
+                   old_row -> 'response_payload_ciphertext'))
          ) THEN
         RETURN NEW;
       END IF;
 
       valid_shape := CASE TG_TABLE_NAME
         WHEN 'events' THEN
-          NEW.payload = '{}'::jsonb
+          new_row -> 'payload' = '{}'::jsonb
           AND (
             (NEW.payload_purged_at IS NULL
               AND NEW.payload_encryption_version = 1
-              AND NEW.payload_ciphertext IS NOT NULL
+              AND new_row ->> 'payload_ciphertext' IS NOT NULL
               AND NEW.payload_binding_version = 1
               AND NEW.payload_binding_key_tag IS NOT NULL
               AND octet_length(NEW.payload_binding_mac) = 32) OR
             (NEW.payload_purged_at IS NOT NULL
-              AND NEW.payload_ciphertext IS NULL
+              AND new_row ->> 'payload_ciphertext' IS NULL
               AND NEW.payload_binding_version IS NULL
               AND NEW.payload_binding_key_tag IS NULL
               AND NEW.payload_binding_mac IS NULL)
           )
         WHEN 'agent_run_steps' THEN
-          NEW.request_payload = '{}'::jsonb
-          AND NEW.response_payload = '{}'::jsonb
+          new_row -> 'request_payload' = '{}'::jsonb
+          AND new_row -> 'response_payload' = '{}'::jsonb
           AND (
             (NEW.payload_purged_at IS NULL
               AND NEW.payload_encryption_version = 1
-              AND NEW.request_payload_ciphertext IS NOT NULL
-              AND NEW.response_payload_ciphertext IS NOT NULL
+              AND new_row ->> 'request_payload_ciphertext' IS NOT NULL
+              AND new_row ->> 'response_payload_ciphertext' IS NOT NULL
               AND NEW.payload_binding_version = 1
               AND NEW.payload_binding_key_tag IS NOT NULL
               AND octet_length(NEW.payload_binding_mac) = 32) OR
             (NEW.payload_purged_at IS NOT NULL
-              AND NEW.request_payload_ciphertext IS NULL
-              AND NEW.response_payload_ciphertext IS NULL
+              AND new_row ->> 'request_payload_ciphertext' IS NULL
+              AND new_row ->> 'response_payload_ciphertext' IS NULL
               AND NEW.payload_binding_version IS NULL
               AND NEW.payload_binding_key_tag IS NULL
               AND NEW.payload_binding_mac IS NULL)
@@ -1439,13 +1856,513 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     """)
 
     execute("""
+    CREATE OR REPLACE FUNCTION public.durable_payload_operator_mutation_authorized()
+    RETURNS boolean
+    LANGUAGE sql
+    IMMUTABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+      -- Compatibility tombstone. Operator authority is row- and
+      -- operation-specific; callers must use the four-argument reviewed helper.
+      SELECT false
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.lock_durable_runtime_activation_sources()
+    RETURNS void
+    LANGUAGE plpgsql
+    VOLATILE
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      PERFORM pg_catalog.pg_advisory_xact_lock(20260811, 420);
+
+      LOCK TABLE
+        public.runtime_leader_authorities,
+        public.runtime_node_incarnations,
+        public.runtime_partitions,
+        public.runtime_partition_transitions,
+        public.agent_runtime_leases,
+        public.runtime_task_assignments,
+        public.runtime_partition_rebalance_requests,
+        public.effects,
+        public.agent_directives,
+        public.events,
+        public.agent_run_steps,
+        public.telegram_conversation_turns,
+        public.telegram_conversations,
+        public.telegram_assistant_runs,
+        public.telegram_assistant_steps,
+        public.telegram_prepared_actions,
+        public.agent_runs,
+        public.operator_events,
+        public.user_memory_profiles,
+        public.operator_memory_summaries,
+        public.background_jobs,
+        public.scheduled_jobs,
+        public.runtime_ingress_receipts,
+        public.snapshots,
+        public.agent_work_results,
+        public.durable_payload_verifications,
+        public.durable_payload_verification_failures
+      IN SHARE MODE;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.lock_durable_payload_binding_sources()
+    RETURNS void
+    LANGUAGE plpgsql
+    VOLATILE
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      LOCK TABLE
+      public.effects,
+      public.agent_directives,
+      public.events,
+      public.agent_run_steps,
+      public.telegram_conversation_turns,
+      public.telegram_conversations,
+      public.telegram_assistant_runs,
+      public.telegram_assistant_steps,
+      public.telegram_prepared_actions,
+      public.agent_runs,
+      public.operator_events,
+      public.user_memory_profiles,
+      public.operator_memory_summaries,
+      public.background_jobs,
+      public.scheduled_jobs,
+      public.runtime_ingress_receipts,
+      public.snapshots,
+      public.agent_work_results
+      IN SHARE MODE;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.lock_durable_payload_contraction_sources()
+    RETURNS void
+    LANGUAGE plpgsql
+    VOLATILE
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      LOCK TABLE
+      public.effects,
+      public.agent_directives,
+      public.events,
+      public.agent_run_steps,
+      public.telegram_conversation_turns,
+      public.telegram_conversations,
+      public.telegram_assistant_runs,
+      public.telegram_assistant_steps,
+      public.telegram_prepared_actions,
+      public.agent_runs,
+      public.operator_events,
+      public.user_memory_profiles,
+      public.operator_memory_summaries,
+      public.background_jobs,
+      public.scheduled_jobs,
+      public.runtime_ingress_receipts,
+      public.snapshots,
+      public.agent_work_results
+      IN SHARE ROW EXCLUSIVE MODE;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.lock_durable_payload_contraction_coordination()
+    RETURNS void
+    LANGUAGE plpgsql
+    VOLATILE
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      PERFORM pg_catalog.pg_advisory_xact_lock(20260811, 420);
+
+      LOCK TABLE
+        public.runtime_leader_authorities,
+        public.runtime_node_incarnations,
+        public.runtime_partitions,
+        public.runtime_partition_transitions,
+        public.agent_runtime_leases,
+        public.runtime_task_assignments,
+        public.runtime_partition_rebalance_requests
+      IN SHARE MODE;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.enforce_effect_protocol_one_way()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      active_legacy bigint;
+      terminal_legacy bigint;
+      runtime_leases bigint;
+      runtime_mode text;
+      processing_directives bigint;
+      running_runs bigint;
+      requested_steps bigint;
+      unencrypted_effect_payloads bigint;
+      unencrypted_directive_payloads bigint;
+      durable_payload_proof_failures bigint;
+      operator_roles_ready boolean;
+      ready_indexes bigint;
+      ready_helpers bigint;
+      ready_constraints bigint;
+      ready_triggers bigint;
+      schema_migrations_recorded boolean;
+    BEGIN
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Effect execution protocol row cannot be deleted'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF OLD.mode = 'generation_fenced_v1' AND
+         NEW.mode IS DISTINCT FROM OLD.mode THEN
+        RAISE EXCEPTION 'Effect execution protocol cannot be downgraded'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF OLD.mode = 'generation_fenced_v1' AND
+         (NEW.activated_at IS DISTINCT FROM OLD.activated_at OR
+          NEW.activation_epoch IS DISTINCT FROM OLD.activation_epoch OR
+          NEW.activation_evidence_id IS DISTINCT FROM OLD.activation_evidence_id OR
+          NEW.activation_evidence_digest IS DISTINCT FROM OLD.activation_evidence_digest OR
+          NEW.activated_by IS DISTINCT FROM OLD.activated_by OR
+          NEW.exact_revision IS DISTINCT FROM OLD.exact_revision) THEN
+        RAISE EXCEPTION 'Activated Effect protocol identity is immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF OLD.mode = 'legacy' AND NEW.mode = 'generation_fenced_v1' THEN
+        IF current_user IS DISTINCT FROM 'maraithon_activation_operator' THEN
+          RAISE EXCEPTION 'Effect protocol activation requires exact activation role'
+            USING ERRCODE = 'insufficient_privilege';
+        END IF;
+
+        SELECT mode INTO STRICT runtime_mode
+        FROM public.runtime_coordination_protocols
+        WHERE name = 'runtime'
+        FOR SHARE;
+
+        IF runtime_mode <> 'dark' THEN
+          RAISE EXCEPTION 'Effect protocol activation requires dark runtime coordination'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF current_setting('maraithon.effect_protocol_activation', true)
+             IS DISTINCT FROM 'generation_fenced_v1' THEN
+          RAISE EXCEPTION 'Effect protocol activation requires the cutover barrier'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF NEW.activated_at IS NULL OR NEW.activation_epoch IS NULL OR
+           NEW.activation_evidence_id IS NULL OR NEW.activation_evidence_digest IS NULL OR
+           NEW.activated_by IS NULL OR NEW.exact_revision IS NULL THEN
+          RAISE EXCEPTION 'Effect protocol activation identity is incomplete'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        IF NEW.activation_evidence_id IS DISTINCT FROM OLD.activation_evidence_id OR
+           NEW.activation_evidence_digest IS DISTINCT FROM OLD.activation_evidence_digest OR
+           NEW.activated_by IS DISTINCT FROM OLD.activated_by OR
+           NEW.exact_revision IS DISTINCT FROM OLD.exact_revision THEN
+          RAISE EXCEPTION 'Effect protocol activation requires pre-attested fleet evidence'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        -- These locks make the safety checks authoritative even if activation
+        -- is invoked through direct SQL instead of the Mix task. Queued old
+        -- Effect writes resume only after mode is exact and are then rejected
+        -- by enforce_effect_execution_protocol().
+        PERFORM public.lock_durable_runtime_activation_sources();
+
+        SELECT COUNT(*) INTO runtime_leases
+        FROM public.agent_runtime_leases;
+
+        IF runtime_leases <> 0 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires drained runtime leases'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        SELECT
+          (SELECT COUNT(*) FROM public.agent_directives WHERE status = 'processing'),
+          (SELECT COUNT(*) FROM public.agent_runs WHERE status = 'running'),
+          (SELECT COUNT(*) FROM public.agent_run_steps WHERE status = 'requested')
+        INTO processing_directives, running_runs, requested_steps;
+
+        IF processing_directives <> 0 OR running_runs <> 0 OR requested_steps <> 0 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires drained durable Agent work'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        SELECT
+          COUNT(*) FILTER (
+            WHERE runtime_owner_generation IS NULL AND
+              NOT ((
+                (status = 'cancelled' AND result_envelope IS NULL) OR
+                (status IN ('completed', 'failed', 'cancelled') AND
+                 result_envelope IS NOT NULL AND result_acknowledged_at IS NOT NULL)
+              ) IS TRUE) AND
+              NOT ((
+                status IN ('completed', 'failed', 'cancelled') AND
+                result_envelope IS NOT NULL AND result_acknowledged_at IS NULL
+              ) IS TRUE)
+          ),
+          COUNT(*) FILTER (
+            WHERE runtime_owner_generation IS NULL AND
+                  status IN ('completed', 'failed', 'cancelled') AND
+                  result_envelope IS NOT NULL AND
+                  result_acknowledged_at IS NULL
+          )
+        INTO active_legacy, terminal_legacy
+        FROM public.effects;
+
+        IF active_legacy <> 0 OR terminal_legacy <> 0 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires drained legacy work'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        SELECT COUNT(*) INTO unencrypted_effect_payloads
+        FROM public.effects
+        WHERE payload_encryption_version IS DISTINCT FROM 1
+           OR (payload_purged_at IS NULL AND params_ciphertext IS NULL)
+           OR (payload_purged_at IS NOT NULL AND
+               (params_ciphertext IS NOT NULL OR result_ciphertext IS NOT NULL))
+           OR params IS DISTINCT FROM '{"redacted": true}'::jsonb
+           OR result IS NOT NULL;
+
+        IF unencrypted_effect_payloads <> 0 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires encrypted payload backfill'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        SELECT COUNT(*) INTO unencrypted_directive_payloads
+        FROM public.agent_directives
+        WHERE payload_encryption_version IS DISTINCT FROM 1
+           OR (payload_purged_at IS NULL AND payload_ciphertext IS NULL)
+           OR payload IS DISTINCT FROM '{"redacted": true}'::jsonb;
+
+        IF unencrypted_directive_payloads <> 0 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires encrypted Directive payload backfill'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        SELECT public.durable_payload_roles_ready()
+        INTO operator_roles_ready;
+
+        IF NOT operator_roles_ready OR
+           NOT public.durable_payload_catalog_ready() OR
+           NOT public.privacy_protocol_catalog_ready() THEN
+          RAISE EXCEPTION 'Effect protocol activation requires separated payload verifier privileges and catalog authority'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        SELECT public.durable_payload_proof_failures()
+        INTO durable_payload_proof_failures;
+
+        IF durable_payload_proof_failures <> 0 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires authenticated durable payload proofs'
+            USING ERRCODE = 'check_violation',
+                  DETAIL = durable_payload_proof_failures::text;
+        END IF;
+
+        SELECT COUNT(*) = 5
+        FROM public.schema_migrations
+        WHERE version IN (
+          20260810132102,
+          20260810132103,
+          20260810140000,
+          20260810140001,
+          20260810140005
+        )
+        INTO schema_migrations_recorded;
+
+        IF NOT schema_migrations_recorded THEN
+          RAISE EXCEPTION 'Effect protocol activation requires both recorded exact migrations'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        WITH required(
+          function_id,
+          expected_volatility,
+          expected_language,
+          expected_security_definer
+        ) AS (
+          VALUES
+            ('public.generation_fenced_effect_index_matches(text)'::regprocedure, 's'::"char", 'sql', false),
+            ('public.generation_fenced_effect_indexes_ready_count()'::regprocedure, 's'::"char", 'sql', false),
+            ('public.durable_payload_row_identity(text,text)'::regprocedure, 'i'::"char", 'sql', false),
+            ('public.durable_payload_digest_part(text,jsonb,text)'::regprocedure, 'i'::"char", 'sql', false),
+            ('public.durable_payload_proof_failures()'::regprocedure, 's'::"char", 'plpgsql', false),
+            ('public.durable_payload_roles_ready()'::regprocedure, 's'::"char", 'plpgsql', false),
+            ('public.delete_durable_payload_verification(text,text)'::regprocedure, 'v'::"char", 'plpgsql', true)
+        )
+        SELECT COUNT(*) INTO ready_helpers
+        FROM required
+        JOIN pg_catalog.pg_proc AS function_row
+          ON function_row.oid = required.function_id
+         AND function_row.provolatile = required.expected_volatility
+         AND function_row.prosecdef = required.expected_security_definer
+         AND function_row.proconfig = ARRAY['search_path=pg_catalog, public']::text[]
+        JOIN pg_catalog.pg_language AS language_row
+          ON language_row.oid = function_row.prolang
+         AND language_row.lanname = required.expected_language
+        JOIN public.effect_execution_protocol_manifests AS manifest
+          ON manifest.name = 'effects'
+         AND manifest.function_fingerprints ->> function_row.proname =
+               md5(function_row.prosrc);
+
+        IF ready_helpers <> 7 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires attested catalog helpers'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        SELECT public.generation_fenced_effect_indexes_ready_count()
+        INTO ready_indexes;
+
+        IF ready_indexes <> 6 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires all exact indexes ready'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        WITH required(relation_id, constraint_name) AS (
+          VALUES
+            ('public.effect_execution_protocols'::regclass, 'effect_execution_protocol_singleton_check'),
+            ('public.effect_execution_protocols'::regclass, 'effect_execution_protocol_mode_check'),
+            ('public.effect_execution_protocols'::regclass, 'effect_execution_protocol_activation_shape_check'),
+            ('public.effect_execution_protocol_manifests'::regclass,
+             'effect_execution_protocol_manifest_singleton_check'),
+            ('public.effect_termination_attestations'::regclass,
+             'effect_termination_attestations_shape_check'),
+            ('public.effects'::regclass, 'effects_execution_status_check'),
+            ('public.effects'::regclass, 'effects_generation_fenced_shape_check')
+        )
+        SELECT COUNT(*) INTO ready_constraints
+        FROM required
+        JOIN pg_catalog.pg_constraint AS constraint_row
+          ON constraint_row.conrelid = required.relation_id
+         AND constraint_row.conname = required.constraint_name
+         AND constraint_row.contype = 'c'
+         AND constraint_row.convalidated
+        JOIN public.effect_execution_protocol_manifests AS manifest
+          ON manifest.name = 'effects'
+         AND manifest.constraint_fingerprints ->> required.constraint_name =
+               md5(pg_catalog.pg_get_constraintdef(constraint_row.oid, true));
+
+        IF ready_constraints <> 7 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires validated safety constraints'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        WITH required(trigger_name, relation_id, function_id, trigger_type) AS (
+          VALUES
+            ('enforce_effect_execution_protocol_trigger', 'public.effects'::regclass,
+             'public.enforce_effect_execution_protocol()'::regprocedure, 31),
+            ('enforce_agent_directive_protocol_trigger', 'public.agent_directives'::regclass,
+             'public.enforce_agent_directive_protocol()'::regprocedure, 31),
+            ('enforce_effect_protocol_one_way_trigger', 'public.effect_execution_protocols'::regclass,
+             'public.enforce_effect_protocol_one_way()'::regprocedure, 27),
+            ('enforce_effect_termination_attestation_trigger',
+             'public.effect_termination_attestations'::regclass,
+             'public.enforce_effect_termination_attestation()'::regprocedure, 31),
+            ('reject_effect_protocol_manifest_mutation_trigger',
+             'public.effect_execution_protocol_manifests'::regclass,
+             'public.reject_effect_protocol_manifest_mutation()'::regprocedure, 27),
+            ('reject_effect_protocol_manifest_truncate_trigger',
+             'public.effect_execution_protocol_manifests'::regclass,
+             'public.reject_durable_effect_truncate()'::regprocedure, 34),
+            ('reject_effect_termination_attestations_truncate_trigger',
+             'public.effect_termination_attestations'::regclass,
+             'public.reject_durable_effect_truncate()'::regprocedure, 34),
+            ('reject_effect_protocol_truncate_trigger', 'public.effect_execution_protocols'::regclass,
+             'public.reject_durable_effect_truncate()'::regprocedure, 34),
+            ('reject_effects_truncate_trigger', 'public.effects'::regclass,
+             'public.reject_durable_effect_truncate()'::regprocedure, 34),
+            ('guard_durable_payload_verification_write_trigger',
+             'public.durable_payload_verifications'::regclass,
+             'public.guard_durable_payload_verification_write()'::regprocedure, 23),
+            ('guard_durable_payload_verification_failure_write_trigger',
+             'public.durable_payload_verification_failures'::regclass,
+             'public.guard_durable_payload_verification_failure_write()'::regprocedure, 23),
+            ('enforce_durable_history_payload_protocol_trigger', 'public.events'::regclass,
+             'public.enforce_durable_history_payload_protocol()'::regprocedure, 31),
+            ('enforce_durable_history_payload_protocol_trigger',
+             'public.agent_run_steps'::regclass,
+             'public.enforce_durable_history_payload_protocol()'::regprocedure, 31),
+            ('invalidate_durable_payload_verification_trigger', 'public.effects'::regclass,
+             'public.invalidate_durable_payload_verification()'::regprocedure, 29),
+            ('invalidate_durable_payload_verification_trigger',
+             'public.agent_directives'::regclass,
+             'public.invalidate_durable_payload_verification()'::regprocedure, 29),
+            ('invalidate_durable_payload_verification_trigger', 'public.events'::regclass,
+             'public.invalidate_durable_payload_verification()'::regprocedure, 29),
+            ('invalidate_durable_payload_verification_trigger',
+             'public.agent_run_steps'::regclass,
+             'public.invalidate_durable_payload_verification()'::regprocedure, 29),
+            ('reject_durable_payload_verifications_truncate_trigger',
+             'public.durable_payload_verifications'::regclass,
+             'public.reject_durable_effect_truncate()'::regprocedure, 34),
+            ('reject_durable_payload_verification_failures_truncate_trigger',
+             'public.durable_payload_verification_failures'::regclass,
+             'public.reject_durable_effect_truncate()'::regprocedure, 34)
+        )
+        SELECT COUNT(*) INTO ready_triggers
+        FROM required
+        JOIN pg_catalog.pg_trigger AS trigger_row
+          ON trigger_row.tgrelid = required.relation_id
+         AND trigger_row.tgname = required.trigger_name
+         AND trigger_row.tgfoid = required.function_id
+         AND trigger_row.tgtype = required.trigger_type
+         AND NOT trigger_row.tgisinternal
+         AND trigger_row.tgenabled IN ('O', 'A')
+        JOIN pg_catalog.pg_proc AS function_row
+          ON function_row.oid = required.function_id
+         AND function_row.provolatile = 'v'
+         AND NOT function_row.prosecdef
+         AND function_row.proconfig = ARRAY['search_path=pg_catalog, public']::text[]
+        JOIN pg_catalog.pg_language AS language_row
+          ON language_row.oid = function_row.prolang
+         AND language_row.lanname = 'plpgsql'
+        JOIN public.effect_execution_protocol_manifests AS manifest
+          ON manifest.name = 'effects'
+         AND manifest.function_fingerprints ->> function_row.proname =
+               md5(function_row.prosrc);
+
+        IF ready_triggers <> 19 THEN
+          RAISE EXCEPTION 'Effect protocol activation requires enabled safety triggers'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      END IF;
+
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute("""
     CREATE OR REPLACE FUNCTION public.durable_payload_old_key_live_count(
       requested_key_kind text,
       requested_old_tag text
     )
     RETURNS bigint
     LANGUAGE plpgsql
-    STABLE
+    VOLATILE
+    SECURITY DEFINER
     SET search_path = pg_catalog, public
     AS $function$
     DECLARE
@@ -1457,7 +2374,34 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         RETURN NULL;
       END IF;
 
+      IF public.durable_payload_catalog_ready() IS NOT TRUE OR
+         public.privacy_protocol_catalog_ready() IS NOT TRUE THEN
+        RAISE EXCEPTION 'key retirement catalog authority is not ready'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
       IF requested_key_kind = 'binding' THEN
+        LOCK TABLE
+          public.effects,
+          public.agent_directives,
+          public.events,
+          public.agent_run_steps,
+          public.telegram_conversation_turns,
+          public.telegram_conversations,
+          public.telegram_assistant_runs,
+          public.telegram_assistant_steps,
+          public.telegram_prepared_actions,
+          public.agent_runs,
+          public.operator_events,
+          public.user_memory_profiles,
+          public.operator_memory_summaries,
+          public.background_jobs,
+          public.scheduled_jobs,
+          public.runtime_ingress_receipts,
+          public.snapshots,
+          public.agent_work_results
+        IN SHARE MODE;
+
         SELECT
           (SELECT count(*) FROM public.effects WHERE payload_binding_key_tag = requested_old_tag) +
           (SELECT count(*) FROM public.agent_directives WHERE payload_binding_key_tag = requested_old_tag) +
@@ -1480,6 +2424,33 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           (SELECT count(*) FROM public.agent_work_results WHERE result_digest_key_tag = requested_old_tag)
         INTO live_count;
       ELSIF requested_key_kind = 'vault' THEN
+        LOCK TABLE
+          public.effects,
+          public.agent_directives,
+          public.events,
+          public.agent_run_steps,
+          public.telegram_conversation_turns,
+          public.telegram_conversations,
+          public.telegram_assistant_runs,
+          public.telegram_assistant_steps,
+          public.telegram_prepared_actions,
+          public.agent_runs,
+          public.operator_events,
+          public.user_memory_profiles,
+          public.operator_memory_summaries,
+          public.background_jobs,
+          public.scheduled_jobs,
+          public.runtime_ingress_receipts,
+          public.snapshots,
+          public.agent_work_results,
+          public.connected_accounts,
+          public.oauth_tokens,
+          public.local_browser_visits,
+          public.local_calendar_events,
+          public.local_files,
+          public.memory_items
+        IN SHARE MODE;
+
         ciphertext_prefix := pg_catalog.decode(
           '01' || pg_catalog.lpad(pg_catalog.to_hex(
             pg_catalog.octet_length(pg_catalog.convert_to(requested_old_tag, 'UTF8'))
@@ -1542,13 +2513,30 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     """)
 
     execute("""
+    CREATE OR REPLACE FUNCTION public.durable_payload_key_registry_definition(
+      requested_key_kind text
+    )
+    RETURNS text
+    LANGUAGE sql
+    IMMUTABLE
+    SET search_path = pg_catalog, public
+    AS $function$
+      SELECT CASE requested_key_kind
+        WHEN 'vault' THEN 'effects.params_ciphertext,effects.result_ciphertext,agent_directives.payload_ciphertext,events.payload_ciphertext,agent_run_steps.request_payload_ciphertext,agent_run_steps.response_payload_ciphertext,telegram_conversation_turns.text_ciphertext,telegram_conversation_turns.structured_data_ciphertext,telegram_conversations.summary_ciphertext,telegram_conversations.historical_summary_ciphertext,telegram_assistant_runs.prompt_snapshot_ciphertext,telegram_assistant_runs.result_summary_ciphertext,telegram_assistant_steps.request_payload_ciphertext,telegram_assistant_steps.response_payload_ciphertext,telegram_prepared_actions.payload_ciphertext,telegram_prepared_actions.preview_text_ciphertext,agent_runs.trigger_ciphertext,agent_runs.metadata_ciphertext,operator_events.payload_ciphertext,operator_events.metadata_ciphertext,user_memory_profiles.summary_ciphertext,user_memory_profiles.profile_ciphertext,operator_memory_summaries.content_ciphertext,background_jobs.payload_ciphertext,background_jobs.result_ciphertext,scheduled_jobs.payload_ciphertext,runtime_ingress_receipts.payload_ciphertext,snapshots.state_data_ciphertext,snapshots.budget_ciphertext,agent_work_results.result_ciphertext,connected_accounts.access_token,connected_accounts.refresh_token,oauth_tokens.access_token,oauth_tokens.refresh_token,local_browser_visits.title,local_calendar_events.title,local_calendar_events.notes,local_files.filename,local_files.text_content,memory_items.content,memory_items.summary,memory_items.metadata'
+        WHEN 'binding' THEN 'effects:payload,agent_directives:payload,events:payload,agent_run_steps:payload,telegram_conversation_turns:payload,telegram_conversations:payload,telegram_assistant_runs:payload,telegram_assistant_steps:payload,telegram_prepared_actions:payload,agent_runs:payload,operator_events:payload,user_memory_profiles:payload,operator_memory_summaries:payload,background_jobs:payload,scheduled_jobs:payload,runtime_ingress_receipts:payload,snapshots:payload,agent_work_results:payload,agent_work_results:authority'
+        ELSE NULL::text
+      END
+    $function$;
+    """)
+
+    execute("""
     CREATE OR REPLACE FUNCTION public.durable_payload_old_key_source_digest(
       requested_key_kind text,
       requested_old_tag text
     )
     RETURNS bytea
     LANGUAGE sql
-    STABLE
+    VOLATILE
     SET search_path = pg_catalog, public
     AS $function$
       SELECT CASE
@@ -1558,6 +2546,9 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           'registry', 'durable_payload_key_registry_v1',
           'key_kind', requested_key_kind,
           'old_tag', requested_old_tag,
+          'registry_definition', public.durable_payload_key_registry_definition(
+            requested_key_kind
+          ),
           'live_count', public.durable_payload_old_key_live_count(
             requested_key_kind, requested_old_tag
           ),
@@ -1567,6 +2558,449 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         ELSE NULL::bytea
       END;
     $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.durable_payload_ciphertext_key_tag(ciphertext bytea)
+    RETURNS text
+    LANGUAGE plpgsql
+    IMMUTABLE
+    STRICT
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      tag_length integer;
+      decoded_tag text;
+    BEGIN
+      IF pg_catalog.octet_length(ciphertext) < 3 OR
+         pg_catalog.get_byte(ciphertext, 0) <> 1 THEN
+        RETURN NULL;
+      END IF;
+
+      tag_length := pg_catalog.get_byte(ciphertext, 1);
+
+      IF tag_length NOT BETWEEN 1 AND 64 OR
+         pg_catalog.octet_length(ciphertext) < tag_length + 2 THEN
+        RETURN NULL;
+      END IF;
+
+      decoded_tag := pg_catalog.convert_from(
+        pg_catalog.substring(ciphertext, 3, tag_length), 'UTF8'
+      );
+
+      IF decoded_tag !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$' THEN
+        RETURN NULL;
+      END IF;
+
+      RETURN decoded_tag;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN NULL;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.advance_durable_payload_key_fence_epoch(
+      requested_kind text,
+      requested_tag text,
+      requested_proof_id uuid
+    )
+    RETURNS bigint
+    LANGUAGE plpgsql
+    VOLATILE
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      next_generation bigint;
+    BEGIN
+      IF current_setting('maraithon.key_retirement_zero_proof', true)
+           IS DISTINCT FROM 'LIVE_ZERO_PROOF_V1' OR
+         (session_user IS DISTINCT FROM 'maraithon_incident_operator' AND
+          current_setting('role', true) IS DISTINCT FROM 'maraithon_incident_operator') THEN
+        RAISE EXCEPTION 'Key fence advancement requires incident zero-proof authority'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF requested_kind NOT IN ('vault', 'binding') OR
+         requested_tag !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$' OR
+         requested_proof_id IS NULL THEN
+        RAISE EXCEPTION 'Key fence advancement arguments are invalid'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      PERFORM 1
+      FROM public.durable_payload_key_fence_state
+      WHERE singleton IS TRUE
+      FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Durable payload key fence state is missing'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF EXISTS (
+        SELECT 1
+        FROM public.retired_durable_payload_keys
+        WHERE key_kind = requested_kind
+          AND old_tag = requested_tag
+      ) THEN
+        RAISE EXCEPTION 'Durable payload key tag already has final removal authorization'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      PERFORM set_config('maraithon.key_fence_kind', requested_kind, true);
+      PERFORM set_config('maraithon.key_fence_tag', requested_tag, true);
+      PERFORM set_config('maraithon.key_fence_proof_id', requested_proof_id::text, true);
+
+      UPDATE public.durable_payload_key_fence_state
+      SET generation = generation + 1,
+          fences = pg_catalog.jsonb_set(
+            fences,
+            ARRAY[requested_kind, requested_tag],
+            pg_catalog.to_jsonb(requested_proof_id::text),
+            true
+          ),
+          updated_at = timezone('UTC', clock_timestamp())
+      WHERE singleton IS TRUE
+        AND fences #>> ARRAY[requested_kind, requested_tag]
+              IS DISTINCT FROM requested_proof_id::text
+      RETURNING generation INTO next_generation;
+
+      IF next_generation IS NULL THEN
+        RAISE EXCEPTION 'Durable payload key fence state is missing or proof is already current'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      RETURN next_generation;
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.guard_durable_payload_key_fence_state()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      expected_kind text := current_setting('maraithon.key_fence_kind', true);
+      expected_tag text := current_setting('maraithon.key_fence_tag', true);
+      expected_proof_id text := current_setting('maraithon.key_fence_proof_id', true);
+      zero_proof_transition boolean :=
+        current_setting('maraithon.key_retirement_zero_proof', true)
+          IS NOT DISTINCT FROM 'LIVE_ZERO_PROOF_V1';
+      retirement_finalization boolean :=
+        current_setting('maraithon.key_retirement_finalization', true)
+          IS NOT DISTINCT FROM 'FINAL_REMOVAL_AUTHORIZATION_V1';
+      old_fence_count bigint;
+      new_fence_count bigint;
+    BEGIN
+      IF TG_OP <> 'UPDATE' OR
+         current_user IS DISTINCT FROM 'maraithon_object_owner' OR
+         zero_proof_transition = retirement_finalization THEN
+        RAISE EXCEPTION 'Durable payload key fence state is immutable'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF expected_kind NOT IN ('vault', 'binding') OR
+         expected_tag !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$' OR
+         expected_proof_id !~
+           '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' OR
+         NEW.singleton IS DISTINCT FROM OLD.singleton OR
+         NEW.singleton IS NOT TRUE OR
+         NEW.generation IS DISTINCT FROM OLD.generation + 1 OR
+         NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at OR
+         NEW.fences #>> ARRAY[expected_kind, expected_tag]
+           IS DISTINCT FROM expected_proof_id THEN
+        RAISE EXCEPTION 'Durable payload key fence transition is invalid'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      SELECT
+        (SELECT count(*) FROM pg_catalog.jsonb_each(OLD.fences -> 'vault')) +
+        (SELECT count(*) FROM pg_catalog.jsonb_each(OLD.fences -> 'binding')),
+        (SELECT count(*) FROM pg_catalog.jsonb_each(NEW.fences -> 'vault')) +
+        (SELECT count(*) FROM pg_catalog.jsonb_each(NEW.fences -> 'binding'))
+      INTO STRICT old_fence_count, new_fence_count;
+
+      IF retirement_finalization THEN
+        IF NEW.fences IS DISTINCT FROM OLD.fences OR
+           new_fence_count IS DISTINCT FROM old_fence_count OR
+           NOT EXISTS (
+             SELECT 1
+             FROM public.retired_durable_payload_keys AS retirement
+             WHERE retirement.key_kind = expected_kind
+               AND retirement.old_tag = expected_tag
+               AND retirement.zero_proof_id::text = expected_proof_id
+           ) THEN
+          RAISE EXCEPTION 'Durable payload key fence finalization is invalid'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        RETURN NEW;
+      END IF;
+
+      IF (OLD.fences -> expected_kind) ? expected_tag THEN
+        IF OLD.fences #>> ARRAY[expected_kind, expected_tag]
+             IS NOT DISTINCT FROM expected_proof_id OR
+           new_fence_count IS DISTINCT FROM old_fence_count OR
+           EXISTS (
+             SELECT 1
+             FROM (
+               SELECT 'vault'::text AS key_kind, key, value
+               FROM pg_catalog.jsonb_each_text(OLD.fences -> 'vault')
+               UNION ALL
+               SELECT 'binding'::text AS key_kind, key, value
+               FROM pg_catalog.jsonb_each_text(OLD.fences -> 'binding')
+             ) AS prior
+             WHERE (prior.key_kind, prior.key) IS DISTINCT FROM
+                     (expected_kind, expected_tag)
+               AND NEW.fences #>> ARRAY[prior.key_kind, prior.key]
+                     IS DISTINCT FROM prior.value
+           ) THEN
+          RAISE EXCEPTION 'Durable payload key proof refresh is invalid'
+            USING ERRCODE = 'check_violation';
+        END IF;
+      ELSIF new_fence_count IS DISTINCT FROM old_fence_count + 1 OR
+            EXISTS (
+              SELECT 1
+              FROM (
+                SELECT 'vault'::text AS key_kind, key, value
+                FROM pg_catalog.jsonb_each_text(OLD.fences -> 'vault')
+                UNION ALL
+                SELECT 'binding'::text AS key_kind, key, value
+                FROM pg_catalog.jsonb_each_text(OLD.fences -> 'binding')
+              ) AS prior
+              WHERE NEW.fences #>> ARRAY[prior.key_kind, prior.key]
+                IS DISTINCT FROM prior.value
+            ) THEN
+        RAISE EXCEPTION 'Durable payload key fences cannot be removed or replaced'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS guard_durable_payload_key_fence_state_trigger " <>
+        "ON public.durable_payload_key_fence_state"
+    )
+
+    execute("""
+    CREATE TRIGGER guard_durable_payload_key_fence_state_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.durable_payload_key_fence_state
+      FOR EACH ROW EXECUTE FUNCTION public.guard_durable_payload_key_fence_state()
+    """)
+
+    execute("""
+    ALTER TABLE public.durable_payload_key_fence_state
+      ENABLE ALWAYS TRIGGER guard_durable_payload_key_fence_state_trigger
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_durable_payload_key_fence_state_truncate_trigger " <>
+        "ON public.durable_payload_key_fence_state"
+    )
+
+    execute("""
+    CREATE TRIGGER reject_durable_payload_key_fence_state_truncate_trigger
+      BEFORE TRUNCATE ON public.durable_payload_key_fence_state
+      FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.durable_payload_key_write_fenced(
+      requested_kind text,
+      requested_tag text
+    )
+    RETURNS boolean
+    LANGUAGE plpgsql
+    STABLE
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      fence_state jsonb;
+    BEGIN
+      IF requested_kind NOT IN ('vault', 'binding') OR
+         requested_tag !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$' THEN
+        RAISE EXCEPTION 'Durable payload key fence lookup is invalid'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF public.durable_payload_catalog_ready() IS NOT TRUE OR
+         public.privacy_protocol_catalog_ready() IS NOT TRUE THEN
+        RAISE EXCEPTION 'Durable payload key fence catalog authority is not ready'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      SELECT fences INTO STRICT fence_state
+      FROM public.durable_payload_key_fence_state
+      WHERE singleton IS TRUE;
+
+      RETURN (fence_state -> requested_kind) ? requested_tag;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'Durable payload key fence state is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute("""
+    CREATE OR REPLACE FUNCTION public.guard_durable_payload_retired_key_write()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    VOLATILE
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      new_row jsonb := to_jsonb(NEW);
+      old_row jsonb := CASE WHEN TG_OP = 'UPDATE' THEN to_jsonb(OLD) ELSE '{}'::jsonb END;
+      vault_fields text[];
+      field_name text;
+      encoded_value text;
+      candidate_tag text;
+      candidate_vault_tags text[] := ARRAY[]::text[];
+      candidate_binding_tags text[] := ARRAY[]::text[];
+      fence_state jsonb;
+    BEGIN
+      vault_fields := CASE TG_TABLE_NAME
+        WHEN 'connected_accounts' THEN ARRAY['access_token', 'refresh_token']
+        WHEN 'oauth_tokens' THEN ARRAY['access_token', 'refresh_token']
+        WHEN 'local_browser_visits' THEN ARRAY['title']
+        WHEN 'local_calendar_events' THEN ARRAY['title', 'notes']
+        WHEN 'local_files' THEN ARRAY['filename', 'text_content']
+        WHEN 'memory_items' THEN ARRAY['content', 'summary', 'metadata']
+        WHEN 'effects' THEN ARRAY['params_ciphertext', 'result_ciphertext']
+        WHEN 'agent_directives' THEN ARRAY['payload_ciphertext']
+        WHEN 'events' THEN ARRAY['payload_ciphertext']
+        WHEN 'agent_run_steps' THEN
+          ARRAY['request_payload_ciphertext', 'response_payload_ciphertext']
+        WHEN 'telegram_conversation_turns' THEN
+          ARRAY['text_ciphertext', 'structured_data_ciphertext']
+        WHEN 'telegram_conversations' THEN
+          ARRAY['summary_ciphertext', 'historical_summary_ciphertext']
+        WHEN 'telegram_assistant_runs' THEN
+          ARRAY['prompt_snapshot_ciphertext', 'result_summary_ciphertext']
+        WHEN 'telegram_assistant_steps' THEN
+          ARRAY['request_payload_ciphertext', 'response_payload_ciphertext']
+        WHEN 'telegram_prepared_actions' THEN
+          ARRAY['payload_ciphertext', 'preview_text_ciphertext']
+        WHEN 'agent_runs' THEN ARRAY['trigger_ciphertext', 'metadata_ciphertext']
+        WHEN 'operator_events' THEN ARRAY['payload_ciphertext', 'metadata_ciphertext']
+        WHEN 'user_memory_profiles' THEN ARRAY['summary_ciphertext', 'profile_ciphertext']
+        WHEN 'operator_memory_summaries' THEN ARRAY['content_ciphertext']
+        WHEN 'background_jobs' THEN ARRAY['payload_ciphertext', 'result_ciphertext']
+        WHEN 'scheduled_jobs' THEN ARRAY['payload_ciphertext']
+        WHEN 'runtime_ingress_receipts' THEN ARRAY['payload_ciphertext']
+        WHEN 'snapshots' THEN ARRAY['state_data_ciphertext', 'budget_ciphertext']
+        WHEN 'agent_work_results' THEN ARRAY['result_ciphertext']
+        ELSE NULL::text[]
+      END;
+
+      IF vault_fields IS NULL THEN
+        RAISE EXCEPTION 'Retired-key guard attached outside the fixed payload registry'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      FOREACH field_name IN ARRAY vault_fields LOOP
+        IF new_row -> field_name IS DISTINCT FROM old_row -> field_name THEN
+          encoded_value := new_row ->> field_name;
+
+          IF encoded_value IS NOT NULL THEN
+            candidate_tag := public.durable_payload_ciphertext_key_tag(encoded_value::bytea);
+
+            IF candidate_tag IS NULL THEN
+              RAISE EXCEPTION 'Changed durable ciphertext has an invalid key tag envelope'
+                USING ERRCODE = 'check_violation';
+            END IF;
+
+            candidate_vault_tags := pg_catalog.array_append(
+              candidate_vault_tags, candidate_tag
+            );
+          END IF;
+        END IF;
+      END LOOP;
+
+      IF new_row -> 'payload_binding_key_tag' IS DISTINCT FROM
+           old_row -> 'payload_binding_key_tag' AND
+         new_row ->> 'payload_binding_key_tag' IS NOT NULL THEN
+        candidate_binding_tags := pg_catalog.array_append(
+          candidate_binding_tags, new_row ->> 'payload_binding_key_tag'
+        );
+      END IF;
+
+      IF TG_TABLE_NAME = 'agent_work_results' AND
+         new_row -> 'result_digest_key_tag' IS DISTINCT FROM
+           old_row -> 'result_digest_key_tag' AND
+         new_row ->> 'result_digest_key_tag' IS NOT NULL THEN
+        candidate_binding_tags := pg_catalog.array_append(
+          candidate_binding_tags, new_row ->> 'result_digest_key_tag'
+        );
+      END IF;
+
+      IF pg_catalog.cardinality(candidate_vault_tags) = 0 AND
+         pg_catalog.cardinality(candidate_binding_tags) = 0 THEN
+        RETURN NEW;
+      END IF;
+
+      SELECT fences INTO STRICT fence_state
+      FROM public.durable_payload_key_fence_state
+      WHERE singleton IS TRUE
+      FOR SHARE;
+
+      IF (fence_state -> 'vault') ?| candidate_vault_tags OR
+         (fence_state -> 'binding') ?| candidate_binding_tags THEN
+        RAISE EXCEPTION 'Durable payload write uses an irreversibly fenced key tag'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'Durable payload key fence authority is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute("""
+    DO $retired_key_triggers$
+    DECLARE
+      source_relation text;
+    BEGIN
+      FOREACH source_relation IN ARRAY ARRAY[
+        'connected_accounts', 'oauth_tokens', 'local_browser_visits',
+        'local_calendar_events', 'local_files', 'memory_items',
+        'effects', 'agent_directives', 'events', 'agent_run_steps',
+        'telegram_conversation_turns', 'telegram_conversations',
+        'telegram_assistant_runs', 'telegram_assistant_steps',
+        'telegram_prepared_actions', 'agent_runs', 'operator_events',
+        'user_memory_profiles', 'operator_memory_summaries',
+        'background_jobs', 'scheduled_jobs', 'runtime_ingress_receipts',
+        'agent_work_results', 'snapshots'
+      ] LOOP
+        EXECUTE pg_catalog.format(
+          'DROP TRIGGER IF EXISTS guard_durable_payload_retired_key_write_trigger ON public.%I',
+          source_relation
+        );
+        EXECUTE pg_catalog.format(
+          'CREATE TRIGGER guard_durable_payload_retired_key_write_trigger ' ||
+          'BEFORE INSERT OR UPDATE ON public.%I FOR EACH ROW ' ||
+          'EXECUTE FUNCTION public.guard_durable_payload_retired_key_write()',
+          source_relation
+        );
+        EXECUTE pg_catalog.format(
+          'ALTER TABLE public.%I ENABLE ALWAYS TRIGGER ' ||
+          'guard_durable_payload_retired_key_write_trigger',
+          source_relation
+        );
+      END LOOP;
+    END
+    $retired_key_triggers$;
     """)
 
     execute("""
@@ -1645,6 +3079,12 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           USING ERRCODE = 'check_violation';
       END IF;
 
+      IF NOT public.durable_payload_catalog_ready() OR
+         NOT public.privacy_protocol_catalog_ready() THEN
+        RAISE EXCEPTION 'Durable payload binding operation catalog authority is not ready'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
       IF TG_OP = 'UPDATE' AND (
         NEW.operation_kind IS DISTINCT FROM OLD.operation_kind OR
         NEW.payload_table IS DISTINCT FROM OLD.payload_table OR
@@ -1680,6 +3120,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     CREATE OR REPLACE FUNCTION public.guard_key_retirement_zero_proof()
     RETURNS trigger
     LANGUAGE plpgsql
+    SECURITY DEFINER
     SET search_path = pg_catalog, public
     AS $function$
     DECLARE
@@ -1696,7 +3137,8 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           USING ERRCODE = 'insufficient_privilege';
       END IF;
 
-      IF current_user IS DISTINCT FROM 'maraithon_incident_operator' OR
+      IF (session_user IS DISTINCT FROM 'maraithon_incident_operator' AND
+          current_setting('role', true) IS DISTINCT FROM 'maraithon_incident_operator') OR
          current_setting('maraithon.key_retirement_zero_proof', true)
            IS DISTINCT FROM 'LIVE_ZERO_PROOF_V1' THEN
         RAISE EXCEPTION 'Key retirement zero proof requires incident authority'
@@ -1733,55 +3175,13 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           USING ERRCODE = 'check_violation';
       END IF;
 
-      IF NEW.key_kind = 'binding' THEN
-        LOCK TABLE
-          public.effects,
-          public.agent_directives,
-          public.events,
-          public.agent_run_steps,
-          public.telegram_conversation_turns,
-          public.telegram_conversations,
-          public.telegram_assistant_runs,
-          public.telegram_assistant_steps,
-          public.telegram_prepared_actions,
-          public.agent_runs,
-          public.operator_events,
-          public.user_memory_profiles,
-          public.operator_memory_summaries,
-          public.background_jobs,
-          public.scheduled_jobs,
-          public.runtime_ingress_receipts,
-          public.snapshots,
-          public.agent_work_results
-        IN SHARE MODE;
-      ELSIF NEW.key_kind = 'vault' THEN
-        LOCK TABLE
-          public.effects,
-          public.agent_directives,
-          public.events,
-          public.agent_run_steps,
-          public.telegram_conversation_turns,
-          public.telegram_conversations,
-          public.telegram_assistant_runs,
-          public.telegram_assistant_steps,
-          public.telegram_prepared_actions,
-          public.agent_runs,
-          public.operator_events,
-          public.user_memory_profiles,
-          public.operator_memory_summaries,
-          public.background_jobs,
-          public.scheduled_jobs,
-          public.runtime_ingress_receipts,
-          public.snapshots,
-          public.agent_work_results,
-          public.connected_accounts,
-          public.oauth_tokens,
-          public.local_browser_visits,
-          public.local_calendar_events,
-          public.local_files,
-          public.memory_items
-        IN SHARE MODE;
-      ELSE
+      IF NOT public.durable_payload_catalog_ready() OR
+         NOT public.privacy_protocol_catalog_ready() THEN
+        RAISE EXCEPTION 'Key retirement zero proof catalog authority is not ready'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF NEW.key_kind NOT IN ('vault', 'binding') THEN
         RAISE EXCEPTION 'Unknown key retirement kind'
           USING ERRCODE = 'check_violation';
       END IF;
@@ -1822,6 +3222,48 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       FOR EACH ROW EXECUTE FUNCTION public.guard_key_retirement_zero_proof()
     """)
 
+    execute("""
+    CREATE OR REPLACE FUNCTION public.sync_durable_payload_key_fence_from_zero_proof()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    VOLATILE
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+      -- The BEFORE proof guard still holds every fixed source SHARE lock.
+      -- Updating the pre-existing state row after the proof insert makes stale
+      -- REPEATABLE READ writers fail serialization and binds one fence advance
+      -- to one durable proof in the same transaction.
+      PERFORM public.advance_durable_payload_key_fence_epoch(
+        NEW.key_kind, NEW.old_tag, NEW.proof_id
+      );
+      RETURN NEW;
+    END;
+    $function$;
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS sync_durable_payload_key_fence_from_zero_proof_trigger " <>
+        "ON public.key_retirement_zero_proofs"
+    )
+
+    execute("""
+    CREATE TRIGGER sync_durable_payload_key_fence_from_zero_proof_trigger
+      AFTER INSERT ON public.key_retirement_zero_proofs
+      FOR EACH ROW EXECUTE FUNCTION public.sync_durable_payload_key_fence_from_zero_proof()
+    """)
+
+    execute("""
+    ALTER TABLE public.key_retirement_zero_proofs
+      ENABLE ALWAYS TRIGGER guard_key_retirement_zero_proof_trigger
+    """)
+
+    execute("""
+    ALTER TABLE public.key_retirement_zero_proofs
+      ENABLE ALWAYS TRIGGER sync_durable_payload_key_fence_from_zero_proof_trigger
+    """)
+
     execute(
       "DROP TRIGGER IF EXISTS reject_durable_payload_binding_operations_truncate_trigger " <>
         "ON public.durable_payload_binding_operations"
@@ -1848,6 +3290,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     CREATE OR REPLACE FUNCTION public.guard_vault_backup_retirement_evidence()
     RETURNS trigger
     LANGUAGE plpgsql
+    SECURITY DEFINER
     SET search_path = pg_catalog, public
     AS $function$
     DECLARE
@@ -1870,7 +3313,8 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           USING ERRCODE = 'insufficient_privilege';
       END IF;
 
-      IF current_user IS DISTINCT FROM 'maraithon_incident_operator' OR
+      IF (session_user IS DISTINCT FROM 'maraithon_incident_operator' AND
+          current_setting('role', true) IS DISTINCT FROM 'maraithon_incident_operator') OR
          current_setting('maraithon.vault_backup_evidence', true)
            IS DISTINCT FROM 'BACKUP_CATALOG_ATTESTED_V1' THEN
         RAISE EXCEPTION 'Vault backup evidence requires incident operator attestation'
@@ -1904,6 +3348,12 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
          NEW.evidence_operator IS DISTINCT FROM stored_evidence_operator OR
          NEW.exact_revision IS DISTINCT FROM stored_exact_revision THEN
         RAISE EXCEPTION 'Backup retirement evidence does not match protocol authority'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF NOT public.durable_payload_catalog_ready() OR
+         NOT public.privacy_protocol_catalog_ready() THEN
+        RAISE EXCEPTION 'Backup retirement evidence catalog authority is not ready'
           USING ERRCODE = 'check_violation';
       END IF;
 
@@ -1986,6 +3436,225 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     """)
 
     execute("""
+    CREATE OR REPLACE FUNCTION public.guard_retired_durable_payload_key()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      runtime_mode text;
+      effect_mode text;
+      stored_evidence_id text;
+      stored_evidence_digest bytea;
+      stored_evidence_operator text;
+      stored_exact_revision text;
+      proof_source_digest bytea;
+      proof_evidence_id text;
+      proof_evidence_digest bytea;
+      proof_evidence_operator text;
+      proof_exact_revision text;
+      proof_proved_at timestamp(6) without time zone;
+      backup_oldest_recoverable_at timestamp(6) without time zone;
+      backup_expires_at timestamp(6) without time zone;
+      live_count bigint;
+      current_source_digest bytea;
+      observed_fence_generation bigint;
+      observed_fences jsonb;
+      finalized_generation bigint;
+    BEGIN
+      IF (session_user IS DISTINCT FROM 'maraithon_incident_operator' AND
+          current_setting('role', true) IS DISTINCT FROM 'maraithon_incident_operator') OR
+         current_setting('maraithon.key_retirement_authorization', true)
+           IS DISTINCT FROM 'RETIRE_KEY_AUTHORIZATION_V1' THEN
+        RAISE EXCEPTION 'Key retirement authorization requires incident authority'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Retired durable payload keys are append-only'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF TG_WHEN = 'AFTER' THEN
+        PERFORM set_config('maraithon.key_fence_kind', NEW.key_kind, true);
+        PERFORM set_config('maraithon.key_fence_tag', NEW.old_tag, true);
+        PERFORM set_config(
+          'maraithon.key_fence_proof_id', NEW.zero_proof_id::text, true
+        );
+        PERFORM set_config(
+          'maraithon.key_retirement_finalization',
+          'FINAL_REMOVAL_AUTHORIZATION_V1',
+          true
+        );
+
+        UPDATE public.durable_payload_key_fence_state
+        SET generation = generation + 1,
+            updated_at = timezone('UTC', clock_timestamp())
+        WHERE singleton IS TRUE
+          AND fences #>> ARRAY[NEW.key_kind, NEW.old_tag] = NEW.zero_proof_id::text
+        RETURNING generation INTO finalized_generation;
+
+        IF finalized_generation IS NULL THEN
+          RAISE EXCEPTION 'Final key-removal authorization lost its durable write fence'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
+        RETURN NEW;
+      END IF;
+
+      SELECT mode INTO STRICT runtime_mode
+      FROM public.runtime_coordination_protocols
+      WHERE name = 'runtime'
+      FOR SHARE;
+
+      SELECT mode, activation_evidence_id, activation_evidence_digest,
+             activated_by, exact_revision
+      INTO STRICT effect_mode, stored_evidence_id, stored_evidence_digest,
+                  stored_evidence_operator, stored_exact_revision
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects'
+      FOR SHARE;
+
+      IF runtime_mode <> 'partition_fenced_v1' OR
+         effect_mode <> 'generation_fenced_v1' OR
+         stored_evidence_id IS NULL OR stored_evidence_digest IS NULL OR
+         stored_evidence_operator IS NULL OR stored_exact_revision IS NULL THEN
+        RAISE EXCEPTION 'Key retirement authorization requires the active exact pair'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF public.durable_payload_catalog_ready() IS NOT TRUE OR
+         public.privacy_protocol_catalog_ready() IS NOT TRUE THEN
+        RAISE EXCEPTION 'Key retirement authorization catalog authority is not ready'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      live_count := public.durable_payload_old_key_live_count(NEW.key_kind, NEW.old_tag);
+
+      IF live_count IS DISTINCT FROM 0 THEN
+        RAISE EXCEPTION 'Key retirement authorization rejected because live old-key rows remain'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      current_source_digest := public.durable_payload_old_key_source_digest(
+        NEW.key_kind, NEW.old_tag
+      );
+
+      SELECT generation, fences
+      INTO STRICT observed_fence_generation, observed_fences
+      FROM public.durable_payload_key_fence_state
+      WHERE singleton IS TRUE
+      FOR UPDATE;
+
+      IF observed_fences #>> ARRAY[NEW.key_kind, NEW.old_tag]
+           IS DISTINCT FROM NEW.zero_proof_id::text THEN
+        RAISE EXCEPTION 'Key retirement zero proof is not the durable write fence'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      SELECT proof.source_digest, proof.evidence_id, proof.evidence_digest,
+             proof.evidence_operator, proof.exact_revision, proof.proved_at,
+             backup.oldest_recoverable_at, backup.evidence_expires_at
+      INTO STRICT proof_source_digest, proof_evidence_id, proof_evidence_digest,
+                  proof_evidence_operator, proof_exact_revision, proof_proved_at,
+                  backup_oldest_recoverable_at, backup_expires_at
+      FROM public.key_retirement_zero_proofs AS proof
+      JOIN public.vault_backup_retirement_evidence AS backup
+        ON backup.key_kind = proof.key_kind
+       AND backup.old_tag = proof.old_tag
+       AND backup.zero_proof_id = proof.proof_id
+      WHERE proof.key_kind = NEW.key_kind
+        AND proof.old_tag = NEW.old_tag
+        AND proof.proof_id = NEW.zero_proof_id
+        AND backup.evidence_id = NEW.backup_evidence_id
+        AND proof.evidence_id = stored_evidence_id
+        AND proof.evidence_digest = stored_evidence_digest
+        AND proof.evidence_operator = stored_evidence_operator
+        AND proof.exact_revision = stored_exact_revision
+        AND backup.evidence_digest = proof.evidence_digest
+        AND backup.evidence_operator = proof.evidence_operator
+        AND backup.exact_revision = proof.exact_revision
+        AND backup.attested_at > proof.proved_at
+        AND backup.backup_oldest_recoverable_at > proof.proved_at
+        AND backup.wal_oldest_recoverable_at > proof.proved_at
+        AND backup.pitr_oldest_recoverable_at > proof.proved_at
+        AND backup.restore_drill_recovered_through_at > proof.proved_at
+        AND backup.oldest_recoverable_at > proof.proved_at
+        AND backup.evidence_expires_at > timezone('UTC', clock_timestamp())
+        AND backup.backup_catalog_captured_at <= timezone('UTC', clock_timestamp())
+        AND backup.wal_catalog_captured_at <= timezone('UTC', clock_timestamp())
+        AND backup.pitr_catalog_captured_at <= timezone('UTC', clock_timestamp())
+        AND backup.restore_drill_completed_at <= timezone('UTC', clock_timestamp())
+      FOR SHARE OF proof;
+
+      IF proof_source_digest IS DISTINCT FROM current_source_digest OR
+         pg_catalog.octet_length(current_source_digest) <> 32 OR
+         backup_oldest_recoverable_at <= proof_proved_at OR
+         backup_expires_at <= timezone('UTC', clock_timestamp()) THEN
+        RAISE EXCEPTION 'Key retirement proof or backup evidence is stale'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      NEW.source_digest := proof_source_digest;
+      NEW.fence_generation := observed_fence_generation;
+      NEW.evidence_id := proof_evidence_id;
+      NEW.evidence_digest := proof_evidence_digest;
+      NEW.evidence_operator := proof_evidence_operator;
+      NEW.exact_revision := proof_exact_revision;
+      NEW.authorized_at := timezone('UTC', clock_timestamp());
+      RETURN NEW;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'Key retirement proof or backup evidence is missing'
+        USING ERRCODE = 'check_violation';
+    END;
+    $function$;
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS guard_retired_durable_payload_key_trigger " <>
+        "ON public.retired_durable_payload_keys"
+    )
+
+    execute("""
+    CREATE TRIGGER guard_retired_durable_payload_key_trigger
+      BEFORE INSERT OR UPDATE OR DELETE ON public.retired_durable_payload_keys
+      FOR EACH ROW EXECUTE FUNCTION public.guard_retired_durable_payload_key()
+    """)
+
+    execute("""
+    ALTER TABLE public.retired_durable_payload_keys
+      ENABLE ALWAYS TRIGGER guard_retired_durable_payload_key_trigger
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS finalize_retired_durable_payload_key_fence_trigger " <>
+        "ON public.retired_durable_payload_keys"
+    )
+
+    execute("""
+    CREATE TRIGGER finalize_retired_durable_payload_key_fence_trigger
+      AFTER INSERT ON public.retired_durable_payload_keys
+      FOR EACH ROW EXECUTE FUNCTION public.guard_retired_durable_payload_key()
+    """)
+
+    execute("""
+    ALTER TABLE public.retired_durable_payload_keys
+      ENABLE ALWAYS TRIGGER finalize_retired_durable_payload_key_fence_trigger
+    """)
+
+    execute(
+      "DROP TRIGGER IF EXISTS reject_retired_durable_payload_keys_truncate_trigger " <>
+        "ON public.retired_durable_payload_keys"
+    )
+
+    execute("""
+    CREATE TRIGGER reject_retired_durable_payload_keys_truncate_trigger
+      BEFORE TRUNCATE ON public.retired_durable_payload_keys
+      FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
+    """)
+
+    execute("""
     CREATE OR REPLACE FUNCTION public.guard_vault_reencryption_failure_write()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2016,6 +3685,154 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     """)
 
     execute("""
+    CREATE OR REPLACE FUNCTION public.snapshot_writer_authority_valid(
+      requested_agent_id uuid,
+      requested_owner_token uuid
+    )
+    RETURNS boolean
+    LANGUAGE plpgsql
+    VOLATILE
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+      runtime_mode text;
+      runtime_activation_epoch uuid;
+      effect_mode text;
+      observed_user_id text;
+      observed_activation_epoch uuid;
+      observed_partition_id smallint;
+      observed_partition_epoch bigint;
+      observed_node_id uuid;
+    BEGIN
+      SELECT mode, activation_epoch
+      INTO STRICT runtime_mode, runtime_activation_epoch
+      FROM public.runtime_coordination_protocols
+      WHERE name = 'runtime'
+      FOR SHARE;
+
+      SELECT mode INTO STRICT effect_mode
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects'
+      FOR SHARE;
+
+      IF runtime_mode <> 'partition_fenced_v1' OR
+         effect_mode <> 'generation_fenced_v1' OR
+         requested_agent_id IS NULL OR requested_owner_token IS NULL THEN
+        RETURN false;
+      END IF;
+
+      SELECT agent.user_id, lease.coordination_activation_epoch,
+             lease.coordination_partition_id, lease.coordination_partition_epoch,
+             lease.coordination_node_incarnation_id
+      INTO STRICT observed_user_id, observed_activation_epoch,
+                  observed_partition_id, observed_partition_epoch, observed_node_id
+      FROM public.agents AS agent
+      JOIN public.agent_runtime_leases AS lease ON lease.agent_id = agent.id
+      WHERE agent.id = requested_agent_id
+        AND lease.owner_token = requested_owner_token;
+
+      IF observed_user_id IS NULL OR
+         observed_activation_epoch IS DISTINCT FROM runtime_activation_epoch OR
+         observed_partition_id IS NULL OR observed_partition_epoch IS NULL OR
+         observed_node_id IS NULL THEN
+        RETURN false;
+      END IF;
+
+      PERFORM 1
+      FROM public.runtime_node_incarnations AS node
+      WHERE node.id = observed_node_id
+        AND node.activation_epoch = observed_activation_epoch
+        AND node.state = 'ready'
+        AND node.ready_at IS NOT NULL
+        AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+      FOR SHARE;
+      IF NOT FOUND THEN RETURN false; END IF;
+
+      PERFORM 1
+      FROM public.runtime_partitions AS partition
+      WHERE partition.partition_id = observed_partition_id
+        AND partition.partition_id =
+              public.runtime_partition_for('user:' || observed_user_id)
+        AND partition.activation_epoch = observed_activation_epoch
+        AND partition.ownership_epoch = observed_partition_epoch
+        AND partition.owner_node_incarnation_id = observed_node_id
+        AND partition.state = 'ready'
+        AND partition.ready_at IS NOT NULL
+        AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+      FOR SHARE;
+      IF NOT FOUND THEN RETURN false; END IF;
+
+      PERFORM 1
+      FROM public.users AS app_user
+      WHERE app_user.id = observed_user_id
+        AND app_user.privacy_erasure_requested_at IS NULL
+      FOR SHARE;
+      IF NOT FOUND THEN RETURN false; END IF;
+
+      PERFORM 1
+      FROM public.agents AS agent
+      WHERE agent.id = requested_agent_id
+        AND agent.user_id = observed_user_id
+        AND agent.status IN ('running', 'degraded')
+        AND agent.install_status = 'enabled'
+      FOR SHARE;
+      IF NOT FOUND THEN RETURN false; END IF;
+
+      PERFORM 1
+      FROM public.agent_isolation_bindings AS binding
+      WHERE binding.agent_id = requested_agent_id
+        AND binding.user_id = observed_user_id
+        AND binding.status = 'active'
+      FOR SHARE;
+      IF NOT FOUND THEN RETURN false; END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM public.agent_restart_guards
+        WHERE agent_id = requested_agent_id
+      ) THEN
+        PERFORM 1
+        FROM public.agent_restart_guards AS guard
+        WHERE guard.agent_id = requested_agent_id
+          AND guard.tripped IS FALSE
+          AND guard.needs_recovery IS FALSE
+          AND (guard.blocked_until IS NULL OR
+               guard.blocked_until <= timezone('UTC', clock_timestamp()))
+        FOR SHARE;
+        IF NOT FOUND THEN RETURN false; END IF;
+      END IF;
+
+      PERFORM 1
+      FROM public.agent_runtime_leases AS lease
+      WHERE lease.agent_id = requested_agent_id
+        AND lease.owner_token = requested_owner_token
+        AND lease.coordination_activation_epoch = observed_activation_epoch
+        AND lease.coordination_partition_id = observed_partition_id
+        AND lease.coordination_partition_epoch = observed_partition_epoch
+        AND lease.coordination_node_incarnation_id = observed_node_id
+        AND lease.ready_at IS NOT NULL
+        AND lease.draining_at IS NULL
+        AND lease.lease_until > timezone('UTC', clock_timestamp())
+      FOR SHARE;
+      IF NOT FOUND THEN RETURN false; END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM public.agent_lifecycle_operations
+        WHERE agent_id = requested_agent_id
+      ) OR EXISTS (
+        SELECT 1 FROM public.agent_termination_incidents
+        WHERE agent_id = requested_agent_id AND status IN ('requested', 'proven')
+      ) THEN
+        RETURN false;
+      END IF;
+
+      RETURN true;
+    EXCEPTION WHEN no_data_found OR invalid_text_representation THEN
+      RETURN false;
+    END;
+    $function$;
+    """)
+
+    execute("""
     CREATE OR REPLACE FUNCTION public.enforce_snapshot_payload_protocol()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2023,28 +3840,241 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     AS $function$
     DECLARE
       protocol_mode text;
+      newer_count integer;
+      lifecycle_delete_authorized boolean := false;
+      identity_unchanged boolean;
+      writer_owner_token uuid;
+      operator_update_authorized boolean := false;
     BEGIN
+      SELECT mode INTO STRICT protocol_mode
+      FROM public.effect_execution_protocols
+      WHERE name = 'effects'
+      FOR SHARE;
+
+      IF protocol_mode NOT IN ('legacy', 'generation_fenced_v1') THEN
+        RAISE EXCEPTION 'Effect execution protocol mode is invalid'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
       IF TG_OP = 'DELETE' THEN
+        IF protocol_mode = 'legacy' AND
+           current_user IN ('maraithon_runtime', 'maraithon_migrator') AND
+           current_setting('maraithon.snapshot_quarantine_delete', true)
+             IS NOT DISTINCT FROM 'QUARANTINE_INVALID_SNAPSHOT_V1' AND
+           EXISTS (
+             SELECT 1
+             FROM public.snapshot_quarantines AS quarantine
+             WHERE quarantine.snapshot_id = OLD.id
+               AND quarantine.agent_id = OLD.agent_id
+               AND quarantine.sequence_num = OLD.sequence_num
+               AND quarantine.status = 'quarantined'
+               AND quarantine.quarantined_at IS NOT NULL
+           ) THEN
+          RETURN OLD;
+        END IF;
+
+        IF current_user NOT IN ('maraithon_runtime', 'maraithon_migrator') OR
+           current_setting('maraithon.snapshot_history_prune', true)
+             IS DISTINCT FROM 'PRUNE_BEYOND_RECOVERY_WINDOW_V1' OR
+           (protocol_mode = 'generation_fenced_v1' AND
+            current_user IS DISTINCT FROM 'maraithon_runtime') THEN
+          IF current_user = 'maraithon_runtime' AND
+             (protocol_mode = 'legacy' OR
+              current_setting('maraithon.effect_writer_protocol', true)
+                IS NOT DISTINCT FROM 'generation_fenced_v1') THEN
+            SELECT EXISTS (
+              SELECT 1
+              FROM public.agent_lifecycle_operations AS operation
+              WHERE operation.agent_id = OLD.agent_id
+                AND operation.kind = 'delete'
+                AND operation.state = 'draining'
+                AND operation.operation_token::text =
+                    current_setting('maraithon.lifecycle_operation_token', true)
+                AND operation.payload #>> '{mutation,action}' = 'delete'
+                AND operation.payload ->> 'operation_token' =
+                    operation.operation_token::text
+            ) INTO lifecycle_delete_authorized;
+          END IF;
+
+          IF NOT lifecycle_delete_authorized THEN
+            RAISE EXCEPTION 'Snapshot deletion requires bounded prune or lifecycle authority'
+              USING ERRCODE = 'check_violation';
+          END IF;
+
+          RETURN OLD;
+        END IF;
+
+        IF protocol_mode = 'generation_fenced_v1' THEN
+          BEGIN
+            writer_owner_token := NULLIF(
+              current_setting('maraithon.agent_lease_owner_token', true), ''
+            )::uuid;
+          EXCEPTION WHEN invalid_text_representation THEN
+            writer_owner_token := NULL;
+          END;
+
+          IF current_setting('maraithon.effect_writer_protocol', true)
+               IS DISTINCT FROM 'generation_fenced_v1' OR
+             public.snapshot_writer_authority_valid(OLD.agent_id, writer_owner_token)
+               IS NOT TRUE THEN
+            RAISE EXCEPTION 'Exact Snapshot pruning requires generation-fenced lease authority'
+              USING ERRCODE = 'check_violation';
+          END IF;
+        END IF;
+
+        SELECT count(*)::integer INTO newer_count
+        FROM (
+          SELECT newer.id
+          FROM public.snapshots AS newer
+          WHERE newer.agent_id = OLD.agent_id
+            AND (newer.sequence_num, newer.id) > (OLD.sequence_num, OLD.id)
+          ORDER BY newer.sequence_num DESC, newer.id DESC
+          LIMIT 10
+        ) AS retained;
+
+        IF newer_count < 10 THEN
+          RAISE EXCEPTION 'Snapshot pruning must preserve the newest ten recovery boundaries'
+            USING ERRCODE = 'check_violation';
+        END IF;
+
         RETURN OLD;
       END IF;
 
-      SELECT mode INTO STRICT protocol_mode
-      FROM public.effect_execution_protocols
-      WHERE name = 'effects';
+      IF TG_OP = 'UPDATE' THEN
+        identity_unchanged :=
+          NEW.id IS NOT DISTINCT FROM OLD.id AND
+          NEW.agent_id IS NOT DISTINCT FROM OLD.agent_id AND
+          NEW.sequence_num IS NOT DISTINCT FROM OLD.sequence_num AND
+          NEW.state_name IS NOT DISTINCT FROM OLD.state_name AND
+          NEW.schema_version IS NOT DISTINCT FROM OLD.schema_version AND
+          NEW.inserted_at IS NOT DISTINCT FROM OLD.inserted_at;
 
-      IF protocol_mode = 'legacy' THEN
-        RETURN NEW;
+        IF NOT identity_unchanged OR
+           NEW.payload_purged_at IS DISTINCT FROM OLD.payload_purged_at THEN
+          RAISE EXCEPTION 'Snapshot identity and purge authority are immutable'
+            USING ERRCODE = 'check_violation';
+        END IF;
       END IF;
 
-      IF protocol_mode IS DISTINCT FROM 'generation_fenced_v1' THEN
-        RAISE EXCEPTION 'Effect execution protocol mode is invalid'
-          USING ERRCODE = 'check_violation';
+      IF protocol_mode = 'legacy' THEN
+        IF TG_OP = 'INSERT' AND current_user = 'maraithon_runtime' THEN
+          RETURN NEW;
+        END IF;
+
+        IF TG_OP = 'UPDATE' AND
+           current_user = 'maraithon_migrator' AND
+           current_setting('maraithon.snapshot_format_migration', true)
+             IS NOT DISTINCT FROM 'MIGRATE_LEGACY_SNAPSHOT_V1' AND
+           (to_jsonb(NEW) - ARRAY['state_data', 'budget']::text[])
+             IS NOT DISTINCT FROM
+             (to_jsonb(OLD) - ARRAY['state_data', 'budget']::text[]) AND
+           (NEW.state_data IS DISTINCT FROM OLD.state_data OR
+            NEW.budget IS DISTINCT FROM OLD.budget) AND
+           (NEW.state_data ->> 'format' = 'maraithon.agent_snapshot' AND
+            NEW.state_data -> 'format_version' = '1'::jsonb AND
+            NEW.budget ->> 'format' = 'maraithon.agent_snapshot' AND
+            NEW.budget -> 'format_version' = '1'::jsonb) IS TRUE THEN
+          RETURN NEW;
+        END IF;
+
+        IF TG_OP = 'UPDATE' AND
+           current_user = 'maraithon_activation_operator' THEN
+          IF public.durable_payload_operator_row_mutation_authorized(
+                TG_RELID::regclass, TG_OP, pg_catalog.to_jsonb(OLD), pg_catalog.to_jsonb(NEW)
+              ) IS TRUE THEN
+            RETURN NEW;
+          END IF;
+        END IF;
+
+        RAISE EXCEPTION 'Legacy Snapshot mutation requires runtime insert, format migration, or contraction authority'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF current_user = 'maraithon_runtime' THEN
+        BEGIN
+          writer_owner_token := NULLIF(
+            current_setting('maraithon.agent_lease_owner_token', true), ''
+          )::uuid;
+        EXCEPTION WHEN invalid_text_representation THEN
+          writer_owner_token := NULL;
+        END;
       END IF;
 
       IF current_user NOT IN ('maraithon_runtime', 'maraithon_incident_operator',
                               'maraithon_activation_operator') THEN
         RAISE EXCEPTION 'Exact Snapshot mutation requires canonical role'
           USING ERRCODE = 'insufficient_privilege';
+      END IF;
+
+      IF TG_OP = 'INSERT' THEN
+        IF current_user IS DISTINCT FROM 'maraithon_runtime' OR
+           current_setting('maraithon.effect_writer_protocol', true)
+             IS DISTINCT FROM 'generation_fenced_v1' THEN
+          RAISE EXCEPTION 'Exact Snapshot insertion requires generation-fenced runtime authority'
+            USING ERRCODE = 'insufficient_privilege';
+        END IF;
+
+        IF public.snapshot_writer_authority_valid(NEW.agent_id, writer_owner_token)
+             IS NOT TRUE THEN
+          RAISE EXCEPTION 'Exact Snapshot insertion requires generation-fenced runtime authority'
+            USING ERRCODE = 'insufficient_privilege';
+        END IF;
+      END IF;
+
+      IF TG_OP = 'UPDATE' THEN
+        operator_update_authorized := false;
+
+        IF current_user = 'maraithon_incident_operator' THEN
+          operator_update_authorized :=
+            public.durable_payload_operator_row_mutation_authorized(
+                TG_RELID::regclass, TG_OP, pg_catalog.to_jsonb(OLD), pg_catalog.to_jsonb(NEW)
+              ) IS TRUE AND
+            (
+            (
+              current_setting('maraithon.binding_key_rotation', true)
+                IS NOT DISTINCT FROM 'BINDING_KEY_ROTATION_V1' AND
+              current_setting('maraithon.vault_reencryption', true)
+                IS DISTINCT FROM 'VAULT_REENCRYPT_V1' AND
+              (to_jsonb(NEW) - ARRAY[
+                'payload_binding_version', 'payload_binding_key_tag',
+                'payload_binding_mac'
+              ]::text[]) IS NOT DISTINCT FROM
+              (to_jsonb(OLD) - ARRAY[
+                'payload_binding_version', 'payload_binding_key_tag',
+                'payload_binding_mac'
+              ]::text[]) AND
+              (
+                NEW.payload_binding_version IS DISTINCT FROM OLD.payload_binding_version OR
+                NEW.payload_binding_key_tag IS DISTINCT FROM OLD.payload_binding_key_tag OR
+                NEW.payload_binding_mac IS DISTINCT FROM OLD.payload_binding_mac
+              )
+            ) OR
+            (
+              current_setting('maraithon.vault_reencryption', true)
+                IS NOT DISTINCT FROM 'VAULT_REENCRYPT_V1' AND
+              current_setting('maraithon.binding_key_rotation', true)
+                IS DISTINCT FROM 'BINDING_KEY_ROTATION_V1' AND
+              (to_jsonb(NEW) - ARRAY[
+                'state_data_ciphertext', 'budget_ciphertext'
+              ]::text[]) IS NOT DISTINCT FROM
+              (to_jsonb(OLD) - ARRAY[
+                'state_data_ciphertext', 'budget_ciphertext'
+              ]::text[]) AND
+              (NEW.state_data_ciphertext IS NULL) =
+                (OLD.state_data_ciphertext IS NULL) AND
+              (NEW.budget_ciphertext IS NULL) = (OLD.budget_ciphertext IS NULL) AND
+              (
+                NEW.state_data_ciphertext IS DISTINCT FROM OLD.state_data_ciphertext OR
+                NEW.budget_ciphertext IS DISTINCT FROM OLD.budget_ciphertext
+              )
+            )
+          );
+        END IF;
+
+        IF operator_update_authorized IS NOT TRUE THEN
+          RAISE EXCEPTION 'Exact Snapshot update requires narrow operator authority'
+            USING ERRCODE = 'insufficient_privilege';
+        END IF;
       END IF;
 
       IF NEW.payload_purged_at IS NULL THEN
@@ -2315,9 +4345,14 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     """)
 
     execute("""
-    REVOKE ALL ON TABLE public.durable_payload_binding_operations,
+    REVOKE ALL ON TABLE public.durable_payload_verifications,
+      public.durable_payload_verification_failures,
+      public.vault_reencryption_failures,
+      public.durable_payload_binding_operations,
       public.key_retirement_zero_proofs,
-      public.vault_backup_retirement_evidence
+      public.vault_backup_retirement_evidence,
+      public.durable_payload_key_fence_state,
+      public.retired_durable_payload_keys
       FROM PUBLIC, maraithon_runtime, maraithon_payload_verifier,
         maraithon_incident_operator, maraithon_activation_operator
     """)
@@ -2331,14 +4366,31 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       public.durable_payload_row_identity(text, text),
       public.durable_payload_digest_part(text, jsonb, text),
       public.durable_payload_proof_failures(),
+      public.durable_payload_source_acl_ready(),
       public.durable_payload_roles_ready(),
       public.enforce_durable_history_payload_protocol(),
+      public.durable_payload_operator_mutation_authorized(),
+      public.durable_payload_operator_row_mutation_authorized(regclass,text,jsonb,jsonb),
+      public.guard_durable_payload_operator_source_mutation(),
+      public.lock_durable_runtime_activation_sources(),
+      public.lock_durable_payload_binding_sources(),
+      public.lock_durable_payload_contraction_sources(),
+      public.lock_durable_payload_contraction_coordination(),
       public.durable_payload_old_key_live_count(text, text),
+      public.durable_payload_key_registry_definition(text),
       public.durable_payload_old_key_source_digest(text, text),
+      public.durable_payload_ciphertext_key_tag(bytea),
+      public.advance_durable_payload_key_fence_epoch(text, text, uuid),
+      public.guard_durable_payload_key_fence_state(),
+      public.durable_payload_key_write_fenced(text, text),
+      public.guard_durable_payload_retired_key_write(),
+      public.sync_durable_payload_key_fence_from_zero_proof(),
       public.guard_durable_payload_binding_operation(),
       public.guard_key_retirement_zero_proof(),
       public.guard_vault_backup_retirement_evidence(),
+      public.guard_retired_durable_payload_key(),
       public.guard_vault_reencryption_failure_write(),
+      public.snapshot_writer_authority_valid(uuid, uuid),
       public.enforce_snapshot_payload_protocol(),
       public.guard_durable_payload_verification_failure_write(),
       public.guard_durable_payload_verification_write(),
@@ -2350,7 +4402,82 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
 
     execute("""
     DO $grants$
+    DECLARE
+      acl_role text;
+      source_relation text;
+      source_columns text;
     BEGIN
+      -- Snapshot format migration and quarantine are offline migrator
+      -- capabilities. The runtime may inspect sanitized reports but cannot
+      -- forge, rewrite, or erase the authority used by quarantine deletion.
+      ALTER TABLE public.snapshot_quarantines OWNER TO maraithon_object_owner;
+      ALTER SEQUENCE public.snapshot_quarantines_id_seq OWNER TO maraithon_object_owner;
+
+      REVOKE ALL ON TABLE public.snapshot_quarantines FROM
+        PUBLIC, maraithon_runtime, maraithon_payload_verifier,
+        maraithon_incident_operator, maraithon_activation_operator;
+      REVOKE ALL ON SEQUENCE public.snapshot_quarantines_id_seq FROM
+        PUBLIC, maraithon_runtime, maraithon_payload_verifier,
+        maraithon_incident_operator, maraithon_activation_operator;
+
+      GRANT ALL ON TABLE public.snapshot_quarantines TO maraithon_migrator;
+      GRANT ALL ON SEQUENCE public.snapshot_quarantines_id_seq TO maraithon_migrator;
+      GRANT SELECT ON TABLE public.snapshot_quarantines TO maraithon_runtime;
+
+      -- SELECT ... FOR SHARE requires UPDATE authority. Limit it to the
+      -- immutable primary key and only the Agent columns migration inspects.
+      GRANT SELECT (id, status, install_status), UPDATE (id)
+        ON TABLE public.agents TO maraithon_migrator;
+
+      -- Converge from any historical broad or column-level grant before
+      -- restoring the closed operator capability sets below. Table REVOKE
+      -- alone does not remove PostgreSQL column ACLs.
+      FOREACH source_relation IN ARRAY ARRAY[
+        'connected_accounts', 'oauth_tokens', 'local_browser_visits',
+        'local_calendar_events', 'local_files', 'memory_items',
+        'effects', 'agent_directives', 'events', 'agent_run_steps',
+        'telegram_conversation_turns', 'telegram_conversations',
+        'telegram_assistant_runs', 'telegram_assistant_steps',
+        'telegram_prepared_actions', 'agent_runs', 'operator_events',
+        'user_memory_profiles', 'operator_memory_summaries',
+        'background_jobs', 'scheduled_jobs', 'runtime_ingress_receipts',
+        'agent_work_results', 'snapshots'
+      ] LOOP
+        SELECT pg_catalog.string_agg(pg_catalog.quote_ident(attribute.attname), ', ')
+        INTO STRICT source_columns
+        FROM pg_catalog.pg_attribute AS attribute
+        WHERE attribute.attrelid = pg_catalog.to_regclass('public.' || source_relation)
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped;
+
+        EXECUTE pg_catalog.format(
+          'REVOKE ALL PRIVILEGES ON TABLE public.%I FROM PUBLIC', source_relation
+        );
+        EXECUTE pg_catalog.format(
+          'REVOKE ALL PRIVILEGES (%s) ON TABLE public.%I FROM PUBLIC',
+          source_columns, source_relation
+        );
+
+        FOREACH acl_role IN ARRAY ARRAY[
+          'maraithon_payload_verifier',
+          'maraithon_incident_operator',
+          'maraithon_activation_operator'
+        ] LOOP
+          IF EXISTS (
+            SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = acl_role
+          ) THEN
+            EXECUTE pg_catalog.format(
+              'REVOKE ALL PRIVILEGES ON TABLE public.%I FROM %I',
+              source_relation, acl_role
+            );
+            EXECUTE pg_catalog.format(
+              'REVOKE ALL PRIVILEGES (%s) ON TABLE public.%I FROM %I',
+              source_columns, source_relation, acl_role
+            );
+          END IF;
+        END LOOP;
+      END LOOP;
+
       IF EXISTS (
         SELECT 1 FROM pg_catalog.pg_roles
         WHERE rolname = 'maraithon_payload_verifier'
@@ -2385,7 +4512,10 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         GRANT EXECUTE ON FUNCTION
           public.durable_payload_row_identity(text, text),
           public.durable_payload_digest_part(text, jsonb, text),
+          public.durable_payload_source_acl_ready(),
           public.durable_payload_roles_ready(),
+          public.durable_payload_key_write_fenced(text, text),
+          public.snapshot_writer_authority_valid(uuid, uuid),
           public.delete_durable_payload_verification(text, text)
           TO maraithon_runtime;
       END IF;
@@ -2395,6 +4525,8 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         SELECT 1 FROM pg_catalog.pg_roles
         WHERE rolname = 'maraithon_incident_operator'
       ) THEN
+        GRANT SELECT, UPDATE ON public.effect_execution_protocols
+          TO maraithon_incident_operator;
         GRANT SELECT
           ON public.connected_accounts, public.oauth_tokens,
              public.local_browser_visits, public.local_calendar_events,
@@ -2409,17 +4541,25 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
              public.vault_reencryption_failures,
              public.vault_backup_retirement_evidence,
              public.durable_payload_binding_operations,
-             public.key_retirement_zero_proofs
+             public.key_retirement_zero_proofs,
+             public.retired_durable_payload_keys
           TO maraithon_incident_operator;
-        GRANT INSERT ON public.vault_backup_retirement_evidence,
-          public.key_retirement_zero_proofs
+        GRANT INSERT ON public.vault_backup_retirement_evidence
+          TO maraithon_incident_operator;
+        GRANT INSERT ON public.key_retirement_zero_proofs,
+          public.retired_durable_payload_keys
           TO maraithon_incident_operator;
         GRANT INSERT, UPDATE ON public.durable_payload_binding_operations
           TO maraithon_incident_operator;
         GRANT EXECUTE ON FUNCTION
           public.durable_payload_row_identity(text, text),
           public.durable_payload_digest_part(text, jsonb, text),
+          public.durable_payload_source_acl_ready(),
+          public.durable_payload_roles_ready(),
+          public.durable_payload_operator_row_mutation_authorized(regclass,text,jsonb,jsonb),
+          public.lock_durable_payload_binding_sources(),
           public.durable_payload_old_key_live_count(text, text),
+          public.durable_payload_key_registry_definition(text),
           public.durable_payload_old_key_source_digest(text, text),
           public.delete_durable_payload_verification(text, text)
           TO maraithon_incident_operator;
@@ -2505,10 +4645,56 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           public.durable_payload_row_identity(text, text),
           public.durable_payload_digest_part(text, jsonb, text),
           public.durable_payload_proof_failures(),
+          public.durable_payload_source_acl_ready(),
           public.durable_payload_roles_ready(),
+          public.durable_payload_operator_row_mutation_authorized(regclass,text,jsonb,jsonb),
+          public.lock_durable_runtime_activation_sources(),
+          public.lock_durable_payload_contraction_sources(),
+          public.lock_durable_payload_contraction_coordination(),
           public.delete_durable_payload_verification(text, text)
           TO maraithon_activation_operator;
-        GRANT SELECT, UPDATE
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.effects TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.agent_directives TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.events TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.agent_run_steps TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.telegram_conversation_turns TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.telegram_conversations TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.telegram_assistant_runs TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.telegram_assistant_steps TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.telegram_prepared_actions TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.agent_runs TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.operator_events TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.user_memory_profiles TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.operator_memory_summaries TO maraithon_activation_operator;
+        GRANT UPDATE (
+          payload, payload_ciphertext, result, result_ciphertext,
+          payload_encryption_version, payload_binding_version,
+          payload_binding_key_tag, payload_binding_mac, updated_at
+        ) ON public.background_jobs TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.scheduled_jobs TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.runtime_ingress_receipts TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.snapshots TO maraithon_activation_operator;
+        GRANT UPDATE (payload_binding_version, payload_binding_key_tag, payload_binding_mac)
+          ON public.agent_work_results TO maraithon_activation_operator;
+        GRANT UPDATE (result_digest, result_digest_version, result_digest_key_tag)
+          ON public.agent_work_results TO maraithon_activation_operator;
+        GRANT SELECT
           ON public.effects, public.agent_directives, public.events, public.agent_run_steps,
              public.telegram_conversation_turns, public.telegram_conversations,
              public.telegram_assistant_runs, public.telegram_assistant_steps,
@@ -2517,8 +4703,34 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
              public.background_jobs, public.scheduled_jobs,
              public.runtime_ingress_receipts, public.agent_work_results, public.snapshots
           TO maraithon_activation_operator;
+        GRANT UPDATE (
+          params, params_ciphertext, result, result_ciphertext, error,
+          payload_encryption_version, payload_binding_version,
+          payload_binding_key_tag, payload_binding_mac, updated_at
+        ) ON public.effects TO maraithon_activation_operator;
+        GRANT UPDATE (
+          payload, payload_ciphertext, payload_encryption_version,
+          payload_binding_version, payload_binding_key_tag, payload_binding_mac,
+          payload_purged_at, updated_at
+        ) ON public.agent_directives TO maraithon_activation_operator;
+        GRANT UPDATE (
+          payload, payload_ciphertext, payload_encryption_version,
+          payload_binding_version, payload_binding_key_tag, payload_binding_mac,
+          spend_total_cost, spend_input_tokens, spend_output_tokens, spend_llm_calls
+        ) ON public.events TO maraithon_activation_operator;
+        GRANT UPDATE (
+          request_payload, request_payload_ciphertext,
+          response_payload, response_payload_ciphertext,
+          payload_encryption_version, payload_binding_version,
+          payload_binding_key_tag, payload_binding_mac, updated_at
+        ) ON public.agent_run_steps TO maraithon_activation_operator;
+        GRANT UPDATE (
+          state_data, state_data_ciphertext, budget, budget_ciphertext,
+          payload_encryption_version, payload_binding_version,
+          payload_binding_key_tag, payload_binding_mac
+        ) ON public.snapshots TO maraithon_activation_operator;
         GRANT SELECT
-          ON public.agent_runtime_leases, public.agent_runs,
+          ON public.agents, public.agent_runtime_leases, public.agent_runs,
              public.effects, public.agent_directives, public.events, public.agent_run_steps,
              public.telegram_conversation_turns, public.telegram_conversations,
              public.telegram_assistant_runs, public.telegram_assistant_steps,
@@ -2532,6 +4744,9 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
              public.effect_termination_attestations,
              public.schema_migrations
           TO maraithon_activation_operator;
+        GRANT UPDATE ON public.durable_payload_verifications,
+          public.durable_payload_verification_failures
+          TO maraithon_activation_operator;
       END IF;
     END
     $grants$
@@ -2539,38 +4754,83 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
 
     execute("""
     DO $ownership$
+    DECLARE
+      relation_name text;
     BEGIN
       IF EXISTS (
         SELECT 1 FROM pg_catalog.pg_roles
         WHERE rolname = 'maraithon_object_owner'
       ) THEN
+        FOREACH relation_name IN ARRAY ARRAY['effects', 'agent_directives', 'events', 'agent_run_steps', 'telegram_conversation_turns', 'telegram_conversations', 'telegram_assistant_runs', 'telegram_assistant_steps', 'telegram_prepared_actions', 'agent_runs', 'operator_events', 'user_memory_profiles', 'operator_memory_summaries', 'background_jobs', 'scheduled_jobs', 'runtime_ingress_receipts', 'snapshots', 'agent_work_results', 'connected_accounts', 'oauth_tokens', 'local_browser_visits', 'local_calendar_events', 'local_files', 'memory_items'] LOOP
+          EXECUTE pg_catalog.format(
+            'ALTER TABLE public.%I OWNER TO maraithon_object_owner', relation_name
+          );
+        END LOOP;
+
         ALTER TABLE public.durable_payload_verifications OWNER TO maraithon_object_owner;
         ALTER TABLE public.durable_payload_verification_failures OWNER TO maraithon_object_owner;
         ALTER TABLE public.vault_reencryption_failures OWNER TO maraithon_object_owner;
         ALTER TABLE public.vault_backup_retirement_evidence OWNER TO maraithon_object_owner;
         ALTER TABLE public.durable_payload_binding_operations OWNER TO maraithon_object_owner;
         ALTER TABLE public.key_retirement_zero_proofs OWNER TO maraithon_object_owner;
+        ALTER TABLE public.durable_payload_key_fence_state OWNER TO maraithon_object_owner;
+        ALTER TABLE public.retired_durable_payload_keys OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.durable_payload_row_identity(text, text)
           OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.durable_payload_digest_part(text, jsonb, text)
           OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.durable_payload_proof_failures()
           OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_source_acl_ready()
+          OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.durable_payload_roles_ready()
           OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.enforce_durable_history_payload_protocol()
           OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_operator_mutation_authorized()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_operator_row_mutation_authorized(
+          regclass, text, jsonb, jsonb
+        ) OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.guard_durable_payload_operator_source_mutation()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.lock_durable_runtime_activation_sources()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.lock_durable_payload_binding_sources()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.lock_durable_payload_contraction_sources()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.lock_durable_payload_contraction_coordination()
+          OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.durable_payload_old_key_live_count(text, text)
           OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_key_registry_definition(text)
+          OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.durable_payload_old_key_source_digest(text, text)
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_ciphertext_key_tag(bytea)
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.advance_durable_payload_key_fence_epoch(text, text, uuid)
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.guard_durable_payload_key_fence_state()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.durable_payload_key_write_fenced(text, text)
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.guard_durable_payload_retired_key_write()
           OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.guard_durable_payload_binding_operation()
           OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.guard_key_retirement_zero_proof()
           OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.sync_durable_payload_key_fence_from_zero_proof()
+          OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.guard_vault_backup_retirement_evidence()
           OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.guard_retired_durable_payload_key()
+          OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.guard_vault_reencryption_failure_write()
+          OWNER TO maraithon_object_owner;
+        ALTER FUNCTION public.snapshot_writer_authority_valid(uuid, uuid)
           OWNER TO maraithon_object_owner;
         ALTER FUNCTION public.enforce_snapshot_payload_protocol()
           OWNER TO maraithon_object_owner;
@@ -2649,9 +4909,11 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           ('public.vault_backup_retirement_evidence'::regclass),
           ('public.durable_payload_binding_operations'::regclass),
           ('public.key_retirement_zero_proofs'::regclass),
+          ('public.durable_payload_key_fence_state'::regclass),
+          ('public.retired_durable_payload_keys'::regclass),
           ('public.durable_payload_protocol_manifests'::regclass)
       ), explicit_function_names(function_name) AS (
-        VALUES ('durable_payload_row_identity'), ('durable_payload_digest_part'), ('durable_payload_proof_failures'), ('durable_payload_roles_ready'), ('durable_payload_old_key_live_count'), ('durable_payload_old_key_source_digest'), ('delete_durable_payload_verification'), ('runtime_catalog_table_fingerprint'), ('runtime_role_topology_fingerprint'), ('durable_payload_catalog_manifest_snapshot'), ('refresh_durable_payload_protocol_manifest'), ('durable_payload_catalog_ready'), ('reject_durable_payload_protocol_manifest_mutation'), ('reject_durable_effect_truncate')
+        VALUES ('durable_payload_row_identity'), ('durable_payload_digest_part'), ('durable_payload_proof_failures'), ('durable_payload_source_acl_ready'), ('durable_payload_roles_ready'), ('durable_payload_operator_mutation_authorized'), ('durable_payload_operator_row_mutation_authorized'), ('guard_durable_payload_operator_source_mutation'), ('lock_durable_runtime_activation_sources'), ('lock_durable_payload_binding_sources'), ('lock_durable_payload_contraction_sources'), ('lock_durable_payload_contraction_coordination'), ('durable_payload_old_key_live_count'), ('durable_payload_key_registry_definition'), ('durable_payload_old_key_source_digest'), ('durable_payload_ciphertext_key_tag'), ('advance_durable_payload_key_fence_epoch'), ('durable_payload_key_write_fenced'), ('snapshot_writer_authority_valid'), ('delete_durable_payload_verification'), ('runtime_catalog_table_fingerprint'), ('runtime_role_topology_fingerprint'), ('durable_payload_catalog_manifest_snapshot'), ('refresh_durable_payload_protocol_manifest'), ('durable_payload_catalog_ready'), ('reject_durable_payload_protocol_manifest_mutation'), ('reject_durable_effect_truncate')
       ), required_functions(function_id) AS (
         SELECT function_row.oid
         FROM pg_catalog.pg_proc AS function_row
@@ -2774,6 +5036,44 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
            AND namespace.nspname = 'public'
           WHERE function_row.proname = required.function_name
         )
+      ), ambiguous_functions AS (
+        SELECT COALESCE(
+          pg_catalog.jsonb_agg(required.function_name ORDER BY required.function_name),
+          '[]'::jsonb
+        ) AS value
+        FROM explicit_function_names AS required
+        WHERE (
+          SELECT count(*)
+          FROM pg_catalog.pg_proc AS function_row
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = function_row.pronamespace
+           AND namespace.nspname = 'public'
+          WHERE function_row.proname = required.function_name
+        ) <> 1
+      ), unexpected_column_acl_grantees AS (
+        SELECT COALESCE(
+          pg_catalog.jsonb_agg(
+            DISTINCT pg_catalog.jsonb_build_object(
+              'relation', relation.oid::regclass::text,
+              'column', attribute.attname,
+              'grantee', COALESCE(grantee.rolname, 'PUBLIC')
+            )
+          ),
+          '[]'::jsonb
+        ) AS value
+        FROM required_relations AS required
+        JOIN pg_catalog.pg_class AS relation ON relation.oid = required.relation_id
+        JOIN pg_catalog.pg_attribute AS attribute
+          ON attribute.attrelid = relation.oid
+         AND attribute.attnum > 0
+         AND NOT attribute.attisdropped
+        CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS column_acl
+        LEFT JOIN pg_catalog.pg_roles AS grantee ON grantee.oid = column_acl.grantee
+        WHERE COALESCE(grantee.rolname, 'PUBLIC') NOT IN (
+          'maraithon_object_owner', 'maraithon_migrator', 'maraithon_runtime',
+          'maraithon_payload_verifier', 'maraithon_incident_operator',
+          'maraithon_activation_operator'
+        )
       ), schema_authority AS (
         SELECT pg_catalog.encode(public.digest(pg_catalog.convert_to(
           pg_catalog.jsonb_build_object(
@@ -2791,12 +5091,16 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         'triggers', trigger_fingerprints.value,
         'catalogs', catalog_fingerprints.value,
         'missing_functions', missing_functions.value,
+        'ambiguous_functions', ambiguous_functions.value,
+        'unexpected_column_acl_grantees', unexpected_column_acl_grantees.value,
+        'source_acl_ready', public.durable_payload_source_acl_ready(),
         'role_topology', public.runtime_role_topology_fingerprint(),
         'schema_authority', schema_authority.value,
         'required_migrations', pg_catalog.to_jsonb(ARRAY[20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140002, 20260810140003, 20260810140004, 20260810140005, 20260810140006, 20260810140007]::bigint[])
       )
       FROM function_fingerprints, constraint_fingerprints, index_fingerprints,
-           trigger_fingerprints, catalog_fingerprints, missing_functions, schema_authority
+           trigger_fingerprints, catalog_fingerprints, missing_functions,
+           ambiguous_functions, unexpected_column_acl_grantees, schema_authority
     $function$;
     """)
 
@@ -2811,6 +5115,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       runtime_mode text;
       effect_mode text;
       snapshot jsonb;
+      prior_trigger_fingerprints jsonb;
       caller_superuser boolean;
     BEGIN
       SELECT rolsuper INTO STRICT caller_superuser
@@ -2837,7 +5142,107 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
           USING ERRCODE = 'check_violation';
       END IF;
 
+      SELECT catalog_manifest -> 'triggers'
+      INTO prior_trigger_fingerprints
+      FROM public.durable_payload_protocol_manifests
+      WHERE name = 'durable_payload_140005'
+        AND migration_version = 20260810140005;
+
       snapshot := public.durable_payload_catalog_manifest_snapshot();
+
+      IF snapshot -> 'ambiguous_functions' <> '[]'::jsonb OR
+         snapshot -> 'unexpected_column_acl_grantees' <> '[]'::jsonb OR
+         (snapshot ->> 'source_acl_ready')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'Durable payload manifest contains ambiguous functions or unreviewed source ACLs'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
+      IF prior_trigger_fingerprints IS NOT NULL AND EXISTS (
+        SELECT 1
+        FROM pg_catalog.jsonb_object_keys(snapshot -> 'triggers') AS current_trigger(key)
+        WHERE NOT prior_trigger_fingerprints ? current_trigger.key
+          AND current_trigger.key NOT IN (
+           'connected_accounts.guard_durable_payload_retired_key_write_trigger',
+           'oauth_tokens.guard_durable_payload_retired_key_write_trigger',
+           'local_browser_visits.guard_durable_payload_retired_key_write_trigger',
+           'local_calendar_events.guard_durable_payload_retired_key_write_trigger',
+           'local_files.guard_durable_payload_retired_key_write_trigger',
+           'memory_items.guard_durable_payload_retired_key_write_trigger',
+           'effects.guard_durable_payload_retired_key_write_trigger',
+           'agent_directives.guard_durable_payload_retired_key_write_trigger',
+           'events.guard_durable_payload_retired_key_write_trigger',
+           'agent_run_steps.guard_durable_payload_retired_key_write_trigger',
+           'telegram_conversation_turns.guard_durable_payload_retired_key_write_trigger',
+           'telegram_conversations.guard_durable_payload_retired_key_write_trigger',
+           'telegram_assistant_runs.guard_durable_payload_retired_key_write_trigger',
+           'telegram_assistant_steps.guard_durable_payload_retired_key_write_trigger',
+           'telegram_prepared_actions.guard_durable_payload_retired_key_write_trigger',
+           'agent_runs.guard_durable_payload_retired_key_write_trigger',
+           'operator_events.guard_durable_payload_retired_key_write_trigger',
+           'user_memory_profiles.guard_durable_payload_retired_key_write_trigger',
+           'operator_memory_summaries.guard_durable_payload_retired_key_write_trigger',
+           'background_jobs.guard_durable_payload_retired_key_write_trigger',
+           'scheduled_jobs.guard_durable_payload_retired_key_write_trigger',
+           'runtime_ingress_receipts.guard_durable_payload_retired_key_write_trigger',
+           'agent_work_results.guard_durable_payload_retired_key_write_trigger',
+           'snapshots.guard_durable_payload_retired_key_write_trigger',
+           'connected_accounts.guard_durable_payload_operator_mutation_trigger',
+           'oauth_tokens.guard_durable_payload_operator_mutation_trigger',
+           'local_browser_visits.guard_durable_payload_operator_mutation_trigger',
+           'local_calendar_events.guard_durable_payload_operator_mutation_trigger',
+           'local_files.guard_durable_payload_operator_mutation_trigger',
+           'memory_items.guard_durable_payload_operator_mutation_trigger',
+           'effects.guard_durable_payload_operator_mutation_trigger',
+           'agent_directives.guard_durable_payload_operator_mutation_trigger',
+           'events.guard_durable_payload_operator_mutation_trigger',
+           'agent_run_steps.guard_durable_payload_operator_mutation_trigger',
+           'telegram_conversation_turns.guard_durable_payload_operator_mutation_trigger',
+           'telegram_conversations.guard_durable_payload_operator_mutation_trigger',
+           'telegram_assistant_runs.guard_durable_payload_operator_mutation_trigger',
+           'telegram_assistant_steps.guard_durable_payload_operator_mutation_trigger',
+           'telegram_prepared_actions.guard_durable_payload_operator_mutation_trigger',
+           'agent_runs.guard_durable_payload_operator_mutation_trigger',
+           'operator_events.guard_durable_payload_operator_mutation_trigger',
+           'user_memory_profiles.guard_durable_payload_operator_mutation_trigger',
+           'operator_memory_summaries.guard_durable_payload_operator_mutation_trigger',
+           'background_jobs.guard_durable_payload_operator_mutation_trigger',
+           'scheduled_jobs.guard_durable_payload_operator_mutation_trigger',
+           'runtime_ingress_receipts.guard_durable_payload_operator_mutation_trigger',
+           'agent_work_results.guard_durable_payload_operator_mutation_trigger',
+           'snapshots.guard_durable_payload_operator_mutation_trigger',
+           'snapshots.enforce_snapshot_payload_protocol_trigger',
+           'agent_directives.enforce_agent_directives_operational_retention',
+           'agent_run_steps.enforce_agent_run_steps_operational_retention',
+           'agent_runs.enforce_agent_runs_operational_retention',
+           'agent_work_results.enforce_agent_work_results_operational_retention',
+           'background_jobs.enforce_background_jobs_operational_retention',
+           'background_jobs.enforce_background_jobs_privacy_erasure_write_fence',
+           'background_jobs.capture_privacy_erasure_job_deferral_receipt_trigger',
+           'connected_accounts.enforce_connected_accounts_privacy_erasure_write_fence',
+           'effect_execution_protocols.enforce_operational_privacy_activation_trigger',
+           'effects.enforce_effects_operational_retention',
+           'events.enforce_events_operational_retention',
+           'oauth_tokens.enforce_oauth_tokens_privacy_erasure_write_fence',
+           'operator_events.enforce_operator_events_operational_retention',
+           'runtime_ingress_receipts.enforce_runtime_ingress_receipts_operational_retention',
+           'scheduled_jobs.enforce_scheduled_jobs_operational_retention',
+           'telegram_assistant_runs.enforce_telegram_assistant_runs_operational_retention',
+           'telegram_assistant_steps.enforce_telegram_assistant_steps_operational_retention',
+           'telegram_conversation_turns.enforce_telegram_conversation_turns_operational_retention',
+           'telegram_conversations.enforce_telegram_conversations_operational_retention',
+           'telegram_prepared_actions.enforce_telegram_prepared_actions_operational_retention',
+           'key_retirement_zero_proofs.sync_durable_payload_key_fence_from_zero_proof_trigger',
+           'durable_payload_key_fence_state.guard_durable_payload_key_fence_state_trigger',
+           'durable_payload_key_fence_state.reject_durable_payload_key_fence_state_truncate_trigger',
+           'retired_durable_payload_keys.guard_retired_durable_payload_key_trigger',
+           'retired_durable_payload_keys.finalize_retired_durable_payload_key_fence_trigger',
+           'retired_durable_payload_keys.reject_retired_durable_payload_keys_truncate_trigger'
+          )
+      ) THEN
+        RAISE EXCEPTION 'Durable payload manifest contains an unexpected authority trigger'
+          USING ERRCODE = 'check_violation';
+      END IF;
+
       PERFORM set_config('maraithon.durable_payload_manifest_refresh',
                          'MIGRATOR_DARK_REFRESH_V1', true);
 
@@ -2866,6 +5271,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     RETURNS boolean
     LANGUAGE plpgsql
     STABLE
+    SECURITY DEFINER
     SET search_path = pg_catalog, public
     AS $function$
     DECLARE
@@ -2883,6 +5289,9 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
 
       RETURN snapshot = stored_manifest
         AND stored_manifest -> 'missing_functions' = '[]'::jsonb
+        AND stored_manifest -> 'ambiguous_functions' = '[]'::jsonb
+        AND stored_manifest -> 'unexpected_column_acl_grantees' = '[]'::jsonb
+        AND (stored_manifest ->> 'source_acl_ready')::boolean IS TRUE
         AND stored_digest = public.digest(
           pg_catalog.convert_to(stored_manifest::text, 'UTF8'), 'sha256'
         )
@@ -2963,7 +5372,8 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       GRANT EXECUTE ON FUNCTION
         public.durable_payload_catalog_manifest_snapshot(),
         public.durable_payload_catalog_ready()
-        TO maraithon_runtime, maraithon_activation_operator;
+        TO maraithon_runtime, maraithon_incident_operator,
+          maraithon_activation_operator;
       ALTER TABLE public.durable_payload_protocol_manifests OWNER TO maraithon_object_owner;
       ALTER FUNCTION public.durable_payload_catalog_manifest_snapshot()
         OWNER TO maraithon_object_owner;

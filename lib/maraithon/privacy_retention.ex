@@ -1081,6 +1081,11 @@ defmodule Maraithon.PrivacyRetention do
        payload_binding_version = NULL,
        payload_binding_key_tag = NULL,
        payload_binding_mac = NULL,
+       result_content_digest = result_digest,
+       result_content_digest_version = 0,
+       result_digest = NULL,
+       result_digest_version = NULL,
+       result_digest_key_tag = NULL,
        result_purged_at = $5,
        updated_at = $5
        """,
@@ -1650,6 +1655,12 @@ defmodule Maraithon.PrivacyRetention do
   end
 
   defp delete_effect_attestation_orphans(limit) do
+    Repo.query!(
+      "SELECT set_config('maraithon.effect_attestation_cleanup', 'ORPHAN_CLEANUP_V1', true)",
+      [],
+      log: false
+    )
+
     result =
       Repo.query!(
         """

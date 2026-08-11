@@ -697,7 +697,7 @@ defmodule Maraithon.DurablePayloadVerification do
 
   defp validate_registered_authority(%{table: "agent_work_results"}, parsed, fields) do
     case parsed.authority do
-      [version, key_tag, mac] ->
+      [version, key_tag, mac, nil, nil] ->
         DurablePayloadBinding.verify(
           "agent_work_result_authority",
           List.first(parsed.identity_values),
@@ -1013,7 +1013,13 @@ defmodule Maraithon.DurablePayloadVerification do
 
     authority =
       if table == "agent_work_results" do
-        ["source.result_digest_version", "source.result_digest_key_tag", "source.result_digest"]
+        [
+          "source.result_digest_version",
+          "source.result_digest_key_tag",
+          "source.result_digest",
+          "source.result_content_digest_version",
+          "source.result_content_digest"
+        ]
       else
         []
       end

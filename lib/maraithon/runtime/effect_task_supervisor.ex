@@ -18,15 +18,37 @@ defmodule Maraithon.Runtime.EffectTaskSupervisor do
     Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def reserve(effect_id, agent_id, claim_token) do
+  def reserve_legacy(effect_id, agent_id, claim_token) do
     with {:ok, effect_id} <- cast_uuid(effect_id),
          {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, claim_token} <- cast_uuid(claim_token) do
-      EffectTaskAuthority.reserve(effect_id, agent_id, claim_token)
+      EffectTaskAuthority.reserve_legacy(effect_id, agent_id, claim_token)
     end
   catch
     :exit, _reason -> {:error, :effect_task_supervisor_unavailable}
   end
+
+  def reserve_coordinated(effect_id, agent_id, claim_token, assignment_id) do
+    with {:ok, effect_id} <- cast_uuid(effect_id),
+         {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, claim_token} <- cast_uuid(claim_token),
+         {:ok, assignment_id} <- cast_uuid(assignment_id) do
+      EffectTaskAuthority.reserve_coordinated(effect_id, agent_id, claim_token, assignment_id)
+    end
+  catch
+    :exit, _reason -> {:error, :effect_task_supervisor_unavailable}
+  end
+
+  def reserve(effect_id, agent_id, claim_token),
+    do: reserve_legacy(effect_id, agent_id, claim_token)
+
+  def bind_task(identity, task_pid) when is_map(identity) and is_pid(task_pid) do
+    EffectTaskAuthority.bind_task(identity, task_pid)
+  catch
+    :exit, _reason -> {:error, :effect_task_supervisor_unavailable}
+  end
+
+  def bind_task(_identity, _task_pid), do: {:error, :invalid_effect_task_identity}
 
   def release(identity) when is_map(identity) do
     EffectTaskAuthority.release(identity)
@@ -45,6 +67,7 @@ defmodule Maraithon.Runtime.EffectTaskSupervisor do
         agent_id: identity.agent_id,
         effect_id: identity.effect_id,
         claim_token: identity.claim_token,
+        assignment_id: Map.get(identity, :assignment_id),
         supervisor_id: identity.supervisor_id,
         task_id: identity.task_id
       })
@@ -52,10 +75,26 @@ defmodule Maraithon.Runtime.EffectTaskSupervisor do
     :ok
   end
 
+  def authorize_activation(identity) when is_map(identity) do
+    EffectTaskAuthority.authorize_activation(identity)
+  catch
+    :exit, _reason -> {:error, :effect_task_supervisor_unavailable}
+  end
+
+  def authorize_activation(_identity), do: {:error, :invalid_effect_task_identity}
+
   def terminate_exact(claim) when is_map(claim) do
     EffectTaskAuthority.terminate_exact(claim)
   catch
     :exit, _reason -> {:unknown, :effect_task_supervisor_unavailable}
+  end
+
+  def terminate_exact(_claim), do: {:unknown, :invalid_effect_task_identity}
+
+  def acknowledge_completed(identity) when is_map(identity) do
+    EffectTaskAuthority.acknowledge_completed(identity)
+  catch
+    :exit, _reason -> {:error, :effect_task_supervisor_unavailable}
   end
 
   def identity do

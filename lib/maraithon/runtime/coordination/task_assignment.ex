@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.Coordination.TaskAssignment do
     field :node_incarnation_id, Ecto.UUID
     field :supervisor_id, Ecto.UUID
     field :local_task_id, Ecto.UUID
+    field :termination_capability_digest, :binary, redact: true
     field :state, :string
     field :provider_boundary, :string
     field :lease_expires_at, :utc_datetime_usec

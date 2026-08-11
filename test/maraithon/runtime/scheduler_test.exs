@@ -321,7 +321,8 @@ defmodule Maraithon.Runtime.SchedulerTest do
                  where: j.agent_id == ^agent.id,
                  where: j.job_type == "wakeup",
                  where: j.status in ["pending", "dispatched"],
-                 where: fragment("?->>? = ?", j.payload, "_schedule_key", "agent_periodic_wakeup")
+                 where: j.payload_scope_key == "_schedule_key",
+                 where: j.payload_scope_value == "agent_periodic_wakeup"
                ),
                :count
              ) == 1

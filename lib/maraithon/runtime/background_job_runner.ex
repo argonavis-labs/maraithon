@@ -1001,29 +1001,47 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
          identity: identity
        }) do
     parent = self()
+    gate = make_ref()
 
-    Task.Supervisor.async_nolink(TaskSupervisor.task_supervisor(), fn ->
-      :ok = TaskSupervisor.register_current!(identity)
+    task =
+      Task.Supervisor.async_nolink(TaskSupervisor.task_supervisor(), fn ->
+        receive do
+          {:activate_background_job, ^gate} -> :ok
+        after
+          5_000 -> exit(:background_job_bind_timeout)
+        end
 
-      case FairScheduler.activate_job(job, assignment) do
-        {:ok, {active_job, active_assignment}} ->
-          case TaskClaims.mark_provider_entered(active_assignment) do
-            {:ok, entered_assignment} ->
-              finish_executed_job(
-                parent,
-                active_job,
-                execute_handler(active_job, handler),
-                entered_assignment
-              )
+        :ok = TaskSupervisor.register_current!(identity)
 
-            _ ->
-              :ok
-          end
+        case FairScheduler.activate_job(job, assignment) do
+          {:ok, {active_job, active_assignment}} ->
+            case TaskClaims.mark_provider_entered(active_assignment) do
+              {:ok, entered_assignment} ->
+                finish_executed_job(
+                  parent,
+                  active_job,
+                  execute_handler(active_job, handler),
+                  entered_assignment
+                )
 
-        _ ->
-          :ok
-      end
-    end)
+              _ ->
+                :ok
+            end
+
+          _ ->
+            :ok
+        end
+      end)
+
+    case TaskSupervisor.bind_task(identity, task.pid) do
+      :ok ->
+        send(task.pid, {:activate_background_job, gate})
+        task
+
+      {:error, _reason} ->
+        _ = Task.Supervisor.terminate_child(TaskSupervisor.task_supervisor(), task.pid)
+        task
+    end
   end
 
   defp finish_executed_job(parent, job, result, assignment) do

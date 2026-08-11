@@ -157,9 +157,22 @@ defmodule Maraithon.Runtime.ScheduledJob do
         changeset
         |> put_change(:payload_empty, payload == %{})
         |> put_change(:payload_dedupe_key, bounded_string(Map.get(payload, "dedupe_key"), 255))
+        |> promote_schedule_scope(payload)
 
       _missing ->
         changeset
+    end
+  end
+
+  defp promote_schedule_scope(changeset, payload) do
+    case bounded_string(Map.get(payload, "_schedule_key"), 255) do
+      nil ->
+        changeset
+
+      scope_value ->
+        changeset
+        |> put_change(:payload_scope_key, "_schedule_key")
+        |> put_change(:payload_scope_value, scope_value)
     end
   end
 

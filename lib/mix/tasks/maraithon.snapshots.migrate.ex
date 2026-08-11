@@ -12,9 +12,10 @@ defmodule Mix.Tasks.Maraithon.Snapshots.Migrate do
   rows. `--finalize` only succeeds after conversion and global retention counts
   are zero, and is the step that validates the tagged-v1 database constraint.
 
-  Production releases do not contain Mix. The same safe functions are callable
-  through release RPC: `Maraithon.Runtime.SnapshotMigration.preflight/0`,
-  `migrate/1`, and `finalize/0`.
+  Production mutation uses `MARAITHON_MIGRATOR_DATABASE_URL` and must run
+  storage-only while the fleet is feature-dark. A running release may call
+  `Maraithon.Runtime.SnapshotMigration.preflight/0` for a read-only report,
+  but `migrate/1` and `finalize/0` require the dedicated migrator connection.
   """
 
   use Mix.Task
@@ -73,6 +74,11 @@ defmodule Mix.Tasks.Maraithon.Snapshots.Migrate do
 
   defp start_storage_only! do
     Mix.Task.run("app.config")
+
+    Maraithon.DatabaseTLS.configure_operator_repo_from_env!(
+      "MARAITHON_MIGRATOR_DATABASE_URL",
+      Mix.env() == :prod
+    )
 
     case Application.ensure_all_started(:ecto_sql) do
       {:ok, _apps} -> :ok

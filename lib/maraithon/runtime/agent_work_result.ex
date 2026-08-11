@@ -34,6 +34,8 @@ defmodule Maraithon.Runtime.AgentWorkResult do
     field :payload_binding_mac, :binary, redact: true
     field :result_purged_at, :utc_datetime_usec
     field :result_digest, :binary
+    field :result_content_digest, :binary
+    field :result_content_digest_version, :integer
     field :result_digest_version, :integer
     field :result_digest_key_tag, :string
     field :provisional_at, :utc_datetime_usec
@@ -181,6 +183,23 @@ defmodule Maraithon.Runtime.AgentWorkResult do
       _missing_id -> add_error(changeset, :id, "must be generated before signing")
     end
   end
+
+  defp verify_authority_digest!(
+         %__MODULE__{
+           status: "committed",
+           result_purged_at: %DateTime{},
+           result_digest: nil,
+           result_digest_version: nil,
+           result_digest_key_tag: nil,
+           result_content_digest: content_digest,
+           result_content_digest_version: content_digest_version
+         },
+         %{},
+         mode
+       )
+       when mode in [:legacy, :exact] and content_digest_version == 0 and
+              is_binary(content_digest) and byte_size(content_digest) == 32,
+       do: :ok
 
   defp verify_authority_digest!(row, _result, :legacy)
        when is_nil(row.result_digest_version) and is_nil(row.result_digest_key_tag),

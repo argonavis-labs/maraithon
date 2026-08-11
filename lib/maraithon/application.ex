@@ -24,6 +24,9 @@ defmodule Maraithon.Application do
       # Encryption vault (must start before Repo for encrypted fields)
       Maraithon.Vault,
       Maraithon.Repo,
+      # A zero proof is an irreversible PostgreSQL write fence. Refuse to
+      # start any new web/runtime writer still configured to use that tag.
+      Maraithon.KeyRetirementBootGuard,
       # Stable exact-Agent guardian. It must outlive Runtime.Supervisor so an
       # AgentSupervisor subtree restart/shutdown still yields the original
       # monitor's exact DOWN proof.

@@ -17,6 +17,9 @@ defmodule Maraithon.Runtime.Coordination.TaskSupervisor do
         assignment_id
       )
 
+  def bind_task(identity, task_pid),
+    do: Maraithon.Runtime.Coordination.TaskAuthority.bind_task(identity, task_pid)
+
   def release(identity), do: Maraithon.Runtime.Coordination.TaskAuthority.release(identity)
 
   def authorize_activation(identity) do

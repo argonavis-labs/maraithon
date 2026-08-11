@@ -61,12 +61,17 @@ defmodule Maraithon.Runtime.Config do
   end
 
   if Mix.env() == :test do
-    defp test_protocol_bypass? do
+    def protocol_test_bypass? do
       get(:allow_legacy_effect_protocol_in_test, false) == true
     end
+
+    def coordination_test_session, do: get(:coordination_test_session, nil)
   else
-    defp test_protocol_bypass?, do: false
+    def protocol_test_bypass?, do: false
+    def coordination_test_session, do: nil
   end
+
+  defp test_protocol_bypass?, do: protocol_test_bypass?()
 
   @doc "Returns whether this revision may participate in DB-owned multi-node coordination."
   def multinode_coordination_enabled? do

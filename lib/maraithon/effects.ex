@@ -1032,9 +1032,13 @@ defmodule Maraithon.Effects do
            ProtocolCutover.require_current_mutation!()
 
            Repo.query!(
-             "SELECT set_config('maraithon.effect_payload_retention', " <>
+             "SELECT " <>
+               "set_config('maraithon.privacy_retention_table', 'effects', true), " <>
+               "set_config('maraithon.privacy_retention_cutoff', " <>
+               "($1::timestamp)::text, true), " <>
+               "set_config('maraithon.effect_payload_retention', " <>
                "'PURGE_ACKNOWLEDGED_PAYLOAD', true)",
-             [],
+             [DateTime.to_naive(cutoff)],
              log: false
            )
 

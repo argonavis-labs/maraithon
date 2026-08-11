@@ -25,6 +25,14 @@ defmodule Maraithon.PrivacyErasure do
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.DatabaseClock
 
+  alias Maraithon.Runtime.Coordination.{
+    NodeIncarnation,
+    Protocol,
+    Session,
+    TaskAssignment,
+    TaskClaims
+  }
+
   @job_type "privacy_erasure"
   @queue "privacy"
   @dedupe_prefix "privacy-erasure:"
@@ -190,7 +198,10 @@ defmodule Maraithon.PrivacyErasure do
 
   def request_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
     with {:ok, digest} <- idempotency_digest("user", user_id, opts) do
-      Repo.transaction(fn -> request_user_locked!(user_id, digest) end)
+      Repo.transaction(fn ->
+        protocol = Protocol.locked_pair!()
+        request_user_locked!(user_id, digest, protocol)
+      end)
       |> normalize_transaction()
     end
   end
@@ -203,7 +214,12 @@ defmodule Maraithon.PrivacyErasure do
   def request_agent(agent_id, opts) when is_binary(agent_id) and is_list(opts) do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, digest} <- idempotency_digest("agent", agent_id, opts) do
-      Repo.transaction(fn -> request_agent_locked!(agent_id, digest, opts) end)
+      Repo.transaction(fn ->
+        case Protocol.locked_pair!() do
+          :exact -> request_agent_locked!(agent_id, digest, opts)
+          :legacy -> Repo.rollback(:exact_runtime_required_for_agent_erasure)
+        end
+      end)
       |> normalize_transaction()
     end
   end
@@ -298,10 +314,14 @@ defmodule Maraithon.PrivacyErasure do
   @doc false
   def reschedule_ms, do: @reschedule_ms
 
-  defp request_user_locked!(user_id, digest) do
+  defp request_user_locked!(user_id, digest, protocol) do
     user =
       Repo.one(from(user in User, where: user.id == ^user_id, lock: "FOR UPDATE")) ||
         Repo.rollback(:user_not_found)
+
+    if protocol != :exact and Repo.exists?(from(agent in Agent, where: agent.user_id == ^user_id)) do
+      Repo.rollback(:exact_runtime_required_for_agent_erasure)
+    end
 
     now = DatabaseClock.now!()
 
@@ -316,7 +336,7 @@ defmodule Maraithon.PrivacyErasure do
           target_agent_count: 0
         })
 
-    set_erasure_context!(request.id)
+    set_erasure_context!(request.id, protocol)
 
     if is_nil(user.privacy_erasure_requested_at) do
       user
@@ -485,10 +505,11 @@ defmodule Maraithon.PrivacyErasure do
     Repo.query!(
       """
       UPDATE background_jobs
-      SET status = 'cancelled', payload = '{}'::jsonb, result = '{}'::jsonb,
-          claimed_by = NULL, claimed_at = NULL, claim_token = NULL,
-          cancelled_at = $2, updated_at = $2
-      WHERE user_id = $1 AND status IN ('pending', 'running')
+      SET status = 'cancelled', claimed_by = NULL, claimed_at = NULL,
+          claim_token = NULL, cancelled_at = $2, updated_at = $2
+      WHERE user_id = $1 AND status = 'pending'
+        AND coordination_task_assignment_id IS NULL
+        AND claim_token IS NULL
       """,
       [user_id, now],
       log: false
@@ -605,8 +626,13 @@ defmodule Maraithon.PrivacyErasure do
     with :ok <- mark_target_attempt(request, target, "draining") do
       result =
         case Repo.exists?(from(agent in Agent, where: agent.id == ^target.agent_id)) do
-          true -> Runtime.delete_agent(target.agent_id)
-          false -> :ok
+          true ->
+            Runtime.delete_agent(target.agent_id,
+              privacy_erasure_request_id: request.id
+            )
+
+          false ->
+            :ok
         end
 
       case result do
@@ -940,7 +966,9 @@ defmodule Maraithon.PrivacyErasure do
   defp erase_plain_user_copies(request, user_id, batch) do
     result =
       Repo.transaction(fn ->
+        protocol = Protocol.locked_pair!()
         _owned = lock_owned_request!(request)
+        set_erasure_context!(request.id, protocol)
 
         Enum.reduce_while(@user_copy_specs, :clean, fn spec, _acc ->
           count = mutate_user_copy_batch(spec, user_id, batch)
@@ -959,42 +987,53 @@ defmodule Maraithon.PrivacyErasure do
   end
 
   defp erase_exact_conversation_batch(request, user_id, batch) do
-    case conversation_erasure_adapter() do
-      nil ->
-        :ready
+    with :ready <- drain_conversation_authority(request, user_id, batch),
+         {:ok, protocol} <- erasure_protocol_pair() do
+      case {protocol, conversation_erasure_adapter()} do
+        {:legacy, _adapter} ->
+          :ready
 
-      adapter ->
-        with :ready <- drain_conversation_authority(request, user_id, batch),
-             true <- function_exported?(adapter, :erase_user_batch, 4) do
-          now = DatabaseClock.now!()
+        {:exact, nil} ->
+          {:pending, "conversation_adapter_unavailable"}
 
-          case adapter.erase_user_batch(user_id, request.id, request.claim_token,
-                 limit: batch,
-                 now: now
-               ) do
-            {:ok, %{processed: processed, deferred: deferred}}
-            when is_integer(processed) and processed >= 0 and is_map(deferred) ->
-              cond do
-                processed > 0 -> {:pending, "conversation_copy_cleanup_pending"}
-                positive_count?(deferred) -> {:pending, "conversation_authority_deferred"}
-                true -> :ready
-              end
+        {:exact, adapter} ->
+          if Code.ensure_loaded?(adapter) and function_exported?(adapter, :erase_user_batch, 4) do
+            now = DatabaseClock.now!()
 
-            {:error, _reason} ->
-              {:pending, "conversation_erasure_unavailable"}
+            case adapter.erase_user_batch(user_id, request.id, request.claim_token,
+                   limit: batch,
+                   now: now
+                 ) do
+              {:ok, %{processed: processed, deferred: deferred}}
+              when is_integer(processed) and processed >= 0 and is_map(deferred) ->
+                cond do
+                  processed > 0 -> {:pending, "conversation_copy_cleanup_pending"}
+                  positive_count?(deferred) -> {:pending, "conversation_authority_deferred"}
+                  true -> :ready
+                end
 
-            _invalid ->
-              {:pending, "conversation_erasure_unavailable"}
+              {:error, _reason} ->
+                {:pending, "conversation_erasure_unavailable"}
+
+              _invalid ->
+                {:pending, "conversation_erasure_unavailable"}
+            end
+          else
+            {:pending, "conversation_adapter_unavailable"}
           end
-        else
-          {:pending, blocker} -> {:pending, blocker}
-          false -> {:pending, "conversation_adapter_unavailable"}
-        end
+      end
+    else
+      {:pending, blocker} -> {:pending, blocker}
+      {:error, _reason} -> {:pending, "conversation_erasure_unavailable"}
     end
   rescue
     _error -> {:pending, "conversation_erasure_unavailable"}
   catch
     :exit, _reason -> {:pending, "conversation_erasure_unavailable"}
+  end
+
+  defp erasure_protocol_pair do
+    Repo.transaction(fn -> Protocol.locked_pair!() end)
   end
 
   defp conversation_erasure_adapter do
@@ -1010,42 +1049,139 @@ defmodule Maraithon.PrivacyErasure do
   # only states with an unambiguous local cancellation outcome to terminal
   # states first; externally ambiguous prepared actions remain proof blockers.
   defp drain_conversation_authority(request, user_id, batch) do
-    now = DatabaseClock.now!()
+    case request_background_job_terminations(request, user_id, batch) do
+      {:pending, blocker} ->
+        {:pending, blocker}
 
-    case Repo.transaction(fn ->
-           _owned = lock_owned_request!(request)
+      :ready ->
+        now = DatabaseClock.now!()
 
-           set_erasure_context!(request.id)
+        case Repo.transaction(fn ->
+               protocol = Protocol.locked_pair!()
+               _owned = lock_owned_request!(request)
 
-           cond do
-             row_exists?(
-               "telegram_prepared_actions",
-               "user_id = $1 AND status IN ('confirmed','execution_unknown')",
-               [user_id]
-             ) ->
-               {:pending, "prepared_action_external_proof_required"}
+               set_erasure_context!(request.id, protocol)
 
-             cancel_background_job_batch(user_id, batch, now) > 0 ->
-               {:pending, "conversation_background_job_drain_pending"}
+               cond do
+                 row_exists?(
+                   "telegram_prepared_actions",
+                   "user_id = $1 AND status IN ('confirmed','execution_unknown')",
+                   [user_id]
+                 ) ->
+                   {:pending, "prepared_action_external_proof_required"}
 
-             reject_prepared_action_batch(user_id, batch, now) > 0 ->
-               {:pending, "prepared_action_drain_pending"}
+                 cancel_background_job_batch(user_id, batch, now) > 0 ->
+                   {:pending, "conversation_background_job_drain_pending"}
 
-             fail_assistant_step_batch(user_id, batch, now) > 0 ->
-               {:pending, "assistant_step_drain_pending"}
+                 reject_prepared_action_batch(user_id, batch, now) > 0 ->
+                   {:pending, "prepared_action_drain_pending"}
 
-             cancel_assistant_run_batch(user_id, batch, now) > 0 ->
-               {:pending, "assistant_run_drain_pending"}
+                 fail_assistant_step_batch(user_id, batch, now) > 0 ->
+                   {:pending, "assistant_step_drain_pending"}
 
-             close_conversation_batch(user_id, batch, now) > 0 ->
-               {:pending, "conversation_close_pending"}
+                 cancel_assistant_run_batch(user_id, batch, now) > 0 ->
+                   {:pending, "assistant_run_drain_pending"}
 
-             true ->
-               :ready
-           end
-         end) do
-      {:ok, result} -> result
-      {:error, _reason} -> {:pending, "conversation_authority_drain_unavailable"}
+                 close_conversation_batch(user_id, batch, now) > 0 ->
+                   {:pending, "conversation_close_pending"}
+
+                 true ->
+                   :ready
+               end
+             end) do
+          {:ok, result} -> result
+          {:error, _reason} -> {:pending, "conversation_authority_drain_unavailable"}
+        end
+    end
+  end
+
+  defp request_background_job_terminations(request, user_id, batch) do
+    termination_limit = min(batch, 16)
+    _ = TaskClaims.reconcile_proven(termination_limit)
+
+    result =
+      Repo.transaction(fn ->
+        _owned = lock_owned_request!(request)
+
+        rows =
+          Repo.all(
+            from assignment in TaskAssignment,
+              join: job in BackgroundJob,
+              on:
+                assignment.work_kind == "background_job" and
+                  assignment.work_id == job.id,
+              join: node in NodeIncarnation,
+              on: node.id == assignment.node_incarnation_id,
+              where: job.user_id == ^user_id,
+              where: job.status in ["pending", "running"],
+              where: assignment.state in ["reserved", "running", "termination_requested"],
+              order_by: assignment.id,
+              limit: ^termination_limit,
+              lock: "FOR UPDATE SKIP LOCKED",
+              select: {assignment, node.node_name}
+          )
+
+        Enum.map(rows, fn {assignment, node_name} ->
+          requested =
+            if assignment.state == "termination_requested" do
+              assignment
+            else
+              case TaskClaims.request_termination(assignment) do
+                {:ok, requested} -> requested
+                {:error, reason} -> Repo.rollback(reason)
+              end
+            end
+
+          {requested.id, node_name}
+        end)
+      end)
+
+    case result do
+      {:ok, []} ->
+        if row_exists?("background_jobs", "user_id = $1 AND status = 'running'", [user_id]),
+          do: {:pending, "conversation_background_job_termination_unproven"},
+          else: :ready
+
+      {:ok, assignments} ->
+        assignments
+        |> Task.async_stream(
+          fn {assignment_id, node_name} ->
+            terminate_background_job_assignment(node_name, assignment_id)
+          end,
+          max_concurrency: 16,
+          ordered: false,
+          timeout: 3_000,
+          on_timeout: :kill_task
+        )
+        |> Stream.run()
+
+        {:pending, "conversation_background_job_termination_pending"}
+
+      {:error, _reason} ->
+        {:pending, "conversation_background_job_termination_unavailable"}
+    end
+  rescue
+    _error -> {:pending, "conversation_background_job_termination_unavailable"}
+  catch
+    :exit, _reason -> {:pending, "conversation_background_job_termination_unavailable"}
+  end
+
+  defp terminate_background_job_assignment(node_name, assignment_id) do
+    case Enum.find([node() | Node.list()], &(Atom.to_string(&1) == node_name)) do
+      nil ->
+        {:unknown, :task_node_unreachable}
+
+      target_node when target_node == node() ->
+        Session.terminate_background_job_assignment(assignment_id)
+
+      target_node ->
+        :rpc.call(
+          target_node,
+          Session,
+          :terminate_background_job_assignment,
+          [assignment_id],
+          2_500
+        )
     end
   end
 
@@ -1059,7 +1195,9 @@ defmodule Maraithon.PrivacyErasure do
         SELECT candidate.id
         FROM background_jobs AS candidate
         WHERE candidate.user_id = $1
-          AND candidate.status IN ('pending','running')
+          AND candidate.status = 'pending'
+          AND candidate.coordination_task_assignment_id IS NULL
+          AND candidate.claim_token IS NULL
         ORDER BY candidate.id
         LIMIT $2
         FOR UPDATE SKIP LOCKED
@@ -1158,7 +1296,20 @@ defmodule Maraithon.PrivacyErasure do
     ).num_rows
   end
 
-  defp set_erasure_context!(request_id) do
+  defp set_erasure_context!(request_id, :exact) do
+    Repo.query!(
+      """
+      SELECT set_config('maraithon.privacy_erasure_request_id', $1, true),
+             set_config('maraithon.effect_writer_protocol', 'generation_fenced_v1', true)
+      """,
+      [request_id],
+      log: false
+    )
+
+    :ok
+  end
+
+  defp set_erasure_context!(request_id, :legacy) do
     Repo.query!(
       "SELECT set_config('maraithon.privacy_erasure_request_id', $1, true)",
       [request_id],

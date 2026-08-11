@@ -37,6 +37,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   alias Maraithon.Runtime.Coordination.{Protocol, Scope}
   alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Runtime.ScheduledJob
+  alias Maraithon.Runtime.Snapshot
 
   @max_payload_bytes 128_000
   @default_drain_ttl_ms 60_000
@@ -154,10 +155,13 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, kind} <- kind(kind),
          {:ok, request} <- canonical_payload(request),
-         {:ok, drain_ttl_ms, requires_external_drain} <- begin_options(opts) do
+         {:ok, drain_ttl_ms, requires_external_drain, privacy_request_id} <-
+           begin_options(opts),
+         true <- is_nil(privacy_request_id) or kind == "delete" do
       request_digest = digest(request)
 
       Repo.transaction(fn ->
+        set_privacy_erasure_context!(privacy_request_id)
         agent = lock_agent!(agent_id)
         _binding = lock_binding(agent)
         guard = lock_guard(agent_id)
@@ -233,6 +237,9 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
             lifecycle_fence(operation, stopped_agent, fenced_lease, :created)
         end
       end)
+    else
+      false -> {:error, :invalid_lifecycle_operation}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -314,7 +321,8 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
       transaction_result =
         Repo.transaction(fn ->
           _protocol_pair = Protocol.locked_pair!()
-          finalize_locked(agent_id, operation_token, scoped?)
+          user_id = prelock_agent_user!(agent_id)
+          finalize_locked(agent_id, operation_token, scoped?, user_id)
         end)
 
       case transaction_result do
@@ -406,8 +414,12 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     |> then(&:crypto.hash(:sha256, &1))
   end
 
-  defp finalize_locked(agent_id, operation_token, scoped?) do
+  defp finalize_locked(agent_id, operation_token, scoped?, prelocked_user_id) do
     agent = lock_agent!(agent_id)
+
+    if agent.user_id != prelocked_user_id,
+      do: Repo.rollback(:agent_user_authority_changed)
+
     _coordination = if scoped?, do: Scope.authorize_reconciliation!(agent), else: :legacy
     binding = lock_binding(agent)
     guard = lock_guard(agent_id)
@@ -793,6 +805,10 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
         )
 
       if deleted != length(effects), do: Repo.rollback(:effect_erasure_fence_lost)
+
+      # Delete Snapshots while the durable lifecycle marker still exists.
+      # PostgreSQL may otherwise cascade-delete the operation row first.
+      Repo.delete_all(from(snapshot in Snapshot, where: snapshot.agent_id == ^operation.agent_id))
     end
 
     :ok
@@ -1085,6 +1101,26 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
   defp expected_guard_owner(_guard), do: nil
 
+  # Durable child-table writes take the privacy User fence in their database
+  # triggers. Acquire that fence before the Agent prefix so a successor lease
+  # claimant (User -> Agent) cannot deadlock with finalization (Agent -> User).
+  defp prelock_agent_user!(agent_id) do
+    case SQL.query!(
+           Repo,
+           """
+           SELECT user_row.id
+           FROM public.users AS user_row
+           JOIN public.agents AS agent_row ON agent_row.user_id = user_row.id
+           WHERE agent_row.id = $1::uuid
+           FOR UPDATE OF user_row
+           """,
+           [Ecto.UUID.dump!(agent_id)]
+         ).rows do
+      [[user_id]] when is_binary(user_id) -> user_id
+      [] -> Repo.rollback(:not_found)
+    end
+  end
+
   defp lock_agent!(agent_id) do
     case Repo.one(from(agent in Agent, where: agent.id == ^agent_id, lock: "FOR UPDATE")) do
       %Agent{} = agent -> agent
@@ -1233,21 +1269,35 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   end
 
   defp begin_options(opts) do
-    allowed = [:drain_ttl_ms, :requires_external_drain]
+    allowed = [:drain_ttl_ms, :requires_external_drain, :privacy_erasure_request_id]
 
     if Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 in allowed)) do
       ttl_ms = Keyword.get(opts, :drain_ttl_ms, @default_drain_ttl_ms)
       requires_external_drain = Keyword.get(opts, :requires_external_drain, false)
 
-      if is_integer(ttl_ms) and ttl_ms in 1_000..300_000 and
-           is_boolean(requires_external_drain) do
-        {:ok, ttl_ms, requires_external_drain}
+      with true <- is_integer(ttl_ms) and ttl_ms in 1_000..300_000,
+           true <- is_boolean(requires_external_drain),
+           {:ok, privacy_request_id} <-
+             optional_uuid(Keyword.get(opts, :privacy_erasure_request_id)) do
+        {:ok, ttl_ms, requires_external_drain, privacy_request_id}
       else
-        {:error, :invalid_lifecycle_operation}
+        _invalid -> {:error, :invalid_lifecycle_operation}
       end
     else
       {:error, :invalid_lifecycle_operation}
     end
+  end
+
+  defp set_privacy_erasure_context!(nil), do: :ok
+
+  defp set_privacy_erasure_context!(request_id) do
+    Repo.query!(
+      "SELECT set_config('maraithon.privacy_erasure_request_id', $1, true)",
+      [request_id],
+      log: false
+    )
+
+    :ok
   end
 
   defp external_drain_evidence(evidence) do

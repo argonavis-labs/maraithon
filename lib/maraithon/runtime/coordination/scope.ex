@@ -28,7 +28,7 @@ defmodule Maraithon.Runtime.Coordination.Scope do
   def current do
     with :ok <- coordination_enabled(),
          :active <- Protocol.mode(),
-         {:ok, %NodeIncarnation{} = session} <- Session.current(),
+         {:ok, %NodeIncarnation{} = session} <- current_session(),
          :ok <- live_ready_session(session) do
       {:ok, session}
     else
@@ -229,7 +229,7 @@ defmodule Maraithon.Runtime.Coordination.Scope do
 
     case Protocol.mode() do
       :dark ->
-        if EffectProtocol.mode() == :legacy,
+        if legacy_scope_allowed?(),
           do: :legacy,
           else: Repo.rollback(:runtime_coordination_not_active)
 
@@ -315,7 +315,7 @@ defmodule Maraithon.Runtime.Coordination.Scope do
 
     case Protocol.mode() do
       :dark ->
-        if EffectProtocol.mode() == :legacy,
+        if legacy_scope_allowed?(),
           do: :ok,
           else: Repo.rollback(:runtime_coordination_not_active)
 
@@ -337,7 +337,7 @@ defmodule Maraithon.Runtime.Coordination.Scope do
   def active_or_legacy do
     case Protocol.mode() do
       :dark ->
-        if EffectProtocol.mode() == :legacy,
+        if legacy_scope_allowed?(),
           do: :legacy,
           else: {:error, :runtime_coordination_not_active}
 
@@ -355,6 +355,17 @@ defmodule Maraithon.Runtime.Coordination.Scope do
       {:ok, _session} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp current_session do
+    case Config.coordination_test_session() do
+      %NodeIncarnation{} = session -> {:ok, session}
+      nil -> Session.current()
+    end
+  end
+
+  defp legacy_scope_allowed? do
+    EffectProtocol.mode() == :legacy or Config.protocol_test_bypass?()
   end
 
   defp coordination_enabled do
@@ -481,54 +492,82 @@ defmodule Maraithon.Runtime.Coordination.Scope do
   defp lock_live_lease_partition(session, lease, mode) do
     states = if mode == :ready, do: @ready_states, else: @owner_states
     ready_required = mode == :ready
+    activation_epoch = Ecto.UUID.dump!(session.activation_epoch)
+    node_incarnation_id = Ecto.UUID.dump!(session.id)
 
-    case SQL.query(
-           Repo,
-           """
-           SELECT partition.partition_id
-           FROM public.runtime_coordination_protocols AS protocol
-           JOIN public.runtime_partitions AS partition
-             ON partition.activation_epoch = protocol.activation_epoch
-           JOIN public.runtime_node_incarnations AS node
-             ON node.id = partition.owner_node_incarnation_id
-            AND node.activation_epoch = partition.activation_epoch
-           JOIN public.agents AS agent ON agent.id = $7::uuid
-           WHERE protocol.name = $1 AND protocol.mode = $2
-             AND protocol.activation_epoch = $3::uuid
-             AND partition.partition_id = $4
-             AND partition.activation_epoch = $3::uuid
-             AND partition.ownership_epoch = $5
-             AND partition.owner_node_incarnation_id = $6::uuid
-             AND partition.partition_id =
-                   public.runtime_partition_for('user:' || agent.user_id)
-             AND partition.state = ANY($8::text[])
-             AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
-             AND node.id = $6::uuid AND node.state = ANY($8::text[])
-             AND node.lease_expires_at > timezone('UTC', clock_timestamp())
-             AND (NOT $9::boolean OR
-                  (partition.state = 'ready' AND partition.ready_at IS NOT NULL AND
-                   node.state = 'ready' AND node.ready_at IS NOT NULL))
-           LIMIT 1
-           FOR SHARE OF partition, node
-           """,
-           [
-             @protocol_name,
-             @active_mode,
-             Ecto.UUID.dump!(session.activation_epoch),
-             lease.coordination_partition_id,
-             lease.coordination_partition_epoch,
-             Ecto.UUID.dump!(session.id),
-             Ecto.UUID.dump!(lease.agent_id),
-             states,
-             ready_required
-           ]
-         ) do
-      {:ok, %{rows: [[partition_id]]}}
-      when partition_id == lease.coordination_partition_id ->
-        :ok
-
-      _ ->
-        {:error, :partition_authority_lost}
+    with {:ok, %{rows: [[1]]}} <-
+           SQL.query(
+             Repo,
+             """
+             SELECT 1
+             FROM public.runtime_node_incarnations
+             WHERE id = $1::uuid AND activation_epoch = $2::uuid
+             FOR SHARE
+             """,
+             [node_incarnation_id, activation_epoch]
+           ),
+         {:ok, %{rows: [[1]]}} <-
+           SQL.query(
+             Repo,
+             """
+             SELECT 1
+             FROM public.runtime_partitions
+             WHERE partition_id = $1 AND activation_epoch = $2::uuid
+               AND ownership_epoch = $3
+               AND owner_node_incarnation_id = $4::uuid
+             FOR SHARE
+             """,
+             [
+               lease.coordination_partition_id,
+               activation_epoch,
+               lease.coordination_partition_epoch,
+               node_incarnation_id
+             ]
+           ),
+         {:ok, %{rows: [[partition_id]]}} when partition_id == lease.coordination_partition_id <-
+           SQL.query(
+             Repo,
+             """
+             SELECT partition.partition_id
+             FROM public.runtime_coordination_protocols AS protocol
+             JOIN public.runtime_partitions AS partition
+               ON partition.activation_epoch = protocol.activation_epoch
+             JOIN public.runtime_node_incarnations AS node
+               ON node.id = partition.owner_node_incarnation_id
+              AND node.activation_epoch = partition.activation_epoch
+             JOIN public.agents AS agent ON agent.id = $7::uuid
+             WHERE protocol.name = $1 AND protocol.mode = $2
+               AND protocol.activation_epoch = $3::uuid
+               AND partition.partition_id = $4
+               AND partition.activation_epoch = $3::uuid
+               AND partition.ownership_epoch = $5
+               AND partition.owner_node_incarnation_id = $6::uuid
+               AND partition.partition_id =
+                     public.runtime_partition_for('user:' || agent.user_id)
+               AND partition.state = ANY($8::text[])
+               AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+               AND node.id = $6::uuid AND node.state = ANY($8::text[])
+               AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+               AND (NOT $9::boolean OR
+                    (partition.state = 'ready' AND partition.ready_at IS NOT NULL AND
+                     node.state = 'ready' AND node.ready_at IS NOT NULL))
+             LIMIT 1
+             """,
+             [
+               @protocol_name,
+               @active_mode,
+               activation_epoch,
+               lease.coordination_partition_id,
+               lease.coordination_partition_epoch,
+               node_incarnation_id,
+               Ecto.UUID.dump!(lease.agent_id),
+               states,
+               ready_required
+             ]
+           ) do
+      :ok
+    else
+      _ -> {:error, :partition_authority_lost}
     end
   end
 end

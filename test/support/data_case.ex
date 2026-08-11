@@ -37,6 +37,19 @@ defmodule Maraithon.DataCase do
   """
   def setup_sandbox(tags) do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Maraithon.Repo, shared: not tags[:async])
+
+    # Local-proof capabilities are sent only when PostgreSQL bind values cannot
+    # enter statement or error logs. Reset any database-level default role so
+    # the test session owner establishes the superuser-only logging policy,
+    # then narrow back to the role requested by the test.
+    Maraithon.Repo.query!("SET LOCAL ROLE NONE", [], log: false)
+    Maraithon.Repo.query!("SET LOCAL log_parameter_max_length = 0", [], log: false)
+    Maraithon.Repo.query!("SET LOCAL log_parameter_max_length_on_error = 0", [], log: false)
+
+    unless tags[:database_role] == :session do
+      Maraithon.Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    end
+
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
   end
 

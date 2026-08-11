@@ -265,11 +265,19 @@ defmodule Maraithon.Runtime do
   @doc """
   Delete an agent and all dependent runtime records.
   """
-  def delete_agent(id) when is_binary(id) do
+  def delete_agent(id, opts \\ [])
+
+  def delete_agent(id, opts) when is_binary(id) and is_list(opts) do
     request = %{"delete" => true}
 
     with {:ok, result} <-
-           execute_lifecycle(id, :delete, request, fn _agent -> %{"action" => "delete"} end),
+           execute_lifecycle(
+             id,
+             :delete,
+             request,
+             fn _agent -> %{"action" => "delete"} end,
+             opts
+           ),
          :ok <- require_finalized_delete(result) do
       Logger.info("Deleted agent",
         agent_reference: Maraithon.Redaction.fingerprint(id),
@@ -279,6 +287,8 @@ defmodule Maraithon.Runtime do
       :ok
     end
   end
+
+  def delete_agent(_id, _opts), do: {:error, :invalid_agent_delete}
 
   @doc """
   Soft-remove an installed agent from the user's marketplace workspace.
@@ -728,12 +738,12 @@ defmodule Maraithon.Runtime do
     end
   end
 
-  defp execute_lifecycle(id, kind, request, planner) do
+  defp execute_lifecycle(id, kind, request, planner, opts \\ []) do
     requires_external_drain = unfenced_local_agent_present?(id)
 
     with :ok <- exact_runtime_enabled(),
          {:ok, fence} <-
-           begin_lifecycle(id, kind, request, planner, requires_external_drain, 3) do
+           begin_lifecycle(id, kind, request, planner, requires_external_drain, opts, 3) do
       _route_result = route_lifecycle_fence(fence, lifecycle_route_reason(kind, request))
 
       case AgentLifecycleOperations.finalize(id, fence.operation_token) do
@@ -752,7 +762,7 @@ defmodule Maraithon.Runtime do
     end
   end
 
-  defp begin_lifecycle(_id, _kind, _request, _planner, _requires_external_drain, 0),
+  defp begin_lifecycle(_id, _kind, _request, _planner, _requires_external_drain, _opts, 0),
     do: {:error, :agent_stop_reconciliation_pending}
 
   defp begin_lifecycle(
@@ -761,11 +771,12 @@ defmodule Maraithon.Runtime do
          request,
          planner,
          requires_external_drain,
+         opts,
          attempts_remaining
        ) do
-    case AgentLifecycleOperations.begin(id, kind, request, planner,
-           requires_external_drain: requires_external_drain
-         ) do
+    begin_opts = Keyword.put(opts, :requires_external_drain, requires_external_drain)
+
+    case AgentLifecycleOperations.begin(id, kind, request, planner, begin_opts) do
       {:error, {:expired_lease_requires_reconciliation, expired_lease}} ->
         case AgentRestartGuards.record_expired(id, expired_lease.owner_token) do
           {status, _incident} when status in [:requested, :duplicate] ->
@@ -780,6 +791,7 @@ defmodule Maraithon.Runtime do
               request,
               planner,
               requires_external_drain,
+              opts,
               attempts_remaining - 1
             )
 

@@ -14,8 +14,12 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
   @name "runtime"
   @dark "dark"
   @active "partition_fenced_v1"
+  @effect_exact "generation_fenced_v1"
   @confirmation "NON_ROLLING_MULTINODE_FLEET_DRAINED"
   @migration 20_260_810_140_004
+  @repair_migration 20_260_811_000_420
+
+  @opaque effect_pair_lock :: {:effect_pair_lock, Ecto.UUID.t()}
 
   def mode do
     case SQL.query(
@@ -106,6 +110,8 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
   def attest_effect_activation_evidence(opts) when is_list(opts) do
     with {:ok, evidence} <- activation_evidence(opts) do
       Repo.transaction(fn ->
+        SQL.query!(Repo, "SET LOCAL ROLE maraithon_activation_operator", [])
+
         runtime_mode =
           case SQL.query!(
                  Repo,
@@ -210,9 +216,7 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
         :legacy
 
       {{:active, _epoch}, :exact} ->
-        # Marks the transaction as an exact Effect writer after both protocol
-        # rows are locked in their canonical runtime -> Effect order.
-        :ok = EffectProtocol.require_current_mutation!()
+        :ok = mark_effect_writer_after_pair_lock!()
         :exact
 
       mismatch ->
@@ -246,11 +250,88 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
         :legacy
 
       {{:active, epoch}, :exact} ->
-        EffectProtocol.require_exact_write!()
+        :ok = mark_effect_writer_after_pair_lock!()
         {:active, epoch}
 
       {runtime_mode, effect_mode} ->
         Repo.rollback({:runtime_effect_protocol_pair_mismatch, runtime_mode, effect_mode})
+    end
+  end
+
+  @doc false
+  @spec lock_effect_pair_with_capability!((atom() -> term())) :: effect_pair_lock() | :legacy
+  def lock_effect_pair_with_capability!(trace \\ fn _stage -> :ok end)
+      when is_function(trace, 1) do
+    case lock_effect_pair!(trace) do
+      {:active, epoch} -> {:effect_pair_lock, epoch}
+      :legacy -> :legacy
+    end
+  end
+
+  @doc false
+  @spec reuse_effect_pair_lock!(effect_pair_lock(), (atom() -> term())) :: :ok
+  def reuse_effect_pair_lock!(capability, trace \\ fn _stage -> :ok end)
+
+  def reuse_effect_pair_lock!({:effect_pair_lock, expected_epoch}, trace)
+      when is_binary(expected_epoch) and is_function(trace, 1) do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "runtime/Effect pair-lock capability requires transaction")
+
+    expected_epoch = Ecto.UUID.dump!(expected_epoch)
+
+    case SQL.query!(
+           Repo,
+           """
+           SELECT runtime_protocol.activation_epoch
+           FROM public.runtime_coordination_protocols AS runtime_protocol
+           JOIN public.effect_execution_protocols AS effect_protocol
+             ON effect_protocol.name = 'effects'
+           WHERE runtime_protocol.name = $1
+             AND runtime_protocol.mode = $2
+             AND runtime_protocol.activation_epoch = $3::uuid
+             AND effect_protocol.mode = $4
+             AND current_setting('maraithon.effect_writer_protocol', true) = $4
+           FOR SHARE OF runtime_protocol, effect_protocol
+           """,
+           [@name, @active, expected_epoch, @effect_exact]
+         ).rows do
+      [[^expected_epoch]] ->
+        trace.(:effect_pair_lock_reused)
+        :ok
+
+      [] ->
+        Repo.rollback(:runtime_effect_protocol_pair_lock_capability_invalid)
+
+      _unexpected ->
+        Repo.rollback(:runtime_effect_protocol_pair_lock_capability_invalid)
+    end
+  end
+
+  def reuse_effect_pair_lock!(_capability, trace) when is_function(trace, 1) do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "runtime/Effect pair-lock capability requires transaction")
+
+    Repo.rollback(:runtime_effect_protocol_pair_lock_capability_invalid)
+  end
+
+  # This marker is transaction-local PostgreSQL state, not a process cache. The
+  # opaque tuple only guides trusted runtime code: a module with arbitrary Repo
+  # SQL access can forge either representation, so the database-local marker and
+  # locked exact rows remain the safety proof and expire at commit or rollback.
+  # The Effect protocol row has already been locked and fully attested by
+  # `EffectProtocol.locked_mode!/0`, and the pair match has already succeeded.
+  # Mark this one transaction without repeating the expensive catalog pass.
+  defp mark_effect_writer_after_pair_lock! do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "exact Effect writer marker requires a transaction")
+
+    case SQL.query!(
+           Repo,
+           "SELECT set_config('maraithon.effect_writer_protocol', $1, true)",
+           [@effect_exact]
+         ).rows do
+      [[@effect_exact]] -> :ok
+      _unexpected -> Repo.rollback(:effect_writer_protocol_marker_failed)
     end
   end
 
@@ -282,19 +363,22 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
 
           case mode do
             @active ->
+              ensure_effect_evidence_matches!(evidence)
+
               if {evidence_id, evidence_digest, activated_by, exact_revision} ==
                    {evidence.id, evidence.digest, evidence.activated_by, evidence.revision},
                  do: :already_active,
                  else: Repo.rollback(:runtime_coordination_activation_evidence_mismatch)
 
             @dark ->
+              ensure_effect_evidence_matches!(evidence)
+
               # These locks serialize against every old admission/claim path. The
               # repeated quiescence check, not operator timing, closes the race.
-              Enum.each(
-                ~w(effects agent_runtime_leases agent_directives agent_runs agent_run_steps background_jobs scheduled_jobs runtime_node_incarnations runtime_task_assignments),
-                fn table ->
-                  SQL.query!(Repo, "LOCK TABLE public.#{table} IN SHARE MODE", [])
-                end
+              SQL.query!(
+                Repo,
+                "SELECT public.lock_durable_runtime_activation_sources()",
+                []
               )
 
               case activation_preconditions_locked(effect_mode) do
@@ -379,11 +463,13 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
            """
            SELECT
              (SELECT count(*) FROM public.schema_migrations WHERE version = #{@migration}) = 1 AND
-             public.runtime_coordination_catalog_ready_count() = 117 AND
+             (SELECT count(*) FROM public.schema_migrations WHERE version = #{@repair_migration}) = 1 AND
+             public.runtime_coordination_catalog_ready_count() = 120 AND
              public.runtime_coordination_roles_ready() AND
              public.runtime_coordination_acl_ready() AND
              public.durable_payload_roles_ready() AND
              public.durable_payload_catalog_ready() AND
+             public.privacy_protocol_catalog_ready() AND
              EXISTS (
                SELECT 1
                FROM public.runtime_coordination_protocols AS protocol
@@ -404,6 +490,24 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
     end
   end
 
+  defp ensure_effect_evidence_matches!(evidence) do
+    expected = [evidence.id, evidence.digest, evidence.activated_by, evidence.revision]
+
+    case SQL.query!(
+           Repo,
+           """
+           SELECT activation_evidence_id, activation_evidence_digest, activated_by,
+                  exact_revision
+           FROM public.effect_execution_protocols
+           WHERE name = 'effects'
+           """,
+           []
+         ).rows do
+      [^expected] -> :ok
+      _mismatch -> Repo.rollback(:runtime_effect_protocol_evidence_mismatch)
+    end
+  end
+
   defp activation_evidence(opts) do
     with {:ok, id} <-
            bounded_string(
@@ -415,7 +519,8 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
          {:ok, digest} <- digest(Keyword.get(opts, :evidence_digest)),
          {:ok, activated_by} <-
            bounded_string(Keyword.get(opts, :activated_by), 1, 320, :invalid_activation_operator),
-         {:ok, revision} <- exact_revision(Keyword.get(opts, :exact_revision)) do
+         {:ok, revision} <-
+           exact_revision(Keyword.get(opts, :exact_revision, Keyword.get(opts, :revision))) do
       {:ok, %{id: id, digest: digest, activated_by: activated_by, revision: revision}}
     end
   end
@@ -436,6 +541,8 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
   end
 
   defp bounded_string(_, _, _, error), do: {:error, error}
+
+  defp digest(value) when is_binary(value) and byte_size(value) == 32, do: {:ok, value}
 
   defp digest(value) when is_binary(value) do
     case Base.decode16(String.trim(value), case: :mixed) do

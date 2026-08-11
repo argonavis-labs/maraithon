@@ -44,7 +44,12 @@ defmodule Maraithon.Runtime.AgentSupervisor do
          :ok <- AgentWatcher.ensure_available(launch_config.watcher),
          :ok <- ensure_supervisor_available(launch_config.supervisor),
          {:ok, lease} <-
-           claim(agent.id, launch_config.recovery_generation, launch_config.ttl_ms) do
+           claim(
+             agent.id,
+             launch_config.recovery_generation,
+             launch_config.ttl_ms,
+             launch_config.watcher
+           ) do
       start_claimed_agent(agent, lease, launch_config)
     end
   end
@@ -207,10 +212,14 @@ defmodule Maraithon.Runtime.AgentSupervisor do
     end
   end
 
-  defp claim(agent_id, nil, ttl_ms), do: AgentLeases.claim(agent_id, ttl_ms: ttl_ms)
+  defp claim(agent_id, nil, ttl_ms, watcher),
+    do: AgentLeases.claim(agent_id, ttl_ms: ttl_ms, watcher: watcher)
 
-  defp claim(agent_id, recovery_generation, ttl_ms) do
-    AgentLeases.claim_recovery(agent_id, recovery_generation, ttl_ms: ttl_ms)
+  defp claim(agent_id, recovery_generation, ttl_ms, watcher) do
+    AgentLeases.claim_recovery(agent_id, recovery_generation,
+      ttl_ms: ttl_ms,
+      watcher: watcher
+    )
   end
 
   defp start_claimed_agent(agent, lease, config) do
@@ -227,10 +236,12 @@ defmodule Maraithon.Runtime.AgentSupervisor do
         finish_tracked_start(config, pid, agent.id, lease.owner_token)
 
       {:error, reason} = error ->
+        discard_lease_capability(config.watcher, agent.id, lease.owner_token)
         request_failed_start(agent.id, lease.owner_token, reason)
         error
 
       :ignore ->
+        discard_lease_capability(config.watcher, agent.id, lease.owner_token)
         request_failed_start(agent.id, lease.owner_token, :agent_start_ignored)
         {:error, :agent_start_ignored}
     end
@@ -245,9 +256,9 @@ defmodule Maraithon.Runtime.AgentSupervisor do
   end
 
   defp finish_tracked_start(config, pid, agent_id, owner_token) do
-    # This caller-side monitor closes the spawn-to-guardian handoff gap.  It is
-    # removed only after AgentWatcher has synchronously installed its monitor.
-    monitor_started_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    # This caller-side monitor closes the spawn-to-guardian handoff gap, but it
+    # is not the watcher-owned proof capability. A failed handoff remains
+    # ambiguous even if this caller later observes DOWN.
     ref = Process.monitor(pid)
 
     case AgentWatcher.track(config.watcher, pid, agent_id, owner_token) do
@@ -257,18 +268,13 @@ defmodule Maraithon.Runtime.AgentSupervisor do
         {:ok, pid}
 
       {:error, reason} ->
+        discard_lease_capability(config.watcher, agent_id, owner_token)
         _termination_attempt = DynamicSupervisor.terminate_child(config.supervisor, pid)
 
         proof_result =
           case await_down(ref, pid, @default_stop_timeout_ms) do
             :down ->
-              AgentTerminations.record_local_down(
-                agent_id,
-                owner_token,
-                pid,
-                {:watcher_handoff_failed, reason},
-                monitor_started_at
-              )
+              request_failed_start(agent_id, owner_token, {:watcher_handoff_down, reason})
 
             :timeout ->
               Process.demonitor(ref, [:flush])
@@ -278,6 +284,11 @@ defmodule Maraithon.Runtime.AgentSupervisor do
         _ = proof_result
         {:error, :agent_watcher_unavailable}
     end
+  end
+
+  defp discard_lease_capability(watcher, agent_id, owner_token) do
+    _ = AgentWatcher.discard_lease_capability(watcher, agent_id, owner_token)
+    :ok
   end
 
   defp request_failed_start(agent_id, owner_token, reason) do

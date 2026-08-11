@@ -1,6 +1,8 @@
 defmodule Maraithon.Runtime.EffectGenerationFenceTest do
   use Maraithon.DataCase, async: false
 
+  @moduletag database_role: :session
+
   alias Ecto.Adapters.SQL
   alias Maraithon.Accounts
   alias Maraithon.AgentIsolation
@@ -8,6 +10,8 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
   alias Maraithon.Agents
   alias Maraithon.Agents.AgentRun
   alias Maraithon.Agents.AgentRunStep
+  alias Maraithon.DurablePayloadContraction
+  alias Maraithon.DurablePayloadVerification
   alias Maraithon.Effects
   alias Maraithon.Effects.Cancellation
   alias Maraithon.Effects.CancellationPlan
@@ -20,13 +24,33 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLifecycleOperations
   alias Maraithon.Runtime.AgentLeases
+  alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentRestartGuards
+  alias Maraithon.Runtime.AgentTerminations
+  alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.BootGate
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.EffectClaimRenewer
   alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Runtime.EffectTaskAuthority
   alias Maraithon.Runtime.Effects.LLMRateLimiter
+
+  alias Maraithon.Runtime.Coordination.{
+    Authority,
+    Partition,
+    Partitioning,
+    Scope,
+    TaskClaims
+  }
+
+  alias Maraithon.Runtime.Coordination.Protocol, as: CoordinationProtocol
+
+  @activation_evidence [
+    evidence_id: "test:stopped-fleet:effect-generation-fence",
+    evidence_digest: :crypto.hash(:sha256, "test stopped fleet evidence"),
+    activated_by: "effect-generation-fence@example.test",
+    revision: String.duplicate("a", 40)
+  ]
 
   defmodule BlockingProvider do
     @moduledoc false
@@ -52,8 +76,39 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     end
   end
 
+  setup_all do
+    # Stable Guardian/Authority processes can outlive a prior sandbox owner.
+    # Start this case from an empty physical-task generation.
+    restart_task_system!()
+    :ok
+  end
+
   setup do
+    original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      original_runtime
+      |> Keyword.put(:multinode_coordination_enabled, true)
+      |> Keyword.delete(:coordination_test_session)
+    )
+
+    # DataCase registered Sandbox.stop_owner/1 first. ExUnit runs this later
+    # callback first, so all retained capabilities and retry timers are stopped
+    # synchronously while the current shared sandbox owner still exists.
+    on_exit(fn ->
+      Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
+      restart_task_system!()
+    end)
+
     assert ProtocolCutover.mode() == :legacy
+
+    assert {:ok, :attested} =
+             CoordinationProtocol.attest_effect_activation_evidence(@activation_evidence)
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+
     :ok
   end
 
@@ -137,8 +192,15 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                [Ecto.UUID.dump!(directive.id), sentinel]
              )
 
-    assert {:ok, 1} = Effects.backfill_legacy_payload_encryption()
-    assert {:ok, 1} = AgentDirectives.backfill_legacy_payload_encryption()
+    settle_legacy_effect!(effect_id)
+    settle_legacy_directive!(stored_directive)
+
+    assert {:ok, :contracted} =
+             authoritative_payload_contraction(fn ->
+               assert {:ok, 1} = Effects.backfill_legacy_payload_encryption()
+               assert {:ok, 1} = AgentDirectives.backfill_legacy_payload_encryption()
+               :contracted
+             end)
 
     assert Repo.get!(Effect, effect_id).params == effect.params
     assert Repo.get!(AgentDirective, directive.id).payload == stored_directive.payload
@@ -174,153 +236,156 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
   end
 
   test "structural index attestation accepts equivalent catalogs and rejects drift" do
-    expiry_name = "effects_exact_claim_expiry_index"
-    SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
+    as_database_owner(fn ->
+      expiry_name = "effects_exact_claim_expiry_index"
+      SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
 
-    SQL.query!(
-      Repo,
-      """
-      CREATE INDEX #{expiry_name}
-      ON public.effects USING btree (
-        claim_expires_at ASC NULLS LAST,
-        id ASC NULLS LAST
+      SQL.query!(
+        Repo,
+        """
+        CREATE INDEX #{expiry_name}
+        ON public.effects USING btree (
+          claim_expires_at ASC NULLS LAST,
+          id ASC NULLS LAST
+        )
+        WHERE status IN ('claimed', 'executing')
+          AND runtime_owner_generation IS NOT NULL
+          AND claim_token IS NOT NULL
+        """,
+        []
       )
-      WHERE (((status)::text = ('claimed')::text) AND
-             runtime_owner_generation IS NOT NULL AND claim_token IS NOT NULL)
-      """,
-      []
-    )
 
-    assert %{rows: [[true]]} =
-             SQL.query!(
-               Repo,
-               "SELECT public.generation_fenced_effect_index_matches($1)",
-               [expiry_name]
-             )
+      assert %{rows: [[true]]} =
+               SQL.query!(
+                 Repo,
+                 "SELECT public.generation_fenced_effect_index_matches($1)",
+                 [expiry_name]
+               )
 
-    SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
+      SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
 
-    SQL.query!(
-      Repo,
-      """
-      CREATE INDEX #{expiry_name}
-      ON public.effects (id, claim_expires_at)
-      WHERE status = 'claimed' AND runtime_owner_generation IS NOT NULL AND
-            claim_token IS NOT NULL
-      """,
-      []
-    )
+      SQL.query!(
+        Repo,
+        """
+        CREATE INDEX #{expiry_name}
+        ON public.effects (id, claim_expires_at)
+        WHERE status = 'claimed' AND runtime_owner_generation IS NOT NULL AND
+              claim_token IS NOT NULL
+        """,
+        []
+      )
 
-    assert %{rows: [[false]]} =
-             SQL.query!(
-               Repo,
-               "SELECT public.generation_fenced_effect_index_matches($1)",
-               [expiry_name]
-             )
+      assert %{rows: [[false]]} =
+               SQL.query!(
+                 Repo,
+                 "SELECT public.generation_fenced_effect_index_matches($1)",
+                 [expiry_name]
+               )
 
-    SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
+      SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
 
-    SQL.query!(
-      Repo,
-      """
-      CREATE INDEX #{expiry_name}
-      ON public.effects (claim_expires_at DESC, id)
-      WHERE status = 'claimed' AND runtime_owner_generation IS NOT NULL AND
-            claim_token IS NOT NULL
-      """,
-      []
-    )
+      SQL.query!(
+        Repo,
+        """
+        CREATE INDEX #{expiry_name}
+        ON public.effects (claim_expires_at DESC, id)
+        WHERE status = 'claimed' AND runtime_owner_generation IS NOT NULL AND
+              claim_token IS NOT NULL
+        """,
+        []
+      )
 
-    assert %{rows: [[false]]} =
-             SQL.query!(
-               Repo,
-               "SELECT public.generation_fenced_effect_index_matches($1)",
-               [expiry_name]
-             )
+      assert %{rows: [[false]]} =
+               SQL.query!(
+                 Repo,
+                 "SELECT public.generation_fenced_effect_index_matches($1)",
+                 [expiry_name]
+               )
 
-    SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
+      SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
 
-    SQL.query!(
-      Repo,
-      """
-      CREATE INDEX #{expiry_name}
-      ON public.effects (claim_expires_at, id)
-      WHERE status = 'claimed' AND runtime_owner_generation IS NOT NULL
-      """,
-      []
-    )
+      SQL.query!(
+        Repo,
+        """
+        CREATE INDEX #{expiry_name}
+        ON public.effects (claim_expires_at, id)
+        WHERE status = 'claimed' AND runtime_owner_generation IS NOT NULL
+        """,
+        []
+      )
 
-    assert %{rows: [[false]]} =
-             SQL.query!(
-               Repo,
-               "SELECT public.generation_fenced_effect_index_matches($1)",
-               [expiry_name]
-             )
+      assert %{rows: [[false]]} =
+               SQL.query!(
+                 Repo,
+                 "SELECT public.generation_fenced_effect_index_matches($1)",
+                 [expiry_name]
+               )
 
-    SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
+      SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
 
-    SQL.query!(
-      Repo,
-      """
-      CREATE INDEX #{expiry_name}
-      ON public.effects (claim_expires_at, id)
-      WHERE status = 'CLAIMED' AND runtime_owner_generation IS NOT NULL AND
-            claim_token IS NOT NULL
-      """,
-      []
-    )
+      SQL.query!(
+        Repo,
+        """
+        CREATE INDEX #{expiry_name}
+        ON public.effects (claim_expires_at, id)
+        WHERE status = 'CLAIMED' AND runtime_owner_generation IS NOT NULL AND
+              claim_token IS NOT NULL
+        """,
+        []
+      )
 
-    assert %{rows: [[false]]} =
-             SQL.query!(
-               Repo,
-               "SELECT public.generation_fenced_effect_index_matches($1)",
-               [expiry_name]
-             )
+      assert %{rows: [[false]]} =
+               SQL.query!(
+                 Repo,
+                 "SELECT public.generation_fenced_effect_index_matches($1)",
+                 [expiry_name]
+               )
 
-    SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
+      SQL.query!(Repo, "DROP INDEX public.#{expiry_name}", [])
 
-    SQL.query!(
-      Repo,
-      """
-      CREATE INDEX #{expiry_name}
-      ON public.effects (claim_expires_at, id)
-      WHERE status = 'claimed' AND runtime_owner_generation IS NOT NULL AND
-            claim_token IS NOT NULL
-      """,
-      []
-    )
+      SQL.query!(
+        Repo,
+        """
+        CREATE INDEX #{expiry_name}
+        ON public.effects (claim_expires_at, id)
+        WHERE status IN ('claimed', 'executing') AND
+              runtime_owner_generation IS NOT NULL AND claim_token IS NOT NULL
+        """,
+        []
+      )
 
-    physical_name = "effects_physical_task_identity_unique_index"
-    SQL.query!(Repo, "DROP INDEX public.#{physical_name}", [])
+      physical_name = "effects_physical_task_identity_unique_index"
+      SQL.query!(Repo, "DROP INDEX public.#{physical_name}", [])
 
-    SQL.query!(
-      Repo,
-      """
-      CREATE UNIQUE INDEX #{physical_name}
-      ON public.effects (claim_owner_node text_pattern_ops, claim_supervisor_id, claim_task_id)
-      WHERE claim_supervisor_id IS NOT NULL AND claim_task_id IS NOT NULL
-      """,
-      []
-    )
+      SQL.query!(
+        Repo,
+        """
+        CREATE UNIQUE INDEX #{physical_name}
+        ON public.effects (claim_owner_node text_pattern_ops, claim_supervisor_id, claim_task_id)
+        WHERE claim_supervisor_id IS NOT NULL AND claim_task_id IS NOT NULL
+        """,
+        []
+      )
 
-    assert %{rows: [[false]]} =
-             SQL.query!(
-               Repo,
-               "SELECT public.generation_fenced_effect_index_matches($1)",
-               [physical_name]
-             )
+      assert %{rows: [[false]]} =
+               SQL.query!(
+                 Repo,
+                 "SELECT public.generation_fenced_effect_index_matches($1)",
+                 [physical_name]
+               )
 
-    SQL.query!(Repo, "DROP INDEX public.#{physical_name}", [])
+      SQL.query!(Repo, "DROP INDEX public.#{physical_name}", [])
 
-    SQL.query!(
-      Repo,
-      """
-      CREATE UNIQUE INDEX #{physical_name}
-      ON public.effects (claim_owner_node, claim_supervisor_id, claim_task_id)
-      WHERE claim_supervisor_id IS NOT NULL AND claim_task_id IS NOT NULL
-      """,
-      []
-    )
+      SQL.query!(
+        Repo,
+        """
+        CREATE UNIQUE INDEX #{physical_name}
+        ON public.effects (claim_owner_node, claim_supervisor_id, claim_task_id)
+        WHERE claim_supervisor_id IS NOT NULL AND claim_task_id IS NOT NULL
+        """,
+        []
+      )
+    end)
   end
 
   test "activation lock contention fails closed and remains retryable" do
@@ -344,8 +409,10 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
 
     assert {:error, :effect_protocol_lock_timeout} =
              ProtocolCutover.activate(
-               confirmation: ProtocolCutover.activation_confirmation(),
-               lock_timeout_ms: 100
+               [
+                 confirmation: ProtocolCutover.activation_confirmation(),
+                 lock_timeout_ms: 100
+               ] ++ @activation_evidence
              )
 
     assert ProtocolCutover.mode() == :legacy
@@ -354,16 +421,20 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
   end
 
   test "direct SQL activation refuses a missing required migration record" do
-    SQL.query!(
-      Repo,
-      "DELETE FROM public.schema_migrations WHERE version = 20260810132102",
-      []
-    )
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        "DELETE FROM public.schema_migrations WHERE version = 20260810132102",
+        []
+      )
+    end)
 
     error =
       assert_raise Postgrex.Error, fn ->
         Repo.transaction(
           fn ->
+            SQL.query!(Repo, "SET LOCAL ROLE maraithon_activation_operator", [])
+
             SQL.query!(
               Repo,
               "SELECT set_config('maraithon.effect_protocol_activation', 'generation_fenced_v1', true)",
@@ -386,17 +457,20 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
         )
       end
 
-    assert Exception.message(error) =~ "requires both recorded exact migrations"
+    assert Exception.message(error) =~
+             "requires separated payload verifier privileges and catalog authority"
 
-    SQL.query!(
-      Repo,
-      """
-      INSERT INTO public.schema_migrations(version, inserted_at)
-      VALUES (20260810132102, timezone('UTC', clock_timestamp()))
-      ON CONFLICT (version) DO NOTHING
-      """,
-      []
-    )
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        """
+        INSERT INTO public.schema_migrations(version, inserted_at)
+        VALUES (20260810132102, timezone('UTC', clock_timestamp()))
+        ON CONFLICT (version) DO NOTHING
+        """,
+        []
+      )
+    end)
   end
 
   test "activation attests constraint definitions and trigger function source" do
@@ -405,6 +479,8 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     assert {:error, :constraint_drift_probe} =
              Repo.transaction(
                fn ->
+                 SQL.query!(Repo, "RESET ROLE", [])
+
                  SQL.query!(
                    Repo,
                    "ALTER TABLE public.effects DROP CONSTRAINT effects_execution_status_check",
@@ -420,7 +496,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                    []
                  )
 
-                 assert {:blocked, {:effect_protocol_constraints_not_ready, 6}} =
+                 assert {:blocked, :durable_payload_verifier_privileges_not_ready} =
                           ProtocolCutover.mode()
 
                  Repo.rollback(:constraint_drift_probe)
@@ -433,6 +509,8 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     assert {:error, :function_drift_probe} =
              Repo.transaction(
                fn ->
+                 SQL.query!(Repo, "RESET ROLE", [])
+
                  SQL.query!(
                    Repo,
                    """
@@ -453,7 +531,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                    []
                  )
 
-                 assert {:blocked, {:effect_protocol_triggers_not_ready, 8}} =
+                 assert {:blocked, :durable_payload_verifier_privileges_not_ready} =
                           ProtocolCutover.mode()
 
                  Repo.rollback(:function_drift_probe)
@@ -466,6 +544,8 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     assert {:error, :catalog_helper_drift_probe} =
              Repo.transaction(
                fn ->
+                 SQL.query!(Repo, "RESET ROLE", [])
+
                  SQL.query!(
                    Repo,
                    """
@@ -479,7 +559,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                    []
                  )
 
-                 assert {:blocked, {:effect_protocol_catalog_helpers_not_ready, 1}} =
+                 assert {:blocked, {:effect_protocol_catalog_helpers_not_ready, 6}} =
                           ProtocolCutover.mode()
 
                  Repo.rollback(:catalog_helper_drift_probe)
@@ -490,6 +570,8 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     assert {:error, :manifest_guard_drift_probe} =
              Repo.transaction(
                fn ->
+                 SQL.query!(Repo, "RESET ROLE", [])
+
                  SQL.query!(
                    Repo,
                    """
@@ -499,7 +581,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                    []
                  )
 
-                 assert {:blocked, {:effect_protocol_triggers_not_ready, 8}} =
+                 assert {:blocked, :durable_payload_verifier_privileges_not_ready} =
                           ProtocolCutover.mode()
 
                  Repo.rollback(:manifest_guard_drift_probe)
@@ -543,6 +625,8 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     assert_raise Postgrex.Error, ~r/requires drained durable Agent work/, fn ->
       Repo.transaction(
         fn ->
+          SQL.query!(Repo, "SET LOCAL ROLE maraithon_activation_operator", [])
+
           SQL.query!(
             Repo,
             "SELECT set_config('maraithon.effect_protocol_activation', 'generation_fenced_v1', true)",
@@ -578,6 +662,12 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     |> AgentRun.changeset(%{status: "completed", completed_at: now})
     |> Repo.update!()
 
+    assert {:ok, %{verified: 1, failures: []}} =
+             DurablePayloadVerification.verify_batch("agent_runs", limit: 10)
+
+    assert {:ok, %{verified: 1, failures: []}} =
+             DurablePayloadVerification.verify_batch("agent_run_steps", limit: 10)
+
     assert {:ok, :activated} = activate_exact()
   end
 
@@ -593,7 +683,16 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                "directive-writer-fence"
              )
 
-    assert {:ok, 1} = AgentDirectives.backfill_legacy_payload_encryption()
+    settle_legacy_directive!(directive)
+
+    assert {:ok, {:ok, 1}} =
+             authoritative_payload_contraction(fn ->
+               AgentDirectives.backfill_legacy_payload_encryption()
+             end)
+
+    assert {:ok, %{verified: 1, failures: []}} =
+             DurablePayloadVerification.verify_batch("agent_directives", limit: 10)
+
     assert {:ok, :activated} = activate_exact()
 
     assert_raise Postgrex.Error,
@@ -624,6 +723,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     SQL.query!(Repo, "SET LOCAL search_path = pg_temp, public", [])
     assert ProtocolCutover.mode() == :legacy
     SQL.query!(Repo, "SET LOCAL search_path = public", [])
+    SQL.query!(Repo, "DROP TABLE pg_temp.effect_execution_protocols", [])
 
     agent = legacy_agent("effect-cutover")
     owner_generation = Ecto.UUID.generate()
@@ -638,6 +738,8 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     assert_raise Postgrex.Error, fn ->
       Repo.transaction(
         fn ->
+          SQL.query!(Repo, "SET LOCAL ROLE maraithon_activation_operator", [])
+
           SQL.query!(
             Repo,
             "SELECT set_config('maraithon.effect_protocol_activation', 'generation_fenced_v1', true)",
@@ -679,7 +781,14 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
       set: [result_acknowledged_at: now, updated_at: now]
     )
 
-    assert {:ok, 1} = Effects.backfill_legacy_payload_encryption()
+    assert {:ok, {:ok, 1}} =
+             authoritative_payload_contraction(fn ->
+               Effects.backfill_legacy_payload_encryption()
+             end)
+
+    assert {:ok, %{verified: 1, failures: []}} =
+             DurablePayloadVerification.verify_batch("effects", limit: 10)
+
     assert {:ok, :activated} = activate_exact()
     assert ProtocolCutover.mode() == :exact
     assert {:ok, :already_active} = activate_exact()
@@ -699,6 +808,8 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     assert_raise Postgrex.Error, fn ->
       Repo.transaction(
         fn ->
+          SQL.query!(Repo, "SET LOCAL ROLE maraithon_activation_operator", [])
+
           SQL.query!(
             Repo,
             "UPDATE public.effect_execution_protocols SET mode = 'legacy' WHERE name = 'effects'",
@@ -713,7 +824,10 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
 
     assert_raise Postgrex.Error, fn ->
       Repo.transaction(
-        fn -> SQL.query!(Repo, "TRUNCATE public.effect_execution_protocols", []) end,
+        fn ->
+          SQL.query!(Repo, "RESET ROLE", [])
+          SQL.query!(Repo, "TRUNCATE public.effect_execution_protocols", [])
+        end,
         mode: :savepoint
       )
     end
@@ -722,76 +836,89 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
 
     assert_raise Postgrex.Error, fn ->
       Repo.transaction(
-        fn -> SQL.query!(Repo, "TRUNCATE public.effects", []) end,
+        fn ->
+          SQL.query!(Repo, "RESET ROLE", [])
+          SQL.query!(Repo, "TRUNCATE public.effects", [])
+        end,
         mode: :savepoint
       )
     end
 
     assert ProtocolCutover.mode() == :exact
 
-    SQL.query!(Repo, "DROP INDEX public.effects_exact_pending_claim_index", [])
+    as_database_owner(fn ->
+      SQL.query!(Repo, "DROP INDEX public.effects_exact_pending_claim_index", [])
+    end)
 
-    assert {:blocked, {:effect_protocol_indexes_not_ready, 5}} = ProtocolCutover.mode()
+    assert {:blocked, :durable_payload_verifier_privileges_not_ready} =
+             ProtocolCutover.mode()
 
-    assert {:error, {:effect_protocol_mismatch, {:effect_protocol_indexes_not_ready, 5}}} =
+    assert {:error, {:effect_protocol_mismatch, :durable_payload_verifier_privileges_not_ready}} =
              ProtocolCutover.activation_preconditions()
 
-    assert {:error, {:effect_protocol_indexes_not_ready, 5}} =
-             ProtocolCutover.activate(confirmation: ProtocolCutover.activation_confirmation())
+    assert {:error, :durable_payload_verifier_privileges_not_ready} = activate_exact()
 
-    SQL.query!(
-      Repo,
-      """
-      CREATE INDEX effects_exact_pending_claim_index
-        ON public.effects (retry_after NULLS FIRST, inserted_at, id)
-        WHERE status = 'pending' AND runtime_owner_generation IS NOT NULL
-      """,
-      []
-    )
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        """
+        CREATE INDEX effects_exact_pending_claim_index
+          ON public.effects (retry_after NULLS FIRST, inserted_at, id)
+          WHERE status = 'pending' AND runtime_owner_generation IS NOT NULL
+        """,
+        []
+      )
 
-    SQL.query!(
-      Repo,
-      "ALTER TABLE public.effects DISABLE TRIGGER enforce_effect_execution_protocol_trigger",
-      []
-    )
+      SQL.query!(
+        Repo,
+        "ALTER TABLE public.effects DISABLE TRIGGER enforce_effect_execution_protocol_trigger",
+        []
+      )
+    end)
 
-    assert {:blocked, {:effect_protocol_triggers_not_ready, 8}} = ProtocolCutover.mode()
+    assert {:blocked, :durable_payload_verifier_privileges_not_ready} =
+             ProtocolCutover.mode()
 
-    SQL.query!(
-      Repo,
-      "ALTER TABLE public.effects ENABLE TRIGGER enforce_effect_execution_protocol_trigger",
-      []
-    )
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        "ALTER TABLE public.effects ENABLE TRIGGER enforce_effect_execution_protocol_trigger",
+        []
+      )
 
-    SQL.query!(
-      Repo,
-      "ALTER TABLE public.effects DROP CONSTRAINT effects_execution_status_check",
-      []
-    )
+      SQL.query!(
+        Repo,
+        "ALTER TABLE public.effects DROP CONSTRAINT effects_execution_status_check",
+        []
+      )
 
-    SQL.query!(
-      Repo,
-      """
-      ALTER TABLE public.effects
-      ADD CONSTRAINT effects_execution_status_check
-      CHECK (status IN ('pending', 'claimed', 'cancelling', 'completed', 'failed', 'cancelled'))
-      NOT VALID
-      """,
-      []
-    )
+      SQL.query!(
+        Repo,
+        """
+        ALTER TABLE public.effects
+        ADD CONSTRAINT effects_execution_status_check
+        CHECK (status IN ('pending', 'claimed', 'executing', 'cancelling', 'completed', 'failed', 'cancelled'))
+        NOT VALID
+        """,
+        []
+      )
+    end)
 
-    assert {:blocked, {:effect_protocol_constraints_not_ready, 6}} = ProtocolCutover.mode()
+    assert {:blocked, :durable_payload_verifier_privileges_not_ready} =
+             ProtocolCutover.mode()
 
-    SQL.query!(
-      Repo,
-      "ALTER TABLE public.effects VALIDATE CONSTRAINT effects_execution_status_check",
-      []
-    )
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        "ALTER TABLE public.effects VALIDATE CONSTRAINT effects_execution_status_check",
+        []
+      )
+    end)
 
     assert :ok = ProtocolCutover.activation_preconditions()
 
     assert {:ok, :already_active} =
-             ProtocolCutover.activate(confirmation: ProtocolCutover.activation_confirmation())
+             activate_exact()
   end
 
   test "exact admission requires the current ready Agent generation and old SQL cannot claim it" do
@@ -929,16 +1056,22 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
 
   test "stale Agent generation cannot cancel successor-owned work" do
     assert {:ok, :activated} = activate_exact()
-    {agent, old_generation} = exact_agent("effect-stale-cancel")
+    watcher = effect_generation_watcher(max_crashes: 3, backoffs_ms: [0])
+    {agent, old_generation} = exact_agent("effect-stale-cancel", watcher: watcher)
 
     assert {:ok, effect_id} =
              Effects.request(agent.id, :tool_call, "time", %{},
                runtime_owner_generation: old_generation
              )
 
-    assert {:ok, :released} = AgentLeases.release(agent.id, old_generation)
-    {:ok, successor} = AgentLeases.claim(agent.id, ttl_ms: 60_000)
-    {:ok, _ready} = AgentLeases.mark_ready(agent.id, successor.owner_token)
+    assert {:recorded, guard} =
+             prove_local_agent_down(watcher, agent.id, old_generation)
+
+    assert {:ok, successor} =
+             AgentLeases.claim_recovery(agent.id, guard.generation, ttl_ms: 60_000)
+
+    assert {:ok, _ready} =
+             AgentLeases.finish_recovery(agent.id, successor.owner_token, guard.generation)
 
     assert {:error, :effect_cancellation_owner_generation_lost} =
              EffectRunner.cancel_active_for_agent(agent.id, "stale_cleanup",
@@ -955,6 +1088,72 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     cancelled = Repo.get!(Effect, effect_id)
     assert cancelled.status == "cancelled"
     assert cancelled.runtime_owner_generation == old_generation
+    assert is_nil(cancelled.coordination_task_assignment_id)
+    assert is_nil(cancelled.claim_token)
+    assert is_nil(cancelled.claim_owner_node)
+    assert is_nil(cancelled.claim_supervisor_id)
+    assert is_nil(cancelled.claim_task_id)
+  end
+
+  test "protocol pair marks exact writes only after the canonical pair matches" do
+    SQL.query!(Repo, "SELECT set_config('maraithon.effect_writer_protocol', '', true)", [])
+
+    assert {:ok, :legacy} =
+             Repo.transaction(fn ->
+               assert CoordinationProtocol.locked_pair!() == :legacy
+
+               assert %{rows: [[""]]} =
+                        SQL.query!(
+                          Repo,
+                          "SELECT current_setting('maraithon.effect_writer_protocol', true)",
+                          []
+                        )
+
+               :legacy
+             end)
+
+    assert {:ok, :activated} =
+             ProtocolCutover.activate(
+               [confirmation: ProtocolCutover.activation_confirmation()] ++ @activation_evidence
+             )
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    SQL.query!(Repo, "SELECT set_config('maraithon.effect_writer_protocol', '', true)", [])
+
+    assert {:error, {:runtime_effect_protocol_pair_mismatch, {:dark, :exact}}} =
+             Repo.transaction(fn -> CoordinationProtocol.locked_pair!() end, mode: :savepoint)
+
+    assert %{rows: [[""]]} =
+             SQL.query!(
+               Repo,
+               "SELECT current_setting('maraithon.effect_writer_protocol', true)",
+               []
+             )
+
+    Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
+
+    assert {:ok, :activated} =
+             CoordinationProtocol.activate(
+               [confirmation: CoordinationProtocol.activation_confirmation()] ++
+                 @activation_evidence
+             )
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    SQL.query!(Repo, "SELECT set_config('maraithon.effect_writer_protocol', '', true)", [])
+
+    assert {:ok, :exact} =
+             Repo.transaction(fn ->
+               assert CoordinationProtocol.locked_pair!() == :exact
+
+               assert %{rows: [["generation_fenced_v1"]]} =
+                        SQL.query!(
+                          Repo,
+                          "SELECT current_setting('maraithon.effect_writer_protocol', true)",
+                          []
+                        )
+
+               :exact
+             end)
   end
 
   test "pre-command exact CAS installs a fresh writer marker before provider entry" do
@@ -997,7 +1196,8 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
              )
 
     send(runner, :poll)
-    assert_receive {:exact_provider_entered, worker, _params}, 2_000
+    _ = :sys.get_state(runner, 15_000)
+    assert_receive {:exact_provider_entered, worker, _params}, 10_000
     send(worker, :release)
   end
 
@@ -1039,7 +1239,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     binding |> Ecto.Changeset.change(status: "paused") |> Repo.update!()
 
     :ok = :sys.resume(authority)
-    _ = :sys.get_state(runner)
+    _ = :sys.get_state(runner, 15_000)
     refute_receive {:exact_provider_entered, _worker, _params}, 200
     refute Repo.get!(Effect, effect_id).status == "completed"
   end
@@ -1087,7 +1287,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
              )
 
     :ok = :sys.resume(authority)
-    _ = :sys.get_state(runner)
+    _ = :sys.get_state(runner, 15_000)
     refute_receive {:exact_provider_entered, _worker, _params}, 200
     refute Repo.get!(Effect, effect_id).status == "completed"
   end
@@ -1116,11 +1316,12 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), runner)
     send(runner, :poll)
 
-    assert_receive {:exact_provider_entered, worker, _params}, 2_000
+    _ = :sys.get_state(runner, 15_000)
+    assert_receive {:exact_provider_entered, worker, _params}, 10_000
     worker_ref = Process.monitor(worker)
 
     claimed = Repo.get!(Effect, effect_id)
-    assert claimed.status == "claimed"
+    assert claimed.status == "executing"
     assert claimed.claim_token != owner_generation
     assert claimed.claim_owner_node == Atom.to_string(node())
     assert claimed.claim_supervisor_id != nil
@@ -1214,6 +1415,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
           claim_token: claimed.claim_token,
           runtime_owner_generation: claimed.runtime_owner_generation,
           owner_node: claimed.claim_owner_node,
+          assignment_id: claimed.coordination_task_assignment_id,
           supervisor_id: claimed.claim_supervisor_id,
           task_id: claimed.claim_task_id
         }
@@ -1279,6 +1481,380 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
              end)
   end
 
+  test "generic cancellation cannot forge a pre-provider outcome intent" do
+    assert {:ok, :activated} = activate_exact()
+    {agent, owner_generation} = exact_agent("effect-preflight-intent-forgery")
+
+    assert {:error, :invalid_effect_cancellation} =
+             Cancellation.prepare(agent.id, "effect_preflight_failed:forged",
+               expected_runtime_owner_generation: owner_generation
+             )
+
+    assert {:error, :invalid_effect_cancellation} =
+             Cancellation.prepare(agent.id, "effect_preflight_retry:forged",
+               expected_runtime_owner_generation: owner_generation
+             )
+
+    for internal_abort <- [
+          "claim_liveness_expired",
+          "effect_runner_shutdown",
+          "effect_task_exited_without_outcome",
+          "effect_task_start_ambiguous"
+        ] do
+      assert {:error, :invalid_effect_cancellation} =
+               Cancellation.prepare(agent.id, internal_abort,
+                 expected_runtime_owner_generation: owner_generation
+               )
+    end
+  end
+
+  test "heartbeat recognizes exact Guardian preactivation without extending either lease" do
+    assert {:ok, :activated} = activate_exact()
+    {agent, owner_generation} = exact_agent("effect-heartbeat-preactivation")
+
+    %{
+      effect_id: effect_id,
+      identity: identity,
+      renewer: renewer,
+      worker: worker,
+      worker_ref: worker_ref
+    } = start_gated_preactivation!(agent, owner_generation)
+
+    before_effect = Repo.get!(Effect, effect_id)
+    before_assignment = TaskClaims.get(identity.assignment_id)
+
+    assert before_effect.status == "claimed"
+    assert before_effect.claim_token == identity.claim_token
+    assert before_effect.claim_supervisor_id == identity.supervisor_id
+    assert before_effect.claim_task_id == identity.task_id
+    assert before_effect.coordination_task_assignment_id == identity.assignment_id
+    assert before_assignment.state == "reserved"
+    assert before_assignment.provider_boundary == "not_entered"
+    assert before_assignment.ready_at == nil
+
+    assert {:ok, %{active: 1, lost: 0}} = EffectClaimRenewer.renew_now()
+
+    renewal_key = {
+      identity.effect_id,
+      identity.agent_id,
+      identity.claim_token,
+      identity.assignment_id,
+      identity.supervisor_id,
+      identity.task_id
+    }
+
+    first_local_deadline =
+      renewer
+      |> :sys.get_state(30_000)
+      |> Map.fetch!(:renewal_deadlines)
+      |> Map.fetch!(renewal_key)
+
+    after_effect = Repo.get!(Effect, effect_id)
+    after_assignment = TaskClaims.get(identity.assignment_id)
+
+    assert after_effect.claim_expires_at == before_effect.claim_expires_at
+    assert after_effect.claim_heartbeat_at == before_effect.claim_heartbeat_at
+    assert after_effect.updated_at == before_effect.updated_at
+    assert after_assignment.lease_expires_at == before_assignment.lease_expires_at
+    assert after_assignment.updated_at == before_assignment.updated_at
+    assert after_assignment.state == "reserved"
+    assert after_assignment.provider_boundary == "not_entered"
+    assert after_assignment.ready_at == nil
+    assert Process.alive?(worker)
+    assert Process.whereis(EffectClaimRenewer) == renewer
+    refute_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 0
+
+    assert {:ok, %{active: 1, lost: 0}} = EffectClaimRenewer.renew_now()
+
+    second_local_deadline =
+      renewer
+      |> :sys.get_state(30_000)
+      |> Map.fetch!(:renewal_deadlines)
+      |> Map.fetch!(renewal_key)
+
+    assert second_local_deadline == first_local_deadline
+    assert {:ok, %{active: 1, lost: 0}} = EffectClaimRenewer.renew_now()
+
+    third_local_deadline =
+      renewer
+      |> :sys.get_state(30_000)
+      |> Map.fetch!(:renewal_deadlines)
+      |> Map.fetch!(renewal_key)
+
+    assert third_local_deadline == first_local_deadline
+
+    repeated_effect = Repo.get!(Effect, effect_id)
+    repeated_assignment = TaskClaims.get(identity.assignment_id)
+    assert repeated_effect.claim_expires_at == before_effect.claim_expires_at
+    assert repeated_effect.claim_heartbeat_at == before_effect.claim_heartbeat_at
+    assert repeated_effect.updated_at == before_effect.updated_at
+    assert repeated_assignment.lease_expires_at == before_assignment.lease_expires_at
+    assert repeated_assignment.updated_at == before_assignment.updated_at
+    assert Process.alive?(worker)
+    refute_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 0
+
+    assert {:ok, plan} =
+             Cancellation.prepare(agent.id, "preactivation_regression_cleanup",
+               expected_runtime_owner_generation: owner_generation
+             )
+
+    assert {:ok, %{requested: 1, claims_settled: 1, unresolved: []}} =
+             Cancellation.execute(plan)
+
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 2_000
+  end
+
+  test "preactivation heartbeat fails closed when the Effect lease is expired" do
+    assert {:ok, :activated} = activate_exact()
+    {agent, owner_generation} = exact_agent("effect-heartbeat-preactivation-effect-expired")
+
+    %{
+      effect_id: effect_id,
+      identity: identity,
+      worker: worker,
+      worker_ref: worker_ref
+    } = start_gated_preactivation!(agent, owner_generation)
+
+    assignment_before = TaskClaims.get(identity.assignment_id)
+
+    with_coordinated_effect_trigger_disabled(fn ->
+      SQL.query!(
+        Repo,
+        """
+        UPDATE public.effects
+        SET claim_heartbeat_at = timezone('UTC', clock_timestamp()) - interval '2 seconds',
+            claim_expires_at = timezone('UTC', clock_timestamp()) - interval '1 second'
+        WHERE id = $1::uuid
+        """,
+        [Ecto.UUID.dump!(effect_id)]
+      )
+    end)
+
+    assert {:error, :effect_claim_heartbeat_failed} = EffectClaimRenewer.renew_now()
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 2_000
+
+    assert TaskClaims.get(identity.assignment_id).lease_expires_at ==
+             assignment_before.lease_expires_at
+
+    await_task_termination_proof!(identity.assignment_id)
+  end
+
+  test "preactivation heartbeat fails closed when the Task lease is expired" do
+    assert {:ok, :activated} = activate_exact()
+    {agent, owner_generation} = exact_agent("effect-heartbeat-preactivation-task-expired")
+
+    %{
+      effect_id: effect_id,
+      identity: identity,
+      worker: worker,
+      worker_ref: worker_ref
+    } = start_gated_preactivation!(agent, owner_generation)
+
+    effect_before = Repo.get!(Effect, effect_id)
+
+    SQL.query!(
+      Repo,
+      "SELECT set_config('maraithon.runtime_task_action', $1, true)",
+      [identity.assignment_id]
+    )
+
+    SQL.query!(
+      Repo,
+      """
+      UPDATE public.runtime_task_assignments
+      SET lease_expires_at = timezone('UTC', clock_timestamp()) - interval '1 second'
+      WHERE id = $1::uuid
+      """,
+      [Ecto.UUID.dump!(identity.assignment_id)]
+    )
+
+    assert {:error, :effect_claim_heartbeat_failed} = EffectClaimRenewer.renew_now()
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 2_000
+
+    stored_effect = Repo.get!(Effect, effect_id)
+    assert stored_effect.claim_expires_at == effect_before.claim_expires_at
+    assert stored_effect.claim_heartbeat_at == effect_before.claim_heartbeat_at
+    await_task_termination_proof!(identity.assignment_id)
+  end
+
+  test "preactivation TaskClaims rejects final-freshness authority drift" do
+    assert {:ok, :activated} = activate_exact()
+    {agent, owner_generation} = exact_agent("effect-preactivation-final-freshness")
+
+    %{
+      effect_id: effect_id,
+      identity: identity,
+      renewer: renewer,
+      worker: worker,
+      worker_ref: worker_ref
+    } = start_gated_preactivation!(agent, owner_generation)
+
+    assignment = TaskClaims.get(identity.assignment_id)
+
+    probe = %{
+      agent_id: agent.id,
+      owner_generation: owner_generation,
+      effect_id: effect_id,
+      assignment: assignment
+    }
+
+    drifts = [
+      {"Effect state", &drift_preactivation_effect_state!/1},
+      {"Task termination_requested state", &drift_preactivation_task_state!/1},
+      {"Effect/assignment identity", &drift_preactivation_effect_assignment!/1},
+      {"node ready state", &drift_preactivation_node!/1},
+      {"partition ready state", &drift_preactivation_partition!/1},
+      {"Agent lease ready state", &drift_preactivation_agent_lease!/1}
+    ]
+
+    with_suspended_renewer(renewer, fn ->
+      for {label, drift} <- drifts do
+        result =
+          Repo.transaction(
+            fn ->
+              assert {:active, _activation_epoch} =
+                       CoordinationProtocol.lock_effect_pair!()
+
+              assert %{rows: [["generation_fenced_v1"]]} =
+                       SQL.query!(
+                         Repo,
+                         "SELECT current_setting('maraithon.effect_writer_protocol', true)",
+                         []
+                       )
+
+              drift.(probe)
+
+              TaskClaims.renew_effect_in_transaction!(
+                assignment,
+                agent.id,
+                owner_generation,
+                60_000
+              )
+            end,
+            mode: :savepoint
+          )
+
+        assert result == {:error, :coordination_task_authority_lost},
+               "#{label} remained eligible for preactivation renewal"
+
+        assert_pristine_preactivation_pair!(probe)
+      end
+    end)
+
+    assert Process.alive?(worker)
+    refute_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 0
+  end
+
+  test "preactivation final freshness rechecks expiry after the Effect lock" do
+    assert {:ok, :activated} = activate_exact()
+    {agent, owner_generation} = exact_agent("effect-preactivation-lock-delay-expiry")
+
+    %{
+      effect_id: effect_id,
+      identity: identity,
+      renewer: renewer,
+      worker: worker,
+      worker_ref: worker_ref
+    } = start_gated_preactivation!(agent, owner_generation)
+
+    assignment = TaskClaims.get(identity.assignment_id)
+
+    probe = %{
+      agent_id: agent.id,
+      owner_generation: owner_generation,
+      effect_id: effect_id,
+      assignment: assignment
+    }
+
+    with_suspended_renewer(renewer, fn ->
+      assert {:error, :coordination_task_authority_lost} =
+               Repo.transaction(
+                 fn ->
+                   assert {:active, _activation_epoch} =
+                            CoordinationProtocol.lock_effect_pair!()
+
+                   with_coordinated_effect_trigger_disabled(fn ->
+                     assert %{num_rows: 1} =
+                              SQL.query!(
+                                Repo,
+                                """
+                                UPDATE public.effects
+                                SET claim_expires_at =
+                                      timezone('UTC', clock_timestamp()) + interval '2 seconds'
+                                WHERE id = $1::uuid
+                                """,
+                                [Ecto.UUID.dump!(effect_id)]
+                              )
+                   end)
+
+                   # Mirror the production ordering: the exact Effect is live
+                   # when its row lock is acquired. PostgreSQL then advances its
+                   # own clock while that lock is held, before TaskClaims performs
+                   # the final all-authority freshness statement.
+                   assert %{rows: [[_locked_effect_id]]} =
+                            SQL.query!(
+                              Repo,
+                              """
+                              SELECT id
+                              FROM public.effects
+                              WHERE id = $1::uuid
+                                AND status = 'claimed'
+                                AND claim_expires_at > timezone('UTC', clock_timestamp())
+                              FOR UPDATE
+                              """,
+                              [Ecto.UUID.dump!(effect_id)]
+                            )
+
+                   SQL.query!(
+                     Repo,
+                     """
+                     SELECT pg_sleep(
+                       GREATEST(
+                         EXTRACT(EPOCH FROM (
+                           claim_expires_at - timezone('UTC', clock_timestamp())
+                         ))::double precision,
+                         0.0
+                       ) + 0.100
+                     )
+                     FROM public.effects
+                     WHERE id = $1::uuid
+                     """,
+                     [Ecto.UUID.dump!(effect_id)]
+                   )
+
+                   assert %{rows: [[true, true]]} =
+                            SQL.query!(
+                              Repo,
+                              """
+                              SELECT
+                                effect.claim_expires_at <=
+                                  timezone('UTC', clock_timestamp()),
+                                task.lease_expires_at >
+                                  timezone('UTC', clock_timestamp())
+                              FROM public.effects AS effect
+                              JOIN public.runtime_task_assignments AS task
+                                ON task.id = effect.coordination_task_assignment_id
+                              WHERE effect.id = $1::uuid
+                              """,
+                              [Ecto.UUID.dump!(effect_id)]
+                            )
+
+                   TaskClaims.renew_effect_in_transaction!(
+                     assignment,
+                     agent.id,
+                     owner_generation,
+                     60_000
+                   )
+                 end,
+                 mode: :savepoint
+               )
+    end)
+
+    assert_pristine_preactivation_pair!(probe)
+    assert Process.alive?(worker)
+    refute_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 0
+  end
+
   test "heartbeat protocol uncertainty immediately terminates physical exact work" do
     assert {:ok, :activated} = activate_exact()
     {agent, owner_generation} = exact_agent("effect-heartbeat-uncertainty")
@@ -1303,41 +1879,48 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), runner)
     send(runner, :poll)
 
-    assert_receive {:exact_provider_entered, worker, _params}, 2_000
+    _ = :sys.get_state(runner, 15_000)
+    assert_receive {:exact_provider_entered, worker, _params}, 10_000
     worker_ref = Process.monitor(worker)
 
     renewer = Process.whereis(EffectClaimRenewer)
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), renewer)
     assert {:ok, %{active: 1, lost: 0}} = EffectClaimRenewer.renew_now()
 
-    SQL.query!(
-      Repo,
-      "ALTER TABLE public.effects DISABLE TRIGGER enforce_effect_execution_protocol_trigger",
-      []
-    )
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        "ALTER TABLE public.effects DISABLE TRIGGER enforce_effect_execution_protocol_trigger",
+        []
+      )
+    end)
 
     assert {:error, :effect_claim_heartbeat_failed} = EffectClaimRenewer.renew_now()
     assert_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 2_000
 
-    SQL.query!(
-      Repo,
-      "ALTER TABLE public.effects ENABLE TRIGGER enforce_effect_execution_protocol_trigger",
-      []
-    )
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        "ALTER TABLE public.effects ENABLE TRIGGER enforce_effect_execution_protocol_trigger",
+        []
+      )
+    end)
   end
 
-  test "cancellation before task activation removes the exact reservation" do
+  test "cancellation before task activation settles and retains the exact reservation proof" do
     assert {:ok, :activated} = activate_exact()
     {agent, owner_generation} = exact_agent("effect-preactivation-cancel")
     now = DatabaseClock.now!()
     effect_id = Ecto.UUID.generate()
     claim_token = Ecto.UUID.generate()
+    assignment_id = Ecto.UUID.generate()
 
     assert {:ok, identity} =
-             Maraithon.Runtime.EffectTaskSupervisor.reserve(
+             Maraithon.Runtime.EffectTaskSupervisor.reserve_coordinated(
                effect_id,
                agent.id,
-               claim_token
+               claim_token,
+               assignment_id
              )
 
     insert_claimed_exact_effect!(
@@ -1348,13 +1931,63 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
       identity.supervisor_id,
       identity.task_id,
       now,
-      effect_id
+      effect_id,
+      :reserved,
+      identity.termination_capability_digest,
+      assignment_id
     )
 
-    assert {:ok, 1} =
-             EffectRunner.cancel_active_for_agent(agent.id, "cancel_before_activation",
+    assert {:ok, plan} =
+             Cancellation.prepare(agent.id, "cancel_before_activation",
                expected_runtime_owner_generation: owner_generation
              )
+
+    cancelling = Repo.get!(Effect, effect_id)
+    reserved = TaskClaims.get(assignment_id)
+
+    assert cancelling.status == "cancelling"
+    assert cancelling.cancellation_state == "requested"
+    assert cancelling.cancellation_target_claim_token == claim_token
+    assert cancelling.coordination_task_assignment_id == assignment_id
+    assert reserved.state == "reserved"
+    assert reserved.provider_boundary == "not_entered"
+    assert reserved.ready_at == nil
+    assert reserved.termination_requested_at == nil
+    assert reserved.termination_proven_at == nil
+    assert reserved.settled_at == nil
+    assert reserved.outcome == nil
+
+    assert %{rows: []} =
+             SQL.query!(
+               Repo,
+               """
+               SELECT proof_kind
+               FROM public.runtime_task_termination_proofs
+               WHERE assignment_id = $1::uuid
+               """,
+               [Ecto.UUID.dump!(assignment_id)]
+             )
+
+    assert {:ok, %{requested: 1, claims_settled: 1, unresolved: []}} =
+             Cancellation.execute(plan)
+
+    settled_assignment = TaskClaims.get(assignment_id)
+    assert settled_assignment.state == "settled"
+    assert settled_assignment.provider_boundary == "not_entered"
+    assert settled_assignment.outcome == "cancelled_before_provider"
+
+    assert %{rows: [["never_activated", evidence_id]]} =
+             SQL.query!(
+               Repo,
+               """
+               SELECT proof_kind, evidence_id
+               FROM public.runtime_task_termination_proofs
+               WHERE assignment_id = $1::uuid
+               """,
+               [Ecto.UUID.dump!(assignment_id)]
+             )
+
+    assert evidence_id == "task-supervisor:never_activated:#{identity.task_id}"
 
     test_pid = self()
 
@@ -1368,8 +2001,19 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     refute_receive :late_effect_task_authorized, 50
 
     settled = Repo.get!(Effect, effect_id)
-    assert settled.status == "failed"
+    assert settled.status == "cancelled"
     assert settled.cancellation_state == "settled"
+    assert settled.coordination_task_assignment_id == assignment_id
+    assert settled.claim_token == claim_token
+    assert settled.claim_owner_node == Atom.to_string(node())
+    assert %DateTime{} = settled.claim_heartbeat_at
+    assert %DateTime{} = settled.claim_expires_at
+    assert settled.claim_supervisor_id == identity.supervisor_id
+    assert settled.claim_task_id == identity.task_id
+    assert settled.cancellation_target_claim_token == claim_token
+    assert %DateTime{} = settled.cancellation_last_attempt_at
+    assert is_nil(settled.claimed_by)
+    assert is_nil(settled.claimed_at)
   end
 
   test "a still-running task generation cannot be overwritten by a retry successor" do
@@ -1402,7 +2046,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
 
     BootGate.open()
     send(runner, :poll)
-    _ = :sys.get_state(runner)
+    _ = :sys.get_state(runner, 15_000)
 
     refute_receive {:exact_provider_entered, _worker, _params}, 100
 
@@ -1439,9 +2083,10 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), runner)
     send(runner, :poll)
 
-    assert_receive {:exact_provider_entered, worker, _params}, 2_000
+    _ = :sys.get_state(runner, 30_000)
+    assert_receive {:exact_provider_entered, worker, _params}, 10_000
     worker_ref = Process.monitor(worker)
-    :ok = :sys.suspend(runner)
+    :ok = :sys.suspend(runner, 30_000)
 
     on_exit(fn ->
       if Process.alive?(runner) do
@@ -1464,6 +2109,10 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     # A synchronous system-state call runs only after the nested one-for-all
     # group has killed predecessor tasks and installed a fresh authority.
     _ = :sys.get_state(Maraithon.Runtime.EffectTaskSupervisor)
+    # Guardian owns the predecessor monitor and its bounded persistence retry.
+    # Drain that authenticated-DOWN callback before issuing reconciliation SQL
+    # through the shared sandbox owner.
+    _ = :sys.get_state(Maraithon.Runtime.TaskGuardian, 30_000)
     new_task_supervisor = Process.whereis(Maraithon.Runtime.ExactEffectTaskSupervisor)
     refute new_task_supervisor == old_task_supervisor
     assert {:ok, new_identity} = Maraithon.Runtime.EffectTaskSupervisor.identity()
@@ -1532,7 +2181,10 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
 
   test "a tripped restart guard settles pending work from every orphan generation" do
     assert {:ok, :activated} = activate_exact()
-    {agent, first_generation} = exact_agent("effect-crash-loop-pending")
+    first_watcher = effect_generation_watcher(max_crashes: 3, backoffs_ms: [0])
+
+    {agent, first_generation} =
+      exact_agent("effect-crash-loop-pending", watcher: first_watcher)
 
     assert {:ok, first_effect_id} =
              Effects.request(agent.id, :tool_call, "time", %{},
@@ -1540,18 +2192,17 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
              )
 
     assert {:recorded, first_guard} =
-             AgentRestartGuards.record_crash(
-               agent.id,
-               first_generation,
-               :first_simulated_crash,
-               max_crashes: 3,
-               backoffs_ms: [0]
-             )
+             prove_local_agent_down(first_watcher, agent.id, first_generation)
 
     refute first_guard.tripped
 
+    second_watcher = effect_generation_watcher(max_crashes: 2, backoffs_ms: [0])
+
     assert {:ok, second_lease} =
-             AgentLeases.claim_recovery(agent.id, first_guard.generation, ttl_ms: 60_000)
+             AgentLeases.claim_recovery(agent.id, first_guard.generation,
+               ttl_ms: 60_000,
+               watcher: second_watcher
+             )
 
     assert {:ok, _ready_lease} =
              AgentLeases.finish_recovery(
@@ -1566,13 +2217,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
              )
 
     assert {:recorded, tripped_guard} =
-             AgentRestartGuards.record_crash(
-               agent.id,
-               second_lease.owner_token,
-               :second_simulated_crash,
-               max_crashes: 2,
-               backoffs_ms: [0]
-             )
+             prove_local_agent_down(second_watcher, agent.id, second_lease.owner_token)
 
     assert tripped_guard.tripped
 
@@ -1588,24 +2233,29 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     end
   end
 
-  test "tripped pending work converges after exact storage readiness is repaired" do
+  test "only proven tripped work converges after exact storage readiness is repaired" do
     assert {:ok, :activated} = activate_exact()
-    {agent, owner_generation} = exact_agent("effect-crash-loop-deferred")
+    watcher = effect_generation_watcher(max_crashes: 1, backoffs_ms: [0])
+
+    {agent, owner_generation} =
+      exact_agent("effect-crash-loop-deferred", watcher: watcher)
 
     assert {:ok, effect_id} =
              Effects.request(agent.id, :tool_call, "time", %{},
                runtime_owner_generation: owner_generation
              )
 
-    SQL.query!(
-      Repo,
-      "ALTER TABLE public.effects DISABLE TRIGGER enforce_effect_execution_protocol_trigger",
-      []
-    )
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        "ALTER TABLE public.effects DISABLE TRIGGER enforce_effect_execution_protocol_trigger",
+        []
+      )
+    end)
 
-    assert {:blocked, {:effect_protocol_triggers_not_ready, 8}} = ProtocolCutover.mode()
+    assert {:blocked, :durable_payload_verifier_privileges_not_ready} = ProtocolCutover.mode()
 
-    assert {:recorded, guard} =
+    assert {:ignored, :termination_proof_required} =
              AgentRestartGuards.record_crash(
                agent.id,
                owner_generation,
@@ -1614,17 +2264,22 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                backoffs_ms: [0]
              )
 
-    assert guard.tripped
     assert Repo.get!(Effect, effect_id).status == "pending"
 
-    SQL.query!(
-      Repo,
-      "ALTER TABLE public.effects ENABLE TRIGGER enforce_effect_execution_protocol_trigger",
-      []
-    )
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        "ALTER TABLE public.effects ENABLE TRIGGER enforce_effect_execution_protocol_trigger",
+        []
+      )
+    end)
 
-    assert {:ok, 1} = AgentRestartGuards.reconcile_tripped_pending(10)
+    assert {:recorded, guard} =
+             prove_local_agent_down(watcher, agent.id, owner_generation)
+
+    assert guard.tripped
     assert Repo.get!(Effect, effect_id).status == "cancelled"
+    assert {:ok, 0} = AgentRestartGuards.reconcile_tripped_pending(10)
   end
 
   test "unreachable physical ownership remains durably cancelling" do
@@ -1643,6 +2298,19 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
         Ecto.UUID.generate(),
         now
       )
+
+    assignment = TaskClaims.get(effect.coordination_task_assignment_id)
+
+    assert {:ok, %{provider_boundary: "entered"}} =
+             Repo.transaction(fn ->
+               ProtocolCutover.require_exact_write!()
+
+               TaskClaims.enter_effect_provider_in_transaction!(
+                 assignment,
+                 agent.id,
+                 owner_generation
+               )
+             end)
 
     assert {:error, :effect_task_termination_incomplete} =
              EffectRunner.cancel_active_for_agent(agent.id, "agent_stopped",
@@ -1675,16 +2343,23 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                "WRONG_CONFIRMATION"
              )
 
-    assert {:ok, attestation} =
-             TerminationAttestations.record(
-               identity,
-               "infra-ticket-1234",
-               "operator@example.com",
-               TerminationAttestations.confirmation()
-             )
+    assert {:ok, %{attestation: attestation, task_assignment: proven_assignment}} =
+             as_incident_operator(fn ->
+               TerminationAttestations.record(
+                 identity,
+                 "infra-ticket-1234",
+                 "operator@example.com",
+                 TerminationAttestations.confirmation()
+               )
+             end)
 
     assert attestation.effect_id == cancelling.id
     assert TerminationAttestations.proof?(identity)
+
+    # The incident transaction records the attestation and exact Task proof
+    # atomically before ordinary runtime reconciliation receives settlement DML.
+    assert proven_assignment.id == cancelling.coordination_task_assignment_id
+    assert proven_assignment.state == "termination_proven"
 
     assert {:ok, %{claims_settled: 1, unresolved: []}} =
              Cancellation.reconcile_agent(agent.id, 10)
@@ -1694,9 +2369,25 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     assert settled.cancellation_state == "settled"
     assert settled.result_envelope == TerminalEnvelope.error(:effect_outcome_ambiguous)
 
+    assert {:ok, %{attestation: retried_attestation, task_assignment: retried_assignment}} =
+             as_incident_operator(fn ->
+               TerminationAttestations.record(
+                 identity,
+                 "infra-ticket-1234",
+                 "operator@example.com",
+                 TerminationAttestations.confirmation()
+               )
+             end)
+
+    assert retried_attestation.id == attestation.id
+    assert retried_assignment.id == proven_assignment.id
+    assert retried_assignment.state in ["termination_proven", "settled", "outcome_ambiguous"]
+
     assert_raise Postgrex.Error, fn ->
       Repo.transaction(
         fn ->
+          SQL.query!(Repo, "RESET ROLE", [])
+
           SQL.query!(
             Repo,
             "DELETE FROM public.effect_termination_attestations WHERE id = $1::uuid",
@@ -1725,7 +2416,7 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                :deleted
              end)
 
-    assert %{rows: [[1]]} =
+    assert %{rows: [[0]]} =
              SQL.query!(
                Repo,
                "SELECT COUNT(*) FROM public.effect_termination_attestations WHERE id = $1::uuid",
@@ -1735,7 +2426,10 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
 
   test "lifecycle recovery cancels pending exact work and closes the work graph atomically" do
     assert {:ok, :activated} = activate_exact()
-    {agent, owner_generation} = exact_agent("effect-lifecycle-convergence")
+    watcher = effect_generation_watcher(backoffs_ms: [0])
+
+    {agent, owner_generation} =
+      exact_agent("effect-lifecycle-convergence", watcher: watcher)
 
     assert {:ok, _directive} =
              AgentDirectives.enqueue(
@@ -1785,25 +2479,29 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                assert {:ok, _stored_directive, 1} =
                         AgentDirectives.admit_effect_locked(stored_directive, run.id, now)
 
+               attrs =
+                 %{
+                   id: effect_id,
+                   agent_id: agent.id,
+                   owner_user_id: agent.user_id,
+                   idempotency_key: Ecto.UUID.generate(),
+                   effect_type: "tool_call",
+                   params: %{
+                     "__maraithon_effect_protocol" => 2,
+                     "tool" => "time",
+                     "args" => %{}
+                   },
+                   status: "pending",
+                   runtime_owner_generation: owner_generation,
+                   agent_run_id: run.id,
+                   agent_run_step_id: step.id,
+                   attempts: 0,
+                   max_attempts: 3
+                 }
+                 |> Map.merge(exact_effect_scope!(agent.id, owner_generation))
+
                %Effect{}
-               |> Effect.protocol_changeset(%{
-                 id: effect_id,
-                 agent_id: agent.id,
-                 owner_user_id: agent.user_id,
-                 idempotency_key: Ecto.UUID.generate(),
-                 effect_type: "tool_call",
-                 params: %{
-                   "__maraithon_effect_protocol" => 2,
-                   "tool" => "time",
-                   "args" => %{}
-                 },
-                 status: "pending",
-                 runtime_owner_generation: owner_generation,
-                 agent_run_id: run.id,
-                 agent_run_step_id: step.id,
-                 attempts: 0,
-                 max_attempts: 3
-               })
+               |> Effect.protocol_changeset(attrs)
                |> Repo.insert!()
              end)
 
@@ -1823,25 +2521,11 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                end
              )
 
-    SQL.query!(
-      Repo,
-      """
-      UPDATE public.agent_runtime_leases
-      SET claimed_at = timezone('UTC', clock_timestamp()) - interval '3 minutes',
-          renewed_at = timezone('UTC', clock_timestamp()) - interval '2 minutes',
-          draining_at = timezone('UTC', clock_timestamp()) - interval '90 seconds',
-          lease_until = timezone('UTC', clock_timestamp()) - interval '1 minute',
-          updated_at = timezone('UTC', clock_timestamp())
-      WHERE agent_id = $1::uuid
-      """,
-      [Ecto.UUID.dump!(agent.id)]
-    )
-
-    assert {:recorded, _guard} =
-             AgentRestartGuards.record_expired(agent.id, owner_generation, backoffs_ms: [0])
-
-    assert {:ok, %{status: :reconciliation_pending}} =
+    assert {:ok, %{status: :reconciliation_pending, reason: :runtime_lease_owned}} =
              AgentLifecycleOperations.finalize(agent.id, fence.operation_token)
+
+    assert {:reconciled_without_loss, _incident} =
+             prove_local_agent_down(watcher, agent.id, owner_generation)
 
     assert Repo.get!(Effect, effect_id).status == "cancelled"
 
@@ -1859,7 +2543,11 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
 
   test "lifecycle delete erases an unacknowledged terminal exact result without false ack" do
     assert {:ok, :activated} = activate_exact()
-    {agent, owner_generation} = exact_agent("effect-lifecycle-erasure")
+    watcher = effect_generation_watcher(backoffs_ms: [0])
+
+    {agent, owner_generation} =
+      exact_agent("effect-lifecycle-erasure", watcher: watcher)
+
     now = DatabaseClock.now!()
 
     claimed =
@@ -1876,6 +2564,25 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     assert {:ok, {1, nil}} =
              Repo.transaction(fn ->
                ProtocolCutover.require_exact_write!()
+               assignment = TaskClaims.get(claimed.coordination_task_assignment_id)
+
+               entered =
+                 TaskClaims.enter_effect_provider_in_transaction!(
+                   assignment,
+                   agent.id,
+                   owner_generation
+                 )
+
+               settled =
+                 TaskClaims.settle_effect_in_transaction(
+                   entered,
+                   agent.id,
+                   owner_generation,
+                   "completed"
+                 )
+
+               assert settled.state == "settled"
+               assert settled.provider_boundary == "outcome_known"
 
                Repo.update_all(
                  from(effect in Effect,
@@ -1916,13 +2623,573 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
                fn _locked -> %{"action" => "delete"} end
              )
 
-    assert {:ok, :released} = AgentLeases.release(agent.id, owner_generation)
+    assert {:reconciled_without_loss, _incident} =
+             prove_local_agent_down(watcher, agent.id, owner_generation)
 
-    assert {:ok, %{status: :finalized, action: :deleted}} =
+    # Recording the fenced local-termination proof drives lifecycle
+    # reconciliation to completion; a later finalize call is idempotently gone.
+    assert {:error, :not_found} =
              AgentLifecycleOperations.finalize(agent.id, fence.operation_token)
 
     assert Repo.get(Effect, claimed.id) == nil
     assert Agents.get_agent(agent.id) == nil
+  end
+
+  defp with_suspended_renewer(renewer, fun)
+       when is_pid(renewer) and is_function(fun, 0) do
+    assert Process.whereis(EffectClaimRenewer) == renewer
+    assert :ok = :sys.suspend(renewer, 30_000)
+
+    try do
+      fun.()
+    after
+      assert :ok = :sys.resume(renewer, 30_000)
+    end
+  end
+
+  defp drift_preactivation_effect_state!(%{effect_id: effect_id}) do
+    SQL.query!(
+      Repo,
+      "SELECT set_config('maraithon.effect_writer_protocol', 'generation_fenced_v1', true)",
+      []
+    )
+
+    assert %{num_rows: 1} =
+             SQL.query!(
+               Repo,
+               """
+               UPDATE public.effects
+               SET status = 'cancelling',
+                   cancellation_state = 'requested',
+                   cancellation_reason = 'preactivation_freshness_probe',
+                   cancellation_requested_at = timezone('UTC', clock_timestamp()),
+                   cancellation_target_claim_token = claim_token,
+                   error = 'preactivation_freshness_probe',
+                   updated_at = timezone('UTC', clock_timestamp())
+               WHERE id = $1::uuid AND status = 'claimed'
+               """,
+               [Ecto.UUID.dump!(effect_id)]
+             )
+  end
+
+  defp drift_preactivation_task_state!(%{assignment: assignment}) do
+    SQL.query!(
+      Repo,
+      "SELECT set_config('maraithon.runtime_task_action', $1, true)",
+      [assignment.id]
+    )
+
+    assert %{num_rows: 1} =
+             SQL.query!(
+               Repo,
+               """
+               UPDATE public.runtime_task_assignments
+               SET state = 'termination_requested',
+                   termination_requested_at = timezone('UTC', clock_timestamp()),
+                   updated_at = timezone('UTC', clock_timestamp())
+               WHERE id = $1::uuid AND state = 'reserved'
+                 AND provider_boundary = 'not_entered' AND ready_at IS NULL
+               """,
+               [Ecto.UUID.dump!(assignment.id)]
+             )
+  end
+
+  defp drift_preactivation_effect_assignment!(%{effect_id: effect_id}) do
+    with_effect_assignment_pair_trigger_bypass(fn ->
+      assert %{num_rows: 1} =
+               SQL.query!(
+                 Repo,
+                 """
+                 UPDATE public.effects
+                 SET coordination_task_assignment_id = $2::uuid,
+                     updated_at = timezone('UTC', clock_timestamp())
+                 WHERE id = $1::uuid AND status = 'claimed'
+                 """,
+                 [Ecto.UUID.dump!(effect_id), Ecto.UUID.dump!(Ecto.UUID.generate())]
+               )
+    end)
+  end
+
+  defp drift_preactivation_node!(%{assignment: assignment}) do
+    SQL.query!(
+      Repo,
+      "SELECT set_config('maraithon.runtime_node_action', $1, true)",
+      [assignment.node_incarnation_id]
+    )
+
+    assert %{num_rows: 1} =
+             SQL.query!(
+               Repo,
+               """
+               UPDATE public.runtime_node_incarnations
+               SET state = 'draining', ready_at = NULL,
+                   draining_at = COALESCE(
+                     draining_at,
+                     timezone('UTC', clock_timestamp())
+                   ),
+                   updated_at = timezone('UTC', clock_timestamp())
+               WHERE id = $1::uuid AND activation_epoch = $2::uuid
+                 AND state = 'ready'
+               """,
+               [
+                 Ecto.UUID.dump!(assignment.node_incarnation_id),
+                 Ecto.UUID.dump!(assignment.activation_epoch)
+               ]
+             )
+  end
+
+  defp drift_preactivation_partition!(%{assignment: assignment}) do
+    SQL.query!(
+      Repo,
+      "SELECT set_config('maraithon.runtime_node_action', $1, true)",
+      [assignment.node_incarnation_id]
+    )
+
+    assert %{num_rows: 1} =
+             SQL.query!(
+               Repo,
+               """
+               UPDATE public.runtime_partitions
+               SET state = 'draining', ready_at = NULL,
+                   draining_at = COALESCE(
+                     draining_at,
+                     timezone('UTC', clock_timestamp())
+                   ),
+                   updated_at = timezone('UTC', clock_timestamp())
+               WHERE partition_id = $1 AND activation_epoch = $2::uuid
+                 AND ownership_epoch = $3
+                 AND owner_node_incarnation_id = $4::uuid
+                 AND state = 'ready'
+               """,
+               [
+                 assignment.partition_id,
+                 Ecto.UUID.dump!(assignment.activation_epoch),
+                 assignment.partition_epoch,
+                 Ecto.UUID.dump!(assignment.node_incarnation_id)
+               ]
+             )
+  end
+
+  defp drift_preactivation_agent_lease!(%{
+         agent_id: agent_id,
+         owner_generation: owner_generation,
+         assignment: assignment
+       }) do
+    SQL.query!(
+      Repo,
+      "SELECT set_config('maraithon.agent_lease_owner_token', $1, true)",
+      [owner_generation]
+    )
+
+    assert %{num_rows: 1} =
+             SQL.query!(
+               Repo,
+               """
+               UPDATE public.agent_runtime_leases
+               SET ready_at = NULL,
+                   draining_at = COALESCE(
+                     draining_at,
+                     timezone('UTC', clock_timestamp())
+                   ),
+                   updated_at = timezone('UTC', clock_timestamp())
+               WHERE agent_id = $1::uuid AND owner_token = $2::uuid
+                 AND coordination_activation_epoch = $3::uuid
+                 AND coordination_partition_id = $4
+                 AND coordination_partition_epoch = $5
+                 AND coordination_node_incarnation_id = $6::uuid
+                 AND ready_at IS NOT NULL AND draining_at IS NULL
+               """,
+               [
+                 Ecto.UUID.dump!(agent_id),
+                 Ecto.UUID.dump!(owner_generation),
+                 Ecto.UUID.dump!(assignment.activation_epoch),
+                 assignment.partition_id,
+                 assignment.partition_epoch,
+                 Ecto.UUID.dump!(assignment.node_incarnation_id)
+               ]
+             )
+  end
+
+  defp assert_pristine_preactivation_pair!(%{
+         effect_id: effect_id,
+         agent_id: agent_id,
+         owner_generation: owner_generation,
+         assignment: expected_assignment
+       }) do
+    effect = Repo.get!(Effect, effect_id)
+    assignment = TaskClaims.get(expected_assignment.id)
+
+    assert effect.status == "claimed"
+    assert effect.cancellation_state == nil
+    assert effect.coordination_task_assignment_id == assignment.id
+    assert effect.claim_token == assignment.claim_token
+    assert effect.claim_supervisor_id == assignment.supervisor_id
+    assert effect.claim_task_id == assignment.local_task_id
+    assert assignment.state == "reserved"
+    assert assignment.provider_boundary == "not_entered"
+    assert assignment.ready_at == nil
+    assert assignment.termination_requested_at == nil
+
+    assert %{rows: [["ready", true, "ready", true, true, true]]} =
+             SQL.query!(
+               Repo,
+               """
+               SELECT node.state, node.ready_at IS NOT NULL,
+                      partition.state, partition.ready_at IS NOT NULL,
+                      lease.ready_at IS NOT NULL, lease.draining_at IS NULL
+               FROM public.runtime_task_assignments AS task
+               JOIN public.runtime_node_incarnations AS node
+                 ON node.id = task.node_incarnation_id
+                AND node.activation_epoch = task.activation_epoch
+               JOIN public.runtime_partitions AS partition
+                 ON partition.partition_id = task.partition_id
+                AND partition.activation_epoch = task.activation_epoch
+                AND partition.ownership_epoch = task.partition_epoch
+                AND partition.owner_node_incarnation_id = task.node_incarnation_id
+               JOIN public.agent_runtime_leases AS lease
+                 ON lease.agent_id = $2::uuid AND lease.owner_token = $3::uuid
+                AND lease.coordination_activation_epoch = task.activation_epoch
+                AND lease.coordination_partition_id = task.partition_id
+                AND lease.coordination_partition_epoch = task.partition_epoch
+                AND lease.coordination_node_incarnation_id = task.node_incarnation_id
+               WHERE task.id = $1::uuid
+               """,
+               [
+                 Ecto.UUID.dump!(assignment.id),
+                 Ecto.UUID.dump!(agent_id),
+                 Ecto.UUID.dump!(owner_generation)
+               ]
+             )
+  end
+
+  defp with_effect_assignment_pair_trigger_bypass(fun) when is_function(fun, 0) do
+    with_coordinated_effect_trigger_disabled(fn ->
+      SQL.query!(
+        Repo,
+        """
+        ALTER TABLE public.effects
+        DISABLE TRIGGER enforce_effect_assignment_final_pair_effect_trigger
+        """,
+        []
+      )
+
+      try do
+        fun.()
+      after
+        SQL.query!(
+          Repo,
+          """
+          ALTER TABLE public.effects
+          ENABLE TRIGGER enforce_effect_assignment_final_pair_effect_trigger
+          """,
+          []
+        )
+      end
+    end)
+  end
+
+  defp as_incident_operator(fun) when is_function(fun, 0) do
+    SQL.query!(Repo, "SET LOCAL ROLE maraithon_incident_operator", [])
+
+    try do
+      fun.()
+    after
+      SQL.query!(Repo, "SET LOCAL ROLE maraithon_runtime", [])
+    end
+  end
+
+  defp as_database_owner(fun) when is_function(fun, 0) do
+    # Flush deferred Effect/assignment pair checks before catalog DDL. PostgreSQL
+    # rejects ALTER TABLE while the relation still has pending trigger events.
+    SQL.query!(Repo, "SET CONSTRAINTS ALL IMMEDIATE", [])
+    SQL.query!(Repo, "RESET ROLE", [])
+
+    try do
+      fun.()
+    after
+      SQL.query!(Repo, "SET LOCAL ROLE maraithon_runtime", [])
+      SQL.query!(Repo, "SET CONSTRAINTS ALL DEFERRED", [])
+    end
+  end
+
+  defp with_coordinated_effect_trigger_disabled(fun) when is_function(fun, 0) do
+    as_database_owner(fn ->
+      SQL.query!(
+        Repo,
+        "ALTER TABLE public.effects DISABLE TRIGGER enforce_coordinated_effect_trigger",
+        []
+      )
+
+      try do
+        SQL.query!(
+          Repo,
+          "SELECT set_config('maraithon.effect_writer_protocol', 'generation_fenced_v1', true)",
+          []
+        )
+
+        fun.()
+      after
+        SQL.query!(
+          Repo,
+          "ALTER TABLE public.effects ENABLE TRIGGER enforce_coordinated_effect_trigger",
+          []
+        )
+      end
+    end)
+  end
+
+  defp authoritative_payload_contraction(fun) when is_function(fun, 0) do
+    result =
+      DurablePayloadContraction.transaction(
+        [
+          confirmation: ProtocolCutover.activation_confirmation(),
+          evidence_id: Keyword.fetch!(@activation_evidence, :evidence_id),
+          evidence_digest: Keyword.fetch!(@activation_evidence, :evidence_digest),
+          operator: Keyword.fetch!(@activation_evidence, :activated_by),
+          revision: Keyword.fetch!(@activation_evidence, :revision)
+        ],
+        fun
+      )
+
+    SQL.query!(Repo, "SET LOCAL ROLE maraithon_runtime", [])
+    result
+  end
+
+  defp settle_legacy_effect!(effect_id) do
+    now = DatabaseClock.now!()
+
+    assert {1, _rows} =
+             Repo.update_all(from(effect in Effect, where: effect.id == ^effect_id),
+               set: [
+                 status: "completed",
+                 result: %{"ok" => true},
+                 result_envelope: TerminalEnvelope.success(),
+                 result_acknowledged_at: now,
+                 updated_at: now
+               ]
+             )
+  end
+
+  defp settle_legacy_directive!(directive) do
+    now = DatabaseClock.now!()
+
+    directive
+    |> AgentDirective.changeset(%{
+      status: "cancelled",
+      terminal_at: now,
+      terminal_acknowledged_at: now,
+      last_error_code: "cancelled",
+      updated_at: now
+    })
+    |> Repo.update!()
+  end
+
+  defp effect_generation_watcher(opts) do
+    suffix = System.unique_integer([:positive])
+    watcher_name = :"effect_generation_watcher_#{suffix}"
+
+    start_supervised!(
+      {AgentWatcher,
+       name: watcher_name,
+       reconcile?: false,
+       recover?: false,
+       crash_loop_max: Keyword.get(opts, :max_crashes, 3),
+       crash_loop_window_ms: Keyword.get(opts, :window_ms, 600_000),
+       reresume_backoffs: Keyword.get(opts, :backoffs_ms, [0]),
+       down_retry_backoffs: [1],
+       shutdown_down_barrier_ms: 0},
+      id: watcher_name
+    )
+  end
+
+  defp prove_local_agent_down(watcher, agent_id, owner_generation) do
+    pid = registered_effect_owner(agent_id, owner_generation)
+    assert :ok = AgentWatcher.track(watcher, pid, agent_id, owner_generation)
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 2_000
+    await_effect_watcher_release(watcher, pid, 100)
+
+    case AgentRestartGuards.get(agent_id) do
+      %{last_owner_token: ^owner_generation} = guard ->
+        {:recorded, guard}
+
+      _no_loss_guard ->
+        incident = AgentTerminations.get_by_lease(owner_generation)
+        assert incident.status == "reconciled"
+        {:reconciled_without_loss, incident}
+    end
+  end
+
+  defp registered_effect_owner(agent_id, owner_generation) do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        result = Registry.register(AgentRegistry, agent_id, owner_generation)
+        send(parent, {:effect_owner_registered, self(), result})
+        receive do: (:stop -> :ok)
+      end)
+
+    assert_receive {:effect_owner_registered, ^pid, {:ok, _owner}}, 2_000
+    pid
+  end
+
+  defp await_effect_watcher_release(_watcher, _pid, 0),
+    do: flunk("AgentWatcher did not reconcile exact Effect-generation owner DOWN")
+
+  defp await_effect_watcher_release(watcher, pid, attempts) do
+    case :sys.get_state(watcher, 30_000) do
+      %{pids: pids, pending_downs: pending} when not is_map_key(pids, pid) ->
+        if map_size(pending) == 0,
+          do: :ok,
+          else: await_effect_watcher_release(watcher, pid, attempts - 1)
+
+      _state ->
+        await_effect_watcher_release(watcher, pid, attempts - 1)
+    end
+  end
+
+  defp exact_effect_scope!(agent_id, owner_generation) do
+    case Scope.partition_for_agent_owner(agent_id, owner_generation) do
+      {:ok, session, partition} -> exact_effect_scope(session, partition)
+      {:error, reason} -> flunk("exact Effect authority unavailable: #{inspect(reason)}")
+    end
+  end
+
+  defp exact_effect_scope(session, partition) do
+    %{
+      coordination_activation_epoch: session.activation_epoch,
+      coordination_partition_id: partition.partition_id,
+      coordination_partition_epoch: partition.ownership_epoch,
+      coordination_node_incarnation_id: session.id
+    }
+  end
+
+  defp earlier_datetime(left, right) do
+    if DateTime.compare(left, right) == :gt, do: right, else: left
+  end
+
+  defp await_task_termination_proof!(assignment_id, attempts \\ 20)
+
+  defp await_task_termination_proof!(_assignment_id, 0),
+    do: flunk("Guardian did not persist the exact Task termination proof")
+
+  defp await_task_termination_proof!(assignment_id, attempts) do
+    guardian = Process.whereis(Maraithon.Runtime.TaskGuardian)
+    state = :sys.get_state(guardian, 30_000)
+
+    # Drive the fixed production retry handler only after authenticated DOWN
+    # has enqueued durable persistence. This is synchronization, not proof.
+    if MapSet.size(state.pending_persistence_set) > 0 do
+      send(guardian, :retry_pending_task_terminations)
+      _ = :sys.get_state(guardian, 30_000)
+    else
+      :erlang.yield()
+    end
+
+    case SQL.query!(
+           Repo,
+           """
+           SELECT 1
+           FROM public.runtime_task_termination_proofs
+           WHERE assignment_id = $1::uuid
+           LIMIT 1
+           """,
+           [Ecto.UUID.dump!(assignment_id)]
+         ).rows do
+      [[1]] -> :ok
+      [] -> await_task_termination_proof!(assignment_id, attempts - 1)
+    end
+  end
+
+  defp start_gated_preactivation!(agent, owner_generation) do
+    BootGate.open()
+
+    assert {:ok, effect_id} =
+             Effects.request(agent.id, :tool_call, "time", %{},
+               runtime_owner_generation: owner_generation
+             )
+
+    stop_existing_runner()
+    test_pid = self()
+
+    # Deterministic barrier at the production ordering boundary: the exact
+    # child is PID-bound and Guardian-registered, but cannot activate durably or
+    # enter provider code until the test releases it.
+    task_starter = fn effect, _completion_writer, _completion_sleeper ->
+      gate = make_ref()
+
+      identity = %{
+        effect_id: effect.id,
+        agent_id: effect.agent_id,
+        claim_token: effect.claim_token,
+        assignment_id: effect.coordination_task_assignment_id,
+        supervisor_id: effect.claim_supervisor_id,
+        task_id: effect.claim_task_id
+      }
+
+      task =
+        Task.Supervisor.async_nolink(
+          Maraithon.Runtime.ExactEffectTaskSupervisor,
+          fn ->
+            receive do
+              {:begin_effect_preactivation, ^gate} -> :ok
+            end
+
+            :ok = Maraithon.Runtime.EffectTaskSupervisor.register_current!(identity)
+            send(test_pid, {:effect_preactivation_gated, self(), identity})
+
+            receive do
+              {:continue_effect_preactivation, ^gate} -> :ok
+            end
+          end,
+          shutdown: :brutal_kill
+        )
+
+      case Maraithon.Runtime.EffectTaskSupervisor.bind_task(identity, task.pid) do
+        :ok ->
+          send(task.pid, {:begin_effect_preactivation, gate})
+          {:bound_task, task}
+
+        {:error, reason} ->
+          _ =
+            Task.Supervisor.terminate_child(
+              Maraithon.Runtime.ExactEffectTaskSupervisor,
+              task.pid
+            )
+
+          {:error, reason}
+      end
+    end
+
+    runner = start_supervised!({EffectRunner, task_starter: task_starter})
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), runner)
+
+    renewer = Process.whereis(EffectClaimRenewer)
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), renewer)
+
+    send(runner, :poll)
+
+    assert_receive {:effect_preactivation_gated, worker, identity}, 15_000
+    _ = :sys.get_state(runner, 15_000)
+    worker_ref = Process.monitor(worker)
+
+    assert identity.effect_id == effect_id
+
+    assert {:ok, [guardian_identity]} =
+             Maraithon.Runtime.EffectTaskSupervisor.active_identities()
+
+    assert guardian_identity == identity
+
+    %{
+      effect_id: effect_id,
+      identity: identity,
+      renewer: renewer,
+      runner: runner,
+      worker: worker,
+      worker_ref: worker_ref
+    }
   end
 
   defp insert_claimed_exact_effect!(
@@ -1933,15 +3200,18 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
          supervisor_id,
          task_id,
          now,
-         effect_id \\ Ecto.UUID.generate()
+         effect_id \\ Ecto.UUID.generate(),
+         assignment_state \\ :running,
+         termination_capability_digest \\ :crypto.hash(:sha256, Ecto.UUID.generate()),
+         assignment_id \\ Ecto.UUID.generate()
        ) do
     {:ok, effect} =
       Repo.transaction(fn ->
         ProtocolCutover.require_exact_write!()
+        {:ok, session, partition} = Scope.partition_for_agent_owner(agent.id, owner_generation)
 
-        pending =
-          %Effect{}
-          |> Effect.protocol_changeset(%{
+        attrs =
+          %{
             id: effect_id,
             agent_id: agent.id,
             owner_user_id: agent.user_id,
@@ -1952,8 +3222,34 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
             runtime_owner_generation: owner_generation,
             attempts: 0,
             max_attempts: 3
-          })
+          }
+          |> Map.merge(exact_effect_scope(session, partition))
+
+        pending =
+          %Effect{}
+          |> Effect.protocol_changeset(attrs)
           |> Repo.insert!()
+
+        {:ok, assignment} =
+          TaskClaims.reserve(
+            session,
+            partition,
+            %{
+              work_kind: "effect",
+              work_id: pending.id,
+              claim_token: claim_token,
+              assignment_id: assignment_id,
+              supervisor_id: supervisor_id,
+              local_task_id: task_id,
+              termination_capability_digest: termination_capability_digest
+            },
+            ttl_ms: 60_000
+          )
+
+        claim_expires_at =
+          now
+          |> DateTime.add(60, :second)
+          |> earlier_datetime(assignment.lease_expires_at)
 
         {1, _rows} =
           Repo.update_all(
@@ -1965,23 +3261,120 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
               claim_token: claim_token,
               claim_owner_node: owner_node,
               claim_heartbeat_at: now,
-              claim_expires_at: DateTime.add(now, 60, :second),
+              claim_expires_at: claim_expires_at,
               claim_supervisor_id: supervisor_id,
               claim_task_id: task_id,
               claimed_by: owner_node,
               claimed_at: now,
+              coordination_task_assignment_id: assignment.id,
               updated_at: now
             ]
           )
 
-        Repo.get!(Effect, pending.id)
+        claimed = Repo.get!(Effect, pending.id)
+
+        case assignment_state do
+          :reserved ->
+            claimed
+
+          :running ->
+            running =
+              TaskClaims.activate_effect_in_transaction!(
+                assignment,
+                agent.id,
+                owner_generation
+              )
+
+            assert running.state == "running"
+            claimed
+        end
       end)
 
     effect
   end
 
   defp activate_exact do
-    ProtocolCutover.activate(confirmation: ProtocolCutover.activation_confirmation())
+    effect_result =
+      ProtocolCutover.activate(
+        [confirmation: ProtocolCutover.activation_confirmation()] ++ @activation_evidence
+      )
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+
+    case effect_result do
+      {:ok, effect_status} when effect_status in [:activated, :already_active] ->
+        Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
+
+        runtime_result =
+          CoordinationProtocol.activate(
+            [confirmation: CoordinationProtocol.activation_confirmation()] ++ @activation_evidence
+          )
+
+        Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+
+        case runtime_result do
+          {:ok, runtime_status} when runtime_status in [:activated, :already_active] ->
+            ensure_coordination_authority!()
+            {:ok, effect_status}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp ensure_coordination_authority! do
+    runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    unless Keyword.get(runtime, :coordination_test_session) do
+      {:ok, joining} =
+        Authority.register_node(
+          node_name: "effect-generation-fence@test",
+          revision: String.duplicate("a", 40),
+          ttl_ms: 300_000
+        )
+
+      {:ok, session} = Authority.mark_node_ready(joining)
+      {:ok, preparing_leader} = Authority.acquire_leader(session, 300_000)
+      {:ok, leader} = Authority.mark_leader_ready(preparing_leader)
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        runtime
+        |> Keyword.put(:coordination_test_session, session)
+        |> Keyword.put(:coordination_test_leader, leader)
+      )
+    end
+
+    :ok
+  end
+
+  defp ensure_user_partition!(user_id) do
+    runtime = Application.fetch_env!(:maraithon, Maraithon.Runtime)
+    session = Keyword.fetch!(runtime, :coordination_test_session)
+    leader = Keyword.fetch!(runtime, :coordination_test_leader)
+    partition_id = user_id |> Partitioning.tenant_key() |> Partitioning.partition_for()
+
+    case Repo.get!(Partition, partition_id) do
+      %Partition{state: "unassigned"} ->
+        {:ok, _preparing} =
+          Authority.assign_partition(leader, session, partition_id, ttl_ms: 300_000)
+
+        {:ok, _ready} = Authority.mark_partition_ready(session, partition_id)
+        :ok
+
+      %Partition{
+        state: "ready",
+        owner_node_incarnation_id: owner_id,
+        activation_epoch: activation_epoch
+      }
+      when owner_id == session.id and activation_epoch == session.activation_epoch ->
+        :ok
+    end
   end
 
   defp legacy_agent(name) do
@@ -2001,9 +3394,18 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     agent
   end
 
-  defp exact_agent(name) do
+  defp exact_agent(name, opts \\ []) do
     agent = legacy_agent(name)
-    {:ok, claimed} = AgentLeases.claim(agent.id, ttl_ms: 60_000)
+    :ok = ensure_user_partition!(agent.user_id)
+
+    claim_opts =
+      [ttl_ms: 60_000] ++
+        case Keyword.fetch(opts, :watcher) do
+          {:ok, watcher} -> [watcher: watcher]
+          :error -> []
+        end
+
+    {:ok, claimed} = AgentLeases.claim(agent.id, claim_opts)
     {:ok, _ready} = AgentLeases.mark_ready(agent.id, claimed.owner_token)
     {agent, claimed.owner_token}
   end
@@ -2031,6 +3433,18 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
 
       LLMRateLimiter.reset()
     end)
+  end
+
+  defp restart_task_system! do
+    parent = Maraithon.Runtime.Supervisor
+    child = Maraithon.Runtime.TaskSystemSupervisor
+
+    :ok = Supervisor.terminate_child(parent, child)
+    {:ok, _pid} = Supervisor.restart_child(parent, child)
+
+    # Synchronous readiness fence; no sleep and no unsupervised replacement.
+    _ = :sys.get_state(EffectTaskAuthority)
+    :ok
   end
 
   defp stop_existing_runner do

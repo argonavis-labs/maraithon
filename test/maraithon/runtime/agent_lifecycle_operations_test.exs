@@ -6,22 +6,33 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
   alias Maraithon.AgentSubscriptions.AgentSubscription
   alias Maraithon.Agents
   alias Maraithon.Effects.Effect
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Repo
   alias Maraithon.Runtime
   alias Maraithon.Runtime.AgentLifecycleOperations
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentSupervisor
+  alias Maraithon.Runtime.AgentTerminations
+  alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.Bootstrap
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.ScheduledJob
   alias Maraithon.Runtime.WakeCoordinator
+  alias Maraithon.Runtime.Coordination.{Authority, Partition, Partitioning}
+  alias Maraithon.Runtime.Coordination.Protocol, as: CoordinationProtocol
+
+  @activation_evidence [
+    evidence_id: "test:stopped-fleet:agent-lifecycle-operations",
+    evidence_digest: :crypto.hash(:sha256, "test stopped fleet evidence"),
+    activated_by: "agent-lifecycle-operations@example.test",
+    revision: String.duplicate("b", 40)
+  ]
 
   test "establishes one immutable marker with the stopped/readiness fence and adopts retries" do
     agent = running_consented_agent("marker-adopt")
-    {:ok, lease} = AgentLeases.claim(agent.id)
-    {:ok, _ready} = AgentLeases.mark_ready(agent.id, lease.owner_token)
+    {lease, watcher, owner_pid} = monitored_owner(agent.id)
 
     request = %{"params" => %{"config" => %{"revision" => 2}}}
 
@@ -57,7 +68,11 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
                planner
              )
 
-    assert {:ok, :released} = AgentLeases.release(agent.id, lease.owner_token)
+    assert {:error, :termination_proof_required} =
+             AgentLeases.release(agent.id, lease.owner_token)
+
+    prove_owner_down(watcher, owner_pid)
+    assert AgentLeases.get(agent.id) == nil
 
     assert {:ok, %{status: :finalized, agent: finalized, resume_after: true}} =
              AgentLifecycleOperations.finalize(agent.id, first.operation_token)
@@ -137,7 +152,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     assert AgentLifecycleOperations.get(agent.id) == nil
   end
 
-  test "terminal corrupt Effect ciphertext is metadata-deleted but active authority stays blocked" do
+  test "corrupt Effect ciphertext is deleted only after active authority is cancelled" do
     terminal_agent = running_consented_agent("corrupt-terminal-delete")
     terminal_effect = pending_effect(terminal_agent.id)
 
@@ -145,10 +160,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     |> Ecto.Changeset.change(status: "cancelled")
     |> Repo.update!()
 
-    Repo.query!(
-      "UPDATE effects SET params_ciphertext = $1 WHERE id = $2",
-      [<<0, 1, 2, 3>>, Ecto.UUID.dump!(terminal_effect.id)]
-    )
+    seed_preexisting_corrupt_ciphertext!(terminal_effect.id)
 
     assert {:ok, terminal_fence} =
              AgentLifecycleOperations.begin(
@@ -169,10 +181,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     active_agent = running_consented_agent("corrupt-active-block")
     active_effect = pending_effect(active_agent.id)
 
-    Repo.query!(
-      "UPDATE effects SET params_ciphertext = $1 WHERE id = $2",
-      [<<0, 1, 2, 3>>, Ecto.UUID.dump!(active_effect.id)]
-    )
+    seed_preexisting_corrupt_ciphertext!(active_effect.id)
 
     assert {:ok, active_fence} =
              AgentLifecycleOperations.begin(
@@ -187,10 +196,18 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
 
     assert Agents.get_agent(active_agent.id, include_removed: true)
 
-    assert %{rows: [["pending"]]} =
+    assert AgentLifecycleOperations.get(active_agent.id).operation_token ==
+             active_fence.operation_token
+
+    assert %{rows: [["cancelled"]]} =
              Repo.query!("SELECT status FROM effects WHERE id = $1", [
                Ecto.UUID.dump!(active_effect.id)
              ])
+
+    assert {:ok, %{status: :finalized, action: :deleted}} =
+             AgentLifecycleOperations.finalize(active_agent.id, active_fence.operation_token)
+
+    refute Agents.get_agent(active_agent.id, include_removed: true)
   end
 
   test "expired lease loss is adopted into the marker and its matching guard is cleared" do
@@ -202,15 +219,23 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     |> Ecto.Changeset.change(lease_until: DateTime.add(ready.ready_at, 1, :microsecond))
     |> Repo.update!()
 
-    assert {:ok, %{drain_status: :quiesced}} = Runtime.stop_agent(agent.id, "expired_owner")
-    assert AgentLeases.get(agent.id) == nil
+    assert {:error, :agent_stop_reconciliation_pending} =
+             Runtime.stop_agent(agent.id, "expired_owner")
+
+    assert %{owner_token: owner_token} = AgentLeases.get(agent.id)
+    assert owner_token == lease.owner_token
     assert AgentRestartGuards.get(agent.id) == nil
     assert AgentLifecycleOperations.get(agent.id) == nil
-    assert Agents.get_agent(agent.id).status == "stopped"
+    assert Agents.get_agent(agent.id).status == "running"
+
+    assert %{status: "requested", lease_token: ^owner_token} =
+             AgentTerminations.get_by_lease(owner_token)
   end
 
   test "WakeCoordinator finishes a stranded ordinary operation from its stored digest" do
+    enable_exact_reconciliation!()
     agent = running_consented_agent("wake-finalize")
+    ensure_user_partition!(agent.user_id)
 
     assert {:ok, fence} =
              AgentLifecycleOperations.begin(
@@ -235,7 +260,9 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
   end
 
   test "closed admission finalizes resume lifecycle work without starting an Agent" do
+    enable_exact_reconciliation!()
     agent = running_consented_agent("wake-finalize-closed-gate")
+    ensure_user_partition!(agent.user_id)
 
     assert {:ok, fence} =
              AgentLifecycleOperations.begin(
@@ -340,7 +367,9 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
   end
 
   test "reconciler never guesses when a stranded payload fails its digest" do
+    enable_exact_reconciliation!()
     agent = running_consented_agent("digest-fail-closed")
+    ensure_user_partition!(agent.user_id)
 
     assert {:ok, fence} =
              AgentLifecycleOperations.begin(
@@ -429,6 +458,115 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     assert length(Agents.list_agents()) == before_count
   end
 
+  defp enable_exact_reconciliation! do
+    original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      original_runtime
+      |> Keyword.put(:multinode_coordination_enabled, true)
+      |> Keyword.delete(:coordination_test_session)
+      |> Keyword.delete(:coordination_test_leader)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, Maraithon.Runtime, original_runtime) end)
+
+    assert ProtocolCutover.mode() == :legacy
+
+    assert {:ok, :attested} =
+             CoordinationProtocol.attest_effect_activation_evidence(@activation_evidence)
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    assert {:ok, status} = activate_exact_reconciliation()
+    assert status in [:activated, :already_active]
+  end
+
+  defp activate_exact_reconciliation do
+    effect_result =
+      ProtocolCutover.activate(
+        [confirmation: ProtocolCutover.activation_confirmation()] ++ @activation_evidence
+      )
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+
+    case effect_result do
+      {:ok, effect_status} when effect_status in [:activated, :already_active] ->
+        Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
+
+        runtime_result =
+          CoordinationProtocol.activate(
+            [confirmation: CoordinationProtocol.activation_confirmation()] ++
+              @activation_evidence
+          )
+
+        Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+
+        case runtime_result do
+          {:ok, runtime_status} when runtime_status in [:activated, :already_active] ->
+            ensure_coordination_authority!()
+            {:ok, effect_status}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp ensure_coordination_authority! do
+    runtime = Application.fetch_env!(:maraithon, Maraithon.Runtime)
+
+    unless Keyword.get(runtime, :coordination_test_session) do
+      {:ok, joining} =
+        Authority.register_node(
+          node_name: "agent-lifecycle-operations@test",
+          revision: String.duplicate("b", 40),
+          ttl_ms: 300_000
+        )
+
+      {:ok, session} = Authority.mark_node_ready(joining)
+      {:ok, preparing_leader} = Authority.acquire_leader(session, 300_000)
+      {:ok, leader} = Authority.mark_leader_ready(preparing_leader)
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        runtime
+        |> Keyword.put(:coordination_test_session, session)
+        |> Keyword.put(:coordination_test_leader, leader)
+      )
+    end
+
+    :ok
+  end
+
+  defp ensure_user_partition!(user_id) do
+    runtime = Application.fetch_env!(:maraithon, Maraithon.Runtime)
+    session = Keyword.fetch!(runtime, :coordination_test_session)
+    leader = Keyword.fetch!(runtime, :coordination_test_leader)
+    partition_id = user_id |> Partitioning.tenant_key() |> Partitioning.partition_for()
+
+    case Repo.get!(Partition, partition_id) do
+      %Partition{state: "unassigned"} ->
+        {:ok, _preparing} =
+          Authority.assign_partition(leader, session, partition_id, ttl_ms: 300_000)
+
+        {:ok, _ready} = Authority.mark_partition_ready(session, partition_id)
+        :ok
+
+      %Partition{
+        state: "ready",
+        owner_node_incarnation_id: owner_id,
+        activation_epoch: activation_epoch
+      }
+      when owner_id == session.id and activation_epoch == session.activation_epoch ->
+        :ok
+    end
+  end
+
   defp running_consented_agent(label, config \\ %{}) do
     user_id = "lifecycle-#{label}-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -457,6 +595,89 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
       status: "pending"
     })
     |> Repo.insert!()
+  end
+
+  defp monitored_owner(agent_id) do
+    suffix = System.unique_integer([:positive])
+    watcher_name = :"lifecycle_operation_watcher_#{suffix}"
+
+    watcher =
+      start_supervised!(
+        {AgentWatcher,
+         [
+           name: watcher_name,
+           reconcile?: false,
+           recover?: false,
+           reresume_backoffs: [0]
+         ]},
+        id: watcher_name
+      )
+
+    {:ok, lease} = AgentLeases.claim(agent_id, watcher: watcher)
+    {:ok, _ready} = AgentLeases.mark_ready(agent_id, lease.owner_token)
+    owner_pid = registered_owner(agent_id, lease.owner_token)
+    assert :ok = AgentWatcher.track(watcher, owner_pid, agent_id, lease.owner_token)
+    {lease, watcher, owner_pid}
+  end
+
+  defp registered_owner(agent_id, owner_token) do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        result = Registry.register(AgentRegistry, agent_id, owner_token)
+        send(parent, {:owner_registered, self(), result})
+        receive do: (:terminate -> :ok)
+      end)
+
+    assert_receive {:owner_registered, ^pid, {:ok, _owner}}, 1_000
+    pid
+  end
+
+  defp prove_owner_down(watcher, owner_pid) do
+    ref = Process.monitor(owner_pid)
+    send(owner_pid, :terminate)
+    assert_receive {:DOWN, ^ref, :process, ^owner_pid, :normal}, 1_000
+    await_watcher_release(watcher, owner_pid, 100)
+  end
+
+  defp await_watcher_release(_watcher, _owner_pid, 0),
+    do: flunk("AgentWatcher did not reconcile the exact DOWN")
+
+  defp await_watcher_release(watcher, owner_pid, attempts) do
+    case :sys.get_state(watcher) do
+      %{pids: pids, pending_downs: pending} when not is_map_key(pids, owner_pid) ->
+        if map_size(pending) == 0,
+          do: :ok,
+          else: await_watcher_release(watcher, owner_pid, attempts - 1)
+
+      _state ->
+        await_watcher_release(watcher, owner_pid, attempts - 1)
+    end
+  end
+
+  defp seed_preexisting_corrupt_ciphertext!(effect_id) do
+    Repo.query!("RESET ROLE", [], log: false)
+
+    try do
+      Repo.query!("SET LOCAL session_replication_role = replica", [], log: false)
+
+      Repo.query!(
+        """
+        UPDATE effects
+        SET params_ciphertext = set_byte(
+          params_ciphertext,
+          octet_length(params_ciphertext) - 1,
+          get_byte(params_ciphertext, octet_length(params_ciphertext) - 1) # 1
+        )
+        WHERE id = $1
+        """,
+        [Ecto.UUID.dump!(effect_id)]
+      )
+    after
+      Repo.query!("SET LOCAL session_replication_role = origin", [], log: false)
+      Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    end
   end
 
   defp pending_effect(agent_id) do

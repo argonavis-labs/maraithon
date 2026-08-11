@@ -122,12 +122,15 @@ defmodule Maraithon.Runtime.SnapshotMigration do
       result =
         repo.transaction(
           fn ->
-            set_local_lock_timeout!(repo)
+            with_migrator_role(repo, fn ->
+              set_local_lock_timeout!(repo)
+              authorize_legacy_snapshot_format_migration!(repo)
 
-            case load_rows(repo, after_id, batch_size, lock?: true) do
-              {:ok, rows} -> process_rows!(repo, rows, after_id, batch_size)
-              {:error, reason} -> repo.rollback(reason)
-            end
+              case load_rows(repo, after_id, batch_size, lock?: true) do
+                {:ok, rows} -> process_rows!(repo, rows, after_id, batch_size)
+                {:error, reason} -> repo.rollback(reason)
+              end
+            end)
           end,
           timeout: @query_timeout_ms
         )
@@ -231,28 +234,30 @@ defmodule Maraithon.Runtime.SnapshotMigration do
       result =
         repo.transaction(
           fn ->
-            set_local_lock_timeout!(repo)
-            query!(repo, "LOCK TABLE snapshots IN SHARE ROW EXCLUSIVE MODE", [])
+            with_migrator_role(repo, fn ->
+              set_local_lock_timeout!(repo)
+              query!(repo, "LOCK TABLE snapshots IN SHARE ROW EXCLUSIVE MODE", [])
 
-            proof_opts =
-              opts
-              |> Keyword.put(:repo, repo)
-              |> Keyword.put(:emit_telemetry, false)
+              proof_opts =
+                opts
+                |> Keyword.put(:repo, repo)
+                |> Keyword.put(:emit_telemetry, false)
 
-            case preflight(proof_opts) do
-              {:ok, preflight} ->
-                if clean_format?(preflight) do
-                  case do_prune_all(opts, max_batches, %{batches: 0, deleted: 0}) do
-                    {:ok, pruned} -> pruned
-                    {:error, reason} -> repo.rollback(reason)
+              case preflight(proof_opts) do
+                {:ok, preflight} ->
+                  if clean_format?(preflight) do
+                    case do_prune_all(opts, max_batches, %{batches: 0, deleted: 0}) do
+                      {:ok, pruned} -> pruned
+                      {:error, reason} -> repo.rollback(reason)
+                    end
+                  else
+                    repo.rollback({:snapshot_prune_requires_clean_format, preflight})
                   end
-                else
-                  repo.rollback({:snapshot_prune_requires_clean_format, preflight})
-                end
 
-              {:error, reason} ->
-                repo.rollback(reason)
-            end
+                {:error, reason} ->
+                  repo.rollback(reason)
+              end
+            end)
           end,
           timeout: :infinity
         )
@@ -293,33 +298,35 @@ defmodule Maraithon.Runtime.SnapshotMigration do
     result =
       repo.transaction(
         fn ->
-          set_local_lock_timeout!(repo)
-          query!(repo, "LOCK TABLE snapshots IN SHARE ROW EXCLUSIVE MODE", [])
+          with_migrator_role(repo, fn ->
+            set_local_lock_timeout!(repo)
+            query!(repo, "LOCK TABLE snapshots IN SHARE ROW EXCLUSIVE MODE", [])
 
-          proof_opts =
-            opts
-            |> Keyword.put(:repo, repo)
-            |> Keyword.put(:emit_telemetry, false)
+            proof_opts =
+              opts
+              |> Keyword.put(:repo, repo)
+              |> Keyword.put(:emit_telemetry, false)
 
-          case preflight(proof_opts) do
-            {:ok, stats} ->
-              if clean_format?(stats) and stats.agents_over_retention == 0 do
-                ensure_format_constraint!(repo)
-                Enum.each(@snapshot_constraints, &require_constraint_definition!(repo, &1))
-                Enum.each(@snapshot_constraints, &validate_required_constraint!(repo, &1))
-                Enum.each(@snapshot_constraints, &require_constraint_definition!(repo, &1))
+            case preflight(proof_opts) do
+              {:ok, stats} ->
+                if clean_format?(stats) and stats.agents_over_retention == 0 do
+                  ensure_format_constraint!(repo)
+                  Enum.each(@snapshot_constraints, &require_constraint_definition!(repo, &1))
+                  Enum.each(@snapshot_constraints, &validate_required_constraint!(repo, &1))
+                  Enum.each(@snapshot_constraints, &require_constraint_definition!(repo, &1))
 
-                case preflight(proof_opts) do
-                  {:ok, proved} -> proved
-                  {:error, reason} -> repo.rollback(reason)
+                  case preflight(proof_opts) do
+                    {:ok, proved} -> proved
+                    {:error, reason} -> repo.rollback(reason)
+                  end
+                else
+                  repo.rollback({:snapshot_preflight_not_clean, stats})
                 end
-              else
-                repo.rollback({:snapshot_preflight_not_clean, stats})
-              end
 
-            {:error, reason} ->
-              repo.rollback(reason)
-          end
+              {:error, reason} ->
+                repo.rollback(reason)
+            end
+          end)
         end,
         timeout: :infinity
       )
@@ -541,6 +548,13 @@ defmodule Maraithon.Runtime.SnapshotMigration do
       )
 
     if removable? do
+      query!(
+        repo,
+        "SELECT set_config('maraithon.snapshot_quarantine_delete', " <>
+          "'QUARANTINE_INVALID_SNAPSHOT_V1', true)",
+        []
+      )
+
       {deleted, _rows} =
         Snapshot
         |> where([snapshot], snapshot.id == ^row.id)
@@ -701,6 +715,13 @@ defmodule Maraithon.Runtime.SnapshotMigration do
     repo = Keyword.get(opts, :repo, Repo)
 
     with {:ok, limit} <- prune_batch_size(opts),
+         {:ok, _marker} <-
+           repo.query(
+             "SELECT set_config('maraithon.snapshot_history_prune', " <>
+               "'PRUNE_BEYOND_RECOVERY_WINDOW_V1', true)",
+             [],
+             timeout: @query_timeout_ms
+           ),
          {:ok, result} <-
            repo.query(prune_sql(), [Snapshot.retention_count(), limit],
              timeout: @query_timeout_ms
@@ -958,6 +979,38 @@ defmodule Maraithon.Runtime.SnapshotMigration do
 
   defp as_utc_datetime(%NaiveDateTime{} = datetime),
     do: DateTime.from_naive!(datetime, "Etc/UTC")
+
+  defp authorize_legacy_snapshot_format_migration!(repo) do
+    query!(
+      repo,
+      "SELECT set_config('maraithon.snapshot_format_migration', " <>
+        "'MIGRATE_LEGACY_SNAPSHOT_V1', true)",
+      []
+    )
+  end
+
+  defp with_migrator_role(repo, fun) when is_function(fun, 0) do
+    prior_role = query!(repo, "SELECT current_user", []).rows
+    query!(repo, "SET LOCAL ROLE maraithon_migrator", [])
+
+    case query!(repo, "SELECT current_user", []).rows do
+      [["maraithon_migrator"]] -> :ok
+      _other -> repo.rollback(:snapshot_migrator_authority_required)
+    end
+
+    try do
+      fun.()
+    after
+      statement =
+        case prior_role do
+          [["maraithon_runtime"]] -> "SET LOCAL ROLE maraithon_runtime"
+          [["maraithon_migrator"]] -> "SET LOCAL ROLE maraithon_migrator"
+          _other -> "RESET ROLE"
+        end
+
+      _ = repo.query(statement, [], timeout: @query_timeout_ms)
+    end
+  end
 
   defp set_local_lock_timeout!(repo) do
     query!(repo, "SET LOCAL lock_timeout = '#{@lock_timeout_ms}ms'", [])

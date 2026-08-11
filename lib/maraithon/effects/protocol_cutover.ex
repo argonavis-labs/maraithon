@@ -14,7 +14,6 @@ defmodule Maraithon.Effects.ProtocolCutover do
   """
 
   alias Ecto.Adapters.SQL
-  alias Maraithon.DurablePayloadRegistry
   alias Maraithon.Repo
 
   @name "effects"
@@ -186,42 +185,61 @@ defmodule Maraithon.Effects.ProtocolCutover do
             [Integer.to_string(lock_timeout_ms) <> "ms"]
           )
 
+          runtime =
+            case SQL.query!(
+                   Repo,
+                   """
+                   SELECT mode, activation_evidence_id, activation_evidence_digest,
+                          activated_by, exact_revision
+                   FROM public.runtime_coordination_protocols
+                   WHERE name = 'runtime'
+                   FOR SHARE
+                   """,
+                   []
+                 ).rows do
+              [[mode, id, digest, activated_by, revision]]
+              when mode in ["dark", "partition_fenced_v1"] ->
+                %{
+                  mode: mode,
+                  id: id,
+                  digest: digest,
+                  activated_by: activated_by,
+                  revision: revision
+                }
+
+              [[mode, _, _, _, _]] ->
+                Repo.rollback({:runtime_coordination_protocol_invalid, mode})
+
+              [] ->
+                Repo.rollback(:runtime_coordination_protocol_missing)
+            end
+
           current = locked_activation_mode!()
 
           case current do
             @exact ->
+              if runtime.mode == "partition_fenced_v1" and
+                   {runtime.id, runtime.digest, runtime.revision} !=
+                     {evidence.id, evidence.digest, evidence.revision},
+                 do: Repo.rollback(:runtime_effect_protocol_evidence_mismatch)
+
               :ok = ensure_activation_evidence_matches!(evidence)
+              if runtime.mode == "partition_fenced_v1", do: ensure_pair_evidence_matches!(runtime)
               :ok = ensure_exact_storage_ready!()
               :already_active
 
             @legacy ->
+              if runtime.mode != "dark",
+                do: Repo.rollback(:effect_activation_requires_dark_runtime)
+
               :ok = ensure_activation_evidence_matches!(evidence)
 
               # Consistent order: protocol row, Effect table, lease table.
               # SHARE blocks writers and DDL while preserving read-only
               # observability during a cutover attempt.
-              SQL.query!(Repo, "LOCK TABLE public.effects IN SHARE MODE", [])
-              SQL.query!(Repo, "LOCK TABLE public.agent_runtime_leases IN SHARE MODE", [])
-              SQL.query!(Repo, "LOCK TABLE public.agent_directives IN SHARE MODE", [])
-              SQL.query!(Repo, "LOCK TABLE public.agent_runs IN SHARE MODE", [])
-              SQL.query!(Repo, "LOCK TABLE public.agent_run_steps IN SHARE MODE", [])
-              SQL.query!(Repo, "LOCK TABLE public.events IN SHARE MODE", [])
-
-              for table <-
-                    DurablePayloadRegistry.tables() --
-                      ~w(effects agent_directives events agent_run_steps) do
-                SQL.query!(Repo, "LOCK TABLE public.#{table} IN SHARE MODE", [])
-              end
-
               SQL.query!(
                 Repo,
-                "LOCK TABLE public.durable_payload_verifications IN SHARE MODE",
-                []
-              )
-
-              SQL.query!(
-                Repo,
-                "LOCK TABLE public.durable_payload_verification_failures IN SHARE MODE",
+                "SELECT public.lock_durable_runtime_activation_sources()",
                 []
               )
 
@@ -395,10 +413,10 @@ defmodule Maraithon.Effects.ProtocolCutover do
   defp ensure_exact_migrations_recorded do
     case SQL.query(
            Repo,
-           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140002, 20260810140003, 20260810140004, 20260810140005, 20260810140006, 20260810140007)",
+           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140002, 20260810140003, 20260810140004, 20260810140005, 20260810140006, 20260810140007, 20260811000420)",
            []
          ) do
-      {:ok, %{rows: [[10]]}} -> :ok
+      {:ok, %{rows: [[11]]}} -> :ok
       {:ok, _missing} -> {:error, :effect_protocol_migrations_not_recorded}
       {:error, _reason} -> {:error, :effect_protocol_unavailable}
     end
@@ -407,10 +425,10 @@ defmodule Maraithon.Effects.ProtocolCutover do
   defp ensure_exact_migrations_recorded! do
     case SQL.query!(
            Repo,
-           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140002, 20260810140003, 20260810140004, 20260810140005, 20260810140006, 20260810140007)",
+           "SELECT COUNT(*) FROM public.schema_migrations WHERE version IN (20260810132102, 20260810132103, 20260810140000, 20260810140001, 20260810140002, 20260810140003, 20260810140004, 20260810140005, 20260810140006, 20260810140007, 20260811000420)",
            []
          ).rows do
-      [[10]] -> :ok
+      [[11]] -> :ok
       _missing -> Repo.rollback(:effect_protocol_migrations_not_recorded)
     end
   end
@@ -466,8 +484,11 @@ defmodule Maraithon.Effects.ProtocolCutover do
   defp ensure_payload_roles_ready do
     case SQL.query(
            Repo,
-           "SELECT public.durable_payload_roles_ready() AND public.durable_payload_catalog_ready()",
-           [], log: false) do
+           "SELECT public.durable_payload_roles_ready() AND " <>
+             "public.durable_payload_catalog_ready() AND public.privacy_protocol_catalog_ready()",
+           [],
+           log: false
+         ) do
       {:ok, %{rows: [[true]]}} -> :ok
       {:ok, _not_ready} -> {:error, :durable_payload_verifier_privileges_not_ready}
       {:error, _reason} -> {:error, :effect_protocol_unavailable}
@@ -763,6 +784,24 @@ defmodule Maraithon.Effects.ProtocolCutover do
 
       _mismatch ->
         Repo.rollback(:effect_protocol_activation_evidence_mismatch)
+    end
+  end
+
+  defp ensure_pair_evidence_matches!(runtime) do
+    expected = [runtime.id, runtime.digest, runtime.activated_by, runtime.revision]
+
+    case SQL.query!(
+           Repo,
+           """
+           SELECT activation_evidence_id, activation_evidence_digest, activated_by,
+                  exact_revision
+           FROM public.effect_execution_protocols
+           WHERE name = $1
+           """,
+           [@name]
+         ).rows do
+      [^expected] -> :ok
+      _mismatch -> Repo.rollback(:runtime_effect_protocol_evidence_mismatch)
     end
   end
 

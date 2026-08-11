@@ -2,12 +2,43 @@ defmodule Maraithon.DurablePayloadVerificationTest do
   use Maraithon.DataCase, async: false
 
   alias Maraithon.Agents
+  alias Maraithon.DurablePayloadPrivacy
   alias Maraithon.DurablePayloadVerification
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Events
   alias Maraithon.Repo
+  alias Maraithon.Runtime.Coordination.Protocol, as: CoordinationProtocol
   alias Maraithon.Runtime.Snapshot
 
+  @moduletag database_role: :session
+
+  @evidence_id "test:stopped-fleet:durable-payload-verification"
+  @evidence_digest :crypto.hash(:sha256, "test durable payload verification stopped fleet")
+  @evidence_operator "durable-payload-verification@example.test"
+  @revision String.duplicate("f", 40)
+  @activation_evidence [
+    evidence_id: @evidence_id,
+    evidence_digest: @evidence_digest,
+    activated_by: @evidence_operator,
+    revision: @revision
+  ]
+  @contraction_evidence [
+    confirmation: "NON_ROLLING_FLEET_DRAINED",
+    evidence_id: @evidence_id,
+    evidence_digest: @evidence_digest,
+    operator: @evidence_operator,
+    revision: @revision
+  ]
+
   setup do
+    assert ProtocolCutover.mode() == :legacy
+
+    assert {:ok, attestation} =
+             CoordinationProtocol.attest_effect_activation_evidence(@activation_evidence)
+
+    assert attestation in [:attested, :already_attested]
+    set_runtime_role!()
+
     {:ok, agent} =
       Agents.create_agent(%{
         behavior: "prompt_agent",
@@ -24,10 +55,8 @@ defmodule Maraithon.DurablePayloadVerificationTest do
     assert {:ok, snapshot} =
              Snapshot.persist(agent.id, 7, :idle, %{cursor: 7}, %{llm_calls: 1}, 3)
 
-    Repo.query!(
-      "UPDATE snapshots SET state_data = '{}'::jsonb, budget = '{}'::jsonb WHERE id = $1",
-      [snapshot.id]
-    )
+    assert {:ok, %{migrated_snapshots: 1, blocked_snapshots: []}} =
+             contract_payload_batch!(batch_size: 10)
 
     snapshot_id = snapshot.id
 
@@ -90,5 +119,18 @@ defmodule Maraithon.DurablePayloadVerificationTest do
 
     assert {:ok, %{verified: 1, failures: []}} =
              DurablePayloadVerification.verify_batch("events", limit: 10)
+  end
+
+  defp contract_payload_batch!(opts) do
+    try do
+      DurablePayloadPrivacy.backfill_batch(Keyword.merge(@contraction_evidence, opts))
+    after
+      set_runtime_role!()
+    end
+  end
+
+  defp set_runtime_role! do
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    :ok
   end
 end

@@ -38,7 +38,7 @@ defmodule Maraithon.Runtime.AgentLeaseConcurrencyTest do
       end)
 
     on_exit(fn ->
-      unboxed(fn ->
+      unboxed_with_trigger_bypass(fn ->
         Repo.delete_all(from(lease in AgentRuntimeLease, where: lease.agent_id == ^agent.id))
         Repo.delete_all(from(agent_row in Agent, where: agent_row.id == ^agent.id))
         Repo.delete_all(from(user in User, where: user.id == ^agent.user_id))
@@ -166,33 +166,37 @@ defmodule Maraithon.Runtime.AgentLeaseConcurrencyTest do
 
     assert_receive {:fenced, fenced_pid}
 
-    blocked_crash =
+    blocked_expiry =
       Task.async(fn ->
         unboxed(fn ->
           with_lock_timeout(fn ->
-            AgentRestartGuards.record_crash(agent.id, lease.owner_token, :concurrent_crash,
+            AgentRestartGuards.record_expired(
+              agent.id,
+              lease.owner_token,
               backoffs_ms: [0]
             )
           end)
         end)
       end)
 
-    assert {:lock_timeout, %Postgrex.Error{} = lock_error} = Task.await(blocked_crash)
+    assert {:lock_timeout, %Postgrex.Error{} = lock_error} = Task.await(blocked_expiry)
     assert lock_error.postgres.code == :lock_not_available
     assert unboxed(fn -> AgentLeases.ready?(agent.id, lease.owner_token) end)
 
     send(fenced_pid, :release_fence)
     assert {:ok, :committed} = Task.await(fenced)
 
-    assert {:recorded, _guard} =
+    assert {:ignored, :lease_renewed} =
              unboxed(fn ->
-               AgentRestartGuards.record_crash(
+               AgentRestartGuards.record_expired(
                  agent.id,
                  lease.owner_token,
-                 :post_commit_crash,
                  backoffs_ms: [0]
                )
              end)
+
+    assert unboxed(fn -> AgentLeases.owner?(agent.id, lease.owner_token) end)
+    assert unboxed(fn -> AgentRestartGuards.get(agent.id) end) == nil
   end
 
   test "a transactional ready fence also holds the exact Binding lock", %{
@@ -260,5 +264,30 @@ defmodule Maraithon.Runtime.AgentLeaseConcurrencyTest do
     end
   end
 
-  defp unboxed(fun), do: Sandbox.unboxed_run(Repo, fun)
+  defp unboxed(fun) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.query!("SET ROLE maraithon_runtime", [], log: false)
+
+      try do
+        fun.()
+      after
+        Repo.query!("RESET ROLE", [], log: false)
+      end
+    end)
+  end
+
+  defp unboxed_with_trigger_bypass(fun) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.query!("RESET ROLE", [], log: false)
+
+      try do
+        Repo.transaction(fn ->
+          Repo.query!("SET LOCAL session_replication_role = replica", [], log: false)
+          fun.()
+        end)
+      after
+        Repo.query!("RESET ROLE", [], log: false)
+      end
+    end)
+  end
 end

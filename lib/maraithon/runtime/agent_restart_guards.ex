@@ -393,8 +393,7 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
     case Repo.one(
            from(proof in AgentTerminationProof,
              where: proof.id == ^incident.proof_id,
-             where: proof.incident_id == ^incident.id,
-             lock: "FOR SHARE"
+             where: proof.incident_id == ^incident.id
            )
          ) do
       %AgentTerminationProof{} = proof -> proof

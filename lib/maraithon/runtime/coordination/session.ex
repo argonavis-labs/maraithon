@@ -24,8 +24,6 @@ defmodule Maraithon.Runtime.Coordination.Session do
     TaskSupervisor
   }
 
-  alias Maraithon.Runtime.EffectTaskSupervisor
-
   @default_tick 2_000
   @default_node_ttl 30_000
   @default_partition_ttl 30_000
@@ -50,6 +48,29 @@ defmodule Maraithon.Runtime.Coordination.Session do
   end
 
   def prepare_shutdown, do: GenServer.call(__MODULE__, :prepare_shutdown, 30_000)
+
+  @doc false
+  def terminate_background_job_assignment(assignment_id) when is_binary(assignment_id) do
+    case TaskClaims.get(assignment_id) do
+      %TaskAssignment{work_kind: "background_job", state: state} = assignment
+      when state in ["reserved", "running", "termination_requested", "termination_proven"] ->
+        case TaskSupervisor.terminate_exact(task_identity(assignment)) do
+          {:ok, _proof} -> :ok
+          {:unknown, _reason} = unknown -> unknown
+          _other -> {:unknown, :task_termination_unproven}
+        end
+
+      _missing_or_mismatched ->
+        {:unknown, :task_identity_mismatch}
+    end
+  rescue
+    _error -> {:unknown, :task_termination_unproven}
+  catch
+    :exit, _reason -> {:unknown, :task_termination_unproven}
+  end
+
+  def terminate_background_job_assignment(_assignment_id),
+    do: {:unknown, :invalid_task_identity}
 
   @impl true
   def init(opts) do
@@ -211,7 +232,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
       from a in TaskAssignment,
         where:
           a.node_incarnation_id == ^session.id and a.partition_id == ^partition_id and
-            a.partition_epoch == ^epoch and a.state == "termination_requested",
+            a.partition_epoch == ^epoch and a.state in ["reserved", "termination_requested"],
         order_by: a.id
     )
     |> Enum.each(&terminate_exact_task/1)
@@ -237,16 +258,11 @@ defmodule Maraithon.Runtime.Coordination.Session do
       task_id: assignment.local_task_id
     }
 
-    case EffectTaskSupervisor.terminate_exact(claim) do
-      {:ok, proof} ->
-        evidence = "effect-task-supervisor:#{proof}:#{assignment.local_task_id}"
-
-        _ =
-          Maraithon.Effects.Cancellation.record_local_coordination_termination(
-            assignment,
-            evidence
-          )
-
+    case Maraithon.Effects.Cancellation.terminate_local_coordination_assignment(
+           assignment,
+           claim
+         ) do
+      {:ok, :termination_proven} ->
         :ok
 
       {:unknown, _reason} ->

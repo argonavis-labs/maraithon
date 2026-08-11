@@ -1,16 +1,50 @@
 defmodule Maraithon.DurablePayloadPrivacyTest do
-  use Maraithon.DataCase, async: true
+  use Maraithon.DataCase, async: false
 
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentRun
   alias Maraithon.Agents.AgentRunStep
   alias Maraithon.DurablePayloadPrivacy
+  alias Maraithon.DurablePayloadVerification
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Events
   alias Maraithon.Events.Event
+  alias Maraithon.PrivacyRetention
+  alias Maraithon.Runtime.Coordination.Protocol, as: CoordinationProtocol
   alias Maraithon.Spend
 
+  @moduletag database_role: :session
+
+  @evidence_id "test:stopped-fleet:durable-payload-privacy"
+  @evidence_digest :crypto.hash(:sha256, "test durable payload privacy stopped fleet")
+  @evidence_operator "durable-payload-privacy@example.test"
+  @revision String.duplicate("c", 40)
+  @activation_evidence [
+    evidence_id: @evidence_id,
+    evidence_digest: @evidence_digest,
+    activated_by: @evidence_operator,
+    revision: @revision
+  ]
+  @contraction_evidence [
+    confirmation: "NON_ROLLING_FLEET_DRAINED",
+    evidence_id: @evidence_id,
+    evidence_digest: @evidence_digest,
+    operator: @evidence_operator,
+    revision: @revision
+  ]
+
+  @retired_key_guard "guard_durable_payload_retired_key_write_trigger"
+
   setup do
+    assert ProtocolCutover.mode() == :legacy
+
+    assert {:ok, attestation} =
+             CoordinationProtocol.attest_effect_activation_evidence(@activation_evidence)
+
+    assert attestation in [:attested, :already_attested]
+    set_runtime_role!()
+
     {:ok, agent} =
       Agents.create_agent(%{behavior: "prompt_agent", config: %{}, status: "running"})
 
@@ -46,7 +80,7 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
     assert :binary.match(event_ciphertext, event_secret) == :nomatch
 
     assert {:ok, %{migrated_events: 1, blocked_events: []}} =
-             Events.backfill_legacy_payload_encryption(limit: 1)
+             contract_payload_batch!(batch_size: 1)
 
     assert %{rows: [[%{}, promoted_event_ciphertext]]} =
              Repo.query!("SELECT payload, payload_ciphertext FROM events WHERE id = $1", [
@@ -96,7 +130,7 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
     assert {:ok, _run} = Agents.complete_agent_run(run.id)
 
     assert {:ok, %{migrated_run_steps: 1, blocked_run_steps: []}} =
-             Agents.backfill_legacy_run_step_payload_encryption(limit: 1)
+             contract_payload_batch!(batch_size: 1)
 
     assert %{rows: [[%{}, promoted_request, %{}, promoted_response]]} =
              Repo.query!(
@@ -225,13 +259,20 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
     assert {:ok, _run} = Agents.complete_agent_run(run.id)
 
     assert {:ok, result} =
-             DurablePayloadPrivacy.backfill(batch_size: 1, max_batches: 5)
+             contract_payloads!(batch_size: 1, max_batches: 5)
 
     assert result.migrated_events == 1
     assert result.migrated_run_steps == 1
     assert result.blocked_events == []
     assert result.blocked_run_steps == []
-    assert result.remaining == %{legacy_events: 0, legacy_run_steps: 0, deferred_run_steps: 0}
+
+    assert %{
+             legacy_events: 0,
+             legacy_run_steps: 0,
+             deferred_run_steps: 0,
+             legacy_snapshots: 0,
+             in_flight: %{total: 0}
+           } = result.remaining
 
     assert Spend.get_agent_spend(agent.id) == %{
              total_cost: 2.0,
@@ -262,7 +303,7 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
       )
 
     assert {:ok, result} =
-             DurablePayloadPrivacy.backfill(batch_size: 1, max_batches: 3)
+             contract_payloads!(batch_size: 1, max_batches: 3)
 
     assert result.migrated_events == 0
     assert result.blocked_events == [%{id: event_id, errors: [:payload_out_of_bounds]}]
@@ -282,10 +323,26 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
   } do
     {:ok, event} = Events.append(agent.id, "sensitive", %{"secret" => "encrypted"})
 
-    Repo.query!("UPDATE events SET payload_ciphertext = $1 WHERE id = $2", [
-      <<0, 1, 2, 3, 4>>,
-      event.id
-    ])
+    corrupt = <<0, 1, 2, 3, 4>>
+
+    assert_raise Postgrex.Error, ~r/invalid key tag envelope/, fn ->
+      Repo.transaction(
+        fn ->
+          Repo.query!("UPDATE events SET payload_ciphertext = $1 WHERE id = $2", [
+            corrupt,
+            event.id
+          ])
+        end,
+        mode: :savepoint
+      )
+    end
+
+    seed_preexisting_ciphertext!("events", fn ->
+      Repo.query!("UPDATE events SET payload_ciphertext = $1 WHERE id = $2", [
+        corrupt,
+        event.id
+      ])
+    end)
 
     assert_raise ArgumentError, fn -> Repo.get!(Event, event.id) end
     assert_raise ArgumentError, fn -> Events.list_events(agent.id) end
@@ -300,10 +357,26 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
         request_payload: %{"secret" => "encrypted"}
       })
 
-    Repo.query!(
-      "UPDATE agent_run_steps SET request_payload_ciphertext = $1 WHERE id = $2",
-      [<<0, 1, 2, 3, 4>>, Ecto.UUID.dump!(step.id)]
-    )
+    corrupt = <<0, 1, 2, 3, 4>>
+
+    assert_raise Postgrex.Error, ~r/invalid key tag envelope/, fn ->
+      Repo.transaction(
+        fn ->
+          Repo.query!(
+            "UPDATE agent_run_steps SET request_payload_ciphertext = $1 WHERE id = $2",
+            [corrupt, Ecto.UUID.dump!(step.id)]
+          )
+        end,
+        mode: :savepoint
+      )
+    end
+
+    seed_preexisting_ciphertext!("agent_run_steps", fn ->
+      Repo.query!(
+        "UPDATE agent_run_steps SET request_payload_ciphertext = $1 WHERE id = $2",
+        [corrupt, Ecto.UUID.dump!(step.id)]
+      )
+    end)
 
     assert_raise ArgumentError, fn -> Repo.get!(AgentRunStep, step.id) end
     assert_raise ArgumentError, fn -> Agents.list_agent_runs(agent.id, preload: [:steps]) end
@@ -328,18 +401,36 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
         set: [inserted_at: old]
       )
 
+    prepare_exact_retention!()
+
     before = Repo.get!(Event, first.id)
     assert Spend.get_agent_spend(agent.id).total_cost == 1.5
 
-    assert {:ok, 1} = Events.purge_payloads_before(cutoff, limit: 1)
+    assert {:ok, %{purged: 1}} =
+             PrivacyRetention.run_handler(:events,
+               cutoff: cutoff,
+               batch_size: 1,
+               per_tenant: 1
+             )
 
     assert Repo.aggregate(
              from(event in Event, where: not is_nil(event.payload_purged_at)),
              :count
            ) == 1
 
-    assert {:ok, 1} = Events.purge_payloads_before(cutoff, limit: 1)
-    assert {:ok, 0} = Events.purge_payloads_before(cutoff, limit: 1)
+    assert {:ok, %{purged: 1}} =
+             PrivacyRetention.run_handler(:events,
+               cutoff: cutoff,
+               batch_size: 1,
+               per_tenant: 1
+             )
+
+    assert {:ok, %{purged: 0}} =
+             PrivacyRetention.run_handler(:events,
+               cutoff: cutoff,
+               batch_size: 1,
+               per_tenant: 1
+             )
 
     purged = Repo.get!(Event, first.id)
     assert purged.agent_id == before.agent_id
@@ -358,8 +449,8 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
 
     assert Enum.find(Events.list_events(agent.id), &(&1.id == first.id)).payload == %{}
 
-    assert {:error, :invalid_event_payload_retention} =
-             Events.purge_payloads_before(cutoff, limit: 501)
+    assert {:error, :invalid_privacy_retention_options} =
+             PrivacyRetention.run_handler(:events, cutoff: cutoff, batch_size: 501)
   end
 
   test "run-step retention never purges a running or actively pointed run", %{agent: agent} do
@@ -385,7 +476,11 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
         set: [completed_at: old]
       )
 
-    assert {:ok, 0} = Agents.purge_agent_run_step_payloads_before(cutoff)
+    assert {:error, {:durable_agent_work_requires_drain, 0, 1, 0}} =
+             ProtocolCutover.activation_preconditions()
+
+    assert {:error, {:effect_protocol_mismatch, :legacy}} =
+             PrivacyRetention.run_handler(:run_steps, cutoff: cutoff, batch_size: 1)
 
     {:ok, _completed_run} = Agents.complete_agent_run(run.id)
 
@@ -401,7 +496,8 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
         set: [active_run_id: run.id]
       )
 
-    assert {:ok, 0} = Agents.purge_agent_run_step_payloads_before(cutoff)
+    assert {:error, {:effect_protocol_mismatch, :legacy}} =
+             PrivacyRetention.run_handler(:run_steps, cutoff: cutoff, batch_size: 1)
 
     {1, _rows} =
       Repo.update_all(
@@ -409,9 +505,42 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
         set: [active_run_id: nil]
       )
 
+    prepare_exact_retention!()
+
     before = Repo.get!(AgentRunStep, step.id)
-    assert {:ok, 1} = Agents.purge_agent_run_step_payloads_before(cutoff, limit: 1)
-    assert {:ok, 0} = Agents.purge_agent_run_step_payloads_before(cutoff, limit: 1)
+
+    {1, _rows} =
+      Repo.update_all(
+        from(stored_agent in Agent, where: stored_agent.id == ^agent.id),
+        set: [active_run_id: run.id]
+      )
+
+    assert {:ok, %{purged: 0}} =
+             PrivacyRetention.run_handler(:run_steps,
+               cutoff: cutoff,
+               batch_size: 1,
+               per_tenant: 1
+             )
+
+    {1, _rows} =
+      Repo.update_all(
+        from(stored_agent in Agent, where: stored_agent.id == ^agent.id),
+        set: [active_run_id: nil]
+      )
+
+    assert {:ok, %{purged: 1}} =
+             PrivacyRetention.run_handler(:run_steps,
+               cutoff: cutoff,
+               batch_size: 1,
+               per_tenant: 1
+             )
+
+    assert {:ok, %{purged: 0}} =
+             PrivacyRetention.run_handler(:run_steps,
+               cutoff: cutoff,
+               batch_size: 1,
+               per_tenant: 1
+             )
 
     purged = Repo.get!(AgentRunStep, step.id)
     assert purged.agent_run_id == before.agent_run_id
@@ -429,7 +558,86 @@ defmodule Maraithon.DurablePayloadPrivacyTest do
     assert AgentRunStep.hydrate_payloads!(purged).request_payload == %{}
     assert AgentRunStep.hydrate_payloads!(purged).response_payload == %{}
 
-    assert {:error, :invalid_agent_run_step_payload_retention} =
-             Agents.purge_agent_run_step_payloads_before(cutoff, limit: 501)
+    assert {:error, :invalid_privacy_retention_options} =
+             PrivacyRetention.run_handler(:run_steps, cutoff: cutoff, batch_size: 501)
+  end
+
+  defp contract_payload_batch!(opts) do
+    try do
+      DurablePayloadPrivacy.backfill_batch(Keyword.merge(@contraction_evidence, opts))
+    after
+      set_runtime_role!()
+    end
+  end
+
+  defp contract_payloads!(opts) do
+    try do
+      DurablePayloadPrivacy.backfill(Keyword.merge(@contraction_evidence, opts))
+    after
+      set_runtime_role!()
+    end
+  end
+
+  defp prepare_exact_retention! do
+    assert {:ok, contraction} = contract_payloads!(batch_size: 100, max_batches: 10)
+    assert contraction.blocked_events == []
+    assert contraction.blocked_run_steps == []
+    assert contraction.blocked_snapshots == []
+
+    assert {:ok, verification} =
+             DurablePayloadVerification.verify(limit: 100, max_batches: 20)
+
+    assert verification.failures == []
+    assert {:ok, %{failures: 0}} = DurablePayloadVerification.preflight()
+
+    assert {:ok, effect_status} =
+             ProtocolCutover.activate(
+               [confirmation: ProtocolCutover.activation_confirmation()] ++ @activation_evidence
+             )
+
+    assert effect_status in [:activated, :already_active]
+
+    Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
+
+    assert {:ok, runtime_status} =
+             CoordinationProtocol.activate(
+               [confirmation: CoordinationProtocol.activation_confirmation()] ++
+                 @activation_evidence
+             )
+
+    assert runtime_status in [:activated, :already_active]
+    set_runtime_role!()
+  end
+
+  # This bypass models corruption that predates the database writer fence. It is
+  # restricted to the two reader-fail-closed cases and always restores the
+  # ENABLE ALWAYS fence before any read assertion runs.
+  defp seed_preexisting_ciphertext!(table, fun)
+       when table in ["events", "agent_run_steps"] and is_function(fun, 0) do
+    Repo.query!("SET CONSTRAINTS ALL IMMEDIATE", [], log: false)
+    Repo.query!("SET LOCAL ROLE maraithon_migrator", [], log: false)
+
+    try do
+      Repo.query!(
+        "ALTER TABLE public.#{table} DISABLE TRIGGER #{@retired_key_guard}",
+        [],
+        log: false
+      )
+
+      fun.()
+    after
+      Repo.query!(
+        "ALTER TABLE public.#{table} ENABLE ALWAYS TRIGGER #{@retired_key_guard}",
+        [],
+        log: false
+      )
+
+      set_runtime_role!()
+    end
+  end
+
+  defp set_runtime_role! do
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    :ok
   end
 end

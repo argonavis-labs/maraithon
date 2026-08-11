@@ -1,13 +1,27 @@
 defmodule Mix.Tasks.Maraithon.Vault.Reencrypt do
+  @moduledoc """
+  Re-encrypts durable Vault ciphertext away from one old key tag in bounded
+  batches, targets one reviewed `table.column`, or performs read-only preflight.
+
+  Production uses `VAULT_ROTATION_DATABASE_URL`, authenticated as the canonical
+  incident-operator role. This task does not authorize deletion of the old key;
+  complete the separate backup-aware `maraithon.key_retirement` lifecycle first.
+
+  ## Usage
+
+      mix maraithon.vault.reencrypt --old-tag TAG [--batch-size N] [--max-batches N]
+      mix maraithon.vault.reencrypt --old-tag TAG --target table.column
+      mix maraithon.vault.reencrypt --old-tag TAG --preflight
+  """
+
   use Mix.Task
 
   alias Maraithon.VaultReencryption
 
-  @shortdoc "Bounded global Vault key rotation and old-tag-zero proof"
+  @shortdoc "Bounded global Vault key rotation"
   @switches [
     old_tag: :string,
     preflight: :boolean,
-    retire: :boolean,
     batch_size: :integer,
     max_batches: :integer,
     target: :string
@@ -25,7 +39,6 @@ defmodule Mix.Tasks.Maraithon.Vault.Reencrypt do
 
     result =
       cond do
-        opts[:retire] -> VaultReencryption.retirement_preflight(opts[:old_tag])
         opts[:preflight] -> VaultReencryption.preflight(opts[:old_tag])
         true -> VaultReencryption.reencrypt(opts[:old_tag], reencryption_opts(opts))
       end
@@ -89,7 +102,11 @@ defmodule Mix.Tasks.Maraithon.Vault.Reencrypt do
       mix maraithon.vault.reencrypt --old-tag TAG [--batch-size N] [--max-batches N]
       mix maraithon.vault.reencrypt --old-tag TAG --target table.column
       mix maraithon.vault.reencrypt --old-tag TAG --preflight
-      mix maraithon.vault.reencrypt --old-tag TAG --retire
+
+    Key retirement is a separate evidence-bound lifecycle. Preflight is
+    advisory; only the confirmed, persisted authorization permits removal:
+      mix maraithon.key_retirement preflight --kind vault --old-tag TAG ...
+      mix maraithon.key_retirement authorize --confirm --kind vault --old-tag TAG ...
     """
   end
 end

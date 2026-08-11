@@ -12,4 +12,12 @@ defmodule Maraithon.Runtime.Effects.Command do
   @callback execute_prepared(effect :: Effect.t(), prepared :: term()) ::
               {:ok, map()} | {:error, term()}
   @callback execute(effect :: Effect.t()) :: {:ok, map()} | {:error, term()}
+
+  @callback revalidate_prepared_authority(
+              effect :: Effect.t(),
+              prepared :: term(),
+              locked_authority :: map()
+            ) :: :ok | {:error, term()}
+
+  @optional_callbacks revalidate_prepared_authority: 3
 end

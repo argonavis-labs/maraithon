@@ -298,7 +298,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
         nil ->
           Repo.transaction(fn ->
             ProtocolCutover.require_current_mutation!()
-            AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
+            AgentLeases.fence_settlement!(ids.agent_id, ids.owner_generation)
             directive = lock_directive!(ids)
             now = DatabaseClock.now!()
 
@@ -400,7 +400,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
         nil ->
           Repo.transaction(fn ->
             ProtocolCutover.require_current_mutation!()
-            AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
+            AgentLeases.fence_settlement!(ids.agent_id, ids.owner_generation)
             directive = lock_directive!(ids)
             now = DatabaseClock.now!()
 
@@ -473,7 +473,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
          {:ok, retry_delay_ms} <- retry_opts(opts) do
       Repo.transaction(fn ->
         ProtocolCutover.require_current_mutation!()
-        AgentLeases.fence_owner!(ids.agent_id, ids.owner_generation)
+        AgentLeases.fence_settlement!(ids.agent_id, ids.owner_generation)
         operation = lock_operation(ids.agent_id)
 
         if operation, do: Repo.rollback(:deferred_to_lifecycle)

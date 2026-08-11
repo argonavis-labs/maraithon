@@ -237,6 +237,13 @@ defmodule Maraithon.Runtime.Scheduler do
   Mark a dispatched job as delivered after PubSub confirms mailbox enqueue.
   """
   def ack_delivered(job_id) do
+    case {Protocol.mode(), EffectProtocol.mode()} do
+      {:dark, :legacy} -> ack_legacy_mailbox_delivery(job_id)
+      _blocked_or_exact -> {:error, :legacy_mailbox_ack_forbidden}
+    end
+  end
+
+  defp ack_legacy_mailbox_delivery(job_id) do
     now = DateTime.utc_now()
 
     case DbResilience.with_database("scheduler ack delivered", fn ->
@@ -487,17 +494,21 @@ defmodule Maraithon.Runtime.Scheduler do
           fragment("?->>? = ?", job.legacy_payload, ^scope_key, ^scope_value)
       )
 
-    if include_legacy_empty_payload? do
-      where(
-        base_query,
-        [job],
-        ^promoted_scope or ^legacy_scope or job.payload_empty == true or
-          (is_nil(job.payload_encryption_version) and
-             fragment("? = '{}'::jsonb", job.legacy_payload))
-      )
-    else
-      where(base_query, [job], ^promoted_scope or ^legacy_scope)
-    end
+    scope_filter = dynamic([job], ^promoted_scope or ^legacy_scope)
+
+    scope_filter =
+      if include_legacy_empty_payload? do
+        dynamic(
+          [job],
+          ^scope_filter or job.payload_empty == true or
+            (is_nil(job.payload_encryption_version) and
+               fragment("? = '{}'::jsonb", job.legacy_payload))
+        )
+      else
+        scope_filter
+      end
+
+    where(base_query, ^scope_filter)
   end
 
   defp deliver_job(job) do
@@ -661,8 +672,10 @@ defmodule Maraithon.Runtime.Scheduler do
             from(j in query,
               join: partition in "runtime_partitions",
               on: field(partition, :partition_id) == j.partition_id,
-              where: field(partition, :activation_epoch) == ^session.activation_epoch,
-              where: field(partition, :owner_node_incarnation_id) == ^session.id,
+              where:
+                field(partition, :activation_epoch) == type(^session.activation_epoch, :binary_id),
+              where:
+                field(partition, :owner_node_incarnation_id) == type(^session.id, :binary_id),
               where: field(partition, :state) == "ready",
               where: fragment("? IS NOT NULL", field(partition, :ready_at)),
               where:

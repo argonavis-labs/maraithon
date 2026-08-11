@@ -877,7 +877,7 @@ defmodule Maraithon.Runtime.Agent do
 
       data =
         emit_event(data, "effect_failed", %{
-          effect_type: effect_info.type,
+          effect_type: to_string(effect_info.type),
           error: "effect_timeout"
         })
 
@@ -1875,7 +1875,7 @@ defmodule Maraithon.Runtime.Agent do
         data =
           emit_event(data, "effect_requested", %{
             effect_id: effect_id,
-            effect_type: effect_type,
+            effect_type: to_string(effect_type),
             idempotency_key: idempotency_key
           })
 
@@ -1963,7 +1963,7 @@ defmodule Maraithon.Runtime.Agent do
             updated_data =
               append_event!(data, "effect_requested", %{
                 effect_id: effect_id,
-                effect_type: effect_type,
+                effect_type: to_string(effect_type),
                 idempotency_key: idempotency_key
               })
 
@@ -2019,7 +2019,7 @@ defmodule Maraithon.Runtime.Agent do
       if match?({:ok, _effect_id}, result) do
         emit_event(data, "effect_requested", %{
           effect_id: effect_id,
-          effect_type: effect_type,
+          effect_type: to_string(effect_type),
           idempotency_key: idempotency_key
         })
       else
@@ -2278,7 +2278,7 @@ defmodule Maraithon.Runtime.Agent do
       type: "effect_completed",
       payload: %{
         effect_id: effect_id,
-        effect_type: effect_info.type,
+        effect_type: to_string(effect_info.type),
         result: result_data
       }
     }
@@ -2289,7 +2289,7 @@ defmodule Maraithon.Runtime.Agent do
       type: "effect_failed",
       payload: %{
         effect_id: effect_id,
-        effect_type: effect_info.type,
+        effect_type: to_string(effect_info.type),
         failure_code: Maraithon.Redaction.error_class(reason),
         error: Maraithon.Redaction.error_summary(reason)
       }

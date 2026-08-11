@@ -6,8 +6,10 @@ defmodule Maraithon.KeyRetirement do
   A retirement requires two temporally ordered, incident-operator-only facts:
   a PostgreSQL-clock global live-zero proof, followed by append-only catalog,
   WAL, PITR, and successful restore-drill evidence whose oldest recoverable
-  point is strictly newer than that proof. Retirement always locks and recounts
-  the fixed live registry; a stored proof alone can never authorize removal.
+  point is strictly newer than that proof. The zero proof irreversibly fences
+  new writes under that tag in PostgreSQL, including stale-node writes. A final
+  locked recount persists the separate authorization for external key removal;
+  the advisory preflight alone never authorizes removal.
   """
 
   alias Maraithon.DurablePayloadBinding
@@ -15,7 +17,6 @@ defmodule Maraithon.KeyRetirement do
   alias Maraithon.DurablePayloadBindingRotation
   alias Maraithon.Repo
   alias Maraithon.Vault
-  alias Maraithon.VaultCiphertextRegistry
   alias Maraithon.VaultReencryption
 
   @kinds [:vault, :binding]
@@ -27,7 +28,7 @@ defmodule Maraithon.KeyRetirement do
          {:ok, evidence} <- Lifecycle.validate_evidence(opts) do
       incident_transaction(fn ->
         :ok = Lifecycle.verify_protocol_evidence!(evidence)
-        lock_kind_sources!(kind)
+        lock_kind_sources!(kind, old_tag)
         report = live_report!(kind, old_tag)
 
         if report.total != 0 do
@@ -43,28 +44,30 @@ defmodule Maraithon.KeyRetirement do
           log: false
         )
 
-        Repo.query!(
-          """
-          INSERT INTO public.key_retirement_zero_proofs (
-            key_kind, old_tag, proof_id, source_digest, evidence_id,
-            evidence_digest, evidence_operator, exact_revision, proved_at
-          ) VALUES (
-            $1, $2, $3::uuid, $4, $5, $6, $7, $8,
-            timezone('UTC', clock_timestamp())
-          )
-          """,
-          [
-            Atom.to_string(kind),
-            old_tag,
-            proof_id,
-            source_digest,
-            evidence.id,
-            evidence.digest,
-            evidence.operator,
-            evidence.revision
-          ],
-          log: false
-        )
+        [[write_fenced_at]] =
+          Repo.query!(
+            """
+            INSERT INTO public.key_retirement_zero_proofs (
+              key_kind, old_tag, proof_id, source_digest, evidence_id,
+              evidence_digest, evidence_operator, exact_revision, proved_at
+            ) VALUES (
+              $1, $2, $3::uuid, $4, $5, $6, $7, $8,
+              timezone('UTC', clock_timestamp())
+            )
+            RETURNING proved_at
+            """,
+            [
+              Atom.to_string(kind),
+              old_tag,
+              proof_id,
+              source_digest,
+              evidence.id,
+              evidence.digest,
+              evidence.operator,
+              evidence.revision
+            ],
+            log: false
+          ).rows
 
         %{
           kind: kind,
@@ -72,7 +75,8 @@ defmodule Maraithon.KeyRetirement do
           proof_id: proof_id,
           total: 0,
           registry_targets: length(report.targets),
-          source_digest: Base.encode16(source_digest, case: :lower)
+          source_digest: Base.encode16(source_digest, case: :lower),
+          write_fenced_at: write_fenced_at
         }
       end)
     end
@@ -179,52 +183,167 @@ defmodule Maraithon.KeyRetirement do
   def attest_backup_evidence(_kind, _old_tag, _opts),
     do: {:error, :invalid_backup_retirement_evidence}
 
-  @doc "Recounts live storage and validates unexpired post-zero recovery evidence."
+  @authorization_confirmation "AUTHORIZE_EXTERNAL_KEY_REMOVAL"
+
+  @doc "Advisory recount of live storage and unexpired post-zero recovery evidence."
   def retirement_preflight(kind, old_tag, opts)
       when kind in @kinds and is_binary(old_tag) and is_list(opts) do
-    with {:ok, evidence} <- Lifecycle.validate_evidence(opts),
+    with :ok <- validate_retirable_tag(kind, old_tag),
+         {:ok, evidence} <- Lifecycle.validate_evidence(opts),
          {:ok, proof_id} <- uuid(Keyword.get(opts, :proof_id)),
          {:ok, evidence_id} <- bounded_evidence_id(Keyword.get(opts, :backup_evidence_id)) do
       incident_transaction(fn ->
-        :ok = Lifecycle.verify_protocol_evidence!(evidence)
-        lock_kind_sources!(kind)
-        report = live_report!(kind, old_tag)
-
-        if report.total != 0 do
-          Repo.rollback(old_tag_present_error(kind, report.total))
-        end
-
-        expected_source_digest = source_digest(kind, old_tag, report.targets)
-        proof = lock_zero_proof!(kind, old_tag, proof_id, evidence)
-
-        if proof.source_digest != expected_source_digest do
-          Repo.rollback(:key_retirement_registry_changed_since_zero_proof)
-        end
-
-        case retirement_evidence(kind, old_tag, proof_id, evidence_id, evidence) do
-          {:ok, row} ->
-            %{
-              kind: kind,
-              old_tag: old_tag,
-              total: 0,
-              registry_targets: length(report.targets),
-              proof_id: proof_id,
-              backup_evidence_id: evidence_id,
-              zero_proved_at: row.proved_at,
-              oldest_recoverable_at: row.oldest_recoverable_at,
-              evidence_expires_at: row.expires_at,
-              source_digest: Base.encode16(expected_source_digest, case: :lower)
-            }
-
-          {:error, reason} ->
-            Repo.rollback(reason)
-        end
+        kind
+        |> retirement_report!(old_tag, proof_id, evidence_id, evidence)
+        |> public_retirement_report()
+        |> Map.put(:external_key_removal_authorized, false)
       end)
     end
   end
 
   def retirement_preflight(_kind, _old_tag, _opts),
     do: {:error, :backup_aware_retirement_evidence_required}
+
+  @doc "Persists the final evidence-bound authorization for external key removal."
+  def authorize_retirement(kind, old_tag, opts)
+      when kind in @kinds and is_binary(old_tag) and is_list(opts) do
+    with true <- Keyword.get(opts, :confirmation) == @authorization_confirmation,
+         :ok <- validate_retirable_tag(kind, old_tag),
+         {:ok, evidence} <- Lifecycle.validate_evidence(opts),
+         {:ok, proof_id} <- uuid(Keyword.get(opts, :proof_id)),
+         {:ok, evidence_id} <- bounded_evidence_id(Keyword.get(opts, :backup_evidence_id)) do
+      incident_transaction(fn ->
+        report = retirement_report!(kind, old_tag, proof_id, evidence_id, evidence)
+
+        Repo.query!(
+          "SELECT set_config('maraithon.key_retirement_authorization', " <>
+            "'RETIRE_KEY_AUTHORIZATION_V1', true)",
+          [],
+          log: false
+        )
+
+        inserted =
+          Repo.query!(
+            """
+            INSERT INTO public.retired_durable_payload_keys (
+              key_kind, old_tag, zero_proof_id, backup_evidence_id,
+              source_digest, fence_generation, evidence_id, evidence_digest,
+              evidence_operator, exact_revision, authorized_at
+            ) VALUES (
+              $1, $2, $3::uuid, $4, $5, 1, $6, $7, $8, $9,
+              timezone('UTC', clock_timestamp())
+            )
+            ON CONFLICT (key_kind, old_tag) DO NOTHING
+            RETURNING authorized_at, fence_generation
+            """,
+            [
+              Atom.to_string(kind),
+              old_tag,
+              proof_id,
+              evidence_id,
+              report.source_digest_binary,
+              evidence.id,
+              evidence.digest,
+              evidence.operator,
+              evidence.revision
+            ],
+            log: false
+          ).rows
+
+        {authorized_at, fence_generation} =
+          case inserted do
+            [[authorized_at, fence_generation]] ->
+              {authorized_at, fence_generation}
+
+            [] ->
+              case Repo.query!(
+                     """
+                     SELECT authorized_at, fence_generation
+                     FROM public.retired_durable_payload_keys
+                     WHERE key_kind = $1 AND old_tag = $2
+                       AND zero_proof_id = $3::uuid
+                       AND backup_evidence_id = $4
+                       AND source_digest = $5
+                       AND evidence_id = $6
+                       AND evidence_digest = $7
+                       AND evidence_operator = $8
+                       AND exact_revision = $9
+                     FOR SHARE
+                     """,
+                     [
+                       Atom.to_string(kind),
+                       old_tag,
+                       proof_id,
+                       evidence_id,
+                       report.source_digest_binary,
+                       evidence.id,
+                       evidence.digest,
+                       evidence.operator,
+                       evidence.revision
+                     ],
+                     log: false
+                   ).rows do
+                [[authorized_at, fence_generation]] ->
+                  {authorized_at, fence_generation}
+
+                [] ->
+                  Repo.rollback(:key_retirement_authorization_conflict)
+              end
+          end
+
+        report
+        |> public_retirement_report()
+        |> Map.put(:external_key_removal_authorized, true)
+        |> Map.put(:authorized_at, authorized_at)
+        |> Map.put(:fence_generation, fence_generation)
+      end)
+    else
+      false -> {:error, :key_retirement_authorization_confirmation_required}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def authorize_retirement(_kind, _old_tag, _opts),
+    do: {:error, :key_retirement_authorization_confirmation_required}
+
+  defp retirement_report!(kind, old_tag, proof_id, evidence_id, evidence) do
+    :ok = Lifecycle.verify_protocol_evidence!(evidence)
+    lock_kind_sources!(kind, old_tag)
+    report = live_report!(kind, old_tag)
+
+    if report.total != 0 do
+      Repo.rollback(old_tag_present_error(kind, report.total))
+    end
+
+    expected_source_digest = source_digest(kind, old_tag, report.targets)
+    proof = lock_zero_proof!(kind, old_tag, proof_id, evidence)
+
+    if proof.source_digest != expected_source_digest do
+      Repo.rollback(:key_retirement_registry_changed_since_zero_proof)
+    end
+
+    case retirement_evidence(kind, old_tag, proof_id, evidence_id, evidence) do
+      {:ok, row} ->
+        %{
+          kind: kind,
+          old_tag: old_tag,
+          total: 0,
+          registry_targets: length(report.targets),
+          proof_id: proof_id,
+          backup_evidence_id: evidence_id,
+          zero_proved_at: row.proved_at,
+          oldest_recoverable_at: row.oldest_recoverable_at,
+          evidence_expires_at: row.expires_at,
+          source_digest_binary: expected_source_digest,
+          source_digest: Base.encode16(expected_source_digest, case: :lower)
+        }
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
+  end
+
+  defp public_retirement_report(report), do: Map.delete(report, :source_digest_binary)
 
   defp retirement_evidence(kind, old_tag, proof_id, evidence_id, evidence) do
     rows =
@@ -260,7 +379,7 @@ defmodule Maraithon.KeyRetirement do
           AND backup.wal_catalog_captured_at <= timezone('UTC', clock_timestamp())
           AND backup.pitr_catalog_captured_at <= timezone('UTC', clock_timestamp())
           AND backup.restore_drill_completed_at <= timezone('UTC', clock_timestamp())
-        FOR SHARE OF proof, backup
+        FOR SHARE OF proof
         """,
         [
           Atom.to_string(kind),
@@ -361,25 +480,38 @@ defmodule Maraithon.KeyRetirement do
     end
   end
 
-  defp lock_kind_sources!(:vault) do
-    VaultCiphertextRegistry.all()
-    |> Enum.map(& &1.table)
-    |> Enum.uniq()
-    |> Enum.each(fn table ->
-      Repo.query!("LOCK TABLE public.#{table} IN SHARE MODE", [], log: false)
-    end)
+  defp lock_kind_sources!(kind, old_tag) do
+    Repo.query!(
+      "SELECT public.durable_payload_old_key_live_count($1, $2)",
+      [Atom.to_string(kind), old_tag],
+      log: false
+    )
+
+    :ok
   end
 
-  defp lock_kind_sources!(:binding), do: Lifecycle.lock_source_tables!()
+  defp source_digest(kind, old_tag, targets) do
+    expected_registry =
+      Enum.map_join(targets, ",", fn target ->
+        case kind do
+          :vault -> "#{target.table}.#{target.column}"
+          :binding -> "#{target.table}:#{target.binding}"
+        end
+      end)
 
-  defp source_digest(kind, old_tag, _targets) do
     case Repo.query!(
-           "SELECT public.durable_payload_old_key_source_digest($1, $2)",
+           """
+           SELECT public.durable_payload_key_registry_definition($1),
+                  public.durable_payload_old_key_source_digest($1, $2)
+           """,
            [Atom.to_string(kind), old_tag],
            log: false
          ).rows do
-      [[digest]] when is_binary(digest) and byte_size(digest) == 32 -> digest
-      _invalid -> Repo.rollback(:key_retirement_registry_digest_unavailable)
+      [[^expected_registry, digest]] when is_binary(digest) and byte_size(digest) == 32 ->
+        digest
+
+      _invalid ->
+        Repo.rollback(:key_retirement_registry_digest_unavailable)
     end
   end
 

@@ -31,6 +31,7 @@ defmodule Maraithon.PrivacyErasureTest do
   alias Maraithon.Accounts.User
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.OAuth.Token
   alias Maraithon.Privacy.ErasureProviderRevocation
   alias Maraithon.Privacy.ErasureRequest
@@ -38,12 +39,20 @@ defmodule Maraithon.PrivacyErasureTest do
   alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.Coordination.Protocol, as: CoordinationProtocol
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.TelegramAssistant.PreparedAction
   alias Maraithon.TelegramAssistant.Run, as: AssistantRun
   alias Maraithon.TelegramConversations.Conversation
 
-  setup do
+  @activation_evidence [
+    evidence_id: "test:stopped-fleet:privacy-erasure",
+    evidence_digest: :crypto.hash(:sha256, "privacy erasure stopped fleet evidence"),
+    activated_by: "privacy-erasure@example.test",
+    revision: String.duplicate("e", 40)
+  ]
+
+  setup context do
     previous = Application.get_env(:maraithon, PrivacyErasure)
     previous_test_pid = Application.get_env(:maraithon, :privacy_erasure_test_pid)
 
@@ -52,6 +61,7 @@ defmodule Maraithon.PrivacyErasureTest do
       restore_env(:privacy_erasure_test_pid, previous_test_pid)
     end)
 
+    if context[:exact_runtime], do: activate_exact!()
     :ok
   end
 
@@ -78,6 +88,7 @@ defmodule Maraithon.PrivacyErasureTest do
     assert Repo.aggregate(job_query, :count) == 1
   end
 
+  @tag exact_runtime: true
   test "Agent intent is durably fenced and deletion uses the Runtime lifecycle" do
     user = user_fixture("agent")
 
@@ -111,6 +122,7 @@ defmodule Maraithon.PrivacyErasureTest do
     assert stored.idempotency_digest == nil
   end
 
+  @tag exact_runtime: true
   test "exact conversation erasure receives the live claim and bounded budget before final proof" do
     Application.put_env(:maraithon, :privacy_erasure_test_pid, self())
 
@@ -273,14 +285,27 @@ defmodule Maraithon.PrivacyErasureTest do
   test "corrupt credential ciphertext is raw-deleted and never blocks local erasure" do
     user = user_fixture("corrupt")
 
+    {:ok, token} =
+      %Token{}
+      |> Token.changeset(%{
+        user_id: user.id,
+        provider: "google",
+        access_token: "corrupt-after-insert"
+      })
+      |> Repo.insert()
+
+    [[ciphertext]] =
+      Repo.query!("SELECT access_token FROM oauth_tokens WHERE id = $1", [token.id]).rows
+
+    last_index = byte_size(ciphertext) - 1
+
+    corrupted_ciphertext =
+      binary_part(ciphertext, 0, last_index) <>
+        <<Bitwise.bxor(:binary.at(ciphertext, last_index), 1)>>
+
     Repo.query!(
-      """
-      INSERT INTO oauth_tokens
-        (user_id, provider, access_token, scopes, metadata, inserted_at, updated_at)
-      VALUES ($1, 'google', $2, ARRAY[]::varchar[], '{}'::jsonb,
-              clock_timestamp(), clock_timestamp())
-      """,
-      [user.id, <<1, 2, 3, 4>>]
+      "UPDATE oauth_tokens SET access_token = $2, updated_at = clock_timestamp() WHERE id = $1",
+      [token.id, corrupted_ciphertext]
     )
 
     {:ok, request} = PrivacyErasure.request_user(user.id)
@@ -329,6 +354,44 @@ defmodule Maraithon.PrivacyErasureTest do
              error_code: "provider_unavailable",
              attempt_count: 1
            } = Repo.get_by!(ErasureProviderRevocation, request_id: request.id)
+  end
+
+  defp activate_exact! do
+    assert {:ok, attestation} =
+             reset_runtime_role_after(fn ->
+               CoordinationProtocol.attest_effect_activation_evidence(@activation_evidence)
+             end)
+
+    assert attestation in [:attested, :already_attested]
+
+    assert {:ok, effect_activation} =
+             reset_runtime_role_after(fn ->
+               ProtocolCutover.activate(
+                 [confirmation: ProtocolCutover.activation_confirmation()] ++ @activation_evidence
+               )
+             end)
+
+    assert effect_activation in [:activated, :already_active]
+
+    assert {:ok, runtime_activation} =
+             reset_runtime_role_after(fn ->
+               Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
+
+               CoordinationProtocol.activate(
+                 [confirmation: CoordinationProtocol.activation_confirmation()] ++
+                   @activation_evidence
+               )
+             end)
+
+    assert runtime_activation in [:activated, :already_active]
+  end
+
+  defp reset_runtime_role_after(fun) do
+    try do
+      fun.()
+    after
+      Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    end
   end
 
   defp drive_to_state(request_id, desired_state) do
