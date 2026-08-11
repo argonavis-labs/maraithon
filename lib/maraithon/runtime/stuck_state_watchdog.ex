@@ -45,9 +45,12 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
       preventing confirmations (e.g. a broken callback route) and is
       alarmed like a detect table.
 
-  Alerting: operator alarms are deduped per `(table, UTC day)` via
+  Alerting: live backlog alarms are deduped per `(table, UTC day)` via
   `OperatorEvents.record_once/1` (the `BriefingCron.claim_late_alert/2`
-  pattern) and delivered **by email** via `Maraithon.EmailDelivery.send/2`
+  pattern). Terminal scheduled-job dead letters instead use their newest row
+  as a durable incident frontier, so the same failed rows cannot alert again
+  merely because UTC midnight passed. Alarms are delivered **by email** via
+  `Maraithon.EmailDelivery.send/2`
   to `Config.get(:dogfood_user_id)` — which is an email address, never a
   chat id, so `PushBroker.deliver/1` must not be used here (it would
   return `{:error, :missing_chat_id}` on every call and the watchdog's own
@@ -169,7 +172,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
   cycle directly. Returns `%{detected:, swept:, alerted:}`.
   """
   def run_cycle(opts \\ []) do
-    now = DateTime.utc_now()
+    now = Keyword.get(opts, :now, DateTime.utc_now())
 
     sweep_result =
       %{swept: 0, alarms: []}
@@ -227,18 +230,30 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
 
   # Detect only: Scheduler owns these rows. Any recent dead-letter means an
   # agent's wakeup silently died. No updated_at on this table; fire_at
-  # approximates when the dead-letter happened (see @moduledoc).
+  # approximates when the dead-letter happened (see @moduledoc). The newest
+  # failed row is a stable incident frontier: retaining the same terminal rows
+  # across UTC midnight must not page the operator again.
   defp check_scheduled_jobs(now) do
     lookback = DateTime.add(now, -@scheduled_jobs_failed_lookback_hours * 3600, :second)
 
-    oldest_first(
+    query =
       ScheduledJob
       |> where([job], job.status == "failed")
-      |> where([job], job.fire_at >= ^lookback),
-      :fire_at,
-      now,
-      reason: "scheduled jobs dead-lettered after repeated unacknowledged dispatches"
-    )
+      |> where([job], job.fire_at >= ^lookback)
+
+    newest_failed_id =
+      query
+      |> order_by([job], desc: job.fire_at, desc: job.inserted_at, desc: job.id)
+      |> select([job], job.id)
+      |> limit(1)
+      |> Repo.one()
+
+    if newest_failed_id do
+      oldest_first(query, :fire_at, now,
+        reason: "scheduled jobs dead-lettered after repeated unacknowledged dispatches",
+        dedupe_key: "stuck_state_watchdog:scheduled_jobs:dead_letter:#{newest_failed_id}"
+      )
+    end
   end
 
   # Detect only: BackgroundJobRunner owns these rows. A *due* pending job
@@ -388,11 +403,16 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
     if count > 0 do
       oldest = query |> select([row], min(field(row, ^age_field))) |> Repo.one()
 
-      %{
+      alarm = %{
         count: count,
         oldest_age_seconds: age_seconds(oldest, now),
         reason: Keyword.get(opts, :reason)
       }
+
+      case Keyword.fetch(opts, :dedupe_key) do
+        {:ok, dedupe_key} -> Map.put(alarm, :dedupe_key, dedupe_key)
+        :error -> alarm
+      end
     else
       nil
     end
@@ -577,7 +597,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
   end
 
   # ==========================================================================
-  # Operator alerting (R4/R5): email, deduped per (table, UTC day)
+  # Operator alerting (R4/R5): email, with per-alarm durable dedupe
   # ==========================================================================
 
   defp alert_operator(alarm, now, opts) do
@@ -631,7 +651,7 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
              source: "stuck_state_watchdog",
              event_type: "stuck_state.alert_attempted",
              source_item_id: alarm.table,
-             dedupe_key: alarm_dedupe_key(alarm.table, now),
+             dedupe_key: alarm_dedupe_key(alarm, now),
              occurred_at: now,
              payload: %{
                "table" => alarm.table,
@@ -648,7 +668,11 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
     end
   end
 
-  defp alarm_dedupe_key(table, now) do
+  defp alarm_dedupe_key(%{dedupe_key: dedupe_key}, _now)
+       when is_binary(dedupe_key) and dedupe_key != "",
+       do: dedupe_key
+
+  defp alarm_dedupe_key(%{table: table}, now) do
     "stuck_state_watchdog:#{table}:#{Date.to_iso8601(DateTime.to_date(now))}"
   end
 
@@ -679,22 +703,22 @@ defmodule Maraithon.Runtime.StuckStateWatchdog do
         Maraithon's stuck-state watchdog found rows stuck past their SLA.
 
         Table: #{alarm.table}
-        Live rows past SLA: #{alarm.count}
+        Affected rows past SLA: #{alarm.count}
         Oldest row age: #{oldest_minutes} minutes
         Detail: #{alarm.reason}
 
-        This alert is sent at most once per table per day. Check the runtime
+        Alerts are durably deduplicated to limit repeat email. Check the runtime
         incident log and the System pages in the web app for detail.
         """,
         html_body: """
         <p>Maraithon's stuck-state watchdog found rows stuck past their SLA.</p>
         <ul>
           <li><b>Table:</b> #{alarm.table}</li>
-          <li><b>Live rows past SLA:</b> #{alarm.count}</li>
+          <li><b>Affected rows past SLA:</b> #{alarm.count}</li>
           <li><b>Oldest row age:</b> #{oldest_minutes} minutes</li>
           <li><b>Detail:</b> #{alarm.reason}</li>
         </ul>
-        <p>This alert is sent at most once per table per day. Check the runtime
+        <p>Alerts are durably deduplicated to limit repeat email. Check the runtime
         incident log and the System pages in the web app for detail.</p>
         """
       })
