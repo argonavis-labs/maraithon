@@ -65,10 +65,27 @@ defmodule Maraithon.DatabaseRoleCompatibility do
       String.trim(statement) == "SELECT 'maraithon_fly_mpg_restore_migration_authority'" ->
         """
         DO $fly_mpg_restore_migration_authority$
+        DECLARE
+          owned_function regprocedure;
         BEGIN
           GRANT ALL ON SCHEMA public TO schema_admin;
           GRANT ALL ON ALL TABLES IN SCHEMA public TO schema_admin;
           GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO schema_admin;
+
+          FOR owned_function IN
+            SELECT function_row.oid::regprocedure
+            FROM pg_catalog.pg_proc AS function_row
+            JOIN pg_catalog.pg_namespace AS namespace
+              ON namespace.oid = function_row.pronamespace
+            JOIN pg_catalog.pg_roles AS owner_role
+              ON owner_role.oid = function_row.proowner
+            WHERE namespace.nspname = 'public'
+              AND owner_role.rolname = current_user
+          LOOP
+            EXECUTE pg_catalog.format(
+              'GRANT EXECUTE ON FUNCTION %s TO schema_admin', owned_function
+            );
+          END LOOP;
         END
         $fly_mpg_restore_migration_authority$;
         """
