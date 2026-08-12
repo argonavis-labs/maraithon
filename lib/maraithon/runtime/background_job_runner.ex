@@ -1080,6 +1080,13 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     end
   end
 
+  defp coordinated_outcome(_job, {:ok, _, {:reschedule_in, delay_ms}})
+       when is_integer(delay_ms) and delay_ms > 0,
+       do: "retry_scheduled"
+
+  defp coordinated_outcome(_job, {:ok, _, {:reschedule_at, %DateTime{}}}),
+    do: "retry_scheduled"
+
   defp coordinated_outcome(_job, {:ok, _}), do: "completed"
 
   defp coordinated_outcome(job, {:error, {:retry_after, seconds, _}})
