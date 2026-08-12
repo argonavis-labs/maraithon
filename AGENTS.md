@@ -18,9 +18,9 @@ This is a web application written using the Phoenix web framework.
 ## Project guidelines
 
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
-- Deploy production with `make deploy`. The deploy script must use `FLY_API_TOKEN` from the environment or `~/.config/maraithon/fly-prod.env`; do not rely on the active `flyctl` login because this workstation may have multiple Fly accounts.
-- Any production Fly command path, including deploys, logs, SSH helpers, and production mobile verification, must be token-scoped with `FLY_API_TOKEN` and the pinned `MARAITHON_FLY_APP` value. Prefer `MARAITHON_FLY_APP` over legacy `FLY_APP`.
-- Keep Fly tokens and operator credentials outside the repo. Never commit `FLY_API_TOKEN`, admin passwords, API bearer tokens, database URLs, or OAuth secrets.
+- Deploy production to Google Cloud with `make deploy`. Production is pinned to project `maraithon`, region `us-central1`, Cloud Run service `maraithon`, and Cloud SQL instance `maraithon-db`.
+- CI authenticates keylessly through the `maraithon-github` Workload Identity provider as `admin-deployer@maraithon.iam.gserviceaccount.com`; do not create or commit service-account keys.
+- Keep operator credentials outside the repo and application secrets in Google Secret Manager. Never commit admin passwords, API bearer tokens, database URLs, LLM provider keys, or OAuth secrets.
 
 ## Current verification mode
 

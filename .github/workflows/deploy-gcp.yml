@@ -1,0 +1,42 @@
+name: Deploy to GCP
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/530299883343/locations/global/workloadIdentityPools/github/providers/maraithon-github
+          service_account: admin-deployer@maraithon.iam.gserviceaccount.com
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: maraithon
+
+      - name: Deploy production
+        run: make deploy
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
