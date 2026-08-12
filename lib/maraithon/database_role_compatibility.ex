@@ -62,6 +62,13 @@ defmodule Maraithon.DatabaseRoleCompatibility do
       String.contains?(statement, "DO $role_topology$") ->
         "SELECT 1"
 
+      String.trim(statement) == "SELECT public.refresh_durable_payload_protocol_manifest()" ->
+        """
+        GRANT EXECUTE ON FUNCTION public.refresh_durable_payload_protocol_manifest()
+          TO schema_admin;
+        SELECT public.refresh_durable_payload_protocol_manifest()
+        """
+
       true ->
         Enum.reduce(@canonical_roles, statement, fn role, sql ->
           String.replace(sql, role, "schema_admin")
