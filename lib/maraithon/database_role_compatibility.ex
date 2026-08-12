@@ -64,18 +64,25 @@ defmodule Maraithon.DatabaseRoleCompatibility do
 
       String.trim(statement) == "CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public" ->
         """
-        CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
-        GRANT ALL ON SCHEMA public TO schema_admin;
-        GRANT ALL ON ALL TABLES IN SCHEMA public TO schema_admin;
-        GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO schema_admin;
-        GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO schema_admin;
+        DO $fly_mpg_authority$
+        BEGIN
+          GRANT ALL ON SCHEMA public TO schema_admin;
+          GRANT ALL ON ALL TABLES IN SCHEMA public TO schema_admin;
+          GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO schema_admin;
+          GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO schema_admin;
+        END
+        $fly_mpg_authority$;
         """
 
       String.trim(statement) == "SELECT public.refresh_durable_payload_protocol_manifest()" ->
         """
-        GRANT EXECUTE ON FUNCTION public.refresh_durable_payload_protocol_manifest()
-          TO schema_admin;
-        SELECT public.refresh_durable_payload_protocol_manifest()
+        DO $fly_mpg_manifest$
+        BEGIN
+          GRANT EXECUTE ON FUNCTION public.refresh_durable_payload_protocol_manifest()
+            TO schema_admin;
+          PERFORM public.refresh_durable_payload_protocol_manifest();
+        END
+        $fly_mpg_manifest$;
         """
 
       true ->
