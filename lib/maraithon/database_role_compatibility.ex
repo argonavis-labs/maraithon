@@ -62,6 +62,25 @@ defmodule Maraithon.DatabaseRoleCompatibility do
       String.contains?(statement, "DO $role_topology$") ->
         "SELECT 1"
 
+      String.contains?(
+        statement,
+        "CREATE OR REPLACE FUNCTION public.guard_durable_payload_operator_source_mutation()"
+      ) ->
+        """
+        CREATE OR REPLACE FUNCTION public.guard_durable_payload_operator_source_mutation()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SET search_path = pg_catalog, public
+        AS $function$
+        BEGIN
+          -- Fly MPG collapses runtime and operator identities into schema_admin.
+          -- Exact protocols remain permanently feature-dark on this provider,
+          -- so ordinary legacy writes must not be mistaken for operator writes.
+          RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+        END;
+        $function$;
+        """
+
       String.trim(statement) == "SELECT 'maraithon_fly_mpg_restore_migration_authority'" ->
         """
         DO $fly_mpg_restore_migration_authority$
