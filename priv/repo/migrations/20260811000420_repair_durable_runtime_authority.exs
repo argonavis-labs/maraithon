@@ -18,7 +18,7 @@ defmodule Maraithon.Repo.Migrations.RepairDurableRuntimeAuthority do
     {
       "20260810140007_add_operational_privacy_controls.exs",
       Maraithon.Repo.Migrations.AddOperationalPrivacyControls,
-      "b061b2224b28ab0b5368d530ddeabb6e16a8811c098456bb2b17bcb99ef71e2d"
+      "05e34d1a54f3a435e172913b7cb93f615fd6bc2e42c6f5e56a227d1273afec99"
     }
   ]
 

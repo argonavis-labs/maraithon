@@ -62,6 +62,17 @@ defmodule Maraithon.DatabaseRoleCompatibility do
       String.contains?(statement, "DO $role_topology$") ->
         "SELECT 1"
 
+      String.trim(statement) == "SELECT 'maraithon_fly_mpg_restore_migration_authority'" ->
+        """
+        DO $fly_mpg_restore_migration_authority$
+        BEGIN
+          GRANT ALL ON SCHEMA public TO schema_admin;
+          GRANT ALL ON ALL TABLES IN SCHEMA public TO schema_admin;
+          GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO schema_admin;
+        END
+        $fly_mpg_restore_migration_authority$;
+        """
+
       String.trim(statement) == "CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public" ->
         """
         DO $fly_mpg_authority$

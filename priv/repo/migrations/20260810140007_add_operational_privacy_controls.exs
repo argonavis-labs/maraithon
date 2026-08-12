@@ -9,6 +9,8 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   @disable_ddl_transaction true
 
   def up do
+    execute_compatible("SELECT 'maraithon_fly_mpg_restore_migration_authority'")
+
     execute_compatible(
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_erasure_requested_at timestamp(6) without time zone"
     )
