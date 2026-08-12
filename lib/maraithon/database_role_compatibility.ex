@@ -62,6 +62,15 @@ defmodule Maraithon.DatabaseRoleCompatibility do
       String.contains?(statement, "DO $role_topology$") ->
         "SELECT 1"
 
+      String.trim(statement) == "CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public" ->
+        """
+        CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+        GRANT ALL ON SCHEMA public TO schema_admin;
+        GRANT ALL ON ALL TABLES IN SCHEMA public TO schema_admin;
+        GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO schema_admin;
+        GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO schema_admin;
+        """
+
       String.trim(statement) == "SELECT public.refresh_durable_payload_protocol_manifest()" ->
         """
         GRANT EXECUTE ON FUNCTION public.refresh_durable_payload_protocol_manifest()
