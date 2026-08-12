@@ -50,7 +50,7 @@ defmodule Maraithon.Runtime.Coordination.Authority do
               node_name,
               revision,
               ttl_ms,
-              Jason.encode!(metadata)
+              metadata
             ]
           )
 
