@@ -19,6 +19,7 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   def activate_job(%BackgroundJob{} = job, assignment) do
     Repo.transaction(fn ->
       assignment = unwrap!(TaskClaims.activate(assignment))
+      set_effect_writer_protocol!()
       set_task_action!(assignment.id)
 
       result =
@@ -231,6 +232,7 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
           assignment =
             unwrap!(TaskClaims.reserve(session, partition, identity, ttl_ms: task_ttl_ms))
 
+          set_effect_writer_protocol!()
           set_task_action!(assignment.id)
 
           result =
@@ -394,6 +396,14 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   defp unwrap!({:ok, value}), do: value
   defp unwrap!({:error, reason}), do: Repo.rollback(reason)
   defp unwrap!(value), do: value
+
+  defp set_effect_writer_protocol! do
+    SQL.query!(
+      Repo,
+      "SELECT set_config('maraithon.effect_writer_protocol', 'generation_fenced_v1', true)",
+      []
+    )
+  end
 
   defp set_task_action!(id),
     do: SQL.query!(Repo, "SELECT set_config('maraithon.runtime_task_action', $1, true)", [id])
