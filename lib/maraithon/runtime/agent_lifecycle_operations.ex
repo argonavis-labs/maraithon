@@ -320,9 +320,9 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
          {:ok, operation_token} <- optional_uuid(operation_token) do
       transaction_result =
         Repo.transaction(fn ->
-          _protocol_pair = Protocol.locked_pair!()
+          protocol_pair = Protocol.locked_pair!()
           user_id = prelock_agent_user!(agent_id)
-          finalize_locked(agent_id, operation_token, scoped?, user_id)
+          finalize_locked(agent_id, operation_token, scoped?, user_id, protocol_pair)
         end)
 
       case transaction_result do
@@ -414,7 +414,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     |> then(&:crypto.hash(:sha256, &1))
   end
 
-  defp finalize_locked(agent_id, operation_token, scoped?, prelocked_user_id) do
+  defp finalize_locked(agent_id, operation_token, scoped?, prelocked_user_id, protocol_pair) do
     agent = lock_agent!(agent_id)
 
     if agent.user_id != prelocked_user_id,
@@ -459,7 +459,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
         active_effect? = Enum.any?(effects, &(&1.status in @active_effect_statuses))
 
-        case unresolved_work(agent, operation, directives, runs, steps, effects) do
+        case unresolved_work(agent, operation, directives, runs, steps, effects, protocol_pair) do
           nil ->
             finalize_quiesced!(agent, binding, guard, operation, directives, effects, now)
 
@@ -478,7 +478,8 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
                    settled_directives,
                    settled_runs,
                    settled_steps,
-                   settled_effects
+                   settled_effects,
+                   protocol_pair
                  ) do
               nil ->
                 finalize_quiesced!(
@@ -814,7 +815,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     :ok
   end
 
-  defp unresolved_work(agent, operation, directives, runs, steps, effects) do
+  defp unresolved_work(agent, operation, directives, runs, steps, effects, protocol_pair) do
     cond do
       is_binary(agent.active_run_id) ->
         :active_run_pointer
@@ -831,7 +832,8 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
       Enum.any?(effects, &(&1.status in @active_effect_statuses)) ->
         :active_effect
 
-      delete_action?(operation) and not effects_deletable_for_delete?(effects) ->
+      delete_action?(operation) and
+          not effects_deletable_for_delete?(effects, protocol_pair) ->
         :effect_retention_requires_archival
 
       true ->
@@ -842,7 +844,12 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   defp delete_action?(operation),
     do: get_in(operation.payload, ["mutation", "action"]) == "delete"
 
-  defp effects_deletable_for_delete?(effects) do
+  # Legacy Effect rows predate terminal envelopes, and the database's legacy
+  # protocol permits their lifecycle erasure once active work is absent. Exact
+  # mode remains fail-closed on the versioned archival envelope.
+  defp effects_deletable_for_delete?(_effects, :legacy), do: true
+
+  defp effects_deletable_for_delete?(effects, :exact) do
     # The persisted lifecycle delete marker is an explicit erasure intent, not
     # a fabricated delivery acknowledgement. The DB trigger independently
     # rechecks the marker and refuses every active Effect row.

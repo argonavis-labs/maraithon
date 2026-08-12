@@ -152,6 +152,33 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     assert AgentLifecycleOperations.get(agent.id) == nil
   end
 
+  test "legacy lifecycle delete accepts terminal Effects that predate result envelopes" do
+    agent = running_consented_agent("legacy-terminal-delete")
+
+    effect =
+      agent.id
+      |> pending_effect()
+      |> Ecto.Changeset.change(status: "completed")
+      |> Repo.update!()
+
+    assert effect.runtime_owner_generation == nil
+    assert effect.result_envelope == nil
+
+    assert {:ok, fence} =
+             AgentLifecycleOperations.begin(
+               agent.id,
+               :delete,
+               %{"delete" => true},
+               fn _agent -> %{"action" => "delete"} end
+             )
+
+    assert {:ok, %{status: :finalized, action: :deleted}} =
+             AgentLifecycleOperations.finalize(agent.id, fence.operation_token)
+
+    refute Repo.get(Effect, effect.id)
+    refute Agents.get_agent(agent.id, include_removed: true)
+  end
+
   test "corrupt Effect ciphertext is deleted only after active authority is cancelled" do
     terminal_agent = running_consented_agent("corrupt-terminal-delete")
     terminal_effect = pending_effect(terminal_agent.id)
