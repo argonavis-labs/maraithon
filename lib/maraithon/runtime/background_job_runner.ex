@@ -1489,23 +1489,15 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   end
 
   defp request_payload_updates(%BackgroundJob{} = job, payload) do
-    updated = %{job | payload: payload}
-
-    [
-      payload: payload,
-      legacy_payload: if(DurablePayload.legacy_write?(), do: payload, else: %{}),
-      payload_encryption_version: 1
-    ] ++ binding_updates(updated)
+    # A legacy row may have been hydrated from its plaintext mirror while the
+    # corresponding ciphertext column is still NULL. Persist both authenticated
+    # fields whenever either changes so the binding context exactly matches the
+    # next raw database load.
+    payload_and_result_updates(job, payload, job.result || %{})
   end
 
   defp result_payload_updates(%BackgroundJob{} = job, result) do
-    updated = %{job | result: result}
-
-    [
-      result: result,
-      legacy_result: if(DurablePayload.legacy_write?(), do: result, else: %{}),
-      payload_encryption_version: 1
-    ] ++ binding_updates(updated)
+    payload_and_result_updates(job, job.payload || %{}, result)
   end
 
   defp payload_and_result_updates(%BackgroundJob{} = job, payload, result) do
