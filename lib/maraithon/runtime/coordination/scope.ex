@@ -358,7 +358,9 @@ defmodule Maraithon.Runtime.Coordination.Scope do
   end
 
   defp current_session do
-    case Config.coordination_test_session() do
+    # This config hook is compiled to `nil` outside tests. Indirect dispatch keeps
+    # newer compilers from treating the test-only struct branch as unreachable.
+    case apply(Config, :coordination_test_session, []) do
       %NodeIncarnation{} = session -> {:ok, session}
       nil -> Session.current()
     end

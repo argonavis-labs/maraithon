@@ -1,17 +1,61 @@
 defmodule Maraithon.Runtime.AgentDirectivesTest do
-  use Maraithon.DataCase, async: true
+  use Maraithon.DataCase, async: false
 
   alias Maraithon.Accounts
   alias Maraithon.AgentIsolation
   alias Maraithon.Agents
+  alias Maraithon.Effects.ProtocolCutover
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirective
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRestartGuards
+  alias Maraithon.Runtime.AgentTerminations
+  alias Maraithon.Runtime.Coordination.{Authority, Partition, Partitioning}
+  alias Maraithon.Runtime.Coordination.Protocol, as: CoordinationProtocol
+
+  @activation_evidence [
+    evidence_id: "test:stopped-fleet:agent-directives",
+    evidence_digest: :crypto.hash(:sha256, "agent directives stopped fleet evidence"),
+    activated_by: "agent-directives@example.test",
+    revision: String.duplicate("d", 40)
+  ]
 
   setup do
+    original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+    original_terminations = Application.get_env(:maraithon, AgentTerminations)
+    {termination_public_key, termination_private_key} = :crypto.generate_key(:eddsa, :ed25519)
+
+    Application.put_env(:maraithon, AgentTerminations,
+      external_attestation_public_key: termination_public_key
+    )
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      original_runtime
+      |> Keyword.put(:multinode_coordination_enabled, true)
+      |> Keyword.delete(:coordination_test_session)
+      |> Keyword.delete(:coordination_test_leader)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
+
+      if original_terminations,
+        do: Application.put_env(:maraithon, AgentTerminations, original_terminations),
+        else: Application.delete_env(:maraithon, AgentTerminations)
+    end)
+
+    assert ProtocolCutover.mode() == :legacy
+
+    assert {:ok, :attested} =
+             CoordinationProtocol.attest_effect_activation_evidence(@activation_evidence)
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    assert {:ok, :activated} = activate_exact()
+
     user_id = "directive-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
@@ -25,7 +69,14 @@ defmodule Maraithon.Runtime.AgentDirectivesTest do
       })
 
     {:ok, binding} = AgentIsolation.grant_binding_consent(agent, binding_consent(agent))
-    %{agent: agent, binding: binding, user_id: user_id}
+    :ok = ensure_user_partition!(user_id)
+
+    %{
+      agent: agent,
+      binding: binding,
+      user_id: user_id,
+      termination_private_key: termination_private_key
+    }
   end
 
   test "enqueue is bounded, canonical, tenant-exact, and idempotent", %{
@@ -667,6 +718,90 @@ defmodule Maraithon.Runtime.AgentDirectivesTest do
     refute agent.id in AgentDirectives.list_due_agent_ids()
   end
 
+  defp activate_exact do
+    effect_result =
+      ProtocolCutover.activate(
+        [confirmation: ProtocolCutover.activation_confirmation()] ++ @activation_evidence
+      )
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+
+    case effect_result do
+      {:ok, effect_status} when effect_status in [:activated, :already_active] ->
+        Repo.query!("SET LOCAL ROLE maraithon_activation_operator", [], log: false)
+
+        runtime_result =
+          CoordinationProtocol.activate(
+            [confirmation: CoordinationProtocol.activation_confirmation()] ++ @activation_evidence
+          )
+
+        Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+
+        case runtime_result do
+          {:ok, runtime_status} when runtime_status in [:activated, :already_active] ->
+            ensure_coordination_authority!()
+            {:ok, effect_status}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp ensure_coordination_authority! do
+    runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    unless Keyword.get(runtime, :coordination_test_session) do
+      {:ok, joining} =
+        Authority.register_node(
+          node_name: "agent-directives@test",
+          revision: String.duplicate("d", 40),
+          ttl_ms: 300_000
+        )
+
+      {:ok, session} = Authority.mark_node_ready(joining)
+      {:ok, preparing_leader} = Authority.acquire_leader(session, 300_000)
+      {:ok, leader} = Authority.mark_leader_ready(preparing_leader)
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        runtime
+        |> Keyword.put(:coordination_test_session, session)
+        |> Keyword.put(:coordination_test_leader, leader)
+      )
+    end
+
+    :ok
+  end
+
+  defp ensure_user_partition!(user_id) do
+    runtime = Application.fetch_env!(:maraithon, Maraithon.Runtime)
+    session = Keyword.fetch!(runtime, :coordination_test_session)
+    leader = Keyword.fetch!(runtime, :coordination_test_leader)
+    partition_id = user_id |> Partitioning.tenant_key() |> Partitioning.partition_for()
+
+    case Repo.get!(Partition, partition_id) do
+      %Partition{state: "unassigned"} ->
+        {:ok, _preparing} =
+          Authority.assign_partition(leader, session, partition_id, ttl_ms: 300_000)
+
+        {:ok, _ready} = Authority.mark_partition_ready(session, partition_id)
+        :ok
+
+      %Partition{
+        state: "ready",
+        owner_node_incarnation_id: owner_id,
+        activation_epoch: activation_epoch
+      }
+      when owner_id == session.id and activation_epoch == session.activation_epoch ->
+        :ok
+    end
+  end
+
   defp expire_claim!(directive_id) do
     Repo.query!(
       """
@@ -682,19 +817,32 @@ defmodule Maraithon.Runtime.AgentDirectivesTest do
   end
 
   defp expire_lease!(agent_id) do
-    Repo.query!(
-      """
-      UPDATE agent_runtime_leases
-      SET claimed_at = timezone('UTC', clock_timestamp()) - interval '3 minutes',
-          renewed_at = timezone('UTC', clock_timestamp()) - interval '2 minutes',
-          lease_until = timezone('UTC', clock_timestamp()) - interval '1 minute',
-          ready_at = NULL,
-          draining_at = NULL,
-          updated_at = timezone('UTC', clock_timestamp())
-      WHERE agent_id = $1::uuid
-      """,
-      [Ecto.UUID.dump!(agent_id)]
-    )
+    runtime_role =
+      Repo.query!("SELECT current_role::text", [], log: false).rows
+      |> List.first()
+      |> List.first()
+
+    try do
+      Repo.query!("RESET ROLE", [], log: false)
+      Repo.query!("SET LOCAL session_replication_role = replica", [], log: false)
+
+      Repo.query!(
+        """
+        UPDATE agent_runtime_leases
+        SET claimed_at = timezone('UTC', clock_timestamp()) - interval '3 minutes',
+            renewed_at = timezone('UTC', clock_timestamp()) - interval '2 minutes',
+            lease_until = timezone('UTC', clock_timestamp()) - interval '1 minute',
+            ready_at = NULL,
+            draining_at = NULL,
+            updated_at = timezone('UTC', clock_timestamp())
+        WHERE agent_id = $1::uuid
+        """,
+        [Ecto.UUID.dump!(agent_id)]
+      )
+    after
+      Repo.query!("SET LOCAL session_replication_role = origin", [], log: false)
+      Repo.query!("SET LOCAL ROLE #{runtime_role}", [], log: false)
+    end
   end
 
   defp make_due!(directive_id) do

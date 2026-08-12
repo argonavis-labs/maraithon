@@ -259,9 +259,6 @@ defmodule MaraithonWeb.WebhookController do
       {:ok, _topic, event} when is_map(event) ->
         {:ok, event}
 
-      {:ok, event} when is_map(event) ->
-        {:ok, event}
-
       {:ignore, _reason} ->
         {:ok,
          %{
