@@ -38,13 +38,29 @@ defmodule Maraithon.Runtime.Coordination.Planner do
           select: p.partition_id
       )
 
-    count =
-      Enum.count(ids, fn id ->
-        match?({:ok, :released}, Authority.release_drained_partition(leader, id))
-      end)
+    count = Enum.count(ids, &release_ready?(leader, &1))
 
     {:ok, count}
   end
+
+  defp release_ready?(leader, partition_id) do
+    match?({:ok, :released}, Authority.release_drained_partition(leader, partition_id))
+  rescue
+    error in Postgrex.Error ->
+      if release_gate_blocked?(error) do
+        false
+      else
+        reraise error, __STACKTRACE__
+      end
+  end
+
+  defp release_gate_blocked?(%Postgrex.Error{
+         postgres: %{code: :check_violation, message: message}
+       })
+       when is_binary(message),
+       do: String.contains?(message, "partition cannot move before exact task proof")
+
+  defp release_gate_blocked?(_error), do: false
 
   defp fence_expired(_leader, 0), do: {:ok, 0}
 
