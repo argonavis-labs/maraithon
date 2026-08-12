@@ -9,11 +9,11 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   @disable_ddl_transaction true
 
   def up do
-    execute(
+    execute_compatible(
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_erasure_requested_at timestamp(6) without time zone"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE agent_directives ADD COLUMN IF NOT EXISTS terminal_acknowledged_at timestamp(6) without time zone"
     )
 
@@ -35,6 +35,19 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     create_online_indexes()
   end
 
+  defp execute_compatible(statement) do
+    statement
+    |> Maraithon.DatabaseRoleCompatibility.rewrite_migration_sql()
+    |> Ecto.Migration.execute()
+  end
+
+  defp execute_compatible(up, down) do
+    Ecto.Migration.execute(
+      Maraithon.DatabaseRoleCompatibility.rewrite_migration_sql(up),
+      Maraithon.DatabaseRoleCompatibility.rewrite_migration_sql(down)
+    )
+  end
+
   def down do
     raise "operational privacy controls are irreversible after erasure or payload retention"
   end
@@ -42,12 +55,12 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   # 140007 is nontransactional so every retry must converge from either the
   # original schema or an interrupted earlier 140007 attempt.
   defp reconcile_erasure_schema do
-    execute(
+    execute_compatible(
       "ALTER TABLE public.privacy_erasure_agent_targets " <>
         "DROP CONSTRAINT IF EXISTS privacy_erasure_agent_targets_agent_id_fkey"
     )
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.privacy_erasure_provider_revocations
       DROP CONSTRAINT IF EXISTS privacy_erasure_provider_revocations_shape_check,
       ADD CONSTRAINT privacy_erasure_provider_revocations_shape_check CHECK (
@@ -62,7 +75,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp install_privacy_erasure_job_deferral_receipts do
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.capture_privacy_erasure_job_deferral_receipt()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -242,7 +255,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     $privacy$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.reject_privacy_erasure_job_deferral_receipt_mutation()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -255,45 +268,45 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     $privacy$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE TRIGGER capture_privacy_erasure_job_deferral_receipt_trigger
     BEFORE UPDATE OF payload ON public.background_jobs
     FOR EACH ROW
     EXECUTE FUNCTION public.capture_privacy_erasure_job_deferral_receipt()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE TRIGGER reject_privacy_erasure_job_deferral_receipt_mutation_trigger
     BEFORE UPDATE OR DELETE ON public.privacy_erasure_job_deferral_receipts
     FOR EACH ROW
     EXECUTE FUNCTION public.reject_privacy_erasure_job_deferral_receipt_mutation()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE TRIGGER reject_privacy_erasure_job_deferral_receipt_truncate_trigger
     BEFORE TRUNCATE ON public.privacy_erasure_job_deferral_receipts
     FOR EACH STATEMENT
     EXECUTE FUNCTION public.reject_privacy_erasure_job_deferral_receipt_mutation()
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.background_jobs
       ENABLE ALWAYS TRIGGER capture_privacy_erasure_job_deferral_receipt_trigger
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.privacy_erasure_job_deferral_receipts
       ENABLE ALWAYS TRIGGER reject_privacy_erasure_job_deferral_receipt_mutation_trigger
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.privacy_erasure_job_deferral_receipts
       ENABLE ALWAYS TRIGGER reject_privacy_erasure_job_deferral_receipt_truncate_trigger
     """)
   end
 
   defp install_privacy_erasure_write_fence do
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_privacy_erasure_write_fence()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -486,7 +499,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     $privacy$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE TRIGGER enforce_users_privacy_erasure_write_fence
     BEFORE UPDATE ON public.users
     FOR EACH ROW EXECUTE FUNCTION public.enforce_privacy_erasure_write_fence()
@@ -497,7 +510,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
           companion_devices companion_device_keys mobile_node_pairings
           mobile_node_devices mobile_push_devices background_jobs
         ) do
-      execute("""
+      execute_compatible("""
       CREATE OR REPLACE TRIGGER enforce_#{table}_privacy_erasure_write_fence
       BEFORE INSERT OR UPDATE ON public.#{table}
       FOR EACH ROW EXECUTE FUNCTION public.enforce_privacy_erasure_write_fence()
@@ -506,7 +519,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp install_effect_retention_guard do
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_effect_execution_protocol()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -781,7 +794,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_effect_termination_attestation()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -854,7 +867,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp install_directive_retention_guard do
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_agent_directive_protocol()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -957,7 +970,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp install_operational_retention_guard do
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_operational_privacy_retention()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1395,30 +1408,30 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
         ) do
       trigger = "enforce_#{table}_operational_retention"
 
-      execute("""
+      execute_compatible("""
       CREATE OR REPLACE TRIGGER #{trigger}
       BEFORE UPDATE ON public.#{table}
       FOR EACH ROW EXECUTE FUNCTION public.enforce_operational_privacy_retention()
       """)
     end
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_work_results
       ADD COLUMN IF NOT EXISTS result_content_digest bytea,
       ADD COLUMN IF NOT EXISTS result_content_digest_version smallint
     """)
 
-    execute("""
+    execute_compatible("""
     COMMENT ON COLUMN public.agent_work_results.result_content_digest IS
       'Opaque frozen result HMAC token retained after ciphertext erasure; never an unkeyed plaintext digest'
     """)
 
-    execute("""
+    execute_compatible("""
     COMMENT ON COLUMN public.agent_work_results.result_content_digest_version IS
       '0 denotes an opaque HMAC snapshot with all key-binding metadata removed'
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_agent_work_result_transition()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1582,7 +1595,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     $privacy$;
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_work_results
       ALTER COLUMN result_digest DROP NOT NULL
     """)
@@ -1590,12 +1603,12 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     flush()
     repair_purged_agent_work_result_authority()
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_work_results
       DROP CONSTRAINT IF EXISTS agent_work_results_digest_check
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_work_results
       ADD CONSTRAINT agent_work_results_digest_check CHECK (
         octet_length(result_key) = 32
@@ -1626,14 +1639,14 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
       ) NOT VALID
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_work_results
       VALIDATE CONSTRAINT agent_work_results_digest_check
     """)
   end
 
   defp attest_operational_privacy_protocol do
-    execute("""
+    execute_compatible("""
     CREATE TABLE IF NOT EXISTS public.privacy_protocol_manifests (
       name varchar(80) PRIMARY KEY,
       migration_version bigint NOT NULL,
@@ -1654,12 +1667,12 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     )
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.privacy_protocol_manifests
       ADD COLUMN IF NOT EXISTS catalog_fingerprints jsonb NOT NULL DEFAULT '{}'::jsonb
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.privacy_protocol_manifests
       ADD COLUMN IF NOT EXISTS manifest_digest bytea NOT NULL
       DEFAULT decode(repeat('00', 32), 'hex')
@@ -1672,7 +1685,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
         "AND octet_length(manifest_digest) = 32)"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.privacy_protocol_catalog_ready()
     RETURNS boolean
     LANGUAGE plpgsql
@@ -1777,7 +1790,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     $privacy$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_operational_privacy_activation()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2021,13 +2034,13 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     $privacy$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE TRIGGER enforce_operational_privacy_activation_trigger
     BEFORE UPDATE ON public.effect_execution_protocols
     FOR EACH ROW EXECUTE FUNCTION public.enforce_operational_privacy_activation()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.reject_privacy_protocol_manifest_mutation()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2040,7 +2053,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     $privacy$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE TRIGGER reject_privacy_protocol_manifest_mutation_trigger
     BEFORE UPDATE OR DELETE ON public.privacy_protocol_manifests
     FOR EACH ROW EXECUTE FUNCTION public.reject_privacy_protocol_manifest_mutation()
@@ -2048,7 +2061,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp attest_privacy_authority do
-    execute("""
+    execute_compatible("""
     DO $privacy_authority$
     BEGIN
       ALTER TABLE public.privacy_protocol_manifests OWNER TO maraithon_object_owner;
@@ -2164,7 +2177,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp refresh_privacy_manifest do
-    execute("""
+    execute_compatible("""
     DO $privacy_manifest_refresh$
     DECLARE
       mutation_trigger_present boolean;
@@ -2452,7 +2465,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp refresh_effect_manifest do
-    execute("""
+    execute_compatible("""
     DO $effect_manifest_refresh$
     DECLARE
       mutation_trigger_present boolean;
@@ -2548,7 +2561,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp refresh_runtime_manifest do
-    execute("""
+    execute_compatible("""
     DO $runtime_manifest_refresh$
     DECLARE
       runtime_mode text;
@@ -2778,7 +2791,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp create_privacy_retention_statuses do
-    execute("""
+    execute_compatible("""
     CREATE TABLE IF NOT EXISTS privacy_retention_statuses (
       handler varchar(80) PRIMARY KEY,
       tenant_cursor varchar(320),
@@ -2805,7 +2818,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp create_privacy_erasure_requests do
-    execute("""
+    execute_compatible("""
     CREATE TABLE IF NOT EXISTS privacy_erasure_requests (
       id uuid PRIMARY KEY,
       scope varchar(16) NOT NULL,
@@ -2845,7 +2858,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp create_privacy_erasure_agent_targets do
-    execute("""
+    execute_compatible("""
     CREATE TABLE IF NOT EXISTS privacy_erasure_agent_targets (
       id bigserial PRIMARY KEY,
       request_id uuid NOT NULL,
@@ -2867,7 +2880,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp create_privacy_erasure_provider_revocations do
-    execute("""
+    execute_compatible("""
     CREATE TABLE IF NOT EXISTS privacy_erasure_provider_revocations (
       id bigserial PRIMARY KEY,
       request_id uuid NOT NULL,
@@ -2888,7 +2901,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp create_privacy_erasure_receipts do
-    execute("""
+    execute_compatible("""
     CREATE TABLE IF NOT EXISTS privacy_erasure_receipts (
       id uuid PRIMARY KEY,
       request_id uuid NOT NULL,
@@ -2920,7 +2933,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     # These receipts deliberately have no foreign keys. Background jobs are
     # deleted by erasure completion, while this content-free contraction
     # authority must remain immutable and independently durable.
-    execute("""
+    execute_compatible("""
     CREATE TABLE IF NOT EXISTS public.privacy_erasure_job_deferral_receipts (
       job_id uuid PRIMARY KEY,
       request_id uuid NOT NULL,
@@ -2938,7 +2951,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     )
     """)
 
-    execute("""
+    execute_compatible("""
     DO $privacy_job_deferral_shape$
     DECLARE
       actual_columns jsonb;
@@ -3002,7 +3015,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     $privacy_job_deferral_shape$;
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.privacy_erasure_job_deferral_receipts
       DROP CONSTRAINT IF EXISTS privacy_erasure_job_deferral_receipts_shape_check,
       ADD CONSTRAINT privacy_erasure_job_deferral_receipts_shape_check CHECK (
@@ -3013,7 +3026,7 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
       ) NOT VALID
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.privacy_erasure_job_deferral_receipts
       VALIDATE CONSTRAINT privacy_erasure_job_deferral_receipts_shape_check
     """)
@@ -3190,45 +3203,45 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   defp create_online_indexes do
     # These tables are new in this migration; ordinary CREATE INDEX is atomic,
     # so an interrupted statement cannot leave a same-name invalid shell.
-    execute("""
+    execute_compatible("""
     CREATE UNIQUE INDEX IF NOT EXISTS privacy_erasure_requests_active_user_index
     ON privacy_erasure_requests (subject_user_id)
     WHERE scope = 'user' AND state <> 'completed' AND subject_user_id IS NOT NULL
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE UNIQUE INDEX IF NOT EXISTS privacy_erasure_requests_active_agent_index
     ON privacy_erasure_requests (subject_agent_id)
     WHERE scope = 'agent' AND state <> 'completed' AND subject_agent_id IS NOT NULL
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE INDEX IF NOT EXISTS privacy_erasure_requests_work_index
     ON privacy_erasure_requests (last_attempted_at NULLS FIRST, requested_at, id)
     WHERE state <> 'completed'
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE UNIQUE INDEX IF NOT EXISTS privacy_erasure_agent_targets_identity_index
     ON privacy_erasure_agent_targets (request_id, agent_id)
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE INDEX IF NOT EXISTS privacy_erasure_agent_targets_work_index
     ON privacy_erasure_agent_targets (request_id, state, last_attempted_at, id)
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE UNIQUE INDEX IF NOT EXISTS privacy_erasure_provider_revocations_identity_index
     ON privacy_erasure_provider_revocations (request_id, credential_table, credential_row_id)
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE UNIQUE INDEX IF NOT EXISTS privacy_erasure_receipts_request_index
     ON privacy_erasure_receipts (request_id)
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE INDEX IF NOT EXISTS privacy_erasure_receipts_expiry_index
     ON privacy_erasure_receipts (expires_at, id)
     """)
@@ -3306,11 +3319,11 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
     refresh_effect_manifest()
     refresh_runtime_manifest()
     prepare_durable_payload_manifest_refresh()
-    execute("SELECT public.refresh_durable_payload_protocol_manifest()")
+    execute_compatible("SELECT public.refresh_durable_payload_protocol_manifest()")
   end
 
   defp prepare_durable_payload_manifest_refresh do
-    execute("""
+    execute_compatible("""
     DO $privacy_durable_manifest_expansion$
     DECLARE
       runtime_mode text;
@@ -3415,12 +3428,12 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
   end
 
   defp create_retry_safe_concurrent_index(name, statement) do
-    execute("DROP INDEX CONCURRENTLY IF EXISTS public.#{name}")
-    execute(statement)
+    execute_compatible("DROP INDEX CONCURRENTLY IF EXISTS public.#{name}")
+    execute_compatible(statement)
   end
 
   defp add_constraint_unless_present(table, name, definition) do
-    execute("""
+    execute_compatible("""
     DO $privacy$
     BEGIN
       IF to_regclass('public.#{table}') IS NOT NULL AND NOT EXISTS (

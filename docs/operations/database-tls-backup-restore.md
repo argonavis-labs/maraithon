@@ -30,6 +30,18 @@ in a separately controlled database bootstrap. Only a reviewed migration or
 release process may receive the migrator credential; ordinary runtime work must
 not use it.
 
+### Fly Managed Postgres staging compatibility
+
+Fly Managed Postgres authenticates named users but exposes fixed provider roles
+such as `schema_admin` to PostgreSQL and does not allow customers to create the
+six canonical roles. On a `*.flympg.net` migration connection, the additive
+migrations map their DDL authority to `schema_admin` so the reviewed revision can
+be staged in production. `runtime_coordination_roles_ready()` remains hard-false
+in this mode: Effect and runtime coordination activation, operator promotion,
+and claims of separated-role readiness are forbidden. Moving either protocol
+out of its feature-dark legacy state still requires a database platform that can
+provision the canonical topology above.
+
 ## Canonical connection variables
 
 Each URL must identify the exact username in its URL userinfo:
@@ -159,9 +171,9 @@ and Effect `legacy`, takes the session advisory lock `(20260811, 420)`, reads al
 three source files, and validates all three pinned SHA-256 hashes before it
 invokes any definition:
 
-- `140004`: `41023cfb05e41665ae62aa5bc7d6b61cd5f09c0b9cc6ce04e2611817abf5d605`
-- `140005`: `746e5ea9d003c83bcea16b4f1e53644d3315bf9c365f61dc384f2377757a0131`
-- `140007`: `122eaf5370b698d32b83a04c95ee7de9daa10e04f9065f454de6a7e2ad6566e3`
+- `140004`: `2c57f6a55466e3857bd24b7c5329ca7e88dd036276c871728e9da5a4909e6f8d`
+- `140005`: `d7ef75cd9d056782eca274a7fda2d33c1de9bca8d457e0d4c8d02182f76c3102`
+- `140007`: `b061b2224b28ab0b5368d530ddeabb6e16a8811c098456bb2b17bcb99ef71e2d`
 
 Only after all three pass does it rerun their retry-safe `up/0` definitions. It
 then lets Ecto record `20260811000420` normally.

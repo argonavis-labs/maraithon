@@ -8,17 +8,17 @@ defmodule Maraithon.Repo.Migrations.RepairDurableRuntimeAuthority do
     {
       "20260810140004_create_runtime_coordination_authority.exs",
       Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority,
-      "41023cfb05e41665ae62aa5bc7d6b61cd5f09c0b9cc6ce04e2611817abf5d605"
+      "2c57f6a55466e3857bd24b7c5329ca7e88dd036276c871728e9da5a4909e6f8d"
     },
     {
       "20260810140005_create_durable_payload_verifications.exs",
       Maraithon.Repo.Migrations.CreateDurablePayloadVerifications,
-      "746e5ea9d003c83bcea16b4f1e53644d3315bf9c365f61dc384f2377757a0131"
+      "d7ef75cd9d056782eca274a7fda2d33c1de9bca8d457e0d4c8d02182f76c3102"
     },
     {
       "20260810140007_add_operational_privacy_controls.exs",
       Maraithon.Repo.Migrations.AddOperationalPrivacyControls,
-      "122eaf5370b698d32b83a04c95ee7de9daa10e04f9065f454de6a7e2ad6566e3"
+      "b061b2224b28ab0b5368d530ddeabb6e16a8811c098456bb2b17bcb99ef71e2d"
     }
   ]
 

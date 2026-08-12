@@ -80,7 +80,10 @@ runtime socket/SNI option must not be copied to an operator URL.
 The canonical object owner is the non-login `maraithon_object_owner`; only
 `maraithon_migrator` is its member. Provision the six-role topology before
 migration and do not share credentials. See [Database TLS, backup, and
-restore](operations/database-tls-backup-restore.md).
+restore](operations/database-tls-backup-restore.md). Fly Managed Postgres may
+stage the additive schema through its documented `schema_admin` compatibility
+lane, but its role-readiness proof remains false and this cutover must not
+advance there.
 
 Fly commands require a short-lived token exported only as `FLY_API_TOKEN`,
 scoped to the pinned production application and the exact actions in this
@@ -178,9 +181,9 @@ legacy fleet must remain available to finish already accepted Agent work.
    `(20260811, 420)`, validates all three source hashes before doing any repair,
    and then reruns their retry-safe definitions:
 
-   - `140004`: `41023cfb05e41665ae62aa5bc7d6b61cd5f09c0b9cc6ce04e2611817abf5d605`
-   - `140005`: `746e5ea9d003c83bcea16b4f1e53644d3315bf9c365f61dc384f2377757a0131`
-   - `140007`: `122eaf5370b698d32b83a04c95ee7de9daa10e04f9065f454de6a7e2ad6566e3`
+   - `140004`: `2c57f6a55466e3857bd24b7c5329ca7e88dd036276c871728e9da5a4909e6f8d`
+   - `140005`: `d7ef75cd9d056782eca274a7fda2d33c1de9bca8d457e0d4c8d02182f76c3102`
+   - `140007`: `b061b2224b28ab0b5368d530ddeabb6e16a8811c098456bb2b17bcb99ef71e2d`
 
    Never delete/edit `schema_migrations`, manually invoke a migration module,
    or copy its SQL. The forward-repair verifier uses disposable

@@ -31,9 +31,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
   end
 
   defp migrate do
-    execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+    execute_compatible("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.runtime_coordination_roles_ready()
     RETURNS boolean
     LANGUAGE sql
@@ -76,7 +76,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     DO $role_topology$
     BEGIN
       IF NOT public.runtime_coordination_roles_ready() THEN
@@ -87,7 +87,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $role_topology$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.runtime_role_topology_fingerprint()
     RETURNS text
     LANGUAGE sql
@@ -291,7 +291,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       timestamps(type: :utc_datetime_usec)
     end
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.runtime_partitions
       ADD COLUMN IF NOT EXISTS effects_drained_epoch bigint
     """)
@@ -391,17 +391,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       timestamps(type: :utc_datetime_usec)
     end
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.runtime_task_assignments
       ADD COLUMN IF NOT EXISTS termination_capability_digest bytea
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.runtime_task_assignments
       ALTER COLUMN termination_capability_digest DROP DEFAULT
     """)
 
-    execute("""
+    execute_compatible("""
     DO $task_termination_capability$
     BEGIN
       IF EXISTS (
@@ -639,22 +639,22 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       add_if_not_exists :coordination_node_incarnation_id, :uuid
     end
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_runtime_leases
       ADD COLUMN IF NOT EXISTS termination_capability_digest bytea
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_runtime_leases
       ALTER COLUMN termination_capability_digest DROP DEFAULT
     """)
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.agent_runtime_leases " <>
         "DROP CONSTRAINT IF EXISTS agent_runtime_leases_termination_capability_digest_shape"
     )
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_runtime_leases
       ADD CONSTRAINT agent_runtime_leases_termination_capability_digest_shape CHECK (
         termination_capability_digest IS NULL OR
@@ -662,7 +662,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       ) NOT VALID
     """)
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.agent_runtime_leases " <>
         "VALIDATE CONSTRAINT agent_runtime_leases_termination_capability_digest_shape"
     )
@@ -680,7 +680,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     # proof to remain joined to the immutable claim. Keep the never-claimed
     # cancellation shape, and add the proof-settled claimed shape before the
     # coordination protocol can be activated.
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.effects
       DROP CONSTRAINT IF EXISTS effects_generation_fenced_shape_check,
       ADD CONSTRAINT effects_generation_fenced_shape_check CHECK ((
@@ -791,12 +791,14 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       ) IS TRUE) NOT VALID
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.effects
       VALIDATE CONSTRAINT effects_generation_fenced_shape_check
     """)
 
-    execute("DROP INDEX CONCURRENTLY IF EXISTS public.background_jobs_partition_due_index")
+    execute_compatible(
+      "DROP INDEX CONCURRENTLY IF EXISTS public.background_jobs_partition_due_index"
+    )
 
     create_if_not_exists index(:background_jobs, [:partition_id, :status, :scheduled_at],
                            name: :background_jobs_partition_due_index,
@@ -804,7 +806,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
                            concurrently: true
                          )
 
-    execute("DROP INDEX CONCURRENTLY IF EXISTS public.background_jobs_tenant_active_index")
+    execute_compatible(
+      "DROP INDEX CONCURRENTLY IF EXISTS public.background_jobs_tenant_active_index"
+    )
 
     create_if_not_exists index(:background_jobs, [:tenant_key, :status],
                            name: :background_jobs_tenant_active_index,
@@ -812,7 +816,9 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
                            concurrently: true
                          )
 
-    execute("DROP INDEX CONCURRENTLY IF EXISTS public.scheduled_jobs_partition_due_index")
+    execute_compatible(
+      "DROP INDEX CONCURRENTLY IF EXISTS public.scheduled_jobs_partition_due_index"
+    )
 
     create_if_not_exists index(:scheduled_jobs, [:partition_id, :status, :fire_at],
                            name: :scheduled_jobs_partition_due_index,
@@ -820,7 +826,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
                            concurrently: true
                          )
 
-    execute(
+    execute_compatible(
       "DROP INDEX CONCURRENTLY IF EXISTS public.agent_runtime_leases_coordination_partition_index"
     )
 
@@ -829,7 +835,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
                            concurrently: true
                          )
 
-    execute(
+    execute_compatible(
       "DROP INDEX CONCURRENTLY IF EXISTS public.effects_coordination_partition_pending_index"
     )
 
@@ -839,7 +845,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
                            concurrently: true
                          )
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.runtime_partition_for(tenant text)
     RETURNS smallint
     LANGUAGE sql
@@ -852,7 +858,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.populate_runtime_work_partition()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -904,22 +910,22 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS populate_background_job_partition_trigger ON public.background_jobs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER populate_background_job_partition_trigger
       BEFORE INSERT OR UPDATE OF user_id, queue, telegram_bot_id, tenant_key
       ON public.background_jobs
       FOR EACH ROW EXECUTE FUNCTION public.populate_runtime_work_partition()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS populate_scheduled_job_partition_trigger ON public.scheduled_jobs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER populate_scheduled_job_partition_trigger
       BEFORE INSERT OR UPDATE OF agent_id, tenant_key
       ON public.scheduled_jobs
@@ -929,11 +935,11 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     # Existing rows remain nullable during the expansion. A bounded operator
     # backfill uses SKIP LOCKED; activation repeats the zero-null proof while
     # holding the work tables in SHARE mode. No migration-time table rewrite.
-    execute(
+    execute_compatible(
       "ALTER TABLE public.background_jobs DROP CONSTRAINT IF EXISTS background_jobs_partition_shape"
     )
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.background_jobs
       ADD CONSTRAINT background_jobs_partition_shape CHECK (
         (tenant_key IS NULL AND partition_id IS NULL) OR
@@ -942,11 +948,11 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       ) NOT VALID
     """)
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.scheduled_jobs DROP CONSTRAINT IF EXISTS scheduled_jobs_partition_shape"
     )
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.scheduled_jobs
       ADD CONSTRAINT scheduled_jobs_partition_shape CHECK (
         (tenant_key IS NULL AND partition_id IS NULL) OR
@@ -955,15 +961,15 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       ) NOT VALID
     """)
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.background_jobs VALIDATE CONSTRAINT background_jobs_partition_shape"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.scheduled_jobs VALIDATE CONSTRAINT scheduled_jobs_partition_shape"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.runtime_coordination_acl_ready()
     RETURNS boolean
     LANGUAGE plpgsql
@@ -1402,7 +1408,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_effect_activation_evidence()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1437,17 +1443,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_effect_activation_evidence_trigger ON public.effect_execution_protocols"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_effect_activation_evidence_trigger
       BEFORE UPDATE ON public.effect_execution_protocols
       FOR EACH ROW EXECUTE FUNCTION public.enforce_effect_activation_evidence()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_coordination_protocol()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1585,27 +1591,27 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_runtime_coordination_protocol_trigger ON public.runtime_coordination_protocols"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_runtime_coordination_protocol_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_coordination_protocols
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_coordination_protocol()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_runtime_coordination_protocol_truncate_trigger ON public.runtime_coordination_protocols"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_runtime_coordination_protocol_truncate_trigger
       BEFORE TRUNCATE ON public.runtime_coordination_protocols
       FOR EACH STATEMENT EXECUTE FUNCTION public.enforce_runtime_coordination_protocol()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.reject_runtime_coordination_evidence_mutation()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1622,24 +1628,28 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
           "runtime_coordination_manifests",
           "runtime_task_termination_proofs"
         ] do
-      execute("DROP TRIGGER IF EXISTS reject_#{table}_mutation_trigger ON public.#{table}")
+      execute_compatible(
+        "DROP TRIGGER IF EXISTS reject_#{table}_mutation_trigger ON public.#{table}"
+      )
 
-      execute("""
+      execute_compatible("""
       CREATE TRIGGER reject_#{table}_mutation_trigger
         BEFORE UPDATE OR DELETE ON public.#{table}
         FOR EACH ROW EXECUTE FUNCTION public.reject_runtime_coordination_evidence_mutation()
       """)
 
-      execute("DROP TRIGGER IF EXISTS reject_#{table}_truncate_trigger ON public.#{table}")
+      execute_compatible(
+        "DROP TRIGGER IF EXISTS reject_#{table}_truncate_trigger ON public.#{table}"
+      )
 
-      execute("""
+      execute_compatible("""
       CREATE TRIGGER reject_#{table}_truncate_trigger
         BEFORE TRUNCATE ON public.#{table}
         FOR EACH STATEMENT EXECUTE FUNCTION public.reject_runtime_coordination_evidence_mutation()
       """)
     end
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_partition_transition()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1678,27 +1688,27 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_runtime_partition_transition_trigger ON public.runtime_partition_transitions"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_runtime_partition_transition_trigger
       BEFORE UPDATE OR DELETE ON public.runtime_partition_transitions
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_partition_transition()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_runtime_partition_transitions_truncate_trigger ON public.runtime_partition_transitions"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_runtime_partition_transitions_truncate_trigger
       BEFORE TRUNCATE ON public.runtime_partition_transitions
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_runtime_coordination_evidence_mutation()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_node_incarnation()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1790,17 +1800,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_runtime_node_incarnation_trigger ON public.runtime_node_incarnations"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_runtime_node_incarnation_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_node_incarnations
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_node_incarnation()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_leader_authority()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1853,17 +1863,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_runtime_leader_authority_trigger ON public.runtime_leader_authorities"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_runtime_leader_authority_trigger
       BEFORE UPDATE OR DELETE ON public.runtime_leader_authorities
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_leader_authority()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_partition_authority()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2012,17 +2022,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_runtime_partition_authority_trigger ON public.runtime_partitions"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_runtime_partition_authority_trigger
       BEFORE UPDATE OR DELETE ON public.runtime_partitions
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_partition_authority()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_task_outcome_evidence()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2204,21 +2214,21 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_runtime_task_outcome_evidence_trigger ON public.runtime_task_outcome_evidence"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_runtime_task_outcome_evidence_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_task_outcome_evidence
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_task_outcome_evidence()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_runtime_task_outcome_evidence_truncate_trigger ON public.runtime_task_outcome_evidence"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_runtime_task_outcome_evidence_truncate_trigger
       BEFORE TRUNCATE ON public.runtime_task_outcome_evidence
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_runtime_coordination_evidence_mutation()
@@ -2227,7 +2237,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     # Existing-row UPDATEs must acquire the global lifecycle prefix before
     # PostgreSQL takes any assignment tuple lock. The row trigger below remains
     # the final NEW-transition and PostgreSQL-clock authority check.
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_task_assignment_update_prefix()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2381,7 +2391,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_task_assignment()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2687,33 +2697,33 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_runtime_task_assignment_update_prefix_trigger ON public.runtime_task_assignments"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_runtime_task_assignment_update_prefix_trigger
       BEFORE UPDATE ON public.runtime_task_assignments
       FOR EACH STATEMENT
       EXECUTE FUNCTION public.enforce_runtime_task_assignment_update_prefix()
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.runtime_task_assignments
       ENABLE ALWAYS TRIGGER enforce_runtime_task_assignment_update_prefix_trigger
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_runtime_task_assignment_trigger ON public.runtime_task_assignments"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_runtime_task_assignment_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.runtime_task_assignments
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_task_assignment()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_task_termination_proof()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2816,17 +2826,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_runtime_task_termination_proof_trigger ON public.runtime_task_termination_proofs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_runtime_task_termination_proof_trigger
       BEFORE INSERT ON public.runtime_task_termination_proofs
       FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_task_termination_proof()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.runtime_task_authority_valid(
       requested_assignment uuid,
       requested_activation uuid,
@@ -2866,7 +2876,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_operator_row_mutation_authorized(
       requested_relation regclass,
       requested_operation text,
@@ -3321,7 +3331,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_durable_payload_operator_source_mutation()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3344,7 +3354,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     DO $operator_source_triggers$
     DECLARE
       source_relation text;
@@ -3380,7 +3390,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $operator_source_triggers$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_runtime_work_role()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3413,16 +3423,18 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     """)
 
     for table <- ["agent_runs", "agent_run_steps"] do
-      execute("DROP TRIGGER IF EXISTS enforce_#{table}_runtime_role_trigger ON public.#{table}")
+      execute_compatible(
+        "DROP TRIGGER IF EXISTS enforce_#{table}_runtime_role_trigger ON public.#{table}"
+      )
 
-      execute("""
+      execute_compatible("""
       CREATE TRIGGER enforce_#{table}_runtime_role_trigger
         BEFORE INSERT OR UPDATE OR DELETE ON public.#{table}
         FOR EACH ROW EXECUTE FUNCTION public.enforce_runtime_work_role()
       """)
     end
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_coordinated_background_job()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3541,17 +3553,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_coordinated_background_job_trigger ON public.background_jobs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_coordinated_background_job_trigger
       BEFORE UPDATE ON public.background_jobs
       FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_background_job()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_coordinated_scheduled_job()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3679,17 +3691,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_coordinated_scheduled_job_trigger ON public.scheduled_jobs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_coordinated_scheduled_job_trigger
       BEFORE UPDATE ON public.scheduled_jobs
       FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_scheduled_job()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_coordinated_agent_directive()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3854,17 +3866,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_coordinated_agent_directive_trigger ON public.agent_directives"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_coordinated_agent_directive_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.agent_directives
       FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_agent_directive()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_coordinated_agent_lease()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -4047,17 +4059,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_coordinated_agent_lease_trigger ON public.agent_runtime_leases"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_coordinated_agent_lease_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.agent_runtime_leases
       FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_agent_lease()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_coordinated_effect()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -4462,15 +4474,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute("DROP TRIGGER IF EXISTS enforce_coordinated_effect_trigger ON public.effects")
+    execute_compatible(
+      "DROP TRIGGER IF EXISTS enforce_coordinated_effect_trigger ON public.effects"
+    )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_coordinated_effect_trigger
       BEFORE INSERT OR UPDATE ON public.effects
       FOR EACH ROW EXECUTE FUNCTION public.enforce_coordinated_effect()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_effect_assignment_final_pair()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -4661,23 +4675,23 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_effect_assignment_final_pair_effect_trigger ON public.effects"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE CONSTRAINT TRIGGER enforce_effect_assignment_final_pair_effect_trigger
       AFTER INSERT OR UPDATE ON public.effects
       DEFERRABLE INITIALLY DEFERRED
       FOR EACH ROW EXECUTE FUNCTION public.enforce_effect_assignment_final_pair()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_effect_assignment_final_pair_assignment_trigger " <>
         "ON public.runtime_task_assignments"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE CONSTRAINT TRIGGER enforce_effect_assignment_final_pair_assignment_trigger
       AFTER INSERT OR UPDATE ON public.runtime_task_assignments
       DEFERRABLE INITIALLY DEFERRED
@@ -4739,7 +4753,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
                            name: :agent_termination_incidents_coordination_index
                          )
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_termination_incidents
       DROP CONSTRAINT IF EXISTS agent_termination_incidents_shape,
       ADD CONSTRAINT agent_termination_incidents_shape CHECK (
@@ -4761,7 +4775,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       ) NOT VALID
     """)
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.agent_termination_incidents VALIDATE CONSTRAINT agent_termination_incidents_shape"
     )
 
@@ -4808,7 +4822,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
                            name: :agent_termination_proofs_exact_identity_index
                          )
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.agent_termination_proofs
       DROP CONSTRAINT IF EXISTS agent_termination_proofs_shape,
       ADD CONSTRAINT agent_termination_proofs_shape CHECK (
@@ -4832,11 +4846,11 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
       ) NOT VALID
     """)
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.agent_termination_proofs VALIDATE CONSTRAINT agent_termination_proofs_shape"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_agent_termination_incident()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -4876,27 +4890,27 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_agent_termination_incident_trigger ON public.agent_termination_incidents"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_agent_termination_incident_trigger
       BEFORE UPDATE OR DELETE ON public.agent_termination_incidents
       FOR EACH ROW EXECUTE FUNCTION public.enforce_agent_termination_incident()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_agent_termination_incidents_truncate_trigger ON public.agent_termination_incidents"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_agent_termination_incidents_truncate_trigger
       BEFORE TRUNCATE ON public.agent_termination_incidents
       FOR EACH STATEMENT EXECUTE FUNCTION public.enforce_agent_termination_incident()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_agent_termination_proof()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -4990,21 +5004,21 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_agent_termination_proof_trigger ON public.agent_termination_proofs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_agent_termination_proof_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.agent_termination_proofs
       FOR EACH ROW EXECUTE FUNCTION public.enforce_agent_termination_proof()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_agent_termination_proofs_truncate_trigger ON public.agent_termination_proofs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_agent_termination_proofs_truncate_trigger
       BEFORE TRUNCATE ON public.agent_termination_proofs
       FOR EACH STATEMENT EXECUTE FUNCTION public.enforce_agent_termination_proof()
@@ -5013,7 +5027,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     # The v1 partition trigger only counted live Agent leases.  This additional
     # trigger makes every exact lease row (including an expired ambiguous row)
     # a release barrier until proof-gated reconciliation removes that row.
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_agent_termination_partition_release()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -5035,17 +5049,17 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_agent_termination_partition_release_trigger ON public.runtime_partitions"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_agent_termination_partition_release_trigger
       BEFORE UPDATE ON public.runtime_partitions
       FOR EACH ROW EXECUTE FUNCTION public.enforce_agent_termination_partition_release()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.runtime_catalog_table_fingerprint(requested regclass)
     RETURNS text
     LANGUAGE sql
@@ -5185,7 +5199,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.runtime_coordination_catalog_ready_count()
     RETURNS bigint
     LANGUAGE sql
@@ -5402,7 +5416,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     # expansion by infrastructure. The migration never creates or links them;
     # the early topology gate prevents a half-secured expansion from being
     # recorded. Activation continuously re-attests the graph and ACLs below.
-    execute("""
+    execute_compatible("""
     DO $block$
     DECLARE
       relation_name text;
@@ -5666,7 +5680,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     $block$;
     """)
 
-    execute("""
+    execute_compatible("""
     INSERT INTO public.runtime_coordination_manifests
       (name, constraint_fingerprints, function_fingerprints, trigger_fingerprints,
        index_fingerprints, catalog_fingerprints, inserted_at, updated_at)
@@ -5855,7 +5869,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     ON CONFLICT (name) DO NOTHING
     """)
 
-    execute("""
+    execute_compatible("""
     INSERT INTO public.runtime_coordination_protocols
       (name, mode, partition_count, activation_epoch, activated_at,
        activation_evidence_id, activation_evidence_digest, activated_by, exact_revision,
@@ -5874,7 +5888,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     ON CONFLICT (name) DO NOTHING
     """)
 
-    execute("""
+    execute_compatible("""
     INSERT INTO public.runtime_leader_authorities
       (role, leader_epoch, state, inserted_at, updated_at)
     VALUES ('partition_planner', 0, 'unassigned',
@@ -5882,7 +5896,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     ON CONFLICT (role) DO NOTHING
     """)
 
-    execute("""
+    execute_compatible("""
     INSERT INTO public.runtime_partitions
       (partition_id, ownership_epoch, state, fair_sequence, inserted_at, updated_at)
     SELECT partition_id, 0, 'unassigned', 0,
@@ -5898,7 +5912,7 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     unless Regex.match?(~r/\A[a-z0-9_]+\z/, name),
       do: raise(Ecto.MigrationError, "unsafe runtime coordination index name")
 
-    execute("""
+    execute_compatible("""
     DO $index_recovery$
     BEGIN
       IF EXISTS (
@@ -5916,6 +5930,19 @@ defmodule Maraithon.Repo.Migrations.CreateRuntimeCoordinationAuthority do
     END;
     $index_recovery$;
     """)
+  end
+
+  defp execute_compatible(statement) do
+    statement
+    |> Maraithon.DatabaseRoleCompatibility.rewrite_migration_sql()
+    |> Ecto.Migration.execute()
+  end
+
+  defp execute_compatible(up, down) do
+    Ecto.Migration.execute(
+      Maraithon.DatabaseRoleCompatibility.rewrite_migration_sql(up),
+      Maraithon.DatabaseRoleCompatibility.rewrite_migration_sql(down)
+    )
   end
 
   def down do

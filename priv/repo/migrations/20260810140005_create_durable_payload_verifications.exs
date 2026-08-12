@@ -30,33 +30,43 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
   end
 
   defp migrate do
-    execute("CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public")
+    execute_compatible("CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public")
 
     # Exact PreparedAction writes clear the legacy preview projection. The
     # original schema made that projection NOT NULL, so relax it before any
     # stopped-fleet contraction can make ciphertext-only rows authoritative.
-    execute(
+    execute_compatible(
       "ALTER TABLE public.telegram_prepared_actions " <>
         "ALTER COLUMN preview_text DROP NOT NULL"
     )
 
-    execute("ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS state_data_ciphertext bytea")
-    execute("ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS budget_ciphertext bytea")
+    execute_compatible(
+      "ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS state_data_ciphertext bytea"
+    )
 
-    execute(
+    execute_compatible(
+      "ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS budget_ciphertext bytea"
+    )
+
+    execute_compatible(
       "ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS payload_encryption_version smallint"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS payload_binding_version smallint"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS payload_binding_key_tag varchar(64)"
     )
 
-    execute("ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS payload_binding_mac bytea")
-    execute("ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS payload_purged_at timestamptz")
+    execute_compatible(
+      "ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS payload_binding_mac bytea"
+    )
+
+    execute_compatible(
+      "ALTER TABLE public.snapshots ADD COLUMN IF NOT EXISTS payload_purged_at timestamptz"
+    )
 
     add_not_valid_constraint(
       "snapshots",
@@ -74,26 +84,28 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       """
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.events ADD COLUMN IF NOT EXISTS payload_encryption_version smallint"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.agent_run_steps ADD COLUMN IF NOT EXISTS payload_encryption_version smallint"
     )
 
     for table <- ~w(effects agent_directives events agent_run_steps) do
-      execute(
+      execute_compatible(
         "ALTER TABLE public.#{table} ADD COLUMN IF NOT EXISTS payload_binding_version smallint"
       )
 
-      execute(
+      execute_compatible(
         "ALTER TABLE public.#{table} ADD COLUMN IF NOT EXISTS payload_binding_key_tag varchar(64)"
       )
 
-      execute("ALTER TABLE public.#{table} ADD COLUMN IF NOT EXISTS payload_binding_mac bytea")
+      execute_compatible(
+        "ALTER TABLE public.#{table} ADD COLUMN IF NOT EXISTS payload_binding_mac bytea"
+      )
 
-      execute("""
+      execute_compatible("""
       DO $constraint$
       BEGIN
         IF NOT EXISTS (
@@ -296,59 +308,59 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       """
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS key_kind varchar(16) NOT NULL DEFAULT 'vault'"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS backup_catalog_digest bytea"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS backup_catalog_captured_at timestamp(6) without time zone"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS backup_oldest_recoverable_at timestamp(6) without time zone"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS wal_catalog_digest bytea"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS wal_catalog_captured_at timestamp(6) without time zone"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS wal_oldest_recoverable_at timestamp(6) without time zone"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS pitr_catalog_digest bytea"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS pitr_catalog_captured_at timestamp(6) without time zone"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS pitr_oldest_recoverable_at timestamp(6) without time zone"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS restore_drill_digest bytea"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS restore_drill_completed_at timestamp(6) without time zone"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS restore_drill_recovered_through_at timestamp(6) without time zone"
     )
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.vault_backup_retirement_evidence ADD COLUMN IF NOT EXISTS zero_proof_id uuid"
     )
 
@@ -412,7 +424,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       add :attempted_at, :utc_datetime_usec, null: false
     end
 
-    execute(
+    execute_compatible(
       "ALTER TABLE public.durable_payload_binding_operations " <>
         "ADD COLUMN IF NOT EXISTS binding_name varchar(255) NOT NULL DEFAULT 'payload'"
     )
@@ -532,7 +544,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       """
     )
 
-    execute("""
+    execute_compatible("""
     DO $key_fence_seed$
     DECLARE
       state_count bigint;
@@ -630,7 +642,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       """
     )
 
-    execute("""
+    execute_compatible("""
     DO $constraint$
     BEGIN
       IF NOT EXISTS (
@@ -648,12 +660,12 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $constraint$;
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.vault_backup_retirement_evidence
       VALIDATE CONSTRAINT vault_backup_retirement_evidence_zero_proof_fkey
     """)
 
-    execute("""
+    execute_compatible("""
     DO $constraint$
     BEGIN
       IF NOT EXISTS (
@@ -684,17 +696,17 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $constraint$;
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.retired_durable_payload_keys
       VALIDATE CONSTRAINT retired_durable_payload_keys_zero_proof_fkey
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.retired_durable_payload_keys
       VALIDATE CONSTRAINT retired_durable_payload_keys_backup_evidence_fkey
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_row_identity(
       source_table text,
       source_id text
@@ -728,7 +740,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_digest_part(
       source_table text,
       source_row jsonb,
@@ -841,7 +853,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_proof_failures()
     RETURNS bigint
     LANGUAGE plpgsql
@@ -1318,7 +1330,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_source_acl_ready()
     RETURNS boolean
     LANGUAGE sql
@@ -1469,7 +1481,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_roles_ready()
     RETURNS boolean
     LANGUAGE plpgsql
@@ -1732,7 +1744,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_durable_history_payload_protocol()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -1855,7 +1867,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_operator_mutation_authorized()
     RETURNS boolean
     LANGUAGE sql
@@ -1868,7 +1880,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.lock_durable_runtime_activation_sources()
     RETURNS void
     LANGUAGE plpgsql
@@ -1912,7 +1924,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.lock_durable_payload_binding_sources()
     RETURNS void
     LANGUAGE plpgsql
@@ -1945,7 +1957,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.lock_durable_payload_contraction_sources()
     RETURNS void
     LANGUAGE plpgsql
@@ -1978,7 +1990,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.lock_durable_payload_contraction_coordination()
     RETURNS void
     LANGUAGE plpgsql
@@ -2002,7 +2014,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_effect_protocol_one_way()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2354,7 +2366,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_old_key_live_count(
       requested_key_kind text,
       requested_old_tag text
@@ -2512,7 +2524,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_key_registry_definition(
       requested_key_kind text
     )
@@ -2529,7 +2541,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_old_key_source_digest(
       requested_key_kind text,
       requested_old_tag text
@@ -2560,7 +2572,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_ciphertext_key_tag(ciphertext bytea)
     RETURNS text
     LANGUAGE plpgsql
@@ -2599,7 +2611,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.advance_durable_payload_key_fence_epoch(
       requested_kind text,
       requested_tag text,
@@ -2677,7 +2689,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_durable_payload_key_fence_state()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2784,34 +2796,34 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS guard_durable_payload_key_fence_state_trigger " <>
         "ON public.durable_payload_key_fence_state"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER guard_durable_payload_key_fence_state_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.durable_payload_key_fence_state
       FOR EACH ROW EXECUTE FUNCTION public.guard_durable_payload_key_fence_state()
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.durable_payload_key_fence_state
       ENABLE ALWAYS TRIGGER guard_durable_payload_key_fence_state_trigger
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_durable_payload_key_fence_state_truncate_trigger " <>
         "ON public.durable_payload_key_fence_state"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_durable_payload_key_fence_state_truncate_trigger
       BEFORE TRUNCATE ON public.durable_payload_key_fence_state
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_key_write_fenced(
       requested_kind text,
       requested_tag text
@@ -2849,7 +2861,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_durable_payload_retired_key_write()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -2967,7 +2979,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     DO $retired_key_triggers$
     DECLARE
       source_relation text;
@@ -3003,7 +3015,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $retired_key_triggers$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_durable_payload_binding_operation()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3105,18 +3117,18 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS guard_durable_payload_binding_operation_trigger " <>
         "ON public.durable_payload_binding_operations"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER guard_durable_payload_binding_operation_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.durable_payload_binding_operations
       FOR EACH ROW EXECUTE FUNCTION public.guard_durable_payload_binding_operation()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_key_retirement_zero_proof()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3211,18 +3223,18 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS guard_key_retirement_zero_proof_trigger " <>
         "ON public.key_retirement_zero_proofs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER guard_key_retirement_zero_proof_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.key_retirement_zero_proofs
       FOR EACH ROW EXECUTE FUNCTION public.guard_key_retirement_zero_proof()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.sync_durable_payload_key_fence_from_zero_proof()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3243,50 +3255,50 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS sync_durable_payload_key_fence_from_zero_proof_trigger " <>
         "ON public.key_retirement_zero_proofs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER sync_durable_payload_key_fence_from_zero_proof_trigger
       AFTER INSERT ON public.key_retirement_zero_proofs
       FOR EACH ROW EXECUTE FUNCTION public.sync_durable_payload_key_fence_from_zero_proof()
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.key_retirement_zero_proofs
       ENABLE ALWAYS TRIGGER guard_key_retirement_zero_proof_trigger
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.key_retirement_zero_proofs
       ENABLE ALWAYS TRIGGER sync_durable_payload_key_fence_from_zero_proof_trigger
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_durable_payload_binding_operations_truncate_trigger " <>
         "ON public.durable_payload_binding_operations"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_durable_payload_binding_operations_truncate_trigger
       BEFORE TRUNCATE ON public.durable_payload_binding_operations
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_key_retirement_zero_proofs_truncate_trigger " <>
         "ON public.key_retirement_zero_proofs"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_key_retirement_zero_proofs_truncate_trigger
       BEFORE TRUNCATE ON public.key_retirement_zero_proofs
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_vault_backup_retirement_evidence()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3415,27 +3427,27 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS guard_vault_backup_retirement_evidence_trigger ON public.vault_backup_retirement_evidence"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER guard_vault_backup_retirement_evidence_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.vault_backup_retirement_evidence
       FOR EACH ROW EXECUTE FUNCTION public.guard_vault_backup_retirement_evidence()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_vault_backup_retirement_evidence_truncate_trigger ON public.vault_backup_retirement_evidence"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_vault_backup_retirement_evidence_truncate_trigger
       BEFORE TRUNCATE ON public.vault_backup_retirement_evidence
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_retired_durable_payload_key()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3611,50 +3623,50 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS guard_retired_durable_payload_key_trigger " <>
         "ON public.retired_durable_payload_keys"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER guard_retired_durable_payload_key_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.retired_durable_payload_keys
       FOR EACH ROW EXECUTE FUNCTION public.guard_retired_durable_payload_key()
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.retired_durable_payload_keys
       ENABLE ALWAYS TRIGGER guard_retired_durable_payload_key_trigger
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS finalize_retired_durable_payload_key_fence_trigger " <>
         "ON public.retired_durable_payload_keys"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER finalize_retired_durable_payload_key_fence_trigger
       AFTER INSERT ON public.retired_durable_payload_keys
       FOR EACH ROW EXECUTE FUNCTION public.guard_retired_durable_payload_key()
     """)
 
-    execute("""
+    execute_compatible("""
     ALTER TABLE public.retired_durable_payload_keys
       ENABLE ALWAYS TRIGGER finalize_retired_durable_payload_key_fence_trigger
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_retired_durable_payload_keys_truncate_trigger " <>
         "ON public.retired_durable_payload_keys"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_retired_durable_payload_keys_truncate_trigger
       BEFORE TRUNCATE ON public.retired_durable_payload_keys
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_vault_reencryption_failure_write()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -3674,17 +3686,17 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS guard_vault_reencryption_failure_write_trigger ON public.vault_reencryption_failures"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER guard_vault_reencryption_failure_write_trigger
       BEFORE INSERT OR UPDATE ON public.vault_reencryption_failures
       FOR EACH ROW EXECUTE FUNCTION public.guard_vault_reencryption_failure_write()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.snapshot_writer_authority_valid(
       requested_agent_id uuid,
       requested_owner_token uuid
@@ -3832,7 +3844,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.enforce_snapshot_payload_protocol()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -4105,17 +4117,17 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS enforce_snapshot_payload_protocol_trigger ON public.snapshots"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER enforce_snapshot_payload_protocol_trigger
       BEFORE INSERT OR UPDATE OR DELETE ON public.snapshots
       FOR EACH ROW EXECUTE FUNCTION public.enforce_snapshot_payload_protocol()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_durable_payload_verification_failure_write()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -4135,17 +4147,17 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS guard_durable_payload_verification_failure_write_trigger ON public.durable_payload_verification_failures"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER guard_durable_payload_verification_failure_write_trigger
       BEFORE INSERT OR UPDATE ON public.durable_payload_verification_failures
       FOR EACH ROW EXECUTE FUNCTION public.guard_durable_payload_verification_failure_write()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.guard_durable_payload_verification_write()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -4170,17 +4182,17 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS guard_durable_payload_verification_write_trigger ON public.durable_payload_verifications"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER guard_durable_payload_verification_write_trigger
       BEFORE INSERT OR UPDATE ON public.durable_payload_verifications
       FOR EACH ROW EXECUTE FUNCTION public.guard_durable_payload_verification_write()
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.delete_durable_payload_verification(
       source_table text,
       source_identity text
@@ -4212,7 +4224,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.invalidate_durable_payload_verification()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -4291,11 +4303,11 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       agent_runs operator_events user_memory_profiles operator_memory_summaries
       background_jobs scheduled_jobs runtime_ingress_receipts agent_work_results snapshots
     ) do
-      execute(
+      execute_compatible(
         "DROP TRIGGER IF EXISTS invalidate_durable_payload_verification_trigger ON public.#{table}"
       )
 
-      execute("""
+      execute_compatible("""
       CREATE TRIGGER invalidate_durable_payload_verification_trigger
         AFTER INSERT OR UPDATE OR DELETE ON public.#{table}
         FOR EACH ROW EXECUTE FUNCTION public.invalidate_durable_payload_verification()
@@ -4303,48 +4315,48 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     end
 
     for table <- ~w(events agent_run_steps) do
-      execute(
+      execute_compatible(
         "DROP TRIGGER IF EXISTS enforce_durable_history_payload_protocol_trigger ON public.#{table}"
       )
 
-      execute("""
+      execute_compatible("""
       CREATE TRIGGER enforce_durable_history_payload_protocol_trigger
         BEFORE INSERT OR UPDATE OR DELETE ON public.#{table}
         FOR EACH ROW EXECUTE FUNCTION public.enforce_durable_history_payload_protocol()
       """)
     end
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_durable_payload_verifications_truncate_trigger ON public.durable_payload_verifications"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_durable_payload_verifications_truncate_trigger
       BEFORE TRUNCATE ON public.durable_payload_verifications
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_durable_payload_verification_failures_truncate_trigger ON public.durable_payload_verification_failures"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_durable_payload_verification_failures_truncate_trigger
       BEFORE TRUNCATE ON public.durable_payload_verification_failures
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
-    execute(
+    execute_compatible(
       "DROP TRIGGER IF EXISTS reject_vault_reencryption_failures_truncate_trigger ON public.vault_reencryption_failures"
     )
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_vault_reencryption_failures_truncate_trigger
       BEFORE TRUNCATE ON public.vault_reencryption_failures
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_effect_truncate()
     """)
 
-    execute("""
+    execute_compatible("""
     REVOKE ALL ON TABLE public.durable_payload_verifications,
       public.durable_payload_verification_failures,
       public.vault_reencryption_failures,
@@ -4357,11 +4369,11 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         maraithon_incident_operator, maraithon_activation_operator
     """)
 
-    execute("REVOKE ALL ON public.vault_reencryption_failures FROM PUBLIC")
-    execute("REVOKE ALL ON public.durable_payload_verifications FROM PUBLIC")
-    execute("REVOKE ALL ON public.durable_payload_verification_failures FROM PUBLIC")
+    execute_compatible("REVOKE ALL ON public.vault_reencryption_failures FROM PUBLIC")
+    execute_compatible("REVOKE ALL ON public.durable_payload_verifications FROM PUBLIC")
+    execute_compatible("REVOKE ALL ON public.durable_payload_verification_failures FROM PUBLIC")
 
-    execute("""
+    execute_compatible("""
     REVOKE ALL ON FUNCTION
       public.durable_payload_row_identity(text, text),
       public.durable_payload_digest_part(text, jsonb, text),
@@ -4400,7 +4412,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
         maraithon_incident_operator, maraithon_activation_operator
     """)
 
-    execute("""
+    execute_compatible("""
     DO $grants$
     DECLARE
       acl_role text;
@@ -4752,7 +4764,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $grants$
     """)
 
-    execute("""
+    execute_compatible("""
     DO $ownership$
     DECLARE
       relation_name text;
@@ -4847,7 +4859,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $ownership$
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE TABLE IF NOT EXISTS public.durable_payload_protocol_manifests (
       name text PRIMARY KEY,
       migration_version bigint NOT NULL,
@@ -4864,7 +4876,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     )
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_catalog_manifest_snapshot()
     RETURNS jsonb
     LANGUAGE sql
@@ -5104,7 +5116,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.refresh_durable_payload_protocol_manifest()
     RETURNS void
     LANGUAGE plpgsql
@@ -5266,7 +5278,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.durable_payload_catalog_ready()
     RETURNS boolean
     LANGUAGE plpgsql
@@ -5306,7 +5318,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE OR REPLACE FUNCTION public.reject_durable_payload_protocol_manifest_mutation()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -5332,29 +5344,29 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $function$;
     """)
 
-    execute("""
+    execute_compatible("""
     DROP TRIGGER IF EXISTS reject_durable_payload_protocol_manifest_mutation_trigger
       ON public.durable_payload_protocol_manifests
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_durable_payload_protocol_manifest_mutation_trigger
       BEFORE UPDATE OR DELETE ON public.durable_payload_protocol_manifests
       FOR EACH ROW EXECUTE FUNCTION public.reject_durable_payload_protocol_manifest_mutation()
     """)
 
-    execute("""
+    execute_compatible("""
     DROP TRIGGER IF EXISTS reject_durable_payload_protocol_manifest_truncate_trigger
       ON public.durable_payload_protocol_manifests
     """)
 
-    execute("""
+    execute_compatible("""
     CREATE TRIGGER reject_durable_payload_protocol_manifest_truncate_trigger
       BEFORE TRUNCATE ON public.durable_payload_protocol_manifests
       FOR EACH STATEMENT EXECUTE FUNCTION public.reject_durable_payload_protocol_manifest_mutation()
     """)
 
-    execute("""
+    execute_compatible("""
     DO $payload_manifest_authority$
     BEGIN
       REVOKE ALL ON TABLE public.durable_payload_protocol_manifests
@@ -5387,7 +5399,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $payload_manifest_authority$
     """)
 
-    execute("SELECT public.refresh_durable_payload_protocol_manifest()")
+    execute_compatible("SELECT public.refresh_durable_payload_protocol_manifest()")
   end
 
   defp add_not_valid_constraint(table, name, expression) do
@@ -5403,7 +5415,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       :crypto.hash(:sha256, "#{table}:#{name}:#{expression}")
       |> Base.encode16(case: :lower)
 
-    execute("""
+    execute_compatible("""
     DO $constraint$
     DECLARE
       constraint_oid oid;
@@ -5433,7 +5445,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     """)
 
     if validate? do
-      execute("ALTER TABLE public.#{table} VALIDATE CONSTRAINT #{name}")
+      execute_compatible("ALTER TABLE public.#{table} VALIDATE CONSTRAINT #{name}")
     end
   end
 
@@ -5445,7 +5457,7 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
       :crypto.hash(:sha256, "#{table}:#{name}:#{columns_sql}:#{unique?}")
       |> Base.encode16(case: :lower)
 
-    execute("""
+    execute_compatible("""
     DO $index$
     DECLARE
       index_oid oid;
@@ -5481,12 +5493,25 @@ defmodule Maraithon.Repo.Migrations.CreateDurablePayloadVerifications do
     $index$;
     """)
 
-    execute(
+    execute_compatible(
       "CREATE #{uniqueness}INDEX IF NOT EXISTS #{name} " <>
         "ON public.#{table} (#{columns_sql})"
     )
 
-    execute("COMMENT ON INDEX public.#{name} IS 'maraithon:#{fingerprint}'")
+    execute_compatible("COMMENT ON INDEX public.#{name} IS 'maraithon:#{fingerprint}'")
+  end
+
+  defp execute_compatible(statement) do
+    statement
+    |> Maraithon.DatabaseRoleCompatibility.rewrite_migration_sql()
+    |> Ecto.Migration.execute()
+  end
+
+  defp execute_compatible(up, down) do
+    Ecto.Migration.execute(
+      Maraithon.DatabaseRoleCompatibility.rewrite_migration_sql(up),
+      Maraithon.DatabaseRoleCompatibility.rewrite_migration_sql(down)
+    )
   end
 
   def down do
