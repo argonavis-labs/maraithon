@@ -9,6 +9,7 @@ defmodule Maraithon.KeyRetirementBootGuard do
 
   use GenServer
 
+  alias Maraithon.DatabaseRoleCompatibility
   alias Maraithon.DurablePayloadBinding
   alias Maraithon.Repo
   alias Maraithon.Vault
@@ -17,14 +18,7 @@ defmodule Maraithon.KeyRetirementBootGuard do
 
   @impl true
   def init(:ok) do
-    case Repo.query!(
-           """
-           SELECT public.durable_payload_key_write_fenced('vault', $1),
-                  public.durable_payload_key_write_fenced('binding', $2)
-           """,
-           [Vault.current_key_tag(), DurablePayloadBinding.current_key_tag()],
-           log: false
-         ).rows do
+    case key_fence_rows() do
       [[false, false]] ->
         {:ok, %{}}
 
@@ -39,6 +33,31 @@ defmodule Maraithon.KeyRetirementBootGuard do
   rescue
     error ->
       {:stop, {:durable_payload_key_fence_unavailable, Exception.message(error)}}
+  end
+
+  defp key_fence_rows do
+    params = [Vault.current_key_tag(), DurablePayloadBinding.current_key_tag()]
+
+    query =
+      if DatabaseRoleCompatibility.fly_managed_postgres?() do
+        # Fly MPG cannot represent the canonical six-role catalog topology, so
+        # the public readiness-gated lookup deliberately remains unavailable.
+        # The singleton fence row and its ALWAYS immutability trigger still
+        # provide the fail-closed write fence required by this boot guard.
+        """
+        SELECT (fences -> 'vault') ? $1,
+               (fences -> 'binding') ? $2
+        FROM public.durable_payload_key_fence_state
+        WHERE singleton IS TRUE
+        """
+      else
+        """
+        SELECT public.durable_payload_key_write_fenced('vault', $1),
+               public.durable_payload_key_write_fenced('binding', $2)
+        """
+      end
+
+    Repo.query!(query, params, log: false).rows
   end
 
   defp maybe_fenced(kinds, kind, true), do: [kind | kinds]
