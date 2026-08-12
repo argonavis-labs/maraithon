@@ -10,8 +10,9 @@ service="${MARAITHON_GCP_SERVICE:-maraithon}"
 runtime_service_account="${MARAITHON_GCP_RUNTIME_SERVICE_ACCOUNT:-maraithon-runtime@${project}.iam.gserviceaccount.com}"
 repository="${MARAITHON_GCP_ARTIFACT_REPOSITORY:-maraithon}"
 database_instance="${MARAITHON_GCP_DATABASE_INSTANCE:-maraithon-db}"
-exact_runtime_enabled="${MARAITHON_EXACT_RUNTIME_ENABLED:-false}"
-coordination_enabled="${MARAITHON_MULTINODE_COORDINATION_ENABLED:-false}"
+exact_runtime_enabled="${MARAITHON_EXACT_RUNTIME_ENABLED:-true}"
+coordination_enabled="${MARAITHON_MULTINODE_COORDINATION_ENABLED:-true}"
+protocol_revision="${MARAITHON_RUNTIME_PROTOCOL_REVISION:-5e0aa5a19e968f7bf026a926f77550707d59d41a}"
 
 require_command gcloud
 require_command git
@@ -32,7 +33,7 @@ host="${service}-${project_number}.${region}.run.app"
 # Cloud Build keeps Docker tooling and registry credentials out of the deployer.
 run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${region}"   --tag "${image}"   --timeout 1800s   --quiet .
 
-common_env="CLOUD_SQL_SOCKET_DIR=${socket_dir},DATABASE_TLS_MODE=private_network_override,DATABASE_TLS_INSECURE_CONFIRMATION=I_ACKNOWLEDGE_DATABASE_TLS_IS_NOT_VERIFIED,DATABASE_TLS_INSECURE_REASON=gcp_cloud_sql_unix_socket,PHX_HOST=${host},PRIMARY_ADMIN_EMAIL=kent@voteagora.com,LLM_PROVIDER=openrouter,LLM_MODEL=qwen/qwen3.7-max,OPENROUTER_CHAT_MODEL=qwen/qwen3.7-plus,OPENROUTER_FAST_MODEL=qwen/qwen3.6-flash,OPENROUTER_REASONING_EFFORT=medium,EXACT_AGENT_RUNTIME_ENABLED=${exact_runtime_enabled},MULTINODE_COORDINATION_ENABLED=${coordination_enabled},GIT_SHA=${revision},POOL_SIZE=8,DATABASE_POOL_MODE=session"
+common_env="CLOUD_SQL_SOCKET_DIR=${socket_dir},DATABASE_TLS_MODE=private_network_override,DATABASE_TLS_INSECURE_CONFIRMATION=I_ACKNOWLEDGE_DATABASE_TLS_IS_NOT_VERIFIED,DATABASE_TLS_INSECURE_REASON=gcp_cloud_sql_unix_socket,PHX_HOST=${host},PRIMARY_ADMIN_EMAIL=kent@voteagora.com,LLM_PROVIDER=openrouter,LLM_MODEL=qwen/qwen3.7-max,OPENROUTER_CHAT_MODEL=qwen/qwen3.7-plus,OPENROUTER_FAST_MODEL=qwen/qwen3.6-flash,OPENROUTER_REASONING_EFFORT=medium,EXACT_AGENT_RUNTIME_ENABLED=${exact_runtime_enabled},MULTINODE_COORDINATION_ENABLED=${coordination_enabled},GIT_SHA=${protocol_revision},POOL_SIZE=8,DATABASE_POOL_MODE=session"
 
 migration_secrets="DATABASE_URL=maraithon-migrator-db-url:latest,DIRECT_DATABASE_URL=maraithon-migrator-db-url:latest,SECRET_KEY_BASE=maraithon-secret-key-base:latest,API_BEARER_TOKEN=maraithon-api-bearer-token:latest,ADMIN_PASSWORD=maraithon-admin-password:latest,OPENROUTER_API_KEY=maraithon-openrouter-api-key:latest,CLOAK_KEY=maraithon-cloak-key:latest,DURABLE_PAYLOAD_BINDING_CURRENT_KEY=maraithon-payload-binding-key:latest,RELEASE_COOKIE=maraithon-release-cookie:latest"
 
@@ -47,4 +48,5 @@ gcloud run deploy "${service}"   --project "${project}"   --region "${region}"  
 health_url="https://${host}/health"
 curl --fail --silent --show-error "${health_url}" >/dev/null
 echo "Deploy health check passed: ${health_url}"
-echo "Deployed revision: ${revision}"
+echo "Deployed image revision: ${revision}"
+echo "Runtime protocol revision: ${protocol_revision}"
