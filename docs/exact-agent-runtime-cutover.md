@@ -183,7 +183,7 @@ legacy fleet must remain available to finish already accepted Agent work.
 
    - `140004`: `2c57f6a55466e3857bd24b7c5329ca7e88dd036276c871728e9da5a4909e6f8d`
    - `140005`: `d7ef75cd9d056782eca274a7fda2d33c1de9bca8d457e0d4c8d02182f76c3102`
-   - `140007`: `05e34d1a54f3a435e172913b7cb93f615fd6bc2e42c6f5e56a227d1273afec99`
+   - `140007`: `39fd4d3796324ff1bf51472209d6b1283a9d447e353e6ba7e6909a23899f023b`
 
    Never delete/edit `schema_migrations`, manually invoke a migration module,
    or copy its SQL. The forward-repair verifier uses disposable

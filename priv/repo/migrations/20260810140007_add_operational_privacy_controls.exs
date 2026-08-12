@@ -3314,14 +3314,17 @@ defmodule Maraithon.Repo.Migrations.AddOperationalPrivacyControls do
       """
     )
 
-    # Final, feature-dark catalog authority is captured only after every
-    # 140007 function, trigger, constraint, ACL, owner, and concurrent index.
-    attest_privacy_authority()
-    refresh_privacy_manifest()
-    refresh_effect_manifest()
-    refresh_runtime_manifest()
-    prepare_durable_payload_manifest_refresh()
-    execute_compatible("SELECT public.refresh_durable_payload_protocol_manifest()")
+    # Final catalog authority requires physically separated PostgreSQL roles.
+    # Fly MPG can stage the additive feature-dark schema, but its fixed provider
+    # role must never be attested as the canonical activation topology.
+    unless Maraithon.DatabaseRoleCompatibility.fly_managed_postgres?() do
+      attest_privacy_authority()
+      refresh_privacy_manifest()
+      refresh_effect_manifest()
+      refresh_runtime_manifest()
+      prepare_durable_payload_manifest_refresh()
+      execute_compatible("SELECT public.refresh_durable_payload_protocol_manifest()")
+    end
   end
 
   defp prepare_durable_payload_manifest_refresh do
