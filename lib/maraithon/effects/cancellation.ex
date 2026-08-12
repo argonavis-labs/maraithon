@@ -38,7 +38,7 @@ defmodule Maraithon.Effects.Cancellation do
   @max_plan_limit 100
   @max_runtime_nodes 32
   @rpc_timeout_ms 5_000
-  @guardian_persistence_timeout_ms 500
+  @guardian_persistence_timeout_ms 5_000
   @ambiguous_outcome :effect_outcome_ambiguous
   @pre_provider_failure_prefix "effect_preflight_failed:"
   @pre_provider_retry_prefix "effect_preflight_retry:"

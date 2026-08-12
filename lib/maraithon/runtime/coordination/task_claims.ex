@@ -12,7 +12,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
   alias Ecto.Adapters.SQL
   alias Maraithon.Repo
 
-  @guardian_persistence_timeout_ms 500
+  @guardian_persistence_timeout_ms 5_000
 
   alias Maraithon.Runtime.Coordination.{
     Authority,
@@ -27,8 +27,8 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
     SQL.query!(
       Repo,
       """
-      SELECT set_config('lock_timeout', '500ms', true),
-             set_config('statement_timeout', '500ms', true)
+      SELECT set_config('lock_timeout', '5s', true),
+             set_config('statement_timeout', '5s', true)
       """,
       [],
       timeout: @guardian_persistence_timeout_ms
