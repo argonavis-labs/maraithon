@@ -179,6 +179,53 @@ defmodule Maraithon.Runtime.AgentLifecycleOperationsTest do
     refute Agents.get_agent(agent.id, include_removed: true)
   end
 
+  test "legacy delete settles requested work before rechecking pre-envelope Effects" do
+    agent = running_consented_agent("legacy-settled-terminal-delete")
+
+    assert {:ok, run} =
+             Agents.start_runtime_agent_run(agent, %{
+               trigger_type: "message",
+               trigger: %{"type" => "message"}
+             })
+
+    assert {:ok, step} =
+             Agents.record_agent_run_step(run.id, agent.id, %{
+               step_type: "tool_call",
+               effect_type: "tool_call",
+               status: "requested"
+             })
+
+    effect =
+      agent.id
+      |> pending_effect()
+      |> Ecto.Changeset.change(
+        status: "completed",
+        agent_run_id: run.id,
+        agent_run_step_id: step.id
+      )
+      |> Repo.update!()
+
+    assert effect.runtime_owner_generation == nil
+    assert effect.result_envelope == nil
+
+    assert {:ok, fence} =
+             AgentLifecycleOperations.begin(
+               agent.id,
+               :delete,
+               %{"delete" => true},
+               fn _agent -> %{"action" => "delete"} end
+             )
+
+    Repo.query!("SET LOCAL ROLE maraithon_runtime", [], log: false)
+    assert %{rows: [["maraithon_runtime"]]} = Repo.query!("SELECT current_user")
+
+    assert {:ok, %{status: :finalized, action: :deleted}} =
+             AgentLifecycleOperations.finalize(agent.id, fence.operation_token)
+
+    refute Repo.get(Effect, effect.id)
+    refute Agents.get_agent(agent.id, include_removed: true)
+  end
+
   test "corrupt Effect ciphertext is deleted only after active authority is cancelled" do
     terminal_agent = running_consented_agent("corrupt-terminal-delete")
     terminal_effect = pending_effect(terminal_agent.id)

@@ -319,11 +319,14 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, operation_token} <- optional_uuid(operation_token) do
       transaction_result =
-        Repo.transaction(fn ->
-          protocol_pair = Protocol.locked_pair!()
-          user_id = prelock_agent_user!(agent_id)
-          finalize_locked(agent_id, operation_token, scoped?, user_id, protocol_pair)
-        end)
+        Repo.transaction(
+          fn ->
+            protocol_pair = Protocol.locked_pair!()
+            user_id = prelock_agent_user!(agent_id)
+            finalize_locked(agent_id, operation_token, scoped?, user_id, protocol_pair)
+          end,
+          timeout: :infinity
+        )
 
       case transaction_result do
         {:ok, {:pending, reason, operation}} ->
@@ -461,7 +464,17 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
         case unresolved_work(agent, operation, directives, runs, steps, effects, protocol_pair) do
           nil ->
-            finalize_quiesced!(agent, binding, guard, operation, directives, effects, now)
+            finalize_quiesced!(
+              agent,
+              binding,
+              guard,
+              operation,
+              directives,
+              runs,
+              steps,
+              effects,
+              now
+            )
 
           reason when reason in @reconcilable_work_reasons and not active_effect? ->
             settle_orphaned_work!(agent, operation, directives, runs, steps, effects, now)
@@ -488,6 +501,8 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
                   guard,
                   operation,
                   settled_directives,
+                  settled_runs,
+                  settled_steps,
                   settled_effects,
                   now
                 )
@@ -502,7 +517,17 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     end
   end
 
-  defp finalize_quiesced!(agent, binding, guard, operation, directives, effects, now) do
+  defp finalize_quiesced!(
+         agent,
+         binding,
+         guard,
+         operation,
+         directives,
+         runs,
+         steps,
+         effects,
+         now
+       ) do
     scheduled_jobs = lock_scheduled_jobs(agent.id)
     subscriptions = lock_subscriptions(agent.id)
 
@@ -510,7 +535,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
     cancel_scheduled_jobs!(scheduled_jobs)
     deactivate_subscriptions!(subscriptions, now)
     clear_expected_guard!(guard, operation)
-    erase_terminal_effects_for_delete!(operation, effects)
+    erase_terminal_effects_for_delete!(operation, effects, runs, steps)
 
     case apply_mutation!(agent, binding, operation, now) do
       {:deleted, deleted_id} ->
@@ -548,7 +573,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
     case action do
       "delete" ->
-        Repo.delete!(agent)
+        Repo.delete!(agent, timeout: :infinity)
         {:deleted, agent.id}
 
       "pause" ->
@@ -786,7 +811,7 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
   defp cancel_directive_for_lifecycle!(%AgentDirective{}, _now), do: :ok
 
-  defp erase_terminal_effects_for_delete!(operation, effects) do
+  defp erase_terminal_effects_for_delete!(operation, effects, runs, steps) do
     if delete_action?(operation) do
       SQL.query!(
         Repo,
@@ -796,23 +821,58 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
 
       ids = Enum.map(effects, & &1.id)
 
-      {deleted, _rows} =
-        Repo.delete_all(
-          from(effect in Effect,
-            where: effect.id in ^ids,
-            where: effect.agent_id == ^operation.agent_id,
-            where: effect.status in ^@terminal_effect_statuses
-          )
-        )
+      deleted =
+        ids
+        |> Enum.chunk_every(@max_batch)
+        |> Enum.reduce(0, fn batch, count ->
+          {batch_deleted, _rows} =
+            Repo.delete_all(
+              from(effect in Effect,
+                where: effect.id in ^batch,
+                where: effect.agent_id == ^operation.agent_id,
+                where: effect.status in ^@terminal_effect_statuses
+              ),
+              timeout: :infinity
+            )
+
+          count + batch_deleted
+        end)
 
       if deleted != length(effects), do: Repo.rollback(:effect_erasure_fence_lost)
 
       # Delete Snapshots while the durable lifecycle marker still exists.
       # PostgreSQL may otherwise cascade-delete the operation row first.
-      Repo.delete_all(from(snapshot in Snapshot, where: snapshot.agent_id == ^operation.agent_id))
+      Repo.delete_all(
+        from(snapshot in Snapshot, where: snapshot.agent_id == ^operation.agent_id),
+        timeout: :infinity
+      )
+
+      # Delete runtime history directly under the executor role. PostgreSQL FK
+      # cascades execute referential actions under table-owner authority, which
+      # must not be mistaken for an ordinary runtime mutation by role guards.
+      delete_locked_history!(AgentRunStep, steps, operation.agent_id)
+      delete_locked_history!(AgentRun, runs, operation.agent_id)
     end
 
     :ok
+  end
+
+  defp delete_locked_history!(schema, rows, agent_id) do
+    deleted =
+      rows
+      |> Enum.map(& &1.id)
+      |> Enum.chunk_every(@max_batch)
+      |> Enum.reduce(0, fn batch, count ->
+        {batch_deleted, _rows} =
+          Repo.delete_all(
+            from(row in schema, where: row.id in ^batch, where: row.agent_id == ^agent_id),
+            timeout: :infinity
+          )
+
+        count + batch_deleted
+      end)
+
+    if deleted != length(rows), do: Repo.rollback(:runtime_history_erasure_fence_lost)
   end
 
   defp unresolved_work(agent, operation, directives, runs, steps, effects, protocol_pair) do
@@ -847,7 +907,16 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   # Legacy Effect rows predate terminal envelopes, and the database's legacy
   # protocol permits their lifecycle erasure once active work is absent. Exact
   # mode remains fail-closed on the versioned archival envelope.
-  defp effects_deletable_for_delete?(_effects, :legacy), do: true
+  defp effects_deletable_for_delete?(effects, :legacy) do
+    Enum.all?(effects, fn
+      %Effect{runtime_owner_generation: nil, status: status}
+      when status in @terminal_effect_statuses ->
+        true
+
+      %Effect{} ->
+        false
+    end)
+  end
 
   defp effects_deletable_for_delete?(effects, :exact) do
     # The persisted lifecycle delete marker is an explicit erasure intent, not
