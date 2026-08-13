@@ -123,7 +123,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
         state = 'running', ready_at = timezone('UTC', clock_timestamp()),
         updated_at = timezone('UTC', clock_timestamp())
         """,
-        "state = 'reserved'"
+        "state = 'reserved' AND lease_expires_at > timezone('UTC', clock_timestamp())"
       )
     end
   end
@@ -157,7 +157,11 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
          WHERE partition_id = runtime_task_assignments.partition_id)
       ), updated_at = timezone('UTC', clock_timestamp())
       """,
-      "state = 'running' AND lease_expires_at > timezone('UTC', clock_timestamp())"
+      """
+      lease_expires_at > timezone('UTC', clock_timestamp()) AND
+      (state = 'running' OR
+       (state = 'reserved' AND ready_at IS NULL AND provider_boundary = 'not_entered'))
+      """
     )
   end
 
