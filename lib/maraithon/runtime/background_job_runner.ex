@@ -60,6 +60,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   @default_poll_interval_ms 1_000
   @default_claim_timeout_ms 300_000
+  @default_coordination_partition_ttl_ms 30_000
   @default_batch_size 10
   @default_max_concurrency 5
   @default_recurring_reconcile_interval_ms :timer.minutes(1)
@@ -119,7 +120,20 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
         )
       )
 
-    renew_interval_ms = renewal_interval_ms(claim_timeout_ms)
+    # Coordinated task leases are capped by the owning partition lease, even
+    # when the background-job claim timeout is longer. Renew against the
+    # shorter authority window so a healthy long-running handler cannot lose
+    # its exact task claim before the ordinary job renewal timer fires.
+    coordination_partition_ttl_ms =
+      RuntimeConfig.positive_integer(
+        :coordination_partition_ttl_ms,
+        @default_coordination_partition_ttl_ms
+      )
+
+    renew_interval_ms =
+      claim_timeout_ms
+      |> min(coordination_partition_ttl_ms)
+      |> renewal_interval_ms()
 
     default_recurring_reconcile_interval_ms =
       RuntimeConfig.positive_integer(
