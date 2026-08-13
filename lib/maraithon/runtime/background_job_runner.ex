@@ -635,7 +635,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   end
 
   defp renew_job_claim(%BackgroundJob{} = job, now) do
-    private_update_all(owned_claim(job), set: [claimed_at: now, updated_at: now])
+    private_update_all(renewable_claim(job), set: [claimed_at: now, updated_at: now])
   end
 
   defp fetch_pending_jobs(limit, %{fair?: true} = state) do
@@ -1551,6 +1551,24 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   defp claim_key(%BackgroundJob{id: id, claim_token: claim_token})
        when is_binary(id) and is_binary(claim_token),
        do: {id, claim_token}
+
+  defp renewable_claim(%BackgroundJob{
+         id: id,
+         claim_token: claim_token,
+         coordination_task_assignment_id: assignment_id
+       })
+       when is_binary(id) and is_binary(claim_token) and is_binary(assignment_id) do
+    from(candidate in BackgroundJob,
+      where: candidate.id == ^id,
+      where: candidate.claim_token == ^claim_token,
+      where:
+        candidate.status == "running" or
+          (candidate.status == "pending" and
+             candidate.coordination_task_assignment_id == ^assignment_id)
+    )
+  end
+
+  defp renewable_claim(%BackgroundJob{} = job), do: owned_claim(job)
 
   defp owned_claim(%BackgroundJob{id: id, claim_token: claim_token})
        when is_binary(id) and is_binary(claim_token) do
