@@ -435,50 +435,70 @@ defmodule Maraithon.Runtime.Coordination.Authority do
 
              set_local!("maraithon.runtime_leader_action", leader.action_token)
 
-             [[from_node, ownership_epoch]] =
+             [[from_node, ownership_epoch, current_state, current_transition_dump]] =
                SQL.query!(
                  Repo,
                  """
-                 SELECT owner_node_incarnation_id, ownership_epoch
+                 SELECT owner_node_incarnation_id, ownership_epoch, state, transition_id
                  FROM public.runtime_partitions
                  WHERE partition_id = $1 AND activation_epoch = $2::uuid
-                   AND state IN ('preparing', 'ready', 'draining', 'blocked')
+                   AND state IN ('preparing', 'ready')
                  FOR UPDATE
                  """,
                  [partition_id, Ecto.UUID.dump!(activation_epoch)]
                ).rows
 
-             transition_id = Ecto.UUID.generate()
+             transition_id =
+               if current_state == "preparing" do
+                 Ecto.UUID.load!(current_transition_dump)
+               else
+                 Ecto.UUID.generate()
+               end
+
+             transition_dump = Ecto.UUID.dump!(transition_id)
              state = if blocked?, do: "blocked", else: "draining"
              reason = if blocked?, do: "physical_task_termination_proof_required", else: nil
 
-             SQL.query!(
-               Repo,
-               """
-               INSERT INTO public.runtime_partition_transitions
-                 (id, activation_epoch, partition_id, partition_epoch,
-                  from_node_incarnation_id, to_node_incarnation_id, kind, state,
-                  leader_node_incarnation_id, leader_epoch, leader_action_token,
-                  requested_at, blocked_reason, inserted_at, updated_at)
-               VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, $6::uuid, $7, $8,
-                       $9::uuid, $10, $11::uuid, timezone('UTC', clock_timestamp()), $12,
-                       timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp()))
-               """,
-               [
-                 Ecto.UUID.dump!(transition_id),
-                 Ecto.UUID.dump!(activation_epoch),
-                 partition_id,
-                 ownership_epoch,
-                 from_node,
-                 target_dump,
-                 kind,
-                 state,
-                 Ecto.UUID.dump!(leader.node_incarnation_id),
-                 leader.leader_epoch,
-                 Ecto.UUID.dump!(leader.action_token),
-                 reason
-               ]
-             )
+             if current_state == "preparing" do
+               SQL.query!(
+                 Repo,
+                 """
+                 UPDATE public.runtime_partition_transitions
+                 SET state = $2, draining_at = timezone('UTC', clock_timestamp()),
+                     blocked_reason = $3, updated_at = timezone('UTC', clock_timestamp())
+                 WHERE id = $1::uuid AND state = 'preparing'
+                 """,
+                 [transition_dump, state, reason]
+               )
+             else
+               SQL.query!(
+                 Repo,
+                 """
+                 INSERT INTO public.runtime_partition_transitions
+                   (id, activation_epoch, partition_id, partition_epoch,
+                    from_node_incarnation_id, to_node_incarnation_id, kind, state,
+                    leader_node_incarnation_id, leader_epoch, leader_action_token,
+                    requested_at, blocked_reason, inserted_at, updated_at)
+                 VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, $6::uuid, $7, $8,
+                         $9::uuid, $10, $11::uuid, timezone('UTC', clock_timestamp()), $12,
+                         timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp()))
+                 """,
+                 [
+                   transition_dump,
+                   Ecto.UUID.dump!(activation_epoch),
+                   partition_id,
+                   ownership_epoch,
+                   from_node,
+                   target_dump,
+                   kind,
+                   state,
+                   Ecto.UUID.dump!(leader.node_incarnation_id),
+                   leader.leader_epoch,
+                   Ecto.UUID.dump!(leader.action_token),
+                   reason
+                 ]
+               )
+             end
 
              result =
                SQL.query!(
@@ -496,7 +516,7 @@ defmodule Maraithon.Runtime.Coordination.Authority do
                  """,
                  [
                    partition_id,
-                   Ecto.UUID.dump!(transition_id),
+                   transition_dump,
                    state,
                    Ecto.UUID.dump!(activation_epoch),
                    ownership_epoch
