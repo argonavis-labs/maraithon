@@ -473,10 +473,8 @@ defmodule Maraithon.Connections do
     configured? = Slack.configured?()
     bot_token = slack_bot_token(tokens)
     user_tokens = slack_user_tokens(tokens)
-    first_user_token = List.first(user_tokens)
-    bot_scopes = token_scope_set(bot_token)
     account_entries = slack_account_entries(user_id, tokens, account_by_provider, return_to)
-    reauth_required? = Enum.any?(account_entries, &(&1.status == :needs_refresh))
+    workspace_token_groups = slack_workspace_token_groups(tokens)
 
     workspace_names =
       tokens
@@ -484,24 +482,18 @@ defmodule Maraithon.Connections do
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
 
-    status =
-      cond do
-        not configured? -> :not_configured
-        is_nil(bot_token) -> :disconnected
-        reauth_required? -> :needs_refresh
-        user_tokens == [] -> :partial
-        true -> :connected
-      end
+    status = slack_connector_status(configured?, account_entries)
 
     details =
       provider_details(
         bot_token,
         [
           if(workspace_names != [], do: "Workspaces: #{Enum.join(workspace_names, ", ")}"),
-          if(MapSet.size(bot_scopes) > 0, do: "Channel access connected"),
-          if(user_tokens != [], do: "DMs and approved replies are enabled."),
+          if(account_entries != [],
+            do: "Channel, DM, search, and approved-reply access checked per workspace."
+          ),
           if(user_tokens == [],
-            do: "Reconnect Slack to enable DMs and approved replies."
+            do: "Reconnect Slack to enable DMs, search, and approved replies."
           )
         ],
         timezone_info
@@ -513,10 +505,14 @@ defmodule Maraithon.Connections do
         label: "Channels",
         description: "Track commitments and unresolved action loops in channel conversations.",
         status:
-          slack_service_status(
+          slack_connector_service_status(
             configured?,
-            bot_token,
-            bot_token && Map.get(account_by_provider, bot_token.provider)
+            account_entries,
+            slack_workspace_grants_complete?(
+              workspace_token_groups,
+              :bot,
+              Slack.default_scopes()
+            )
           )
       },
       %{
@@ -525,10 +521,14 @@ defmodule Maraithon.Connections do
         description:
           "Read DM and MPIM context to catch unanswered replies and private commitments.",
         status:
-          slack_service_status(
+          slack_connector_service_status(
             configured?,
-            first_user_token,
-            first_user_token && Map.get(account_by_provider, first_user_token.provider)
+            account_entries,
+            slack_workspace_grants_complete?(
+              workspace_token_groups,
+              :user,
+              Slack.default_user_scopes()
+            )
           )
       }
     ]
@@ -1268,11 +1268,14 @@ defmodule Maraithon.Connections do
       user_tokens == [] ->
         :partial
 
-      Enum.any?(user_tokens, &token_has_scope?(&1, "chat:write")) ->
-        :connected
+      not token_has_scopes?(bot_token, Slack.default_scopes()) ->
+        :missing_scope
+
+      not Enum.any?(user_tokens, &token_has_scopes?(&1, Slack.default_user_scopes())) ->
+        :missing_scope
 
       true ->
-        :missing_scope
+        :connected
     end
   end
 
@@ -1291,7 +1294,7 @@ defmodule Maraithon.Connections do
     do: "Reconnect Slack so Maraithon can read DMs and send replies when you approve them."
 
   defp slack_workspace_status_note(:missing_scope, _bot_token, _user_tokens, _token_statuses),
-    do: "Reconnect Slack so Maraithon can send replies when you approve them."
+    do: "Reconnect Slack to grant channel, DM, search, and approved-reply permissions."
 
   defp slack_workspace_status_note(_status, _bot_token, _user_tokens, _token_statuses),
     do: "Healthy"
@@ -1307,26 +1310,68 @@ defmodule Maraithon.Connections do
   defp slack_user_grant_detail([]), do: nil
 
   defp slack_user_grant_detail(user_tokens) do
-    if Enum.any?(user_tokens, &token_has_scope?(&1, "chat:write")) do
-      "DMs, private context, and posting as you enabled"
+    if Enum.any?(user_tokens, &token_has_scopes?(&1, Slack.default_user_scopes())) do
+      "DMs, private context, search, and posting as you enabled"
     else
-      "DMs and private context enabled"
+      "Reconnect to finish DM, search, and posting permissions"
     end
   end
 
-  defp token_has_scope?(%Token{} = token, scope) when is_binary(scope) do
-    token
-    |> token_scopes()
-    |> Enum.any?(&(&1 == scope))
+  defp token_has_scopes?(%Token{} = token, required_scopes) when is_list(required_scopes) do
+    granted = token_scope_set(token)
+    Enum.all?(required_scopes, &MapSet.member?(granted, &1))
   end
 
-  defp token_has_scope?(_token, _scope), do: false
+  defp token_has_scopes?(_token, _required_scopes), do: false
 
-  defp slack_service_status(false, _token, _account), do: :not_configured
-  defp slack_service_status(true, nil, _account), do: :disconnected
+  defp slack_connector_status(false, _account_entries), do: :not_configured
+  defp slack_connector_status(true, []), do: :disconnected
 
-  defp slack_service_status(true, _token, account) do
-    if reauth_required_account?(account), do: :needs_refresh, else: :connected
+  defp slack_connector_status(true, account_entries) do
+    statuses = Enum.map(account_entries, & &1.status)
+
+    cond do
+      :needs_refresh in statuses -> :needs_refresh
+      :missing_scope in statuses -> :missing_scope
+      Enum.any?(statuses, &(&1 in [:partial, :disconnected])) -> :partial
+      Enum.all?(statuses, &(&1 == :connected)) -> :connected
+      true -> :partial
+    end
+  end
+
+  defp slack_connector_service_status(false, _account_entries, _complete?),
+    do: :not_configured
+
+  defp slack_connector_service_status(true, [], _complete?), do: :disconnected
+
+  defp slack_connector_service_status(true, account_entries, complete?) do
+    if Enum.any?(account_entries, &(&1.status == :needs_refresh)) do
+      :needs_refresh
+    else
+      if complete?, do: :connected, else: :missing_scope
+    end
+  end
+
+  defp slack_workspace_token_groups(tokens) when is_list(tokens) do
+    tokens
+    |> Enum.filter(&slack_provider?(&1.provider))
+    |> Enum.group_by(&slack_team_id/1)
+    |> Enum.reject(fn {team_id, _workspace_tokens} -> is_nil(team_id) end)
+  end
+
+  defp slack_workspace_grants_complete?([], _token_kind, _required_scopes), do: false
+
+  defp slack_workspace_grants_complete?(workspace_token_groups, token_kind, required_scopes)
+       when is_list(workspace_token_groups) and is_list(required_scopes) do
+    Enum.all?(workspace_token_groups, fn {_team_id, workspace_tokens} ->
+      candidates =
+        case token_kind do
+          :bot -> Enum.filter(workspace_tokens, &slack_bot_provider?(&1.provider))
+          :user -> Enum.filter(workspace_tokens, &slack_user_provider?(&1.provider))
+        end
+
+      Enum.any?(candidates, &token_has_scopes?(&1, required_scopes))
+    end)
   end
 
   defp single_oauth_account_entry(
@@ -1820,6 +1865,8 @@ defmodule Maraithon.Connections do
       permissions: [
         "Read channel and thread history",
         "Read DM and MPIM history with user scopes",
+        "Open or resume DMs and group DMs",
+        "Search messages available to the connected user",
         "Post messages and thread replies with the connected user's Slack token",
         "Process Slack Events API webhooks for near-real-time updates"
       ],

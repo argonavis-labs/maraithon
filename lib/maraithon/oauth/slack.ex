@@ -29,8 +29,10 @@ defmodule Maraithon.OAuth.Slack do
     "groups:read",
     "im:history",
     "im:read",
+    "im:write",
     "mpim:history",
     "mpim:read",
+    "mpim:write",
     "chat:write",
     "users:read",
     "reactions:read"
@@ -43,8 +45,10 @@ defmodule Maraithon.OAuth.Slack do
     "groups:read",
     "im:history",
     "im:read",
+    "im:write",
     "mpim:history",
     "mpim:read",
+    "mpim:write",
     "chat:write",
     "search:read",
     "users:read"

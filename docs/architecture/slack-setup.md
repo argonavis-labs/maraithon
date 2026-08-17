@@ -49,8 +49,10 @@ groups:history
 groups:read
 im:history
 im:read
+im:write
 mpim:history
 mpim:read
+mpim:write
 reactions:read
 users:read
 ```
@@ -63,8 +65,11 @@ groups:history
 groups:read
 im:history
 im:read
+im:write
 mpim:history
 mpim:read
+mpim:write
+chat:write
 search:read
 users:read
 ```
@@ -84,13 +89,15 @@ Slack will hit the URL with a `url_verification` challenge first; `Maraithon.Con
 
 From the Slack app's **Basic Information** page, copy Client ID, Client Secret, and Signing Secret.
 
-```bash
-fly secrets set \
-  SLACK_CLIENT_ID=<client_id> \
-  SLACK_CLIENT_SECRET=<client_secret> \
-  SLACK_REDIRECT_URI=https://maraithon.com/auth/slack/callback \
-  SLACK_SIGNING_SECRET=<signing_secret>
+Production stores `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, and
+`SLACK_SIGNING_SECRET` in Google Secret Manager and attaches them to the Cloud Run
+service. `SLACK_REDIRECT_URI` is set to:
+
+```text
+https://maraithon.com/auth/slack/callback
 ```
+
+Use `make deploy` after changing the secret bindings in `scripts/monorepo/deploy`.
 
 Local dev: put the same values in your dev env (e.g. `.env`).
 

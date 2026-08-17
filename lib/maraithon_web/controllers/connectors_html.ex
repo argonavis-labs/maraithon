@@ -103,7 +103,8 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def connection_primary_action(%{provider: "desktop"}), do: "Set up Mac companion"
 
-  def connection_primary_action(%{provider: "slack", status: :connected}), do: "View Slack"
+  def connection_primary_action(%{provider: "slack", accounts: [_account | _rest]}),
+    do: "Add Slack Workspace"
 
   def connection_primary_action(%{provider: "slack", status: status})
       when status in [:partial, :missing_scope, :needs_refresh],
@@ -131,7 +132,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_primary_url(_provider), do: "/connectors"
 
   def connection_primary_action_visible_on_detail?(%{provider: provider, status: :connected})
-      when provider != "google",
+      when provider not in ["google", "slack"],
       do: false
 
   def connection_primary_action_visible_on_detail?(provider),

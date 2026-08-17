@@ -46,10 +46,14 @@ defmodule Maraithon.Tools.SlackOpenConversation do
   defp validate_user_ids(_user_ids), do: :ok
 
   defp resolve_token(user_id, team_id, args) do
+    user_ids = ActionHelpers.optional_csv(args, "user_ids")
+    required_scope = if length(user_ids) > 1, do: "mpim:write", else: "im:write"
+
     SlackHelpers.resolve_access_token(
       user_id,
       team_id,
       token_preference: ActionHelpers.optional_string(args, "token_preference"),
+      required_scopes: [required_scope],
       slack_user_id: ActionHelpers.optional_string(args, "slack_user_id")
     )
   end

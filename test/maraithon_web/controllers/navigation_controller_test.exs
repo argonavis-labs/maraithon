@@ -89,14 +89,14 @@ defmodule MaraithonWeb.NavigationControllerTest do
       {:ok, _bot} =
         OAuth.store_tokens(user_id, "slack:T12345", %{
           access_token: "xoxb-test-token",
-          scopes: ["channels:read", "im:read"],
+          scopes: Maraithon.OAuth.Slack.default_scopes(),
           metadata: %{"team_id" => "T12345", "team_name" => "Agora"}
         })
 
       {:ok, _user_token} =
         OAuth.store_tokens(user_id, "slack:T12345:user:U99999", %{
           access_token: "xoxp-test-token",
-          scopes: ["search:read", "im:read", "chat:write"],
+          scopes: Maraithon.OAuth.Slack.default_user_scopes(),
           metadata: %{
             "team_id" => "T12345",
             "team_name" => "Agora",
@@ -117,8 +117,8 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "Connected Workspaces"
       assert detail_html =~ "Agora"
       assert detail_html =~ "1 workspace connected"
-      assert detail_html =~ "DMs, private context, and posting as you enabled"
-      assert detail_html =~ "Channel events and mentions enabled"
+      assert detail_html =~ "DMs, private context, search, and posting as you enabled"
+      assert detail_html =~ "Add Slack Workspace"
       refute detail_html =~ "Agora · Bot"
       refute detail_html =~ "Agora · DM user"
       refute detail_html =~ "Stored Grant"
