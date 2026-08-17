@@ -119,6 +119,8 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "1 workspace connected"
       assert detail_html =~ "DMs, private context, search, and posting as you enabled"
       assert detail_html =~ "Add Slack Workspace"
+      assert detail_html =~ ~s(href="/auth/slack?)
+      refute detail_html =~ ~s(href="/connectors/slack")
       refute detail_html =~ "Agora · Bot"
       refute detail_html =~ "Agora · DM user"
       refute detail_html =~ "Stored Grant"

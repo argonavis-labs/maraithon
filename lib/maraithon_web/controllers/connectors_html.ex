@@ -119,7 +119,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_action_enabled?(%{configured?: true}), do: true
   def connection_action_enabled?(_provider), do: false
 
-  def connection_primary_url(%{provider: "google"} = provider), do: provider.connect_url
+  def connection_primary_url(%{provider: provider_name} = provider)
+      when provider_name in ["google", "slack"],
+      do: provider.connect_url
 
   def connection_primary_url(%{provider: "desktop"} = provider),
     do: provider_detail_path(provider)
