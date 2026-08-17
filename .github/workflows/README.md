@@ -1,10 +1,10 @@
 # Workflows
 
-## `deploy-fly.yml`
-Push to `main` → deploys the Phoenix backend to Fly.
+## `deploy-gcp.yml`
+Push to `main` → deploys the Phoenix backend to Google Cloud Run.
 
 ## `mobile-release.yml`
-- Push to `main` → builds the iOS app and uploads to TestFlight, then makes it available to the required internal **Founders** group. If a **Staging** beta group exists, CI attaches the build there too.
+- Pushes to `main` that change the iOS app or its release tooling → build the iOS app and upload it to TestFlight, then make it available to the required internal **Founders** group. Backend-only pushes do not create mobile certificates or TestFlight builds. If a **Staging** beta group exists, CI attaches the build there too.
 - Tag `v*` (e.g. `v1.0.4`) → builds and uploads to TestFlight, then makes it available to the required internal **Founders** group.
 - Manual `workflow_dispatch` → choose `staging` or `production`.
 

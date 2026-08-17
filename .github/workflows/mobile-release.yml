@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    paths:
+      - 'apps/mobile/**'
+      - 'scripts/ci/assign-testflight-group.mjs'
+      - 'scripts/ci/cleanup-dev-certificates.mjs'
+      - '.github/workflows/mobile-release.yml'
+      - 'Makefile'
   workflow_dispatch:
     inputs:
       release_environment:
