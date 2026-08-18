@@ -189,7 +189,7 @@ defmodule MaraithonWeb.TodosLive do
              |> assign(:new_todo_form, to_form(@default_new_todo_params, as: :todo))
              |> assign(:new_todo_errors, %{})
              |> put_flash(:info, "Todo added.")
-             |> push_patch(to: todos_path(@default_filters, %{"todo_id" => todo.id}))}
+             |> push_patch(to: todo_detail_path(@default_filters, todo.id))}
 
           {:error, reason} ->
             {:noreply,
@@ -323,8 +323,7 @@ defmodule MaraithonWeb.TodosLive do
 
   def handle_event("open_todo_detail", %{"id" => todo_id}, socket) do
     if visible_todo_id?(socket, todo_id) do
-      {:noreply,
-       push_patch(socket, to: todos_path(socket.assigns.filters, %{"todo_id" => todo_id}))}
+      {:noreply, push_patch(socket, to: todo_detail_path(socket.assigns.filters, todo_id))}
     else
       {:noreply, socket}
     end
@@ -367,10 +366,24 @@ defmodule MaraithonWeb.TodosLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
-      <div class="space-y-6">
-        <.page_header title="Todos" />
+      <%= if @selected_todo do %>
+        <.todo_detail_panel
+          todo={@selected_todo}
+          filters={@filters}
+          project_options={@project_options}
+          timezone_info={@timezone_info}
+        />
+      <% else %>
+        <div class="space-y-4">
+          <.page_header title="Todos" />
 
-        <.panel body_class="px-5 py-4">
+          <details class="group">
+            <summary class="inline-flex cursor-pointer list-none items-center gap-6 rounded-lg border border-zinc-950/10 bg-white px-3 py-2 text-sm/6 font-medium text-zinc-700 hover:text-zinc-950">
+              Add a todo
+              <span class="text-zinc-400 group-open:rotate-45" aria-hidden="true">+</span>
+            </summary>
+            <div class="mt-3">
+              <.panel body_class="px-5 py-4">
           <:header>
             <div class="flex flex-wrap items-end justify-between gap-3">
               <h2 class="text-sm/6 font-semibold text-zinc-950">New todo</h2>
@@ -476,7 +489,16 @@ defmodule MaraithonWeb.TodosLive do
           </.form>
         </.panel>
 
-        <.panel body_class="px-5 py-4">
+            </div>
+          </details>
+
+          <details class="group">
+            <summary class="inline-flex cursor-pointer list-none items-center gap-3 rounded-lg border border-zinc-950/10 bg-white px-3 py-2 text-sm/6 font-medium text-zinc-700 hover:text-zinc-950">
+              Search and filter
+              <span class="text-xs/5 text-zinc-500"><%= active_filter_label(@filters) %></span>
+            </summary>
+            <div class="mt-3">
+              <.panel body_class="px-5 py-4">
           <.form
             for={@filter_form}
             id="todo-filters"
@@ -556,25 +578,21 @@ defmodule MaraithonWeb.TodosLive do
           </.form>
         </.panel>
 
+            </div>
+          </details>
+
         <.panel body_class="px-5 py-0">
           <:header>
             <div class="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 class="text-sm/6 font-semibold text-zinc-950">Todo list</h2>
-                <p class="text-sm/6 text-zinc-500">
-                  <%= result_count_label(@todos, @total_count) %>
-                </p>
-              </div>
+              <p class="text-sm/6 text-zinc-500"><%= result_count_label(@todos, @total_count) %></p>
               <.badge color="zinc"><%= active_filter_label(@filters) %></.badge>
             </div>
           </:header>
 
           <div class={[
-            "grid grid-cols-1 gap-4 py-4",
-            @selected_todo && "xl:grid-cols-[minmax(0,1fr)_26rem]",
+            "min-w-0 py-2",
             MapSet.size(@selected_todo_ids) > 0 && "pb-24"
           ]}>
-            <div class="min-w-0">
               <.todo_bulk_toolbar selected_todo_ids={@selected_todo_ids} />
 
               <.table>
@@ -583,25 +601,25 @@ defmodule MaraithonWeb.TodosLive do
                     <.table_header class="w-10">
                       <input
                         type="checkbox"
-                        aria-label="Select all work items"
+                        aria-label="Select all todos"
                         checked={all_visible_todos_selected?(@todos, @selected_todo_ids)}
                         phx-click="toggle_all_todos"
                         class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
                       />
                     </.table_header>
-                    <.sortable_table_header filters={@filters} field="title" class="min-w-[22rem]">
+                    <.sortable_table_header filters={@filters} field="title" class="min-w-[20rem]">
                       Todo
                     </.sortable_table_header>
-                    <.table_header>Project</.table_header>
-                    <.sortable_table_header filters={@filters} field="source">Source</.sortable_table_header>
-                    <.table_header>Who can help</.table_header>
-                    <.sortable_table_header filters={@filters} field="due">Due</.sortable_table_header>
-                    <.table_header class="w-48 text-right">Actions</.table_header>
+                    <.table_header class="min-w-40">Context</.table_header>
+                    <.sortable_table_header filters={@filters} field="due" class="min-w-32">
+                      Due
+                    </.sortable_table_header>
+                    <.table_header class="w-24 text-right">Action</.table_header>
                   </.table_row>
                 </.table_head>
                 <.table_body>
                   <.table_row :if={@todos == []}>
-                    <.table_cell colspan="7" class="py-10 text-center text-sm/6 text-zinc-500">
+                    <.table_cell colspan="5" class="py-10 text-center text-sm/6 text-zinc-500">
                       <%= empty_message(@filters) %>
                     </.table_cell>
                   </.table_row>
@@ -624,7 +642,7 @@ defmodule MaraithonWeb.TodosLive do
                         class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
                       />
                     </.table_cell>
-                    <.table_cell class="max-w-xl whitespace-normal align-top">
+                    <.table_cell class="max-w-2xl whitespace-normal align-top">
                       <div class="flex flex-wrap items-center gap-2">
                         <div class="font-medium text-zinc-950"><%= todo.title %></div>
                         <.badge :if={todo.status != "open"} color={status_color(todo.status)}>
@@ -635,82 +653,43 @@ defmodule MaraithonWeb.TodosLive do
                           <%= priority_label(todo.priority) %>
                         </.badge>
                       </div>
-                      <div :if={present?(todo.summary)} class="mt-1 line-clamp-2 text-sm/6 text-zinc-600">
-                        <%= todo.summary %>
-                      </div>
-                      <div :if={present?(todo.next_action)} class="mt-1 line-clamp-2 text-sm/6 text-zinc-700">
-                        <span class="font-medium text-zinc-950"><%= todo_next_action_label(todo) %>:</span> <%= todo.next_action %>
-                      </div>
+                      <p :if={present?(todo.next_action)} class="mt-1 line-clamp-1 text-sm/6 text-zinc-600">
+                        <span class="font-medium text-zinc-800"><%= todo_next_action_label(todo) %>:</span>
+                        <%= todo.next_action %>
+                      </p>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top">
-                      <span class="text-sm/6 text-zinc-700"><%= todo_project_name(todo, @projects) %></span>
-                    </.table_cell>
-                    <.table_cell class="whitespace-normal align-top">
-                      <div class="text-sm/6 font-medium text-zinc-950"><%= todo_source_label(todo.source) %></div>
-                      <div :if={todo_source_account_value(todo)} class="mt-1 text-xs/5 text-zinc-500">
-                        <%= todo_source_account_value(todo) %>
-                      </div>
-                    </.table_cell>
-                    <.table_cell class="whitespace-normal align-top">
-                      <.badge color={agent_actionability_color(todo.agent_actionability)}>
-                        <%= agent_actionability_label(todo) %>
-                      </.badge>
-                      <div :if={todo.agent_actionability != "needs_you" and todo.agent_action_requires_approval} class="mt-1 text-xs/5 text-zinc-500">
-                        Approval required
+                      <div class="text-sm/6 text-zinc-700"><%= todo_project_name(todo, @projects) %></div>
+                      <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                        <span class="text-xs/5 text-zinc-500"><%= todo_source_label(todo.source) %></span>
+                        <.badge color={agent_actionability_color(todo.agent_actionability)}>
+                          <%= agent_actionability_label(todo) %>
+                        </.badge>
                       </div>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top text-xs/5 text-zinc-500">
                       <%= format_datetime(todo.due_at, "No due date", @timezone_info) %>
                     </.table_cell>
                     <.table_cell class="align-top text-right">
-                      <div class="flex shrink-0 items-center justify-end gap-1">
-                        <.button
-                          type="button"
-                          phx-click="complete_todo"
-                          phx-value-id={todo.id}
-                          onclick="event.stopPropagation()"
-                          variant="plain"
-                          class="text-xs text-zinc-500 hover:text-zinc-950"
-                        >
-                          Done
-                        </.button>
-                        <.button
-                          type="button"
-                          phx-click="dismiss_todo"
-                          phx-value-id={todo.id}
-                          onclick="event.stopPropagation()"
-                          variant="plain"
-                          class="text-xs text-zinc-500 hover:text-zinc-950"
-                        >
-                          Dismiss
-                        </.button>
-                        <.button
-                          type="button"
-                          phx-click="see_less_todo"
-                          phx-value-id={todo.id}
-                          onclick="event.stopPropagation()"
-                          variant="plain"
-                          class="text-xs text-zinc-500 hover:text-zinc-950"
-                        >
-                          Show less
-                        </.button>
-                      </div>
+                      <.button
+                        :if={todo.status in ["open", "snoozed"]}
+                        type="button"
+                        phx-click="complete_todo"
+                        phx-value-id={todo.id}
+                        onclick="event.stopPropagation()"
+                        variant="plain"
+                        class="text-xs text-zinc-500 hover:text-zinc-950"
+                      >
+                        Done
+                      </.button>
                     </.table_cell>
                   </.table_row>
                 </.table_body>
               </.table>
-            </div>
-
-            <.todo_detail_panel
-              :if={@selected_todo}
-              todo={@selected_todo}
-              filters={@filters}
-              project_options={@project_options}
-              timezone_info={@timezone_info}
-            />
           </div>
         </.panel>
-      </div>
+        </div>
+      <% end %>
     </Layouts.app>
     """
   end
@@ -729,7 +708,7 @@ defmodule MaraithonWeb.TodosLive do
     total_count = Todos.count_for_user(user_id, Keyword.drop(query_opts, [:limit]))
     visible_ids = todos |> Enum.map(& &1.id) |> MapSet.new()
     selected_todo_ids = MapSet.intersection(socket.assigns.selected_todo_ids, visible_ids)
-    selected_todo = selected_visible_todo(user_id, socket.assigns.selected_todo_id, visible_ids)
+    selected_todo = selected_todo_for_user(user_id, socket.assigns.selected_todo_id)
 
     assign(socket,
       projects: projects,
@@ -753,7 +732,7 @@ defmodule MaraithonWeb.TodosLive do
     <div
       :if={@selected_count > 0}
       id="todo-bulk-actions"
-      class="pointer-events-none fixed inset-x-3 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex justify-center sm:inset-x-6 lg:left-64 lg:bottom-6"
+      class="pointer-events-none fixed inset-x-3 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex justify-center sm:inset-x-6 lg:bottom-6"
     >
       <div class="pointer-events-auto flex max-w-[calc(100vw-1.5rem)] flex-wrap items-center justify-center gap-1.5 rounded-lg border border-zinc-950/20 bg-zinc-950/95 px-2.5 py-2 text-white shadow-xl ring-1 ring-white/10 backdrop-blur">
         <span class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-semibold">
@@ -828,134 +807,206 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_detail_panel(assigns) do
     can_edit_next_action = todo_next_action_editable?(assigns.todo)
-    decision_signal? = todo_decision_signal?(assigns.todo)
 
     assigns =
       assigns
       |> assign(:can_edit_next_action, can_edit_next_action)
-      |> assign(:decision_signal?, decision_signal?)
-      |> assign(:decision_review_fields, todo_decision_review_fields(assigns.todo))
+      |> assign(:decision_signal?, todo_decision_signal?(assigns.todo))
+      |> assign(:guidance_fields, todo_guidance_fields(assigns.todo))
+      |> assign(
+        :supporting_fields,
+        todo_supporting_fields(assigns.todo, can_edit_next_action, assigns.timezone_info)
+      )
       |> assign(
         :next_action_form,
         to_form(%{"next_action" => assigns.todo.next_action || ""}, as: :todo)
       )
 
     ~H"""
-    <aside id="todo-detail" class="rounded-lg border border-zinc-950/10 bg-white px-4 py-4 shadow-sm">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-2">
-            <.badge color={status_color(@todo.status)}><%= todo_status_label(@todo.status) %></.badge>
-            <.badge color={attention_color(@todo.attention_mode)}>
-              <%= attention_mode_label(@todo.attention_mode) %>
-            </.badge>
-            <.badge color={priority_color(@todo.priority)}>
-              <%= priority_label(@todo.priority) %>
-            </.badge>
-            <.badge :if={@decision_signal?} color="indigo">Decision</.badge>
-          </div>
-          <h3 class="mt-2 text-base/7 font-semibold text-zinc-950"><%= @todo.title %></h3>
-        </div>
-        <.link
-          patch={todos_path(@filters)}
-          class="rounded-md px-2 py-1 text-xs/5 font-medium text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950"
-        >
-          Close
-        </.link>
-      </div>
-
+    <div id="todo-detail" class="mx-auto max-w-4xl space-y-5">
       <.link
-        navigate={~p"/todos/#{@todo.id}/chat"}
-        class="mt-3 inline-flex items-center gap-1.5 rounded-md bg-zinc-900 px-3 py-1.5 text-xs/5 font-semibold text-white hover:bg-zinc-700"
+        patch={todos_path(@filters)}
+        class="inline-flex items-center gap-1 text-sm/6 font-medium text-zinc-500 hover:text-zinc-950"
       >
-        <%= todo_chat_action_label(@todo) %>
+        <span aria-hidden="true">←</span> Back to todos
       </.link>
 
-      <div class="mt-4 grid gap-3 border-t border-zinc-950/10 pt-4 sm:grid-cols-2">
-        <div>
-          <p class="text-xs/5 font-medium text-zinc-500">Project</p>
-          <form id={"todo-project-form-#{@todo.id}"} phx-change="assign_todo_project" class="mt-1">
-            <input type="hidden" name="assignment[todo_id]" value={@todo.id} />
-            <.c_select id={"todo-project-#{@todo.id}"} name="assignment[project_id]">
-              <option
-                :for={{label, value} <- @project_options}
-                value={value}
-                selected={(@todo.project_id || "") == value}
-              >
-                <%= label %>
-              </option>
-            </.c_select>
-          </form>
+      <header class="border-b border-zinc-950/10 pb-5">
+        <div class="flex flex-wrap items-center gap-2">
+          <.badge color={status_color(@todo.status)}><%= todo_status_label(@todo.status) %></.badge>
+          <.badge color={attention_color(@todo.attention_mode)}>
+            <%= attention_mode_label(@todo.attention_mode) %>
+          </.badge>
+          <.badge :if={@decision_signal?} color="indigo">Decision</.badge>
+          <.badge :if={@todo.priority >= 75} color={priority_color(@todo.priority)}>
+            <%= priority_label(@todo.priority) %>
+          </.badge>
         </div>
-        <div>
-          <p class="text-xs/5 font-medium text-zinc-500">Who can help</p>
-          <div class="mt-2">
-            <.badge color={agent_actionability_color(@todo.agent_actionability)}>
-              <%= agent_actionability_label(@todo) %>
-            </.badge>
-          </div>
-          <p :if={@todo.agent_actionability != "needs_you" and @todo.agent_action_requires_approval} class="mt-1 text-xs/5 text-zinc-500">
-            Confirmation required before any external action.
-          </p>
+        <h1 class="mt-3 text-2xl/8 font-semibold tracking-tight text-zinc-950"><%= @todo.title %></h1>
+        <p :if={present?(@todo.summary)} class="mt-2 max-w-3xl text-sm/6 text-zinc-600">
+          <%= @todo.summary %>
+        </p>
+      </header>
+
+      <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_17rem]">
+        <div class="space-y-5">
+          <.panel body_class="px-5 py-5">
+            <:header>
+              <div>
+                <h2 class="text-sm/6 font-semibold text-zinc-950">How to solve this</h2>
+                <p class="text-sm/6 text-zinc-500">Start with the next concrete move, then use the supporting evidence below.</p>
+              </div>
+            </:header>
+
+            <dl :if={@guidance_fields != []} class="divide-y divide-zinc-950/5">
+              <div :for={field <- @guidance_fields} class="py-3 first:pt-0 last:pb-0">
+                <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
+                <dd class="mt-1 whitespace-pre-wrap break-words text-sm/6 text-zinc-800"><%= field.value %></dd>
+              </div>
+            </dl>
+
+            <p :if={@guidance_fields == []} class="text-sm/6 text-zinc-600">
+              Add a clear next action, or ask Maraithon to work through the todo with you.
+            </p>
+
+            <.form
+              :if={@can_edit_next_action}
+              for={@next_action_form}
+              id={"todo-next-action-form-#{@todo.id}"}
+              phx-submit="save_todo_next_action"
+              phx-value-id={@todo.id}
+              class="mt-5 border-t border-zinc-950/10 pt-4"
+            >
+              <.field label="Next action" for={"todo-next-action-#{@todo.id}"}>
+                <.c_textarea
+                  id={"todo-next-action-#{@todo.id}"}
+                  name={@next_action_form[:next_action].name}
+                  value={@next_action_form[:next_action].value}
+                  rows={3}
+                  maxlength="1000"
+                  required
+                />
+              </.field>
+              <div class="mt-3 flex justify-end">
+                <.button type="submit" variant="outline" class="text-xs" phx-disable-with="Saving...">
+                  Save next action
+                </.button>
+              </div>
+            </.form>
+
+            <div class="mt-5 border-t border-zinc-950/10 pt-4">
+              <.button navigate={~p"/todos/#{@todo.id}/chat"}>Ask Maraithon</.button>
+              <p :if={@todo.agent_action_requires_approval} class="mt-2 text-xs/5 text-zinc-500">
+                Maraithon will ask for confirmation before any external action.
+              </p>
+            </div>
+          </.panel>
+
+          <.panel :if={@supporting_fields != []} body_class="px-5 py-2">
+            <:header>
+              <h2 class="text-sm/6 font-semibold text-zinc-950">Supporting details</h2>
+            </:header>
+            <dl class="divide-y divide-zinc-950/5">
+              <div :for={field <- @supporting_fields} class="py-3">
+                <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
+                <dd class="mt-1 whitespace-pre-wrap break-words text-sm/6 text-zinc-700"><%= field.value %></dd>
+              </div>
+            </dl>
+          </.panel>
         </div>
+
+        <aside class="space-y-4">
+          <.panel body_class="px-4 py-4">
+            <:header>
+              <h2 class="text-sm/6 font-semibold text-zinc-950">Todo</h2>
+            </:header>
+
+            <div>
+              <p class="text-xs/5 font-medium text-zinc-500">Project</p>
+              <form id={"todo-project-form-#{@todo.id}"} phx-change="assign_todo_project" class="mt-1">
+                <input type="hidden" name="assignment[todo_id]" value={@todo.id} />
+                <.c_select id={"todo-project-#{@todo.id}"} name="assignment[project_id]">
+                  <option
+                    :for={{label, value} <- @project_options}
+                    value={value}
+                    selected={(@todo.project_id || "") == value}
+                  >
+                    <%= label %>
+                  </option>
+                </.c_select>
+              </form>
+            </div>
+
+            <div class="mt-4 border-t border-zinc-950/10 pt-4">
+              <p class="text-xs/5 font-medium text-zinc-500">Who can help</p>
+              <div class="mt-2">
+                <.badge color={agent_actionability_color(@todo.agent_actionability)}>
+                  <%= agent_actionability_label(@todo) %>
+                </.badge>
+              </div>
+            </div>
+
+            <div :if={@can_edit_next_action} class="mt-4 grid gap-2 border-t border-zinc-950/10 pt-4">
+              <.button type="button" phx-click="complete_todo" phx-value-id={@todo.id}>
+                Mark done
+              </.button>
+              <div class="flex justify-center gap-1">
+                <.button type="button" phx-click="dismiss_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
+                  Dismiss
+                </.button>
+                <.button type="button" phx-click="see_less_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
+                  Show less
+                </.button>
+              </div>
+            </div>
+          </.panel>
+        </aside>
       </div>
-
-      <div :if={@decision_review_fields != []} class="mt-4 border-t border-zinc-950/10 pt-4">
-        <p class="text-xs/5 font-medium text-zinc-500">Decision to make</p>
-        <dl class="mt-2 divide-y divide-zinc-950/5">
-          <div :for={field <- @decision_review_fields} class="grid grid-cols-1 gap-1 py-2">
-            <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
-            <dd class="break-words text-sm/6 text-zinc-700"><%= field.value %></dd>
-          </div>
-        </dl>
-      </div>
-
-      <.form
-        :if={@can_edit_next_action}
-        for={@next_action_form}
-        id={"todo-next-action-form-#{@todo.id}"}
-        phx-submit="save_todo_next_action"
-        phx-value-id={@todo.id}
-        class="mt-4 border-t border-zinc-950/10 pt-4"
-      >
-        <.field label="Next action" for={"todo-next-action-#{@todo.id}"}>
-          <.c_textarea
-            id={"todo-next-action-#{@todo.id}"}
-            name={@next_action_form[:next_action].name}
-            value={@next_action_form[:next_action].value}
-            rows={3}
-            maxlength="1000"
-            required
-          />
-        </.field>
-
-        <div class="mt-3 flex justify-end">
-          <.button type="submit" variant="outline" class="text-xs" phx-disable-with="Saving...">
-            Save action
-          </.button>
-        </div>
-      </.form>
-
-      <dl class="mt-4 divide-y divide-zinc-950/5">
-        <div :for={field <- todo_detail_fields(@todo, @can_edit_next_action, @timezone_info)} class="grid grid-cols-1 gap-1 py-3">
-          <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
-          <dd class="break-words text-sm/6 text-zinc-700"><%= field.value %></dd>
-        </div>
-      </dl>
-
-      <div :if={@can_edit_next_action} class="mt-4 flex flex-wrap justify-end gap-1 border-t border-zinc-950/10 pt-4">
-        <.button type="button" phx-click="complete_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
-          Done
-        </.button>
-        <.button type="button" phx-click="dismiss_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
-          Dismiss
-        </.button>
-        <.button type="button" phx-click="see_less_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
-          Show less
-        </.button>
-      </div>
-    </aside>
+    </div>
     """
+  end
+
+  defp todo_guidance_fields(%Todo{} = todo) do
+    action_card_fields = todo_decision_review_fields(todo)
+
+    primary =
+      action_card_fields
+      |> Enum.filter(
+        &(&1.label in ["Decision", "Recommended move", "Suggested reply", "Prepared action"])
+      )
+      |> Enum.map(fn
+        %{label: "Decision"} = field -> %{field | label: "What requires action"}
+        %{label: "Recommended move"} = field -> %{field | label: "Recommended next move"}
+        field -> field
+      end)
+
+    fallback = [
+      %{label: "Next action", value: todo.next_action},
+      %{label: "Action plan", value: todo.action_plan}
+    ]
+
+    (primary ++ fallback)
+    |> Enum.reject(&blank?(&1.value))
+    |> Enum.uniq_by(& &1.value)
+    |> Enum.take(6)
+  end
+
+  defp todo_supporting_fields(%Todo{} = todo, next_action_editable?, timezone_info) do
+    context =
+      todo
+      |> todo_decision_review_fields()
+      |> Enum.reject(
+        &(&1.label in ["Decision", "Recommended move", "Suggested reply", "Prepared action"])
+      )
+
+    details =
+      todo
+      |> todo_detail_fields(next_action_editable?, timezone_info)
+      |> Enum.reject(&(&1.label in ["Next action", "Action plan", "Summary"]))
+
+    (context ++ details)
+    |> Enum.reject(&blank?(&1.value))
+    |> Enum.uniq_by(fn field -> {field.label, field.value} end)
   end
 
   defp todo_next_action_editable?(%Todo{status: status}), do: status in ~w(open snoozed)
@@ -1184,20 +1235,18 @@ defmodule MaraithonWeb.TodosLive do
     end
   end
 
-  defp selected_visible_todo(_user_id, nil, _visible_ids), do: nil
-  defp selected_visible_todo(_user_id, "", _visible_ids), do: nil
+  defp selected_todo_for_user(_user_id, nil), do: nil
+  defp selected_todo_for_user(_user_id, ""), do: nil
 
-  defp selected_visible_todo(user_id, todo_id, visible_ids)
+  defp selected_todo_for_user(user_id, todo_id)
        when is_binary(user_id) and is_binary(todo_id) do
-    with true <- MapSet.member?(visible_ids, todo_id),
-         %Todo{} = todo <- Todos.get_for_user(user_id, todo_id) do
-      todo
-    else
-      _ -> nil
+    case Todos.get_for_user(user_id, todo_id) do
+      %Todo{} = todo -> todo
+      _other -> nil
     end
   end
 
-  defp selected_visible_todo(_user_id, _todo_id, _visible_ids), do: nil
+  defp selected_todo_for_user(_user_id, _todo_id), do: nil
 
   defp todo_query_opts(filters, timezone_info) do
     [
@@ -1340,6 +1389,19 @@ defmodule MaraithonWeb.TodosLive do
       |> Enum.into(%{})
 
     if map_size(query) == 0, do: ~p"/todos", else: ~p"/todos?#{query}"
+  end
+
+  defp todo_detail_path(filters, todo_id) do
+    query =
+      filters
+      |> Enum.reject(fn {key, value} ->
+        blank?(value) or Map.get(@default_filters, key) == value
+      end)
+      |> Enum.into(%{})
+
+    if map_size(query) == 0,
+      do: ~p"/todos/#{todo_id}",
+      else: ~p"/todos/#{todo_id}?#{query}"
   end
 
   defp current_path_from_uri(uri) do
@@ -1629,14 +1691,6 @@ defmodule MaraithonWeb.TodosLive do
     do: "Maraithon can execute"
 
   defp agent_actionability_label(_todo), do: "Needs you"
-
-  defp todo_chat_action_label(%Todo{agent_actionability: "can_execute"}),
-    do: "Review and confirm"
-
-  defp todo_chat_action_label(%Todo{agent_actionability: "can_prepare"}),
-    do: "Prepare with Maraithon"
-
-  defp todo_chat_action_label(_todo), do: "Chat about this"
 
   defp agent_actionability_color("can_prepare"), do: "blue"
   defp agent_actionability_color("can_execute"), do: "emerald"

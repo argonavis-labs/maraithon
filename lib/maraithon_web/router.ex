@@ -133,6 +133,7 @@ defmodule MaraithonWeb.Router do
       live "/dashboard", DashboardLive, :index
       live "/insights", InsightsLive, :index
       live "/todos", TodosLive, :index
+      live "/todos/:todo_id", TodosLive, :show
       live "/todos/:todo_id/chat", TodoChatLive, :index
       live "/chat", ChatLive, :index
       live "/chat/:thread_id", ChatLive, :show

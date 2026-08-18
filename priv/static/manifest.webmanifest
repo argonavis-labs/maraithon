@@ -1,16 +1,22 @@
 {
   "name": "Maraithon",
   "short_name": "Maraithon",
-  "description": "A personal chief-of-staff workspace for open work, relationships, connected accounts, and proactive follow-through.",
-  "id": "/dashboard",
-  "start_url": "/dashboard?source=pwa",
+  "description": "A focused todo list with supporting context and clear guidance for the next step.",
+  "id": "/todos",
+  "start_url": "/todos",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui", "browser"],
+  "display_override": [
+    "standalone",
+    "minimal-ui",
+    "browser"
+  ],
   "orientation": "portrait",
   "background_color": "#f4f4f5",
   "theme_color": "#18181b",
-  "categories": ["business", "productivity"],
+  "categories": [
+    "productivity"
+  ],
   "icons": [
     {
       "src": "/images/app-icon.svg",
@@ -33,22 +39,10 @@
   ],
   "shortcuts": [
     {
-      "name": "Dashboard",
-      "short_name": "Dashboard",
-      "url": "/dashboard?source=pwa-shortcut",
-      "description": "Open today's chief-of-staff dashboard."
-    },
-    {
-      "name": "Work",
-      "short_name": "Work",
-      "url": "/todos?source=pwa-shortcut",
-      "description": "Open the current work queue."
-    },
-    {
-      "name": "People",
-      "short_name": "People",
-      "url": "/operator/people?source=pwa-shortcut",
-      "description": "Open relationship context."
+      "name": "Todos",
+      "short_name": "Todos",
+      "url": "/todos",
+      "description": "Open your todo list."
     }
   ]
 }

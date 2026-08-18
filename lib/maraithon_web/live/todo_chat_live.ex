@@ -140,7 +140,7 @@ defmodule MaraithonWeb.TodoChatLive do
           </p>
         </div>
         <.link
-          navigate={~p"/todos?todo_id=#{@todo.id}"}
+          navigate={~p"/todos/#{@todo.id}"}
           class="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950"
         >
           Back to work

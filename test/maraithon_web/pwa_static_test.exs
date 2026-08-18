@@ -9,13 +9,13 @@ defmodule MaraithonWeb.PwaStaticTest do
     assert manifest =~ ~s("name": "Maraithon")
     assert manifest =~ ~s("display": "standalone")
     assert manifest =~ ~s("/images/app-icon-512.png")
-    assert manifest =~ "chief-of-staff workspace"
-    assert manifest =~ ~s("name": "Work")
-    assert manifest =~ "current work queue"
-    assert manifest =~ "Open relationship context"
-    refute manifest =~ "agent runtime"
-    refute manifest =~ ~s("name": "Todos")
-    refute manifest =~ "todo command surface"
+    assert manifest =~ "focused todo list"
+    assert manifest =~ ~s("id": "/todos")
+    assert manifest =~ ~s("start_url": "/todos")
+    assert manifest =~ ~s("name": "Todos")
+    assert manifest =~ "Open your todo list"
+    refute manifest =~ ~s("name": "Dashboard")
+    refute manifest =~ ~s("name": "People")
     refute manifest =~ "relationship CRM"
 
     sw_conn = conn |> recycle() |> get("/sw.js")
@@ -31,17 +31,18 @@ defmodule MaraithonWeb.PwaStaticTest do
 
     assert offline =~ "You are offline"
     assert offline =~ "Maraithon needs a connection"
-    assert offline =~ "current work"
-    assert offline =~ "relationships"
+    assert offline =~ "todo list"
+    assert offline =~ "supporting details"
+    assert offline =~ "next-step guidance"
+    refute offline =~ "relationships"
     refute offline =~ "live agents"
-    refute offline =~ "todos"
   end
 
-  test "authenticated app shell renders mobile PWA metadata and tab bar", %{conn: conn} do
+  test "authenticated app shell renders PWA metadata without competing navigation", %{conn: conn} do
     conn =
       conn
       |> log_in_test_user("pwa-shell@example.com")
-      |> get("/connectors")
+      |> get("/todos")
 
     html = html_response(conn, 200)
 
@@ -49,8 +50,11 @@ defmodule MaraithonWeb.PwaStaticTest do
     assert html =~ ~s(name="theme-color")
     assert html =~ ~s(name="apple-mobile-web-app-capable")
     assert html =~ ~s(rel="manifest")
-    assert html =~ "navigator.serviceWorker.register"
-    assert html =~ ~s(id="maraithon-mobile-tabbar")
-    assert html =~ ~s(data-command-palette-trigger="true")
+    assert html =~ ~s(src="/assets/app.js")
+    assert html =~ "Maraithon"
+    assert html =~ "Todos"
+    refute html =~ ~s(id="maraithon-mobile-tabbar")
+    refute html =~ ~s(id="maraithon-sidebar")
+    refute html =~ ">Apps<"
   end
 end
