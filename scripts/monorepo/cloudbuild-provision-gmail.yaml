@@ -29,7 +29,4 @@ steps:
             --quiet
         fi
 
-options:
-  logging: CLOUD_LOGGING_ONLY
-
 timeout: 300s
