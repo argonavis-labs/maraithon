@@ -199,23 +199,6 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   end
 
   @doc """
-  Schedule a short durable debounce before force-flushing a low-volume CRM
-  ingest window. An active job is shared by subsequent events for the same
-  user/source; after it completes, a later event can schedule the next flush.
-  """
-  def enqueue_crm_window_flush(user_id, source, delay_seconds \\ 120)
-      when is_binary(user_id) and is_binary(source) and is_integer(delay_seconds) and
-             delay_seconds >= 0 do
-    enqueue("crm_window_flush", %{
-      "user_id" => user_id,
-      "queue" => "relationships",
-      "payload" => %{"source" => source},
-      "dedupe_key" => "crm_ingest:flush_pending:#{user_id}:#{source}",
-      "scheduled_at" => DateTime.add(DateTime.utc_now(), delay_seconds, :second)
-    })
-  end
-
-  @doc """
   Enqueue the `relationship_ingestion` job that runs once a `Crm.Ingest.Window`
   has been guarded into `flushed` status. Idempotent on `window_id`.
   """
@@ -499,7 +482,6 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   defp default_queue(@telegram_webhook_job_type), do: "ingress"
   defp default_queue("email_processing"), do: "email"
   defp default_queue("relationship_learning"), do: "relationships"
-  defp default_queue("crm_window_flush"), do: "relationships"
   defp default_queue("relationship_ingestion"), do: "relationships"
   defp default_queue("relationship_backfill"), do: "relationships"
   defp default_queue("open_loop_check"), do: "open_loops"

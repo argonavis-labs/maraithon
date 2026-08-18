@@ -111,8 +111,11 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
     assert %Observation{direction: "outbound"} =
              Repo.get_by(Observation, user_id: user_id, source: "slack")
 
-    assert %{scheduled_at: scheduled_at} = find_job(user_id, "crm_window_flush")
-    assert DateTime.compare(scheduled_at, DateTime.utc_now()) == :gt
+    assert {:ok, 1} =
+             Maraithon.Crm.Ingest.sweep_windows_older_than(
+               DateTime.add(DateTime.utc_now(), 121, :second),
+               120
+             )
   end
 
   defp find_job(user_id, job_type) do

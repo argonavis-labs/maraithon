@@ -67,6 +67,19 @@ defmodule Maraithon.Connectors.Gmail do
   # permanently dropped everything past the truncation point.
   @history_message_fetch_chunk 100
 
+  @doc "Returns true when a connected Google account granted a Gmail service scope."
+  def enabled_for_account?(%{metadata: metadata, scopes: scopes}) do
+    metadata = metadata || %{}
+    services = metadata["services"] || metadata[:services] || []
+
+    Enum.member?(List.wrap(services), "gmail") or
+      Enum.any?(List.wrap(scopes), fn scope ->
+        is_binary(scope) and String.contains?(String.downcase(scope), "gmail")
+      end)
+  end
+
+  def enabled_for_account?(_account), do: false
+
   # ===========================================================================
   # Watch Management
   # ===========================================================================

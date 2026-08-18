@@ -236,16 +236,7 @@ defmodule Maraithon.Connectors.Slack do
 
         case Maraithon.Crm.Ingest.observe(user_id, changeset) do
           {:ok, :buffered, _observation_id} ->
-            case Maraithon.Runtime.BackgroundJobs.enqueue_crm_window_flush(user_id, "slack") do
-              {:ok, _job} ->
-                :ok
-
-              {:error, reason} ->
-                Logger.warning("Could not schedule Slack CRM window flush",
-                  user_id: user_id,
-                  reason: inspect(reason)
-                )
-            end
+            :ok
 
           {:ok, :flushed, _observation_id, _job_id} ->
             :ok

@@ -12,6 +12,7 @@ defmodule Maraithon.Todos.ProductionValidator do
   alias Maraithon.Agents.Agent
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.SourceCursors
+  alias Maraithon.Crm.Ingest.Window
   alias Maraithon.Crm.Observation
   alias Maraithon.OAuth
   alias Maraithon.Repo
@@ -83,14 +84,22 @@ defmodule Maraithon.Todos.ProductionValidator do
     results =
       accounts
       |> Enum.filter(&(provider_family(&1.provider) == "google"))
+      |> Enum.filter(&Gmail.enabled_for_account?/1)
       |> Enum.map(&repair_google_account(user_id, &1))
+
+    error_counts =
+      results
+      |> Enum.flat_map(fn result -> [result.watch_error, result.sync_error] end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.frequencies()
 
     %{
       accounts_checked: length(results),
       watches_active: Enum.count(results, &(&1.watch == "active")),
       syncs_completed: Enum.count(results, &(&1.sync == "completed")),
       messages_seen: Enum.reduce(results, 0, &(&1.messages_seen + &2)),
-      unavailable: Enum.count(results, &(&1.sync == "unavailable"))
+      unavailable: Enum.count(results, &(&1.sync == "unavailable")),
+      safe_error_counts: error_counts
     }
   end
 
@@ -101,19 +110,27 @@ defmodule Maraithon.Todos.ProductionValidator do
       case Gmail.sync_history(user_id, account, provider: account.provider) do
         {:ok, result} ->
           %{
-            watch: watch,
+            watch: watch.status,
+            watch_error: watch.error,
             sync: "completed",
+            sync_error: nil,
             messages_seen: non_negative_count(result[:count] || result["count"])
           }
 
-        {:error, _reason} ->
-          %{watch: watch, sync: "unavailable", messages_seen: 0}
+        {:error, reason} ->
+          %{
+            watch: watch.status,
+            watch_error: watch.error,
+            sync: "unavailable",
+            sync_error: safe_connector_error(reason),
+            messages_seen: 0
+          }
       end
     else
-      {:error, _reason} -> %{watch: "unavailable", sync: "unavailable", messages_seen: 0}
+      {:error, reason} -> unavailable_google_result(safe_connector_error(reason))
     end
   rescue
-    _error -> %{watch: "unavailable", sync: "unavailable", messages_seen: 0}
+    _error -> unavailable_google_result("validator_exception")
   end
 
   defp repair_gmail_watch(user_id, account, access_token) do
@@ -127,15 +144,25 @@ defmodule Maraithon.Todos.ProductionValidator do
             else: attrs
 
         case SourceCursors.put(account, "gmail_history_id", attrs) do
-          {:ok, _cursor} -> "active"
-          _other -> "unavailable"
+          {:ok, _cursor} -> %{status: "active", error: nil}
+          _other -> %{status: "unavailable", error: "cursor_write_failed"}
         end
 
-      {:error, _reason} ->
-        "unavailable"
+      {:error, reason} ->
+        %{status: "unavailable", error: safe_connector_error(reason)}
     end
   rescue
-    _error -> "unavailable"
+    _error -> %{status: "unavailable", error: "validator_exception"}
+  end
+
+  defp unavailable_google_result(error) do
+    %{
+      watch: "unavailable",
+      watch_error: error,
+      sync: "unavailable",
+      sync_error: error,
+      messages_seen: 0
+    }
   end
 
   defp await_relationship_jobs(user_id, started_at) do
@@ -144,19 +171,34 @@ defmodule Maraithon.Todos.ProductionValidator do
   end
 
   defp await_relationship_jobs(user_id, started_at, deadline) do
-    counts = relationship_job_counts(user_id, started_at)
-    active = Map.get(counts, "pending", 0) + Map.get(counts, "running", 0)
+    jobs = relationship_job_counts(user_id, started_at)
+    windows = ingestion_window_counts(user_id, started_at)
+    in_flight = Map.get(windows, "flushed", 0)
 
-    if active > 0 and System.monotonic_time(:millisecond) < deadline do
+    if in_flight > 0 and System.monotonic_time(:millisecond) < deadline do
       Process.sleep(2_000)
       await_relationship_jobs(user_id, started_at, deadline)
     else
       %{
-        completed: Map.get(counts, "completed", 0),
-        failed: Map.get(counts, "failed", 0),
-        active: active
+        completed: Map.get(jobs, "completed", 0),
+        failed: Map.get(jobs, "failed", 0),
+        active: Map.get(jobs, "pending", 0) + Map.get(jobs, "running", 0),
+        windows_completed: Map.get(windows, "completed", 0),
+        windows_failed: Map.get(windows, "failed", 0),
+        windows_in_flight: in_flight
       }
     end
+  end
+
+  defp ingestion_window_counts(user_id, started_at) do
+    from(window in Window,
+      where: window.user_id == ^user_id,
+      where: window.opened_at >= ^started_at,
+      group_by: window.status,
+      select: {window.status, count(window.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
   end
 
   defp relationship_job_counts(user_id, started_at) do
@@ -252,6 +294,30 @@ defmodule Maraithon.Todos.ProductionValidator do
   defp provider_family("slack"), do: "slack"
   defp provider_family("slack:" <> _), do: "slack"
   defp provider_family(_provider), do: "other"
+
+  defp safe_connector_error(reason)
+       when reason in [
+              :no_token,
+              :reauth_required,
+              :pubsub_topic_not_configured,
+              :history_expired,
+              :missing_history_id,
+              :insufficient_scope,
+              :rate_limited
+            ],
+       do: Atom.to_string(reason)
+
+  defp safe_connector_error({:http_status, status, _detail}) when is_integer(status),
+    do: "http_#{status}"
+
+  defp safe_connector_error({:http_status, status}) when is_integer(status),
+    do: "http_#{status}"
+
+  defp safe_connector_error({wrapper, reason})
+       when wrapper in [:token_refresh_failed, :oauth_failed, :gmail_failed],
+       do: safe_connector_error(reason)
+
+  defp safe_connector_error(_reason), do: "connector_error"
 
   defp protocol_label(:dark), do: "dark"
   defp protocol_label(:legacy), do: "legacy"

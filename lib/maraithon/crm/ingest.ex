@@ -32,6 +32,7 @@ defmodule Maraithon.Crm.Ingest do
   alias Maraithon.Crm.Observation
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJobs
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
 
   require Logger
 
@@ -110,7 +111,13 @@ defmodule Maraithon.Crm.Ingest do
   def sweep_stale_windows(now \\ DateTime.utc_now())
 
   def sweep_stale_windows(%DateTime{} = now) do
-    cutoff = DateTime.add(now, -@stale_window_minutes * 60, :second)
+    sweep_windows_older_than(now, @stale_window_minutes * 60)
+  end
+
+  @doc "Force-flush open windows older than a caller-selected bounded age."
+  def sweep_windows_older_than(%DateTime{} = now, age_seconds)
+      when is_integer(age_seconds) and age_seconds > 0 do
+    cutoff = DateTime.add(now, -age_seconds, :second)
 
     stale =
       from(w in Window,
@@ -373,20 +380,24 @@ defmodule Maraithon.Crm.Ingest do
   end
 
   defp enqueue_flush(%Window{} = window) do
-    case BackgroundJobs.enqueue_relationship_ingestion(
-           window.id,
-           existing_user_id(window.user_id)
-         ) do
-      {:ok, job} ->
-        Repo.update_all(
-          from(w in Window, where: w.id == ^window.id),
-          set: [flush_job_id: job.id, updated_at: DateTime.utc_now()]
-        )
+    if RuntimeConfig.multinode_coordination_enabled?() do
+      case BackgroundJobs.enqueue_relationship_ingestion(
+             window.id,
+             existing_user_id(window.user_id)
+           ) do
+        {:ok, job} ->
+          Repo.update_all(
+            from(w in Window, where: w.id == ^window.id),
+            set: [flush_job_id: job.id, updated_at: DateTime.utc_now()]
+          )
 
-        {:ok, :flushed, job.id}
+          {:ok, :flushed, job.id}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:ok, :flushed, nil}
     end
   end
 
