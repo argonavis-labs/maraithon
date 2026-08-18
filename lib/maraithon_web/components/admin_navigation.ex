@@ -9,45 +9,27 @@ defmodule MaraithonWeb.AdminNavigation do
 
   use MaraithonWeb, :html
 
-  import MaraithonWeb.Components.CommandPalette
   import MaraithonWeb.Components.Sidebar
 
-  # Mirrors the mobile app's tab order (Today, Work, Stream, People, Chat)
-  # so the two surfaces feel like one product. The daily product surfaces
-  # stay primary; the control plane lives in the System section below.
   @primary_nav [
-    %{label: "Today", path: "/briefing", icon: :home},
-    %{label: "Goals", path: "/goals", icon: :goals},
-    %{label: "Work", path: "/todos", icon: :todos},
-    %{label: "Stream", path: "/stream", icon: :insights},
-    %{label: "People", path: "/operator/people", icon: :people},
-    %{label: "Chat", path: "/chat", icon: :search}
+    %{label: "Todos", path: "/todos", icon: :todos}
   ]
 
-  # Control plane: setup, automation, and assistant internals. Useful, but
-  # not part of running the day.
+  # Connected apps are setup for the todo agent, not a competing product surface.
   @system_nav [
-    %{label: "Apps", path: "/connectors", icon: :connectors},
-    %{label: "Agents", path: "/agents", icon: :agents},
-    %{label: "Insights", path: "/insights", icon: :insights},
-    %{label: "Saved Context", path: "/operator/memories", icon: :memory},
-    %{label: "Activity", path: "/activity", icon: :book},
-    %{label: "Dashboard", path: "/dashboard", icon: :home}
+    %{label: "Apps", path: "/connectors", icon: :connectors}
   ]
 
   @mobile_nav [
-    %{label: "Today", path: "/briefing", icon: :home},
-    %{label: "Goals", path: "/goals", icon: :goals},
-    %{label: "Work", path: "/todos", icon: :todos},
-    %{label: "People", path: "/operator/people", icon: :people},
-    %{label: "Chat", path: "/chat", icon: :search}
+    %{label: "Todos", path: "/todos", icon: :todos},
+    %{label: "Apps", path: "/connectors", icon: :connectors}
   ]
 
   @admin_nav [
     %{label: "Settings", path: "/settings", icon: :settings}
   ]
 
-  attr :current_path, :string, default: "/dashboard"
+  attr :current_path, :string, default: "/todos"
   attr :current_user, :map, default: nil
   slot :inner_block, required: true
   slot :flash
@@ -64,8 +46,6 @@ defmodule MaraithonWeb.AdminNavigation do
 
     ~H"""
     <div class="relative isolate flex min-h-svh w-full bg-zinc-50 max-lg:flex-col lg:bg-zinc-100">
-      <.command_palette current_path={@normalized_path} current_user={@current_user} />
-
       <aside
         id="maraithon-sidebar"
         class={[
@@ -141,7 +121,7 @@ defmodule MaraithonWeb.AdminNavigation do
         class="fixed inset-x-0 bottom-0 z-30 border-t border-zinc-950/10 bg-white/95 px-2 pt-1.5 pb-[calc(0.35rem+env(safe-area-inset-bottom))] shadow-[0_-1px_12px_rgba(24,24,27,0.08)] backdrop-blur lg:hidden"
         aria-label="Primary navigation"
       >
-        <div class="mx-auto grid max-w-md grid-cols-6 gap-1">
+        <div class="mx-auto grid max-w-md grid-cols-2 gap-1">
           <.link
             :for={item <- @mobile_nav}
             navigate={item.path}
@@ -151,15 +131,6 @@ defmodule MaraithonWeb.AdminNavigation do
             <.icon name={item.icon} class="size-5" />
             <span class="mt-0.5 truncate text-[11px]/4 font-medium"><%= item.label %></span>
           </.link>
-          <button
-            type="button"
-            data-command-palette-trigger="true"
-            class="flex min-w-0 flex-col items-center justify-center rounded-lg px-1 py-1.5 text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-            aria-label="Open command palette"
-          >
-            <.icon name={:search} class="size-5" />
-            <span class="mt-0.5 truncate text-[11px]/4 font-medium">Search</span>
-          </button>
         </div>
       </nav>
     </div>
@@ -191,23 +162,7 @@ defmodule MaraithonWeb.AdminNavigation do
     ~H"""
     <.sidebar class="border-r border-zinc-950/5">
       <.sidebar_header>
-        <.sidebar_brand title="Maraithon" subtitle="Executive workspace" navigate="/dashboard" />
-        <button
-          type="button"
-          data-command-palette-trigger="true"
-          aria-label="Open command palette"
-          class={[
-            "mt-3 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm/5 font-medium",
-            "text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950",
-            "focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-          ]}
-        >
-          <.icon name={:search} class="size-5" />
-          <span class="min-w-0 flex-1 truncate">Search</span>
-          <kbd class="rounded border border-zinc-950/10 bg-zinc-50 px-1.5 py-0.5 text-[11px]/5 font-medium text-zinc-500">
-            Cmd K
-          </kbd>
-        </button>
+        <.sidebar_brand title="Maraithon" subtitle="Todo list" navigate="/todos" />
       </.sidebar_header>
 
       <.sidebar_body>
@@ -262,7 +217,7 @@ defmodule MaraithonWeb.AdminNavigation do
   # Legacy top-tab signature kept for any caller that hasn't migrated to
   # `admin_layout/1` yet. Renders nothing so old templates degrade
   # cleanly until they're refactored.
-  attr :current_path, :string, default: "/dashboard"
+  attr :current_path, :string, default: "/todos"
   attr :current_user, :map, default: nil
 
   def admin_tabs(assigns) do
@@ -290,20 +245,20 @@ defmodule MaraithonWeb.AdminNavigation do
     |> Phoenix.LiveView.JS.set_attribute({"aria-hidden", "true"}, to: "#maraithon-mobile-sidebar")
   end
 
-  defp normalize_path(nil), do: "/dashboard"
+  defp normalize_path(nil), do: "/todos"
 
   defp normalize_path(path) when is_binary(path) do
     path
     |> String.split("?", parts: 2)
     |> List.first()
     |> case do
-      nil -> "/dashboard"
-      "" -> "/dashboard"
+      nil -> "/todos"
+      "" -> "/todos"
       value -> value
     end
   end
 
-  defp normalize_path(_path), do: "/dashboard"
+  defp normalize_path(_path), do: "/todos"
 
   defp active?(current_path, "/dashboard"),
     do: current_path in ["/dashboard", "/admin", "/"]

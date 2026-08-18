@@ -71,7 +71,7 @@ defmodule MaraithonWeb.TodosLive do
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "Open Work",
+       page_title: "Todos",
        current_path: "/todos",
        filters: @default_filters,
        filter_form: to_form(@default_filters, as: :filters),
@@ -312,20 +312,12 @@ defmodule MaraithonWeb.TodosLive do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-6">
-        <.page_header
-          title="Open Work"
-          subtitle="A fast place to triage open obligations, follow-ups that need confirmation, personal commitments, and completed work."
-        >
-          <:actions>
-            <.button navigate="/dashboard" variant="outline">Dashboard</.button>
-          </:actions>
-        </.page_header>
+        <.page_header title="Todos" />
 
         <.panel body_class="px-5 py-4">
           <:header>
             <div>
-              <h2 class="text-sm/6 font-semibold text-zinc-950">Add follow-up</h2>
-              <p class="text-sm/6 text-zinc-500">Capture a user-owned open loop.</p>
+              <h2 class="text-sm/6 font-semibold text-zinc-950">New todo</h2>
             </div>
           </:header>
 
@@ -344,7 +336,7 @@ defmodule MaraithonWeb.TodosLive do
                 id={@new_todo_form[:title].id}
                 name={@new_todo_form[:title].name}
                 value={@new_todo_form[:title].value}
-                placeholder="Close the loop with..."
+                placeholder="What needs to be done?"
                 maxlength="240"
                 required
               />
@@ -463,7 +455,7 @@ defmodule MaraithonWeb.TodosLive do
           <:header>
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 class="text-sm/6 font-semibold text-zinc-950">Work list</h2>
+                <h2 class="text-sm/6 font-semibold text-zinc-950">Todo list</h2>
                 <p class="text-sm/6 text-zinc-500">
                   <%= result_count_label(@todos, @total_count) %>
                 </p>
@@ -493,7 +485,7 @@ defmodule MaraithonWeb.TodosLive do
                       />
                     </.table_header>
                     <.sortable_table_header filters={@filters} field="title" class="min-w-[22rem]">
-                      Work item
+                      Todo
                     </.sortable_table_header>
                     <.sortable_table_header filters={@filters} field="source">Source</.sortable_table_header>
                     <.sortable_table_header filters={@filters} field="status">Status</.sortable_table_header>

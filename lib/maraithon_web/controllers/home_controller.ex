@@ -27,6 +27,6 @@ defmodule MaraithonWeb.HomeController do
   end
 
   defp post_sign_in_path(user_id) do
-    if is_binary(user_id), do: "/dashboard", else: "/"
+    if is_binary(user_id), do: "/todos", else: "/"
   end
 end
