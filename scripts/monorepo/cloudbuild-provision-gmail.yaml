@@ -8,11 +8,13 @@ steps:
           gcloud pubsub topics create "${_TOPIC_ID}" --project "${PROJECT_ID}" --quiet
         fi
 
-        gcloud pubsub topics add-iam-policy-binding "${_TOPIC_ID}" \
+        if ! gcloud pubsub topics add-iam-policy-binding "${_TOPIC_ID}" \
           --project "${PROJECT_ID}" \
           --member 'serviceAccount:gmail-api-push@system.gserviceaccount.com' \
           --role 'roles/pubsub.publisher' \
-          --quiet >/dev/null
+          --quiet >/dev/null; then
+          echo "WARNING: Gmail publisher IAM still requires a project IAM administrator" >&2
+        fi
 
         if gcloud pubsub subscriptions describe "${_SUBSCRIPTION_ID}" --project "${PROJECT_ID}" >/dev/null 2>&1; then
           gcloud pubsub subscriptions update "${_SUBSCRIPTION_ID}" \
