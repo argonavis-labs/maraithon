@@ -1,0 +1,35 @@
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        if ! gcloud pubsub topics describe "${_TOPIC_ID}" --project "${PROJECT_ID}" >/dev/null 2>&1; then
+          gcloud pubsub topics create "${_TOPIC_ID}" --project "${PROJECT_ID}" --quiet
+        fi
+
+        gcloud pubsub topics add-iam-policy-binding "${_TOPIC_ID}" \
+          --project "${PROJECT_ID}" \
+          --member 'serviceAccount:gmail-api-push@system.gserviceaccount.com' \
+          --role 'roles/pubsub.publisher' \
+          --quiet >/dev/null
+
+        if gcloud pubsub subscriptions describe "${_SUBSCRIPTION_ID}" --project "${PROJECT_ID}" >/dev/null 2>&1; then
+          gcloud pubsub subscriptions update "${_SUBSCRIPTION_ID}" \
+            --project "${PROJECT_ID}" \
+            --push-endpoint "${_PUSH_ENDPOINT}" \
+            --ack-deadline 20 \
+            --quiet
+        else
+          gcloud pubsub subscriptions create "${_SUBSCRIPTION_ID}" \
+            --project "${PROJECT_ID}" \
+            --topic "${_TOPIC_ID}" \
+            --push-endpoint "${_PUSH_ENDPOINT}" \
+            --ack-deadline 20 \
+            --quiet
+        fi
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 300s

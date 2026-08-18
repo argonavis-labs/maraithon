@@ -36,19 +36,10 @@ gmail_topic="projects/${project}/topics/${gmail_topic_id}"
 gmail_push_endpoint="https://maraithon.com/webhooks/google/gmail"
 
 # Gmail push requires a topic in the OAuth application's GCP project and the
-# Gmail system publisher identity. Keep the subscription declarative so a
-# deploy repairs drift without exposing any mailbox data.
-if ! gcloud pubsub topics describe "${gmail_topic_id}" --project "${project}" >/dev/null 2>&1; then
-  gcloud pubsub topics create "${gmail_topic_id}" --project "${project}" --quiet
-fi
-
-gcloud pubsub topics add-iam-policy-binding "${gmail_topic_id}"   --project "${project}"   --member 'serviceAccount:gmail-api-push@system.gserviceaccount.com'   --role 'roles/pubsub.publisher'   --quiet >/dev/null
-
-if gcloud pubsub subscriptions describe "${gmail_subscription_id}" --project "${project}" >/dev/null 2>&1; then
-  gcloud pubsub subscriptions update "${gmail_subscription_id}"     --project "${project}"     --push-endpoint "${gmail_push_endpoint}"     --ack-deadline 20     --quiet
-else
-  gcloud pubsub subscriptions create "${gmail_subscription_id}"     --project "${project}"     --topic "${gmail_topic_id}"     --push-endpoint "${gmail_push_endpoint}"     --ack-deadline 20     --quiet
-fi
+# Gmail system publisher identity. The deployer can submit builds but is kept
+# intentionally unable to mutate Pub/Sub directly, so the existing Cloud Build
+# infrastructure authority performs this narrow idempotent provisioning step.
+run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${region}"   --no-source   --config "scripts/monorepo/cloudbuild-provision-gmail.yaml"   --substitutions "_TOPIC_ID=${gmail_topic_id},_SUBSCRIPTION_ID=${gmail_subscription_id},_PUSH_ENDPOINT=${gmail_push_endpoint}"   --timeout 300s   --quiet
 
 # Cloud Build keeps Docker tooling and registry credentials out of the deployer.
 run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${region}"   --tag "${image}"   --timeout 1800s   --quiet .
