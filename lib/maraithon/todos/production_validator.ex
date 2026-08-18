@@ -46,6 +46,7 @@ defmodule Maraithon.Todos.ProductionValidator do
            google_ingestion: google_result,
            relationship_jobs: queue_result,
            observations: observation_counts(user.id),
+           ingestion_windows: all_ingestion_window_counts(user.id),
            todos: todo_counts(user.id),
            projects: project_counts(user.id)
          }}
@@ -191,9 +192,11 @@ defmodule Maraithon.Todos.ProductionValidator do
   end
 
   defp ingestion_window_counts(user_id, started_at) do
+    cutoff = DateTime.add(started_at, -15 * 60, :second)
+
     from(window in Window,
       where: window.user_id == ^user_id,
-      where: window.opened_at >= ^started_at,
+      where: window.opened_at >= ^cutoff,
       group_by: window.status,
       select: {window.status, count(window.id)}
     )
@@ -223,6 +226,24 @@ defmodule Maraithon.Todos.ProductionValidator do
         Enum.reduce(counts, 0, fn {family, count}, total ->
           if family in ["google", "slack"], do: total, else: total + count
         end)
+    }
+  end
+
+  defp all_ingestion_window_counts(user_id) do
+    counts =
+      from(window in Window,
+        where: window.user_id == ^user_id,
+        group_by: window.status,
+        select: {window.status, count(window.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    %{
+      open: Map.get(counts, "open", 0),
+      flushed: Map.get(counts, "flushed", 0),
+      completed: Map.get(counts, "completed", 0),
+      failed: Map.get(counts, "failed", 0)
     }
   end
 
@@ -316,6 +337,15 @@ defmodule Maraithon.Todos.ProductionValidator do
   defp safe_connector_error({wrapper, reason})
        when wrapper in [:token_refresh_failed, :oauth_failed, :gmail_failed],
        do: safe_connector_error(reason)
+
+  defp safe_connector_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp safe_connector_error(reason) when is_tuple(reason) and tuple_size(reason) > 0 do
+    case elem(reason, 0) do
+      label when is_atom(label) -> Atom.to_string(label)
+      _other -> "connector_tuple_error"
+    end
+  end
 
   defp safe_connector_error(_reason), do: "connector_error"
 
