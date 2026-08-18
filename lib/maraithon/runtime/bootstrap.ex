@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.Bootstrap do
 
   use GenServer
 
+  alias Maraithon.Effects.ProtocolCutover, as: EffectProtocol
   alias Maraithon.Runtime.BootGate
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
@@ -44,10 +45,18 @@ defmodule Maraithon.Runtime.Bootstrap do
   def handle_info(:bootstrap, state) do
     case Protocol.mode() do
       :dark ->
-        # Coordination dark mode preserves legacy application behavior, but it
-        # is never sufficient authority for generation-fenced exact admission.
-        Logger.warning("Exact Agent runtime coordination is dark; bootstrap remains closed")
-        {:stop, :normal, state}
+        case EffectProtocol.mode() do
+          :legacy ->
+            Logger.info("Bootstrapping the single-node legacy Agent runtime")
+            do_bootstrap(state)
+
+          :exact ->
+            Logger.warning("Exact Agent runtime coordination is dark; bootstrap remains closed")
+            {:stop, :normal, state}
+
+          blocked ->
+            retry_bootstrap({:effect_protocol_blocked, blocked}, state)
+        end
 
       :active ->
         if RuntimeConfig.exact_agent_runtime_ready?() and

@@ -113,48 +113,49 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
   @impl true
   def handle_webhook(conn, _params) do
-    # Extract headers
     channel_id = get_header(conn, "x-goog-channel-id")
     resource_id = get_header(conn, "x-goog-resource-id")
     resource_state = get_header(conn, "x-goog-resource-state")
-    channel_token = get_header(conn, "x-goog-channel-token")
+    user_id = get_header(conn, "x-goog-channel-token")
     message_number = get_header(conn, "x-goog-message-number")
-
-    # Channel token contains user_id
-    user_id = channel_token
 
     cond do
       is_nil(user_id) or user_id == "" ->
         {:error, :missing_channel_token}
 
       resource_state == "sync" ->
-        # Initial sync confirmation - acknowledge but don't publish. Kept
-        # ahead of the channel-id check: the confirmation can race the watch
-        # cursor row being persisted right after setup_watch.
+        # The confirmation can race the cursor write immediately after watch setup.
         {:ignore, "sync confirmation"}
 
-      not known_watch_channel?(user_id, channel_id) ->
-        # These pushes carry no verifiable signature; the channel token
-        # (user_id) and every header are attacker-controlled. Only act when
-        # the claimed channel id matches a watch we actually registered for
-        # one of this user's Google accounts (stored on the
-        # `calendar_sync_token` cursor row); otherwise ack-and-drop so
-        # unauthenticated POSTs cannot enqueue arbitrary-user sync jobs.
-        Logger.debug("Calendar webhook with unknown channel id ignored")
-        {:ignore, "unknown watch channel"}
-
       true ->
-        handle_watch_notification(
-          user_id,
-          channel_id,
-          resource_id,
-          resource_state,
-          message_number
-        )
+        case watch_account(user_id, channel_id) do
+          nil ->
+            # Push headers are attacker-controlled. Only act on a channel id
+            # persisted for one of this user's connected Google accounts.
+            Logger.debug("Calendar webhook with unknown channel id ignored")
+            {:ignore, "unknown watch channel"}
+
+          account ->
+            handle_watch_notification(
+              user_id,
+              account.provider,
+              channel_id,
+              resource_id,
+              resource_state,
+              message_number
+            )
+        end
     end
   end
 
-  defp handle_watch_notification(user_id, channel_id, resource_id, resource_state, message_number) do
+  defp handle_watch_notification(
+         user_id,
+         provider,
+         channel_id,
+         resource_id,
+         resource_state,
+         message_number
+       ) do
     topic = "calendar:#{user_id}"
 
     case resource_state do
@@ -167,7 +168,11 @@ defmodule Maraithon.Connectors.GoogleCalendar do
         case BackgroundJobs.enqueue("calendar_incremental_sync", %{
                "user_id" => user_id,
                "queue" => "connectors",
-               "payload" => %{"channel_id" => channel_id, "resource_id" => resource_id},
+               "payload" => %{
+                 "channel_id" => channel_id,
+                 "resource_id" => resource_id,
+                 "provider" => provider
+               },
                "dedupe_key" => dedupe_key
              }) do
           {:ok, _job} ->
@@ -205,15 +210,14 @@ defmodule Maraithon.Connectors.GoogleCalendar do
     end
   end
 
-  # A notification is only actionable when its x-goog-channel-id matches the
-  # watch channel we registered (and persisted on the `calendar_sync_token`
-  # cursor row) for one of the claimed user's Google accounts.
-  defp known_watch_channel?(user_id, channel_id)
+  # Return the exact account that owns the persisted watch channel so the
+  # background job uses its multi-account provider identity.
+  defp watch_account(user_id, channel_id)
        when is_binary(user_id) and is_binary(channel_id) and channel_id != "" do
     user_id
     |> ConnectedAccounts.list_for_user()
     |> Enum.filter(&google_account?/1)
-    |> Enum.any?(fn account ->
+    |> Enum.find(fn account ->
       case SourceCursors.get(account.id, @sync_token_cursor_kind) do
         %{watch_channel_id: stored} when is_binary(stored) and stored != "" ->
           Plug.Crypto.secure_compare(stored, channel_id)
@@ -224,7 +228,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
     end)
   end
 
-  defp known_watch_channel?(_user_id, _channel_id), do: false
+  defp watch_account(_user_id, _channel_id), do: nil
 
   defp google_account?(%{provider: "google"}), do: true
   defp google_account?(%{provider: "google:" <> _rest}), do: true

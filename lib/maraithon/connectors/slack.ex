@@ -169,8 +169,8 @@ defmodule Maraithon.Connectors.Slack do
   defp ingest_slack_message(team_id, event, event_type) when is_binary(team_id) do
     if event_type == "message" do
       case lookup_slack_account(team_id) do
-        %{user_id: user_id, external_account_id: account_id} ->
-          maybe_observe_slack_message(user_id, account_id || team_id, event)
+        %{user_id: user_id} = account ->
+          maybe_observe_slack_message(user_id, account, team_id, event)
 
         _ ->
           :ok
@@ -183,7 +183,8 @@ defmodule Maraithon.Connectors.Slack do
   defp ingest_slack_message(_team_id, _event, _event_type), do: :ok
 
   defp lookup_slack_account(team_id) do
-    Maraithon.ConnectedAccounts.get_connected_by_external_account("slack", team_id)
+    Maraithon.ConnectedAccounts.get_connected_by_provider("slack:#{team_id}") ||
+      Maraithon.ConnectedAccounts.get_connected_by_external_account("slack", team_id)
   rescue
     exception ->
       Logger.debug("CRM ingest skipped Slack lookup: #{Exception.message(exception)}")
@@ -194,7 +195,8 @@ defmodule Maraithon.Connectors.Slack do
       nil
   end
 
-  defp maybe_observe_slack_message(user_id, source_account, event) do
+  defp maybe_observe_slack_message(user_id, account, team_id, event) do
+    source_account = account.external_account_id || team_id
     sender_id = event["user"]
     ts = event["ts"]
 
@@ -221,19 +223,34 @@ defmodule Maraithon.Connectors.Slack do
             "source_account" => source_account,
             "source_item_id" => "#{event["channel"]}:#{ts}",
             "occurred_at" => occurred_at,
-            "direction" => "inbound",
+            "direction" => slack_message_direction(account, sender_id),
             "participants" => [participant],
             "subject" => nil,
             "excerpt" => clip_text(event["text"]),
             "metadata" => %{
-              "team_id" => event["team"] || nil,
+              "team_id" => team_id,
               "channel" => event["channel"],
               "thread_ts" => event["thread_ts"]
             }
           })
 
         case Maraithon.Crm.Ingest.observe(user_id, changeset) do
-          {:ok, _} ->
+          {:ok, :buffered, _observation_id} ->
+            case Maraithon.Runtime.BackgroundJobs.enqueue_crm_window_flush(user_id, "slack") do
+              {:ok, _job} ->
+                :ok
+
+              {:error, reason} ->
+                Logger.warning("Could not schedule Slack CRM window flush",
+                  user_id: user_id,
+                  reason: inspect(reason)
+                )
+            end
+
+          {:ok, :flushed, _observation_id, _job_id} ->
+            :ok
+
+          {:ok, :duplicate} ->
             :ok
 
           {:error, reason} ->
@@ -244,6 +261,18 @@ defmodule Maraithon.Connectors.Slack do
             )
         end
     end
+  end
+
+  defp slack_message_direction(account, sender_id) do
+    metadata = account.metadata || %{}
+
+    connected_user_id =
+      metadata["authed_user_id"] || metadata[:authed_user_id] ||
+        metadata["slack_user_id"] || metadata[:slack_user_id]
+
+    if is_binary(connected_user_id) and connected_user_id == sender_id,
+      do: "outbound",
+      else: "inbound"
   end
 
   defp parse_slack_ts(ts) when is_binary(ts) do

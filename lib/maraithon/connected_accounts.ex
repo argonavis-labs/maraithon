@@ -44,6 +44,14 @@ defmodule Maraithon.ConnectedAccounts do
     |> latest_account()
   end
 
+  def get_connected_by_provider(provider) when is_binary(provider) do
+    ConnectedAccount
+    |> where([account], account.provider == ^provider and account.status == "connected")
+    |> latest_account()
+  end
+
+  def get_connected_by_provider(_provider), do: nil
+
   @doc """
   Like `get_connected_by_external_account/2` but ignores account status.
 

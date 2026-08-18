@@ -13,6 +13,7 @@ database_instance="${MARAITHON_GCP_DATABASE_INSTANCE:-maraithon-db}"
 exact_runtime_enabled="${MARAITHON_EXACT_RUNTIME_ENABLED:-true}"
 coordination_enabled="${MARAITHON_MULTINODE_COORDINATION_ENABLED:-false}"
 protocol_revision="${MARAITHON_RUNTIME_PROTOCOL_REVISION:-5e0aa5a19e968f7bf026a926f77550707d59d41a}"
+todo_validation_user="${MARAITHON_VALIDATE_TODO_LAUNCH_USER:-}"
 
 require_command gcloud
 require_command git
@@ -29,11 +30,30 @@ connection="${project}:${region}:${database_instance}"
 socket_dir="/cloudsql/${connection}"
 image="${region}-docker.pkg.dev/${project}/${repository}/${service}:${revision}"
 host="${service}-${project_number}.${region}.run.app"
+gmail_topic_id="${MARAITHON_GMAIL_PUBSUB_TOPIC_ID:-maraithon-gmail-push}"
+gmail_subscription_id="${MARAITHON_GMAIL_PUBSUB_SUBSCRIPTION_ID:-maraithon-gmail-push-webhook}"
+gmail_topic="projects/${project}/topics/${gmail_topic_id}"
+gmail_push_endpoint="https://maraithon.com/webhooks/google/gmail"
+
+# Gmail push requires a topic in the OAuth application's GCP project and the
+# Gmail system publisher identity. Keep the subscription declarative so a
+# deploy repairs drift without exposing any mailbox data.
+if ! gcloud pubsub topics describe "${gmail_topic_id}" --project "${project}" >/dev/null 2>&1; then
+  gcloud pubsub topics create "${gmail_topic_id}" --project "${project}" --quiet
+fi
+
+gcloud pubsub topics add-iam-policy-binding "${gmail_topic_id}"   --project "${project}"   --member 'serviceAccount:gmail-api-push@system.gserviceaccount.com'   --role 'roles/pubsub.publisher'   --quiet >/dev/null
+
+if gcloud pubsub subscriptions describe "${gmail_subscription_id}" --project "${project}" >/dev/null 2>&1; then
+  gcloud pubsub subscriptions update "${gmail_subscription_id}"     --project "${project}"     --push-endpoint "${gmail_push_endpoint}"     --ack-deadline 20     --quiet
+else
+  gcloud pubsub subscriptions create "${gmail_subscription_id}"     --project "${project}"     --topic "${gmail_topic_id}"     --push-endpoint "${gmail_push_endpoint}"     --ack-deadline 20     --quiet
+fi
 
 # Cloud Build keeps Docker tooling and registry credentials out of the deployer.
 run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${region}"   --tag "${image}"   --timeout 1800s   --quiet .
 
-common_env="CLOUD_SQL_SOCKET_DIR=${socket_dir},DATABASE_TLS_MODE=private_network_override,DATABASE_TLS_INSECURE_CONFIRMATION=I_ACKNOWLEDGE_DATABASE_TLS_IS_NOT_VERIFIED,DATABASE_TLS_INSECURE_REASON=gcp_cloud_sql_unix_socket,PHX_HOST=maraithon.com,PRIMARY_ADMIN_EMAIL=kent@voteagora.com,LLM_PROVIDER=openrouter,LLM_MODEL=qwen/qwen3.7-max,OPENROUTER_CHAT_MODEL=qwen/qwen3.7-plus,OPENROUTER_FAST_MODEL=qwen/qwen3.6-flash,OPENROUTER_REASONING_EFFORT=medium,GOOGLE_REDIRECT_URI=https://maraithon.com/auth/google/callback,GOOGLE_CALENDAR_WEBHOOK_URL=https://maraithon.com/webhooks/google/calendar,GITHUB_REDIRECT_URI=https://maraithon.com/auth/github/callback,SLACK_REDIRECT_URI=https://maraithon.com/auth/slack/callback,NOTAUI_REDIRECT_URI=https://maraithon.com/auth/notaui/callback,EXACT_AGENT_RUNTIME_ENABLED=${exact_runtime_enabled},MULTINODE_COORDINATION_ENABLED=${coordination_enabled},GIT_SHA=${protocol_revision},POOL_SIZE=16,DB_QUERY_TIMEOUT_MS=30000,DATABASE_POOL_MODE=session"
+common_env="CLOUD_SQL_SOCKET_DIR=${socket_dir},DATABASE_TLS_MODE=private_network_override,DATABASE_TLS_INSECURE_CONFIRMATION=I_ACKNOWLEDGE_DATABASE_TLS_IS_NOT_VERIFIED,DATABASE_TLS_INSECURE_REASON=gcp_cloud_sql_unix_socket,PHX_HOST=maraithon.com,PRIMARY_ADMIN_EMAIL=kent@voteagora.com,LLM_PROVIDER=openrouter,LLM_MODEL=qwen/qwen3.7-max,OPENROUTER_CHAT_MODEL=qwen/qwen3.7-plus,OPENROUTER_FAST_MODEL=qwen/qwen3.6-flash,OPENROUTER_REASONING_EFFORT=medium,GOOGLE_REDIRECT_URI=https://maraithon.com/auth/google/callback,GOOGLE_CALENDAR_WEBHOOK_URL=https://maraithon.com/webhooks/google/calendar,GOOGLE_PUBSUB_TOPIC=${gmail_topic},GITHUB_REDIRECT_URI=https://maraithon.com/auth/github/callback,SLACK_REDIRECT_URI=https://maraithon.com/auth/slack/callback,NOTAUI_REDIRECT_URI=https://maraithon.com/auth/notaui/callback,EXACT_AGENT_RUNTIME_ENABLED=${exact_runtime_enabled},MULTINODE_COORDINATION_ENABLED=${coordination_enabled},GIT_SHA=${protocol_revision},POOL_SIZE=16,DB_QUERY_TIMEOUT_MS=30000,DATABASE_POOL_MODE=session"
 
 migration_secrets="DATABASE_URL=maraithon-migrator-db-url:latest,DIRECT_DATABASE_URL=maraithon-migrator-db-url:latest,SECRET_KEY_BASE=maraithon-secret-key-base:latest,API_BEARER_TOKEN=maraithon-api-bearer-token:latest,ADMIN_PASSWORD=maraithon-admin-password:latest,OPENROUTER_API_KEY=maraithon-openrouter-api-key:latest,CLOAK_KEY=maraithon-cloak-key:latest,DURABLE_PAYLOAD_BINDING_CURRENT_KEY=maraithon-payload-binding-key:latest,RELEASE_COOKIE=maraithon-release-cookie:latest"
 
@@ -58,5 +78,36 @@ fi
 health_url="https://${host}/health"
 curl --fail --silent --show-error "${health_url}" >/dev/null
 echo "Deploy health check passed: ${health_url}"
+
+if [[ -n "${todo_validation_user}" ]]; then
+  if [[ "${todo_validation_user}" != "kent@runner.now" ]]; then
+    echo "Refusing Todo validation for an unauthorized account" >&2
+    exit 64
+  fi
+
+  gcloud run jobs deploy "${service}-todo-validation"     --project "${project}"     --region "${region}"     --image "${image}"     --service-account "${runtime_service_account}"     --set-cloudsql-instances "${connection}"     --set-env-vars "${common_env},TODO_VALIDATION_USER=${todo_validation_user}"     --set-secrets "${runtime_secrets}"     --command /app/bin/maraithon     --args eval,Maraithon.Release.validate_authorized_todo_launch     --cpu 1     --memory 2Gi     --task-timeout 10m     --max-retries 0     --quiet
+
+  validation_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  gcloud run jobs execute "${service}-todo-validation"     --project "${project}"     --region "${region}"     --wait     --quiet
+
+  validation_report=""
+  for _attempt in $(seq 1 20); do
+    validation_report="$(gcloud logging read       "resource.type=cloud_run_job AND resource.labels.job_name=${service}-todo-validation AND timestamp>=\"${validation_started_at}\" AND textPayload:\"TODO_LAUNCH_VALIDATION=\""       --project "${project}"       --limit 1       --order=desc       --format 'value(textPayload)' 2>/dev/null || true)"
+
+    if [[ "${validation_report}" == TODO_LAUNCH_VALIDATION=* ]]; then
+      break
+    fi
+
+    sleep 3
+  done
+
+  if [[ "${validation_report}" != TODO_LAUNCH_VALIDATION=* ]]; then
+    echo "Todo validation completed but its aggregate-only report was not available" >&2
+    exit 1
+  fi
+
+  echo "${validation_report}"
+fi
+
 echo "Deployed image revision: ${revision}"
 echo "Runtime protocol revision: ${protocol_revision}"

@@ -176,6 +176,25 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
     end
   end
 
+  def execute(%BackgroundJob{job_type: "crm_window_flush"} = job) do
+    with {:ok, user_id} <- require_user_id(job),
+         source when is_binary(source) <- payload_string(job, "source", nil) do
+      case Ingest.flush_pending(user_id, source) do
+        {:ok, outcome, job_id} ->
+          {:ok, %{source: source, outcome: to_string(outcome), relationship_job_id: job_id}}
+
+        {:ok, outcome} ->
+          {:ok, %{source: source, outcome: to_string(outcome)}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      nil -> {:error, :missing_source}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def execute(%BackgroundJob{job_type: "relationship_ingestion"} = job) do
     case payload_string(job, "window_id", nil) do
       window_id when is_binary(window_id) ->

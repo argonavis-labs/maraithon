@@ -40,3 +40,4 @@ jobs:
           MARAITHON_GCP_PROJECT: maraithon
           MARAITHON_GCP_REGION: us-central1
           MARAITHON_GCP_SERVICE: maraithon
+          MARAITHON_VALIDATE_TODO_LAUNCH_USER: kent@runner.now

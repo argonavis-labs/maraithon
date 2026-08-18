@@ -154,13 +154,13 @@ defmodule Maraithon.Connectors.Gmail do
         # user_id from the resolved row, never the raw claim. Unknown
         # mailboxes are acked-and-dropped so unauthenticated POSTs cannot
         # flood the job queue.
-        case ConnectedAccounts.get(claimed_user_id, "google") do
+        case connected_mailbox_account(claimed_user_id) do
           nil ->
             Logger.debug("Gmail webhook for unknown mailbox ignored")
             {:ignore, "unknown mailbox"}
 
           account ->
-            enqueue_incremental_sync(account.user_id, history_id, message_id)
+            enqueue_incremental_sync(account.user_id, account.provider, history_id, message_id)
         end
 
       {:error, reason} ->
@@ -168,7 +168,17 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
-  defp enqueue_incremental_sync(user_id, history_id, message_id) do
+  defp connected_mailbox_account(claimed_mailbox) when is_binary(claimed_mailbox) do
+    mailbox = claimed_mailbox |> String.trim() |> String.downcase()
+
+    ConnectedAccounts.get_connected_by_provider("google:#{mailbox}") ||
+      ConnectedAccounts.get_connected_by_external_account("google", mailbox) ||
+      ConnectedAccounts.get(mailbox, "google")
+  end
+
+  defp connected_mailbox_account(_claimed_mailbox), do: nil
+
+  defp enqueue_incremental_sync(user_id, provider, history_id, message_id) do
     topic = "email:#{user_id}"
 
     dedupe_key = gmail_webhook_dedupe_key(message_id, user_id, history_id)
@@ -176,7 +186,10 @@ defmodule Maraithon.Connectors.Gmail do
     case BackgroundJobs.enqueue("gmail_incremental_sync", %{
            "user_id" => user_id,
            "queue" => "connectors",
-           "payload" => %{"notification_history_id" => history_id},
+           "payload" => %{
+             "notification_history_id" => history_id,
+             "provider" => provider
+           },
            "dedupe_key" => dedupe_key
          }) do
       {:ok, _job} ->
@@ -1164,6 +1177,17 @@ defmodule Maraithon.Connectors.Gmail do
           :ok
       end
     end)
+
+    case Ingest.flush_pending(user_id, "gmail") do
+      {:error, reason} ->
+        Logger.warning("CRM ingest could not flush Gmail observations",
+          user_id: user_id,
+          reason: inspect(reason)
+        )
+
+      _result ->
+        :ok
+    end
 
     :ok
   end
