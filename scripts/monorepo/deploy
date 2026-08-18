@@ -43,7 +43,17 @@ gcloud run jobs execute "${service}-migrate"   --project "${project}"   --region
 
 runtime_secrets="DATABASE_URL=maraithon-runtime-db-url:latest,SECRET_KEY_BASE=maraithon-secret-key-base:latest,API_BEARER_TOKEN=maraithon-api-bearer-token:latest,ADMIN_PASSWORD=maraithon-admin-password:latest,OPENROUTER_API_KEY=maraithon-openrouter-api-key:latest,CLOAK_KEY=maraithon-cloak-key:latest,DURABLE_PAYLOAD_BINDING_CURRENT_KEY=maraithon-payload-binding-key:latest,RELEASE_COOKIE=maraithon-release-cookie:latest,POSTMARK_SERVER_TOKEN=maraithon-postmark-server-token:latest,AUTH_EMAIL_FROM=maraithon-auth-email-from:latest,GOOGLE_CLIENT_ID=maraithon-google-client-id:latest,GOOGLE_CLIENT_SECRET=maraithon-google-client-secret:latest,GITHUB_CLIENT_ID=maraithon-github-client-id:latest,GITHUB_CLIENT_SECRET=maraithon-github-client-secret:latest,GITHUB_WEBHOOK_SECRET=maraithon-github-webhook-secret:latest,SLACK_CLIENT_ID=maraithon-slack-client-id:latest,SLACK_CLIENT_SECRET=maraithon-slack-client-secret:latest,SLACK_SIGNING_SECRET=maraithon-slack-signing-secret:latest,NOTAUI_CLIENT_ID=maraithon-notaui-client-id:latest,NOTAUI_CLIENT_SECRET=maraithon-notaui-client-secret:latest"
 
-gcloud run deploy "${service}"   --project "${project}"   --region "${region}"   --image "${image}"   --service-account "${runtime_service_account}"   --set-cloudsql-instances "${connection}"   --set-env-vars "${common_env},PHX_SERVER=true,DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,OPENROUTER_HTTP_REFERER=https://maraithon.com,OPENROUTER_APP_TITLE=Maraithon"   --set-secrets "${runtime_secrets}"   --allow-unauthenticated   --port 8080   --cpu 1   --memory 2Gi   --min 1   --max 1   --concurrency 80   --timeout 300   --no-cpu-throttling   --startup-probe 'httpGet.path=/health,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=24'   --quiet
+if ! gcloud run deploy "${service}"   --project "${project}"   --region "${region}"   --image "${image}"   --service-account "${runtime_service_account}"   --set-cloudsql-instances "${connection}"   --set-env-vars "${common_env},PHX_SERVER=true,DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,OPENROUTER_HTTP_REFERER=https://maraithon.com,OPENROUTER_APP_TITLE=Maraithon"   --set-secrets "${runtime_secrets}"   --allow-unauthenticated   --port 8080   --cpu 1   --memory 2Gi   --min 1   --max 1   --concurrency 80   --timeout 300   --no-cpu-throttling   --startup-probe 'httpGet.path=/health,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=24'   --quiet; then
+  failed_revision="$(gcloud run revisions list     --project "${project}"     --region "${region}"     --service "${service}"     --sort-by='~metadata.creationTimestamp'     --limit=1     --format='value(metadata.name)' 2>/dev/null || true)"
+
+  if [[ -n "${failed_revision}" ]]; then
+    echo "Cloud Run revision startup diagnostics: ${failed_revision}" >&2
+    gcloud run revisions describe "${failed_revision}"       --project "${project}"       --region "${region}"       --format='yaml(status.conditions,status.logUrl)' >&2 || true
+    gcloud logging read       "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND resource.labels.revision_name=${failed_revision}"       --project "${project}"       --freshness=30m       --limit=100       --order=asc       --format='value(timestamp,severity,textPayload,jsonPayload.message)' >&2 || true
+  fi
+
+  exit 1
+fi
 
 health_url="https://${host}/health"
 curl --fail --silent --show-error "${health_url}" >/dev/null
