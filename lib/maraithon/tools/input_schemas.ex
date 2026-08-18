@@ -738,6 +738,8 @@ defmodule Maraithon.Tools.InputSchemas do
       "kind" => @string,
       "attention_mode" => @string,
       "owner_user_id" => @string,
+      "project_id" => @string,
+      "agent_actionability" => enum(~w(all can_help needs_you can_prepare can_execute)),
       "due_before" => @string,
       "due_after" => @string
     }
@@ -764,6 +766,10 @@ defmodule Maraithon.Tools.InputSchemas do
       "source" => @string,
       "source_account_id" => @integer,
       "source_account_label" => @string,
+      "project_id" => @string,
+      "agent_actionability" => enum(~w(needs_you can_prepare can_execute)),
+      "agent_action_label" => @string,
+      "agent_action_requires_approval" => @boolean,
       "source_item_id" => @string,
       "source_occurred_at" => @string,
       "dedupe_key" => @string,
@@ -775,7 +781,12 @@ defmodule Maraithon.Tools.InputSchemas do
   defp todo_candidate_schema do
     object(%{
       "source" => @string,
+      "source_account_id" => @integer,
       "source_account_label" => @string,
+      "project_id" => @string,
+      "agent_actionability" => enum(~w(needs_you can_prepare can_execute)),
+      "agent_action_label" => @string,
+      "agent_action_requires_approval" => @boolean,
       "title" => @string,
       "summary" => @string,
       "todo" => @string,

@@ -10,6 +10,7 @@ defmodule Maraithon.Todos do
   alias Maraithon.LLM.Embeddings
   alias Maraithon.LocalEmbeddings
   alias Maraithon.PreferenceMemory
+  alias Maraithon.Projects.Project
   alias Maraithon.Repo
   alias Maraithon.Timezones
 
@@ -1601,6 +1602,8 @@ defmodule Maraithon.Todos do
     |> update_text_attr(attrs, "source", "source")
     |> update_integer_attr(attrs, "source_account_id", "source_account_id")
     |> update_text_attr(attrs, "source_account_label", "source_account_label")
+    |> update_project_id_attr(todo, attrs)
+    |> update_agent_actionability_attrs(attrs)
     |> update_kind_attr(attrs)
     |> update_attention_mode_attr(attrs)
     |> update_text_attr(attrs, "title", "title")
@@ -1643,6 +1646,61 @@ defmodule Maraithon.Todos do
         nil -> changes
         value -> Map.put(changes, field, transform.(value))
       end
+    else
+      changes
+    end
+  end
+
+  defp update_project_id_attr(changes, %Todo{} = todo, attrs) do
+    if attr_present?(attrs, "project_id") do
+      case fetch_attr(attrs, "project_id") do
+        value when value in [nil, ""] ->
+          Map.put(changes, "project_id", nil)
+
+        value when is_binary(value) ->
+          case Ecto.UUID.cast(String.trim(value)) do
+            {:ok, project_id} ->
+              if project_belongs_to_user?(project_id, todo.user_id),
+                do: Map.put(changes, "project_id", project_id),
+                else: Map.put(changes, "project_id", "invalid_project")
+
+            :error ->
+              Map.put(changes, "project_id", "invalid_project")
+          end
+
+        _other ->
+          Map.put(changes, "project_id", "invalid_project")
+      end
+    else
+      changes
+    end
+  end
+
+  defp update_agent_actionability_attrs(changes, attrs) do
+    changes =
+      if attr_present?(attrs, "agent_actionability") do
+        Map.put(
+          changes,
+          "agent_actionability",
+          normalize_agent_actionability(read_string(attrs, "agent_actionability", "needs_you"))
+        )
+      else
+        changes
+      end
+
+    changes =
+      if attr_present?(attrs, "agent_action_label") do
+        Map.put(changes, "agent_action_label", read_string(attrs, "agent_action_label", nil))
+      else
+        changes
+      end
+
+    if attr_present?(attrs, "agent_action_requires_approval") do
+      Map.put(
+        changes,
+        "agent_action_requires_approval",
+        read_boolean_attr(attrs, "agent_action_requires_approval", true)
+      )
     else
       changes
     end
@@ -1838,6 +1896,12 @@ defmodule Maraithon.Todos do
       "source_account_id" => read_integer(attrs, "source_account_id", nil),
       "source_account_label" =>
         read_string(attrs, "source_account_label", source_account_label_from_metadata(metadata)),
+      "project_id" => resolve_project_id(user_id, attrs, metadata),
+      "agent_actionability" =>
+        normalize_agent_actionability(read_string(attrs, "agent_actionability", "needs_you")),
+      "agent_action_label" => read_string(attrs, "agent_action_label", nil),
+      "agent_action_requires_approval" =>
+        read_boolean_attr(attrs, "agent_action_requires_approval", true),
       "kind" => kind,
       "attention_mode" =>
         normalize_attention_mode(read_string(attrs, "attention_mode", "act_now")),
@@ -1933,6 +1997,12 @@ defmodule Maraithon.Todos do
       source: insight.source || "system",
       source_account_id: read_integer(metadata, "source_account_id", nil),
       source_account_label: source_account_label_from_metadata(metadata),
+      project_id: resolve_project_id(insight.user_id, metadata, %{}),
+      agent_actionability:
+        normalize_agent_actionability(read_string(metadata, "agent_actionability", "needs_you")),
+      agent_action_label: read_string(metadata, "agent_action_label", nil),
+      agent_action_requires_approval:
+        read_boolean_attr(metadata, "agent_action_requires_approval", true),
       kind: todo_kind_from_insight(insight),
       attention_mode: normalize_attention_mode(insight.attention_mode || "act_now"),
       title: normalize_required_text(insight.title, @fallback_title),
@@ -2012,6 +2082,8 @@ defmodule Maraithon.Todos do
     kind = Keyword.get(opts, :kind)
     attention_mode = Keyword.get(opts, :attention_mode)
     owner_user_id = Keyword.get(opts, :owner_user_id)
+    project_id = Keyword.get(opts, :project_id)
+    agent_actionability = Keyword.get(opts, :agent_actionability)
     due_before = Keyword.get(opts, :due_before) || Keyword.get(opts, :due_before_or_at)
     due_after = Keyword.get(opts, :due_after) || Keyword.get(opts, :due_after_or_at)
     due_nil? = Keyword.get(opts, :due_nil?, false)
@@ -2034,6 +2106,8 @@ defmodule Maraithon.Todos do
     |> maybe_filter_kind(kind)
     |> maybe_filter_attention_mode(attention_mode)
     |> maybe_filter_owner_user_id(owner_user_id)
+    |> maybe_filter_project_id(project_id)
+    |> maybe_filter_agent_actionability(agent_actionability)
     |> maybe_filter_direction(direction)
     |> maybe_filter_counterparty_person_id(counterparty_person_id)
     |> maybe_filter_due_after(due_after)
@@ -2041,6 +2115,35 @@ defmodule Maraithon.Todos do
     |> maybe_filter_due_nil(due_nil?)
     |> maybe_filter_query(query_text)
   end
+
+  defp maybe_filter_project_id(query, nil), do: query
+  defp maybe_filter_project_id(query, ""), do: query
+  defp maybe_filter_project_id(query, "all"), do: query
+  defp maybe_filter_project_id(query, "inbox"), do: where(query, [todo], is_nil(todo.project_id))
+
+  defp maybe_filter_project_id(query, project_id) when is_binary(project_id) do
+    case Ecto.UUID.cast(project_id) do
+      {:ok, uuid} -> where(query, [todo], todo.project_id == ^uuid)
+      :error -> where(query, [todo], false)
+    end
+  end
+
+  defp maybe_filter_project_id(query, _project_id), do: query
+
+  defp maybe_filter_agent_actionability(query, nil), do: query
+  defp maybe_filter_agent_actionability(query, ""), do: query
+  defp maybe_filter_agent_actionability(query, "all"), do: query
+
+  defp maybe_filter_agent_actionability(query, "can_help") do
+    where(query, [todo], todo.agent_actionability in ["can_prepare", "can_execute"])
+  end
+
+  defp maybe_filter_agent_actionability(query, value)
+       when value in ["needs_you", "can_prepare", "can_execute"] do
+    where(query, [todo], todo.agent_actionability == ^value)
+  end
+
+  defp maybe_filter_agent_actionability(query, _value), do: query
 
   defp maybe_filter_direction(query, nil), do: query
   defp maybe_filter_direction(query, ""), do: query
@@ -2536,6 +2639,50 @@ defmodule Maraithon.Todos do
 
   defp normalize_kind(kind) when kind in ~w(general gmail_triage), do: kind
   defp normalize_kind(_kind), do: "general"
+
+  defp resolve_project_id(user_id, attrs, _metadata) do
+    case fetch_attr(attrs, "project_id") do
+      value when value in [nil, ""] ->
+        nil
+
+      value when is_binary(value) ->
+        case Ecto.UUID.cast(String.trim(value)) do
+          {:ok, project_id} ->
+            if project_belongs_to_user?(project_id, user_id),
+              do: project_id,
+              else: "invalid_project"
+
+          :error ->
+            "invalid_project"
+        end
+
+      _other ->
+        "invalid_project"
+    end
+  end
+
+  defp project_belongs_to_user?(project_id, user_id)
+       when is_binary(project_id) and is_binary(user_id) do
+    Project
+    |> where([project], project.id == ^project_id and project.user_id == ^user_id)
+    |> Repo.exists?()
+  end
+
+  defp project_belongs_to_user?(_project_id, _user_id), do: false
+
+  defp normalize_agent_actionability(value)
+       when value in ~w(needs_you can_prepare can_execute),
+       do: value
+
+  defp normalize_agent_actionability(_value), do: "needs_you"
+
+  defp read_boolean_attr(attrs, key, default) do
+    case fetch_attr(attrs, key) do
+      value when value in [true, "true", "1", 1] -> true
+      value when value in [false, "false", "0", 0] -> false
+      _other -> default
+    end
+  end
 
   defp normalize_attention_mode(value) when value in ~w(act_now monitor), do: value
   defp normalize_attention_mode(_value), do: "act_now"

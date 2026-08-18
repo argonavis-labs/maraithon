@@ -13,6 +13,7 @@ defmodule Maraithon.Todos.Todo do
   @attention_modes ~w(act_now monitor)
   @kinds ~w(general gmail_triage)
   @directions ~w(owed_by_me owed_to_me fyi)
+  @agent_actionabilities ~w(needs_you can_prepare can_execute)
 
   schema "todos" do
     field :user_id, :string
@@ -38,6 +39,11 @@ defmodule Maraithon.Todos.Todo do
     field :source_occurred_at, :utc_datetime_usec
     field :dedupe_key, :string
     field :metadata, :map, default: %{}
+    field :agent_actionability, :string, default: "needs_you"
+    field :agent_action_label, :string
+    field :agent_action_requires_approval, :boolean, default: true
+
+    belongs_to :project, Maraithon.Projects.Project
 
     # SPEC 05: two-sided waiting-on tracker. `direction` names who owes
     # whom (self-owned action items default to owed_by_me), and the
@@ -89,6 +95,10 @@ defmodule Maraithon.Todos.Todo do
     :source_item_id,
     :source_occurred_at,
     :metadata,
+    :project_id,
+    :agent_actionability,
+    :agent_action_label,
+    :agent_action_requires_approval,
     :direction,
     :counterparty_person_id,
     :counterparty_label,
@@ -108,10 +118,12 @@ defmodule Maraithon.Todos.Todo do
     |> validate_inclusion(:attention_mode, @attention_modes)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:direction, @directions)
+    |> validate_inclusion(:agent_actionability, @agent_actionabilities)
     |> validate_number(:priority, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
     |> validate_number(:nudge_count, greater_than_or_equal_to: 0)
     |> validate_length(:counterparty_label, max: 255)
     |> validate_length(:follow_up_channel, max: 50)
+    |> validate_length(:agent_action_label, max: 255)
     |> validate_length(:source, min: 2, max: 100)
     |> validate_length(:title, min: 4, max: 240)
     |> validate_length(:summary, min: 4, max: 2_000)
@@ -131,6 +143,7 @@ defmodule Maraithon.Todos.Todo do
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:owner_user_id)
     |> foreign_key_constraint(:source_account_id)
+    |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:counterparty_person_id)
     |> unique_constraint(:dedupe_key, name: :todos_user_id_dedupe_key_index)
   end

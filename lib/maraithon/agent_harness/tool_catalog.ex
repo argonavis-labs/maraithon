@@ -4,33 +4,26 @@ defmodule Maraithon.AgentHarness.ToolCatalog do
   """
 
   @tool_descriptors %{
-    "calendar.list" => %{
-      name: "calendar.list",
+    "google_calendar_list_events" => %{
+      name: "google_calendar_list_events",
       connector: "google",
       mcp_server: "google",
       action: "list_events",
       side_effect: "read"
     },
-    "gmail.read" => %{
-      name: "gmail.read",
+    "gmail_get_message" => %{
+      name: "gmail_get_message",
       connector: "google",
       mcp_server: "google",
       action: "read_message",
       side_effect: "read"
     },
-    "gmail.search" => %{
-      name: "gmail.search",
+    "gmail_search" => %{
+      name: "gmail_search",
       connector: "google",
       mcp_server: "google",
       action: "search_messages",
       side_effect: "read"
-    },
-    "llm.complete" => %{
-      name: "llm.complete",
-      connector: nil,
-      mcp_server: nil,
-      action: "model_completion",
-      side_effect: "generate"
     },
     "get_open_loops" => %{
       name: "get_open_loops",
@@ -151,26 +144,26 @@ defmodule Maraithon.AgentHarness.ToolCatalog do
       action: "update_memory_confidence",
       side_effect: "write"
     },
-    "slack.read" => %{
-      name: "slack.read",
+    "slack_list_messages" => %{
+      name: "slack_list_messages",
       connector: "slack",
       mcp_server: "slack",
-      action: "read_message",
+      action: "list_messages",
       side_effect: "read"
     },
-    "slack.search" => %{
-      name: "slack.search",
+    "slack_get_thread_replies" => %{
+      name: "slack_get_thread_replies",
+      connector: "slack",
+      mcp_server: "slack",
+      action: "get_thread_replies",
+      side_effect: "read"
+    },
+    "slack_search_messages" => %{
+      name: "slack_search_messages",
       connector: "slack",
       mcp_server: "slack",
       action: "search_messages",
       side_effect: "read"
-    },
-    "telegram.send" => %{
-      name: "telegram.send",
-      connector: "telegram",
-      mcp_server: "telegram",
-      action: "send_message",
-      side_effect: "write"
     }
   }
 

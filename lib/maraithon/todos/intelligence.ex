@@ -297,6 +297,14 @@ defmodule Maraithon.Todos.Intelligence do
          with source, title, summary, next_action, and dedupe_key.
        - Preserve useful source metadata such as Slack channel/thread, Gmail
          message/thread/account, calendar account/event, or Chief-of-Staff skill.
+       - Set `agent_actionability` explicitly: `needs_you` for a human decision
+         or hands-on step, `can_prepare` for drafting/research, and `can_execute`
+         only when an available provider tool can perform the exact operation
+         after confirmation. Never infer executability from source alone. Keep
+         `agent_action_requires_approval` true for every external side effect.
+       - Treat metadata.project_suggestion as an evidence-backed proposal only.
+         Never turn a model suggestion into project_id; project assignment is a
+         separate user-confirmed operation.
        - Include People enrichment whenever source evidence identifies people:
          put `crm_people` in todo.metadata as an array of people to upsert, with
          contact details, relationship, preferred communication method,
@@ -476,6 +484,9 @@ defmodule Maraithon.Todos.Intelligence do
                "owner_label": null,
                "source_account_id": null,
                "source_account_label": null,
+               "agent_actionability": "needs_you | can_prepare | can_execute",
+               "agent_action_label": "short honest capability label",
+               "agent_action_requires_approval": true,
                "priority": 50,
                "status": "open | snoozed",
                "snoozed_until": "ISO-8601 datetime or omitted",
@@ -1317,6 +1328,8 @@ defmodule Maraithon.Todos.Intelligence do
       |> preserve_candidate_completion_check(candidate)
       |> preserve_candidate_source_identifiers(candidate)
       |> preserve_candidate_source_context(candidate)
+      |> preserve_candidate_project_id(candidate)
+      |> preserve_candidate_agent_actionability(candidate)
       |> preserve_candidate_schedule_attrs(candidate)
       |> put_intelligence_metadata(
         action,
@@ -1453,7 +1466,8 @@ defmodule Maraithon.Todos.Intelligence do
     body_excerpt checked_evidence context context_brief conversation_context direct_ask
     evidence evidence_summary excerpt explicit_user_commitment false_positive_risk family_member
     family_role fyi_class importance importance_hint life_domain missing_followthrough_evidence
-    commitment_direction obligation_type organization people person project project_name quote record
+    commitment_direction obligation_type organization people person project project_name
+    project_suggestion quote record
     relationship_context relationship_domain reply_obligation sensitivity source_body
     source_evidence source_excerpt source_ref source_refs source_subject subject thread_subject
     todo_policy user_requested why_it_matters why_now work_item_admission
@@ -1510,6 +1524,41 @@ defmodule Maraithon.Todos.Intelligence do
 
       Map.put(todo_attrs, "metadata", preserved)
     end
+  end
+
+  defp preserve_candidate_project_id(todo_attrs, candidate) do
+    candidate = stringify_top_level_keys(candidate || %{})
+
+    case Map.fetch(candidate, "project_id") do
+      {:ok, value} -> Map.put(todo_attrs, "project_id", value)
+      :error -> todo_attrs
+    end
+  end
+
+  defp preserve_candidate_agent_actionability(todo_attrs, candidate) do
+    candidate = stringify_top_level_keys(candidate || %{})
+
+    actionability =
+      case read_string(todo_attrs, "agent_actionability", nil) do
+        value when value in ["needs_you", "can_prepare", "can_execute"] -> value
+        _other -> read_string(candidate, "agent_actionability", "needs_you")
+      end
+
+    actionability =
+      if actionability in ["needs_you", "can_prepare", "can_execute"],
+        do: actionability,
+        else: "needs_you"
+
+    label =
+      read_string(todo_attrs, "agent_action_label", nil) ||
+        read_string(candidate, "agent_action_label", nil)
+
+    todo_attrs =
+      todo_attrs
+      |> Map.put("agent_actionability", actionability)
+      |> Map.put("agent_action_requires_approval", true)
+
+    if is_binary(label), do: Map.put(todo_attrs, "agent_action_label", label), else: todo_attrs
   end
 
   defp preserve_candidate_schedule_attrs(todo_attrs, candidate) do
@@ -1620,6 +1669,7 @@ defmodule Maraithon.Todos.Intelligence do
   @existing_prompt_metadata_keys ~w(
     channel_id channel_name chat_display_name chat_key commitment_direction company
     completion_check detector gmail_message_id gmail_thread_id life_domain message_id
+    project_suggestion
     obligation_type organization person reminder_title team_id thread_id thread_ts
     why_it_matters
   )
@@ -1632,6 +1682,10 @@ defmodule Maraithon.Todos.Intelligence do
       "source" => todo.source,
       "source_account_id" => todo.source_account_id,
       "source_account_label" => todo.source_account_label,
+      "project_id" => todo.project_id,
+      "agent_actionability" => todo.agent_actionability,
+      "agent_action_label" => todo.agent_action_label,
+      "agent_action_requires_approval" => todo.agent_action_requires_approval,
       "kind" => todo.kind,
       "attention_mode" => todo.attention_mode,
       "status" => todo.status,

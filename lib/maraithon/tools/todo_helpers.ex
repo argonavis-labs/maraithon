@@ -23,6 +23,8 @@ defmodule Maraithon.Tools.TodoHelpers do
     |> maybe_put(:kind, optional_string(args, "kind"))
     |> maybe_put(:attention_mode, optional_string(args, "attention_mode"))
     |> maybe_put(:owner_user_id, optional_string(args, "owner_user_id"))
+    |> maybe_put(:project_id, optional_string(args, "project_id"))
+    |> maybe_put(:agent_actionability, optional_string(args, "agent_actionability"))
     |> maybe_put(:due_before, optional_string(args, "due_before"))
     |> maybe_put(:due_after, optional_string(args, "due_after"))
     |> maybe_put(:query, optional_string(args, "query"))
@@ -44,6 +46,10 @@ defmodule Maraithon.Tools.TodoHelpers do
       source: todo.source,
       source_account_id: todo.source_account_id,
       source_account_label: todo.source_account_label,
+      project_id: todo.project_id,
+      agent_actionability: todo.agent_actionability,
+      agent_action_label: todo.agent_action_label,
+      agent_action_requires_approval: todo.agent_action_requires_approval,
       kind: todo.kind,
       attention_mode: todo.attention_mode,
       status: todo.status,

@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.TodosLive do
   use MaraithonWeb, :live_view
 
-  alias Maraithon.{ActionCards, BriefingSchedules, SourceLabels, Timezones}
+  alias Maraithon.{ActionCards, BriefingSchedules, Projects, SourceLabels, Timezones}
   alias Maraithon.Todos
   alias Maraithon.Todos.{DecisionSignals, Todo}
   alias MaraithonWeb.TodoActionCopy
@@ -13,6 +13,8 @@ defmodule MaraithonWeb.TodosLive do
     "attention" => "all",
     "due" => "all",
     "source" => "all",
+    "project" => "all",
+    "agent" => "all",
     "sort" => "rank",
     "dir" => "desc"
   }
@@ -21,9 +23,10 @@ defmodule MaraithonWeb.TodosLive do
     "next_action" => "",
     "due_at" => "",
     "priority" => "50",
+    "project_id" => "",
     "notes" => ""
   }
-  @empty_state_filter_keys ~w(q status attention due source)
+  @empty_state_filter_keys ~w(q status attention due source project agent)
   @status_options [
     {"Active", "active"},
     {"Open", "open"},
@@ -37,6 +40,11 @@ defmodule MaraithonWeb.TodosLive do
     {"Needs action", "act_now"},
     {"Decisions", "decision"},
     {"Watching", "monitor"}
+  ]
+  @agent_options [
+    {"Any helper", "all"},
+    {"Maraithon can help", "can_help"},
+    {"Needs you", "needs_you"}
   ]
   @due_options [
     {"Any due date", "all"},
@@ -77,11 +85,16 @@ defmodule MaraithonWeb.TodosLive do
        filter_form: to_form(@default_filters, as: :filters),
        status_options: @status_options,
        attention_options: @attention_options,
+       agent_options: @agent_options,
        due_options: @due_options,
        source_options: @source_options,
        priority_options: @priority_options,
        new_todo_form: to_form(@default_new_todo_params, as: :todo),
        new_todo_errors: %{},
+       new_project_form: to_form(%{"name" => ""}, as: :project),
+       projects: [],
+       project_options: [{"Inbox", ""}],
+       project_filter_options: [{"All projects", "all"}, {"Inbox", "inbox"}],
        todos: [],
        total_count: 0,
        selected_todo_ids: MapSet.new(),
@@ -116,6 +129,49 @@ defmodule MaraithonWeb.TodosLive do
     {:noreply, push_patch(socket, to: ~p"/todos")}
   end
 
+  def handle_event("assign_todo_project", %{"assignment" => params}, socket) do
+    todo_id = normalize_text(params["todo_id"])
+    project_id = normalize_text(params["project_id"])
+
+    user_id = current_user_id(socket)
+
+    case Todos.update_for_user(
+           user_id,
+           todo_id,
+           %{"project_id" => project_id},
+           todo_action_opts(user_id, "Project changed from todo detail.")
+         ) do
+      {:ok, _todo} ->
+        {:noreply, socket |> refresh_todos() |> put_flash(:info, "Project updated.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Project could not be updated.")}
+    end
+  end
+
+  def handle_event("create_project", %{"project" => %{"name" => name}}, socket) do
+    case normalize_text(name) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Enter a project name.")}
+
+      project_name ->
+        case Projects.create_project(current_user_id(socket), %{"name" => project_name}) do
+          {:ok, project} ->
+            {:noreply,
+             socket
+             |> assign(:new_project_form, to_form(%{"name" => ""}, as: :project))
+             |> refresh_todos()
+             |> put_flash(:info, "#{project.name} created.")}
+
+          {:error, %Ecto.Changeset{}} ->
+            {:noreply, put_flash(socket, :error, "That project could not be created.")}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Project creation failed. Try again.")}
+        end
+    end
+  end
+
   def handle_event("create_todo", %{"todo" => params}, socket) do
     params = normalize_new_todo_params(params)
     user_id = current_user_id(socket)
@@ -125,14 +181,14 @@ defmodule MaraithonWeb.TodosLive do
         case Todos.upsert_many(
                user_id,
                [attrs],
-               todo_action_opts(user_id, "Added from Work page.")
+               todo_action_opts(user_id, "Added from todo list.")
              ) do
           {:ok, [todo]} ->
             {:noreply,
              socket
              |> assign(:new_todo_form, to_form(@default_new_todo_params, as: :todo))
              |> assign(:new_todo_errors, %{})
-             |> put_flash(:info, "Added follow-up.")
+             |> put_flash(:info, "Todo added.")
              |> push_patch(to: todos_path(@default_filters, %{"todo_id" => todo.id}))}
 
           {:error, reason} ->
@@ -316,8 +372,18 @@ defmodule MaraithonWeb.TodosLive do
 
         <.panel body_class="px-5 py-4">
           <:header>
-            <div>
+            <div class="flex flex-wrap items-end justify-between gap-3">
               <h2 class="text-sm/6 font-semibold text-zinc-950">New todo</h2>
+              <.form for={@new_project_form} id="new-project-form" phx-submit="create_project" class="flex items-center gap-2">
+                <.c_input
+                  id={@new_project_form[:name].id}
+                  name={@new_project_form[:name].name}
+                  value={@new_project_form[:name].value}
+                  placeholder="New project"
+                  maxlength="160"
+                />
+                <.button type="submit" variant="outline" phx-disable-with="Adding...">Add project</.button>
+              </.form>
             </div>
           </:header>
 
@@ -325,7 +391,7 @@ defmodule MaraithonWeb.TodosLive do
             for={@new_todo_form}
             id="new-todo-form"
             phx-submit="create_todo"
-            class="grid gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(16rem,1.25fr)_12rem_9rem_auto]"
+            class="grid gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(14rem,1.2fr)_11rem_12rem_9rem_auto]"
           >
             <.field
               label="Work item"
@@ -357,6 +423,21 @@ defmodule MaraithonWeb.TodosLive do
               />
             </.field>
 
+            <.field label="Project" for={@new_todo_form[:project_id].id}>
+              <.c_select
+                id={@new_todo_form[:project_id].id}
+                name={@new_todo_form[:project_id].name}
+              >
+                <option
+                  :for={{label, value} <- @project_options}
+                  value={value}
+                  selected={@new_todo_form[:project_id].value == value}
+                >
+                  <%= label %>
+                </option>
+              </.c_select>
+            </.field>
+
             <.field
               label="Due"
               for={@new_todo_form[:due_at].id}
@@ -382,7 +463,7 @@ defmodule MaraithonWeb.TodosLive do
               <.button type="submit" phx-disable-with="Adding...">Add</.button>
             </div>
 
-            <.field label="Notes" for={@new_todo_form[:notes].id} class="lg:col-span-4">
+            <.field label="Notes" for={@new_todo_form[:notes].id} class="lg:col-span-5">
               <.c_textarea
                 id={@new_todo_form[:notes].id}
                 name={@new_todo_form[:notes].name}
@@ -401,7 +482,7 @@ defmodule MaraithonWeb.TodosLive do
             id="todo-filters"
             phx-change="update_filters"
             phx-submit="update_filters"
-            class="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1.5fr)_repeat(4,minmax(9rem,1fr))_auto]"
+            class="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(14rem,1.5fr)_repeat(6,minmax(8rem,1fr))_auto]"
           >
             <.field label="Search" for={@filter_form[:q].id}>
               <.c_input
@@ -421,9 +502,33 @@ defmodule MaraithonWeb.TodosLive do
               </.c_select>
             </.field>
 
+            <.field label="Project" for={@filter_form[:project].id}>
+              <.c_select id={@filter_form[:project].id} name={@filter_form[:project].name}>
+                <option
+                  :for={{label, value} <- @project_filter_options}
+                  value={value}
+                  selected={@filters["project"] == value}
+                >
+                  <%= label %>
+                </option>
+              </.c_select>
+            </.field>
+
             <.field label="Attention" for={@filter_form[:attention].id}>
               <.c_select id={@filter_form[:attention].id} name={@filter_form[:attention].name}>
                 <option :for={{label, value} <- @attention_options} value={value} selected={@filters["attention"] == value}>
+                  <%= label %>
+                </option>
+              </.c_select>
+            </.field>
+
+            <.field label="Help" for={@filter_form[:agent].id}>
+              <.c_select id={@filter_form[:agent].id} name={@filter_form[:agent].name}>
+                <option
+                  :for={{label, value} <- @agent_options}
+                  value={value}
+                  selected={@filters["agent"] == value}
+                >
                   <%= label %>
                 </option>
               </.c_select>
@@ -487,18 +592,16 @@ defmodule MaraithonWeb.TodosLive do
                     <.sortable_table_header filters={@filters} field="title" class="min-w-[22rem]">
                       Todo
                     </.sortable_table_header>
+                    <.table_header>Project</.table_header>
                     <.sortable_table_header filters={@filters} field="source">Source</.sortable_table_header>
-                    <.sortable_table_header filters={@filters} field="status">Status</.sortable_table_header>
-                    <.sortable_table_header filters={@filters} field="attention">Attention</.sortable_table_header>
-                    <.sortable_table_header filters={@filters} field="priority">Urgency</.sortable_table_header>
+                    <.table_header>Who can help</.table_header>
                     <.sortable_table_header filters={@filters} field="due">Due</.sortable_table_header>
-                    <.sortable_table_header filters={@filters} field="updated">Updated</.sortable_table_header>
                     <.table_header class="w-48 text-right">Actions</.table_header>
                   </.table_row>
                 </.table_head>
                 <.table_body>
                   <.table_row :if={@todos == []}>
-                    <.table_cell colspan="9" class="py-10 text-center text-sm/6 text-zinc-500">
+                    <.table_cell colspan="7" class="py-10 text-center text-sm/6 text-zinc-500">
                       <%= empty_message(@filters) %>
                     </.table_cell>
                   </.table_row>
@@ -524,7 +627,13 @@ defmodule MaraithonWeb.TodosLive do
                     <.table_cell class="max-w-xl whitespace-normal align-top">
                       <div class="flex flex-wrap items-center gap-2">
                         <div class="font-medium text-zinc-950"><%= todo.title %></div>
+                        <.badge :if={todo.status != "open"} color={status_color(todo.status)}>
+                          <%= todo_status_label(todo.status) %>
+                        </.badge>
                         <.badge :if={todo_decision_signal?(todo)} color="indigo">Decision</.badge>
+                        <.badge :if={todo.priority >= 75} color={priority_color(todo.priority)}>
+                          <%= priority_label(todo.priority) %>
+                        </.badge>
                       </div>
                       <div :if={present?(todo.summary)} class="mt-1 line-clamp-2 text-sm/6 text-zinc-600">
                         <%= todo.summary %>
@@ -534,29 +643,24 @@ defmodule MaraithonWeb.TodosLive do
                       </div>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top">
+                      <span class="text-sm/6 text-zinc-700"><%= todo_project_name(todo, @projects) %></span>
+                    </.table_cell>
+                    <.table_cell class="whitespace-normal align-top">
                       <div class="text-sm/6 font-medium text-zinc-950"><%= todo_source_label(todo.source) %></div>
                       <div :if={todo_source_account_value(todo)} class="mt-1 text-xs/5 text-zinc-500">
                         <%= todo_source_account_value(todo) %>
                       </div>
                     </.table_cell>
-                    <.table_cell class="align-top">
-                      <.badge color={status_color(todo.status)}><%= todo_status_label(todo.status) %></.badge>
-                    </.table_cell>
-                    <.table_cell class="align-top">
-                      <.badge color={attention_color(todo.attention_mode)}>
-                        <%= attention_mode_label(todo.attention_mode) %>
+                    <.table_cell class="whitespace-normal align-top">
+                      <.badge color={agent_actionability_color(todo.agent_actionability)}>
+                        <%= agent_actionability_label(todo) %>
                       </.badge>
-                    </.table_cell>
-                    <.table_cell class="align-top">
-                      <.badge color={priority_color(todo.priority)}>
-                        <%= priority_label(todo.priority) %>
-                      </.badge>
+                      <div :if={todo.agent_actionability != "needs_you" and todo.agent_action_requires_approval} class="mt-1 text-xs/5 text-zinc-500">
+                        Approval required
+                      </div>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top text-xs/5 text-zinc-500">
                       <%= format_datetime(todo.due_at, "No due date", @timezone_info) %>
-                    </.table_cell>
-                    <.table_cell class="whitespace-normal align-top text-xs/5 text-zinc-500">
-                      <%= format_datetime(todo.updated_at, "Never", @timezone_info) %>
                     </.table_cell>
                     <.table_cell class="align-top text-right">
                       <div class="flex shrink-0 items-center justify-end gap-1">
@@ -601,6 +705,7 @@ defmodule MaraithonWeb.TodosLive do
               :if={@selected_todo}
               todo={@selected_todo}
               filters={@filters}
+              project_options={@project_options}
               timezone_info={@timezone_info}
             />
           </div>
@@ -613,6 +718,12 @@ defmodule MaraithonWeb.TodosLive do
   defp refresh_todos(socket) do
     user_id = current_user_id(socket)
     timezone_info = user_timezone_info(user_id)
+    projects = Projects.list_projects(user_id: user_id, status: "active")
+    project_options = [{"Inbox", ""} | Enum.map(projects, &{&1.name, &1.id})]
+
+    project_filter_options =
+      [{"All projects", "all"}, {"Inbox", "inbox"} | Enum.map(projects, &{&1.name, &1.id})]
+
     query_opts = todo_query_opts(socket.assigns.filters, timezone_info)
     todos = Todos.list_for_user(user_id, query_opts)
     total_count = Todos.count_for_user(user_id, Keyword.drop(query_opts, [:limit]))
@@ -621,6 +732,9 @@ defmodule MaraithonWeb.TodosLive do
     selected_todo = selected_visible_todo(user_id, socket.assigns.selected_todo_id, visible_ids)
 
     assign(socket,
+      projects: projects,
+      project_options: project_options,
+      project_filter_options: project_filter_options,
       todos: todos,
       total_count: total_count || 0,
       selected_todo_ids: selected_todo_ids,
@@ -709,6 +823,7 @@ defmodule MaraithonWeb.TodosLive do
 
   attr :todo, :any, required: true
   attr :filters, :map, required: true
+  attr :project_options, :list, required: true
   attr :timezone_info, :map, required: true
 
   defp todo_detail_panel(assigns) do
@@ -753,8 +868,37 @@ defmodule MaraithonWeb.TodosLive do
         navigate={~p"/todos/#{@todo.id}/chat"}
         class="mt-3 inline-flex items-center gap-1.5 rounded-md bg-zinc-900 px-3 py-1.5 text-xs/5 font-semibold text-white hover:bg-zinc-700"
       >
-        Chat about this
+        <%= todo_chat_action_label(@todo) %>
       </.link>
+
+      <div class="mt-4 grid gap-3 border-t border-zinc-950/10 pt-4 sm:grid-cols-2">
+        <div>
+          <p class="text-xs/5 font-medium text-zinc-500">Project</p>
+          <form id={"todo-project-form-#{@todo.id}"} phx-change="assign_todo_project" class="mt-1">
+            <input type="hidden" name="assignment[todo_id]" value={@todo.id} />
+            <.c_select id={"todo-project-#{@todo.id}"} name="assignment[project_id]">
+              <option
+                :for={{label, value} <- @project_options}
+                value={value}
+                selected={(@todo.project_id || "") == value}
+              >
+                <%= label %>
+              </option>
+            </.c_select>
+          </form>
+        </div>
+        <div>
+          <p class="text-xs/5 font-medium text-zinc-500">Who can help</p>
+          <div class="mt-2">
+            <.badge color={agent_actionability_color(@todo.agent_actionability)}>
+              <%= agent_actionability_label(@todo) %>
+            </.badge>
+          </div>
+          <p :if={@todo.agent_actionability != "needs_you" and @todo.agent_action_requires_approval} class="mt-1 text-xs/5 text-zinc-500">
+            Confirmation required before any external action.
+          </p>
+        </div>
+      </div>
 
       <div :if={@decision_review_fields != []} class="mt-4 border-t border-zinc-950/10 pt-4">
         <p class="text-xs/5 font-medium text-zinc-500">Decision to make</p>
@@ -895,6 +1039,7 @@ defmodule MaraithonWeb.TodosLive do
       "next_action" => normalize_text(Map.get(params, "next_action")) || "",
       "due_at" => normalize_text(Map.get(params, "due_at")) || "",
       "priority" => normalize_new_todo_priority(Map.get(params, "priority")),
+      "project_id" => normalize_text(Map.get(params, "project_id")) || "",
       "notes" => normalize_text(Map.get(params, "notes")) || ""
     }
   end
@@ -928,6 +1073,7 @@ defmodule MaraithonWeb.TodosLive do
          "due_at" => elem(due_at_result, 1),
          "notes" => notes,
          "priority" => String.to_integer(params["priority"]),
+         "project_id" => normalize_text(params["project_id"]),
          "dedupe_key" => "manual:web:#{Ecto.UUID.generate()}",
          "metadata" => %{
            "created_from" => "todos_web",
@@ -1061,6 +1207,8 @@ defmodule MaraithonWeb.TodosLive do
       attention_mode: attention_filter(filters["attention"]),
       decision_only?: decision_filter?(filters["attention"]),
       source: source_filter(filters["source"]),
+      project_id: project_filter(filters["project"]),
+      agent_actionability: agent_filter(filters["agent"]),
       sort_by: filters["sort"],
       sort_dir: filters["dir"]
     ]
@@ -1089,6 +1237,22 @@ defmodule MaraithonWeb.TodosLive do
   defp source_filter("all"), do: nil
   defp source_filter(source) when is_binary(source), do: source
   defp source_filter(_source), do: nil
+
+  defp project_filter(value) when value in [nil, "", "all"], do: nil
+  defp project_filter("inbox"), do: "inbox"
+
+  defp project_filter(value) when is_binary(value) do
+    case Ecto.UUID.cast(value) do
+      {:ok, uuid} -> uuid
+      :error -> nil
+    end
+  end
+
+  defp project_filter(_value), do: nil
+
+  defp agent_filter("can_help"), do: "can_help"
+  defp agent_filter("needs_you"), do: "needs_you"
+  defp agent_filter(_value), do: nil
 
   defp due_filter("overdue", _timezone_info), do: [due_before: DateTime.utc_now()]
 
@@ -1124,6 +1288,8 @@ defmodule MaraithonWeb.TodosLive do
         normalize_choice(Map.get(params, "attention"), ~w(all act_now decision monitor), "all"),
       "due" => normalize_choice(Map.get(params, "due"), ~w(all overdue today week no_due), "all"),
       "source" => normalize_source(Map.get(params, "source")),
+      "project" => normalize_project_filter(Map.get(params, "project")),
+      "agent" => normalize_choice(Map.get(params, "agent"), ~w(all can_help needs_you), "all"),
       "sort" =>
         normalize_choice(
           Map.get(params, "sort"),
@@ -1142,6 +1308,18 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   defp normalize_choice(_value, _allowed, fallback), do: fallback
+
+  defp normalize_project_filter(value) when value in [nil, ""], do: "all"
+  defp normalize_project_filter(value) when value in ["all", "inbox"], do: value
+
+  defp normalize_project_filter(value) when is_binary(value) do
+    case Ecto.UUID.cast(String.trim(value)) do
+      {:ok, uuid} -> uuid
+      :error -> "all"
+    end
+  end
+
+  defp normalize_project_filter(_value), do: "all"
 
   defp normalize_source(value) when is_binary(value) do
     case String.trim(value) do
@@ -1198,6 +1376,7 @@ defmodule MaraithonWeb.TodosLive do
     [
       %{label: "Source", value: todo_source_label(todo.source)},
       %{label: "Account", value: todo_source_account_value(todo)},
+      %{label: "Suggested project", value: todo_project_suggestion(todo)},
       %{label: "Summary", value: todo.summary},
       %{label: "Next action", value: if(next_action_editable?, do: nil, else: todo.next_action)},
       %{label: "Due", value: format_datetime(todo.due_at, nil, timezone_info)},
@@ -1259,6 +1438,24 @@ defmodule MaraithonWeb.TodosLive do
   defp normalize_context_value(value) when is_boolean(value), do: to_string(value)
   defp normalize_context_value(_value), do: nil
 
+  defp todo_project_suggestion(%Todo{metadata: metadata}) when is_map(metadata) do
+    case fetch_map_value(metadata, "project_suggestion") do
+      suggestion when is_map(suggestion) ->
+        name = fetch_map_value(suggestion, "name")
+        evidence = fetch_map_value(suggestion, "evidence")
+
+        [name, evidence]
+        |> Enum.filter(&present?/1)
+        |> Enum.join(" — ")
+        |> normalize_text()
+
+      _other ->
+        nil
+    end
+  end
+
+  defp todo_project_suggestion(_todo), do: nil
+
   defp todo_source_account_value(%Todo{} = todo) do
     metadata = todo.metadata || %{}
 
@@ -1306,14 +1503,21 @@ defmodule MaraithonWeb.TodosLive do
       option_label(@status_options, filters["status"]),
       option_label(@attention_options, filters["attention"]),
       option_label(@due_options, filters["due"]),
-      option_label(@source_options, filters["source"])
+      option_label(@source_options, filters["source"]),
+      project_filter_label(filters["project"]),
+      option_label(@agent_options, filters["agent"])
     ]
-    |> Enum.reject(&(&1 in [nil, "Any attention", "Any due date", "All sources"]))
+    |> Enum.reject(&(&1 in [nil, "Any attention", "Any due date", "All sources", "Any helper"]))
     |> case do
       [] -> "Default view"
       labels -> Enum.join(labels, " / ")
     end
   end
+
+  defp project_filter_label("all"), do: nil
+  defp project_filter_label("inbox"), do: "Inbox"
+  defp project_filter_label(value) when is_binary(value), do: "Project"
+  defp project_filter_label(_value), do: nil
 
   defp option_label(options, value) do
     Enum.find_value(options, fn
@@ -1404,6 +1608,39 @@ defmodule MaraithonWeb.TodosLive do
   defp priority_label(priority) when is_integer(priority) and priority >= 75, do: "High"
   defp priority_label(priority) when is_integer(priority) and priority >= 50, do: "Normal"
   defp priority_label(_priority), do: "Low"
+
+  defp todo_project_name(%Todo{project_id: nil}, _projects), do: "Inbox"
+
+  defp todo_project_name(%Todo{project_id: project_id}, projects) do
+    case Enum.find(projects, &(&1.id == project_id)) do
+      nil -> "Project unavailable"
+      project -> project.name
+    end
+  end
+
+  defp agent_actionability_label(%Todo{agent_action_label: label})
+       when is_binary(label) and label != "",
+       do: label
+
+  defp agent_actionability_label(%Todo{agent_actionability: "can_prepare"}),
+    do: "Maraithon can prepare"
+
+  defp agent_actionability_label(%Todo{agent_actionability: "can_execute"}),
+    do: "Maraithon can execute"
+
+  defp agent_actionability_label(_todo), do: "Needs you"
+
+  defp todo_chat_action_label(%Todo{agent_actionability: "can_execute"}),
+    do: "Review and confirm"
+
+  defp todo_chat_action_label(%Todo{agent_actionability: "can_prepare"}),
+    do: "Prepare with Maraithon"
+
+  defp todo_chat_action_label(_todo), do: "Chat about this"
+
+  defp agent_actionability_color("can_prepare"), do: "blue"
+  defp agent_actionability_color("can_execute"), do: "emerald"
+  defp agent_actionability_color(_value), do: "zinc"
 
   defp todo_status_label("open"), do: "Open"
   defp todo_status_label("snoozed"), do: "Snoozed"

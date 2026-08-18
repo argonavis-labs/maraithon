@@ -864,11 +864,26 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
              "notes": "source evidence and metadata",
              "action_plan": "draft or plan of next action",
              "action_draft": {
-               "text": "ready suggested wording or a conversational next step"
+               "kind": "gmail_reply | slack_reply | next_step",
+               "provider": "google:account@example.com for Gmail or slack:<team id>:user:<user id> for Slack; omitted for next_step",
+               "text": "exact proposed message or conversational next step",
+               "to": "Gmail recipient, Gmail only",
+               "subject": "Gmail subject, Gmail only",
+               "thread_id": "Gmail thread id, Gmail only",
+               "reply_to_message_id": "Gmail message id, Gmail only",
+               "google_provider": "google:account@example.com, Gmail only",
+               "google_account_email": "account@example.com, Gmail only",
+               "channel_id": "Slack channel id, Slack only",
+               "thread_ts": "Slack thread timestamp, Slack only",
+               "team_id": "Slack workspace id, Slack only",
+               "token_preference": "user, Slack only"
              },
              "owner_user_id": null,
              "owner_label": "null for the main user, or named non-user owner",
              "source_account_label": "email/calendar account when known",
+             "agent_actionability": "needs_you | can_prepare | can_execute",
+             "agent_action_label": "short honest label such as Maraithon can draft a reply",
+             "agent_action_requires_approval": true,
              "source_item_id": "canonical thread/event/message id when known (Gmail uses thread id)",
              "source_occurred_at": "ISO-8601 datetime when known",
              "dedupe_key": "stable semantic key",
@@ -887,12 +902,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
                  "later_evidence": []
                },
                "source_ref": "...",
+               "source_permalink": "auditable provider URL when available",
+               "slack_team_id": "Slack workspace id when the source is Slack",
+               "slack_channel_id": "Slack channel id when the source is Slack",
+               "slack_message_ts": "Slack message timestamp when the source is Slack",
                "gmail_message_id": "raw Gmail message id when the source is Gmail",
                "gmail_thread_id": "raw Gmail thread id when the source is Gmail",
                "google_provider": "google:<account email> when the source is Gmail",
                "google_account_email": "account email when the source is Gmail",
                "source_tags": ["project","gmail"],
                "quote": "...",
+               "project_suggestion": {
+                 "name": "best-fit existing or proposed project name",
+                 "confidence": 0.0,
+                 "evidence": "source-backed reason for the suggestion"
+               },
                "company": "company or organization when known",
                "relationship_context": "why this person matters or why they are in the thread",
                "relationship_strength": 0,
@@ -989,6 +1013,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
          cadence in `metadata.follow_up_reasoning`. Never set `next_nudge_at`
          for `owed_by_me` or `fyi` items — the runtime drops it for any
          direction other than `owed_to_me`.
+       - Set `agent_actionability` explicitly on every work item. Use
+         `needs_you` when a human decision or hands-on step is required,
+         `can_prepare` when Maraithon can draft or research the next step, and
+         `can_execute` only when a currently available provider tool can perform
+         the exact operation after confirmation. Never infer executability from
+         source alone. Keep `agent_action_requires_approval` true for every
+         external side effect, including sending Gmail or posting to Slack.
+       - Put project routing only in `metadata.project_suggestion` with name,
+         confidence, and evidence. A suggestion is not a confirmed project
+         assignment and must never be written as `project_id` by the model.
+       - For executable Gmail or Slack drafts, fill only the matching provider
+         identifiers in action_draft and copy them from supplied structured
+         evidence. Never invent recipients, accounts, workspace/channel IDs,
+         message IDs, thread IDs, or timestamps. Use action_draft.kind `next_step`
+         when those exact identifiers are unavailable; next_step is not executable.
        - Every saved work item must include action_draft.text. If a reply or
          message makes sense, write concise suggested wording in the operator's
          style. If a full draft does not make sense, write a conversational next

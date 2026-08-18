@@ -241,12 +241,12 @@ defmodule Maraithon.AgentMarketplace do
 
   defp tool_allowlist_for("ai_chief_of_staff") do
     [
-      "gmail.search",
-      "gmail.read",
-      "calendar.list",
-      "slack.search",
-      "slack.read",
-      "telegram.send",
+      "gmail_search",
+      "gmail_get_message",
+      "google_calendar_list_events",
+      "slack_search_messages",
+      "slack_list_messages",
+      "slack_get_thread_replies",
       "list_connected_accounts",
       "get_open_loops",
       "get_todo",
@@ -265,14 +265,13 @@ defmodule Maraithon.AgentMarketplace do
       "recall_memory",
       "write_memory",
       "record_memory_feedback",
-      "update_memory_confidence",
-      "llm.complete"
+      "update_memory_confidence"
     ]
   end
 
-  defp tool_allowlist_for(_behavior), do: ["llm.complete"]
+  defp tool_allowlist_for(_behavior), do: []
 
-  defp mcp_allowlist_for("ai_chief_of_staff"), do: ["google", "slack", "telegram", "maraithon"]
+  defp mcp_allowlist_for("ai_chief_of_staff"), do: ["google", "slack", "maraithon"]
   defp mcp_allowlist_for(_behavior), do: []
 
   defp required_connectors(requirements) do
