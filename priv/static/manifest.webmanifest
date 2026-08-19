@@ -43,6 +43,12 @@
       "short_name": "Todos",
       "url": "/todos",
       "description": "Open your todo list."
+    },
+    {
+      "name": "Apps",
+      "short_name": "Apps",
+      "url": "/connectors",
+      "description": "Manage connected apps and sources."
     }
   ]
 }

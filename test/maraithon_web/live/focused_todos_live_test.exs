@@ -15,7 +15,7 @@ defmodule MaraithonWeb.FocusedTodosLiveTest do
     {:ok, conn: log_in_test_user(conn, @user_email)}
   end
 
-  test "authenticated shell presents the todo list as the only product destination", %{conn: conn} do
+  test "authenticated shell keeps Todos primary and Apps available for connections", %{conn: conn} do
     assert {:ok, [_todo]} =
              Todos.upsert_many(@user_email, [
                %{
@@ -37,7 +37,7 @@ defmodule MaraithonWeb.FocusedTodosLiveTest do
     assert html =~ "Confirm the remaining owner and send the update."
     assert html =~ "Add a todo"
     assert html =~ "Search and filter"
-    refute html =~ ">Apps<"
+    assert has_element?(view, "a[href='/connectors']", "Apps")
     refute html =~ ">Settings<"
     refute html =~ "Primary navigation"
     refute has_element?(view, "#todo-detail")

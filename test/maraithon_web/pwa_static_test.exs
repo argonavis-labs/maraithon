@@ -14,6 +14,8 @@ defmodule MaraithonWeb.PwaStaticTest do
     assert manifest =~ ~s("start_url": "/todos")
     assert manifest =~ ~s("name": "Todos")
     assert manifest =~ "Open your todo list"
+    assert manifest =~ ~s("name": "Apps")
+    assert manifest =~ "Manage connected apps and sources"
     refute manifest =~ ~s("name": "Dashboard")
     refute manifest =~ ~s("name": "People")
     refute manifest =~ "relationship CRM"
@@ -55,6 +57,7 @@ defmodule MaraithonWeb.PwaStaticTest do
     assert html =~ "Todos"
     refute html =~ ~s(id="maraithon-mobile-tabbar")
     refute html =~ ~s(id="maraithon-sidebar")
-    refute html =~ ">Apps<"
+    assert html =~ ~s(href="/connectors")
+    assert html =~ "Apps"
   end
 end
