@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+project="${MARAITHON_GCP_PROJECT:-maraithon}"
+service="${MARAITHON_GCP_SERVICE:-maraithon}"
+
+require_command gcloud
+
+if [[ "${project}" != "maraithon" ]]; then
+  echo "Refusing to diagnose an unpinned GCP project: ${project}" >&2
+  exit 64
+fi
+
+# Do not emit log bodies. Only report counts for fixed coordination error classes.
+logs="$(gcloud logging read \
+  "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND (textPayload:\"Maraithon.Runtime.Coordination.Session\" OR textPayload:\"runtime_partitions\" OR textPayload:\"runtime_partition_transitions\")" \
+  --project "${project}" \
+  --freshness 30m \
+  --limit 1000 \
+  --order=desc \
+  --format 'value(textPayload)')"
+
+count() {
+  local pattern="$1"
+  local value
+  value="$(printf '%s\n' "${logs}" | grep -Eic "${pattern}" || true)"
+  printf '%s' "${value:-0}"
+}
+
+printf 'RUNTIME_COORDINATION_DIAGNOSTIC={'
+printf '"records":%s' "$(count '.')"
+printf ',"session_termination":%s' "$(count 'GenServer .*Coordination.Session.*terminating|Coordination.Session.*terminating')"
+printf ',"insufficient_privilege":%s' "$(count 'insufficient_privilege|permission denied')"
+printf ',"check_violation":%s' "$(count 'check_violation|ERROR 23514')"
+printf ',"partition_authority_lost":%s' "$(count 'partition_authority_lost')"
+printf ',"node_authority_lost":%s' "$(count 'node_authority_lost')"
+printf ',"leader_authority_lost":%s' "$(count 'leader_authority_lost')"
+printf ',"partition_not_assignable":%s' "$(count 'partition_not_assignable')"
+printf ',"partition_transition_table":%s' "$(count 'runtime_partition_transitions')"
+printf ',"partition_table":%s' "$(count 'runtime_partitions')"
+printf ',"database_connection":%s' "$(count 'DBConnection|connection.*closed|tcp recv')"
+printf '}\n'
