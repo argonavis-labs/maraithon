@@ -234,6 +234,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
              FairScheduler.reserve_next(node, partitions)
 
     assert first.tenant_key == "user:tenant-a"
+    assert first.payload == %{"dedupe" => "a-1"}
 
     # Default max_concurrency=1 makes the second reservation rotate to the
     # other tenant rather than repeatedly serving the lexicographically first.

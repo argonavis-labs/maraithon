@@ -30,14 +30,17 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
           SET status = 'running', updated_at = timezone('UTC', clock_timestamp())
           WHERE id = $1::uuid AND status = 'pending' AND claim_token = $2::uuid
             AND coordination_task_assignment_id = $3::uuid
-          RETURNING id, user_id, queue, job_type, payload, status, dedupe_key,
+          RETURNING id, user_id, queue, job_type,
+                    payload_ciphertext, payload, payload_encryption_version,
+                    payload_binding_version, payload_binding_key_tag, payload_binding_mac,
+                    payload_purged_at, status, dedupe_key, partition_key, rate_limit_key,
                     telegram_bot_id, telegram_update_id, attempts, max_attempts,
                     scheduled_at, claimed_by, claimed_at, claim_token, completed_at,
-                    failed_at, cancelled_at, result, last_error, tenant_key, partition_id,
-                    coordination_activation_epoch, coordination_partition_epoch,
-                    coordination_node_incarnation_id, coordination_task_assignment_id,
-                    coordination_task_supervisor_id, coordination_local_task_id,
-                    inserted_at, updated_at
+                    failed_at, cancelled_at, result_ciphertext, result, last_error,
+                    tenant_key, partition_id, coordination_activation_epoch,
+                    coordination_partition_epoch, coordination_node_incarnation_id,
+                    coordination_task_assignment_id, coordination_task_supervisor_id,
+                    coordination_local_task_id, inserted_at, updated_at
           """,
           [
             Ecto.UUID.dump!(job.id),
@@ -249,14 +252,17 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
                   coordination_local_task_id = $9::uuid,
                   updated_at = timezone('UTC', clock_timestamp())
               WHERE id = $1::uuid AND status = 'pending' AND claim_token IS NULL
-              RETURNING id, user_id, queue, job_type, payload, status, dedupe_key,
+              RETURNING id, user_id, queue, job_type,
+                        payload_ciphertext, payload, payload_encryption_version,
+                        payload_binding_version, payload_binding_key_tag, payload_binding_mac,
+                        payload_purged_at, status, dedupe_key, partition_key, rate_limit_key,
                         telegram_bot_id, telegram_update_id, attempts, max_attempts,
                         scheduled_at, claimed_by, claimed_at, claim_token, completed_at,
-                        failed_at, cancelled_at, result, last_error, tenant_key, partition_id,
-                        coordination_activation_epoch, coordination_partition_epoch,
-                        coordination_node_incarnation_id, coordination_task_assignment_id,
-                        coordination_task_supervisor_id, coordination_local_task_id,
-                        inserted_at, updated_at
+                        failed_at, cancelled_at, result_ciphertext, result, last_error,
+                        tenant_key, partition_id, coordination_activation_epoch,
+                        coordination_partition_epoch, coordination_node_incarnation_id,
+                        coordination_task_assignment_id, coordination_task_supervisor_id,
+                        coordination_local_task_id, inserted_at, updated_at
               """,
               [
                 Ecto.UUID.dump!(candidate.id),
@@ -373,8 +379,11 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
     )
   end
 
-  defp load_job!(%{columns: columns, rows: [row]}),
-    do: Repo.load(BackgroundJob, {columns, decode_payload(columns, row)})
+  defp load_job!(%{columns: columns, rows: [row]}) do
+    BackgroundJob
+    |> Repo.load({columns, decode_payload(columns, row)})
+    |> BackgroundJob.hydrate_payloads()
+  end
 
   defp load_job!(_), do: Repo.rollback(:fair_claim_conflict)
 
