@@ -464,8 +464,8 @@ defmodule Maraithon.Runtime.Coordination.Authority do
                  Repo,
                  """
                  UPDATE public.runtime_partition_transitions
-                 SET state = $2, draining_at = timezone('UTC', clock_timestamp()),
-                     blocked_reason = $3, updated_at = timezone('UTC', clock_timestamp())
+                 SET state = $2, blocked_reason = $3,
+                     updated_at = timezone('UTC', clock_timestamp())
                  WHERE id = $1::uuid AND state = 'preparing'
                  """,
                  [transition_dump, state, reason]
