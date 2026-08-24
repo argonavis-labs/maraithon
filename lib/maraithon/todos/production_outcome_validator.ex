@@ -18,6 +18,35 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   @poll_interval_ms 1_000
 
   def run do
+    do_run()
+  rescue
+    error in Postgrex.Error ->
+      {:error, {:database_error, database_error_code(error)}}
+
+    error ->
+      {:error, {:validator_exception, error.__struct__}}
+  catch
+    kind, _reason ->
+      {:error, {:validator_exit, kind}}
+  end
+
+  def error_code(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  def error_code({:todo_outcome_validation_processing_failed, category})
+      when is_binary(category),
+      do: "todo_outcome_validation_processing_failed:#{category}"
+
+  def error_code({:database_error, code}), do: "database_error:#{code}"
+
+  def error_code({:validator_exception, module}) when is_atom(module),
+    do: "validator_exception:#{inspect(module)}"
+
+  def error_code({:validator_exit, kind}) when is_atom(kind),
+    do: "validator_exit:#{kind}"
+
+  def error_code(_reason), do: "todo_outcome_validation_failed"
+
+  defp do_run do
     user_id = validation_user_id()
 
     try do
@@ -151,7 +180,8 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
         {:ok, event, job}
 
       event.status == "failed" or job.status in ["failed", "cancelled"] ->
-        {:error, :todo_outcome_validation_processing_failed}
+        {:error,
+         {:todo_outcome_validation_processing_failed, processing_error_category(event, job)}}
 
       System.monotonic_time(:millisecond) >= deadline ->
         {:error, :todo_outcome_validation_timeout}
@@ -161,6 +191,28 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
         await_processing(event_id, job_id, deadline)
     end
   end
+
+  defp processing_error_category(event, job) do
+    error = [event.last_error, job.last_error] |> Enum.find(&is_binary/1) || ""
+
+    cond do
+      String.contains?(error, "todo_outcome_learning_invalid_json") -> "invalid_json"
+      String.contains?(error, "todo_outcome_learning_missing_pattern") -> "missing_pattern"
+      String.contains?(error, "todo_learning_source_not_found") -> "source_not_found"
+      String.contains?(error, "insufficient_privilege") -> "database_privilege"
+      String.contains?(error, "permission denied") -> "database_privilege"
+      String.contains?(error, "http_status") -> "llm_http_status"
+      String.contains?(error, "http_error") -> "llm_http_error"
+      String.contains?(error, "rate_limit") -> "llm_rate_limit"
+      String.contains?(error, "timeout") -> "timeout"
+      true -> "unknown"
+    end
+  end
+
+  defp database_error_code(%Postgrex.Error{postgres: postgres}) when is_map(postgres),
+    do: Map.get(postgres, :code, :unknown)
+
+  defp database_error_code(_error), do: :unknown
 
   defp require_status(value, value, _reason), do: :ok
   defp require_status(_actual, _expected, reason), do: {:error, reason}

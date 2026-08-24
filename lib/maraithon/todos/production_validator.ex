@@ -59,8 +59,13 @@ defmodule Maraithon.Todos.ProductionValidator do
 
   defp validate_outcome_learning do
     case ProductionOutcomeValidator.run() do
-      {:ok, report} -> report
-      {:error, reason} -> raise "Todo outcome-learning validation failed: #{reason}"
+      {:ok, report} ->
+        report
+
+      {:error, reason} ->
+        code = ProductionOutcomeValidator.error_code(reason)
+        IO.puts("TODO_OUTCOME_VALIDATION_ERROR=" <> Jason.encode!(%{code: code}))
+        raise "Todo outcome-learning validation failed: #{code}"
     end
   end
 

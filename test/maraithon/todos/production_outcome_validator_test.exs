@@ -42,6 +42,21 @@ defmodule Maraithon.Todos.ProductionOutcomeValidatorTest do
     assert validation_user_count() == validation_users_before
   end
 
+  test "reduces validation failures to aggregate-only error codes" do
+    assert ProductionOutcomeValidator.error_code(:todo_outcome_validation_timeout) ==
+             "todo_outcome_validation_timeout"
+
+    assert ProductionOutcomeValidator.error_code(
+             {:todo_outcome_validation_processing_failed, "invalid_json"}
+           ) == "todo_outcome_validation_processing_failed:invalid_json"
+
+    assert ProductionOutcomeValidator.error_code({:validator_exception, RuntimeError}) ==
+             "validator_exception:RuntimeError"
+
+    assert ProductionOutcomeValidator.error_code({:unexpected, "sensitive detail"}) ==
+             "todo_outcome_validation_failed"
+  end
+
   defp validation_user_count do
     Repo.aggregate(
       from(user in User,

@@ -79,7 +79,28 @@ if [[ -n "${todo_validation_user}" ]]; then
   gcloud run jobs deploy "${service}-todo-validation"     --project "${project}"     --region "${region}"     --image "${image}"     --service-account "${runtime_service_account}"     --set-cloudsql-instances "${connection}"     --set-env-vars "${common_env},TODO_VALIDATION_USER=${todo_validation_user}"     --set-secrets "${runtime_secrets}"     --command /app/bin/maraithon     --args eval,Maraithon.Release.validate_authorized_todo_launch     --cpu 1     --memory 2Gi     --task-timeout 10m     --max-retries 0     --quiet
 
   validation_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  gcloud run jobs execute "${service}-todo-validation"     --project "${project}"     --region "${region}"     --wait     --quiet
+
+  if ! gcloud run jobs execute "${service}-todo-validation"     --project "${project}"     --region "${region}"     --wait     --quiet; then
+    validation_error=""
+
+    for _attempt in $(seq 1 20); do
+      validation_error="$(gcloud logging read       "resource.type=cloud_run_job AND resource.labels.job_name=${service}-todo-validation AND timestamp>=\"${validation_started_at}\" AND textPayload:\"TODO_OUTCOME_VALIDATION_ERROR=\""       --project "${project}"       --limit 1       --order=desc       --format 'value(textPayload)' 2>/dev/null || true)"
+
+      if [[ "${validation_error}" == TODO_OUTCOME_VALIDATION_ERROR=* ]]; then
+        break
+      fi
+
+      sleep 3
+    done
+
+    if [[ "${validation_error}" == TODO_OUTCOME_VALIDATION_ERROR=* ]]; then
+      echo "${validation_error}" >&2
+    else
+      echo "Todo validation failed before an aggregate-only error report was available" >&2
+    fi
+
+    exit 1
+  fi
 
   validation_report=""
   for _attempt in $(seq 1 20); do
