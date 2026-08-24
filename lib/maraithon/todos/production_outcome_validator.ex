@@ -14,7 +14,7 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   alias Maraithon.Todos.{OutcomeLearning, Todo, TodoLearningEvent}
 
   @surface "production_validation"
-  @timeout_ms 240_000
+  @timeout_ms 480_000
   @poll_interval_ms 1_000
 
   def run do
@@ -73,7 +73,8 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
            %BackgroundJob{} = job <- at_stage(:load_job, fn -> learning_job(event.id) end),
            :ok <- validate_job(job),
            {:ok, processed_event, completed_job} <-
-             at_stage(:await_processing, fn -> await_processing(event.id, job.id) end) do
+             at_stage(:await_processing, fn -> await_processing(event.id, job.id) end),
+           :ok <- validate_processed_result(processed_event, completed_job) do
         {:ok,
          %{
            isolated_user: true,
@@ -201,6 +202,16 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
     end
   end
 
+  defp validate_processed_result(event, job) do
+    cond do
+      event.attempts != 1 -> {:error, :todo_outcome_validation_event_attempts_failed}
+      event.operation != "noop" -> {:error, :todo_outcome_validation_operation_failed}
+      not is_nil(event.memory_id) -> {:error, :todo_outcome_validation_memory_write_failed}
+      job.attempts != 0 -> {:error, :todo_outcome_validation_job_attempts_failed}
+      true -> :ok
+    end
+  end
+
   defp await_processing(event_id, job_id) do
     deadline = System.monotonic_time(:millisecond) + @timeout_ms
     await_processing(event_id, job_id, deadline)
@@ -233,8 +244,18 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   defp timeout_category(event, job) do
     event_status = aggregate_status(event.status, ~w(pending processing processed failed))
     job_status = aggregate_status(job.status, ~w(pending running completed failed cancelled))
-    "event_#{event_status}:job_#{job_status}"
+    event_attempts = aggregate_attempts(event.attempts)
+    job_attempts = aggregate_attempts(job.attempts)
+    error = processing_error_category(event, job)
+
+    "event_#{event_status}:job_#{job_status}:" <>
+      "event_attempts_#{event_attempts}:job_attempts_#{job_attempts}:error_#{error}"
   end
+
+  defp aggregate_attempts(0), do: "zero"
+  defp aggregate_attempts(1), do: "one"
+  defp aggregate_attempts(value) when is_integer(value) and value > 1, do: "many"
+  defp aggregate_attempts(_value), do: "unknown"
 
   defp aggregate_status(status, allowed) when is_binary(status) and is_list(allowed) do
     if status in allowed, do: status, else: "unknown"

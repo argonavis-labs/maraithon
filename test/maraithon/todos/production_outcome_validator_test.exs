@@ -66,8 +66,11 @@ defmodule Maraithon.Todos.ProductionOutcomeValidatorTest do
            ) == "todo_outcome_validation_processing_failed:invalid_json"
 
     assert ProductionOutcomeValidator.error_code(
-             {:todo_outcome_validation_timeout, "event_processing:job_running"}
-           ) == "todo_outcome_validation_timeout:event_processing:job_running"
+             {:todo_outcome_validation_timeout,
+              "event_processing:job_running:event_attempts_one:job_attempts_zero:error_unknown"}
+           ) ==
+             "todo_outcome_validation_timeout:event_processing:job_running:" <>
+               "event_attempts_one:job_attempts_zero:error_unknown"
 
     assert ProductionOutcomeValidator.error_code(
              {:validator_exception, :cleanup, RuntimeError,
