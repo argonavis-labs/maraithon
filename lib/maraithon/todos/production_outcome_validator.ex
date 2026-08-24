@@ -9,7 +9,7 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   alias Maraithon.Accounts.User
   alias Maraithon.Memory.Item
   alias Maraithon.Repo
-  alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.{BackgroundJob, Config}
   alias Maraithon.Todos
   alias Maraithon.Todos.{OutcomeLearning, Todo, TodoLearningEvent}
 
@@ -47,6 +47,10 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   def error_code({:todo_outcome_validation_timeout, category}) when is_binary(category),
     do: "todo_outcome_validation_timeout:#{category}"
 
+  def error_code({:todo_outcome_validation_runtime_not_ready, category})
+      when is_binary(category),
+      do: "todo_outcome_validation_runtime_not_ready:#{category}"
+
   def error_code({:database_error, stage, code, site}),
     do: "database_error:#{stage}:#{code}:#{site}"
 
@@ -72,6 +76,7 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
            :ok <- validate_event(event),
            %BackgroundJob{} = job <- at_stage(:load_job, fn -> learning_job(event.id) end),
            :ok <- validate_job(job),
+           :ok <- at_stage(:await_runtime, fn -> await_runtime_ready(job) end),
            {:ok, processed_event, completed_job} <-
              at_stage(:await_processing, fn -> await_processing(event.id, job.id) end),
            :ok <- validate_processed_result(processed_event, completed_job) do
@@ -201,6 +206,91 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
         :ok
     end
   end
+
+  defp await_runtime_ready(job) do
+    if Config.protocol_test_bypass?() do
+      :ok
+    else
+      deadline = System.monotonic_time(:millisecond) + 60_000
+      await_runtime_ready(job, deadline)
+    end
+  end
+
+  defp await_runtime_ready(job, deadline) do
+    snapshot = runtime_readiness_snapshot(job)
+
+    cond do
+      snapshot.active_nodes > 0 and snapshot.target_partition_ready and snapshot.tenant_ready ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        {:error,
+         {:todo_outcome_validation_runtime_not_ready, runtime_readiness_category(snapshot)}}
+
+      true ->
+        Process.sleep(@poll_interval_ms)
+        await_runtime_ready(job, deadline)
+    end
+  end
+
+  defp runtime_readiness_snapshot(job) do
+    [[active_nodes, joining_nodes, ready_partitions, target_partition_ready, tenant_ready]] =
+      Repo.query!(
+        """
+        SELECT
+          (SELECT count(*) FROM runtime_node_incarnations
+           WHERE state = 'ready' AND ready_at IS NOT NULL
+             AND lease_expires_at > timezone('UTC', clock_timestamp())),
+          (SELECT count(*) FROM runtime_node_incarnations
+           WHERE state = 'joining'
+             AND lease_expires_at > timezone('UTC', clock_timestamp())),
+          (SELECT count(*) FROM runtime_partitions
+           WHERE state = 'ready' AND ready_at IS NOT NULL
+             AND lease_expires_at > timezone('UTC', clock_timestamp())),
+          EXISTS (
+            SELECT 1 FROM runtime_partitions
+            WHERE partition_id = $1 AND state = 'ready' AND ready_at IS NOT NULL
+              AND lease_expires_at > timezone('UTC', clock_timestamp())
+          ),
+          EXISTS (
+            SELECT 1 FROM runtime_tenant_fairness
+            WHERE tenant_key = $2 AND partition_id = $1
+          )
+        """,
+        [job.partition_id, job.tenant_key],
+        log: false
+      ).rows
+
+    %{
+      active_nodes: active_nodes,
+      joining_nodes: joining_nodes,
+      ready_partitions: ready_partitions,
+      target_partition_ready: target_partition_ready,
+      tenant_ready: tenant_ready
+    }
+  end
+
+  defp runtime_readiness_category(snapshot) do
+    "nodes_#{aggregate_count(snapshot.active_nodes)}:" <>
+      "joining_#{aggregate_count(snapshot.joining_nodes)}:" <>
+      "partitions_#{aggregate_partitions(snapshot.ready_partitions)}:" <>
+      "target_#{aggregate_boolean(snapshot.target_partition_ready)}:" <>
+      "tenant_#{aggregate_boolean(snapshot.tenant_ready)}"
+  end
+
+  defp aggregate_count(0), do: "zero"
+  defp aggregate_count(1), do: "one"
+  defp aggregate_count(value) when is_integer(value) and value > 1, do: "many"
+  defp aggregate_count(_value), do: "unknown"
+
+  defp aggregate_partitions(0), do: "zero"
+  defp aggregate_partitions(64), do: "all"
+  defp aggregate_partitions(value) when is_integer(value) and value > 0, do: "some"
+  defp aggregate_partitions(_value), do: "unknown"
+
+  defp aggregate_boolean(true), do: "ready"
+  defp aggregate_boolean(false), do: "missing"
+  defp aggregate_boolean(_value), do: "unknown"
 
   defp validate_processed_result(event, job) do
     cond do

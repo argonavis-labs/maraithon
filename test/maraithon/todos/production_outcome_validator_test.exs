@@ -73,6 +73,13 @@ defmodule Maraithon.Todos.ProductionOutcomeValidatorTest do
                "event_attempts_one:job_attempts_zero:error_unknown"
 
     assert ProductionOutcomeValidator.error_code(
+             {:todo_outcome_validation_runtime_not_ready,
+              "nodes_zero:joining_one:partitions_zero:target_missing:tenant_missing"}
+           ) ==
+             "todo_outcome_validation_runtime_not_ready:" <>
+               "nodes_zero:joining_one:partitions_zero:target_missing:tenant_missing"
+
+    assert ProductionOutcomeValidator.error_code(
              {:validator_exception, :cleanup, RuntimeError,
               "Maraithon.Todos.ProductionOutcomeValidator.cleanup/1"}
            ) ==
