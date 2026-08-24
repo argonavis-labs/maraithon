@@ -20,7 +20,7 @@ defmodule Maraithon.Todos.ProductionValidator do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.Coordination.Protocol, as: CoordinationProtocol
   alias Maraithon.Effects.ProtocolCutover, as: EffectProtocol
-  alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.{ProductionOutcomeValidator, Todo}
 
   @authorized_email "kent@runner.now"
   @known_sources ~w(gmail slack google_calendar calendar local_calendar calendar_local imessage messages local_messages voice_memos notes reminders files browser_history whatsapp)
@@ -36,6 +36,7 @@ defmodule Maraithon.Todos.ProductionValidator do
         accounts = connected_accounts(user.id)
         google_result = repair_google_ingestion(user.id, accounts)
         queue_result = await_relationship_jobs(user.id, started_at)
+        outcome_learning_result = validate_outcome_learning()
 
         {:ok,
          %{
@@ -45,6 +46,7 @@ defmodule Maraithon.Todos.ProductionValidator do
            runtime: runtime_summary(user.id),
            google_ingestion: google_result,
            relationship_jobs: queue_result,
+           todo_outcome_learning: outcome_learning_result,
            observations: observation_counts(user.id),
            ingestion_windows: all_ingestion_window_counts(user.id),
            todos: todo_counts(user.id),
@@ -54,6 +56,13 @@ defmodule Maraithon.Todos.ProductionValidator do
   end
 
   def run(_email), do: {:error, :unauthorized_validation_target}
+
+  defp validate_outcome_learning do
+    case ProductionOutcomeValidator.run() do
+      {:ok, report} -> report
+      {:error, reason} -> raise "Todo outcome-learning validation failed: #{reason}"
+    end
+  end
 
   defp connected_accounts(user_id) do
     ConnectedAccount

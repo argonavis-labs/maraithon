@@ -40,6 +40,9 @@ defmodule Maraithon.LLM.MockProvider do
       String.contains?(prompt, Maraithon.Todos.Intelligence.sentinel()) ->
         todo_intelligence_response(prompt)
 
+      String.contains?(prompt, Maraithon.Todos.OutcomeLearner.sentinel()) ->
+        todo_outcome_learning_response()
+
       String.contains?(prompt, Maraithon.Todos.FeedbackTrainer.sentinel()) ->
         todo_see_less_training_response(prompt)
 
@@ -123,6 +126,15 @@ defmodule Maraithon.LLM.MockProvider do
     Jason.encode!(%{
       "summary" => "Mock memory intelligence selected relevant memories.",
       "selected" => selected
+    })
+  end
+
+  defp todo_outcome_learning_response do
+    Jason.encode!(%{
+      "action" => "noop",
+      "target_memory_id" => nil,
+      "retire_memory_ids" => [],
+      "pattern" => %{}
     })
   end
 
