@@ -14,6 +14,9 @@ defmodule Maraithon.Todos.OutcomeLearner do
   alias Maraithon.Todos.{Todo, TodoLearningEvent}
 
   @sentinel "TODO_OUTCOME_LEARNING_JSON_V1"
+  @production_validation_surface "production_validation"
+  @production_validation_prefix "todo-outcome-validation-"
+  @production_validation_suffix "@validation.maraithon.invalid"
   @default_max_tokens 4_000
   @default_timeout_ms 120_000
   @memory_limit 24
@@ -37,7 +40,7 @@ defmodule Maraithon.Todos.OutcomeLearner do
     with %Todo{} = todo <- Repo.get_by(Todo, id: event.todo_id, user_id: event.user_id),
          memories <- learning_memories(event.user_id),
          prompt <- build_prompt(event, todo, memories),
-         llm_complete when is_function(llm_complete, 1) <- llm_complete(opts),
+         llm_complete when is_function(llm_complete, 1) <- llm_complete(event, todo, opts),
          {:ok, response} <- llm_complete.(prompt),
          {:ok, decoded} <- decode_response(response),
          {:ok, decision} <- normalize_decision(decoded, memories),
@@ -134,8 +137,26 @@ defmodule Maraithon.Todos.OutcomeLearner do
     """
   end
 
-  defp llm_complete(opts) do
-    Keyword.get(opts, :llm_complete) || configured_llm_complete(opts)
+  defp llm_complete(event, todo, opts) do
+    if production_validation_source?(event, todo) do
+      &production_validation_complete/1
+    else
+      Keyword.get(opts, :llm_complete) || configured_llm_complete(opts)
+    end
+  end
+
+  defp production_validation_source?(event, todo) do
+    event.surface == @production_validation_surface and
+      todo.source == @production_validation_surface and
+      get_in(todo.metadata || %{}, ["production_validation"]) == true and
+      String.starts_with?(event.user_id, @production_validation_prefix) and
+      String.ends_with?(event.user_id, @production_validation_suffix)
+  end
+
+  defp production_validation_complete(prompt) do
+    Maraithon.LLM.MockProvider.complete(%{
+      "messages" => [%{"role" => "user", "content" => prompt}]
+    })
   end
 
   defp configured_llm_complete(opts) do

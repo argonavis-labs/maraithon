@@ -44,6 +44,9 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
       when is_binary(category),
       do: "todo_outcome_validation_processing_failed:#{category}"
 
+  def error_code({:todo_outcome_validation_timeout, category}) when is_binary(category),
+    do: "todo_outcome_validation_timeout:#{category}"
+
   def error_code({:database_error, stage, code, site}),
     do: "database_error:#{stage}:#{code}:#{site}"
 
@@ -219,13 +222,25 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
          {:todo_outcome_validation_processing_failed, processing_error_category(event, job)}}
 
       System.monotonic_time(:millisecond) >= deadline ->
-        {:error, :todo_outcome_validation_timeout}
+        {:error, {:todo_outcome_validation_timeout, timeout_category(event, job)}}
 
       true ->
         Process.sleep(@poll_interval_ms)
         await_processing(event_id, job_id, deadline)
     end
   end
+
+  defp timeout_category(event, job) do
+    event_status = aggregate_status(event.status, ~w(pending processing processed failed))
+    job_status = aggregate_status(job.status, ~w(pending running completed failed cancelled))
+    "event_#{event_status}:job_#{job_status}"
+  end
+
+  defp aggregate_status(status, allowed) when is_binary(status) and is_list(allowed) do
+    if status in allowed, do: status, else: "unknown"
+  end
+
+  defp aggregate_status(_status, _allowed), do: "unknown"
 
   defp processing_error_category(event, job) do
     error = [event.last_error, job.last_error] |> Enum.find(&is_binary/1) || ""

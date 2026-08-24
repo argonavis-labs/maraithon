@@ -9,6 +9,20 @@ defmodule Maraithon.Todos.ProductionOutcomeValidatorTest do
   alias Maraithon.Todos.ProductionOutcomeValidator
 
   test "validates the real durable model queue and removes synthetic data" do
+    previous_todo_config = Application.get_env(:maraithon, :todos, [])
+    test_process = self()
+
+    Application.put_env(
+      :maraithon,
+      :todos,
+      Keyword.put(previous_todo_config, :outcome_learning_llm_complete, fn _prompt ->
+        send(test_process, :configured_outcome_model_called)
+        {:error, :configured_outcome_model_must_not_run_for_production_validation}
+      end)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :todos, previous_todo_config) end)
+
     Repo.delete_all(
       from(job in BackgroundJob,
         where: job.queue == "runtime_model_user" and job.status in ["pending", "running"]
@@ -40,6 +54,7 @@ defmodule Maraithon.Todos.ProductionOutcomeValidatorTest do
     assert report.job_status == "completed"
     assert report.job_attempts == 0
     assert validation_user_count() == validation_users_before
+    refute_received :configured_outcome_model_called
   end
 
   test "reduces validation failures to aggregate-only error codes" do
@@ -49,6 +64,10 @@ defmodule Maraithon.Todos.ProductionOutcomeValidatorTest do
     assert ProductionOutcomeValidator.error_code(
              {:todo_outcome_validation_processing_failed, "invalid_json"}
            ) == "todo_outcome_validation_processing_failed:invalid_json"
+
+    assert ProductionOutcomeValidator.error_code(
+             {:todo_outcome_validation_timeout, "event_processing:job_running"}
+           ) == "todo_outcome_validation_timeout:event_processing:job_running"
 
     assert ProductionOutcomeValidator.error_code(
              {:validator_exception, :cleanup, RuntimeError,
