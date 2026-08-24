@@ -234,7 +234,22 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   end
 
   defp runtime_readiness_snapshot(job) do
-    [[active_nodes, joining_nodes, ready_partitions, target_partition_ready, tenant_ready]] =
+    [
+      [
+        active_nodes,
+        joining_nodes,
+        ready_partitions,
+        ready_leaders,
+        preparing_leaders,
+        unassigned_partitions,
+        preparing_partitions,
+        draining_partitions,
+        blocked_partitions,
+        active_tasks,
+        target_partition_ready,
+        tenant_ready
+      ]
+    ] =
       Repo.query!(
         """
         SELECT
@@ -247,6 +262,18 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
           (SELECT count(*) FROM runtime_partitions
            WHERE state = 'ready' AND ready_at IS NOT NULL
              AND lease_expires_at > timezone('UTC', clock_timestamp())),
+          (SELECT count(*) FROM runtime_leader_authorities
+           WHERE state = 'ready' AND ready_at IS NOT NULL
+             AND lease_expires_at > timezone('UTC', clock_timestamp())),
+          (SELECT count(*) FROM runtime_leader_authorities
+           WHERE state = 'preparing'
+             AND lease_expires_at > timezone('UTC', clock_timestamp())),
+          (SELECT count(*) FROM runtime_partitions WHERE state = 'unassigned'),
+          (SELECT count(*) FROM runtime_partitions WHERE state = 'preparing'),
+          (SELECT count(*) FROM runtime_partitions WHERE state = 'draining'),
+          (SELECT count(*) FROM runtime_partitions WHERE state = 'blocked'),
+          (SELECT count(*) FROM runtime_task_assignments
+           WHERE state IN ('reserved', 'running', 'termination_requested', 'termination_proven')),
           EXISTS (
             SELECT 1 FROM runtime_partitions
             WHERE partition_id = $1 AND state = 'ready' AND ready_at IS NOT NULL
@@ -265,6 +292,13 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
       active_nodes: active_nodes,
       joining_nodes: joining_nodes,
       ready_partitions: ready_partitions,
+      ready_leaders: ready_leaders,
+      preparing_leaders: preparing_leaders,
+      unassigned_partitions: unassigned_partitions,
+      preparing_partitions: preparing_partitions,
+      draining_partitions: draining_partitions,
+      blocked_partitions: blocked_partitions,
+      active_tasks: active_tasks,
       target_partition_ready: target_partition_ready,
       tenant_ready: tenant_ready
     }
@@ -273,7 +307,14 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   defp runtime_readiness_category(snapshot) do
     "nodes_#{aggregate_count(snapshot.active_nodes)}:" <>
       "joining_#{aggregate_count(snapshot.joining_nodes)}:" <>
-      "partitions_#{aggregate_partitions(snapshot.ready_partitions)}:" <>
+      "leader_ready_#{aggregate_count(snapshot.ready_leaders)}:" <>
+      "leader_preparing_#{aggregate_count(snapshot.preparing_leaders)}:" <>
+      "partitions_ready_#{aggregate_partitions(snapshot.ready_partitions)}:" <>
+      "unassigned_#{aggregate_partitions(snapshot.unassigned_partitions)}:" <>
+      "preparing_#{aggregate_partitions(snapshot.preparing_partitions)}:" <>
+      "draining_#{aggregate_partitions(snapshot.draining_partitions)}:" <>
+      "blocked_#{aggregate_partitions(snapshot.blocked_partitions)}:" <>
+      "tasks_#{aggregate_count(snapshot.active_tasks)}:" <>
       "target_#{aggregate_boolean(snapshot.target_partition_ready)}:" <>
       "tenant_#{aggregate_boolean(snapshot.tenant_ready)}"
   end
