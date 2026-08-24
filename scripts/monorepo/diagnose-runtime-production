@@ -43,3 +43,62 @@ printf ',"partition_transition_table":%s' "$(count 'runtime_partition_transition
 printf ',"partition_table":%s' "$(count 'runtime_partitions')"
 printf ',"database_connection":%s' "$(count 'DBConnection|connection.*closed|tcp recv')"
 printf '}\n'
+
+job="${service}-todo-validation"
+snapshot_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+expression="$(cat <<'ELIXIR'
+Application.load(:maraithon)
+keys = ~w(nodes_active nodes_recent leader_active leader_recent partitions_ready preparing_live preparing_expired preparing_active_owner draining_live draining_expired unassigned blocked tasks_reserved tasks_running tasks_termination_requested tasks_termination_proven)
+sql = """
+SELECT
+  (SELECT count(*) FROM public.runtime_node_incarnations WHERE state = 'ready' AND ready_at IS NOT NULL AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_node_incarnations WHERE state = 'ready' AND lease_expires_at > timezone('UTC', clock_timestamp()) AND updated_at > timezone('UTC', clock_timestamp()) - interval '10 seconds'),
+  (SELECT count(*) FROM public.runtime_leader_authorities WHERE state = 'ready' AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_leader_authorities WHERE state = 'ready' AND lease_expires_at > timezone('UTC', clock_timestamp()) AND updated_at > timezone('UTC', clock_timestamp()) - interval '10 seconds'),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'ready' AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'preparing' AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'preparing' AND lease_expires_at <= timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions AS p JOIN public.runtime_node_incarnations AS n ON n.id = p.owner_node_incarnation_id WHERE p.state = 'preparing' AND p.lease_expires_at > timezone('UTC', clock_timestamp()) AND n.state = 'ready' AND n.lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'draining' AND lease_expires_at > timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'draining' AND lease_expires_at <= timezone('UTC', clock_timestamp())),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'unassigned'),
+  (SELECT count(*) FROM public.runtime_partitions WHERE state = 'blocked'),
+  (SELECT count(*) FROM public.runtime_task_assignments WHERE state = 'reserved'),
+  (SELECT count(*) FROM public.runtime_task_assignments WHERE state = 'running'),
+  (SELECT count(*) FROM public.runtime_task_assignments WHERE state = 'termination_requested'),
+  (SELECT count(*) FROM public.runtime_task_assignments WHERE state = 'termination_proven')
+"""
+{:ok, row, _apps} = Ecto.Migrator.with_repo(Maraithon.Repo, fn repo -> repo.query!(sql).rows |> hd() end)
+IO.puts("RUNTIME_COORDINATION_DB=" <> Jason.encode!(Map.new(Enum.zip(keys, row))))
+ELIXIR
+)"
+
+gcloud run jobs execute "${job}" \
+  --project "${project}" \
+  --region "${MARAITHON_GCP_REGION:-us-central1}" \
+  --args="^@^eval@${expression}" \
+  --wait \
+  --quiet
+
+snapshot=""
+for _attempt in $(seq 1 20); do
+  snapshot="$(gcloud logging read \
+    "resource.type=cloud_run_job AND resource.labels.job_name=${job} AND timestamp>=\"${snapshot_started_at}\" AND textPayload:\"RUNTIME_COORDINATION_DB=\"" \
+    --project "${project}" \
+    --limit 1 \
+    --order=desc \
+    --format 'value(textPayload)' 2>/dev/null || true)"
+
+  if [[ "${snapshot}" == RUNTIME_COORDINATION_DB=* ]]; then
+    break
+  fi
+
+  sleep 3
+done
+
+if [[ "${snapshot}" != RUNTIME_COORDINATION_DB=* ]]; then
+  echo "Runtime coordination snapshot completed without an aggregate report" >&2
+  exit 1
+fi
+
+echo "${snapshot}"
