@@ -1590,7 +1590,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     {allowed_candidates, skipped_candidates} =
       Maraithon.Todos.SignalGate.partition_candidates(candidates)
 
-    case Todos.upsert_many(user_id, allowed_candidates) do
+    case Todos.upsert_many(user_id, allowed_candidates, model_selected?: true) do
       {:ok, todos} ->
         {:ok,
          %{

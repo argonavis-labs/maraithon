@@ -401,15 +401,15 @@ defmodule Maraithon.Todos.Intelligence do
          inflate it as urgent unless the evidence shows personal/family impact,
          a close relationship, or an active project/customer wait.
        - Apply `todo_relevance_memories` as durable work-relevance steering. These
-         memories are negative "see less like this" examples written from
-         explicit human feedback.
-       - Decide semantically whether a candidate matches a negative work-relevance memory.
+         patterns were learned from human completion and dismissal outcomes and
+         may be positive, negative, or mixed.
+       - Decide semantically whether a candidate matches a work-relevance pattern.
          Do not rely on exact keywords, sender, thread id, account, or source
          type alone. Compare the source evidence, ask/no-ask, owner, urgency,
-         relationship, life domain, and whether someone is actually waiting.
-       - If a candidate matches negative work-relevance memory and no exception
-         signal applies, return action "skip" and explain the matching memory in
-         reasoning.
+         relationship, life domain, consequence, and whether someone is waiting.
+       - Positive matching patterns should raise admission confidence and rank.
+         Negative matching patterns should lower rank or return action "skip"
+         when no exception applies. Explain material pattern matches in reasoning.
        - For chief_of_staff_commitment_tracker candidates, metadata.completion_check
          is mandatory evidence that the work is still open. If completion_check.status
          is missing, unclear, or completed_or_closed, return action "skip". When you
@@ -425,9 +425,11 @@ defmodule Maraithon.Todos.Intelligence do
        - If a candidate partly matches negative feedback but may be worth keeping
          for later, create/update it as `attention_mode: "monitor"` with lower
          priority instead of putting it in act-now.
-       - Negative work-relevance memories are not global blocks. Stronger fresh evidence,
-         personal/family impact, a direct deadline, close relationship, customer
-         wait, or user/customer impact can override them.
+       - If a candidate strongly matches a positive pattern, prefer `act_now` and
+         increase priority in proportion to the pattern confidence and fresh evidence.
+       - Learned work-relevance memories are not global blocks or guarantees.
+         Stronger fresh evidence, personal/family impact, a direct deadline, close
+         relationship, customer wait, or user/customer impact can override them.
        - Write next_action as a sentence the operator can act on directly. Avoid
          ticket/report language such as "covering current state" when a human
          version like "ask if it is fixed, who owns it, and whether customers
@@ -883,7 +885,7 @@ defmodule Maraithon.Todos.Intelligence do
       status: "active",
       limit: limit
     )
-    |> Enum.filter(&(&1.polarity == "negative"))
+    |> Enum.filter(&(&1.polarity in ["positive", "negative", "neutral"]))
     |> Enum.map(&Memory.serialize_item/1)
     |> Enum.map(&todo_relevance_memory_for_prompt/1)
   rescue
@@ -906,8 +908,10 @@ defmodule Maraithon.Todos.Intelligence do
         |> Map.take([
           "pattern_key",
           "categories",
+          "positive_signals",
           "negative_signals",
           "exceptions",
+          "outcome_counts",
           "reasoning",
           "feedback_source"
         ])
@@ -1406,7 +1410,7 @@ defmodule Maraithon.Todos.Intelligence do
     persisted_result =
       case attrs_list do
         [] -> {:ok, []}
-        attrs -> Todos.upsert_many(user_id, attrs)
+        attrs -> Todos.upsert_many(user_id, attrs, model_selected?: true)
       end
 
     with {:ok, persisted} <- persisted_result do

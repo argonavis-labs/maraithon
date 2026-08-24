@@ -20,8 +20,8 @@ defmodule Maraithon.Todos do
     AttentionRanker,
     CounterpartyResolver,
     DecisionSignals,
-    FeedbackTrainer,
     Intelligence,
+    OutcomeLearning,
     SignalGate,
     SurfaceQuality
   }
@@ -55,6 +55,11 @@ defmodule Maraithon.Todos do
   end
 
   def get_for_user(_user_id, _todo_id), do: nil
+
+  @doc "Records the first explicit human detail view for outcome learning."
+  def record_user_opened(user_id, todo_id, opts \\ []) do
+    OutcomeLearning.record_user_opened(user_id, todo_id, opts)
+  end
 
   def list_for_user(user_id, opts \\ []) when is_binary(user_id) do
     limit = normalize_limit(Keyword.get(opts, :limit, 20), 20)
@@ -303,31 +308,14 @@ defmodule Maraithon.Todos do
     note = Keyword.get(opts, :note)
     source = normalize_feedback_source(Keyword.get(opts, :source, "dismiss"))
 
-    # Dismissing/deleting a todo is a low-signal "this wasn't important" cue, in
-    # contrast to checking it off (high-signal "done"). We record it as such and
-    # let the preference learner gently improve future surfacing — best-effort,
-    # so a learning hiccup never blocks the dismissal itself.
-    case update_status(
-           user_id,
-           todo_id,
-           "dismissed",
-           note,
-           put_dismissal_signal(%{}, source),
-           opts
-         ) do
-      {:ok, todo} ->
-        if Keyword.get(opts, :skip_feedback?, false) do
-          :ok
-        else
-          _ = maybe_learn_from_feedback(todo, "not_helpful")
-          :ok
-        end
-
-        {:ok, todo}
-
-      other ->
-        other
-    end
+    update_status(
+      user_id,
+      todo_id,
+      "dismissed",
+      note,
+      put_dismissal_signal(%{}, source),
+      opts
+    )
   end
 
   def dismiss(_user_id, _todo_id, _opts), do: {:error, :not_found}
@@ -438,23 +426,19 @@ defmodule Maraithon.Todos do
   def see_less_like(user_id, todo_id, opts) when is_binary(user_id) and is_binary(todo_id) do
     source = normalize_feedback_source(Keyword.get(opts, :source, "todo_surface"))
 
-    with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
-         {:ok, %{memory: memory, training: training}} <-
-           FeedbackTrainer.train_see_less(user_id, todo, opts),
-         {:ok, dismissed} <-
-           update_status(
-             user_id,
-             todo_id,
-             "dismissed",
-             see_less_resolution_note(source),
-             put_see_less_feedback(%{}, source, memory, training),
-             opts
-           ) do
-      {:ok, %{todo: dismissed, memory: memory, training: training}}
-    else
-      nil -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-      _other -> {:error, :todo_see_less_failed}
+    case update_status(
+           user_id,
+           todo_id,
+           "dismissed",
+           see_less_resolution_note(source),
+           put_see_less_queued_feedback(%{}, source),
+           Keyword.put(opts, :source, source)
+         ) do
+      {:ok, dismissed} ->
+        {:ok, %{todo: dismissed, memory: nil, training: %{"queued" => true}}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -465,7 +449,7 @@ defmodule Maraithon.Todos do
   def update_for_user(user_id, todo_id, attrs, opts)
       when is_binary(user_id) and is_binary(todo_id) and is_map(attrs) and is_list(opts) do
     Repo.transaction(fn ->
-      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id) do
+      with %Todo{} = todo <- get_todo_for_update(user_id, todo_id) do
         changes = update_attrs(todo, attrs)
         changes = if changes == %{}, do: changes, else: ActionDrafts.ensure(changes, todo)
 
@@ -474,7 +458,8 @@ defmodule Maraithon.Todos do
         else
           with {:ok, updated} <- todo |> Todo.changeset(changes) |> Repo.update(),
                {:ok, _insight} <- sync_linked_insight(updated),
-               {:ok, _event} <- maybe_record_status_activity(todo, updated, updated.status, opts) do
+               {:ok, _event} <- maybe_record_status_activity(todo, updated, updated.status, opts),
+               {:ok, _learning_event} <- OutcomeLearning.maybe_enqueue(todo, updated, opts) do
             updated
           else
             {:error, reason} -> Repo.rollback(reason)
@@ -1198,6 +1183,7 @@ defmodule Maraithon.Todos do
       |> normalize_attrs(attrs)
       |> UserFacingCopy.polish_attrs()
       |> ActionDrafts.ensure()
+      |> maybe_put_model_selected_at(opts)
 
     case existing_todo_for_upsert(user_id, normalized_attrs) do
       {%Todo{} = todo, matched_attrs} ->
@@ -1225,6 +1211,15 @@ defmodule Maraithon.Todos do
           other ->
             other
         end
+    end
+  end
+
+  defp maybe_put_model_selected_at(attrs, opts) when is_map(attrs) and is_list(opts) do
+    if Keyword.get(opts, :model_selected?, false) and
+         Map.get(attrs, "source") not in ["manual", "mobile"] do
+      Map.put_new(attrs, "model_selected_at", DateTime.utc_now())
+    else
+      attrs
     end
   end
 
@@ -1324,11 +1319,18 @@ defmodule Maraithon.Todos do
     end
   end
 
+  defp get_todo_for_update(user_id, todo_id) do
+    Todo
+    |> where([todo], todo.id == ^todo_id and todo.user_id == ^user_id)
+    |> lock("FOR UPDATE")
+    |> Repo.one()
+  end
+
   defp update_status(user_id, todo_id, status, note, extra_metadata, opts) do
     activity_opts = Keyword.put_new(opts, :note, note)
 
     Repo.transaction(fn ->
-      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
+      with %Todo{} = todo <- get_todo_for_update(user_id, todo_id),
            {:ok, updated} <-
              todo
              |> Todo.changeset(%{
@@ -1342,7 +1344,8 @@ defmodule Maraithon.Todos do
              })
              |> Repo.update(),
            {:ok, _insight} <- sync_linked_insight(updated),
-           {:ok, _event} <- maybe_record_status_activity(todo, updated, status, activity_opts) do
+           {:ok, _event} <- maybe_record_status_activity(todo, updated, status, activity_opts),
+           {:ok, _learning_event} <- OutcomeLearning.maybe_enqueue(todo, updated, activity_opts) do
         updated
       else
         nil -> Repo.rollback(:not_found)
@@ -1520,6 +1523,7 @@ defmodule Maraithon.Todos do
 
     attrs
     |> Map.put("status", status)
+    |> Map.put("model_selected_at", merged_model_selected_at(existing, attrs))
     |> Map.put("closed_at", closed_at)
     |> Map.put("snoozed_until", snoozed_until)
     |> Map.put("direction", direction)
@@ -1535,6 +1539,14 @@ defmodule Maraithon.Todos do
   # update path, an incoming scan that simply omitted next_nudge_at must not
   # wipe an existing cadence back to nil — but the owed_to_me-only invariant
   # still wins, so any non-owed_to_me resolution clears it regardless.
+  defp merged_model_selected_at(%Todo{} = existing, attrs) do
+    if existing.source in ["manual", "mobile"] do
+      nil
+    else
+      existing.model_selected_at || Map.get(attrs, "model_selected_at")
+    end
+  end
+
   defp preserved_update_next_nudge_at(%Todo{} = existing, attrs, direction) do
     cond do
       direction != "owed_to_me" -> nil
@@ -2016,6 +2028,7 @@ defmodule Maraithon.Todos do
       status: todo_status_from_insight(insight.status),
       snoozed_until: insight.snoozed_until,
       closed_at: todo_closed_at(insight),
+      model_selected_at: insight.inserted_at || DateTime.utc_now(),
       source_item_id: insight.source_id,
       source_occurred_at: insight.source_occurred_at,
       dedupe_key: todo_dedupe_key_for_insight(insight),
@@ -2469,17 +2482,12 @@ defmodule Maraithon.Todos do
     })
   end
 
-  defp put_see_less_feedback(metadata, source, memory, training) when is_map(metadata) do
-    recorded_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-
+  defp put_see_less_queued_feedback(metadata, source) when is_map(metadata) do
     feedback = %{
       "value" => "see_less",
       "source" => source,
-      "memory_id" => memory.id,
-      "memory_title" => memory.title,
-      "pattern_key" => Map.get(training, "pattern_key"),
-      "summary" => Map.get(training, "summary"),
-      "recorded_at" => recorded_at
+      "learning" => "queued",
+      "recorded_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     }
 
     metadata

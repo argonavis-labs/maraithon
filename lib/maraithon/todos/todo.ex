@@ -35,6 +35,8 @@ defmodule Maraithon.Todos.Todo do
     field :status, :string, default: "open"
     field :snoozed_until, :utc_datetime_usec
     field :closed_at, :utc_datetime_usec
+    field :model_selected_at, :utc_datetime_usec
+    field :first_user_opened_at, :utc_datetime_usec
     field :source_item_id, :string
     field :source_occurred_at, :utc_datetime_usec
     field :dedupe_key, :string
@@ -92,6 +94,8 @@ defmodule Maraithon.Todos.Todo do
     :status,
     :snoozed_until,
     :closed_at,
+    :model_selected_at,
+    :first_user_opened_at,
     :source_item_id,
     :source_occurred_at,
     :metadata,

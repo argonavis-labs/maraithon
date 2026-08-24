@@ -108,6 +108,25 @@ defmodule MaraithonWeb.MobileTodoController do
     end
   end
 
+  def opened(conn, %{"id" => todo_id}) do
+    user_id = conn.assigns.current_user.id
+
+    case Todos.record_user_opened(user_id, todo_id,
+           actor_type: "user",
+           actor_id: user_id,
+           actor_label: "User",
+           source: "mobile_detail"
+         ) do
+      :ok ->
+        json(conn, %{ok: true})
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(MobileJSON.error(:not_found))
+    end
+  end
+
   def chat_thread(conn, %{"id" => todo_id}) do
     user_id = conn.assigns.current_user.id
 

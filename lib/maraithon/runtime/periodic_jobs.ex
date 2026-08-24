@@ -25,7 +25,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.TokenRefresher
   alias Maraithon.Runtime.WatchRenewer
   alias Maraithon.TelegramAssistant.ProactiveQueue
-  alias Maraithon.Todos.UserBatch
+  alias Maraithon.Todos.{OutcomeLearning, UserBatch}
 
   @provider_queue "runtime_provider_account"
   @model_queue "runtime_model_user"
@@ -41,6 +41,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @todo_completion_job "runtime_partition:todo_completion"
   @nudge_job "runtime_partition:nudge"
   @staleness_job "runtime_partition:staleness_triage"
+  @todo_outcome_job "runtime_partition:todo_outcome_learning"
 
   def provider_queue, do: @provider_queue
   def model_queue, do: @model_queue
@@ -389,6 +390,12 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp execute_model(%BackgroundJob{job_type: @staleness_job} = job) do
     with {:ok, user_id} <- partition_user_id(job) do
       StalenessTriageSweep.run_for_user(user_id) |> normalize_work_result()
+    end
+  end
+
+  defp execute_model(%BackgroundJob{job_type: @todo_outcome_job} = job) do
+    with {:ok, event_id} <- payload_string(job, "event_id") do
+      OutcomeLearning.process_event(event_id) |> normalize_work_result()
     end
   end
 

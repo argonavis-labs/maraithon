@@ -4,8 +4,10 @@ defmodule Maraithon.TodosTest do
   alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Memory
+  alias Maraithon.Repo
   alias Maraithon.Todos
-  alias Maraithon.Todos.FeedbackTrainer
+  alias Maraithon.Todos.{OutcomeLearner, TodoLearningEvent}
 
   test "fallback todo copy gives a direct saved-work decision frame" do
     user_id = unique_user_email("todos-fallback-copy")
@@ -447,59 +449,78 @@ defmodule Maraithon.TodosTest do
              |> Enum.map(& &1.id)
   end
 
-  test "see less writes negative todo memory and dismisses the current todo" do
+  test "see less queues durable outcome learning and dismisses immediately" do
     user_id = unique_user_email("todos-see-less")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
     {:ok, [todo]} =
-      Todos.upsert_many(user_id, [
-        gmail_todo_attrs("thread-newsletter", "Skim vendor newsletter",
-          summary: "A broad vendor newsletter has no direct ask for Kent.",
-          priority: 45
-        )
-      ])
+      Todos.upsert_many(
+        user_id,
+        [
+          gmail_todo_attrs("thread-newsletter", "Skim vendor newsletter",
+            summary: "A broad vendor newsletter has no direct ask for Kent.",
+            priority: 45
+          )
+        ],
+        model_selected?: true
+      )
 
-    llm_complete = fn prompt ->
-      assert prompt =~ FeedbackTrainer.sentinel()
-      assert prompt =~ "Skim vendor newsletter"
-      assert prompt =~ "Do not create brittle rules"
-
-      {:ok,
-       Jason.encode!(%{
-         "title" => "See less: vendor newsletters",
-         "summary" => "Vendor newsletters without a direct ask should not become todos.",
-         "content" =>
-           "When a vendor newsletter is informational and does not ask Kent for a reply, decision, approval, or deadline-driven action, skip it instead of creating a todo.",
-         "pattern_key" => "vendor_newsletters_without_direct_ask",
-         "categories" => ["vendor_newsletter", "no_direct_ask"],
-         "negative_signals" => ["broadcast update", "no explicit ask"],
-         "exceptions" => ["explicit deadline", "customer impact"],
-         "confidence" => 0.91,
-         "reasoning" => "The selected todo is informational rather than actionable."
-       })}
-    end
-
-    assert {:ok, %{todo: dismissed, memory: memory, training: training}} =
+    assert {:ok, %{todo: dismissed, memory: nil, training: %{"queued" => true}}} =
              Todos.see_less_like(user_id, todo.id,
                source: "test",
-               llm_complete: llm_complete
+               actor_type: "user",
+               actor_id: user_id
              )
 
     assert dismissed.status == "dismissed"
     assert get_in(dismissed.metadata, ["assistant_feedback", "value"]) == "see_less"
-    assert get_in(dismissed.metadata, ["see_less_feedback", "memory_id"]) == memory.id
-    assert training["pattern_key"] == "vendor_newsletters_without_direct_ask"
+    assert get_in(dismissed.metadata, ["see_less_feedback", "learning"]) == "queued"
+    assert Todos.list_open_for_user(user_id) == []
 
+    event = Repo.get_by!(TodoLearningEvent, todo_id: todo.id)
+    assert event.outcome == "bad"
+    assert event.status == "pending"
+
+    llm_complete = fn prompt ->
+      assert prompt =~ OutcomeLearner.sentinel()
+      assert prompt =~ "Skim vendor newsletter"
+      assert prompt =~ "admission and ranking"
+
+      {:ok,
+       Jason.encode!(%{
+         "action" => "upsert",
+         "target_memory_id" => nil,
+         "retire_memory_ids" => [],
+         "pattern" => %{
+           "title" => "See less: vendor newsletters",
+           "summary" => "Vendor newsletters without a direct ask should not become todos.",
+           "content" =>
+             "Skip informational vendor newsletters without a direct ask, and rank exceptions with concrete deadlines or customer impact higher.",
+           "pattern_key" => "vendor_newsletters_without_direct_ask",
+           "categories" => ["vendor_newsletter", "no_direct_ask"],
+           "positive_signals" => [],
+           "negative_signals" => ["broadcast update", "no explicit ask"],
+           "exceptions" => ["explicit deadline", "customer impact"],
+           "polarity" => "negative",
+           "confidence" => 0.91,
+           "reasoning" => "The selected todo is informational rather than actionable."
+         }
+       })}
+    end
+
+    assert {:ok, %{memory_id: memory_id, operation: "created"}} =
+             OutcomeLearner.learn(event, llm_complete: llm_complete)
+
+    memory = Memory.get_item_for_user(user_id, memory_id)
     assert memory.kind == "relevance_feedback"
     assert memory.polarity == "negative"
-    assert memory.source == "todo_see_less"
-    assert memory.source_ref_type == "todo"
-    assert memory.source_ref_id == todo.id
+    assert memory.source == "todo_outcome_learning"
+    assert memory.source_ref_type == "todo_learning_event"
+    assert memory.source_ref_id == event.id
     assert "todo_relevance" in memory.tags
-    assert "see_less" in memory.tags
-    assert memory.metadata["trainer"] == FeedbackTrainer.sentinel()
+    assert memory.metadata["trainer"] == OutcomeLearner.sentinel()
 
-    assert Todos.list_open_for_user(user_id) == []
+    assert Repo.get!(TodoLearningEvent, event.id).status == "processed"
   end
 
   describe "SPEC 06 bucket_for_brief direction option" do

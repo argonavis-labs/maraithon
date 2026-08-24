@@ -109,6 +109,14 @@ defmodule MaraithonWeb.TodosLive do
     filters = normalize_filters(params)
     selected_todo_id = normalize_text(Map.get(params, "todo_id"))
 
+    if selected_todo_id do
+      _ =
+        Todos.record_user_opened(current_user_id(socket), selected_todo_id,
+          actor_type: "user",
+          source: "todos_detail"
+        )
+    end
+
     socket =
       socket
       |> assign(:current_path, current_path_from_uri(uri))
@@ -340,9 +348,14 @@ defmodule MaraithonWeb.TodosLive do
         {:noreply, put_flash(socket, :error, "Enter a next action with at least 4 characters.")}
 
       true ->
-        case Todos.update_for_user(current_user_id(socket), todo_id, %{
-               "next_action" => next_action
-             }) do
+        user_id = current_user_id(socket)
+
+        case Todos.update_for_user(
+               user_id,
+               todo_id,
+               %{"next_action" => next_action},
+               todo_action_opts(user_id, "Next action updated from todo detail.")
+             ) do
           {:ok, _todo} ->
             {:noreply,
              socket

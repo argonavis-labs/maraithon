@@ -149,6 +149,10 @@ struct MobileAPIClient: Sendable {
         let todo: RemoteTodo
     }
 
+    struct AcknowledgementResponse: Decodable, Sendable {
+        let ok: Bool
+    }
+
     struct GoalsResponse: Decodable, Sendable {
         let goals: [RemoteGoal]
     }
@@ -1162,6 +1166,15 @@ struct MobileAPIClient: Sendable {
             responseType: TodoResponse.self
         )
         return response.todo
+    }
+
+    func markTodoOpened(sessionToken: String, id: UUID) async throws {
+        let _: AcknowledgementResponse = try await send(
+            path: "/todos/\(id.uuidString.lowercased())/opened",
+            method: "POST",
+            sessionToken: sessionToken,
+            responseType: AcknowledgementResponse.self
+        )
     }
 
     func deleteTodo(sessionToken: String, id: UUID) async throws -> RemoteTodo {

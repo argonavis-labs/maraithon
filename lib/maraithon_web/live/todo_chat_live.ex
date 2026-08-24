@@ -21,6 +21,8 @@ defmodule MaraithonWeb.TodoChatLive do
          |> push_navigate(to: ~p"/todos")}
 
       true ->
+        _ = Todos.record_user_opened(user_id, todo.id, actor_type: "user", source: "todo_chat")
+
         case AssistantChat.get_or_create_todo_thread(user_id, todo.id) do
           {:ok, %{thread: thread}} ->
             socket =

@@ -605,20 +605,31 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
         {:error, {:brief_review_delivery_in_progress, delivery_key}}
 
       {:claimed, current, claim_token} ->
-        deliver_claimed_review_presentation(
-          current,
-          "todo",
-          todo.id,
-          claim_token,
-          fn armed ->
-            payload = review_item_payload(armed, todo, position, total)
+        result =
+          deliver_claimed_review_presentation(
+            current,
+            "todo",
+            todo.id,
+            claim_token,
+            fn armed ->
+              payload = review_item_payload(armed, todo, position, total)
 
-            TelegramResponder.send(chat_id, payload.text,
-              parse_mode: "HTML",
-              reply_markup: payload.reply_markup
+              TelegramResponder.send(chat_id, payload.text,
+                parse_mode: "HTML",
+                reply_markup: payload.reply_markup
+              )
+            end
+          )
+
+        if result == :ok do
+          _ =
+            Todos.record_user_opened(todo.user_id, todo.id,
+              actor_type: "user",
+              source: "telegram_review"
             )
-          end
-        )
+        end
+
+        result
 
       {:error, reason} ->
         {:error, {:brief_review_delivery_checkpoint_failed, reason}}

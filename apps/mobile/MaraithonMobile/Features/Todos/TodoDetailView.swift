@@ -41,7 +41,9 @@ struct TodoDetailView: View {
             TodoEditorView(todo: todo)
         }
         .task(id: todo.id) {
+            async let opened: Void = markTodoOpened()
             await loadThreadIfNeeded()
+            _ = await opened
         }
     }
 
@@ -185,6 +187,14 @@ struct TodoDetailView: View {
                 tint: .green
             )
         ]
+    }
+
+    private func markTodoOpened() async {
+        guard let sessionToken = sessionStore.user?.sessionToken else { return }
+
+        // Opening must never block the detail view. The durable server write is
+        // best-effort here and idempotent across repeated presentations.
+        try? await MobileAPIClient().markTodoOpened(sessionToken: sessionToken, id: todo.id)
     }
 
     private func loadThreadIfNeeded() async {

@@ -24,7 +24,13 @@ defmodule MaraithonWeb.BriefingLive do
   def handle_event("complete_todo", %{"id" => todo_id}, socket) do
     user_id = socket.assigns.current_user.id
 
-    case Todos.mark_done(user_id, todo_id, note: "Completed from the morning briefing.") do
+    case Todos.mark_done(user_id, todo_id,
+           note: "Completed from the morning briefing.",
+           actor_type: "user",
+           actor_id: user_id,
+           actor_label: "User",
+           source: "web_briefing"
+         ) do
       {:ok, _todo} -> {:noreply, refresh(socket)}
       {:error, _reason} -> {:noreply, put_flash(socket, :error, "Could not complete that item.")}
     end
@@ -33,7 +39,13 @@ defmodule MaraithonWeb.BriefingLive do
   def handle_event("dismiss_todo", %{"id" => todo_id}, socket) do
     user_id = socket.assigns.current_user.id
 
-    case Todos.dismiss(user_id, todo_id, note: "Dismissed from the morning briefing.") do
+    case Todos.dismiss(user_id, todo_id,
+           note: "Dismissed from the morning briefing.",
+           actor_type: "user",
+           actor_id: user_id,
+           actor_label: "User",
+           source: "web_briefing"
+         ) do
       {:ok, _todo} -> {:noreply, refresh(socket)}
       {:error, _reason} -> {:noreply, put_flash(socket, :error, "Could not dismiss that item.")}
     end
