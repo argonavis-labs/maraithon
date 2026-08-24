@@ -105,11 +105,11 @@ if [[ -n "${todo_validation_user}" ]]; then
     fi
 
     coordination_log="$(gcloud logging read \
-      "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND timestamp>=\"${validation_started_at}\" AND textPayload:\"RUNTIME_COORDINATION_ERROR=\"" \
+      "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND timestamp>=\"${validation_started_at}\" AND (textPayload:\"RUNTIME_COORDINATION_ERROR=\" OR jsonPayload.message:\"RUNTIME_COORDINATION_ERROR=\")" \
       --project "${project}" \
       --limit 20 \
       --order=desc \
-      --format 'value(textPayload)' 2>/dev/null || true)"
+      --format 'value(textPayload,jsonPayload.message)' 2>/dev/null || true)"
     coordination_error="$(printf '%s\n' "${coordination_log}" | \
       grep -Eo 'RUNTIME_COORDINATION_ERROR=[a-z0-9_:,-]+' | head -n 1 || true)"
 

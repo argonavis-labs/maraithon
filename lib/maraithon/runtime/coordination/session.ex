@@ -194,17 +194,38 @@ defmodule Maraithon.Runtime.Coordination.Session do
            {:renew_node, Authority.renew_node(state.session, state.node_ttl_ms)},
          {:renew_partitions, {:ok, _partitions}} <-
            {:renew_partitions, Authority.renew_partitions(session, state.partition_ttl_ms)} do
-      state = %{state | session: session}
-      state = refresh_leader(state)
-      _ = publish_preparing_partitions(session)
-      _ = drain_revoked_partitions(session)
-      _ = TaskClaims.reconcile_proven(100)
-      if state.leader, do: Planner.plan_once(state.leader, limit: state.transition_limit)
-      state
+      state = %{state | session: session} |> refresh_leader()
+
+      case publish_preparing_partitions(session) do
+        :ok ->
+          _ = drain_revoked_partitions(session)
+
+          case TaskClaims.reconcile_proven(100) do
+            {:ok, _results} -> plan_partitions(state)
+            _error -> fail_closed(state, :reconcile_proven)
+          end
+
+        {:error, :partition_publish_failed} ->
+          fail_closed(state, :publish_partition)
+      end
     else
       {:renew_node, _error} -> fail_closed(state, :renew_node)
       {:renew_partitions, _error} -> fail_closed(state, :renew_partitions)
     end
+  end
+
+  defp plan_partitions(%{leader: nil} = state), do: state
+
+  defp plan_partitions(state) do
+    case Planner.plan_once(state.leader, limit: state.transition_limit) do
+      {:ok, _result} -> state
+      _error -> fail_closed(state, :planner_error)
+    end
+  rescue
+    _error in Postgrex.Error -> fail_closed(state, :planner_database)
+    _error -> fail_closed(state, :planner_exception)
+  catch
+    :exit, _reason -> fail_closed(state, :planner_exception)
   end
 
   defp refresh_leader(%{leader: nil} = state) do
@@ -232,10 +253,13 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   defp publish_preparing_partitions(session) do
     Authority.owned_partitions(session, ["preparing"])
-    |> Enum.each(fn partition ->
+    |> Enum.reduce_while(:ok, fn partition, :ok ->
       # All scoped pollers were verified before node readiness; partition ready
       # is the final authority publication, never an acquisition side effect.
-      _ = Authority.mark_partition_ready(session, partition.partition_id)
+      case Authority.mark_partition_ready(session, partition.partition_id) do
+        {:ok, _ready} -> {:cont, :ok}
+        _error -> {:halt, {:error, :partition_publish_failed}}
+      end
     end)
   end
 
