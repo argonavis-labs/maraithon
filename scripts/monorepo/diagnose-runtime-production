@@ -16,7 +16,7 @@ fi
 
 # Do not emit log bodies. Only report counts for fixed coordination error classes.
 logs="$(gcloud logging read \
-  "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND (textPayload:\"Maraithon.Runtime.Coordination.Session\" OR textPayload:\"runtime_partitions\" OR textPayload:\"runtime_partition_transitions\")" \
+  "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND (textPayload:\"RUNTIME_COORDINATION_ERROR=\" OR textPayload:\"Maraithon.Runtime.Coordination.Session\" OR textPayload:\"runtime_partitions\" OR textPayload:\"runtime_partition_transitions\")" \
   --project "${project}" \
   --freshness 30m \
   --limit 1000 \
@@ -32,6 +32,10 @@ count() {
 
 printf 'RUNTIME_COORDINATION_DIAGNOSTIC={'
 printf '"records":%s' "$(count '.')"
+printf ',"joining_workers_missing":%s' "$(count 'RUNTIME_COORDINATION_ERROR=joining_workers_missing')"
+printf ',"mark_node_ready":%s' "$(count 'RUNTIME_COORDINATION_ERROR=mark_node_ready')"
+printf ',"renew_node":%s' "$(count 'RUNTIME_COORDINATION_ERROR=renew_node')"
+printf ',"renew_partitions":%s' "$(count 'RUNTIME_COORDINATION_ERROR=renew_partitions')"
 printf ',"session_termination":%s' "$(count 'GenServer .*Coordination.Session.*terminating|Coordination.Session.*terminating')"
 printf ',"insufficient_privilege":%s' "$(count 'insufficient_privilege|permission denied')"
 printf ',"check_violation":%s' "$(count 'check_violation|ERROR 23514')"

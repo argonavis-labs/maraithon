@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   use GenServer
   import Ecto.Query
+  require Logger
 
   alias Maraithon.Repo
   alias Maraithon.Runtime.Config
@@ -80,6 +81,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
       session: nil,
       leader: nil,
       phase: :dormant,
+      joining_attempts: 0,
       tick_ms:
         Keyword.get(opts, :tick_ms, Config.positive_integer(:coordination_tick_ms, @default_tick)),
       node_ttl_ms:
@@ -154,16 +156,23 @@ defmodule Maraithon.Runtime.Coordination.Session do
   end
 
   defp coordinate(%{phase: :joining, session: session} = state) do
-    if workers_ready?(state.required_workers) do
+    missing_workers = Enum.reject(state.required_workers, &is_pid(Process.whereis(&1)))
+
+    if missing_workers == [] do
       case Authority.mark_node_ready(session) do
         {:ok, %NodeIncarnation{} = ready} ->
-          %{state | session: ready, phase: :ready} |> ready_cycle()
+          %{state | session: ready, phase: :ready, joining_attempts: 0} |> ready_cycle()
 
         _ ->
-          fail_closed(state)
+          fail_closed(state, :mark_node_ready)
       end
     else
-      state
+      if rem(state.joining_attempts, 15) == 0 do
+        codes = missing_workers |> Enum.map(&worker_code/1) |> Enum.sort() |> Enum.join(",")
+        Logger.warning("RUNTIME_COORDINATION_ERROR=joining_workers_missing:#{codes}")
+      end
+
+      %{state | joining_attempts: state.joining_attempts + 1}
     end
   end
 
@@ -181,9 +190,10 @@ defmodule Maraithon.Runtime.Coordination.Session do
   defp coordinate(state), do: state
 
   defp ready_cycle(state) do
-    with {:ok, %NodeIncarnation{} = session} <-
-           Authority.renew_node(state.session, state.node_ttl_ms),
-         {:ok, _partitions} <- Authority.renew_partitions(session, state.partition_ttl_ms) do
+    with {:renew_node, {:ok, %NodeIncarnation{} = session}} <-
+           {:renew_node, Authority.renew_node(state.session, state.node_ttl_ms)},
+         {:renew_partitions, {:ok, _partitions}} <-
+           {:renew_partitions, Authority.renew_partitions(session, state.partition_ttl_ms)} do
       state = %{state | session: session}
       state = refresh_leader(state)
       _ = publish_preparing_partitions(session)
@@ -192,7 +202,8 @@ defmodule Maraithon.Runtime.Coordination.Session do
       if state.leader, do: Planner.plan_once(state.leader, limit: state.transition_limit)
       state
     else
-      _ -> fail_closed(state)
+      {:renew_node, _error} -> fail_closed(state, :renew_node)
+      {:renew_partitions, _error} -> fail_closed(state, :renew_partitions)
     end
   end
 
@@ -375,13 +386,22 @@ defmodule Maraithon.Runtime.Coordination.Session do
     :exit, _ -> :blocked
   end
 
-  defp fail_closed(state) do
+  defp fail_closed(state), do: fail_closed(state, :unspecified)
+
+  defp fail_closed(state, stage) do
+    Logger.error("RUNTIME_COORDINATION_ERROR=#{stage}")
+
     # Uncertainty revokes all local execution immediately. Durable settlement
     # still requires exact monitored termination proof and PostgreSQL fences.
     cleanup_uncertain(state)
   end
 
-  defp workers_ready?(workers), do: Enum.all?(workers, &is_pid(Process.whereis(&1)))
+  defp worker_code(Maraithon.Runtime.BackgroundJobRunner), do: "background_job_runner"
+  defp worker_code(Maraithon.Runtime.EffectRunner), do: "effect_runner"
+  defp worker_code(Maraithon.Runtime.Scheduler), do: "scheduler"
+  defp worker_code(Maraithon.Runtime.WakeCoordinator), do: "wake_coordinator"
+  defp worker_code(Maraithon.Runtime.AgentWatcher), do: "agent_watcher"
+  defp worker_code(_worker), do: "unknown"
 
   defp required_workers do
     [

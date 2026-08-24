@@ -104,6 +104,19 @@ if [[ -n "${todo_validation_user}" ]]; then
       echo "Todo validation failed before an aggregate-only error report was available" >&2
     fi
 
+    coordination_log="$(gcloud logging read \
+      "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND timestamp>=\"${validation_started_at}\" AND textPayload:\"RUNTIME_COORDINATION_ERROR=\"" \
+      --project "${project}" \
+      --limit 20 \
+      --order=desc \
+      --format 'value(textPayload)' 2>/dev/null || true)"
+    coordination_error="$(printf '%s\n' "${coordination_log}" | \
+      grep -Eo 'RUNTIME_COORDINATION_ERROR=[a-z0-9_:,-]+' | head -n 1 || true)"
+
+    if [[ "${coordination_error}" == RUNTIME_COORDINATION_ERROR=* ]]; then
+      echo "${coordination_error}" >&2
+    fi
+
     exit 1
   fi
 
