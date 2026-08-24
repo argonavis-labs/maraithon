@@ -76,7 +76,7 @@ if [[ -n "${todo_validation_user}" ]]; then
     exit 64
   fi
 
-  gcloud run jobs deploy "${service}-todo-validation"     --project "${project}"     --region "${region}"     --image "${image}"     --service-account "${runtime_service_account}"     --set-cloudsql-instances "${connection}"     --set-env-vars "${common_env},TODO_VALIDATION_USER=${todo_validation_user}"     --set-secrets "${runtime_secrets}"     --command /app/bin/maraithon     --args eval,Maraithon.Release.validate_authorized_todo_launch     --cpu 1     --memory 2Gi     --task-timeout 10m     --max-retries 0     --quiet
+  gcloud run jobs deploy "${service}-todo-validation"     --project "${project}"     --region "${region}"     --image "${image}"     --service-account "${runtime_service_account}"     --set-cloudsql-instances "${connection}"     --set-env-vars "${common_env},DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,TODO_VALIDATION_USER=${todo_validation_user}"     --set-secrets "${runtime_secrets}"     --command /app/bin/maraithon     --args eval,Maraithon.Release.validate_authorized_todo_launch     --cpu 1     --memory 2Gi     --task-timeout 10m     --max-retries 0     --quiet
 
   validation_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
