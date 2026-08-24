@@ -168,7 +168,16 @@ defmodule Maraithon.Runtime.Coordination.Session do
   end
 
   defp coordinate(%{phase: :ready} = state), do: ready_cycle(state)
-  defp coordinate(%{phase: :uncertain} = state), do: cleanup_uncertain(state)
+
+  defp coordinate(%{phase: :uncertain} = state) do
+    # Uncertain work remains fenced to its expired incarnation. After local
+    # termination and proof reconciliation, rejoin with a fresh identity so
+    # unrelated partitions can recover. The planner still cannot release an
+    # old partition until its exact task proof is durable.
+    state = cleanup_uncertain(state)
+    %{state | session: nil, leader: nil, phase: :dormant}
+  end
+
   defp coordinate(state), do: state
 
   defp ready_cycle(state) do

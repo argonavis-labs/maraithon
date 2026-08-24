@@ -47,12 +47,18 @@ defmodule Maraithon.Runtime.Coordination.Planner do
     match?({:ok, :released}, Authority.release_drained_partition(leader, partition_id))
   rescue
     error in Postgrex.Error ->
-      if release_gate_blocked?(error) do
+      if release_gate_blocked?(error) or release_retryable?(error) do
         false
       else
         reraise error, __STACKTRACE__
       end
   end
+
+  defp release_retryable?(%Postgrex.Error{postgres: %{code: code}})
+       when code in [:lock_not_available, :query_canceled],
+       do: true
+
+  defp release_retryable?(_error), do: false
 
   defp release_gate_blocked?(%Postgrex.Error{
          postgres: %{code: :check_violation, message: message}

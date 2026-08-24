@@ -876,93 +876,104 @@ defmodule Maraithon.Runtime.Coordination.Authority do
   end
 
   def release_drained_partition(leader, partition_id) when is_map(leader) do
-    Repo.transaction(fn ->
-      activation_epoch = lock_active_effect_pair!()
-      leader_epoch = fence_leader!(leader)
+    Repo.transaction(
+      fn ->
+        # A stale partition must not hold the planner past its own lease window.
+        # Timeout rolls back the exact release transaction; it never weakens a fence.
+        SQL.query!(
+          Repo,
+          "SELECT set_config('lock_timeout', '1s', true), set_config('statement_timeout', '5s', true)",
+          []
+        )
 
-      if leader_epoch != activation_epoch,
-        do: Repo.rollback(:leader_authority_lost)
+        activation_epoch = lock_active_effect_pair!()
+        leader_epoch = fence_leader!(leader)
 
-      set_local!("maraithon.runtime_leader_action", leader.action_token)
+        if leader_epoch != activation_epoch,
+          do: Repo.rollback(:leader_authority_lost)
 
-      # The topology fence prevents new exact work admission. Lock the remaining
-      # active Effects before the partition so release serializes with the
-      # Effect-first drain phase even if its Agent lease was already proof-deleted.
-      lock_partition_effect_release_barrier!(activation_epoch, partition_id)
+        set_local!("maraithon.runtime_leader_action", leader.action_token)
 
-      {transition, ownership_epoch, effects_drained_epoch} =
-        case SQL.query!(
-               Repo,
-               """
-               SELECT transition_id, ownership_epoch, effects_drained_epoch
-               FROM public.runtime_partitions
-               WHERE partition_id = $1 AND activation_epoch = $2::uuid
-                 AND state IN ('draining', 'blocked')
-               FOR UPDATE
-               """,
-               [partition_id, Ecto.UUID.dump!(activation_epoch)]
-             ).rows do
-          [[transition, ownership_epoch, effects_drained_epoch]] ->
-            {transition, ownership_epoch, effects_drained_epoch}
+        # The topology fence prevents new exact work admission. Lock the remaining
+        # active Effects before the partition so release serializes with the
+        # Effect-first drain phase even if its Agent lease was already proof-deleted.
+        lock_partition_effect_release_barrier!(activation_epoch, partition_id)
 
-          [] ->
-            Repo.rollback(:partition_not_drained)
+        {transition, ownership_epoch, effects_drained_epoch} =
+          case SQL.query!(
+                 Repo,
+                 """
+                 SELECT transition_id, ownership_epoch, effects_drained_epoch
+                 FROM public.runtime_partitions
+                 WHERE partition_id = $1 AND activation_epoch = $2::uuid
+                   AND state IN ('draining', 'blocked')
+                 FOR UPDATE
+                 """,
+                 [partition_id, Ecto.UUID.dump!(activation_epoch)]
+               ).rows do
+            [[transition, ownership_epoch, effects_drained_epoch]] ->
+              {transition, ownership_epoch, effects_drained_epoch}
+
+            [] ->
+              Repo.rollback(:partition_not_drained)
+          end
+
+        if effects_drained_epoch not in [nil, ownership_epoch],
+          do: Repo.rollback(:partition_not_drained)
+
+        if is_nil(effects_drained_epoch) do
+          marker_result =
+            SQL.query!(
+              Repo,
+              """
+              UPDATE public.runtime_partitions
+              SET effects_drained_epoch = ownership_epoch,
+                  updated_at = timezone('UTC', clock_timestamp())
+              WHERE partition_id = $1 AND activation_epoch = $2::uuid
+                AND ownership_epoch = $3 AND effects_drained_epoch IS NULL
+                AND state IN ('draining', 'blocked')
+              RETURNING partition_id
+              """,
+              [partition_id, Ecto.UUID.dump!(activation_epoch), ownership_epoch]
+            )
+
+          if marker_result.num_rows != 1, do: Repo.rollback(:partition_not_drained)
         end
 
-      if effects_drained_epoch not in [nil, ownership_epoch],
-        do: Repo.rollback(:partition_not_drained)
-
-      if is_nil(effects_drained_epoch) do
-        marker_result =
+        result =
           SQL.query!(
             Repo,
             """
             UPDATE public.runtime_partitions
-            SET effects_drained_epoch = ownership_epoch,
+            SET activation_epoch = NULL, owner_node_incarnation_id = NULL,
+                transition_id = NULL, state = 'unassigned', lease_expires_at = NULL,
+                ready_at = NULL, draining_at = NULL, effects_drained_epoch = NULL,
                 updated_at = timezone('UTC', clock_timestamp())
             WHERE partition_id = $1 AND activation_epoch = $2::uuid
-              AND ownership_epoch = $3 AND effects_drained_epoch IS NULL
+              AND ownership_epoch = $3 AND effects_drained_epoch = $3
               AND state IN ('draining', 'blocked')
             RETURNING partition_id
             """,
             [partition_id, Ecto.UUID.dump!(activation_epoch), ownership_epoch]
           )
 
-        if marker_result.num_rows != 1, do: Repo.rollback(:partition_not_drained)
-      end
+        if result.num_rows != 1, do: Repo.rollback(:partition_not_drained)
 
-      result =
         SQL.query!(
           Repo,
           """
-          UPDATE public.runtime_partitions
-          SET activation_epoch = NULL, owner_node_incarnation_id = NULL,
-              transition_id = NULL, state = 'unassigned', lease_expires_at = NULL,
-              ready_at = NULL, draining_at = NULL, effects_drained_epoch = NULL,
+          UPDATE public.runtime_partition_transitions
+          SET state = 'completed', completed_at = timezone('UTC', clock_timestamp()),
               updated_at = timezone('UTC', clock_timestamp())
-          WHERE partition_id = $1 AND activation_epoch = $2::uuid
-            AND ownership_epoch = $3 AND effects_drained_epoch = $3
-            AND state IN ('draining', 'blocked')
-          RETURNING partition_id
+          WHERE id = $1::uuid AND state IN ('draining', 'blocked')
           """,
-          [partition_id, Ecto.UUID.dump!(activation_epoch), ownership_epoch]
+          [transition]
         )
 
-      if result.num_rows != 1, do: Repo.rollback(:partition_not_drained)
-
-      SQL.query!(
-        Repo,
-        """
-        UPDATE public.runtime_partition_transitions
-        SET state = 'completed', completed_at = timezone('UTC', clock_timestamp()),
-            updated_at = timezone('UTC', clock_timestamp())
-        WHERE id = $1::uuid AND state IN ('draining', 'blocked')
-        """,
-        [transition]
-      )
-
-      :released
-    end)
+        :released
+      end,
+      timeout: 6_000
+    )
   end
 
   def owned_partitions(%NodeIncarnation{} = session, states \\ ["ready"]) do
