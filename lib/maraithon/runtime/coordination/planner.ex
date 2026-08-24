@@ -17,14 +17,48 @@ defmodule Maraithon.Runtime.Coordination.Planner do
     limit = Keyword.get(opts, :limit, 4) |> max(1) |> min(@max_limit)
     cooldown_ms = Keyword.get(opts, :cooldown_ms, 60_000) |> max(1_000)
 
-    with {:ok, finalized} <- finalize_drained(leader, limit),
-         {:ok, expired} <- fence_expired(leader, max(limit - finalized, 0)),
-         {:ok, assigned} <- assign_unowned(leader, max(limit - finalized - expired, 0)),
-         {:ok, rebalanced} <-
-           rebalance(leader, max(limit - finalized - expired - assigned, 0), cooldown_ms) do
+    with {:finalize, {:ok, finalized}} <-
+           {:finalize, run_stage(fn -> finalize_drained(leader, limit) end)},
+         {:fence, {:ok, expired}} <-
+           {:fence, run_stage(fn -> fence_expired(leader, max(limit - finalized, 0)) end)},
+         {:assign, {:ok, assigned}} <-
+           {:assign,
+            run_stage(fn -> assign_unowned(leader, max(limit - finalized - expired, 0)) end)},
+         {:rebalance, {:ok, rebalanced}} <-
+           {:rebalance,
+            run_stage(fn ->
+              rebalance(leader, max(limit - finalized - expired - assigned, 0), cooldown_ms)
+            end)} do
       {:ok, %{finalized: finalized, expired: expired, assigned: assigned, rebalanced: rebalanced}}
+    else
+      {stage, {:error, reason}} when stage in [:finalize, :fence, :assign, :rebalance] ->
+        {:error, {stage, reason}}
     end
   end
+
+  defp run_stage(fun) do
+    fun.()
+  rescue
+    error in Postgrex.Error -> {:error, {:database, database_error_code(error)}}
+    _error -> {:error, :exception}
+  catch
+    :exit, _reason -> {:error, :exit}
+  end
+
+  defp database_error_code(%Postgrex.Error{postgres: %{code: code}})
+       when code in [
+              :check_violation,
+              :foreign_key_violation,
+              :insufficient_privilege,
+              :lock_not_available,
+              :query_canceled,
+              :unique_violation,
+              :undefined_column,
+              :undefined_table
+            ],
+       do: code
+
+  defp database_error_code(_error), do: :other
 
   defp finalize_drained(_leader, 0), do: {:ok, 0}
 

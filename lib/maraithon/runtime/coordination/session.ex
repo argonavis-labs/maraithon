@@ -219,7 +219,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
   defp plan_partitions(state) do
     case Planner.plan_once(state.leader, limit: state.transition_limit) do
       {:ok, _result} -> state
-      _error -> fail_closed(state, :planner_error)
+      {:error, reason} -> fail_closed(state, planner_error_code(reason))
     end
   rescue
     _error in Postgrex.Error -> fail_closed(state, :planner_database)
@@ -227,6 +227,32 @@ defmodule Maraithon.Runtime.Coordination.Session do
   catch
     :exit, _reason -> fail_closed(state, :planner_exception)
   end
+
+  defp planner_error_code({stage, reason}),
+    do: "planner_#{planner_stage_code(stage)}:#{planner_reason_code(reason)}"
+
+  defp planner_error_code(_reason), do: "planner_unknown:error"
+
+  defp planner_stage_code(:finalize), do: "finalize"
+  defp planner_stage_code(:fence), do: "fence"
+  defp planner_stage_code(:assign), do: "assign"
+  defp planner_stage_code(:rebalance), do: "rebalance"
+  defp planner_stage_code(_stage), do: "unknown"
+
+  defp planner_reason_code({:database, code}), do: "database_#{database_error_code(code)}"
+  defp planner_reason_code(:exception), do: "exception"
+  defp planner_reason_code(:exit), do: "exit"
+  defp planner_reason_code(_reason), do: "error"
+
+  defp database_error_code(:check_violation), do: "check_violation"
+  defp database_error_code(:foreign_key_violation), do: "foreign_key_violation"
+  defp database_error_code(:insufficient_privilege), do: "insufficient_privilege"
+  defp database_error_code(:lock_not_available), do: "lock_not_available"
+  defp database_error_code(:query_canceled), do: "query_canceled"
+  defp database_error_code(:unique_violation), do: "unique_violation"
+  defp database_error_code(:undefined_column), do: "undefined_column"
+  defp database_error_code(:undefined_table), do: "undefined_table"
+  defp database_error_code(_code), do: "other"
 
   defp refresh_leader(%{leader: nil} = state) do
     case Authority.acquire_leader(state.session, state.leader_ttl_ms) do
