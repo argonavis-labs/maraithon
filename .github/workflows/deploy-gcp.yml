@@ -5,6 +5,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Production operation
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - validate-todo
 
 concurrency:
   group: production-deploy
@@ -35,9 +44,18 @@ jobs:
           project_id: maraithon
 
       - name: Deploy production
+        if: github.event_name == 'push' || inputs.operation == 'deploy'
         run: make deploy
         env:
           MARAITHON_GCP_PROJECT: maraithon
           MARAITHON_GCP_REGION: us-central1
           MARAITHON_GCP_SERVICE: maraithon
           MARAITHON_VALIDATE_TODO_LAUNCH_USER: kent@runner.now
+
+      - name: Validate production Todo outcome learning
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'validate-todo'
+        run: scripts/monorepo/validate-todo-production
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
