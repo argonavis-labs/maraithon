@@ -50,8 +50,12 @@ defmodule Maraithon.Todos.ProductionOutcomeValidatorTest do
              {:todo_outcome_validation_processing_failed, "invalid_json"}
            ) == "todo_outcome_validation_processing_failed:invalid_json"
 
-    assert ProductionOutcomeValidator.error_code({:validator_exception, RuntimeError}) ==
-             "validator_exception:RuntimeError"
+    assert ProductionOutcomeValidator.error_code(
+             {:validator_exception, :cleanup, RuntimeError,
+              "Maraithon.Todos.ProductionOutcomeValidator.cleanup/1"}
+           ) ==
+             "validator_exception:cleanup:RuntimeError:" <>
+               "Maraithon.Todos.ProductionOutcomeValidator.cleanup/1"
 
     assert ProductionOutcomeValidator.error_code({:unexpected, "sensitive detail"}) ==
              "todo_outcome_validation_failed"

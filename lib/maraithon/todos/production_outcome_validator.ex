@@ -18,16 +18,24 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   @poll_interval_ms 1_000
 
   def run do
-    do_run()
-  rescue
-    error in Postgrex.Error ->
-      {:error, {:database_error, database_error_code(error)}}
+    try do
+      do_run()
+    rescue
+      error in Postgrex.Error ->
+        {:error,
+         {:database_error, current_stage(), database_error_code(error),
+          stacktrace_site(__STACKTRACE__)}}
 
-    error ->
-      {:error, {:validator_exception, error.__struct__}}
-  catch
-    kind, _reason ->
-      {:error, {:validator_exit, kind}}
+      error ->
+        {:error,
+         {:validator_exception, current_stage(), error.__struct__,
+          stacktrace_site(__STACKTRACE__)}}
+    catch
+      kind, _reason ->
+        {:error, {:validator_exit, current_stage(), kind, stacktrace_site(__STACKTRACE__)}}
+    after
+      Process.delete(stage_key())
+    end
   end
 
   def error_code(reason) when is_atom(reason), do: Atom.to_string(reason)
@@ -36,13 +44,14 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
       when is_binary(category),
       do: "todo_outcome_validation_processing_failed:#{category}"
 
-  def error_code({:database_error, code}), do: "database_error:#{code}"
+  def error_code({:database_error, stage, code, site}),
+    do: "database_error:#{stage}:#{code}:#{site}"
 
-  def error_code({:validator_exception, module}) when is_atom(module),
-    do: "validator_exception:#{inspect(module)}"
+  def error_code({:validator_exception, stage, module, site}) when is_atom(module),
+    do: "validator_exception:#{stage}:#{inspect(module)}:#{site}"
 
-  def error_code({:validator_exit, kind}) when is_atom(kind),
-    do: "validator_exit:#{kind}"
+  def error_code({:validator_exit, stage, kind, site}) when is_atom(kind),
+    do: "validator_exit:#{stage}:#{kind}:#{site}"
 
   def error_code(_reason), do: "todo_outcome_validation_failed"
 
@@ -50,15 +59,18 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
     user_id = validation_user_id()
 
     try do
-      with {:ok, _user} <- create_user(user_id),
-           {:ok, todo} <- create_todo(user_id),
-           {:ok, %{todo: dismissed}} <- dismiss_todo(user_id, todo.id),
+      with {:ok, _user} <- at_stage(:create_user, fn -> create_user(user_id) end),
+           {:ok, todo} <- at_stage(:create_todo, fn -> create_todo(user_id) end),
+           {:ok, %{todo: dismissed}} <-
+             at_stage(:dismiss_todo, fn -> dismiss_todo(user_id, todo.id) end),
            :ok <- require_status(dismissed.status, "dismissed", :todo_not_dismissed),
-           %TodoLearningEvent{} = event <- learning_event(todo.id),
+           %TodoLearningEvent{} = event <-
+             at_stage(:load_event, fn -> learning_event(todo.id) end),
            :ok <- validate_event(event),
-           %BackgroundJob{} = job <- learning_job(event.id),
+           %BackgroundJob{} = job <- at_stage(:load_job, fn -> learning_job(event.id) end),
            :ok <- validate_job(job),
-           {:ok, processed_event, completed_job} <- await_processing(event.id, job.id) do
+           {:ok, processed_event, completed_job} <-
+             at_stage(:await_processing, fn -> await_processing(event.id, job.id) end) do
         {:ok,
          %{
            isolated_user: true,
@@ -77,8 +89,31 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
         _other -> {:error, :todo_outcome_validation_failed}
       end
     after
-      cleanup(user_id)
+      at_stage(:cleanup, fn -> cleanup(user_id) end)
     end
+  end
+
+  defp at_stage(stage, fun) when is_atom(stage) and is_function(fun, 0) do
+    Process.put(stage_key(), stage)
+    fun.()
+  end
+
+  defp current_stage, do: Process.get(stage_key(), :unknown)
+  defp stage_key, do: {__MODULE__, :validation_stage}
+
+  defp stacktrace_site(stacktrace) do
+    Enum.find_value(stacktrace, "unknown", fn
+      {module, function, arity_or_args, _location} when is_atom(module) and is_atom(function) ->
+        module_name = Atom.to_string(module)
+
+        if String.starts_with?(module_name, "Elixir.Maraithon.") do
+          arity = if is_integer(arity_or_args), do: arity_or_args, else: length(arity_or_args)
+          "#{inspect(module)}.#{function}/#{arity}"
+        end
+
+      _frame ->
+        nil
+    end)
   end
 
   defp create_user(user_id) do
