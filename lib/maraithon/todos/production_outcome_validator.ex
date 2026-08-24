@@ -260,6 +260,14 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   defp cleanup(user_id) do
     {:ok, :ok} =
       Repo.transaction(fn ->
+        # Exact durable-history mode requires its writer marker even for deleting
+        # this isolated, synthetic, terminal queue row.
+        Repo.query!(
+          "SELECT set_config('maraithon.effect_writer_protocol', 'generation_fenced_v1', true)",
+          [],
+          log: false
+        )
+
         Repo.delete_all(from(job in BackgroundJob, where: job.user_id == ^user_id))
         Repo.delete_all(from(event in TodoLearningEvent, where: event.user_id == ^user_id))
         Repo.delete_all(from(todo in Todo, where: todo.user_id == ^user_id))
