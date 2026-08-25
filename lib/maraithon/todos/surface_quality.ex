@@ -26,7 +26,7 @@ defmodule Maraithon.Todos.SurfaceQuality do
 
   @specific_context_keys ~w(
     body_excerpt context context_brief email_subject evidence evidence_summary excerpt
-    goal_category message_subject project project_name quote relationship_context
+    goal_category holiday_date holiday_name holiday_phase_key message_subject project project_name quote relationship_context
     source_evidence source_excerpt source_refs source_subject subject thread_subject topic
     todo_policy why_it_matters why_now
   )
@@ -118,8 +118,9 @@ defmodule Maraithon.Todos.SurfaceQuality do
       record_has_context?(read_map(metadata, "record"))
   end
 
-  defp human_context?(_todo, metadata, profile, true, false) do
+  defp human_context?(todo, metadata, profile, true, false) do
     any_present?(metadata, @human_context_keys) or
+      (source_evidence?(todo, metadata) and present?(read_field(todo, "summary"))) or
       profile_context_present?(
         profile,
         ~w(company organization relationship why project life_domain)

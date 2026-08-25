@@ -1357,6 +1357,75 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert focus.next_free_block["next_event"]["local_start"] == "12:00:00"
   end
 
+  test "upsert_todos preserves explicit reminder requests without trusting model metadata" do
+    user_id = "toolbox-explicit-todo-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    runtime_context = %{
+      user_id: user_id,
+      context: %{
+        projects: [],
+        recent_turns: [%{role: "user", text: "Remind me to call the dentist tomorrow."}]
+      }
+    }
+
+    assert {:ok, persisted} =
+             Toolbox.execute(
+               "upsert_todos",
+               %{
+                 "todos" => [
+                   %{
+                     "source" => "assistant",
+                     "title" => "Call the dentist",
+                     "summary" => "You asked for a reminder to call the dentist.",
+                     "next_action" => "Call the dentist tomorrow.",
+                     "dedupe_key" => "assistant:dentist"
+                   }
+                 ]
+               },
+               runtime_context
+             )
+
+    assert persisted.count == 1
+    [todo] = persisted.todos
+    assert todo.source == "telegram_assistant"
+    assert todo.metadata["explicit_user_request"] == true
+  end
+
+  test "upsert_todos does not self-certify an evidence-free automatic candidate" do
+    user_id = "toolbox-automatic-todo-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    runtime_context = %{
+      user_id: user_id,
+      context: %{
+        projects: [],
+        recent_turns: [%{role: "user", text: "What should I know today?"}]
+      }
+    }
+
+    assert {:ok, persisted} =
+             Toolbox.execute(
+               "upsert_todos",
+               %{
+                 "todos" => [
+                   %{
+                     "source" => "assistant",
+                     "title" => "Review an interesting update",
+                     "summary" => "This might be useful.",
+                     "next_action" => "Review it later.",
+                     "dedupe_key" => "assistant:interesting-update",
+                     "metadata" => %{"direct_ask" => true}
+                   }
+                 ]
+               },
+               runtime_context
+             )
+
+    assert persisted.count == 0
+    assert persisted.skipped_count == 1
+  end
+
   test "todo tools can persist, search, and resolve durable work" do
     user_id = "toolbox-todos-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

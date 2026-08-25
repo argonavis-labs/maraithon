@@ -35,7 +35,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignmentTest do
         now: DateTime.add(now, -2, :day)
       )
 
-    state = GoalAlignment.init(%{"user_id" => user.id, "review_interval_hours" => 1})
+    state =
+      GoalAlignment.init(%{
+        "user_id" => user.id,
+        "review_interval_hours" => 1,
+        "llm_reasoning_effort" => "medium"
+      })
 
     source_bundle =
       %{trigger: %{type: :wakeup}, timestamp: now}
@@ -63,6 +68,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignmentTest do
     assert pending_state.last_reviewed_at == now
     assert pending_state.pending_goal_ids == [goal.id]
     prompt = params["messages"] |> hd() |> Map.fetch!("content")
+    assert params["max_tokens"] == 12_000
+    assert params["timeout_ms"] == 180_000
+    assert params["reasoning_effort"] == "high"
     assert prompt =~ "all connected context"
     assert prompt =~ "Launch follow-up"
 

@@ -434,6 +434,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
           "todos" => [
             %{
               "source" => "slack",
+              "source_item_id" => "C-runner-gtm:1715090400.000100",
               "title" => "Review Runner launch note",
               "summary" =>
                 "Charlie is waiting on you to review the Runner launch note before GTM can ship.",
@@ -443,6 +444,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
               "dedupe_key" => "morning:slack:runner-launch-note",
               "metadata" => %{
                 "channel_name" => "runner-gtm",
+                "source_excerpt" =>
+                  "Charlie asked: Can you review the Runner launch note today so GTM can ship?",
                 "commitment_direction" => "pending_reply",
                 "why_it_matters" => "GTM is blocked until the launch note is approved."
               }

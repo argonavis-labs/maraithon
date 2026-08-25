@@ -74,20 +74,23 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         InboxCalendarAdvisor.handle_wakeup(state, context)
 
       assert is_map(params)
-      assert params["model"] == Maraithon.LLM.chat_model()
-      assert params["max_tokens"] == 6_000
-      assert params["reasoning_effort"] == "none"
-      assert params["temperature"] == 0.15
+      assert params["model"] == Maraithon.LLM.model()
+      assert params["max_tokens"] == 10_000
+      assert params["timeout_ms"] == 180_000
+      assert params["reasoning_effort"] == "high"
+      assert params["temperature"] == 0.1
       assert length(new_state.pending_candidates) >= 1
       prompt = get_in(params, ["messages", Access.at(0), "content"])
       assert prompt =~ "ab12cd11"
       assert prompt =~ "IMPORTANT"
       assert prompt =~ "ops@example.com"
-      assert prompt =~ "automated transactional receipts"
+      assert prompt =~ "successful payments"
+      assert prompt =~ "outstanding operator-owned action"
+      assert prompt =~ "Monitoring is a timing choice"
       assert prompt =~ "Uber Eats"
       assert prompt =~ "false_positive_risk"
       assert prompt =~ "executive chief-of-staff assistant"
-      assert prompt =~ "direct operator action now"
+      assert prompt =~ "executive importance"
       assert prompt =~ "operator response actions"
       assert prompt =~ "A real human sender does not imply a reply owed"
       assert prompt =~ "evidence_for_reply_owed"
@@ -129,7 +132,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       prompt = get_in(params, ["messages", Access.at(0), "content"])
 
       assert params["model"] == Maraithon.LLM.chat_model()
-      assert params["max_tokens"] == 6_000
+      assert params["max_tokens"] == 10_000
+      assert params["timeout_ms"] == 180_000
       assert length(new_state.pending_candidates) in 1..20
       assert String.length(prompt) < 80_000
       refute prompt =~ String.duplicate("Can you send the promised deck today? ", 100)
@@ -503,6 +507,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               "subject" => "Meta Ad Account Blocked",
               "snippet" =>
                 "Your ad account is blocked and access is restricted pending verification.",
+              "body_text" =>
+                "Your Meta ad account is blocked and access is restricted. Complete verification to restore campaign access.",
               "from" => "Meta Support <security@facebookmail.com>",
               "to" => user_id,
               "labels" => ["INBOX"],
@@ -527,6 +533,44 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert stored.metadata["fyi_class"] == "account_risk"
       assert stored.metadata["telegram_fit_score"] == 0.95
       assert stored.metadata["why_now"] =~ "blocked or restricted account"
+    end
+
+    test "uses stripped HTML body evidence for a material account-risk todo", %{
+      user_id: user_id,
+      context: context
+    } do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-html-account-risk",
+              "thread_id" => "thread-html-account-risk",
+              "subject" => "Account restricted",
+              "snippet" => "Open this message for account details.",
+              "html_body" => """
+              <style>.hidden { display: none; }</style>
+              <p>Your account is restricted.</p>
+              <p>Verify your identity by Friday or campaign access will remain suspended.</p>
+              """,
+              "from" => "Platform Security <security@example.com>",
+              "to" => user_id,
+              "labels" => ["INBOX"],
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      assert {:emit, {:insights_recorded, %{count: 1}}, _final_state} =
+               InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      [todo] = Todos.list_open_for_user(user_id)
+      assert todo.title =~ "Account risk"
+      assert todo.metadata["body_excerpt"] =~ "Verify your identity by Friday"
+      refute todo.metadata["body_excerpt"] =~ "display: none"
     end
 
     test "uses saved watch rules to surface hockey Gmail as important_fyi", %{
@@ -706,7 +750,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert Insights.list_open_for_user(user_id) == []
     end
 
-    test "surfaces App Store Connect notifications as important_fyi", %{
+    test "keeps App Store Connect in-review status as FYI without creating a todo", %{
       user_id: user_id,
       context: context
     } do
@@ -721,6 +765,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               "thread_id" => "thread-app-store-1",
               "subject" => "Apple Connect Notifications: App Store Connect In Review",
               "snippet" => "Your app is now In Review in App Store Connect.",
+              "body_text" =>
+                "Your app is now In Review in App Store Connect. No action is required while review is in progress.",
               "from" => "App Store Connect <no_reply@email.apple.com>",
               "to" => user_id,
               "labels" => ["INBOX"],
@@ -742,6 +788,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert stored.metadata["fyi_class"] == "platform_status"
       assert stored.metadata["why_now"] =~ "release planning"
       assert stored.recommended_action =~ "monitor it"
+      assert {:skip, reason} = Maraithon.Todos.SignalGate.allow_insight?(stored)
+      assert reason =~ "routine transactional"
+      assert Todos.list_for_user(user_id, limit: 10) == []
     end
 
     test "does not surface Notaui digest summaries as platform status", %{
@@ -1016,6 +1065,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
             "metadata" => %{
               "thread_id" => "ab12cd91",
               "organization" => "Billing",
+              "source_excerpt" => "Billing asked: Can you reply with payment status today?",
               "reply_obligation" => true
             }
           }

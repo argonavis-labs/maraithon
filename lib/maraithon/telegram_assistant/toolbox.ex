@@ -2634,11 +2634,49 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     end
   end
 
+  defp mark_explicit_user_todo_request(todo) do
+    todo = stringify_map(todo)
+    metadata = todo |> Map.get("metadata", %{}) |> stringify_map()
+
+    todo
+    |> Map.put("source", "telegram_assistant")
+    |> Map.put("metadata", Map.put(metadata, "explicit_user_request", true))
+  end
+
+  defp explicit_todo_request?(runtime_context) do
+    context = Map.get(runtime_context, :context) || Map.get(runtime_context, "context") || %{}
+    turns = Map.get(context, :recent_turns) || Map.get(context, "recent_turns") || []
+
+    text =
+      Enum.find_value(turns, fn turn ->
+        role = Map.get(turn, :role) || Map.get(turn, "role")
+        if role == "user", do: Map.get(turn, :text) || Map.get(turn, "text")
+      end)
+
+    is_binary(text) and
+      Regex.match?(
+        ~r/\b(?:add|create|make|set)\b.{0,32}\b(?:reminder|task|todo|to-do)\b|\b(?:remind me|remember to|help me remember|don['’]t let me forget|put (?:this|that|it) on my (?:list|tasks|todos))\b/iu,
+        text
+      )
+  end
+
   defp upsert_todos(runtime_context, args) do
     todos = Map.get(args, "todos", [])
 
     if is_list(todos) do
-      case OpenLoops.ingest_todos(runtime_context.user_id, Enum.filter(todos, &is_map/1),
+      candidates =
+        todos
+        |> Enum.filter(&is_map/1)
+        |> Enum.map(&stringify_map/1)
+        |> then(fn candidates ->
+          if explicit_todo_request?(runtime_context) do
+            Enum.map(candidates, &mark_explicit_user_todo_request/1)
+          else
+            candidates
+          end
+        end)
+
+      case OpenLoops.ingest_todos(runtime_context.user_id, candidates,
              source: "telegram_assistant"
            ) do
         {:ok, result} ->

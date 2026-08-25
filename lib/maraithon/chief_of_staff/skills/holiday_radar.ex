@@ -406,6 +406,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
       "next_action" =>
         safe_user_sentence(Map.get(todo_map, "next_action")) || fallback_next_action,
       "priority" => normalize_priority(Map.get(todo_map, "priority"), fallback_priority),
+      "source_item_id" => "holiday:#{holiday["id"]}:#{phase_key}",
       "source_occurred_at" => reviewed_at,
       "dedupe_key" => "holiday:#{holiday["id"]}:#{phase_key}",
       "metadata" =>

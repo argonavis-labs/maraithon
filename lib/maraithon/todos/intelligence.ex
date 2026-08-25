@@ -22,6 +22,7 @@ defmodule Maraithon.Todos.Intelligence do
   @required_todo_fields ~w(source title summary next_action dedupe_key)
   @default_max_tokens 64_000
   @default_timeout_ms 1_200_000
+  @default_reasoning_effort "high"
   @prompt_context_fit_budgets [112_000, 96_000, 80_000, 64_000, 48_000, 32_000, 16_000, 8_000, 0]
   @max_fitted_request_bytes 120_000
   @existing_prompt_item_max_bytes 1_400
@@ -285,9 +286,67 @@ defmodule Maraithon.Todos.Intelligence do
        Requirements:
        - Return one decision for every candidate_todos item. `candidate_todos`,
          `existing_todo_id`, and the `todo` response object are internal JSON contract names.
-       - Executive bar: if a busy operator would reasonably feel their time was
-         wasted by seeing this as a separate work item, return action "skip".
-         Favor fewer, sharper items over broad capture.
+       - Executive bar: admit a candidate only if a competent chief of staff
+         would be judged for letting it slip. If the operator would have been
+         fine without this work item, return action "skip". Default to skip.
+         Ten sharp items beat forty complete ones.
+       - Admission is stricter than relevance, urgency, or usefulness. Decide
+         from source body/message evidence and trusted structured provider facts.
+         Sender, subject, labels, unread state, thread age, and the candidate's
+         generated title/summary/next_action are not proof. If readable source
+         evidence is missing and trusted facts do not prove the obligation, skip.
+         Before deduplication or writing copy, require source evidence for BOTH:
+         1. an outstanding operator-owned action; and
+         2. executive importance that justifies durable attention.
+         If either is missing or uncertain, return action "skip".
+       - An outstanding-action basis must be one of: an explicit human ask; a
+         promise the operator made; a decision/approval/deliverable assigned to
+         the operator; a deadline-bound obligation; a concrete remediation step
+         for a material risk; material family logistics; or an explicit reminder
+         the operator requested. A suggestion, optional CTA, FYI, possibility,
+         event existence, unread state, or model-invented next step is not a basis.
+       - Executive importance must be source-backed by at least one of: a person
+         meaningfully waiting; a customer/project/revenue/access blocker; a real
+         deadline with consequence; legal, financial, compliance, health, safety,
+         or security exposure; close-relationship or family impact; or material
+         loss if ignored. Generic convenience, curiosity, engagement, tidiness,
+         learning value, or "might be useful" is not enough.
+       - Check closure before admission. If later evidence says the ask was
+         answered, deliverable sent, payment made, decision made, issue resolved,
+         or loop canceled, skip it. If someone else owns the action, it is already
+         assigned, or it resolves without the operator, skip it.
+       - Apply a durable-attention test. A work item should remain useful beyond
+         the transient notification moment and represent an unresolved outcome,
+         not merely repeat a fact already visible in email, chat, or calendar.
+         Never manufacture work by converting "be aware", "monitor", "track",
+         "consider", "read", "check out", or "use this code" into a next action.
+       - Default to skip for routine transactional records and completed states:
+         successful payments, receipts, statements, confirmations, renewals,
+         shipped/delivered orders, tracking updates, accepted invitations, event
+         reminders, completed processing, resolved incidents, and "no action
+         required" messages. A date, amount, IMPORTANT/UNREAD label, or automated
+         urgency wording does not make these work.
+       - Default to skip for newsletters/content, marketing or sales CTAs, product
+         announcements, surveys/review requests, rewards/promotions, social/app
+         engagement notifications, low-stakes account notices, relationship
+         maintenance suggestions, cold outreach, and speculative monitoring.
+       - Automated senders are neither an automatic veto nor an admission signal.
+         Keep an automated message only when its source body proves a material
+         operator action, such as a failed payment that will suspend service, an
+         invoice actually due, an address correction blocking shipment, canceled
+         travel requiring rebooking, KYC needed to avoid account restriction, a
+         rejected submission requiring repair, or security remediation.
+       - Use contrastive judgment: "payment successful" is skip; "payment failed,
+         update the card by Friday or service stops" is keep. "Receipt attached"
+         is skip; "Finance asked for a corrected receipt by Friday" is keep.
+         "Order shipped" is skip; "confirm the address or the order is canceled"
+         is keep. "Meeting reminder" is skip; "send the redlines before the
+         meeting" is keep. "Updated terms" is skip; "complete KYC or the account
+         freezes" is keep. "Login code" is skip; "unrecognized login—secure the
+         account" is keep.
+       - In reasoning, name the supplied source excerpt that proves the operator
+         action and the specific blocking or important consequence. This reasoning
+         never counts as source evidence and cannot authorize the write by itself.
        - Use action "update" with existing_todo_id when the candidate is the same
          underlying work as an existing saved work item and should refresh it.
        - For update decisions, use the existing saved work item's current
@@ -383,9 +442,12 @@ defmodule Maraithon.Todos.Intelligence do
          draft does not make sense, still write a clear next-step sentence the operator
          can act on, for example: `You should message the requester and say:
          "Thanks, yes that would be great."`
-       - Set due_at only when the source states an explicit deadline or date.
-         Never infer a due_at from vague phrasing like "soon" or "next week";
-         put that nuance in summary or why_it_matters instead.
+       - Set due_at only when the source states an explicit deadline or date
+         that binds the operator: a due/filing date, meeting deliverable, shutoff
+         or suspension date, or a date a person asked for. Marketing urgency,
+         offer expiration, engagement streaks, and routine renewal dates are not
+         work deadlines. Never infer due_at from vague phrasing like "soon" or
+         "next week"; put that nuance in summary or why_it_matters instead.
        - Use product language for user-facing fields: say `work item`, `open work`,
          `People`, or `relationship context`; do not write `todo` or `CRM` in
          title, summary, next_action, notes, or action_plan unless quoting source text.
@@ -429,14 +491,17 @@ defmodule Maraithon.Todos.Intelligence do
          evidence proves the work is completed or not real. Do not downgrade a
          future-dated operator self-commitment to status "open"; the snooze is the
          polite follow-up timing chosen by the source intelligence.
-       - If a candidate partly matches negative feedback but may be worth keeping
-         for later, create/update it as `attention_mode: "monitor"` with lower
-         priority instead of putting it in act-now.
+       - `attention_mode: "monitor"` is a timing choice, not an admission
+         choice. Use it only for candidates that already pass the admission gate
+         but do not need action today. Never use monitor to save a candidate that
+         failed admission; return action "skip" instead.
        - If a candidate strongly matches a positive pattern, prefer `act_now` and
          increase priority in proportion to the pattern confidence and fresh evidence.
-       - Learned work-relevance memories are not global blocks or guarantees.
-         Stronger fresh evidence, personal/family impact, a direct deadline, close
-         relationship, customer wait, or user/customer impact can override them.
+       - Learned work-relevance memories are steering, not blocks or guarantees.
+         Fresh evidence may override a negative pattern only when the evidence
+         independently passes the admission gate. A positive pattern never admits
+         a candidate that fails the gate and never overrides a routine-noise
+         exclusion unless a protected material exception applies.
        - Write next_action as a sentence the operator can act on directly. Avoid
          ticket/report language such as "covering current state" when a human
          version like "ask if it is fixed, who owns it, and whether customers
@@ -446,8 +511,9 @@ defmodule Maraithon.Todos.Intelligence do
        - Every commitment-shaped todo (a promise, ask, or reply someone is
          waiting on) must set `direction`: `owed_by_me` when the operator owes
          the counterparty an action or reply, `owed_to_me` when the operator is
-         waiting on someone else, or `fyi` for informational items nobody is
-         waiting on. Map any legacy `i_owe`/`asked_of_me` evidence to
+         waiting on someone else, or `fyi` only for an admitted material-risk
+         remediation with no waiting counterparty. Never create informational-only
+         work. Map any legacy `i_owe`/`asked_of_me` evidence to
          `owed_by_me` and any `pending_reply`/`user_owes`/`waiting_on_*`
          evidence to `owed_to_me`. Name the counterparty in
          `counterparty_label` whenever source evidence identifies them.
@@ -951,7 +1017,7 @@ defmodule Maraithon.Todos.Intelligence do
         Keyword.get(
           opts,
           :reasoning_effort,
-          Keyword.get(config, :reasoning_effort, LLM.intelligence())
+          Keyword.get(config, :reasoning_effort, @default_reasoning_effort)
         ),
       "timeout_ms" =>
         Keyword.get(opts, :timeout_ms, Keyword.get(config, :timeout_ms, @default_timeout_ms))
@@ -1485,7 +1551,20 @@ defmodule Maraithon.Todos.Intelligence do
   )
 
   defp preserve_candidate_source_identifiers(todo_attrs, candidate) do
-    candidate_metadata = read_map(candidate || %{}, "metadata")
+    candidate = stringify_top_level_keys(candidate || %{})
+    candidate_metadata = read_map(candidate, "metadata")
+
+    todo_attrs =
+      Enum.reduce(~w(source_item_id source_occurred_at), todo_attrs, fn key, acc ->
+        value = fetch_attr(candidate, key)
+
+        if not preservable_metadata_value?(fetch_attr(acc, key)) and
+             preservable_metadata_value?(value) do
+          Map.put(acc, key, normalize_json_value(value))
+        else
+          acc
+        end
+      end)
 
     if candidate_metadata == %{} do
       todo_attrs
@@ -1508,7 +1587,17 @@ defmodule Maraithon.Todos.Intelligence do
   end
 
   defp preserve_candidate_source_context(todo_attrs, candidate) do
-    candidate_metadata = read_map(candidate || %{}, "metadata")
+    candidate = stringify_top_level_keys(candidate || %{})
+    candidate_metadata = read_map(candidate, "metadata")
+
+    candidate_metadata =
+      case fetch_attr(candidate, "people") do
+        people when is_list(people) and people != [] ->
+          Map.put_new(candidate_metadata, "people", people)
+
+        _other ->
+          candidate_metadata
+      end
 
     if candidate_metadata == %{} do
       todo_attrs

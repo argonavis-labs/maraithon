@@ -64,6 +64,25 @@ defmodule Maraithon.Todos.SurfaceQualityTest do
     refute "generic_copy" in quality["warnings"]
   end
 
+  test "source-backed named human ask supplies human context without CRM metadata" do
+    quality =
+      SurfaceQuality.assess(%{
+        "source" => "slack",
+        "attention_mode" => "act_now",
+        "title" => "Send Sissi Wang the partner answer",
+        "summary" => "Sissi Wang asked how the partner program works.",
+        "next_action" => "Send Sissi Wang the partner-program answer.",
+        "source_item_id" => "slack:sissi-partner",
+        "metadata" => %{
+          "source_excerpt" => "Sissi asked: Could you send how the partner program works?"
+        }
+      })
+
+    assert quality["surfaceable"]
+    assert quality["human_context"]
+    assert quality["source_backed"]
+  end
+
   test "person-only follow-up is not surfaceable without what or why context" do
     quality =
       SurfaceQuality.assess(%{

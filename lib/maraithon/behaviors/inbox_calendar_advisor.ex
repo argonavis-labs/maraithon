@@ -44,7 +44,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   @max_email_body_excerpt_chars 2_400
   @llm_candidate_limit 20
   @llm_output_item_limit 5
-  @llm_max_output_tokens 6_000
+  @llm_max_output_tokens 10_000
+  @llm_timeout_ms 180_000
   @llm_candidate_body_excerpt_chars 1_500
   @llm_candidate_string_chars 1_000
 
@@ -197,13 +198,21 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   @account_risk_terms [
     "ad account blocked",
+    "ad account is blocked",
     "account blocked",
+    "account is blocked",
+    "account has been blocked",
     "account disabled",
+    "account is disabled",
     "account suspended",
+    "account is suspended",
     "account restricted",
+    "account is restricted",
     "business restricted",
     "access suspended",
+    "access is suspended",
     "access restricted",
+    "access is restricted",
     "verification required"
   ]
 
@@ -1067,16 +1076,18 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     labels = read_list(email, "labels") |> Enum.map(&to_string/1)
     occurred_at = message_timestamp(email)
 
-    body = email_search_text(email, [subject, snippet, from, to, Enum.join(labels, " ")])
+    search_text = email_search_text(email, [subject, snippet, from, to, Enum.join(labels, " ")])
+    body_excerpt = email_body_excerpt(email)
+    source_body = String.downcase(body_excerpt || "")
 
     builtin =
-      if suppress_builtin_fyi_email?(email, body, from) do
+      if suppress_builtin_fyi_email?(email, source_body, from) do
         empty_fyi_profile()
       else
-        builtin_fyi_profile(body)
+        builtin_fyi_profile(search_text)
       end
 
-    watch_matches = matching_watch_rules(body, from, builtin.topics, watch_rules)
+    watch_matches = matching_watch_rules(search_text, from, builtin.topics, watch_rules)
 
     if builtin.type == nil and watch_matches == [] do
       []
@@ -1134,7 +1145,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                 "watch_topics" => Enum.flat_map(watch_matches, & &1.topic_matches) |> Enum.uniq(),
                 "matched_keywords" =>
                   Enum.flat_map(watch_matches, & &1.keyword_matches) |> Enum.uniq(),
-                "body_excerpt" => email_body_excerpt(email),
+                "body_excerpt" => body_excerpt,
                 "telegram_fit_score" => profile.telegram_fit_score,
                 "telegram_fit_reason" => profile.telegram_fit_reason,
                 "why_now" => profile.why_now,
@@ -2784,10 +2795,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         }
       ],
       "max_tokens" => @llm_max_output_tokens,
-      "temperature" => 0.15,
-      "reasoning_effort" => "none"
+      "timeout_ms" => @llm_timeout_ms,
+      "temperature" => 0.1,
+      "reasoning_effort" => "high"
     }
-    |> maybe_put_model(LLM.chat_model())
+    |> maybe_put_model(LLM.model())
   end
 
   defp output_item_limit(max_insights) when is_integer(max_insights) and max_insights > 0,
@@ -2829,7 +2841,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Your first job is disqualification, not escalation.
     - Executive bar: if a busy operator would reasonably feel their time was wasted
       by seeing this as a separate open-work card, omit it.
-    - Keep only unresolved commitments that either need direct operator action now or should stay monitored as a high-signal tracked thread.
+    - Keep only candidates whose source body proves both an outstanding operator-owned action and executive importance: a person waiting, a customer/project/access blocker, a binding deadline with consequence, material legal/financial/compliance/health/security risk, or real family impact.
+    - Monitoring is a timing choice, not an admission path. Never keep a candidate merely because it may be worth watching; if it lacks a concrete outstanding action, omit it.
     - Prioritize explicit promises, missed replies, and post-meeting follow-ups after disqualifying weak candidates.
     - Apply a reasoning-first decision, not keyword heuristics:
       1. Is there a real human counterparty?
@@ -2839,9 +2852,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       5. Is interruption justified now?
       6. What is the false positive risk?
     - Drop low-confidence or ambiguous items.
-    - Strongly down-rank or exclude automated transactional receipts and notifications
-      (payment confirmations, invoices, password resets, marketing/autonotifications)
-      unless there is a clear human request or explicit operator commitment that is still open.
+    - Exclude routine transactional and completed-state messages: successful payments,
+      receipts, statements, confirmations, renewals, shipped/delivered orders, tracking
+      updates, accepted invitations, event reminders, completed processing, surveys,
+      social/app engagement, product announcements, and no-action-required notices.
+      Keep an automated message only when the full body proves a material operator action,
+      such as failed payment/access, an invoice actually due, shipment address correction,
+      canceled travel requiring rebooking, KYC/account restriction, rejected submission,
+      security remediation, or a real human ask/commitment.
     - Omit one-time passwords, login codes, verification codes, security codes,
       passcodes, and similar short-lived authentication credentials. Entering or
       using a delivered code is not durable follow-through. Never copy the code
@@ -3369,9 +3387,22 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       read_string(message, "body_text", ""),
       read_string(message, "plain_body", ""),
       read_string(message, "body", ""),
-      read_string(message, "content", "")
+      read_string(message, "content", ""),
+      message |> read_string("html_body", "") |> html_to_text()
     ]
   end
+
+  defp html_to_text(html) when is_binary(html) do
+    html
+    |> String.replace(~r/<(?:style|script)\b[^>]*>.*?<\/(?:style|script)>/isu, " ")
+    |> String.replace(~r/<[^>]+>/u, " ")
+    |> String.replace(~r/&nbsp;|&#160;/iu, " ")
+    |> String.replace(~r/&amp;/iu, "&")
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
+
+  defp html_to_text(_html), do: ""
 
   defp sent_messages_after(messages, nil), do: messages
 

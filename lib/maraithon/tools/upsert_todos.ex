@@ -17,7 +17,12 @@ defmodule Maraithon.Tools.UpsertTodos do
           {:error, "todos is required"}
 
         true ->
-          case OpenLoops.ingest_todos(user_id, Enum.filter(todos, &is_map/1), source: "mcp") do
+          candidates =
+            todos
+            |> Enum.filter(&is_map/1)
+            |> Enum.map(&mark_explicit_user_request(&1, "mcp"))
+
+          case OpenLoops.ingest_todos(user_id, candidates, source: "mcp") do
             {:ok, result} ->
               {:ok,
                %{
@@ -38,6 +43,19 @@ defmodule Maraithon.Tools.UpsertTodos do
   end
 
   def execute(_args), do: {:error, "invalid_args"}
+
+  defp mark_explicit_user_request(todo, source) do
+    todo = Map.new(todo, fn {key, value} -> {to_string(key), value} end)
+
+    metadata =
+      todo
+      |> Map.get("metadata", %{})
+      |> then(fn value -> if is_map(value), do: value, else: %{} end)
+
+    todo
+    |> Map.put("source", source)
+    |> Map.put("metadata", Map.put(metadata, "explicit_user_request", true))
+  end
 
   defp normalize_error(reason) when is_binary(reason), do: reason
   defp normalize_error(reason), do: safe_error(reason)

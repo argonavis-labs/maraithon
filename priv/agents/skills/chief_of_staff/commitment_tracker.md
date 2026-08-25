@@ -42,13 +42,13 @@ Review `slack.self_authored_recent` carefully before general Slack chatter. Thos
 
 For future-dated self-commitments, save the work item now but avoid an immediate nag. You MUST set `status` to `snoozed`, not `open`, and set `snoozed_until` to a polite follow-up time after the operator had time to act. For "tomorrow" with no exact time, use late afternoon in the operator's local timezone, around 4 PM local; if the source gives an explicit due time, use that time or shortly after it.
 
-Executive bar: if a busy operator would feel their time was wasted by seeing the candidate as a separate work item, skip it. The right answer is often fewer, sharper decisions rather than a broad capture list.
+Executive bar: admit a candidate only when the full source proves both an outstanding operator-owned action and importance that a competent chief of staff would be judged for letting slip: a person waiting, blocker, binding deadline with consequence, material legal/financial/compliance/health/security risk, or real family impact. Default to skip; monitoring is not an admission path.
 
 Skip content consumption and educational material unless the full body contains one of the admission signals above. Newsletters, articles, essays, podcasts, videos, reports, course/webinar announcements, market commentary, and informational digests are not work items just because they may be useful to read, watch, or listen to.
 
 Skip passive status notifications and FYI-only system updates unless the source requires a concrete operator action such as fix, approve, submit, decide, reply, pay, schedule, or unblock. "Acknowledge", "monitor", "keep an eye on it", or "step in if it changes" is not a durable work item by itself.
 
-Skip relationship-maintenance nudges, cold/quiet-thread detections, raw calendar conflict detections, purely social plans, automated notices, marketing, newsletters, receipts, FYI-only calendar confirmations, read receipts, and emoji-only reactions unless they create a specific personal/family/home or business obligation for the operator.
+Skip relationship-maintenance nudges, cold/quiet-thread detections, raw calendar conflict detections, purely social plans, automated notices, marketing, newsletters, successful payments, receipts, statements, confirmations, renewals, shipping/tracking updates, accepted invitations, calendar reminders, surveys, social/app engagement, product announcements, read receipts, and emoji-only reactions. Keep an automated message only when the full body proves material operator action such as failed payment/access, an invoice actually due, shipment/travel remediation, KYC/account restriction, rejected submission, security remediation, or a real human ask/commitment.
 
 For every Gmail item, judge relevance from the full `body`, not sender, subject, or snippet. If `body_available` is false, treat that message as unreviewable source degradation unless another full-body source supports the same commitment. For Slack, iMessage/Messages, voice memos, Notes, Reminders, files, and browser history, judge relevance from the supplied message text, transcript, body, title, notes, extracted text, URL/title, and surrounding metadata.
 
@@ -67,7 +67,8 @@ Routing metadata:
   waiting on someone else), or `fyi` when nobody is waiting on anything. Name
   the counterparty in the top-level `counterparty_label` whenever known.
 - For operator self-commitments, set `metadata.explicit_user_commitment` to true, use `metadata.commitment_direction = "i_owe"` (top-level `direction: "owed_by_me"`), include the exact source quote, and keep Slack channel/thread identifiers in metadata/source fields.
-- Always include useful source metadata: thread ID, message ID, event ID, memo ID, note ID, reminder ID, file ID, visit ID, account, chat/channel, quote, source ref, and source tags.
+- Every saved todo must set top-level `source_item_id` to the real provider message/thread/event/reminder/note/file handle and include `metadata.quote` or `metadata.source_excerpt` as a short verbatim excerpt that proves the action. Never relabel generated tracker prose as source evidence. If neither a durable provider handle nor a readable source excerpt is supplied, do not emit the todo.
+- Also include useful source metadata when available: thread ID, message ID, event ID, memo ID, note ID, reminder ID, file ID, visit ID, account, chat/channel, source ref, and source tags.
 - For Slack items, use `user_display_name`, `mentioned_users.display_name`, and resolved message text for human-facing names. Keep raw Slack user IDs such as `U...` in metadata only.
 - For human follow-ups, include memory-jogging relationship context in metadata: `company`, `organization`, `relationship_context`, `relationship_strength` when known, `why_it_matters`, and enough `source_tags` to identify the project/company.
 - For personal/family items that are legitimately in scope, set `metadata.life_domain` to `personal`, `family`, or `home`.

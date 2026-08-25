@@ -15,7 +15,7 @@ defmodule Maraithon.Goals do
   alias Maraithon.ScheduledTasks.Task, as: ScheduledTask
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
-  alias Maraithon.Todos.{SurfaceQuality, Todo}
+  alias Maraithon.Todos.{SignalGate, SurfaceQuality, Todo}
 
   @default_limit 50
   @max_limit 200
@@ -777,7 +777,8 @@ defmodule Maraithon.Goals do
     with %Goal{} = goal <- get_goal(user_id, goal_id, preload: false),
          :ok <- validate_goal_link_confidence(attrs),
          {:ok, todo_attrs} <- review_todo_attrs(user_id, goal, run, attrs, now),
-         {:ok, [todo]} <- Todos.upsert_many(user_id, [todo_attrs], actor_opts(user_id)) do
+         {:ok, gated_attrs} <- goal_todo_admission(todo_attrs),
+         {:ok, [todo]} <- Todos.upsert_many(user_id, [gated_attrs], actor_opts(user_id)) do
       case link_resource(user_id, goal.id, %{
              "resource_type" => "todo",
              "resource_id" => todo.id,
@@ -792,6 +793,13 @@ defmodule Maraithon.Goals do
     else
       nil -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp goal_todo_admission(todo_attrs) do
+    case SignalGate.allow_candidate?(todo_attrs) do
+      {:ok, gated_attrs} -> {:ok, gated_attrs}
+      {:skip, _reason} -> {:error, :goal_todo_candidate_failed_admission}
     end
   end
 
@@ -866,12 +874,14 @@ defmodule Maraithon.Goals do
             "next_action" => next_action,
             "priority" => read_integer(attrs, "priority", goal.priority || 50),
             "due_at" => Map.get(attrs, "due_at"),
+            "source_item_id" => goal.id,
             "dedupe_key" =>
               read_string(attrs, "dedupe_key") || goal_todo_dedupe_key(goal, title, next_action),
             "metadata" => %{
               "goal_id" => goal.id,
               "goal_category" => goal.category,
               "goal_review_run_id" => run.id,
+              "goal_priority" => goal.priority || 50,
               "evidence_summary" => evidence_summary,
               "source_refs" => read_list(evidence, "source_refs")
             }

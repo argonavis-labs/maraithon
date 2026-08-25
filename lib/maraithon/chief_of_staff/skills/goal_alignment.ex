@@ -14,8 +14,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
   @default_review_interval_hours 24
   @default_max_goals_per_cycle 8
   @default_lookback_hours 24 * 14
-  @default_llm_max_tokens 8_000
-  @default_llm_reasoning_effort "medium"
+  @default_llm_max_tokens 12_000
+  @default_llm_timeout_ms 180_000
+  @default_llm_reasoning_effort "high"
   @source_item_limit 18
   @text_limit 800
 
@@ -51,6 +52,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
       "local_file_limit" => 80,
       "local_browser_visit_limit" => 120,
       "llm_max_tokens" => @default_llm_max_tokens,
+      "llm_timeout_ms" => @default_llm_timeout_ms,
       "llm_reasoning_effort" => @default_llm_reasoning_effort
     }
   end
@@ -151,8 +153,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
         integer_in_range(config["lookback_hours"], @default_lookback_hours, 24, 24 * 90),
       llm_max_tokens:
         integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 512, 16_000),
-      llm_reasoning_effort:
-        normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
+      llm_timeout_ms:
+        integer_in_range(config["llm_timeout_ms"], @default_llm_timeout_ms, 30_000, 300_000),
+      llm_reasoning_effort: @default_llm_reasoning_effort,
       config: config,
       pending_review_run_id: nil,
       pending_goal_ids: [],
@@ -312,6 +315,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
         }
       ],
       "max_tokens" => state.llm_max_tokens,
+      "timeout_ms" => state.llm_timeout_ms,
       "temperature" => 0.1,
       "reasoning_effort" => state.llm_reasoning_effort
     }
@@ -325,8 +329,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
 
     Create outputs only when they are high quality:
     - Advice must be specific, grounded in connected context, and useful for the goal.
-    - Todo candidates must have a concrete next action, clear source-backed reason, and evidence.redacted_summary.
-    - Do not create motivational, vague, duplicate, or "try harder" todos.
+    - Todo candidates must pass a strict Chief of Staff bar: source evidence must prove both an outstanding operator-owned action and material goal impact, such as a blocker, binding deadline with consequence, real person waiting, access/risk exposure, or a next move without which the goal stalls.
+    - Monitoring, advice, useful context, progress facts, opportunities, and routine notifications belong in findings/advice, not todo_candidates. Do not create motivational, vague, duplicate, "try harder", receipt, confirmation, renewal, shipping, calendar-reminder, newsletter, app/social-notification, or completed-status todos.
+    - Every todo candidate needs a concrete next action, source-backed consequence, evidence.redacted_summary, and priority 80-100. Use that range only when the supplied source_refs prove the blocker or important consequence; otherwise omit the candidate. If the operator would be fine without a separate Done/Dismiss decision, omit it.
     - For health, fitness, person, and life goals, preserve privacy. Use summaries, not sensitive raw excerpts.
     - Never propose external sends, calendar changes, or third-party mutations. Only propose Maraithon todos, progress, links, findings, and advice.
     - Every progress update, finding, advice item, and todo candidate must include goal_id.
@@ -348,7 +353,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
         {"goal_id":"...", "resource_type":"todo|person|insight|brief|chat_thread|memory|source_observation|scheduled_task", "resource_id":"...", "relationship":"supports|blocks|evidence|next_move|progress|context", "confidence":0.0, "metadata":{"reason":"short reason"}}
       ],
       "todo_candidates": [
-        {"goal_id":"...", "title":"short action title", "summary":"context-rich reason this advances or protects the goal", "next_action":"specific next move", "priority":0, "attention_mode":"act_now|monitor", "due_at":null, "confidence":0.0, "evidence":{"redacted_summary":"source-backed rationale", "source_refs":["..."]}}
+        {"goal_id":"...", "title":"short action title", "summary":"context-rich reason this advances or protects the goal", "next_action":"specific next move", "priority":85, "attention_mode":"act_now|monitor", "due_at":null, "confidence":0.0, "evidence":{"redacted_summary":"source-backed rationale", "source_refs":["..."]}}
       ]
     }
 
@@ -560,13 +565,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.GoalAlignment do
         default
     end
   end
-
-  defp normalize_reasoning_effort(value, default) when is_binary(value) do
-    value = String.trim(value)
-    if value in ["minimal", "low", "medium", "high"], do: value, else: default
-  end
-
-  defp normalize_reasoning_effort(_value, default), do: default
 
   defp stringify_keys(%_{} = struct), do: struct
 

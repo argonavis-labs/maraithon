@@ -28,6 +28,26 @@ defmodule Maraithon.Todos.SignalGateTest do
     assert reason =~ "one-time authentication credentials"
   end
 
+  test "keeps heuristic insight candidates inert until model promotion" do
+    insight = %Maraithon.Insights.Insight{
+      status: "candidate",
+      source: "local_patterns",
+      category: "commitment_unresolved",
+      title: "Possible follow-up",
+      summary: "A heuristic pattern found a possible commitment.",
+      recommended_action: "Review the source before deciding.",
+      source_id: "local-pattern-candidate",
+      dedupe_key: "local-pattern:candidate",
+      metadata: %{
+        "matching_message_excerpt" => "I will send the document tomorrow.",
+        "commitment_direction" => "i_owe"
+      }
+    }
+
+    assert {:skip, reason} = SignalGate.allow_insight?(insight)
+    assert reason =~ "awaits model promotion"
+  end
+
   test "rejects a direct high-impact FYI verification code" do
     insight = %Maraithon.Insights.Insight{
       source: "gmail",

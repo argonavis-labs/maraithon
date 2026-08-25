@@ -30,14 +30,26 @@ defmodule Maraithon.Todos.IntelligenceTest do
         "title" => "ACME renewal reply is still open",
         "summary" => "The same ACME renewal thread still needs a reply.",
         "next_action" => "Send the updated renewal ETA.",
-        "dedupe_key" => "candidate:duplicate"
+        "source_item_id" => "gmail-thread-acme-renewal",
+        "dedupe_key" => "candidate:duplicate",
+        "metadata" => %{
+          "body_excerpt" =>
+            "ACME asked for the updated renewal ETA and is still waiting for your reply.",
+          "reply_obligation" => true
+        }
       },
       %{
         "source" => "slack",
         "title" => "Review launch note",
         "summary" => "The GTM channel asked for a launch-note review.",
         "next_action" => "Review the launch note and leave approval or edits.",
-        "dedupe_key" => "slack:launch-note-review"
+        "source_item_id" => "slack-message-launch-note-review",
+        "dedupe_key" => "slack:launch-note-review",
+        "metadata" => %{
+          "source_excerpt" =>
+            "Could you review the launch note and approve it before the launch meeting?",
+          "direct_ask" => true
+        }
       },
       %{
         "source" => "telegram",
@@ -52,6 +64,10 @@ defmodule Maraithon.Todos.IntelligenceTest do
       assert prompt =~ Todos.Intelligence.sentinel()
       assert prompt =~ existing.id
       assert prompt =~ "CANDIDATE_TODOS_JSON"
+      assert prompt =~ "competent chief of staff"
+      assert prompt =~ "Default to skip for routine transactional records"
+      assert prompt =~ "is a timing choice, not an admission"
+      assert prompt =~ "never counts as source evidence"
 
       {:ok,
        %{
@@ -151,8 +167,7 @@ defmodule Maraithon.Todos.IntelligenceTest do
         "dedupe_key" => "commitment:imessage:imessage-source-1:model-fresh-key",
         "metadata" => %{
           "direct_ask" => true,
-          "source_evidence" =>
-            "Christina asked if you can get Emma and whether you have the painting.",
+          "source_excerpt" => "Christina asked: Can you get Emma, and do you have the painting?",
           "why_it_matters" => "Christina is waiting on your confirmation before pickup."
         }
       }
@@ -291,7 +306,8 @@ defmodule Maraithon.Todos.IntelligenceTest do
         "next_action" => "Reply to Dana with the board packet timing.",
         "dedupe_key" => "gmail:dana-board-packet",
         "metadata" => %{
-          "source_evidence" => "Dana asked for the board packet before the partner meeting.",
+          "source_excerpt" =>
+            "Dana asked: Can you send the board packet before the partner meeting?",
           "source_refs" => ["gmail:thread-dana-board"],
           "why_it_matters" => "The partner meeting is waiting on this packet.",
           "direct_ask" => true,
@@ -332,7 +348,7 @@ defmodule Maraithon.Todos.IntelligenceTest do
              )
 
     assert [%{title: "Reply to Dana about board packet"} = created] = result.todos
-    assert created.metadata["source_evidence"] =~ "Dana asked"
+    assert created.metadata["source_excerpt"] =~ "Dana asked"
     assert created.metadata["source_refs"] == ["gmail:thread-dana-board"]
     assert created.metadata["why_it_matters"] =~ "partner meeting"
     assert created.metadata["direct_ask"] == true
@@ -851,6 +867,71 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert result.skipped_count == 7
     assert_received {:fitted_request_bytes, request_bytes}
     assert request_bytes <= 120_000
+  end
+
+  test "rejects an adversarial model promotion of a routine newsletter" do
+    user_id = unique_user_email("todo-intelligence-adversarial-newsletter")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidate = %{
+      "source" => "gmail",
+      "source_item_id" => "gmail-message-weekly-newsletter",
+      "title" => "Weekly product newsletter",
+      "summary" => "Five features shipped this week.",
+      "dedupe_key" => "gmail:weekly-newsletter",
+      "metadata" => %{
+        "body_excerpt" =>
+          "Weekly product newsletter: five features shipped this week. Read more in the blog."
+      }
+    }
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Promoted the newsletter to urgent work.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "reasoning" => "The update may be important.",
+                 "todo" => %{
+                   "source" => "gmail",
+                   "source_item_id" => "gmail-message-weekly-newsletter",
+                   "title" => "Reply to the urgent product update",
+                   "summary" => "A customer is blocked on the product update.",
+                   "next_action" => "Reply now with a decision.",
+                   "action_draft" => %{"text" => "I will review this immediately."},
+                   "dedupe_key" => "gmail:weekly-newsletter",
+                   "metadata" => %{
+                     "body_excerpt" => "A customer is blocked and waiting for you.",
+                     "direct_ask" => true,
+                     "reply_obligation" => true,
+                     "fyi_class" => "customer_risk",
+                     "telegram_fit_score" => 0.99,
+                     "false_positive_risk" => 0.0
+                   }
+                 }
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, [candidate],
+               llm_complete: llm_complete,
+               reasoning_effort: "high",
+               source: "test",
+               now: ~U[2026-08-25 18:00:00Z],
+               semantic_dedupe: false,
+               memory_query: "routine newsletter regression"
+             )
+
+    assert result.todos == []
+    assert result.skipped_count == 1
+    assert Todos.list_for_user(user_id, limit: 10) == []
   end
 
   test "rejects an adversarial model-created login-code todo" do

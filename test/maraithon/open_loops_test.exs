@@ -14,10 +14,14 @@ defmodule Maraithon.OpenLoopsTest do
     candidates = [
       %{
         "source" => "slack",
+        "source_item_id" => "1710000000.000000",
         "title" => "Reply to Sam about launch",
         "summary" => "Sam asked for the launch plan in Slack.",
         "next_action" => "Send Sam the launch-plan answer.",
         "dedupe_key" => "slack:sam-launch",
+        "metadata" => %{
+          "source_excerpt" => "Sam asked: Can you send me the launch plan by Friday?"
+        },
         "people" => [
           %{
             "first_name" => "Sam",
@@ -129,10 +133,16 @@ defmodule Maraithon.OpenLoopsTest do
     candidates = [
       %{
         "source" => "chief_of_staff_morning_briefing",
+        "source_item_id" => "brief:sissi-partner-answer",
         "title" => "Send Sissi the partner answer",
         "summary" => "Sissi asked how Runner's partner program works.",
         "next_action" => "Send Sissi the clean partner-program answer.",
         "dedupe_key" => "morning:sissi-partner-answer",
+        "metadata" => %{
+          "source_excerpt" => "Sissi asked: Could you send how Runner's partner program works?",
+          "why_it_matters" =>
+            "Sissi is waiting on the partner-program answer before her next workshop."
+        },
         "memories" => [
           %{
             "kind" => "professional_contact",
@@ -171,6 +181,7 @@ defmodule Maraithon.OpenLoopsTest do
                llm_complete: llm_complete
              )
 
+    assert result.skipped == []
     assert [%{title: "Sissi Wang is a workshop-driven partner lead"}] = result.enrichment.memories
     assert result.enrichment.errors == []
 
@@ -186,10 +197,16 @@ defmodule Maraithon.OpenLoopsTest do
     candidates = [
       %{
         "source" => "gmail",
+        "source_item_id" => "thread:emma-permission",
         "title" => "Return Emma permission form",
         "summary" => "A school email says Emma's permission form is due Friday.",
         "next_action" => "Send the signed permission form back to school.",
-        "dedupe_key" => "gmail:thread:emma-permission"
+        "dedupe_key" => "gmail:thread:emma-permission",
+        "metadata" => %{
+          "source_excerpt" => "Please sign and return Emma's permission form by Friday.",
+          "why_it_matters" =>
+            "Emma cannot join the school activity unless the form is returned by Friday."
+        }
       }
     ]
 
@@ -246,6 +263,7 @@ defmodule Maraithon.OpenLoopsTest do
                llm_complete: llm_complete
              )
 
+    assert result.skipped_count == 0
     assert [%{person_name: "Emma"}] = result.enrichment.person_links
 
     assert [%{title: "Emma school logistics should be treated as parent actions"}] =
