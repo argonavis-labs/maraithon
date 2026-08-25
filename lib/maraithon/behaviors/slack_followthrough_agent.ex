@@ -27,6 +27,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   @slack_conversations_page_limit 1_000
   @max_evidence_points 3
   @max_insights_scan_multiplier 2
+  @source_excerpt_chars 1_000
 
   @promise_terms [
     "i will",
@@ -525,6 +526,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
                 "channel_id" => message.channel_id,
                 "channel_name" => message.channel_name,
                 "thread_ts" => message.thread_ts,
+                "source_excerpt" => truncate(display_text, @source_excerpt_chars),
                 "person" => person,
                 "person_slack_user_id" => person_user_id,
                 "signals" => Enum.uniq(promise_matches ++ action_matches ++ planning_matches),
@@ -547,6 +549,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
   defp reply_candidates(message, all_messages, self_user_ids, state) do
     text = message.text || ""
+    display_text = message.text_resolved || text
     normalized = String.downcase(text)
     reply_matches = matched_terms(normalized, @reply_request_terms)
     needs_reply? = reply_matches != [] or String.contains?(normalized, "?")
@@ -640,6 +643,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
                   "channel_id" => message.channel_id,
                   "channel_name" => message.channel_name,
                   "thread_ts" => message.thread_ts,
+                  "source_excerpt" => truncate(display_text, @source_excerpt_chars),
                   "person" => person,
                   "person_slack_user_id" => message.user_id,
                   "signals" => reply_matches,

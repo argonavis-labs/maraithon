@@ -327,6 +327,13 @@ defmodule Maraithon.Todos.Intelligence do
          source body shows a direct ask, operator promise, deadline/deliverable,
          specific decision, human counterparty waiting, or concrete
          personal/business consequence if ignored.
+       - One-time passwords, login codes, verification codes, security codes,
+         passcodes, and similar short-lived authentication credentials are
+         transient delivery messages, not durable work. Skip them even when the
+         message says to enter or use the code. Never copy the credential into a
+         work item. The exception is a real security incident, such as a
+         suspicious or unrecognized login or an unauthorized account/password
+         change, that requires a concrete remediation step.
        - Skip passive status notifications and FYI-only system updates unless
          the source requires a concrete operator action such as fix, approve,
          submit, decide, reply, pay, schedule, or unblock. "Acknowledge",

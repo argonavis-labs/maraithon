@@ -2842,6 +2842,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Strongly down-rank or exclude automated transactional receipts and notifications
       (payment confirmations, invoices, password resets, marketing/autonotifications)
       unless there is a clear human request or explicit operator commitment that is still open.
+    - Omit one-time passwords, login codes, verification codes, security codes,
+      passcodes, and similar short-lived authentication credentials. Entering or
+      using a delivered code is not durable follow-through. Never copy the code
+      into an insight or work item. Keep only a real security incident that needs
+      remediation, such as a suspicious or unrecognized login or unauthorized
+      account/password change.
     - Strongly down-rank or exclude unsolicited sales outreach, recruiting pitches, and networking pitches.
     - A real human sender does not imply a reply owed.
     - If the only positive evidence is "a real person followed up", Gmail labels, or unread state, omit the item.

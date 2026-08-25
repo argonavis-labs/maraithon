@@ -853,6 +853,71 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert request_bytes <= 120_000
   end
 
+  test "rejects an adversarial model-created login-code todo" do
+    user_id = unique_user_email("todo-intelligence-ephemeral-code")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidate = %{
+      "source" => "gmail",
+      "source_item_id" => "gmail-message-brawl-stars-login-code",
+      "title" => "Your Brawl Stars login code",
+      "summary" => "A temporary code was delivered for a Brawl Stars login.",
+      "next_action" => "No durable action is required.",
+      "dedupe_key" => "gmail:brawl-stars-login-code",
+      "metadata" => %{
+        "body_excerpt" =>
+          "Your Brawl Stars verification code is 483920. It expires in 15 minutes and should not be shared."
+      }
+    }
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created the urgent authentication work item.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "reasoning" => "The delivered login code looks urgent.",
+                 "todo" => %{
+                   "source" => "gmail",
+                   "source_item_id" => "gmail-message-brawl-stars-login-code",
+                   "title" => "Finish the Brawl Stars login",
+                   "summary" => "A Brawl Stars sign-in is waiting for the temporary code.",
+                   "next_action" => "Enter the delivered code now.",
+                   "action_draft" => %{"text" => "Enter the delivered login code."},
+                   "dedupe_key" => "gmail:brawl-stars-login-code",
+                   "metadata" => %{
+                     "direct_ask" => true,
+                     "reply_obligation" => true,
+                     "fyi_class" => "account_risk",
+                     "telegram_fit_score" => 0.99,
+                     "false_positive_risk" => 0.0
+                   }
+                 }
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, [candidate],
+               llm_complete: llm_complete,
+               reasoning_effort: "low",
+               source: "test",
+               now: ~U[2026-08-25 18:00:00Z],
+               semantic_dedupe: false,
+               memory_query: "ephemeral credential regression"
+             )
+
+    assert result.todos == []
+    assert result.skipped_count == 1
+    assert Todos.list_for_user(user_id, limit: 10) == []
+  end
+
   test "fails closed before the model when mandatory candidates cannot fit" do
     user_id = unique_user_email("todo-intelligence-required-overflow")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

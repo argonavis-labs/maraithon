@@ -57,6 +57,72 @@ defmodule Maraithon.Todos.SignalGate do
     "status changed",
     "status update"
   ]
+  @ephemeral_credential_terms [
+    "activation code",
+    "authentication code",
+    "confirmation code",
+    "download code",
+    "gift code",
+    "login code",
+    "one-time code",
+    "one time code",
+    "one-time passcode",
+    "one time passcode",
+    "one-time password",
+    "one time password",
+    "otp",
+    "passcode",
+    "recovery code",
+    "redeem code",
+    "security code",
+    "sign-in code",
+    "signin code",
+    "temporary passcode",
+    "verification code"
+  ]
+  @ephemeral_delivery_terms [
+    "code expires",
+    "do not share this code",
+    "don't share this code",
+    "enter the code below",
+    "enter this code",
+    "expires in",
+    "never share this code",
+    "use this code",
+    "valid for",
+    "your authentication code",
+    "your confirmation code",
+    "your login code",
+    "your security code",
+    "your sign-in code",
+    "your verification code"
+  ]
+  @security_incident_terms [
+    "account compromised",
+    "account locked",
+    "password change you did not request",
+    "password changed without your permission",
+    "suspicious login",
+    "suspicious sign-in",
+    "unauthorized login",
+    "unauthorized password change",
+    "unauthorized sign-in",
+    "unrecognized login",
+    "unrecognized sign-in"
+  ]
+  @credential_system_work_terms [
+    "bug",
+    "broken",
+    "delivery",
+    "feature",
+    "flow",
+    "implementation",
+    "integration",
+    "issue",
+    "support ticket",
+    "test",
+    "testing"
+  ]
   @passive_monitor_terms [
     "acknowledge",
     "keep an eye",
@@ -165,10 +231,8 @@ defmodule Maraithon.Todos.SignalGate do
 
   def allow_candidate?(candidate, proposed_attrs)
       when is_map(candidate) and is_map(proposed_attrs) do
-    attrs =
-      candidate
-      |> stringify_keys()
-      |> deep_merge(proposed_attrs |> stringify_keys())
+    source_attrs = stringify_keys(candidate)
+    attrs = deep_merge(source_attrs, stringify_keys(proposed_attrs))
 
     cond do
       completed_or_closed?(attrs) ->
@@ -194,6 +258,10 @@ defmodule Maraithon.Todos.SignalGate do
       drop_importance?(attrs) ->
         {:skip,
          "Skipped by executive signal gate: candidate is marked digest/drop, not durable open work."}
+
+      ephemeral_credential_notification?(source_attrs) ->
+        {:skip,
+         "Skipped by executive signal gate: one-time authentication credentials are transient notifications, not durable open work."}
 
       content_consumption?(attrs) and not admission_signal?(attrs) ->
         {:skip,
@@ -314,6 +382,54 @@ defmodule Maraithon.Todos.SignalGate do
 
     read_string(metadata, "importance", nil) in @drop_importance or
       read_string(metadata, "importance_hint", nil) in @drop_importance
+  end
+
+  defp ephemeral_credential_notification?(attrs) do
+    text = text_blob(attrs)
+
+    evidence =
+      [read_string(attrs, "title", nil), source_evidence_text(attrs)]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+      |> case do
+        "" -> text
+        source_text -> source_text
+      end
+
+    credential? = Enum.any?(@ephemeral_credential_terms, &gate_term_present?(evidence, &1))
+    delivery? = Enum.any?(@ephemeral_delivery_terms, &String.contains?(evidence, &1))
+    short_lived? = Regex.match?(~r/(?<!\d)\d{4,8}(?!\d)/u, evidence)
+    source = read_string(attrs, "source", nil)
+    human_work_request? = local_source_text_has_action?(evidence)
+
+    system_work? =
+      human_work_request? and
+        Enum.any?(@credential_system_work_terms, &gate_term_present?(evidence, &1))
+
+    intrinsically_ephemeral? =
+      Enum.any?(
+        [
+          "one-time code",
+          "one time code",
+          "one-time passcode",
+          "one time passcode",
+          "one-time password",
+          "one time password",
+          "otp"
+        ],
+        &gate_term_present?(evidence, &1)
+      )
+
+    automated_email_shape? =
+      source in ["email", "gmail"] and not human_work_request?
+
+    credential? and not security_incident?(evidence) and not system_work? and
+      (intrinsically_ephemeral? or short_lived? or delivery? or automated_email_shape?)
+  end
+
+  defp security_incident?(text) when is_binary(text) do
+    Enum.any?(@security_incident_terms, &String.contains?(text, &1))
   end
 
   defp content_consumption?(attrs) do
