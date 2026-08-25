@@ -15,6 +15,7 @@ on:
           - deploy
           - validate-todo
           - diagnose-runtime
+          - reset-rebuild-kent
 
 concurrency:
   group: production-deploy
@@ -67,3 +68,13 @@ jobs:
         env:
           MARAITHON_GCP_PROJECT: maraithon
           MARAITHON_GCP_SERVICE: maraithon
+
+      - name: Reset and rebuild Kent's operator intelligence
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'reset-rebuild-kent'
+        run: scripts/monorepo/reset-rebuild-operator-production
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
+          MARAITHON_OPERATOR_USER: kent@runner.now
+          MARAITHON_RESET_CONFIRMATION: RESET_AND_REBUILD_KENT

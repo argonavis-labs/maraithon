@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+project="${MARAITHON_GCP_PROJECT:-maraithon}"
+region="${MARAITHON_GCP_REGION:-us-central1}"
+service="${MARAITHON_GCP_SERVICE:-maraithon}"
+operator_user="${MARAITHON_OPERATOR_USER:-}"
+confirmation="${MARAITHON_RESET_CONFIRMATION:-}"
+
+require_command gcloud
+require_command curl
+require_command python3
+
+if [[ "${project}" != "maraithon" ]]; then
+  echo "Refusing to reset an unpinned GCP project: ${project}" >&2
+  exit 64
+fi
+
+if [[ "${region}" != "us-central1" || "${service}" != "maraithon" ]]; then
+  echo "Refusing to reset an unpinned production service." >&2
+  exit 64
+fi
+
+if [[ "${operator_user}" != "kent@runner.now" ]]; then
+  echo "Refusing to reset an unauthorized operator." >&2
+  exit 64
+fi
+
+if [[ "${confirmation}" != "RESET_AND_REBUILD_KENT" ]]; then
+  echo "Refusing to reset without the exact confirmation phrase." >&2
+  exit 64
+fi
+
+api_url="$(gcloud run services describe "${service}"   --project "${project}"   --region "${region}"   --format 'value(status.url)')"
+
+if [[ "${api_url}" != https://maraithon-*.us-central1.run.app ]]; then
+  echo "Refusing unexpected production service URL." >&2
+  exit 64
+fi
+
+api_token="$(gcloud secrets versions access latest   --secret maraithon-api-bearer-token   --project "${project}")"
+
+if [[ -z "${api_token}" ]]; then
+  echo "Production API bearer token was empty." >&2
+  exit 1
+fi
+
+# Keep the credential out of shell traces and output.
+set +x
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "${tmpdir}"; unset api_token' EXIT
+
+api_post() {
+  local path="$1"
+  local payload="$2"
+  local output="$3"
+  local status
+
+  status="$(curl --silent --show-error     --connect-timeout 15     --max-time 90     --output "${output}"     --write-out '%{http_code}'     --request POST     --header "Authorization: Bearer ${api_token}"     --header 'Content-Type: application/json'     --data "${payload}"     "${api_url}/api/v1${path}")"
+
+  if [[ "${status}" -lt 200 || "${status}" -ge 300 ]]; then
+    echo "Production API POST ${path} failed with HTTP ${status}." >&2
+    python3 - "${output}" <<'PY'
+import json, sys
+try:
+    payload = json.load(open(sys.argv[1]))
+except Exception:
+    print("The response was not valid JSON.", file=sys.stderr)
+else:
+    error = payload.get("error", "request_failed")
+    message = payload.get("message", "No safe error detail was provided.")
+    print(f"{error}: {message}", file=sys.stderr)
+PY
+    return 1
+  fi
+}
+
+api_get_job() {
+  local job_id="$1"
+  local output="$2"
+  local status
+
+  status="$(curl --silent --show-error     --connect-timeout 15     --max-time 60     --retry 3     --retry-all-errors     --output "${output}"     --write-out '%{http_code}'     --get     --header "Authorization: Bearer ${api_token}"     --data-urlencode "user_id=${operator_user}"     "${api_url}/api/v1/admin/open-work/rebuild/${job_id}")"
+
+  [[ "${status}" -ge 200 && "${status}" -lt 300 ]]
+}
+
+api_get_todos() {
+  local output="$1"
+  local status
+
+  status="$(curl --silent --show-error     --connect-timeout 15     --max-time 60     --retry 3     --retry-all-errors     --output "${output}"     --write-out '%{http_code}'     --get     --header "Authorization: Bearer ${api_token}"     --data-urlencode "user_id=${operator_user}"     --data-urlencode 'limit=1000'     --data-urlencode 'statuses=open,snoozed'     "${api_url}/api/v1/admin/todos")"
+
+  if [[ "${status}" -lt 200 || "${status}" -ge 300 ]]; then
+    echo "Production Todo aggregate check failed with HTTP ${status}." >&2
+    return 1
+  fi
+}
+
+reset_file="${tmpdir}/reset.json"
+ensure_file="${tmpdir}/ensure.json"
+refresh_file="${tmpdir}/refresh.json"
+queue_file="${tmpdir}/queue.json"
+status_file="${tmpdir}/status.json"
+todos_file="${tmpdir}/todos.json"
+
+api_post '/admin/operator-state/reset'   "$(python3 -c 'import json; print(json.dumps({"user_id": "kent@runner.now", "confirm": True}))')"   "${reset_file}"
+
+python3 - "${reset_file}" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1]))
+print("OPERATOR_RESET=" + json.dumps({
+    "deleted": payload.get("deleted", {}),
+    "preserved": sorted(payload.get("preserved", [])),
+}, separators=(",", ":"), sort_keys=True))
+PY
+
+api_post '/admin/chief-of-staff/ensure'   "$(python3 -c 'import json; print(json.dumps({"user_id": "kent@runner.now"}))')"   "${ensure_file}"
+
+python3 - "${ensure_file}" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1]))
+agent = payload.get("agent") or {}
+print("CHIEF_OF_STAFF_ENSURE=" + json.dumps({
+    "active_subscription_count": len(payload.get("active_subscriptions") or []),
+    "agent_status": agent.get("status"),
+    "status": payload.get("status"),
+}, separators=(",", ":"), sort_keys=True))
+PY
+
+api_post '/admin/insights/refresh'   "$(python3 -c 'import json; print(json.dumps({"user_id": "kent@runner.now", "reason": "Rebuild after hardened Todo Intelligence deployment."}))')"   "${refresh_file}"
+
+python3 - "${refresh_file}" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1]))
+print("INSIGHT_REFRESH=" + json.dumps({
+    "eligible_count": payload.get("eligible_count", 0),
+    "queued_count": payload.get("queued_count", 0),
+    "skipped_count": len(payload.get("skipped") or []),
+}, separators=(",", ":"), sort_keys=True))
+PY
+
+api_post '/admin/open-work/rebuild'   "$(python3 -c 'import json; print(json.dumps({"user_id": "kent@runner.now", "lookback_hours": 336, "result_limit": 200, "dismiss_existing": False, "allow_empty": True, "reason": "Rebuild after hardened Todo Intelligence deployment."}))')"   "${queue_file}"
+
+job_id="$(python3 - "${queue_file}" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1]))
+job_id = payload.get("job_id")
+if not isinstance(job_id, str) or not job_id:
+    raise SystemExit("Open-work rebuild did not return a job id.")
+print(job_id)
+PY
+)"
+
+printf 'OPEN_WORK_REBUILD_QUEUED={"job_id":"%s"}\n' "${job_id}"
+
+rebuild_status=""
+for _attempt in $(seq 1 160); do
+  if api_get_job "${job_id}" "${status_file}"; then
+    rebuild_status="$(python3 - "${status_file}" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1]))
+print(payload.get("status", ""))
+PY
+)"
+
+    case "${rebuild_status}" in
+      completed)
+        break
+        ;;
+      failed)
+        echo "Open-work rebuild reported failure." >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  sleep 15
+done
+
+if [[ "${rebuild_status}" != "completed" ]]; then
+  echo "Open-work rebuild did not complete within 40 minutes." >&2
+  exit 1
+fi
+
+api_get_todos "${todos_file}"
+
+python3 - "${status_file}" "${todos_file}" <<'PY'
+import collections, json, sys
+status_payload = json.load(open(sys.argv[1]))
+todo_payload = json.load(open(sys.argv[2]))
+todos = todo_payload.get("todos") or []
+
+def counts(field):
+    return dict(sorted(collections.Counter((item.get(field) or "unknown") for item in todos).items()))
+
+print("OPEN_WORK_REBUILD=" + json.dumps({
+    "job_id": status_payload.get("job_id"),
+    "status": status_payload.get("status"),
+}, separators=(",", ":"), sort_keys=True))
+print("REBUILT_OPEN_WORK_AGGREGATE=" + json.dumps({
+    "agent_actionability": counts("agent_actionability"),
+    "attention_mode": counts("attention_mode"),
+    "count": len(todos),
+    "source": counts("source"),
+    "status": counts("status"),
+}, separators=(",", ":"), sort_keys=True))
+PY
