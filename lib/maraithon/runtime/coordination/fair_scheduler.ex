@@ -102,6 +102,8 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   end
 
   defp reserve_locked(session, partitions, task_ttl_ms) do
+    lock_session_reservations!(session)
+
     partitions
     |> Enum.sort_by(& &1.partition_id)
     |> Enum.each(fn partition ->
@@ -347,6 +349,25 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
     _error -> exit(:background_job_commit_unknown_handoff_failed)
   catch
     :exit, reason -> exit({:background_job_commit_unknown_handoff_failed, reason})
+  end
+
+  # Each fair runner fences the full owned partition set with `FOR SHARE`, then
+  # upgrades one selected partition through the fair-sequence UPDATE. Concurrent
+  # runners on the same node can otherwise hold share locks that each other must
+  # upgrade, including through the tenant `ON CONFLICT` path. Serialize before
+  # taking any canonical row lock; partitions owned by other nodes remain fully
+  # independent.
+  defp lock_session_reservations!(session) do
+    lock_key = "maraithon.fair_scheduler:#{session.id}"
+
+    SQL.query!(
+      Repo,
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [lock_key],
+      log: false
+    )
+
+    :ok
   end
 
   defp ensure_tenants!(session, ids, epochs) do
