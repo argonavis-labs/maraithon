@@ -481,7 +481,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
       "temperature" => 0.1,
       "reasoning_effort" =>
         config
-        |> Keyword.get(:reasoning_effort, LLM.intelligence())
+        |> Keyword.get(:reasoning_effort, "none")
         |> bounded_reasoning_effort(),
       "timeout_ms" =>
         opts
