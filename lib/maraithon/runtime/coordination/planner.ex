@@ -3,6 +3,7 @@ defmodule Maraithon.Runtime.Coordination.Planner do
 
   import Ecto.Query
   alias Maraithon.Repo
+  alias Maraithon.Runtime.AgentRuntimeLease
 
   alias Maraithon.Runtime.Coordination.{
     Authority,
@@ -63,10 +64,32 @@ defmodule Maraithon.Runtime.Coordination.Planner do
   defp finalize_drained(_leader, 0), do: {:ok, 0}
 
   defp finalize_drained(leader, limit) do
+    unresolved_tasks =
+      from assignment in TaskAssignment,
+        where: assignment.partition_id == parent_as(:partition).partition_id,
+        where: assignment.partition_epoch == parent_as(:partition).ownership_epoch,
+        where:
+          assignment.state in [
+            "reserved",
+            "running",
+            "termination_requested",
+            "termination_proven"
+          ],
+        select: 1
+
+    live_agent_leases =
+      from lease in AgentRuntimeLease,
+        where: lease.coordination_partition_id == parent_as(:partition).partition_id,
+        where: lease.coordination_partition_epoch == parent_as(:partition).ownership_epoch,
+        select: 1
+
     ids =
       Repo.all(
         from p in Partition,
+          as: :partition,
           where: p.state in ["draining", "blocked"],
+          where: not exists(subquery(unresolved_tasks)),
+          where: not exists(subquery(live_agent_leases)),
           order_by: [asc: p.draining_at, asc: p.partition_id],
           limit: ^limit,
           select: p.partition_id

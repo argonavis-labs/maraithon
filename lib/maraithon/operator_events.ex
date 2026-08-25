@@ -119,6 +119,9 @@ defmodule Maraithon.OperatorEvents do
       updated_at: now
     }
 
+    row =
+      Map.merge(row, DurablePayload.binding_attrs!(row, OperatorEvent.payload_binding_spec()))
+
     case Repo.transaction(fn ->
            :ok = DurablePayload.require_current_mutation!()
 
