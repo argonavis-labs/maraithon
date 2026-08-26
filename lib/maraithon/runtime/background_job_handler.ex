@@ -10,8 +10,7 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   import Ecto.Query
 
   alias Maraithon.ConnectedAccounts
-  alias Maraithon.Connectors.Gmail
-  alias Maraithon.Connectors.GoogleCalendar
+  alias Maraithon.Connectors.{Connector, Gmail, GoogleCalendar}
   alias Maraithon.Crm.Ingest
   alias Maraithon.Crm.Ingest.Window
   alias Maraithon.Crm.Observation
@@ -106,8 +105,13 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
         account ->
           case GoogleCalendar.sync_history(user_id, account, provider: provider) do
-            {:ok, result} -> {:ok, Map.put(result, :source, "calendar_incremental_sync")}
-            {:error, reason} -> handle_google_rate_limit(reason)
+            {:ok, result} ->
+              with :ok <- publish_calendar_sync_completed(user_id, job, result) do
+                {:ok, Map.put(result, :source, "calendar_incremental_sync")}
+              end
+
+            {:error, reason} ->
+              handle_google_rate_limit(reason)
           end
       end
     end
@@ -336,6 +340,30 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
   def execute(%BackgroundJob{job_type: job_type}),
     do: {:error, {:unknown_background_job, job_type}}
+
+  defp publish_calendar_sync_completed(user_id, job, result) do
+    event =
+      Connector.build_event("calendar_sync_completed", "google_calendar", %{
+        user_id: user_id,
+        count: Map.get(result, :count, 0)
+      })
+      |> put_calendar_sync_dedupe_key(job)
+
+    case Connector.publish("calendar:#{user_id}", event) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:calendar_sync_completion_publish_failed, reason}}
+    end
+  end
+
+  defp put_calendar_sync_dedupe_key(event, job) do
+    case job.dedupe_key || job.id do
+      identity when is_binary(identity) and identity != "" ->
+        Map.put(event, :dedupe_key, "#{identity}:calendar_sync_completed")
+
+      _missing_identity ->
+        event
+    end
+  end
 
   defp dispatch_local_embed_job(%BackgroundJob{} = job, module) do
     case payload_string(job, "record_id", nil) do
