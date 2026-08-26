@@ -52,8 +52,11 @@ defmodule MaraithonWeb.WebhookController do
     # channel ids / connected accounts) and drop anything unknown. Respond
     # 204-empty for both processed and dropped notifications so an
     # unauthenticated caller cannot probe which users/channels exist, while
-    # Google still gets the 2xx it needs to stop retrying.
-    handle_connector(conn, params, GoogleCalendar, respond: :no_content)
+    # Google still gets the 2xx it needs to stop retrying. The connector's
+    # durable job insert is the acceptance boundary; its worker publishes a
+    # completion event after sync, so exact-runtime fan-out never delays this
+    # provider request.
+    handle_connector(conn, params, GoogleCalendar, respond: :no_content, publish: false)
   end
 
   @doc """
@@ -172,7 +175,7 @@ defmodule MaraithonWeb.WebhookController do
     case result do
       {:ok, topic, event} ->
         maybe_handle_event(event, opts)
-        Connector.publish(topic, event)
+        maybe_publish(topic, event, opts)
 
         if no_content_response?(opts) do
           send_resp(conn, :no_content, "")
@@ -206,6 +209,10 @@ defmodule MaraithonWeb.WebhookController do
   end
 
   defp no_content_response?(opts), do: Keyword.get(opts, :respond) == :no_content
+
+  defp maybe_publish(topic, event, opts) do
+    if Keyword.get(opts, :publish, true), do: Connector.publish(topic, event), else: :ok
+  end
 
   defp maybe_handle_event(event, opts) do
     case Keyword.get(opts, :on_event) do
