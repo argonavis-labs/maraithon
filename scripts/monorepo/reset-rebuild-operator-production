@@ -195,10 +195,33 @@ todos = todo_payload.get("todos") or []
 def counts(field):
     return dict(sorted(collections.Counter((item.get(field) or "unknown") for item in todos).items()))
 
+completed_events = [
+    event for event in (status_payload.get("events") or [])
+    if event.get("status") == "completed"
+]
+metadata = (completed_events[0].get("metadata") or {}) if completed_events else {}
+allowed_metadata = {
+    key: metadata.get(key)
+    for key in [
+        "dismissed_count",
+        "open_todo_count",
+        "restored_count",
+        "restore_failed_count",
+        "tracker_event_type",
+        "todo_count",
+        "todo_skipped_count",
+    ]
+    if key in metadata
+}
+allowed_metadata["source_telemetry"] = metadata.get("source_telemetry") or {}
+
 print("OPEN_WORK_REBUILD=" + json.dumps({
     "job_id": status_payload.get("job_id"),
     "status": status_payload.get("status"),
 }, separators=(",", ":"), sort_keys=True))
+print("REBUILD_EXECUTION_AGGREGATE=" + json.dumps(
+    allowed_metadata, separators=(",", ":"), sort_keys=True
+))
 print("REBUILT_OPEN_WORK_AGGREGATE=" + json.dumps({
     "agent_actionability": counts("agent_actionability"),
     "attention_mode": counts("attention_mode"),
