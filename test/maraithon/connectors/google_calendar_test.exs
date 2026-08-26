@@ -604,7 +604,10 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
       })
 
       Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
-        assert conn.query_string == "syncToken=existing-token-456"
+        params = URI.decode_query(conn.query_string)
+        assert params["syncToken"] == "existing-token-456"
+        assert params["singleEvents"] == "true"
+        assert params["maxResults"] == "100"
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
