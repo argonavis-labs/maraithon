@@ -5,7 +5,7 @@ defmodule MaraithonWeb.Plugs.CompanionDeviceAuth do
   Reads `Authorization: Bearer <token>`, looks the token up via
   `Maraithon.Companion.Devices.verify_token/1`, and on success:
 
-    * assigns `:current_device` and `:current_user_id` on the conn
+    * assigns `:current_device`, `:current_user_id`, and `:current_user` on the conn
     * bumps `last_seen_at` so connector health surfaces "stale" devices
 
   On failure, halts with `401` and a JSON `{"error": "unauthorized"}`.
@@ -13,6 +13,7 @@ defmodule MaraithonWeb.Plugs.CompanionDeviceAuth do
 
   import Plug.Conn
 
+  alias Maraithon.Accounts
   alias Maraithon.Companion.Devices
 
   def init(opts), do: opts
@@ -25,11 +26,18 @@ defmodule MaraithonWeb.Plugs.CompanionDeviceAuth do
             auth_failure(conn, :invalid_token)
 
           device ->
-            device = Devices.touch_last_seen(device)
+            case Accounts.get_user(device.user_id) do
+              nil ->
+                auth_failure(conn, :user_not_found)
 
-            conn
-            |> assign(:current_device, device)
-            |> assign(:current_user_id, device.user_id)
+              user ->
+                device = Devices.touch_last_seen(device)
+
+                conn
+                |> assign(:current_device, device)
+                |> assign(:current_user_id, device.user_id)
+                |> assign(:current_user, user)
+            end
         end
 
       :error ->

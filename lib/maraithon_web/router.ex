@@ -266,6 +266,13 @@ defmodule MaraithonWeb.Router do
     post "/files", CompanionController, :ingest_files
     post "/browser-history", CompanionController, :ingest_browser_history
     post "/recall", CompanionController, :recall
+
+    # Use the native mobile Todo contract while deriving tenancy only from the
+    # paired device token in CompanionDeviceAuth.
+    get "/todos", MobileTodoController, :index
+    get "/todos/:id", MobileTodoController, :show
+    post "/todos/:id/actions/done", CompanionTodoController, :done
+    post "/todos/:id/actions/reopen", CompanionTodoController, :reopen
     post "/device-keys", CompanionController, :upload_device_key
     get "/device-keys/me", CompanionController, :current_device_key
     get "/whoami", CompanionController, :whoami
