@@ -34,12 +34,7 @@ if [[ "${confirmation}" != "RESET_AND_REBUILD_KENT" ]]; then
   exit 64
 fi
 
-api_url="$(gcloud run services describe "${service}"   --project "${project}"   --region "${region}"   --format 'value(status.url)')"
-
-if [[ "${api_url}" != https://maraithon-*.us-central1.run.app ]]; then
-  echo "Refusing unexpected production service URL." >&2
-  exit 64
-fi
+api_url="https://maraithon-530299883343.us-central1.run.app"
 
 api_token="$(gcloud secrets versions access latest   --secret maraithon-api-bearer-token   --project "${project}")"
 
