@@ -114,9 +114,8 @@ print("OPERATOR_RESET=" + json.dumps({
 }, separators=(",", ":"), sort_keys=True))
 PY
 
-api_post '/admin/chief-of-staff/ensure'   "$(python3 -c 'import json; print(json.dumps({"user_id": "kent@runner.now"}))')"   "${ensure_file}"
-
-python3 - "${ensure_file}" <<'PY'
+if api_post '/admin/chief-of-staff/ensure'   "$(python3 -c 'import json; print(json.dumps({"user_id": "kent@runner.now"}))')"   "${ensure_file}"; then
+  python3 - "${ensure_file}" <<'PY'
 import json, sys
 payload = json.load(open(sys.argv[1]))
 agent = payload.get("agent") or {}
@@ -126,6 +125,9 @@ print("CHIEF_OF_STAFF_ENSURE=" + json.dumps({
     "status": payload.get("status"),
 }, separators=(",", ":"), sort_keys=True))
 PY
+else
+  echo 'CHIEF_OF_STAFF_ENSURE={"status":"readiness_refresh_failed_nonblocking"}'
+fi
 
 api_post '/admin/insights/refresh'   "$(python3 -c 'import json; print(json.dumps({"user_id": "kent@runner.now", "reason": "Rebuild after hardened Todo Intelligence deployment."}))')"   "${refresh_file}"
 
