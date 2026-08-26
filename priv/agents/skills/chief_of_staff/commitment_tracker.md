@@ -77,6 +77,9 @@ Routing metadata:
 
 Output requirements:
 - Return only valid JSON. No prose outside JSON.
+- Return at most 12 todo candidates. Rank all reviewed obligations first, then
+  emit only the 12 highest-stakes source-backed items. Do not spend output on
+  lower-value candidates after that cap.
 - `body` must be Telegram-friendly: short headings and bullets, no Markdown tables.
 - Keep the body precise, not chatty. Lead with what was logged, what was already covered/resolved/noise, and which source gaps remain.
 - User-facing report title/body should use "Open work review" framing, not "Commitment Tracker" or automation names.

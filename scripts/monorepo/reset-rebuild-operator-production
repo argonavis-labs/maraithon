@@ -208,6 +208,13 @@ allowed_metadata = {
         "restored_count",
         "restore_failed_count",
         "tracker_event_type",
+        "generation_mode",
+        "generation_error",
+        "llm_finish_reason",
+        "proposed_todo_count",
+        "pending_reply_count",
+        "already_tracked_count",
+        "missing_source_count",
         "todo_count",
         "todo_skipped_count",
     ]

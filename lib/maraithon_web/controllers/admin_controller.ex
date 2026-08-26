@@ -505,35 +505,41 @@ defmodule MaraithonWeb.AdminController do
 
     case chief_of_staff_agent_for_user(user_id) do
       nil ->
-        case Runtime.start_agent(%{
-               "user_id" => user_id,
-               "behavior" => "ai_chief_of_staff",
-               "config" => config
-             }) do
-          {:ok, agent} -> {:ok, "created", agent}
+        case Runtime.install_chief_of_staff(user_id, config: config) do
+          {:ok, agent} -> {:ok, "installed", agent}
           {:error, reason} -> {:error, reason}
         end
 
       agent ->
         config = chief_of_staff_config(agent.config || %{}, user_id, source_scope, subscriptions)
 
-        case Runtime.update_agent(agent.id, %{
-               "user_id" => user_id,
-               "behavior" => "ai_chief_of_staff",
-               "config" => config
-             }) do
+        case update_chief_of_staff_agent(agent, user_id, config) do
           {:ok, agent} -> {:ok, "updated", agent}
           {:error, reason} -> {:error, reason}
         end
     end
   end
 
+  defp update_chief_of_staff_agent(%{status: "stopped"} = agent, _user_id, config) do
+    Agents.update_agent(agent, %{config: config})
+  end
+
+  defp update_chief_of_staff_agent(agent, user_id, config) do
+    Runtime.update_agent(agent.id, %{
+      "user_id" => user_id,
+      "config" => config
+    })
+  end
+
   defp chief_of_staff_agent_for_user(user_id) do
-    Agents.list_agents()
-    |> Enum.find(fn agent ->
-      agent.behavior == "ai_chief_of_staff" and
-        (agent.user_id == user_id or get_in(agent.config || %{}, ["user_id"]) == user_id)
-    end)
+    case Agents.get_package_installation(user_id, "ai_chief_of_staff") do
+      nil ->
+        Agents.list_agents(user_id: user_id)
+        |> Enum.find(&(&1.behavior == "ai_chief_of_staff"))
+
+      agent ->
+        agent
+    end
   end
 
   defp chief_of_staff_config(existing_config, user_id, source_scope, subscriptions) do

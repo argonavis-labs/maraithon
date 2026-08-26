@@ -139,6 +139,7 @@ defmodule MaraithonWeb.AdminControllerTest do
 
       {:ok, agent} =
         Agents.create_agent(%{
+          user_id: user_id,
           behavior: "ai_chief_of_staff",
           config: %{"user_id" => user_id, "name" => "Kent Chief"},
           status: "stopped"
@@ -162,13 +163,57 @@ defmodule MaraithonWeb.AdminControllerTest do
       updated = Agents.get_agent(agent.id)
       assert updated.user_id == user_id
 
-      assert AgentSubscriptions.list_for_agent(agent.id)
-             |> Enum.map(&{&1.user_id, &1.topic})
-             |> Enum.sort() == [
-               {user_id, "calendar:ensure-chief@example.com"},
-               {user_id, "email:kent@example.com"},
-               {user_id, "slack:T12345"}
+      assert updated.config["subscribe"] == [
+               "email:kent@example.com",
+               "calendar:ensure-chief@example.com",
+               "slack:T12345"
              ]
+
+      assert AgentSubscriptions.list_for_agent(agent.id) == []
+    end
+
+    test "installs a consent-dark exact-owned Chief when none exists", %{conn: conn} do
+      user_id = "install-chief@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      conn = post(conn, "/api/v1/admin/chief_of_staff/ensure", %{"user_id" => user_id})
+
+      response = json_response(conn, 200)
+      assert response["status"] == "installed"
+      assert response["active_subscriptions"] == []
+
+      agent = Agents.get_agent(response["agent"]["id"])
+      assert agent.user_id == user_id
+      assert agent.behavior == "manifest_agent"
+      assert agent.config["source_behavior"] == "ai_chief_of_staff"
+      assert agent.install_status == "setup_required"
+      assert agent.status == "stopped"
+      assert Maraithon.AgentIsolation.get_binding(agent.id) == nil
+    end
+
+    test "does not adopt a config-only legacy Chief owned by another user", %{conn: conn} do
+      user_id = "exact-owner-chief@example.com"
+      legacy_owner_id = "legacy-chief-owner@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      {:ok, _legacy_owner} = Accounts.get_or_create_user_by_email(legacy_owner_id)
+
+      {:ok, legacy_agent} =
+        Agents.create_agent(%{
+          user_id: legacy_owner_id,
+          behavior: "ai_chief_of_staff",
+          config: %{"user_id" => user_id},
+          status: "stopped"
+        })
+
+      conn = post(conn, "/api/v1/admin/chief_of_staff/ensure", %{"user_id" => user_id})
+
+      response = json_response(conn, 200)
+      assert response["status"] == "installed"
+      refute response["agent"]["id"] == legacy_agent.id
+
+      installed = Agents.get_agent(response["agent"]["id"])
+      assert installed.user_id == user_id
+      assert Agents.get_agent(legacy_agent.id).user_id == legacy_owner_id
     end
   end
 

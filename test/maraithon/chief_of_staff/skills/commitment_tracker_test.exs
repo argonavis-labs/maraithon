@@ -202,9 +202,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     input = Jason.decode!(String.trim(input_json))
 
     input_bytes = byte_size(Jason.encode!(input))
-    assert input_bytes in 48_000..56_000
-    assert length(get_in(input, ["gmail", "recent_inbox"])) == 8
-    assert length(get_in(input, ["gmail", "recent_sent"])) == 8
+    assert input_bytes in 78_000..82_000
+    assert length(get_in(input, ["gmail", "recent_inbox"])) == 16
+    assert length(get_in(input, ["gmail", "recent_sent"])) == 16
     assert get_in(input, ["gmail", "counts", "recent_inbox"]) == 40
     assert get_in(input, ["gmail", "counts", "recent_sent"]) == 40
 
@@ -212,6 +212,100 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert first_inbox["subject"] == "Commitment evidence 1"
     assert first_inbox["from"] =~ "Counterparty 1"
     assert first_inbox["body"] =~ ~s(Source-backed "quoted" commitment evidence)
+  end
+
+  test "prompt retrieval promotes full-body obligations beyond newer Gmail noise", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-09 15:00:00Z]
+
+    noise_messages =
+      Enum.map(1..20, fn index ->
+        %{
+          "message_id" => "noise-message-#{index}",
+          "thread_id" => "noise-thread-#{index}",
+          "labels" => ["INBOX"],
+          "from" => "Digest <digest@example.com>",
+          "to" => "Operator <operator@example.com>",
+          "subject" => "Weekly update #{index}",
+          "text_body" => "This is a routine informational digest with no action required.",
+          "internal_date" => DateTime.add(now, -index, :minute),
+          "account" => "operator@example.com"
+        }
+      end)
+
+    subject_only = %{
+      "message_id" => "subject-only-message",
+      "thread_id" => "subject-only-thread",
+      "labels" => ["INBOX"],
+      "from" => "Automated <automated@example.com>",
+      "to" => "Operator <operator@example.com>",
+      "subject" => "Please sign by Friday or launch is blocked",
+      "snippet" => "Please sign by Friday or launch is blocked",
+      "internal_date" => DateTime.add(now, -21, :minute),
+      "account" => "operator@example.com"
+    }
+
+    actionable = %{
+      "message_id" => "actionable-message",
+      "thread_id" => "actionable-thread",
+      "labels" => ["INBOX"],
+      "from" => "Dana <dana@example.com>",
+      "to" => "Operator <operator@example.com>",
+      "subject" => "Agreement",
+      "text_body" =>
+        "Please sign the agreement by Friday; the customer launch is blocked waiting on you.",
+      "internal_date" => DateTime.add(now, -22, :minute),
+      "account" => "operator@example.com"
+    }
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "inbox_messages" => noise_messages ++ [subject_only, actionable],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    state =
+      CommitmentTracker.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "commitment_review_hour_local" => 7
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: source_bundle,
+      assistant_cycle_id: "cycle-priority-commitments"
+    }
+
+    assert {:effect, {:llm_call, params}, _state} =
+             CommitmentTracker.handle_wakeup(state, context)
+
+    assert {:ok, bounded} = RequestBudget.validate(params)
+    assert byte_size(Jason.encode!(bounded)) <= 128_000
+
+    prompt = get_in(params, ["messages", Access.at(0), "content"])
+
+    [_instructions, input_json] =
+      String.split(prompt, "Commitment tracker input JSON:\n", parts: 2)
+
+    input = Jason.decode!(String.trim(input_json))
+    inbox = get_in(input, ["gmail", "recent_inbox"])
+    thread_ids = Enum.map(inbox, & &1["thread_id"])
+
+    assert length(inbox) == 16
+    assert hd(thread_ids) == "actionable-thread"
+    assert "actionable-thread" in thread_ids
+    refute "subject-only-thread" in thread_ids
+    assert "noise-thread-1" in thread_ids
   end
 
   test "tracker input resolves iMessage sender phone numbers from People", %{user_id: user_id} do
@@ -354,13 +448,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     {:effect, {:llm_call, params}, state} = CommitmentTracker.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 12_000
+    assert params["max_tokens"] == 32_000
     assert params["reasoning_effort"] == "high"
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
     assert prompt =~ "Commitment Tracker"
     assert prompt =~ "Commitment tracker input JSON"
     assert prompt =~ "Return only valid JSON"
+    assert prompt =~ "Return at most 12 todo objects"
     assert prompt =~ "Open work review"
     assert prompt =~ "do not write \"Commitment"
     assert prompt =~ "source_access"
@@ -435,6 +530,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
       CommitmentTracker.handle_effect_result({:llm_call, response}, state, context)
 
     assert payload.cadences == ["commitment_tracker"]
+    assert payload.generation_mode == "llm"
+    assert payload.generation_error == false
+    assert payload.proposed_todo_count == 1
+    assert payload.pending_reply_count == 0
+    assert payload.already_tracked_count == 0
+    assert payload.missing_source_count == 0
     assert payload.todo_count == 1
     assert payload.todo_skipped_count == 0
 
@@ -481,6 +582,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     assert relationship.open_todo_count == 1
     assert Enum.any?(relationship.todos, &(&1.id == todo.id))
+
+    oversized_response =
+      response.content
+      |> Jason.decode!()
+      |> Map.update!("todos", fn [todo_payload] -> List.duplicate(todo_payload, 13) end)
+      |> then(&%{content: Jason.encode!(&1)})
+
+    {:emit, {:briefs_recorded, capped_payload}, _state} =
+      CommitmentTracker.handle_effect_result({:llm_call, oversized_response}, state, context)
+
+    assert capped_payload.proposed_todo_count == 12
   end
 
   test "captures future-dated Slack self-commitments as snoozed follow-up work", %{

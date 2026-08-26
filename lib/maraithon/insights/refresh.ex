@@ -6,6 +6,7 @@ defmodule Maraithon.Insights.Refresh do
   import Ecto.Query
 
   alias Maraithon.Agents
+  alias Maraithon.Agents.Agent
   alias Maraithon.Behaviors.AIChiefOfStaff
   alias Maraithon.Behaviors.FounderFollowthroughAgent
   alias Maraithon.Behaviors.GitHubProductPlanner
@@ -41,16 +42,18 @@ defmodule Maraithon.Insights.Refresh do
 
     eligible_agents =
       Agents.list_agents(user_id: user_id)
-      |> Enum.filter(&refreshable_behavior?(&1.behavior))
+      |> Enum.filter(&refreshable_agent?/1)
 
     {queued, skipped} =
       Enum.reduce(eligible_agents, {[], []}, fn agent, {queued, skipped} ->
+        behavior = effective_behavior(agent)
+
         if agent.status in ["running", "degraded"] do
           case runtime_module.send_message(agent.id, @refresh_message, metadata) do
             {:ok, %{message_id: message_id}} ->
               queued_entry = %{
                 agent_id: agent.id,
-                behavior: agent.behavior,
+                behavior: behavior,
                 status: agent.status,
                 message_id: message_id
               }
@@ -60,7 +63,7 @@ defmodule Maraithon.Insights.Refresh do
             {:error, reason} ->
               skipped_entry = %{
                 agent_id: agent.id,
-                behavior: agent.behavior,
+                behavior: behavior,
                 status: agent.status,
                 reason: normalize_reason(reason)
               }
@@ -70,7 +73,7 @@ defmodule Maraithon.Insights.Refresh do
         else
           skipped_entry = %{
             agent_id: agent.id,
-            behavior: agent.behavior,
+            behavior: behavior,
             status: agent.status,
             reason: "agent_not_running"
           }
@@ -152,6 +155,28 @@ defmodule Maraithon.Insights.Refresh do
   defp refresh_message_text(_user_id, queued, skipped, _eligible_agents) do
     "Queued insight refresh for #{length(queued)} agent(s); skipped #{length(skipped)}."
   end
+
+  defp refreshable_agent?(%Agent{} = agent),
+    do: refreshable_behavior?(effective_behavior(agent))
+
+  defp refreshable_agent?(_agent), do: false
+
+  defp effective_behavior(%Agent{behavior: "manifest_agent", config: config})
+       when is_map(config) do
+    normalize_string(config["source_behavior"]) || "manifest_agent"
+  end
+
+  defp effective_behavior(%Agent{behavior: behavior}), do: behavior
+
+  defp refreshable_behavior?(%{behavior: "manifest_agent", config: config})
+       when is_map(config),
+       do: refreshable_behavior?(config["source_behavior"])
+
+  defp refreshable_behavior?(%{behavior: behavior}) when is_binary(behavior),
+    do: refreshable_behavior?(behavior)
+
+  defp refreshable_behavior?(%{behavior_module: behavior_module}),
+    do: refreshable_behavior?(behavior_module)
 
   defp refreshable_behavior?(behavior) when is_binary(behavior),
     do: behavior in @refreshable_behaviors

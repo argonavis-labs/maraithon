@@ -36,7 +36,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   @default_local_browser_visit_scan_limit 200
   @default_lookback_hours 24 * 14
   @default_calendar_forward_days 14
-  @default_llm_max_tokens 12_000
+  @default_llm_max_tokens 32_000
   @default_llm_reasoning_effort "high"
   @vague_self_commitment_followup_hour 16
   @explicit_clock_time_pattern ~r/\b(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b(?:[01]?\d|2[0-3]):[0-5]\d\b/i
@@ -53,7 +53,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     "eod"
   ]
   @skill_path "priv/agents/skills/chief_of_staff/commitment_tracker.md"
-  @tracker_input_fit_budgets [72_000, 56_000, 48_000, 40_000, 32_000]
+  @tracker_input_fit_budgets [96_000, 80_000, 72_000, 56_000, 48_000, 40_000, 32_000]
   @max_previous_cycle_memo_bytes 4_000
 
   @impl true
@@ -245,7 +245,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         ),
       llm_model: normalize_string(config["llm_model"]),
       llm_max_tokens:
-        integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 512, 12_000),
+        integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 512, 32_000),
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
       pending_tracker_input: nil,
@@ -320,6 +320,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         {report, generation_mode, error_message} =
           report_or_error_notice(parsed_report, response, tracker_input)
 
+        report = cap_report_todos(report)
+
         if generation_mode == "error" do
           Tracing.record_error(
             "commitment_tracker generation failed: " <>
@@ -387,6 +389,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
           todo_payload =
             todo_result
             |> todo_event_payload()
+            |> Map.merge(report_event_payload(report, generation_mode, response, error_message))
             |> Map.put(:linked_todo_ids, [])
 
           {:emit,
@@ -423,6 +426,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
               todo_payload =
                 todo_result
                 |> todo_event_payload()
+                |> Map.merge(
+                  report_event_payload(report, generation_mode, response, error_message)
+                )
                 |> Map.put(:linked_todo_ids, linked_todo_ids)
                 |> maybe_put(:todo_link_error, todo_link_error)
 
@@ -744,9 +750,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         {"source_access", 3_000},
         {"source_health", 3_000},
         {"open_work", 7_000},
-        {"gmail", 18_000},
-        {"slack", 12_000},
-        {"calendar", 5_000},
+        {"gmail", 36_000},
+        {"slack", 26_000},
+        {"calendar", 8_000},
         {"local_calendar", 5_000},
         {"imessage", 8_000},
         {"relationships", 3_000},
@@ -772,13 +778,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp compact_tracker_sections_for_prompt(tracker_input) do
     tracker_input
     |> compact_tracker_section("gmail", [
-      {"recent_inbox", 8, 1_400},
-      {"recent_sent", 8, 1_400}
+      {"recent_inbox", 16, 1_400, :gmail_obligation},
+      {"recent_sent", 16, 1_400, :gmail_obligation}
     ])
     |> compact_tracker_section("slack", [
-      {"self_authored_recent", 6, 1_200},
-      {"mentions", 4, 1_200},
-      {"recent_messages", 4, 1_200}
+      {"self_authored_recent", 12, 1_200, :message_obligation},
+      {"mentions", 8, 1_200, :message_obligation},
+      {"recent_messages", 12, 1_200, :message_obligation}
     ])
     |> compact_tracker_section("calendar", [{"upcoming_events", 12, 900}])
     |> compact_tracker_section("local_calendar", [{"upcoming_events", 12, 900}])
@@ -799,6 +805,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       section when is_map(section) ->
         compacted =
           Enum.reduce(list_specs, Map.drop(section, Enum.map(list_specs, &elem(&1, 0))), fn
+            {list_key, limit, item_bytes, priority_mode}, acc ->
+              items =
+                section
+                |> Map.get(list_key, [])
+                |> prioritize_tracker_items(priority_mode)
+                |> compact_tracker_items(limit, item_bytes)
+
+              Map.put(acc, list_key, items)
+
             {list_key, limit, item_bytes}, acc ->
               items =
                 section
@@ -814,6 +829,68 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         tracker_input
     end
   end
+
+  defp prioritize_tracker_items(items, mode) when is_list(items) do
+    items
+    |> Enum.with_index()
+    |> Enum.sort_by(fn {item, index} ->
+      priority = if tracker_obligation_evidence?(item, mode), do: 0, else: 1
+      {priority, index}
+    end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp prioritize_tracker_items(_items, _mode), do: []
+
+  defp tracker_obligation_evidence?(item, :gmail_obligation) when is_map(item) do
+    truthy_value?(Map.get(item, "body_available")) and
+      obligation_evidence_text?(read_string(item, "body", ""))
+  end
+
+  defp tracker_obligation_evidence?(item, :message_obligation) when is_map(item) do
+    obligation_evidence_text?(read_string(item, "text", ""))
+  end
+
+  defp tracker_obligation_evidence?(_item, _mode), do: false
+
+  defp obligation_evidence_text?(text) when is_binary(text) do
+    normalized = text |> String.downcase() |> String.trim()
+
+    direct_ask? =
+      Regex.match?(~r/\b(can|could|would|will) you\b|\bplease\b|\bneed you to\b/u, normalized)
+
+    self_commitment? =
+      Regex.match?(
+        ~r/\b(i will|i'll|i’ll|i am going to|i'm going to|i’m going to|let me)\b/u,
+        normalized
+      )
+
+    deadline_or_wait? =
+      Regex.match?(
+        ~r/\b(due|deadline|overdue|past due|by (today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|eod|end of day)|blocked|blocking|waiting on you|need your|requires your)\b/u,
+        normalized
+      )
+
+    material_risk? =
+      Enum.any?(
+        [
+          "payment failed",
+          "account restricted",
+          "account suspended",
+          "access will be removed",
+          "unrecognized login",
+          "unauthorized login",
+          "security incident",
+          "complete kyc",
+          "compliance required"
+        ],
+        &String.contains?(normalized, &1)
+      )
+
+    direct_ask? or self_commitment? or deadline_or_wait? or material_risk?
+  end
+
+  defp obligation_evidence_text?(_text), do: false
 
   defp compact_tracker_items(items, limit, item_bytes) when is_list(items) do
     items
@@ -844,7 +921,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        Skill path: #{@skill_path}
 
        Response contract:
-       Return only valid JSON with this shape:
+       Return only valid JSON with this shape. Return at most 12 todo objects,
+       chosen as the highest-stakes source-backed open obligations. Never spend
+       the response budget on lower-value candidates after the top 12.
        {
          "title": "Open work review - YYYY-MM-DD",
          "summary": "...",
@@ -1867,6 +1946,27 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     body = read_string(report, "body", "")
 
     Map.put(report, "body", String.trim(body <> "\n" <> addition))
+  end
+
+  defp cap_report_todos(report) when is_map(report) do
+    Map.update(report, "todos", [], fn
+      todos when is_list(todos) -> Enum.take(todos, 12)
+      _other -> []
+    end)
+  end
+
+  defp cap_report_todos(_report), do: %{"todos" => []}
+
+  defp report_event_payload(report, generation_mode, response, error_message) do
+    %{
+      generation_mode: generation_mode,
+      generation_error: is_binary(error_message) and String.trim(error_message) != "",
+      llm_finish_reason: llm_finish_reason(response),
+      proposed_todo_count: report |> read_list("todos") |> length(),
+      pending_reply_count: report |> read_list("pending_replies") |> length(),
+      already_tracked_count: report |> read_list("already_tracked") |> length(),
+      missing_source_count: report |> read_list("missing_sources") |> length()
+    }
   end
 
   defp todo_event_payload({:ok, :no_todos}) do

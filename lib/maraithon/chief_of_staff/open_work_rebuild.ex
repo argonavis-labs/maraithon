@@ -197,6 +197,17 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
               "restored_count" => get_in(result, ["restoration", "restored_count"]),
               "restore_failed_count" => get_in(result, ["restoration", "failed_count"]),
               "tracker_event_type" => get_in(result, ["tracker", "event_type"]),
+              "generation_mode" => get_in(result, ["tracker", "payload", "generation_mode"]),
+              "generation_error" => get_in(result, ["tracker", "payload", "generation_error"]),
+              "llm_finish_reason" => get_in(result, ["tracker", "payload", "llm_finish_reason"]),
+              "proposed_todo_count" =>
+                get_in(result, ["tracker", "payload", "proposed_todo_count"]),
+              "pending_reply_count" =>
+                get_in(result, ["tracker", "payload", "pending_reply_count"]),
+              "already_tracked_count" =>
+                get_in(result, ["tracker", "payload", "already_tracked_count"]),
+              "missing_source_count" =>
+                get_in(result, ["tracker", "payload", "missing_source_count"]),
               "todo_count" => get_in(result, ["tracker", "payload", "todo_count"]),
               "todo_skipped_count" =>
                 get_in(result, ["tracker", "payload", "todo_skipped_count"]),
@@ -277,8 +288,14 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
   end
 
   defp chief_of_staff_agent_for_user(user_id) do
-    Agents.list_agents(user_id: user_id)
-    |> Enum.find(&(&1.behavior == "ai_chief_of_staff"))
+    case Agents.get_package_installation(user_id, "ai_chief_of_staff") do
+      nil ->
+        Agents.list_agents(user_id: user_id)
+        |> Enum.find(&(&1.behavior == "ai_chief_of_staff"))
+
+      agent ->
+        agent
+    end
   end
 
   defp maybe_dismiss_existing(user_id, opts) do
@@ -528,7 +545,7 @@ defmodule Maraithon.ChiefOfStaff.OpenWorkRebuild do
       "local_reminder_scan_limit" => 200,
       "local_file_scan_limit" => 200,
       "local_browser_visit_scan_limit" => 250,
-      "llm_max_tokens" => 12_000,
+      "llm_max_tokens" => 32_000,
       "llm_reasoning_effort" => "high"
     })
   end

@@ -129,6 +129,76 @@ defmodule Maraithon.Insights.RefreshTest do
     assert slack_metadata["reason"] == "rebuild_after_logic_change"
   end
 
+  test "queue_for_user/2 recognizes a manifest Chief by effective behavior" do
+    user_id = "manifest-refresh-user@example.com"
+    Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, manifest_agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "manifest_agent",
+        config: %{"source_behavior" => "ai_chief_of_staff"},
+        status: "stopped",
+        install_status: "setup_required"
+      })
+
+    assert {:ok, result} =
+             Refresh.queue_for_user(user_id,
+               runtime_module: RuntimeStub,
+               requested_by: "admin_api",
+               reason: "rebuild_after_logic_change"
+             )
+
+    assert result.eligible_count == 1
+    assert result.queued_count == 0
+
+    assert [skipped] = result.skipped
+    assert skipped.agent_id == manifest_agent.id
+    assert skipped.behavior == "ai_chief_of_staff"
+    assert skipped.reason == "agent_not_running"
+  end
+
+  test "reset_open_insights_for_agent/3 resolves a manifest Chief runtime descriptor" do
+    user_id = "manifest-reset-user@example.com"
+    Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, manifest_agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "manifest_agent",
+        config: %{"source_behavior" => "ai_chief_of_staff"},
+        status: "stopped",
+        install_status: "setup_required"
+      })
+
+    {:ok, [insight]} =
+      Insights.record_many(user_id, manifest_agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Reply to finance",
+          "summary" => "A response is still outstanding.",
+          "recommended_action" => "Reply now.",
+          "dedupe_key" => "manifest-refresh:new"
+        }
+      ])
+
+    runtime_descriptor = %{
+      behavior: "manifest_agent",
+      behavior_module: Maraithon.Behaviors.ManifestAgent,
+      config: manifest_agent.config
+    }
+
+    assert 1 =
+             Refresh.reset_open_insights_for_agent(
+               user_id,
+               manifest_agent.id,
+               runtime_descriptor
+             )
+
+    assert Repo.reload(insight).status == "dismissed"
+  end
+
   test "reset_open_insights_for_agent/3 dismisses existing open insights for one agent", %{
     user_id: user_id,
     founder_agent: founder_agent,

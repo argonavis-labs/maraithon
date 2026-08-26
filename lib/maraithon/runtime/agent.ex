@@ -2926,7 +2926,11 @@ defmodule Maraithon.Runtime.Agent do
         InsightRefresh.reset_open_insights_for_agent(
           data.user_id,
           data.agent_id,
-          data.behavior_module
+          %{
+            behavior: data.behavior,
+            behavior_module: data.behavior_module,
+            config: data.config
+          }
         )
 
       if reset_count > 0 do
