@@ -42,13 +42,9 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
   @default_api_base "https://www.googleapis.com/calendar/v3"
   @sync_token_cursor_kind "calendar_sync_token"
-  # Safety cap on how many `events.list` pages we'll follow for a single sync
-  # before giving up. Google only returns `nextSyncToken` on the FINAL page,
-  # so stopping early (like the old single-request implementation did) means
-  # `nextSyncToken` is always nil on multi-page results and the next sync
-  # re-fetches the same first page forever. This cap exists only to bound a
-  # pathological/looping response.
-  @max_sync_pages 25
+  # Google only returns `nextSyncToken` on the FINAL page. Page traversal is
+  # therefore bounded by provider-token uniqueness rather than an arbitrary
+  # page count: stopping early cannot advance the durable sync cursor safely.
 
   # ===========================================================================
   # Watch Management
@@ -728,18 +724,17 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   # never advance its cursor (`persist_sync_token` no-ops on nil), causing
   # the next sync to re-fetch the same first page forever.
   defp fetch_events(access_token, opts) do
-    fetch_events_page(access_token, opts, [], 1, nil)
+    fetch_events_page(access_token, opts, [], MapSet.new(), nil)
   end
 
-  defp fetch_events_page(access_token, opts, acc_items, page, page_token) do
+  defp fetch_events_page(access_token, opts, acc_items, seen_page_tokens, page_token) do
     sync_token = Keyword.get(opts, :sync_token)
+    max_results = Keyword.get(opts, :max_results, 100)
 
     params =
       if sync_token do
-        %{syncToken: sync_token}
+        %{syncToken: sync_token, singleEvents: true, maxResults: max_results}
       else
-        max_results = Keyword.get(opts, :max_results, 100)
-
         time_min =
           opts
           |> Keyword.get(:time_min)
@@ -768,19 +763,17 @@ defmodule Maraithon.Connectors.GoogleCalendar do
         next_page_token = response["nextPageToken"]
 
         cond do
-          present?(next_page_token) and page < max_sync_pages() ->
-            fetch_events_page(access_token, opts, acc_items, page + 1, next_page_token)
+          present?(next_page_token) and MapSet.member?(seen_page_tokens, next_page_token) ->
+            {:error, :calendar_pagination_loop}
 
           present?(next_page_token) ->
-            # Safety cap hit. Return what we have but no sync token, so
-            # `persist_sync_token` no-ops rather than persisting a token that
-            # would skip the unseen remaining pages.
-            Logger.warning(
-              "Calendar sync pagination exceeded safety cap; returning partial batch without advancing cursor",
-              pages: page
+            fetch_events_page(
+              access_token,
+              opts,
+              acc_items,
+              MapSet.put(seen_page_tokens, next_page_token),
+              next_page_token
             )
-
-            {:ok, parse_events(acc_items), nil}
 
           true ->
             {:ok, parse_events(acc_items), response["nextSyncToken"]}
@@ -791,7 +784,14 @@ defmodule Maraithon.Connectors.GoogleCalendar do
         # a way to do so) and do one full window fetch; the fresh
         # nextSyncToken from that fetch is what gets persisted.
         maybe_reset_sync_token(opts)
-        fetch_events_page(access_token, Keyword.delete(opts, :sync_token), [], 1, nil)
+
+        fetch_events_page(
+          access_token,
+          Keyword.delete(opts, :sync_token),
+          [],
+          MapSet.new(),
+          nil
+        )
 
       {:error, reason} ->
         {:error, reason}
@@ -812,11 +812,6 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(value), do: not is_nil(value)
-
-  defp max_sync_pages do
-    Application.get_env(:maraithon, :google_calendar, [])
-    |> Keyword.get(:max_sync_pages, @max_sync_pages)
-  end
 
   defp parse_events(items) do
     Enum.map(items, fn item ->
