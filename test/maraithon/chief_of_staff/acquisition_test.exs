@@ -579,6 +579,125 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert get_in(telemetry, ["sources", "slack", "message_count"]) == 1
   end
 
+  test "deeply searches every Gmail account after a metadata-only sync event" do
+    now = ~U[2026-08-27 20:00:00Z]
+    providers = ["google:alpha@example.com", "google:beta@example.com"]
+
+    base_messages =
+      Map.new(providers, fn provider ->
+        prefix = if provider =~ "alpha", do: "alpha", else: "beta"
+
+        {provider,
+         [
+           %{
+             message_id: "#{prefix}-newest",
+             thread_id: "#{prefix}-newest-thread",
+             subject: "Newest but not actionable",
+             labels: ["INBOX"],
+             internal_date: now
+           }
+         ]}
+      end)
+
+    targeted_messages =
+      Map.new(providers, fn provider ->
+        prefix = if provider =~ "alpha", do: "alpha", else: "beta"
+
+        {provider,
+         [
+           %{
+             message_id: "#{prefix}-buried-ask",
+             thread_id: "#{prefix}-buried-thread",
+             subject: "Security evidence",
+             snippet: "Could you please send the requested screenshots?",
+             labels: ["INBOX"],
+             internal_date: DateTime.add(now, -6, :hour)
+           }
+         ]}
+      end)
+
+    contents =
+      targeted_messages
+      |> Map.values()
+      |> List.flatten()
+      |> Map.new(fn message ->
+        {message.message_id,
+         Map.put(message, :text_body, "Could you please send the requested screenshots?")}
+      end)
+
+    TravelGmailStub.configure(
+      messages_by_provider: base_messages,
+      messages_by_query_match: [{"please send", targeted_messages}],
+      contents: contents
+    )
+
+    source_scope = %{
+      "google_accounts" =>
+        Enum.map(providers, fn provider ->
+          %{
+            "provider" => provider,
+            "account_email" => String.replace_prefix(provider, "google:", ""),
+            "services" => ["gmail"]
+          }
+        end)
+    }
+
+    context = %{
+      agent_id: "chief-agent-deep-gmail",
+      user_id: "chief@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :pubsub_event, topic: "email:alpha@example.com"},
+      event: %{
+        topic: "email:alpha@example.com",
+        payload: %{
+          "source" => "gmail",
+          "data" => %{"provider" => "google:alpha@example.com", "count" => 1}
+        }
+      }
+    }
+
+    {bundle, telemetry, _watermarks} =
+      Acquisition.build(
+        "chief@example.com",
+        ["followthrough"],
+        %{
+          "followthrough" => %{
+            "source_scope" => source_scope,
+            "email_scan_limit" => 10,
+            "lookback_hours" => 48
+          }
+        },
+        context
+      )
+
+    buried =
+      bundle
+      |> SourceBundle.gmail_messages()
+      |> Enum.filter(&String.ends_with?(&1["message_id"], "-buried-ask"))
+
+    assert Enum.sort(Enum.map(buried, & &1["google_provider"])) == Enum.sort(providers)
+    assert Enum.all?(buried, &(&1["search_mode"] == "targeted_actionable"))
+    assert Enum.all?(buried, &(&1["body_available"] == true))
+
+    assert Enum.all?(buried, fn message ->
+             Enum.any?(
+               SourceBundle.gmail_inbox_messages(bundle),
+               &(&1["message_id"] == message["message_id"])
+             )
+           end)
+
+    gmail_fetches = Enum.filter(telemetry["fetches"], &(&1["source"] == "gmail"))
+
+    assert Enum.all?(providers, fn provider ->
+             Enum.any?(
+               gmail_fetches,
+               &(&1["provider"] == provider and &1["targeted_search_count"] >= 1)
+             )
+           end)
+  end
+
   test "builds one shared gmail and calendar bundle for overlapping skills" do
     now = ~U[2026-04-02 13:00:00Z]
 

@@ -281,6 +281,26 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
   def gmail_messages(bundle), do: bundle |> read_map("gmail") |> read_list("messages")
   def gmail_inbox_messages(bundle), do: bundle |> read_map("gmail") |> read_list("inbox_messages")
   def gmail_sent_messages(bundle), do: bundle |> read_map("gmail") |> read_list("sent_messages")
+
+  @doc """
+  Moves provider-side actionable search matches ahead of routine recent mail.
+
+  Consumers still control their own time window and item limit. This only
+  prevents a deeply found ask or promise from being dropped by a second
+  newest-N cap after acquisition already recovered it.
+  """
+  def prioritize_gmail_actionable(messages) when is_list(messages) do
+    {targeted, routine} =
+      Enum.split_with(messages, fn message ->
+        is_map(message) and
+          (Map.get(message, "search_mode") || Map.get(message, :search_mode)) ==
+            "targeted_actionable"
+      end)
+
+    targeted ++ routine
+  end
+
+  def prioritize_gmail_actionable(_messages), do: []
   def calendar_events(bundle), do: bundle |> read_map("calendar") |> read_list("events")
   def slack_workspaces(bundle), do: bundle |> read_map("slack") |> read_list("workspaces")
   def slack_messages(bundle), do: bundle |> read_map("slack") |> read_list("messages")

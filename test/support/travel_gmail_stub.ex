@@ -15,6 +15,7 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
     end
 
     provider = Keyword.get(opts, :provider)
+    query = Keyword.get(opts, :query, "")
 
     error =
       config(:fetch_errors_by_provider, %{})
@@ -24,8 +25,14 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
       {:error, error}
     else
       messages =
-        config(:messages_by_provider, %{})
-        |> Map.get(provider, config(:messages, []))
+        case messages_for_query(provider, query) do
+          {:matched, messages} ->
+            messages
+
+          :no_match ->
+            config(:messages_by_provider, %{})
+            |> Map.get(provider, config(:messages, []))
+        end
 
       metadata =
         config(:fetch_metadata_by_provider, %{})
@@ -60,6 +67,24 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
       when is_binary(user_id) and is_binary(message_id) do
     fetch_message_content(user_id, message_id)
   end
+
+  defp messages_for_query(provider, query) when is_binary(query) do
+    config(:messages_by_query_match, [])
+    |> Enum.find_value(:no_match, fn
+      {needle, messages_by_provider} when is_binary(needle) and is_map(messages_by_provider) ->
+        if String.contains?(query, needle) do
+          {:matched, Map.get(messages_by_provider, provider, [])}
+        end
+
+      {needle, messages} when is_binary(needle) and is_list(messages) ->
+        if String.contains?(query, needle), do: {:matched, messages}
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp messages_for_query(_provider, _query), do: :no_match
 
   defp config(key, default) do
     Application.get_env(:maraithon, __MODULE__, [])

@@ -88,8 +88,13 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
         account ->
           case Gmail.sync_history(user_id, account, provider: provider) do
-            {:ok, result} -> {:ok, Map.put(result, :source, "gmail_incremental_sync")}
-            {:error, reason} -> handle_google_rate_limit(reason)
+            {:ok, result} ->
+              with :ok <- publish_gmail_sync_completed(user_id, account, job, result) do
+                {:ok, Map.put(result, :source, "gmail_incremental_sync")}
+              end
+
+            {:error, reason} ->
+              handle_google_rate_limit(reason)
           end
       end
     end
@@ -340,6 +345,46 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
   def execute(%BackgroundJob{job_type: job_type}),
     do: {:error, {:unknown_background_job, job_type}}
+
+  defp publish_gmail_sync_completed(user_id, account, job, result) do
+    event =
+      Connector.build_event("gmail_sync_completed", "gmail", %{
+        user_id: user_id,
+        provider: account.provider,
+        count: Map.get(result, :count, 0)
+      })
+      |> put_gmail_sync_dedupe_key(job)
+
+    case Connector.publish(gmail_account_topic(user_id, account), event) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:gmail_sync_completion_publish_failed, reason}}
+    end
+  end
+
+  defp put_gmail_sync_dedupe_key(event, job) do
+    case job.dedupe_key || job.id do
+      identity when is_binary(identity) and identity != "" ->
+        Map.put(event, :dedupe_key, "#{identity}:gmail_sync_completed")
+
+      _missing_identity ->
+        event
+    end
+  end
+
+  defp gmail_account_topic(user_id, account) do
+    metadata = account.metadata || %{}
+
+    account_email =
+      metadata["account_email"] || metadata["email"] || account.external_account_id ||
+        gmail_provider_email(account.provider) || user_id
+
+    "email:#{account_email |> to_string() |> String.trim() |> String.downcase()}"
+  end
+
+  defp gmail_provider_email("google:" <> account_email) when account_email != "",
+    do: account_email
+
+  defp gmail_provider_email(_provider), do: nil
 
   defp publish_calendar_sync_completed(user_id, job, result) do
     event =

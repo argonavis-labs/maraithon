@@ -3,6 +3,19 @@ defmodule Maraithon.ChiefOfStaff.SourceBundleTest do
 
   alias Maraithon.ChiefOfStaff.SourceBundle
 
+  test "prioritizes deeply searched Gmail asks before routine recent mail" do
+    messages = [
+      %{"message_id" => "newest"},
+      %{"message_id" => "buried", "search_mode" => "targeted_actionable"},
+      %{"message_id" => "older"}
+    ]
+
+    assert ["buried", "newest", "older"] ==
+             messages
+             |> SourceBundle.prioritize_gmail_actionable()
+             |> Enum.map(& &1["message_id"])
+  end
+
   test "normalizes Slack workspaces, messages, mentions, and freshness" do
     bundle =
       %{}

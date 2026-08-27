@@ -495,12 +495,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       |> SourceBundle.gmail_inbox_messages()
       |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
       |> Enum.sort_by(&gmail_message_sort_key/1, :desc)
+      |> SourceBundle.prioritize_gmail_actionable()
 
     sent_messages =
       source_bundle
       |> SourceBundle.gmail_sent_messages()
       |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
       |> Enum.sort_by(&gmail_message_sort_key/1, :desc)
+      |> SourceBundle.prioritize_gmail_actionable()
 
     calendar_events =
       source_bundle

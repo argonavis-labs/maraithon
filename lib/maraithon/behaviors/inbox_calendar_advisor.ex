@@ -643,6 +643,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       messages ->
         messages
         |> filter_messages_within_followup_window(state)
+        |> SourceBundle.prioritize_gmail_actionable()
         |> Enum.take(state.email_scan_limit)
     end
   end
@@ -679,6 +680,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       messages ->
         messages
         |> filter_messages_within_followup_window(state)
+        |> SourceBundle.prioritize_gmail_actionable()
         |> Enum.take(sent_limit)
     end
   end

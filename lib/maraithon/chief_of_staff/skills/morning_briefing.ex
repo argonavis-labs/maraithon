@@ -801,11 +801,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "recent_inbox" =>
           gmail_inbox_messages
           |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
+          |> SourceBundle.prioritize_gmail_actionable()
           |> Enum.take(@prompt_section_limit)
           |> Enum.map(&gmail_message_for_prompt/1),
         "recent_unread" =>
           gmail_inbox_messages
           |> Enum.filter(&recent_unread_message?(&1, lookback_start))
+          |> SourceBundle.prioritize_gmail_actionable()
           |> Enum.take(@prompt_section_limit)
           |> Enum.map(&gmail_message_for_prompt/1),
         "counts" => %{

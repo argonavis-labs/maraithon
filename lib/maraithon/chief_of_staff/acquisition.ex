@@ -33,7 +33,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @gmail_candidate_fetch_concurrency 12
   @gmail_provider_fetch_concurrency 3
   @gmail_provider_phase_timeout_ms 9_000
-  @gmail_commercial_phase_timeout_ms 1_000
+  @gmail_targeted_search_phase_timeout_ms 4_000
   @gmail_candidate_detail_timeout_ms 5_000
   @gmail_body_fetch_concurrency 8
   @gmail_body_phase_timeout_ms 8_000
@@ -78,6 +78,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @commercial_gmail_lookback_days 7
   @commercial_gmail_query_limit 5
   @default_forward_days 14
+  # Gmail's newest-N delta is not enough for high-volume inboxes. These
+  # provider-side searches recover likely asks and promises from every
+  # connected mailbox before the global candidate cap is applied.
+  @default_actionable_gmail_queries [
+    ~s(newer_than:14d -in:sent {"can you" "could you" "please send" "please share" "please reply" "action required"}),
+    ~s(newer_than:14d -in:sent {"following up" "any update" "when can" deadline urgent asap}),
+    ~s(newer_than:14d in:sent {"I will" "I'll" "we will" "we'll" "I can" "we can"}),
+    ~s(newer_than:14d in:sent {"will send" "will share" "follow up" "circle back" "get this to you"})
+  ]
   @default_commercial_gmail_queries []
   @default_slack_key_channels []
   @default_local_calendar_limit 250
@@ -2047,7 +2056,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       commercial =
         if query_count > 0 do
-          min(query_count * @commercial_gmail_query_limit, div(total, 8))
+          # Reserve enough per-account room for targeted asks/promises to
+          # survive a noisy newest-N base window. The total provider quota is
+          # unchanged, so this improves recall without growing prompt input.
+          min(query_count * @commercial_gmail_query_limit * 2, div(total, 2))
         else
           0
         end
@@ -2203,6 +2215,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "mode" => "connector",
       "status" => status,
       "count" => length(provider_messages),
+      "targeted_search_count" => commercial_count,
+      # Retain the old field for dashboards while configured commercial
+      # searches and built-in actionable searches share the same phase.
       "commercial_search_count" => commercial_count,
       "listed_count" => fetch_metadata.listed_count,
       "requested_count" => fetch_metadata.requested_count,
@@ -2700,15 +2715,22 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> Map.get("messages", [])
         |> annotate_event_messages(source_scope, context)
 
-      {:ok,
-       %{
-         messages: messages,
-         providers:
-           messages
-           |> Enum.map(&Map.get(&1, "google_provider"))
-           |> Enum.filter(&is_binary/1)
-           |> Enum.uniq()
-       }}
+      if messages == [] do
+        # Gmail push notifications only announce that mailbox history changed.
+        # A completion event also carries no bodies. Fall back to provider
+        # acquisition so an empty envelope never suppresses the real search.
+        :fallback
+      else
+        {:ok,
+         %{
+           messages: messages,
+           providers:
+             messages
+             |> Enum.map(&Map.get(&1, "google_provider"))
+             |> Enum.filter(&is_binary/1)
+             |> Enum.uniq()
+         }}
+      end
     else
       :fallback
     end
@@ -2725,7 +2747,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> Map.get("events", [])
         |> Enum.map(&stringify_keys/1)
 
-      {:ok, events}
+      # Calendar watch callbacks are also change notifications, not event
+      # payloads. Read every connected calendar after the durable sync ends.
+      if events == [], do: :fallback, else: {:ok, events}
     else
       :fallback
     end
@@ -2917,7 +2941,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> Enum.map(&normalize_string/1)
       |> Enum.reject(&is_nil/1)
 
-    (@default_commercial_gmail_queries ++ configured)
+    (@default_actionable_gmail_queries ++ @default_commercial_gmail_queries ++ configured)
     |> Enum.uniq()
   end
 
@@ -3123,12 +3147,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     total = max(gmail_fetch_timeout_ms(plan), 4)
     reserve = min(2_000, max(div(total, 10), 1))
     usable = max(total - reserve, 3)
-    commercial = min(@gmail_commercial_phase_timeout_ms, max(div(usable, 18), 1))
-    remaining = max(usable - commercial, 2)
+    targeted = min(@gmail_targeted_search_phase_timeout_ms, max(div(usable, 4), 1))
+    remaining = max(usable - targeted, 2)
     provider = min(@gmail_provider_phase_timeout_ms, max(div(remaining + 1, 2), 1))
     body = min(@gmail_body_phase_timeout_ms, max(remaining - provider, 1))
 
-    %{provider: provider, commercial: commercial, body: body, reserve: reserve, total: total}
+    %{provider: provider, commercial: targeted, body: body, reserve: reserve, total: total}
   end
 
   defp ceil_div(0, divisor) when is_integer(divisor) and divisor > 0, do: 0
@@ -3237,7 +3261,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> max(1)
 
     query_timeout =
-      Keyword.get(fetch_opts, :commercial_query_timeout_ms, @gmail_commercial_phase_timeout_ms)
+      Keyword.get(
+        fetch_opts,
+        :commercial_query_timeout_ms,
+        @gmail_targeted_search_phase_timeout_ms
+      )
 
     gmail_opts =
       Keyword.drop(fetch_opts, [:commercial_query_concurrency, :commercial_query_timeout_ms])
@@ -3267,11 +3295,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       on_timeout: :kill_task
     )
     |> Enum.flat_map(fn
-      {:ok, {_query, {:ok, messages, _metadata}}} when is_list(messages) ->
-        messages
+      {:ok, {query, {:ok, messages, _metadata}}} when is_list(messages) ->
+        annotate_targeted_gmail_matches(messages, query)
 
-      {:ok, {_query, {:ok, messages}}} when is_list(messages) ->
-        messages
+      {:ok, {query, {:ok, messages}}} when is_list(messages) ->
+        annotate_targeted_gmail_matches(messages, query)
 
       {:ok, {query, {:error, reason}}} ->
         Logger.debug("ChiefOfStaff commercial Gmail search failed",
@@ -3304,6 +3332,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     |> dedupe_messages()
     |> Enum.take(total_limit)
   end
+
+  defp annotate_targeted_gmail_matches(messages, query)
+       when is_list(messages) and is_binary(query) do
+    Enum.map(messages, fn message ->
+      message
+      |> stringify_keys()
+      |> Map.put("search_mode", "targeted_actionable")
+      |> Map.put("search_query", query)
+    end)
+  end
+
+  defp annotate_targeted_gmail_matches(messages, _query), do: messages
 
   defp enrich_gmail_message(user_id, message, default_provider) do
     metadata = stringify_keys(message)
@@ -3402,11 +3442,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp filter_messages_by_label(messages, label, _limit) when is_list(messages) do
-    messages
-    |> Enum.filter(fn message ->
-      message
-      |> Map.get("labels", [])
-      |> Enum.any?(&(to_string(&1) == label))
+    Enum.filter(messages, fn message ->
+      labels = message |> Map.get("labels", []) |> Enum.map(&to_string/1)
+      targeted? = Map.get(message, "search_mode") == "targeted_actionable"
+
+      label in labels or (label == "INBOX" and targeted? and "SENT" not in labels)
     end)
   end
 

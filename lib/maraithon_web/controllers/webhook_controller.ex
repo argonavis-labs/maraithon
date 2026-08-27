@@ -68,7 +68,10 @@ defmodule MaraithonWeb.WebhookController do
     # See google_calendar/2 - same unauthenticated-push posture applies to
     # the Pub/Sub Gmail notifications (mailbox claim validated in the
     # connector against connected accounts).
-    handle_connector(conn, params, Gmail, respond: :no_content)
+    # The durable background job publishes only after Gmail history sync
+    # completes. Publishing this metadata-only enqueue envelope would wake the
+    # assistant before the changed messages are ready.
+    handle_connector(conn, params, Gmail, respond: :no_content, publish: false)
   end
 
   @doc """
