@@ -14,14 +14,12 @@ import AppKit
 struct RootWindow: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selection: SidebarItem? = .source(id: "imessage")
+    @State private var selection: SidebarItem? = .todos
 
     var body: some View {
         Group {
             switch env.deviceAuth.state {
-            case .signedOut, .error:
-                ConnectView()
-            default:
+            case .signedIn:
                 if env.onboarding.current != .done {
                     OnboardingView(flow: env.onboarding)
                 } else {
@@ -41,6 +39,8 @@ struct RootWindow: View {
                         }
                     }
                 }
+            case .signedOut, .connecting, .awaitingApproval, .error:
+                ConnectView()
             }
         }
         .animation(.default, value: env.deviceAuth.state)
@@ -59,6 +59,7 @@ struct RootWindow: View {
             // do not get re-prompted (the persisted flag wins).
             switch newState {
             case .signedOut, .error:
+                env.todos.clear()
                 env.onboarding.reset()
             default:
                 break
@@ -95,6 +96,8 @@ struct RootWindow: View {
     @ViewBuilder
     private func detailView(for selection: SidebarItem?) -> some View {
         switch selection {
+        case .todos:
+            TodosView()
         case .recall:
             RecallView()
         case .source(let id) where id == "imessage":
@@ -130,6 +133,7 @@ struct RootWindow: View {
 }
 
 enum SidebarItem: Hashable {
+    case todos
     case recall
     case source(id: String)
     case logs

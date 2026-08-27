@@ -137,24 +137,23 @@ xcconfig_value() {
 }
 
 companion_debug_app_path() {
-  local build_location_args=()
-  local build_setting_overrides=()
+  local show_build_settings_args=(
+    -project Maraithon.xcodeproj
+    -scheme Maraithon
+    -configuration Debug
+  )
   if [[ -n "${MARAITHON_COMPANION_DERIVED_DATA_PATH:-}" ]]; then
-    build_location_args+=(-derivedDataPath "${MARAITHON_COMPANION_DERIVED_DATA_PATH}")
+    show_build_settings_args+=(-derivedDataPath "${MARAITHON_COMPANION_DERIVED_DATA_PATH}")
   fi
   if [[ -n "${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR:-}" ]]; then
-    build_setting_overrides+=("CONFIGURATION_BUILD_DIR=${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR}")
+    show_build_settings_args+=("CONFIGURATION_BUILD_DIR=${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR}")
   fi
 
   local build_dir
   build_dir="$(
     cd "${COMPANION_DIR}" &&
       xcodebuild \
-        -project Maraithon.xcodeproj \
-        -scheme Maraithon \
-        -configuration Debug \
-        "${build_location_args[@]}" \
-        "${build_setting_overrides[@]}" \
+        "${show_build_settings_args[@]}" \
         -showBuildSettings 2>/dev/null |
       awk -F= '
         $1 ~ /BUILT_PRODUCTS_DIR[[:space:]]*$/ {

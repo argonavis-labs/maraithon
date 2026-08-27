@@ -275,6 +275,7 @@ actor RealtimeChannel {
                 let message = try await socket.receive()
                 handle(message: message)
             } catch {
+                guard !Task.isCancelled else { return }
                 log?("realtime.receive_error", ["error": String(describing: error)])
                 await teardown(reason: "receive_error")
                 scheduleReconnect()
@@ -366,9 +367,19 @@ actor RealtimeChannel {
         )
         reconnectTask?.cancel()
         reconnectTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
-            await self?.connectOnce()
+            do {
+                try await Task.sleep(for: .seconds(seconds))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await self?.runScheduledReconnect()
         }
+    }
+
+    private func runScheduledReconnect() async {
+        reconnectTask = nil
+        await connectOnce()
     }
 
     private func update(status newStatus: Status) {

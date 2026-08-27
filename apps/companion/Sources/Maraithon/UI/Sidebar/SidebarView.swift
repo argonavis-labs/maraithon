@@ -21,6 +21,8 @@ struct SidebarView: View {
             accountSection
 
             Section("Assistant") {
+                Label("Todos", systemImage: "checklist")
+                    .tag(SidebarItem.todos)
                 Label("Recall", systemImage: "magnifyingglass")
                     .tag(SidebarItem.recall)
             }

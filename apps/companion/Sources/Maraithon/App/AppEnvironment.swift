@@ -9,14 +9,16 @@ import Observation
 ///   1. `EventLog` first — every other service emits to it.
 ///   2. `Blocklist` — used by sources to filter before push.
 ///   3. `DeviceAuth` — owns the bearer token; everyone reads from it.
-///   4. `SyncEngine` — needs both `EventLog` and `DeviceAuth`.
-///   5. `SourceRegistry` — installs sources whose outboxes call into
+///   4. `TodosStore` — reads account-backed work through that device token.
+///   5. `SyncEngine` — needs both `EventLog` and `DeviceAuth`.
+///   6. `SourceRegistry` — installs sources whose outboxes call into
 ///      `SyncEngine`.
 @Observable
 @MainActor
 final class AppEnvironment {
     let eventLog: EventLog
     let deviceAuth: DeviceAuth
+    let todos: TodosStore
     let onboarding: OnboardingFlow
     let syncEngine: SyncEngine
     let sources: SourceRegistry
@@ -35,7 +37,19 @@ final class AppEnvironment {
         let log = EventLog()
         self.eventLog = log
         self.blocklist = Blocklist()
-        self.deviceAuth = DeviceAuth(eventLog: log)
+        let auth = DeviceAuth(eventLog: log)
+        self.deviceAuth = auth
+        self.todos = TodosStore(
+            client: MaraithonClient(
+                tokenProvider: { [weak auth] in
+                    await MainActor.run { [auth] in auth?.currentToken }
+                }
+            ),
+            eventLog: log,
+            unauthorizedHandler: { [weak auth] in
+                auth?.tokenRejected()
+            }
+        )
         self.onboarding = OnboardingFlow(eventLog: log)
         let engine = SyncEngine(eventLog: log, deviceAuth: deviceAuth)
         self.syncEngine = engine
@@ -194,6 +208,11 @@ final class AppEnvironment {
     /// Triggered by the global `⌘R` shortcut and the toolbar.
     func syncNowFromMenu() {
         sources.syncNow()
+        if case .signedIn = deviceAuth.state {
+            Task { [todos] in
+                await todos.load()
+            }
+        }
     }
 
     /// Toggle every registered source between paused and running. Surfaces

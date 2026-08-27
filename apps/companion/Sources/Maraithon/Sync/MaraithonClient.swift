@@ -141,12 +141,55 @@ struct MaraithonClient: Sendable {
         return try decoder.decode(RecallResponse.self, from: data)
     }
 
+    /// Lists Todos through the paired-device bearer surface. The server
+    /// derives the account from the token; the client never sends a user id.
+    func listTodos(
+        filter: TodoListFilter,
+        query: String? = nil
+    ) async throws -> CompanionTodosResponse {
+        var queryItems = [
+            URLQueryItem(name: "status", value: filter.rawValue),
+            URLQueryItem(name: "sort", value: filter == .active ? "rank" : "updated"),
+            URLQueryItem(name: "dir", value: "desc"),
+            URLQueryItem(name: "limit", value: "200"),
+            URLQueryItem(name: "include_cards", value: filter == .active ? "true" : "false"),
+            URLQueryItem(name: "open_cards_only", value: "true")
+        ]
+        if let query, !query.isEmpty {
+            queryItems.append(URLQueryItem(name: "q", value: query))
+        }
+
+        let request = try await makeRequest(
+            method: "GET",
+            path: "/api/v1/companion/todos",
+            body: nil,
+            queryItems: queryItems
+        )
+        let (data, response) = try await transport(request)
+        try Self.validate(response: response, data: data)
+        return try JSONDecoder().decode(CompanionTodosResponse.self, from: data)
+    }
+
+    /// Marks a Todo done or reopens it. Those are the only Todo mutations
+    /// available to a companion device token.
+    func updateTodo(id: String, action: CompanionTodoAction) async throws -> CompanionTodoActionResponse {
+        let request = try await makeRequest(
+            method: "POST",
+            path: "/api/v1/companion/todos/\(id)/actions/\(action.rawValue)",
+            body: nil
+        )
+        let (data, response) = try await transport(request)
+        try Self.validate(response: response, data: data)
+        return try JSONDecoder().decode(CompanionTodoActionResponse.self, from: data)
+    }
+
     // MARK: - Request shaping
 
     private func makeRequest(
         method: String,
         path: String,
         body: Data?,
+        queryItems: [URLQueryItem] = [],
         extraHeaders: [String: String] = [:]
     ) async throws -> URLRequest {
         guard let token = await tokenProvider(), !token.isEmpty else {
@@ -154,6 +197,16 @@ struct MaraithonClient: Sendable {
         }
         var url = baseURL
         url.append(path: path)
+        if !queryItems.isEmpty {
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                throw MaraithonClientError.invalidResponse
+            }
+            components.queryItems = queryItems
+            guard let queryURL = components.url else {
+                throw MaraithonClientError.invalidResponse
+            }
+            url = queryURL
+        }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
