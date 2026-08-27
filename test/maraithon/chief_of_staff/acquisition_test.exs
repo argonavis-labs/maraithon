@@ -307,6 +307,131 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert get_in(telemetry, ["sources", "slack", "conversation_count"]) == 1
   end
 
+  test "recovers exact Slack broadcast mentions outside the bounded channel scan" do
+    now = ~U[2026-08-27 17:24:00Z]
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    assert {:ok, _user} =
+             Maraithon.Accounts.get_or_create_user_by_email("chief-slack-broadcast@example.com")
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("chief-slack-broadcast@example.com", "slack:T123:user:UKENT", %{
+               access_token: "xoxp-user-token",
+               scopes: ["channels:read", "channels:history", "search:read", "users:read"]
+             })
+
+    Bypass.stub(bypass, "GET", "/api/conversations.list", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "channels" => [%{"id" => "CSELECTED", "name" => "exec-priority"}]
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.history", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "messages" => []}))
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/search.messages", fn conn ->
+      query = conn.query_string |> Plug.Conn.Query.decode() |> Map.get("query")
+
+      matches =
+        if String.starts_with?(query, "@here after:") do
+          [
+            %{
+              "ts" => "1787792700.000001",
+              "user" => "UKEVIN",
+              "text" =>
+                "<!here> Please dm me with the following information depending on the OS you have\n" <>
+                  "macOS screenshots: FileVault turned on, lock screen, automatic security updates, " <>
+                  "device model and serial, macOS version, and password-length attestation.",
+              "channel" => %{"id" => "C-SOC2", "name" => "p-certificates-soc2"},
+              "permalink" => "https://example.slack.com/archives/C-SOC2/p1787792700000001"
+            }
+          ]
+        else
+          []
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => %{"total" => length(matches), "matches" => matches}
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/users.info", fn conn ->
+      user = conn.query_string |> Plug.Conn.Query.decode() |> Map.get("user")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "user" => %{
+            "id" => user,
+            "profile" => %{"display_name" => if(user == "UKEVIN", do: "Kevin", else: user)}
+          }
+        })
+      )
+    end)
+
+    source_scope = %{
+      "slack_workspaces" => [
+        %{"team_id" => "T123", "team_name" => "Agora", "services" => ["channels"]}
+      ]
+    }
+
+    context = %{
+      agent_id: "chief-agent-slack-broadcast",
+      user_id: "chief-slack-broadcast@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry, _watermarks} =
+      Acquisition.build(
+        "chief-slack-broadcast@example.com",
+        ["followthrough"],
+        %{
+          "followthrough" => %{
+            "source_scope" => source_scope,
+            "lookback_hours" => 48,
+            "slack_channel_scan_limit" => 1,
+            "slack_message_scan_limit" => 100
+          }
+        },
+        context
+      )
+
+    [mention] = SourceBundle.slack_mentions(bundle)
+    assert mention["channel_id"] == "C-SOC2"
+    assert mention["text"] =~ "<!here> Please dm me"
+    assert mention["search_mode"] == "broadcast_mention"
+
+    assert Enum.any?(
+             telemetry["fetches"],
+             &(&1["mode"] == "broadcast_mention_search" and &1["mention"] == "@here" and
+                 &1["count"] == 1)
+           )
+  end
+
   test "adds self-authored Slack search matches when private channel history is not enumerable" do
     now = ~U[2026-06-18 21:24:00Z]
     bypass = Bypass.open()

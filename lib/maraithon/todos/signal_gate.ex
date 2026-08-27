@@ -219,6 +219,7 @@ defmodule Maraithon.Todos.SignalGate do
     "payment declined",
     "payment failed",
     "please approve",
+    "please dm",
     "please pay",
     "please reply",
     "please review",

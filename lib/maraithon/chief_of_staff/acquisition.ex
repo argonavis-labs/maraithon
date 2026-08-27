@@ -50,6 +50,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @slack_user_directory_timeout_ms 1_500
   @slack_conversations_page_limit 1_000
   @slack_self_authored_search_result_limit 50
+  @slack_broadcast_search_result_limit 100
+  @slack_broadcast_mentions [
+    {"@here", "<!here>"},
+    {"@channel", "<!channel>"},
+    {"@everyone", "<!everyone>"}
+  ]
   @slack_self_authored_search_queries [
     "\"I am going to\"",
     "\"I'm going to\"",
@@ -924,8 +930,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> Enum.sort_by(&slack_channel_priority(&1, plan.slack_key_channels))
         |> Enum.take(max(plan.slack_channel_limit, 0))
 
-      {mentions, mention_fetches} =
+      {direct_mentions, mention_fetches} =
         fetch_slack_mentions(user_id, team_id, workspace, plan, oldest)
+
+      {broadcast_mentions, broadcast_fetches} =
+        fetch_slack_broadcast_mentions(user_id, team_id, workspace, plan, oldest)
+
+      mentions = dedupe_slack_messages(direct_mentions ++ broadcast_mentions)
 
       {self_authored_messages, self_authored_fetches} =
         fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest)
@@ -1023,7 +1034,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         }
       }
 
-      {:ok, workspace_payload, self_authored_fetches ++ mention_fetches ++ fetches}
+      {:ok, workspace_payload,
+       self_authored_fetches ++ broadcast_fetches ++ mention_fetches ++ fetches}
     else
       {:error, reason} -> {:error, reason, []}
     end
@@ -1097,6 +1109,86 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
            ]}
       end
     end)
+  end
+
+  defp fetch_slack_broadcast_mentions(user_id, team_id, workspace, plan, oldest) do
+    oldest_date = slack_search_after_date(oldest)
+    search_limit = slack_broadcast_search_limit(plan)
+
+    case SlackHelpers.resolve_access_token(user_id, team_id, token_preference: "user") do
+      {:ok, token} ->
+        Enum.reduce(@slack_broadcast_mentions, {[], []}, fn {rendered, raw_token},
+                                                            {mention_acc, fetch_acc} ->
+          query = "#{rendered} after:#{oldest_date}"
+
+          case call_with_timeout(
+                 fn ->
+                   slack_module().search_messages(token.access_token, query,
+                     count: search_limit,
+                     sort: "timestamp",
+                     sort_dir: "desc"
+                   )
+                 end,
+                 slack_search_timeout_ms(plan)
+               ) do
+            {:ok, response} ->
+              raw_matches =
+                response
+                |> get_in(["messages", "matches"])
+                |> normalize_list()
+                |> Enum.filter(&slack_broadcast_match?(&1, raw_token))
+                |> Enum.filter(&slack_search_match_recent?(&1, oldest))
+
+              user_directory = slack_user_directory(token.access_token, raw_matches, nil)
+
+              matches =
+                Enum.map(raw_matches, fn match ->
+                  match
+                  |> serialize_slack_match(team_id, workspace, user_directory)
+                  |> Map.put("search_mode", "broadcast_mention")
+                  |> Map.put("search_query", query)
+                end)
+
+              fetch = %{
+                "source" => "slack",
+                "team_id" => team_id,
+                "mode" => "broadcast_mention_search",
+                "status" => "ok",
+                "mention" => rendered,
+                "count" => length(matches)
+              }
+
+              {dedupe_slack_messages(mention_acc ++ matches), [fetch | fetch_acc]}
+
+            {:error, reason} ->
+              fetch = %{
+                "source" => "slack",
+                "team_id" => team_id,
+                "mode" => "broadcast_mention_search",
+                "status" => "error",
+                "mention" => rendered,
+                "reason" => Redaction.error_class(reason)
+              }
+
+              {mention_acc, [fetch | fetch_acc]}
+          end
+        end)
+
+      {:error, :no_user_token} ->
+        {[], []}
+
+      {:error, reason} ->
+        {[],
+         [
+           %{
+             "source" => "slack",
+             "team_id" => team_id,
+             "mode" => "broadcast_mention_search",
+             "status" => "error",
+             "reason" => Redaction.error_class(reason)
+           }
+         ]}
+    end
   end
 
   defp fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest) do
@@ -1229,6 +1321,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     ]
   end
 
+  defp slack_broadcast_search_limit(plan) when is_map(plan) do
+    plan
+    |> Map.get(:slack_message_limit, @default_slack_message_limit)
+    |> parse_integer()
+    |> case do
+      limit when is_integer(limit) and limit > 0 ->
+        min(limit, @slack_broadcast_search_result_limit)
+
+      _other ->
+        @slack_broadcast_search_result_limit
+    end
+  end
+
+  defp slack_broadcast_search_limit(_plan), do: @slack_broadcast_search_result_limit
+
   defp slack_self_authored_search_limit(plan) when is_map(plan) do
     limit =
       plan
@@ -1251,6 +1358,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp slack_search_match_for_user?(_match, _slack_user_id), do: false
+
+  defp slack_broadcast_match?(match, raw_token) when is_map(match) and is_binary(raw_token) do
+    match
+    |> Map.get("text", "")
+    |> to_string()
+    |> String.contains?(raw_token)
+  end
+
+  defp slack_broadcast_match?(_match, _raw_token), do: false
 
   defp slack_search_match_recent?(match, oldest) when is_map(match) and is_binary(oldest) do
     with {oldest_seconds, _} <- Float.parse(oldest),

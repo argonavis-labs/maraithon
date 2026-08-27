@@ -27,8 +27,9 @@ defmodule Maraithon.Connectors.Slack do
   1. Install Slack app to workspace via OAuth
   2. Configure Event Subscriptions in Slack app settings
   3. Point Request URL to `/webhooks/slack`
-  4. Subscribe to events you want (message.channels, app_mention, etc.)
-  5. Slack sends events to your webhook
+  4. Subscribe to user message events (`message.channels`, `message.groups`,
+     `message.im`, and `message.mpim`) plus the required bot events
+  5. Slack sends signed events to the webhook for durable agent ingress
 
   ## Configuration
 
@@ -109,9 +110,8 @@ defmodule Maraithon.Connectors.Slack do
         topic = build_topic(team_id, event["channel"])
 
         normalized =
-          Connector.build_event(
+          build_slack_event(
             event_type,
-            "slack",
             %{
               team_id: team_id,
               event: event
@@ -144,6 +144,7 @@ defmodule Maraithon.Connectors.Slack do
         team_id: team_id,
         channel_id: channel,
         user_id: event["user"],
+        self_user_id: authorized_user_id(params),
         text: event["text"],
         ts: event["ts"],
         thread_ts: event["thread_ts"],
@@ -152,7 +153,7 @@ defmodule Maraithon.Connectors.Slack do
         edited: event["edited"]
       }
 
-      normalized = Connector.build_event(event_type, "slack", data, params)
+      normalized = build_slack_event(event_type, data, params)
 
       _ = ingest_slack_message(team_id, event, event_type)
 
@@ -302,7 +303,7 @@ defmodule Maraithon.Connectors.Slack do
       thread_ts: event["thread_ts"]
     }
 
-    normalized = Connector.build_event("app_mention", "slack", data, params)
+    normalized = build_slack_event("app_mention", data, params)
 
     Logger.info("Slack app mention",
       team_id: team_id,
@@ -327,7 +328,7 @@ defmodule Maraithon.Connectors.Slack do
       item_ts: get_in(event, ["item", "ts"])
     }
 
-    normalized = Connector.build_event(event_type, "slack", data, params)
+    normalized = build_slack_event(event_type, data, params)
     {:ok, topic, normalized}
   end
 
@@ -342,7 +343,7 @@ defmodule Maraithon.Connectors.Slack do
       inviter: event["inviter"]
     }
 
-    normalized = Connector.build_event(event_type, "slack", data, params)
+    normalized = build_slack_event(event_type, data, params)
     {:ok, topic, normalized}
   end
 
@@ -469,6 +470,60 @@ defmodule Maraithon.Connectors.Slack do
   # ===========================================================================
   # Private Helpers
   # ===========================================================================
+
+  defp build_slack_event(event_type, data, params) do
+    event = Connector.build_event(event_type, "slack", data, params)
+
+    case params["event_id"] do
+      event_id when is_binary(event_id) and event_id != "" ->
+        event
+        |> Map.put(:id, event_id)
+        |> Map.put(:dedupe_key, "slack-event:#{event_id}")
+
+      _missing_event_id ->
+        event
+    end
+  end
+
+  defp authorized_user_id(params) when is_map(params) do
+    authorization_user_id(params["authorizations"]) ||
+      first_string(params["authed_users"]) ||
+      string_value(params["authed_user_id"])
+  end
+
+  defp authorized_user_id(_params), do: nil
+
+  defp authorization_user_id(authorizations) when is_list(authorizations) do
+    authorizations
+    |> Enum.find_value(fn
+      %{"user_id" => user_id, "is_bot" => false} -> string_value(user_id)
+      _authorization -> nil
+    end)
+    |> case do
+      nil ->
+        Enum.find_value(authorizations, fn
+          %{"user_id" => user_id} -> string_value(user_id)
+          _authorization -> nil
+        end)
+
+      user_id ->
+        user_id
+    end
+  end
+
+  defp authorization_user_id(_authorizations), do: nil
+
+  defp first_string(values) when is_list(values), do: Enum.find_value(values, &string_value/1)
+  defp first_string(_values), do: nil
+
+  defp string_value(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp string_value(_value), do: nil
 
   defp build_topic(team_id, nil), do: "slack:#{team_id}"
   defp build_topic(team_id, channel), do: "slack:#{team_id}:#{channel}"

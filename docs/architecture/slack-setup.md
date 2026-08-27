@@ -76,14 +76,28 @@ users:read
 
 These match `@default_scopes` and `@default_user_scopes` in `lib/maraithon/oauth/slack.ex`. If you change the lists in code, mirror the change in the Slack app config and have users re-authorize.
 
-### 3. (Optional) Configure Event Subscriptions
+### 3. Configure Event Subscriptions
 
-If you want Slack to push events to Maraithon:
+Events API delivery is the primary message-ingress path. It must be enabled so
+Maraithon does not depend on a bounded conversation poll to notice new work.
 
-- **Request URL:** `https://maraithon.com/webhooks/slack`
-- **Subscribe to bot events:** `message.channels`, `message.groups`, `message.im`, `message.mpim`, `app_mention`, `reaction_added`, `reaction_removed`, `member_joined_channel`, `member_left_channel`
+- Turn on **Enable Events**.
+- Set **Request URL** to `https://maraithon.com/webhooks/slack`.
+- Under **Subscribe to events on behalf of users**, add:
+  `message.channels`, `message.groups`, `message.im`, and `message.mpim`.
+- Under **Subscribe to bot events**, add:
+  `app_mention`, `reaction_added`, `reaction_removed`,
+  `member_joined_channel`, and `member_left_channel`.
 
-Slack will hit the URL with a `url_verification` challenge first; `Maraithon.Connectors.Slack.handle_webhook/2` handles it.
+User message events are required here. Bot message events only cover conversations
+where the bot is present; the user subscription covers the connected user's public
+channels, private channels, DMs, and group DMs using the user scopes above.
+
+Slack first sends a `url_verification` challenge, which
+`Maraithon.Connectors.Slack.handle_webhook/2` handles. Signed message callbacks are
+then accepted into the durable Agent Directive ingress before Maraithon returns a
+success response. Slack `event_id` is the retry-deduplication identity. Bounded
+search remains a recovery path for pre-install history or callback downtime.
 
 ### 4. Set environment variables
 

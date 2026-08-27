@@ -21,6 +21,8 @@ defmodule Maraithon.Connectors.SlackTest do
       params = %{
         "type" => "event_callback",
         "team_id" => "T12345",
+        "event_id" => "Ev12345",
+        "authorizations" => [%{"user_id" => "U_SELF", "is_bot" => false}],
         "event" => %{
           "type" => "message",
           "channel" => "C12345",
@@ -38,7 +40,10 @@ defmodule Maraithon.Connectors.SlackTest do
       assert event.type == "message"
       assert event.source == "slack"
       assert event.data.team_id == "T12345"
+      assert event.data.self_user_id == "U_SELF"
       assert event.data.text == "Hello world"
+      assert event.id == "Ev12345"
+      assert event.dedupe_key == "slack-event:Ev12345"
     end
 
     test "routes dm messages to dm topic" do

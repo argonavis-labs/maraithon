@@ -334,7 +334,7 @@ defmodule MaraithonWeb.WebhookControllerTest do
         |> assign(:raw_body, Jason.encode!(payload))
         |> post("/webhooks/slack", payload)
 
-      assert json_response(conn, 200)["status"] == "published"
+      assert json_response(conn, 200)["status"] == "accepted"
     end
   end
 

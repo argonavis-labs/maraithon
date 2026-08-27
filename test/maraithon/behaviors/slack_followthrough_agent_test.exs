@@ -76,6 +76,48 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
       assert stored.metadata["record"]["next_action"] =~ "Reply in the same Slack thread"
     end
 
+    test "turns an actionable @here device-security request into a useful todo", %{
+      user_id: user_id,
+      context: context
+    } do
+      state =
+        SlackFollowthroughAgent.init(%{
+          "user_id" => user_id,
+          "min_confidence" => "0.75",
+          "max_insights_per_cycle" => "3"
+        })
+
+      payload = %{
+        "source" => "slack",
+        "data" => %{
+          "team_id" => "T123",
+          "channel_id" => "C-SOC2",
+          "channel_name" => "p-certificates-soc2",
+          "user_id" => "UKEVIN",
+          "user_display_name" => "Kevin",
+          "self_user_id" => "U_SELF",
+          "text" =>
+            "<!here> Please dm me with the following information depending on the OS you have\n" <>
+              "macOS screenshots: FileVault turned on, lock screen at 5 minutes or less, " <>
+              "automatic security updates, device model and serial, macOS version, and password-length attestation.",
+          "ts" => "1787792700.000001"
+        }
+      }
+
+      {:emit, {:insights_recorded, %{count: 1}}, _state} =
+        SlackFollowthroughAgent.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      [todo] = Todos.list_open_for_user(user_id)
+      assert todo.title == "Send device security evidence to Kevin"
+
+      assert todo.next_action ==
+               "Complete the requested items, then DM Kevin with the results in Slack."
+
+      assert todo.source == "slack"
+      assert todo.metadata["source_excerpt"] =~ "FileVault"
+      assert todo.metadata["broadcast_mention"] == "@here"
+    end
+
     test "ignores closed loops when follow-through already happened", %{
       user_id: user_id,
       context: context

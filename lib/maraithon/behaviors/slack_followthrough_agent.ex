@@ -73,6 +73,24 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
     "tomorrow"
   ]
 
+  @broadcast_mention_tokens ["<!here>", "<!channel>", "<!everyone>"]
+  @broadcast_request_terms [
+    "please",
+    "can you",
+    "could you",
+    "need you",
+    "dm me",
+    "send",
+    "share",
+    "submit",
+    "upload",
+    "provide",
+    "complete",
+    "reply",
+    "respond",
+    "screenshot"
+  ]
+
   @artifact_delivery_terms [
     "sent",
     "shared",
@@ -405,11 +423,15 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       sorted_messages
       |> Enum.flat_map(&commitment_candidates(&1, sorted_messages, self_user_ids, state))
 
+    broadcast_request_candidates =
+      sorted_messages
+      |> Enum.flat_map(&broadcast_request_candidates(&1, self_user_ids))
+
     reply_candidates =
       sorted_messages
       |> Enum.flat_map(&reply_candidates(&1, sorted_messages, self_user_ids, state))
 
-    commitment_candidates ++ reply_candidates
+    commitment_candidates ++ broadcast_request_candidates ++ reply_candidates
   end
 
   defp scan_message_batch(_messages, _state, _timestamp, _explicit_self_ids), do: []
@@ -546,6 +568,114 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       []
     end
   end
+
+  defp broadcast_request_candidates(message, self_user_ids) do
+    text = message.text || ""
+    display_text = message.text_resolved || text
+    normalized = String.downcase(text)
+    broadcast_matches = matched_terms(normalized, @broadcast_mention_tokens)
+    request_matches = matched_terms(normalized, @broadcast_request_terms)
+
+    actionable_broadcast? =
+      broadcast_matches != [] and request_matches != [] and
+        not message.is_dm and not message.is_mpim and
+        not self_message?(message, self_user_ids)
+
+    if actionable_broadcast? do
+      person = slack_user_display_name(message, message.user_id) || "the sender"
+      due_at = infer_deadline_from_text(normalized, message.occurred_at)
+      source_id = "slack:#{message.team_id}:#{message.channel_id}:#{message.ts}"
+      next_action = broadcast_request_next_action(normalized, person)
+
+      evidence = [
+        "Channel-wide Slack request used #{broadcast_label(hd(broadcast_matches))}.",
+        "Request cues detected: #{Enum.join(request_matches, ", ")}.",
+        "No response or completion evidence is recorded yet."
+      ]
+
+      confidence =
+        0.78
+        |> maybe_add_float(0.06, length(request_matches) >= 2)
+        |> maybe_add_float(0.04, String.length(normalized) >= 120)
+        |> clamp(0.0, 1.0)
+
+      record =
+        commitment_record(
+          "Complete the Slack request: #{truncate(display_text, 160)}",
+          person,
+          source_id,
+          due_at,
+          "unresolved",
+          evidence,
+          next_action
+        )
+
+      [
+        %{
+          source: "slack",
+          source_id: source_id,
+          source_occurred_at: message.occurred_at,
+          category: "broadcast_request",
+          title: broadcast_request_title(normalized, person),
+          summary:
+            "A channel-wide request in ##{message.channel_name || message.channel_id} asks you to act#{deadline_phrase(due_at)}.",
+          recommended_action: next_action,
+          priority: urgency_priority(due_at, 84),
+          confidence: confidence,
+          due_at: due_at,
+          dedupe_key:
+            "slack:broadcast-request:#{message.team_id}:#{message.channel_id}:#{message.ts}",
+          metadata: %{
+            "team_id" => message.team_id,
+            "channel_id" => message.channel_id,
+            "channel_name" => message.channel_name,
+            "thread_ts" => message.thread_ts,
+            "source_excerpt" => truncate(display_text, @source_excerpt_chars),
+            "person" => person,
+            "person_slack_user_id" => message.user_id,
+            "broadcast_mention" => broadcast_label(hd(broadcast_matches)),
+            "signals" => Enum.uniq(broadcast_matches ++ request_matches),
+            "missing_inputs" => ["The requested results or artifacts from the Slack message"],
+            "suggested_reply_points" => [
+              "Complete each requested item from the source message.",
+              "Send the requested evidence or answers to #{person}.",
+              "Ask for a deadline only if the source message does not provide one."
+            ],
+            "record" => record
+          }
+        }
+      ]
+    else
+      []
+    end
+  end
+
+  defp broadcast_request_title(text, person) do
+    cond do
+      String.contains?(text, "screenshot") and
+          contains_any?(text, ["filevault", "bitlocker", "device encryption"]) ->
+        "Send device security evidence to #{person}"
+
+      String.contains?(text, "screenshot") ->
+        "Send requested screenshots to #{person}"
+
+      true ->
+        "Respond to #{person}'s Slack request"
+    end
+  end
+
+  defp broadcast_request_next_action(text, person) do
+    if String.contains?(text, "dm me") do
+      "Complete the requested items, then DM #{person} with the results in Slack."
+    else
+      "Complete the requested items, then reply to #{person} in Slack with the results."
+    end
+  end
+
+  defp broadcast_label("<!here>"), do: "@here"
+  defp broadcast_label("<!channel>"), do: "@channel"
+  defp broadcast_label("<!everyone>"), do: "@everyone"
+  defp broadcast_label(token), do: token
 
   defp reply_candidates(message, all_messages, self_user_ids, state) do
     text = message.text || ""

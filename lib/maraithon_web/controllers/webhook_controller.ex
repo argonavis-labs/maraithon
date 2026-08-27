@@ -144,21 +144,28 @@ defmodule MaraithonWeb.WebhookController do
         |> text(challenge)
 
       {:ok, topic, event} ->
-        Connector.publish(topic, event)
+        topics =
+          [topic, slack_team_topic(topic)]
+          |> Enum.reject(&is_nil/1)
+          |> Enum.uniq()
 
-        case slack_team_topic(topic) do
-          nil -> :ok
-          ^topic -> :ok
-          team_topic -> Connector.publish(team_topic, event)
+        case Connector.publish_topics(topics, event) do
+          :ok ->
+            conn
+            |> put_status(:ok)
+            |> json(%{
+              status: "accepted",
+              topic: topic,
+              event_type: event.type
+            })
+
+          {:error, reason} ->
+            Logger.error("Slack webhook durable publish failed",
+              failure_code: Maraithon.Redaction.error_class(reason)
+            )
+
+            send_resp(conn, :service_unavailable, "")
         end
-
-        conn
-        |> put_status(:ok)
-        |> json(%{
-          status: "published",
-          topic: topic,
-          event_type: event.type
-        })
 
       result ->
         handle_connector_result(conn, result, failure_log: "Slack webhook failed")
