@@ -1128,7 +1128,9 @@ defmodule Maraithon.Runtime.Coordination.Authority do
            """
            SELECT action_token FROM public.runtime_leader_authorities
            WHERE role = 'partition_planner' AND node_incarnation_id = $1::uuid
-             AND state IN ('preparing', 'ready') FOR UPDATE
+             AND state IN ('preparing', 'ready')
+             AND lease_expires_at > timezone('UTC', clock_timestamp())
+           FOR UPDATE
            """,
            [Ecto.UUID.dump!(session.id)]
          ).rows do
@@ -1145,6 +1147,7 @@ defmodule Maraithon.Runtime.Coordination.Authority do
               updated_at = timezone('UTC', clock_timestamp())
           WHERE role = 'partition_planner' AND node_incarnation_id = $1::uuid
             AND action_token = $2::uuid AND state IN ('preparing', 'ready')
+            AND lease_expires_at > timezone('UTC', clock_timestamp())
           """,
           [Ecto.UUID.dump!(session.id), Ecto.UUID.dump!(token)]
         )
