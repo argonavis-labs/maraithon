@@ -188,7 +188,23 @@ defmodule Maraithon.Runtime.Coordination.Session do
   def handle_cast(:drain, %{phase: :draining} = state), do: {:noreply, state}
 
   def handle_cast(:drain, state) do
-    {_reply, state} = drain(state)
+    state =
+      try do
+        {_reply, state} = drain(state)
+        state
+      rescue
+        error ->
+          Logger.warning(
+            "RUNTIME_COORDINATION_ERROR=drain:#{Maraithon.Redaction.error_class(error)}"
+          )
+
+          %{state | phase: :draining, leader: nil}
+      catch
+        :exit, _reason ->
+          Logger.warning("RUNTIME_COORDINATION_ERROR=drain:exit")
+          %{state | phase: :draining, leader: nil}
+      end
+
     publish(state)
     {:noreply, state}
   end
@@ -202,6 +218,8 @@ defmodule Maraithon.Runtime.Coordination.Session do
   end
 
   @impl true
+  def terminate(_reason, %{phase: :draining}), do: :ok
+
   def terminate(_reason, state) do
     _ = drain(state)
     # The protected table dies with this process; readers then fall back to
@@ -442,13 +460,10 @@ defmodule Maraithon.Runtime.Coordination.Session do
         drain_revoked_partitions(%{session | state: "draining", ready_at: nil})
         _ = TaskClaims.reconcile_proven(100)
 
-        _ =
-          Authority.revoke_node(%{
-            session
-            | state: "draining",
-              ready_at: nil,
-              draining_at: session.draining_at || session.updated_at
-          })
+        # PostgreSQL refuses revocation while any local task lacks its proof;
+        # the node then stays draining (nothing new is admitted) and a successor
+        # leader releases the partitions once the proofs land.
+        _ = revoke_drained_node(session)
 
         {:ok, %{state | phase: :draining, leader: nil}}
 
@@ -458,6 +473,22 @@ defmodule Maraithon.Runtime.Coordination.Session do
   end
 
   defp drain(state), do: {:ok, state}
+
+  defp revoke_drained_node(session) do
+    Authority.revoke_node(%{
+      session
+      | state: "draining",
+        ready_at: nil,
+        draining_at: session.draining_at || session.updated_at
+    })
+  rescue
+    error in Postgrex.Error ->
+      Logger.warning("Node revocation deferred until local task proofs land",
+        failure_code: Maraithon.Redaction.error_class(error)
+      )
+
+      {:error, :node_revocation_deferred}
+  end
 
   defp terminate_local_agents do
     DynamicSupervisor.which_children(Maraithon.Runtime.AgentSupervisor)

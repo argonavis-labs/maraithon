@@ -97,7 +97,7 @@ if [[ -n "${api_token}" ]]; then
 
     for _attempt in $(seq 1 48); do
       status_json="$(runtime_status)"
-      if [[ "${status_json}" == *'"phase":"draining"'* && "${status_json}" == *'"owned_partitions":0'* && "${status_json}" == *'"open_tasks":0'* ]]; then
+      if [[ "${status_json}" == *'"phase":"draining"'* && "${status_json}" == *'"open_tasks":0'* ]]; then
         echo "Runtime drained cleanly"
         break
       fi
