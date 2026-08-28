@@ -16,6 +16,7 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
   @surface "production_validation"
   @timeout_ms 480_000
   @poll_interval_ms 1_000
+  @runtime_ready_timeout_ms 240_000
 
   def run do
     try do
@@ -211,7 +212,10 @@ defmodule Maraithon.Todos.ProductionOutcomeValidator do
     if Config.protocol_test_bypass?() do
       :ok
     else
-      deadline = System.monotonic_time(:millisecond) + 60_000
+      # A fresh revision takes over partitions only after the previous node's
+      # 30s leases expire, then assigns and readies them; give the handover
+      # room instead of failing the gate three minutes after boot.
+      deadline = System.monotonic_time(:millisecond) + @runtime_ready_timeout_ms
       await_runtime_ready(job, deadline)
     end
   end
