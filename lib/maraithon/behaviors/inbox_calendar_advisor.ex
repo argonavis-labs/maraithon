@@ -362,7 +362,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             {:effect, {:llm_call, params},
              %{
                state
-               | pending_candidates: llm_candidates,
+               | pending_candidates: compact_pending_candidates(llm_candidates),
                  pending_direct_insights: direct_insights,
                  pending_relationship_observations: relationship_observations,
                  pending_llm_kind: :insights,
@@ -2950,6 +2950,91 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Do not return items with importance "digest" or "drop"; omit them from the array instead.
     - Keep false_positive_risk <= 0.35 for every returned item.
     """
+  end
+
+  defp compact_pending_candidates(candidates) when is_list(candidates) do
+    candidates
+    |> Enum.take(@llm_candidate_limit)
+    |> Enum.map(&compact_pending_candidate/1)
+  end
+
+  defp compact_pending_candidates(_candidates), do: []
+
+  defp compact_pending_candidate(candidate) when is_map(candidate) do
+    candidate = stringify_keys(candidate)
+
+    candidate
+    |> Map.take([
+      "source",
+      "source_id",
+      "source_item_id",
+      "source_occurred_at",
+      "category",
+      "title",
+      "summary",
+      "recommended_action",
+      "priority",
+      "confidence",
+      "due_at",
+      "tracking_key",
+      "dedupe_key",
+      "attention_mode",
+      "revision_key",
+      "window_key"
+    ])
+    |> Map.put("metadata", compact_pending_candidate_metadata(read_map(candidate, "metadata")))
+    |> compact_llm_value()
+    |> compact_map()
+  end
+
+  defp compact_pending_candidate(_candidate), do: %{}
+
+  defp compact_pending_candidate_metadata(metadata) do
+    metadata
+    |> stringify_keys()
+    |> Map.take([
+      "account",
+      "google_provider",
+      "message_id",
+      "thread_id",
+      "event_id",
+      "channel_id",
+      "team_id",
+      "from",
+      "to",
+      "subject",
+      "summary",
+      "organizer",
+      "occurred_at",
+      "body_excerpt",
+      "signals",
+      "topic",
+      "context_brief",
+      "why_now",
+      "missing_inputs",
+      "suggested_reply_points",
+      "draft_plan",
+      "thread_type_hint",
+      "solicited_hint",
+      "prior_user_engagement",
+      "explicit_user_commitment",
+      "reply_obligation_hint",
+      "importance_hint",
+      "evidence_for_reply_owed",
+      "evidence_against_reply_owed",
+      "decision_reason",
+      "notification_posture",
+      "interrupt_now",
+      "attention_mode",
+      "attention_reason",
+      "attention_revision_key",
+      "attention_window_key",
+      "conversation_context",
+      "record",
+      "detail"
+    ])
+    |> Map.update("body_excerpt", nil, &truncate(&1, @llm_candidate_body_excerpt_chars))
+    |> compact_map()
   end
 
   defp compact_llm_candidates(candidates) when is_list(candidates) do
