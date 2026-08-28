@@ -33,6 +33,24 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffSnapshotStateTest do
     assert state.source_bundle == bundle
   end
 
+  test "oversized strings are truncated but keep their type and shape" do
+    big = String.duplicate("é", 40_000)
+
+    state = %{
+      skill_states: %{"inbox" => %{candidates: [%{body: big, subject: "s"}], memo: "short"}}
+    }
+
+    snapshot = AIChiefOfStaff.snapshot_state(state)
+    [candidate] = snapshot.skill_states["inbox"].candidates
+
+    assert is_binary(candidate.body)
+    assert byte_size(candidate.body) < 20_000
+    assert String.valid?(candidate.body)
+    assert String.ends_with?(candidate.body, "[truncated for checkpoint]")
+    assert candidate.subject == "s"
+    assert snapshot.skill_states["inbox"].memo == "short"
+  end
+
   test "non-map state passes through" do
     assert AIChiefOfStaff.snapshot_state(:opaque) == :opaque
   end

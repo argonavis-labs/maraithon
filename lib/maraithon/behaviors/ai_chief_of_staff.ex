@@ -257,28 +257,79 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   @impl true
   def snapshot_state(state) when is_map(state) do
-    strip_transient(state, 0)
+    {snapshot, truncated_paths} = strip_transient(state, [], 0, [])
+
+    if truncated_paths != [] do
+      Logger.warning("Checkpoint truncated oversized state strings",
+        failure_code: "snapshot_scalar_truncated",
+        paths: truncated_paths |> Enum.take(8) |> Enum.map(&Enum.join(&1, "."))
+      )
+    end
+
+    snapshot
   end
 
   def snapshot_state(state), do: state
 
   # Source bundles are re-fetched every cycle and can be megabytes; a checkpoint
-  # taken mid-cycle must not carry them (or any nested skill's copy).
+  # taken mid-cycle must not carry them (or any nested skill's copy). Single
+  # strings above the snapshot scalar cap (raw email bodies, prompts, provider
+  # payloads) are truncated so the checkpoint keeps its shape and types.
   @transient_snapshot_keys [:source_bundle, :assistant_fetch_telemetry]
-  @transient_strip_depth 6
+  @transient_strip_depth 8
+  @snapshot_scalar_limit_bytes 16_384
+  @snapshot_truncation_suffix "\n…[truncated for checkpoint]"
 
-  defp strip_transient(value, depth) when depth > @transient_strip_depth, do: value
+  defp strip_transient(value, _path, depth, paths) when depth > @transient_strip_depth,
+    do: {value, paths}
 
-  defp strip_transient(%{__struct__: _} = value, _depth), do: value
+  defp strip_transient(%{__struct__: _} = value, _path, _depth, paths), do: {value, paths}
 
-  defp strip_transient(value, depth) when is_map(value) do
-    Map.new(value, fn
-      {key, _inner} when key in @transient_snapshot_keys -> {key, nil}
-      {key, inner} -> {key, strip_transient(inner, depth + 1)}
+  defp strip_transient(value, path, depth, paths) when is_map(value) do
+    Enum.reduce(value, {%{}, paths}, fn
+      {key, _inner}, {acc, paths} when key in @transient_snapshot_keys ->
+        {Map.put(acc, key, nil), paths}
+
+      {key, inner}, {acc, paths} ->
+        {stripped, paths} = strip_transient(inner, [path_label(key) | path], depth + 1, paths)
+        {Map.put(acc, key, stripped), paths}
     end)
   end
 
-  defp strip_transient(value, _depth), do: value
+  defp strip_transient(value, path, depth, paths) when is_list(value) do
+    {items, paths} =
+      Enum.reduce(value, {[], paths}, fn item, {acc, paths} ->
+        {stripped, paths} = strip_transient(item, ["[]" | path], depth + 1, paths)
+        {[stripped | acc], paths}
+      end)
+
+    {Enum.reverse(items), paths}
+  end
+
+  defp strip_transient(value, path, _depth, paths)
+       when is_binary(value) and byte_size(value) > @snapshot_scalar_limit_bytes do
+    truncated =
+      value
+      |> binary_part(0, @snapshot_scalar_limit_bytes)
+      |> valid_utf8_prefix()
+      |> Kernel.<>(@snapshot_truncation_suffix)
+
+    {truncated, [Enum.reverse(path) | paths]}
+  end
+
+  defp strip_transient(value, _path, _depth, paths), do: {value, paths}
+
+  defp path_label(key) when is_atom(key), do: Atom.to_string(key)
+  defp path_label(key) when is_binary(key), do: key
+  defp path_label(key), do: inspect(key)
+
+  defp valid_utf8_prefix(binary) do
+    if String.valid?(binary) do
+      binary
+    else
+      binary |> String.chunk(:valid) |> List.first() || ""
+    end
+  end
 
   @impl true
   def next_wakeup(state) do
