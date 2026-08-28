@@ -923,6 +923,25 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     read_string(context, "notification_posture", nil) == "resolved"
   end
 
+  defp open_gmail_completion_check(context) when is_map(context) do
+    if read_string(context, "notification_posture", nil) == "insufficient_context" do
+      nil
+    else
+      %{
+        "status" => "open",
+        "reasoning" =>
+          "Checked later Gmail thread activity and recent sent messages; no reply, forward, delivery, or other resolution was found.",
+        "latest_source_checked_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+        "later_evidence" =>
+          context
+          |> read_list("coverage_evidence")
+          |> Enum.take(@max_evidence_points)
+      }
+    end
+  end
+
+  defp open_gmail_completion_check(_context), do: nil
+
   defp gmail_tracking_key("reply_urgent", thread_id) when is_binary(thread_id) do
     "gmail:thread:#{thread_id}:reply_owed"
   end
@@ -1878,6 +1897,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                   "source_direction" => "outbound",
                   "is_from_me" => true,
                   "explicit_user_commitment" => true,
+                  "completion_check" => open_gmail_completion_check(conversation_context),
                   "signals" => Enum.uniq(promise_matches ++ action_matches),
                   "topic" => commitment_topic,
                   "context_brief" =>
@@ -3012,6 +3032,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       "body_excerpt",
       "source_direction",
       "is_from_me",
+      "completion_check",
       "signals",
       "topic",
       "context_brief",

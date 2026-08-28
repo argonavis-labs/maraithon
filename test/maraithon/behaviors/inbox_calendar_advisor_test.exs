@@ -140,13 +140,60 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
     end
 
     test "titles sent commitments as missing follow-through instead of missing reply", %{
-      context: context
+      context: context,
+      user_id: user_id
     } do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "google-access",
+          refresh_token: "google-refresh",
+          expires_in: 3600
+        })
+
       sent_at = DateTime.add(DateTime.utc_now(), -2, :hour)
 
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => []}))
+      end)
+
+      Bypass.expect_once(
+        bypass,
+        "GET",
+        "/gmail/v1/users/me/threads/ab12cd12",
+        fn conn ->
+          assert conn.query_string == "format=metadata"
+
+          body = %{
+            "messages" => [
+              gmail_thread_message(
+                "ab12cd13",
+                "ab12cd12",
+                user_id,
+                "Sarah <sarah@example.com>",
+                "Investor deck",
+                "I'll send the deck to Sarah today.",
+                sent_at
+              )
+            ]
+          }
+
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(200, Jason.encode!(body))
+        end
+      )
+
       sent_message = %{
-        "message_id" => "sent-commitment-title-1",
-        "thread_id" => "thread-sent-commitment-title",
+        "message_id" => "ab12cd13",
+        "thread_id" => "ab12cd12",
         "subject" => "Investor deck",
         "snippet" => "I'll send the deck to Sarah today.",
         "text_body" => "I'll send the deck to Sarah today.",
@@ -174,6 +221,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert candidate["metadata"]["source_direction"] == "outbound"
       assert candidate["metadata"]["is_from_me"] == true
       assert candidate["metadata"]["explicit_user_commitment"] == true
+      assert candidate["metadata"]["completion_check"]["status"] == "open"
+
+      candidate =
+        put_in(candidate, ["metadata", "origin_skill_id"], "followthrough")
 
       assert {:ok, _attrs} =
                Maraithon.Todos.SignalGate.allow_candidate?(candidate, %{
