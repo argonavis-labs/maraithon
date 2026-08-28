@@ -35,16 +35,21 @@ connection="${project}:${region}:${database_instance}"
 socket_dir="/cloudsql/${connection}"
 image="${region}-docker.pkg.dev/${project}/${repository}/${service}:${revision}"
 host="${service}-${project_number}.${region}.run.app"
+gmail_pubsub_project="${MARAITHON_GMAIL_PUBSUB_PROJECT:-orchestrator-483621}"
 gmail_topic_id="${MARAITHON_GMAIL_PUBSUB_TOPIC_ID:-maraithon-gmail-push}"
 gmail_subscription_id="${MARAITHON_GMAIL_PUBSUB_SUBSCRIPTION_ID:-maraithon-gmail-push-webhook}"
-gmail_topic="projects/${project}/topics/${gmail_topic_id}"
+gmail_topic="projects/${gmail_pubsub_project}/topics/${gmail_topic_id}"
 gmail_push_endpoint="https://maraithon.com/webhooks/google/gmail"
 
-# Gmail push requires a topic in the OAuth application's GCP project and the
-# Gmail system publisher identity. The deployer can submit builds but is kept
-# intentionally unable to mutate Pub/Sub directly, so the existing Cloud Build
-# infrastructure authority performs this narrow idempotent provisioning step.
-run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${region}"   --no-source   --config "scripts/monorepo/cloudbuild-provision-gmail.yaml"   --substitutions "_TOPIC_ID=${gmail_topic_id},_SUBSCRIPTION_ID=${gmail_subscription_id},_PUSH_ENDPOINT=${gmail_push_endpoint}"   --timeout 300s   --quiet
+# Gmail requires the watch topic to live in the Google OAuth client's project.
+# Provision it here only when that is the deployment project. Cross-project
+# topics are pre-provisioned by their owning project and remain stable across
+# Maraithon deploys.
+if [[ "${gmail_pubsub_project}" == "${project}" ]]; then
+  run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${region}"   --no-source   --config "scripts/monorepo/cloudbuild-provision-gmail.yaml"   --substitutions "_TOPIC_ID=${gmail_topic_id},_SUBSCRIPTION_ID=${gmail_subscription_id},_PUSH_ENDPOINT=${gmail_push_endpoint}"   --timeout 300s   --quiet
+else
+  echo "Using pre-provisioned external Gmail Pub/Sub topic: ${gmail_topic}"
+fi
 
 # Cloud Build keeps Docker tooling and registry credentials out of the deployer.
 run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${region}"   --tag "${image}"   --timeout 1800s   --quiet .
