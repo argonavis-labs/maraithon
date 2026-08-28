@@ -248,8 +248,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 512, 32_000),
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
-      pending_tracker_input: nil,
-      pending_dedupe_key: nil,
+      pending_effect: nil,
       last_run_keys: %{}
     }
   end
@@ -281,8 +280,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         pending_state = %{
           state
           | user_id: user_id,
-            pending_tracker_input: tracker_input,
-            pending_dedupe_key: dedupe_key
+            pending_effect: pending_effect(tracker_input, context, dedupe_key, now)
         }
 
         case llm_params(tracker_input, state, context) do
@@ -314,7 +312,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         finish_reason: llm_finish_reason(response) || "ok"
       },
       fn ->
-        tracker_input = state.pending_tracker_input || %{}
+        pending_effect = state.pending_effect || %{}
+        tracker_input = tracker_input_for_result(pending_effect, context)
         parsed_report = parse_llm_report(response)
 
         {report, generation_mode, error_message} =
@@ -347,7 +346,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
               DateTime.utc_now() |> DateTime.to_iso8601()
             ),
           "dedupe_key" =>
-            state.pending_dedupe_key ||
+            read_string(pending_effect, "dedupe_key", nil) ||
               "commitment_tracker:#{read_string(tracker_input, "date", "unknown")}",
           "status" => "pending",
           "title" =>
@@ -406,8 +405,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
             |> Map.merge(todo_payload)},
            %{
              state
-             | pending_tracker_input: nil,
-               pending_dedupe_key: nil,
+             | pending_effect: nil,
                last_run_keys: Map.put(state.last_run_keys, "daily", period_key)
            }}
         else
@@ -446,13 +444,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
                 |> Map.merge(todo_payload)},
                %{
                  state
-                 | pending_tracker_input: nil,
-                   pending_dedupe_key: nil,
+                 | pending_effect: nil,
                    last_run_keys: Map.put(state.last_run_keys, "daily", period_key)
                }}
 
             {:error, _reason} ->
-              {:idle, %{state | pending_tracker_input: nil, pending_dedupe_key: nil}}
+              {:idle, %{state | pending_effect: nil}}
           end
         end
       end
@@ -704,6 +701,194 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         ),
       "source_health" => SourceBundle.freshness(source_bundle)
     }
+  end
+
+  defp pending_effect(tracker_input, context, dedupe_key, now) do
+    projected = compact_tracker_sections_for_prompt(tracker_input)
+
+    %{
+      effect_kind: :commitment_review,
+      cycle_id: context[:assistant_cycle_id],
+      candidate_refs: tracker_candidate_refs(projected),
+      dedupe_key: dedupe_key,
+      window_key: read_string(tracker_input, "date", nil),
+      generated_at: read_string(tracker_input, "generated_at", DateTime.to_iso8601(now)),
+      timezone: read_string(tracker_input, "timezone", nil),
+      timezone_offset_hours: tracker_input_timezone_offset_hours(tracker_input),
+      issued_at: DateTime.to_iso8601(now)
+    }
+  end
+
+  defp tracker_candidate_refs(input) do
+    [
+      {"gmail", "recent_inbox", :gmail},
+      {"gmail", "recent_sent", :gmail},
+      {"calendar", "upcoming_events", :calendar},
+      {"local_calendar", "upcoming_events", :calendar},
+      {"slack", "self_authored_recent", :slack},
+      {"slack", "recent_messages", :slack},
+      {"slack", "mentions", :slack},
+      {"imessage", "recent_messages", :message},
+      {"imessage", "chats", :message},
+      {"open_work", "todos", :todo},
+      {"voice_memos", "items", :local_item},
+      {"notes", "items", :local_item},
+      {"reminders", "due_soon", :local_item},
+      {"files", "recent", :local_item},
+      {"browser_history", "recent", :local_item}
+    ]
+    |> Enum.flat_map(fn {source, bucket, kind} ->
+      input
+      |> read_map(source)
+      |> read_list(bucket)
+      |> Enum.map(&tracker_candidate_ref(&1, source, bucket, kind))
+    end)
+  end
+
+  defp tracker_candidate_ref(item, source, bucket, :gmail) do
+    %{
+      "source" => source,
+      "bucket" => bucket,
+      "message_id" => read_string(item, "message_id", nil),
+      "thread_id" => read_string(item, "thread_id", nil),
+      "source_item_id" => read_string(item, "source_item_id", nil),
+      "subject" => read_string(item, "subject", nil),
+      "from" => read_string(item, "from", nil),
+      "to" => read_string(item, "to", nil),
+      "occurred_at" => read_string(item, "date", nil),
+      "account" => read_string(item, "account", nil),
+      "google_provider" => read_string(item, "google_provider", nil)
+    }
+    |> compact_map()
+  end
+
+  defp tracker_candidate_ref(item, source, bucket, :calendar) do
+    %{
+      "source" => source,
+      "bucket" => bucket,
+      "event_id" => read_string(item, "event_id", nil),
+      "subject" => read_string(item, "summary", nil),
+      "occurred_at" => read_string(item, "start", nil),
+      "end" => read_string(item, "end", nil),
+      "account" => read_string(item, "account", nil)
+    }
+    |> compact_map()
+  end
+
+  defp tracker_candidate_ref(item, source, bucket, :slack) do
+    %{
+      "source" => source,
+      "bucket" => bucket,
+      "team_id" => read_string(item, "team_id", nil),
+      "channel_id" => read_string(item, "channel_id", nil),
+      "ts" => read_string(item, "ts", nil),
+      "thread_ts" => read_string(item, "thread_ts", nil),
+      "source_item_id" => read_string(item, "source_item_id", nil),
+      "from" => read_string(item, "user_display_name", read_string(item, "user", nil)),
+      "occurred_at" => read_string(item, "date", nil)
+    }
+    |> compact_map()
+  end
+
+  defp tracker_candidate_ref(item, source, bucket, :todo) do
+    %{
+      "source" => source,
+      "bucket" => bucket,
+      "id" => read_string(item, "id", nil),
+      "title" => truncate(read_string(item, "title", nil), 300),
+      "summary" => truncate(read_string(item, "summary", nil), 500),
+      "next_action" => truncate(read_string(item, "next_action", nil), 500),
+      "due_at" => read_string(item, "due_at", nil),
+      "todo_source" => read_string(item, "source", nil),
+      "source_item_id" => read_string(item, "source_item_id", nil),
+      "source_account_label" => read_string(item, "source_account_label", nil)
+    }
+    |> compact_map()
+  end
+
+  defp tracker_candidate_ref(item, source, bucket, _kind) do
+    %{
+      "source" => source,
+      "bucket" => bucket,
+      "source_item_id" =>
+        read_string(
+          item,
+          "source_item_id",
+          read_string(item, "message_id", read_string(item, "chat_id", nil))
+        ),
+      "subject" =>
+        truncate(
+          read_string(item, "title", read_string(item, "filename", nil)),
+          300
+        ),
+      "from" => read_string(item, "sender_display_name", read_string(item, "sender_handle", nil)),
+      "occurred_at" =>
+        read_string(
+          item,
+          "source_occurred_at",
+          read_string(item, "created_at", read_string(item, "modified_at", nil))
+        )
+    }
+    |> compact_map()
+  end
+
+  defp tracker_input_for_result(pending_effect, context) do
+    refs = Map.get(pending_effect, :candidate_refs, Map.get(pending_effect, "candidate_refs", []))
+    source_bundle = context[:source_bundle] || %{}
+
+    %{
+      "date" => read_string(pending_effect, "window_key", nil),
+      "generated_at" => read_string(pending_effect, "generated_at", nil),
+      "timezone" => read_string(pending_effect, "timezone", nil),
+      "timezone_offset_hours" => read_any(pending_effect, "timezone_offset_hours"),
+      "source_access" => source_access(source_bundle),
+      "source_health" => SourceBundle.freshness(source_bundle),
+      "gmail" => %{
+        "recent_inbox" => result_refs(refs, "gmail", "recent_inbox"),
+        "recent_sent" => result_refs(refs, "gmail", "recent_sent")
+      },
+      "calendar" => %{
+        "upcoming_events" => result_refs(refs, "calendar", "upcoming_events")
+      },
+      "local_calendar" => %{
+        "upcoming_events" => result_refs(refs, "local_calendar", "upcoming_events")
+      },
+      "slack" => %{
+        "self_authored_recent" => result_refs(refs, "slack", "self_authored_recent"),
+        "recent_messages" => result_refs(refs, "slack", "recent_messages"),
+        "mentions" => result_refs(refs, "slack", "mentions")
+      },
+      "imessage" => %{
+        "recent_messages" => result_refs(refs, "imessage", "recent_messages"),
+        "chats" => result_refs(refs, "imessage", "chats")
+      },
+      "open_work" => %{"todos" => result_todo_refs(refs)},
+      "voice_memos" => %{"items" => result_refs(refs, "voice_memos", "items")},
+      "notes" => %{"items" => result_refs(refs, "notes", "items")},
+      "reminders" => %{"due_soon" => result_refs(refs, "reminders", "due_soon")},
+      "files" => %{"recent" => result_refs(refs, "files", "recent")},
+      "browser_history" => %{"recent" => result_refs(refs, "browser_history", "recent")}
+    }
+  end
+
+  defp result_refs(refs, source, bucket) when is_list(refs) do
+    refs
+    |> Enum.filter(fn ref ->
+      read_string(ref, "source", nil) == source and read_string(ref, "bucket", nil) == bucket
+    end)
+    |> Enum.map(&Map.drop(&1, ["source", "bucket"]))
+  end
+
+  defp result_refs(_refs, _source, _bucket), do: []
+
+  defp result_todo_refs(refs) do
+    refs
+    |> result_refs("open_work", "todos")
+    |> Enum.map(fn ref ->
+      ref
+      |> Map.put("source", read_string(ref, "todo_source", nil))
+      |> Map.delete("todo_source")
+    end)
   end
 
   defp llm_params(tracker_input, state, context) do
