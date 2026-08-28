@@ -159,7 +159,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
                state
                | user_id: user_id,
                  pending_review_key: review_key,
-                 pending_holidays: Map.new(holidays, &{&1["id"], &1})
+                 pending_holidays: Map.new(holidays, &{&1["id"], compact_holiday(&1)})
              }}
           end
         end
@@ -343,8 +343,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
           "holiday_phase_key" => phase_key,
           "holiday_confidence" => confidence,
           "holiday_reasoning" => reasoning,
-          "holiday_planning_tags" => holiday["planning_tags"],
-          "holiday_markets" => holiday["markets"]
+          "holiday_region" => holiday["region"]
         }
         |> compact_map()
 
@@ -417,11 +416,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
           "holiday_phase_key" => phase_key,
           "holiday_confidence" => confidence,
           "holiday_reasoning" => reasoning,
-          "holiday_planning_tags" => holiday["planning_tags"],
-          "holiday_markets" => holiday["markets"]
+          "holiday_region" => holiday["region"]
         }
         |> compact_map()
     }
+  end
+
+  defp compact_holiday(holiday) when is_map(holiday) do
+    region =
+      normalize_string(holiday["region"]) ||
+        holiday["markets"] |> List.wrap() |> Enum.find(&is_binary/1)
+
+    %{
+      "id" => normalize_string(holiday["id"]),
+      "name" => normalize_string(holiday["name"]),
+      "date" => normalize_string(holiday["date"]),
+      "region" => region
+    }
+    |> compact_map()
   end
 
   defp llm_params(
