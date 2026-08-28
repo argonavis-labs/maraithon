@@ -238,9 +238,22 @@ defmodule Maraithon.Runtime.SnapshotFormat do
   defp encode_node(%Time{calendar: Calendar.ISO} = value, _depth, nodes),
     do: {:ok, %{"$type" => "time", "value" => Time.to_iso8601(value)}, nodes + 1}
 
-  defp encode_node(%{__struct__: module}, _depth, _nodes) do
-    Logger.warning("Snapshot value type is not encodable", value_type: inspect(module))
-    {:error, :unsupported_snapshot_type}
+  # Plain data structs (behavior state routinely holds LLM response, usage,
+  # and similar structs) round-trip as their fields plus the module name.
+  # Decoding only rebuilds modules that already exist and define a struct.
+  defp encode_node(%{__struct__: module} = value, depth, nodes) when is_atom(module) do
+    fields = Map.from_struct(value)
+
+    with true <- map_size(fields) <= @max_map_entries,
+         {:ok, entries, nodes} <- encode_map(fields, depth + 1, nodes + 1) do
+      entries = Enum.sort_by(entries, &encoded_key/1)
+
+      {:ok, %{"$type" => "struct", "module" => Atom.to_string(module), "entries" => entries},
+       nodes}
+    else
+      false -> {:error, :snapshot_map_too_large}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp encode_node(value, depth, nodes) when is_tuple(value) do
@@ -273,7 +286,10 @@ defmodule Maraithon.Runtime.SnapshotFormat do
   end
 
   defp encode_node(value, _depth, _nodes) do
-    Logger.warning("Snapshot value type is not encodable", value_type: erlang_type(value))
+    Logger.warning("Snapshot value type is not encodable",
+      failure_code: "unsupported_snapshot_type:" <> erlang_type(value)
+    )
+
     {:error, :unsupported_snapshot_type}
   end
 
@@ -368,6 +384,23 @@ defmodule Maraithon.Runtime.SnapshotFormat do
       {:ok, String.to_existing_atom(value), nodes + 1}
     rescue
       ArgumentError -> {:error, :unknown_snapshot_symbol}
+    end
+  end
+
+  defp decode_node(
+         %{"$type" => "struct", "module" => module_name, "entries" => entries} = node,
+         depth,
+         nodes
+       )
+       when map_size(node) == 3 and is_binary(module_name) and
+              byte_size(module_name) <= @max_symbol_bytes and is_list(entries) do
+    with {:ok, module} <- existing_struct_module(module_name),
+         true <- bounded_map?(entries),
+         {:ok, fields, nodes} <- decode_map(entries, depth + 1, nodes + 1) do
+      {:ok, struct(module, fields), nodes}
+    else
+      false -> {:error, :snapshot_map_too_large}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -475,6 +508,16 @@ defmodule Maraithon.Runtime.SnapshotFormat do
       _invalid_entry, _acc ->
         {:halt, {:error, :invalid_snapshot_format}}
     end)
+  end
+
+  defp existing_struct_module(name) do
+    module = String.to_existing_atom(name)
+
+    if Code.ensure_loaded?(module) and function_exported?(module, :__struct__, 0),
+      do: {:ok, module},
+      else: {:error, :unknown_snapshot_struct}
+  rescue
+    ArgumentError -> {:error, :unknown_snapshot_struct}
   end
 
   defp bounded_collection?(values),
