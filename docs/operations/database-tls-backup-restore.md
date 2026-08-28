@@ -217,13 +217,15 @@ preimage into a transaction-local GUC. PostgreSQL decodes and hashes it against
 the exact lease/assignment row. Secret-bearing GUC statements disable both
 Ecto logging and query telemetry and return only a boolean, never the GUC value.
 In the same proof transaction, the runtime resets
-`log_parameter_max_length_on_error` to `0` and fails closed unless both effective
-parameter-length settings are `0` before it sends the preimage. The PostgreSQL
-service/bootstrap must preconfigure the superuser-only
-`log_parameter_max_length = 0` and retain
-`log_parameter_max_length_on_error = 0`; verify both settings on every runtime
-and operator endpoint before exact activation so bind values cannot enter
-server statement or error logs.
+`log_parameter_max_length_on_error` to `0` before it sends the preimage. It then
+fails closed unless either `log_parameter_max_length = 0`, or every normal
+parameter-bearing statement route is disabled: `log_statement = none`,
+`log_duration = off`, both duration thresholds are `-1`, transaction sampling
+is `0`, pgaudit parameter logging is off, and auto-explain parameter logging is
+off or inactive. This strict equivalent profile supports managed PostgreSQL
+services that do not expose the superuser-only parameter-length flag. Verify
+the complete effective profile on every runtime and operator endpoint before
+exact activation so bind values cannot enter server statement or error logs.
 
 Public API/state, RPC arguments, access/proof terms, logs, and database rows
 never expose the preimage. A role plus an arbitrary GUC, raw SQL, direct

@@ -11,6 +11,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
   import Ecto.Query
   alias Ecto.Adapters.SQL
   alias Maraithon.Repo
+  alias Maraithon.Runtime.SecretParameterLoggingPolicy
 
   @guardian_persistence_timeout_ms 5_000
 
@@ -1776,28 +1777,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
     do: SQL.query!(Repo, "SELECT set_config($1, $2, true)", [key, to_string(value)])
 
   defp verify_secret_logging_policy! do
-    _ =
-      SQL.query!(
-        Repo,
-        "SELECT set_config('log_parameter_max_length_on_error', '0', true) IS NOT NULL",
-        [],
-        log: false,
-        telemetry_event: false
-      )
-
-    case SQL.query!(
-           Repo,
-           """
-           SELECT current_setting('log_parameter_max_length')::integer = 0,
-                  current_setting('log_parameter_max_length_on_error')::integer = 0
-           """,
-           [],
-           log: false,
-           telemetry_event: false
-         ).rows do
-      [[true, true]] -> :ok
-      _unsafe -> Repo.rollback(:task_termination_secret_logging_policy_unsafe)
-    end
+    SecretParameterLoggingPolicy.verify!(:task_termination_secret_logging_policy_unsafe)
   end
 
   defp set_local_termination_capability!(capability_secret) do

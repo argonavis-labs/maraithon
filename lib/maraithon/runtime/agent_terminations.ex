@@ -22,6 +22,7 @@ defmodule Maraithon.Runtime.AgentTerminations do
   alias Maraithon.Runtime.AgentWatcher
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.IncidentLog
+  alias Maraithon.Runtime.SecretParameterLoggingPolicy
 
   @default_window_ms 600_000
   @default_max_crashes 3
@@ -206,7 +207,8 @@ defmodule Maraithon.Runtime.AgentTerminations do
          {:ok, digest} <- digest(Map.get(attrs, :evidence_digest) || attrs["evidence_digest"]),
          {:ok, signature} <- signature(Map.get(attrs, :signature) || attrs["signature"]),
          {:ok, proved_by} <- bounded(Map.get(attrs, :proved_by) || attrs["proved_by"], 320),
-         %AgentTerminationIncident{} = incident <- Repo.get(AgentTerminationIncident, incident_id),
+         %AgentTerminationIncident{} = incident <-
+           Repo.get(AgentTerminationIncident, incident_id),
          :ok <- coordinated_external_identity(incident),
          {:ok, public_key} <- attestation_public_key(),
          payload <- attestation_payload(incident, evidence_id, digest, proved_by),
@@ -623,7 +625,8 @@ defmodule Maraithon.Runtime.AgentTerminations do
 
   defp ensure_same_incident!(left, right) do
     if {left.id, left.activation_epoch, left.node_incarnation_id, left.partition_id,
-        left.partition_epoch, left.agent_id, left.lease_token} ==
+        left.partition_epoch, left.agent_id,
+        left.lease_token} ==
          {right.id, right.activation_epoch, right.node_incarnation_id, right.partition_id,
           right.partition_epoch, right.agent_id, right.lease_token},
        do: :ok,
@@ -700,24 +703,7 @@ defmodule Maraithon.Runtime.AgentTerminations do
     do: Repo.rollback(:local_down_witness_required)
 
   defp require_secret_sql_logging_disabled! do
-    result =
-      SQL.query!(
-        Repo,
-        """
-        SELECT
-          set_config('log_parameter_max_length_on_error', '0', true) = '0'
-          AND current_setting('log_parameter_max_length') = '0'
-          AND current_setting('log_parameter_max_length_on_error') = '0'
-        """,
-        [],
-        log: false,
-        telemetry_event: false
-      )
-
-    unless result.rows == [[true]],
-      do: Repo.rollback(:local_proof_database_logging_policy_unsafe)
-
-    :ok
+    SecretParameterLoggingPolicy.verify!(:local_proof_database_logging_policy_unsafe)
   end
 
   defp unwrap_request({:ok, {:ignored, reason}}), do: {:ignored, reason}
