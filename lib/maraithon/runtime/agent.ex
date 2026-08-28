@@ -1443,6 +1443,17 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp persist_exact_snapshot!(data) do
+    # The Snapshot trigger admits inserts only from a generation-fenced writer
+    # that names its live lease token. Directive settlement and the exact
+    # checkpoint both run inside a ready-fenced transaction, so mark it here.
+    Maraithon.Effects.ProtocolCutover.require_exact_write!()
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "SELECT set_config('maraithon.agent_lease_owner_token', $1, true)",
+      [data.owner_token]
+    )
+
     case Snapshot.persist(
            data.agent_id,
            data.sequence_num,
