@@ -73,7 +73,46 @@ defmodule Maraithon.Behaviors.ManifestAgentTest do
                last_message_metadata: %{}
              })
 
-    assert next_state.pending_tool_call.tool == "calendar.list"
+    assert next_state.pending_tool_call == %{tool: "calendar.list"}
+  end
+
+  test "stores only bounded summaries of tool results and converts restored legacy entries" do
+    state =
+      ManifestAgent.init(%{
+        "_harness_manifest" => %{
+          model: "gpt-5.4",
+          intelligence: "high",
+          system_prompt: "Use tools when needed.",
+          goals: [],
+          skills: [],
+          tool_allowlist: ["calendar.list"]
+        }
+      })
+      |> Map.put(:pending_tool_call, %{tool: "calendar.list"})
+
+    context = %{user_id: nil, timestamp: ~U[2026-08-28 12:00:00Z]}
+    raw_result = String.duplicate("calendar output ", 1_000)
+
+    assert {:effect, {:llm_call, _params}, next_state} =
+             ManifestAgent.handle_effect_result({:tool_call, raw_result}, state, context)
+
+    [summary] = next_state.tool_results
+    assert summary.tool == "calendar.list"
+    assert summary.status == :ok
+    assert byte_size(summary.summary) <= 2_048
+    assert summary.bytes > byte_size(summary.summary)
+    assert summary.at == "2026-08-28T12:00:00Z"
+    refute Map.has_key?(summary, :result)
+
+    restored =
+      ManifestAgent.reconcile_restored_state(
+        %{next_state | tool_results: [{"search", raw_result}]},
+        %{}
+      )
+
+    [converted] = restored.tool_results
+    assert converted.tool == "search"
+    assert byte_size(converted.summary) <= 2_048
   end
 
   test "rejects structured model tool requests outside the allowlist" do

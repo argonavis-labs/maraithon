@@ -11,6 +11,7 @@ defmodule Maraithon.Behaviors.ManifestAgent do
   alias Maraithon.Behaviors
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
+  alias Maraithon.PromptBudget
   alias Maraithon.Tools.{ActionHelpers, ToolErrorCopy}
 
   @agent_error_fallback "That automation did not complete. Review the latest event before running it again."
@@ -48,6 +49,23 @@ defmodule Maraithon.Behaviors.ManifestAgent do
 
   def snapshot_state(state), do: Maraithon.Behaviors.SnapshotTrim.trim(state)
 
+  @doc false
+  @impl true
+  def reconcile_restored_state(state, _config) when is_map(state) do
+    tool_results =
+      state
+      |> Map.get(:tool_results, Map.get(state, "tool_results", []))
+      |> List.wrap()
+      |> Enum.map(&normalize_restored_tool_result/1)
+      |> Enum.take(10)
+
+    state
+    |> Map.put(:tool_results, tool_results)
+    |> Map.update(:pending_tool_call, nil, &compact_pending_tool_call/1)
+  end
+
+  def reconcile_restored_state(state, _config), do: state
+
   @impl true
   def handle_wakeup(state, context) do
     if state.source_module do
@@ -84,7 +102,7 @@ defmodule Maraithon.Behaviors.ManifestAgent do
         {:tool_call, tool_name, args} ->
           if allowed_tool?(state.manifest, tool_name) do
             {:effect, {:tool_call, tool_name, args},
-             %{state | pending_tool_call: %{tool: tool_name, args: args}, runs: state.runs + 1}}
+             %{state | pending_tool_call: %{tool: tool_name}, runs: state.runs + 1}}
           else
             emit_error("tool_not_allowed: #{tool_name}", %{state | runs: state.runs + 1}, context)
           end
@@ -101,10 +119,7 @@ defmodule Maraithon.Behaviors.ManifestAgent do
       state.source_module.handle_effect_result({:tool_call, result}, state.source_state, context)
       |> route_source_result(%{state | pending_source_effect?: false})
     else
-      tool_result = %{
-        tool_call: state.pending_tool_call,
-        result: result
-      }
+      tool_result = summarize_tool_result(state.pending_tool_call, result, context)
 
       state = %{
         state
@@ -161,6 +176,108 @@ defmodule Maraithon.Behaviors.ManifestAgent do
   end
 
   def next_wakeup(_state), do: :none
+
+  defp summarize_tool_result(pending_tool_call, result, context) do
+    %{
+      tool: pending_tool_name(pending_tool_call),
+      status: tool_result_status(result),
+      summary: tool_result_summary(result),
+      bytes: external_size(result),
+      at: tool_result_timestamp(context)
+    }
+  end
+
+  defp normalize_restored_tool_result(%{summary: summary} = result) do
+    %{
+      tool: Map.get(result, :tool),
+      status: Map.get(result, :status, :ok),
+      summary: bounded_summary(summary),
+      bytes: Map.get(result, :bytes, external_size(summary)),
+      at: Map.get(result, :at)
+    }
+  end
+
+  defp normalize_restored_tool_result(%{"summary" => summary} = result) do
+    %{
+      tool: Map.get(result, "tool"),
+      status: Map.get(result, "status", "ok"),
+      summary: bounded_summary(summary),
+      bytes: Map.get(result, "bytes", external_size(summary)),
+      at: Map.get(result, "at")
+    }
+  end
+
+  defp normalize_restored_tool_result({tool, result}) do
+    summarize_tool_result(%{tool: tool}, result, %{})
+  end
+
+  defp normalize_restored_tool_result(%{} = result) do
+    tool_call = Map.get(result, :tool_call, Map.get(result, "tool_call"))
+    raw_result = Map.get(result, :result, Map.get(result, "result", result))
+    summarize_tool_result(tool_call || result, raw_result, %{})
+  end
+
+  defp normalize_restored_tool_result(result),
+    do: summarize_tool_result(nil, result, %{})
+
+  defp compact_pending_tool_call(%{} = pending) do
+    case pending_tool_name(pending) do
+      nil -> nil
+      tool -> %{tool: tool}
+    end
+  end
+
+  defp compact_pending_tool_call(_pending), do: nil
+
+  defp pending_tool_name(%{tool: tool}) when is_binary(tool), do: tool
+  defp pending_tool_name(%{"tool" => tool}) when is_binary(tool), do: tool
+  defp pending_tool_name(%{name: tool}) when is_binary(tool), do: tool
+  defp pending_tool_name(%{"name" => tool}) when is_binary(tool), do: tool
+
+  defp pending_tool_name(%{tool_call: tool_call}), do: pending_tool_name(tool_call)
+  defp pending_tool_name(%{"tool_call" => tool_call}), do: pending_tool_name(tool_call)
+  defp pending_tool_name(_pending), do: nil
+
+  defp tool_result_status({:ok, _result}), do: :ok
+  defp tool_result_status({:error, _reason}), do: :error
+  defp tool_result_status(%{status: status}) when status in [:ok, :error], do: status
+  defp tool_result_status(%{"status" => status}) when status in ["ok", "error"], do: status
+  defp tool_result_status(_result), do: :ok
+
+  defp tool_result_summary({:ok, result}), do: tool_result_summary(result)
+
+  defp tool_result_summary({:error, reason}) do
+    reason
+    |> Maraithon.Redaction.error_summary()
+    |> bounded_summary()
+  end
+
+  defp tool_result_summary(result) when is_binary(result), do: bounded_summary(result)
+
+  defp tool_result_summary(result) do
+    result
+    |> inspect(pretty: false, limit: 30, printable_limit: 4_096)
+    |> bounded_summary()
+  end
+
+  defp bounded_summary(value) when is_binary(value),
+    do: PromptBudget.truncate_utf8(value, 2_048)
+
+  defp bounded_summary(value), do: value |> inspect(pretty: false, limit: 20) |> bounded_summary()
+
+  defp external_size(result) do
+    :erlang.external_size(result)
+  rescue
+    _error -> 0
+  end
+
+  defp tool_result_timestamp(context) do
+    case context[:timestamp] do
+      %DateTime{} = timestamp -> DateTime.to_iso8601(timestamp)
+      value when is_binary(value) -> value
+      _ -> nil
+    end
+  end
 
   defp source_behavior(config) when is_map(config) do
     case config["source_behavior"] || config[:source_behavior] do
