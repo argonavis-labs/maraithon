@@ -171,6 +171,16 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
 
       assert candidate["title"] =~ "No follow-through is recorded yet."
       refute candidate["title"] =~ "No reply has gone out yet"
+      assert candidate["metadata"]["source_direction"] == "outbound"
+      assert candidate["metadata"]["is_from_me"] == true
+      assert candidate["metadata"]["explicit_user_commitment"] == true
+
+      assert {:ok, _attrs} =
+               Maraithon.Todos.SignalGate.allow_candidate?(candidate, %{
+                 "title" => "Send Sarah the investor deck",
+                 "summary" => "You committed to sending Sarah the investor deck today.",
+                 "next_action" => "Send Sarah the investor deck and confirm delivery."
+               })
     end
 
     test "includes Telegram feedback context in the llm prompt", %{

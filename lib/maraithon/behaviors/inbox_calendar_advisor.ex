@@ -1875,6 +1875,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                   "to" => to,
                   "subject" => subject,
                   "body_excerpt" => email_body_excerpt(sent_email),
+                  "source_direction" => "outbound",
+                  "is_from_me" => true,
+                  "explicit_user_commitment" => true,
                   "signals" => Enum.uniq(promise_matches ++ action_matches),
                   "topic" => commitment_topic,
                   "context_brief" =>
@@ -3007,6 +3010,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       "organizer",
       "occurred_at",
       "body_excerpt",
+      "source_direction",
+      "is_from_me",
       "signals",
       "topic",
       "context_brief",
