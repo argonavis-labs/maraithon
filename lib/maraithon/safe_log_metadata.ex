@@ -19,8 +19,10 @@ defmodule Maraithon.SafeLogMetadata do
     sent suppressed disabled responsestatus truncated backfillneeded
     candidatecount devicecount sourcecount itemcount rejected unregistered attempt iteration
     detected swept alerted count oldestageseconds activecandidatecount activejobcount
-    activeeffectcount
+    activeeffectcount snapshotbytes
   )
+
+  @path_fields ~w(paths)
 
   @label_fields ~w(
     requestid agentid effectid jobid jobtype provider useridhash userfingerprint
@@ -108,6 +110,8 @@ defmodule Maraithon.SafeLogMetadata do
     :active_candidate_count,
     :active_job_count,
     :active_effect_count,
+    :snapshot_bytes,
+    :paths,
     :effect_type,
     :event_type,
     :table
@@ -132,6 +136,7 @@ defmodule Maraithon.SafeLogMetadata do
       normalized == "status" -> :status
       normalized in @numeric_fields -> :numeric
       normalized in @label_fields -> :label
+      normalized in @path_fields -> :paths
       normalized == "failurecodes" -> :failure_codes
       true -> :unknown
     end

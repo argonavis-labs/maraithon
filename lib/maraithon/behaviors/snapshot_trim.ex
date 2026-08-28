@@ -23,9 +23,9 @@ defmodule Maraithon.Behaviors.SnapshotTrim do
     {trimmed, paths} = walk(state, [], 0, [])
 
     if paths != [] do
-      Logger.warning("Checkpoint truncated oversized state strings",
+      Logger.error("Checkpoint truncated oversized state strings",
         failure_code: "snapshot_scalar_truncated",
-        paths: paths |> Enum.take(8) |> Enum.map(&Enum.join(&1, "."))
+        paths: paths |> Enum.take(8) |> Enum.map_join(",", &Enum.join(&1, "."))
       )
     end
 

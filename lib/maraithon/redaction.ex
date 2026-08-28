@@ -155,6 +155,7 @@ defmodule Maraithon.Redaction do
       :status -> status_log_value(value)
       :numeric -> numeric_log_value(value)
       :label -> label_log_value(value)
+      :paths -> paths_log_value(value)
       :failure_codes -> failure_codes_log_value(value)
       :unknown -> "redacted_detail"
     end
@@ -201,6 +202,15 @@ defmodule Maraithon.Redaction do
   end
 
   defp label_log_value(_value), do: "redacted_detail"
+
+  defp paths_log_value(value) when is_binary(value) do
+    if byte_size(value) <= 2_048 and String.valid?(value) and
+         Regex.match?(~r/^[A-Za-z0-9._:\/\[\],-]+$/, value),
+       do: value,
+       else: "redacted_detail"
+  end
+
+  defp paths_log_value(_value), do: "redacted_detail"
 
   defp failure_codes_log_value(value) when is_map(value) do
     value

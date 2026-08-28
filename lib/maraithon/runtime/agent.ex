@@ -14,6 +14,7 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent, as: AgentRecord
   alias Maraithon.Behaviors
+  alias Maraithon.Behaviors.SnapshotBudget
   alias Maraithon.Insights.Refresh, as: InsightRefresh
   alias Maraithon.LLM.RequestBudget
   alias Maraithon.Memory
@@ -1454,11 +1455,13 @@ defmodule Maraithon.Runtime.Agent do
       [data.owner_token]
     )
 
+    behavior_state = measured_snapshot_behavior_state(data)
+
     case Snapshot.persist(
            data.agent_id,
            data.sequence_num,
            :idle,
-           snapshot_behavior_state(data),
+           behavior_state,
            data.budget,
            behavior_schema_version(data.behavior_module)
          ) do
@@ -1483,15 +1486,39 @@ defmodule Maraithon.Runtime.Agent do
       else: state
   end
 
+  defp measured_snapshot_behavior_state(data) do
+    state = snapshot_behavior_state(data)
+    agent_reference = Maraithon.Redaction.fingerprint(data.agent_id)
+
+    case SnapshotBudget.check(state) do
+      {:ok, bytes} ->
+        Logger.info("Agent checkpoint snapshot measured",
+          agent_reference: agent_reference,
+          snapshot_bytes: bytes
+        )
+
+      {:error, {reason, paths}} ->
+        Logger.error("Agent checkpoint snapshot measurement failed",
+          agent_reference: agent_reference,
+          failure_code: Maraithon.Redaction.error_class(reason),
+          paths: Enum.map_join(paths, ",", &Enum.join(&1, "."))
+        )
+    end
+
+    state
+  end
+
   # Best-effort only for the retained legacy compatibility path. Exact
   # checkpoint Event + Snapshot writes share one ready-fenced transaction.
   # Legacy checkpoints are handled only while idle.
   defp persist_snapshot(data) do
+    behavior_state = measured_snapshot_behavior_state(data)
+
     case Snapshot.persist(
            data.agent_id,
            data.sequence_num,
            :idle,
-           snapshot_behavior_state(data),
+           behavior_state,
            data.budget,
            behavior_schema_version(data.behavior_module)
          ) do
