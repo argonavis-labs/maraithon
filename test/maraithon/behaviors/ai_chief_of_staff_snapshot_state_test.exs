@@ -62,6 +62,30 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffSnapshotStateTest do
     assert String.ends_with?(path, "[truncated for checkpoint]")
   end
 
+  test "oversized strings inside tuples, keyword lists, and deep nesting are truncated" do
+    big = String.duplicate("y", 70_000)
+    deep = Enum.reduce(1..12, %{body: big}, fn i, acc -> %{"level#{i}" => acc} end)
+
+    state = %{
+      skill_states: %{
+        "inbox" => %{
+          tool_results: [{"search", big}],
+          options: [content: big],
+          deep: deep
+        }
+      }
+    }
+
+    snapshot = AIChiefOfStaff.snapshot_state(state)
+    inbox = snapshot.skill_states["inbox"]
+    [{"search", r}] = inbox.tool_results
+    assert byte_size(r) < 20_000
+    assert byte_size(inbox.options[:content]) < 20_000
+
+    leaf = Enum.reduce(12..1, inbox.deep, fn i, acc -> acc["level#{i}"] end)
+    assert byte_size(leaf.body) < 20_000
+  end
+
   test "non-map state passes through" do
     assert AIChiefOfStaff.snapshot_state(:opaque) == :opaque
   end

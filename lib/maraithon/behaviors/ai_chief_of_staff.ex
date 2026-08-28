@@ -276,7 +276,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   # strings above the snapshot scalar cap (raw email bodies, prompts, provider
   # payloads) are truncated so the checkpoint keeps its shape and types.
   @transient_snapshot_keys [:source_bundle, :assistant_fetch_telemetry]
-  @transient_strip_depth 8
+  @transient_strip_depth 24
   @snapshot_scalar_limit_bytes 16_384
   @snapshot_truncation_suffix "\n…[truncated for checkpoint]"
 
@@ -303,6 +303,11 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         {stripped, paths} = strip_transient(inner, [path_label(key) | path], depth + 1, paths)
         {Map.put(acc, key, stripped), paths}
     end)
+  end
+
+  defp strip_transient(value, path, depth, paths) when is_tuple(value) do
+    {items, paths} = strip_transient(Tuple.to_list(value), path, depth, paths)
+    {List.to_tuple(items), paths}
   end
 
   defp strip_transient(value, path, depth, paths) when is_list(value) do
