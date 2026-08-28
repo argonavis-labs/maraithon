@@ -2,9 +2,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.Accounts
+  alias Maraithon.Behaviors.SnapshotBudget
   alias Maraithon.Agents
   alias Maraithon.ChiefOfStaff.Skills.LocalPatternReview
   alias Maraithon.Insights
+  alias Maraithon.Runtime.SnapshotFormat
 
   setup do
     user_id = "local-pattern-review-#{Ecto.UUID.generate()}@example.com"
@@ -29,7 +31,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
     %{user_id: user_id, agent: agent, state: state, context: context}
   end
 
-  defp candidate_insight(user_id, agent_id, suffix) do
+  defp candidate_insight(user_id, agent_id, suffix, summary \\ nil) do
     {:ok, [insight]} =
       Insights.record_many(
         user_id,
@@ -39,7 +41,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
             "source" => "local_patterns",
             "category" => "general",
             "title" => "Candidate #{suffix}",
-            "summary" => "A candidate insight #{suffix}",
+            "summary" => summary || "A candidate insight #{suffix}",
             "recommended_action" => "Do something",
             "priority" => 50,
             "confidence" => 0.5,
@@ -74,7 +76,37 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
 
     assert [message] = params["messages"]
     assert message["content"] =~ candidate.id
-    assert length(pending_state.pending_candidates) == 1
+    assert length(pending_state.pending_candidate_refs) == 1
+  end
+
+  test "keeps only compact refs for realistic large candidate batches", %{
+    user_id: user_id,
+    agent: agent,
+    state: state,
+    context: context
+  } do
+    large_summary = String.duplicate("provider-derived detail ", 20)
+
+    Enum.each(1..20, fn index ->
+      candidate_insight(user_id, agent.id, "large-#{index}", large_summary)
+    end)
+
+    assert {:effect, {:llm_call, params}, pending_state} =
+             LocalPatternReview.handle_wakeup(%{state | candidate_limit: 20}, context)
+
+    assert length(pending_state.pending_candidate_refs) == 20
+
+    assert Enum.all?(pending_state.pending_candidate_refs, fn ref ->
+             Map.keys(ref) |> Enum.sort() == [:category, :id]
+           end)
+
+    assert get_in(params, ["messages", Access.at(0), "content"]) =~ "provider-derived detail"
+    refute Jason.encode!(pending_state) =~ "provider-derived detail"
+
+    assert {:ok, bytes} = SnapshotBudget.check(pending_state)
+    assert bytes < 128 * 1_024
+    assert {:ok, envelope, ^bytes} = SnapshotFormat.encode(pending_state)
+    assert {:ok, ^pending_state} = SnapshotFormat.decode(envelope)
   end
 
   test "promotes kept candidates to \"new\" and dismisses the rest", %{
@@ -107,7 +139,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
              )
 
     assert payload.count == 1
-    assert next_state.pending_candidates == []
+    assert next_state.pending_candidate_refs == []
 
     # SPEC 07 R7: the discard decision carries the model's own reason into
     # the cross-cycle decision ledger contract; "keep" gets no entry (the
@@ -216,11 +248,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
     assert {:effect, {:llm_call, params}, pending_state} =
              LocalPatternReview.handle_wakeup(state, context)
 
-    drift = Enum.find(pending_state.pending_candidates, &(&1.category == "relationship_drift"))
+    drift =
+      Enum.find(pending_state.pending_candidate_refs, &(&1.category == "relationship_drift"))
 
     assert drift
-    assert drift.status == "candidate"
-    assert drift.tracking_key == "relationship_drift:#{person.id}"
+    assert Map.keys(drift) |> Enum.sort() == [:category, :id]
+
+    drift_record = Enum.find(Insights.list_candidates_for_user(user_id), &(&1.id == drift.id))
+    assert drift_record.status == "candidate"
+    assert drift_record.tracking_key == "relationship_drift:#{person.id}"
 
     assert [message] = params["messages"]
     assert message["content"] =~ drift.id
@@ -266,7 +302,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReviewTest do
     assert {:idle, next_state} =
              LocalPatternReview.handle_effect_error(:llm_call, "boom", pending_state, context)
 
-    assert next_state.pending_candidates == []
+    assert next_state.pending_candidate_refs == []
     assert length(Insights.list_candidates_for_user(user_id)) == 1
   end
 end

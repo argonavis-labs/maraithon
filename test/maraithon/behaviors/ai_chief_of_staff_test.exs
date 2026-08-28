@@ -182,6 +182,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
           }
         },
         "morning_briefing" => %{pending_brief_input: %{"gmail" => %{"body" => "raw"}}},
+        "local_pattern_review" => %{pending_candidates: [%{summary: "raw"}]},
         "inbox_calendar_advisor" => %{pending_candidates: [%{"body" => "raw"}]}
       }
     }
@@ -209,6 +210,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
 
     assert migrated.skill_states["morning_briefing"].pending_effect == nil
     refute Map.has_key?(migrated.skill_states["morning_briefing"], :pending_brief_input)
+    assert migrated.skill_states["local_pattern_review"].pending_candidate_refs == []
+    refute Map.has_key?(migrated.skill_states["local_pattern_review"], :pending_candidates)
     assert migrated.skill_states["inbox_calendar_advisor"].pending_candidates == []
   end
 

@@ -82,7 +82,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
         integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 256, 4_000),
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
-      pending_candidates: []
+      pending_candidate_refs: []
     }
   end
 
@@ -112,7 +112,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
           # Nothing to review — no model spend on a quiet cycle.
           {:idle, state}
         else
-          pending_state = %{state | pending_candidates: candidates}
+          pending_state = %{state | pending_candidate_refs: candidate_refs(candidates)}
 
           case llm_params(candidates, state, context) do
             {:ok, params} ->
@@ -144,7 +144,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
   end
 
   def handle_effect_result(_effect_result, state, _context),
-    do: {:idle, %{state | pending_candidates: []}}
+    do: {:idle, %{state | pending_candidate_refs: []}}
 
   @impl true
   def handle_effect_error(:llm_call, reason, state, context) do
@@ -157,7 +157,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
   end
 
   def handle_effect_error(_effect_type, _reason, state, _context),
-    do: {:idle, %{state | pending_candidates: []}}
+    do: {:idle, %{state | pending_candidate_refs: []}}
 
   @impl true
   def next_wakeup(_state), do: :none
@@ -218,14 +218,20 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
     """
   end
 
+  defp candidate_refs(candidates) do
+    Enum.map(candidates, fn %Insight{} = insight ->
+      %{id: insight.id, category: insight.category}
+    end)
+  end
+
   defp apply_review(response, state, _context) do
-    candidates = state.pending_candidates
-    cleared_state = %{state | pending_candidates: []}
+    candidate_refs = state.pending_candidate_refs
+    cleared_state = %{state | pending_candidate_refs: []}
 
     case parse_decisions(response) do
       {:ok, decisions} ->
         {approved_count, categories, ledger_entries} =
-          apply_decisions(state.user_id, candidates, decisions)
+          apply_decisions(state.user_id, candidate_refs, decisions)
 
         # R7 (SPEC 07): discard decisions are the reference producer for the
         # cross-cycle decision ledger — the model's own reason string would
@@ -251,24 +257,27 @@ defmodule Maraithon.ChiefOfStaff.Skills.LocalPatternReview do
     end
   end
 
-  defp apply_decisions(user_id, candidates, decisions) do
-    Enum.reduce(candidates, {0, [], []}, fn %Insight{} = insight,
-                                            {count, categories, ledger_entries} ->
-      case decision_for(decisions, insight.id) do
+  defp apply_decisions(user_id, candidate_refs, decisions) do
+    Enum.reduce(candidate_refs, {0, [], []}, fn candidate_ref,
+                                                {count, categories, ledger_entries} ->
+      insight_id = Map.get(candidate_ref, :id, Map.get(candidate_ref, "id"))
+      category = Map.get(candidate_ref, :category, Map.get(candidate_ref, "category"))
+
+      case decision_for(decisions, insight_id) do
         "keep" ->
-          case Insights.approve_candidate(user_id, insight.id) do
-            {:ok, _updated} -> {count + 1, [insight.category | categories], ledger_entries}
+          case Insights.approve_candidate(user_id, insight_id) do
+            {:ok, _updated} -> {count + 1, [category | categories], ledger_entries}
             {:error, _reason} -> {count, categories, ledger_entries}
           end
 
         _discard_or_missing ->
-          _ = Insights.dismiss(user_id, insight.id)
+          _ = Insights.dismiss(user_id, insight_id)
 
           entry = %{
-            "item_id" => to_string(insight.id),
+            "item_id" => to_string(insight_id),
             "item_type" => "insight",
             "decision" => "suppressed",
-            "reason" => discard_reason(decisions, insight.id)
+            "reason" => discard_reason(decisions, insight_id)
           }
 
           {count, categories, [entry | ledger_entries]}

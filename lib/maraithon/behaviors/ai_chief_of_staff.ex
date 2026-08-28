@@ -427,6 +427,12 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       "morning_briefing" ->
         Map.put(skill_state, :pending_effect, nil)
 
+      "local_pattern_review" ->
+        skill_state
+        |> Map.delete(:pending_candidates)
+        |> Map.delete("pending_candidates")
+        |> Map.put(:pending_candidate_refs, [])
+
       "inbox_calendar_advisor" ->
         skill_state
         |> Map.put(:pending_candidates, [])
