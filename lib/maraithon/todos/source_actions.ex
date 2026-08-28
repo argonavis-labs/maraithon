@@ -10,7 +10,7 @@ defmodule Maraithon.Todos.SourceActions do
 
   alias Maraithon.Cards.SourceContext
   alias Maraithon.Connectors.Gmail
-  alias Maraithon.Todos.{ActionDrafts, PublicMetadata, Todo}
+  alias Maraithon.Todos.{ActionDrafts, Brief, PublicMetadata, Todo}
 
   @max_draft_length 2_000
   @max_prefill_length 700
@@ -40,6 +40,7 @@ defmodule Maraithon.Todos.SourceActions do
     provider = provider(todo, metadata)
     draft = draft_text(todo)
     open_url = open_url(provider, todo, metadata, draft)
+    source_context = source_context(todo)
 
     if is_nil(open_url) and is_nil(draft) do
       nil
@@ -53,11 +54,11 @@ defmodule Maraithon.Todos.SourceActions do
         "open_label" => open_label(label, open_url),
         "draft_text" => draft,
         "draft_kind" => draft_kind(todo),
-        "recipient" => recipient(metadata),
+        "recipient" => recipient(todo, metadata),
         "recipient_handle" => recipient_handle(provider, metadata),
-        "subject" => card_subject(metadata)
+        "subject" => source_subject(todo, metadata)
       }
-      |> SourceContext.merge_into(SourceContext.for_todo(todo))
+      |> SourceContext.merge_into(source_context)
       |> compact()
     end
   end
@@ -200,11 +201,14 @@ defmodule Maraithon.Todos.SourceActions do
 
   defp draft_kind(_todo), do: nil
 
-  defp recipient(metadata) do
-    Enum.find_value(@recipient_keys, fn key ->
-      value = read_string(metadata, key)
-      if is_binary(value) and PublicMetadata.public_text?(value), do: value
-    end)
+  defp recipient(%Todo{} = todo, metadata) do
+    from_metadata =
+      Enum.find_value(@recipient_keys, fn key ->
+        value = read_string(metadata, key)
+        if is_binary(value) and PublicMetadata.public_text?(value), do: value
+      end)
+
+    from_metadata || todo.counterparty_label || get_in(Brief.reply(todo) || %{}, ["to"])
   end
 
   defp card_subject(metadata) do
@@ -212,6 +216,28 @@ defmodule Maraithon.Todos.SourceActions do
       value = read_string(metadata, key)
       if is_binary(value) and PublicMetadata.public_text?(value), do: value
     end)
+  end
+
+  defp source_subject(%Todo{} = todo, metadata) do
+    reply_subject = get_in(Brief.reply(todo) || %{}, ["subject"])
+
+    reply_subject ||
+      case Brief.current(todo) do
+        %{"source_subject" => subject} when is_binary(subject) and subject != "" -> subject
+        _other -> card_subject(metadata)
+      end
+  end
+
+  defp source_context(%Todo{} = todo) do
+    base = SourceContext.for_todo(todo)
+
+    case Brief.current(todo) do
+      %{"source_history" => history} when is_list(history) and history != [] ->
+        Map.put(base, "conversation", history)
+
+      _other ->
+        base
+    end
   end
 
   defp recipient_handle("imessage", metadata), do: message_handle(metadata)

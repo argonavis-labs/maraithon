@@ -2,8 +2,10 @@ defmodule Maraithon.Todos.BriefTest do
   use Maraithon.DataCase, async: false
 
   alias Maraithon.Accounts
+  alias Maraithon.Runtime.BackgroundJobHandler
   alias Maraithon.Todos
   alias Maraithon.Todos.{ActionDrafts, Brief}
+  alias Maraithon.Todos.Brief.Context
 
   defp create_todo(user_id, attrs \\ %{}) do
     {:ok, [todo]} =
@@ -69,6 +71,69 @@ defmodule Maraithon.Todos.BriefTest do
     refute Map.has_key?(updated.metadata, "brief_generation")
     assert Brief.public(updated)["why_it_matters"] == brief["why_it_matters"]
     refute Map.has_key?(Brief.public(updated), "fingerprint")
+  end
+
+  test "open todos precompute their brief on the durable model lane" do
+    user_id = new_user("brief-precompute")
+
+    assert {:ok, [todo]} =
+             Todos.upsert_many(
+               user_id,
+               [
+                 %{
+                   "source" => "gmail",
+                   "kind" => "gmail_triage",
+                   "title" => "Reply before opening this todo",
+                   "summary" => "The source needs a response.",
+                   "next_action" => "Send the prepared reply.",
+                   "dedupe_key" => "brief-precompute:#{System.unique_integer([:positive])}",
+                   "metadata" => %{"source_quote" => "Can you confirm today?"}
+                 }
+               ]
+             )
+
+    assert Brief.current(todo) == nil
+
+    assert {:ok, job} = Brief.enqueue_generation(todo)
+    assert job.job_type == "todo_brief_generation"
+    assert job.queue == "runtime_model_user"
+    assert String.starts_with?(job.partition_key, "tenant:")
+    assert job.rate_limit_key == "model"
+    assert job.payload["todo_id"] == todo.id
+
+    assert {:ok, %{status: "ready", todo_id: todo_id}} = BackgroundJobHandler.execute(job)
+    assert todo_id == todo.id
+    assert Brief.current(Todos.get_for_user(user_id, todo.id))
+  end
+
+  test "projects fetched email messages into bounded display history" do
+    history =
+      Context.source_history(%{
+        source: %{
+          "message" => %{"subject" => "Great Catching Up"},
+          "thread" => [
+            %{
+              "from" => "Michael Lippi <michael@example.com>",
+              "to" => "Kent <kent@example.com>",
+              "date" => "Fri, 28 Aug 2026 12:56:00 -0400",
+              "body" => "Let me know when you and Christina are available."
+            },
+            %{
+              "from" => "Kent <kent@example.com>",
+              "to" => "Michael Lippi <michael@example.com>",
+              "date" => "Fri, 28 Aug 2026 13:10:00 -0400",
+              "body" => "I will sync with Christina tonight.",
+              "is_from_user" => true
+            }
+          ]
+        }
+      })
+
+    assert [michael, kent] = history
+    assert michael["speaker"] == "Michael Lippi"
+    assert michael["text"] =~ "Christina"
+    assert kent["speaker"] == "Kent"
+    assert kent["from_user"] == true
   end
 
   test "a current brief is reused instead of regenerated" do

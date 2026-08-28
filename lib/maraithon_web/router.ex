@@ -179,6 +179,7 @@ defmodule MaraithonWeb.Router do
     get "/todos/:id", MobileTodoController, :show
     post "/todos/:id/opened", MobileTodoController, :opened
     post "/todos/:id/chat", MobileTodoController, :chat_thread
+    post "/todos/:id/reply", MobileTodoController, :reply
     patch "/todos/:id", MobileTodoController, :update
     delete "/todos/:id", MobileTodoController, :delete
     post "/todos/:id/actions/:action", MobileTodoController, :perform_action

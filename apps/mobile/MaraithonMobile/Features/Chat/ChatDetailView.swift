@@ -13,6 +13,7 @@ struct ChatDetailView: View {
     var onInitialPromptConsumed: () -> Void = {}
     var contextHeader: ChatContextHeader?
     var sourceAction: TodoSourceAction?
+    var sourceActionSend: ((String, String?) async throws -> Void)?
     var quickPrompts: [ChiefOfStaffPrompt]
     @State private var draft = ""
     @State private var errorMessage: String?
@@ -40,6 +41,7 @@ struct ChatDetailView: View {
         onInitialPromptConsumed: @escaping () -> Void = {},
         contextHeader: ChatContextHeader? = nil,
         sourceAction: TodoSourceAction? = nil,
+        sourceActionSend: ((String, String?) async throws -> Void)? = nil,
         quickPrompts: [ChiefOfStaffPrompt] = ChiefOfStaffPrompt.chat
     ) {
         self.thread = thread
@@ -49,6 +51,7 @@ struct ChatDetailView: View {
         self.onInitialPromptConsumed = onInitialPromptConsumed
         self.contextHeader = contextHeader
         self.sourceAction = sourceAction
+        self.sourceActionSend = sourceActionSend
         self.quickPrompts = quickPrompts
         // Seed the timeline so the first frame renders without an empty flash;
         // it is kept fresh via onChange(of: thread.messages.count). The body
@@ -75,7 +78,7 @@ struct ChatDetailView: View {
                         }
 
                         if let sourceAction {
-                            SourceActionCardView(action: sourceAction)
+                            SourceActionCardView(action: sourceAction, onSend: sourceActionSend)
                                 .padding(.bottom, 12)
                         }
 

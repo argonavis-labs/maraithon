@@ -89,6 +89,11 @@ struct CardConversationMessage: Codable, Hashable, Sendable {
         let trimmed = speaker?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? "Them" : trimmed
     }
+
+    var timestampLabel: String? {
+        guard let at, let date = ISO8601DateFormatter().date(from: at) else { return at }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
 }
 
 enum CardSourceContextParsing {

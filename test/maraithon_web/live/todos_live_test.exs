@@ -6,6 +6,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
   alias Maraithon.{Agents, Memory, Repo, Timezones}
   alias Maraithon.Todos
+  alias Maraithon.Todos.Brief
   alias Maraithon.Todos.Todo
 
   @user_email "todos-live@example.com"
@@ -493,6 +494,74 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute detail_html =~ "source_health"
     refute detail_html =~ "desktop: not connected"
     refute detail_html =~ "school logistics"
+  end
+
+  test "a precomputed Gmail brief opens with thread history and an inline reply", %{conn: conn} do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Send Michael your availability",
+                 "summary" => "Michael is waiting for evening availability.",
+                 "next_action" => "Reply with availability.",
+                 "priority" => 90,
+                 "dedupe_key" => "todos-live:precomputed-email-thread",
+                 "metadata" => %{"account" => @user_email, "person" => "Michael Lippi"}
+               }
+             ])
+
+    reply = %{
+      "channel" => "gmail",
+      "to" => "michael@example.com",
+      "subject" => "Re: Great Catching Up",
+      "body" => "Hi Michael,\n\nChristina and I are free Tuesday evening.\n\nKent",
+      "resolves_todo" => true
+    }
+
+    brief = %{
+      "version" => Brief.version(),
+      "fingerprint" => Brief.fingerprint(todo),
+      "generated_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "why_it_matters" => "Michael is waiting to schedule the conversation.",
+      "situation" => "You committed to check with Christina and reply.",
+      "recommendation" => "Send the prepared reply.",
+      "reply" => reply,
+      "source_subject" => "Great Catching Up",
+      "source_history" => [
+        %{
+          "speaker" => "Michael Lippi",
+          "at" => "Today at 12:56 PM",
+          "text" => "Let me know when you and Christina are available."
+        },
+        %{
+          "speaker" => "Kent",
+          "at" => "Today at 1:10 PM",
+          "text" => "I will sync with Christina tonight.",
+          "from_user" => true
+        }
+      ]
+    }
+
+    assert {:ok, _briefed} =
+             Todos.put_brief(
+               @user_email,
+               todo.id,
+               brief,
+               Brief.action_draft_from_reply(reply)
+             )
+
+    {:ok, view, html} = live(conn, "/todos?todo_id=#{todo.id}")
+
+    assert html =~ "Email thread"
+    assert html =~ "Great Catching Up"
+    assert html =~ "Michael Lippi"
+    assert html =~ "I will sync with Christina tonight."
+    assert html =~ "Review the wording, then send without leaving this todo."
+    assert has_element?(view, "#todo-source-history")
+    assert has_element?(view, "#todo-reply-form")
+    assert has_element?(view, "#todo-reply-form button", "Send email")
+    refute html =~ "Thinking it through"
   end
 
   test "source filter includes local companion sources", %{conn: conn} do

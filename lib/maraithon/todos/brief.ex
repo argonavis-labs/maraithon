@@ -14,13 +14,14 @@ defmodule Maraithon.Todos.Brief do
 
   alias Maraithon.Drafts
   alias Maraithon.LLM
+  alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Todos
   alias Maraithon.Todos.Brief.Context
   alias Maraithon.Todos.Todo
 
   require Logger
 
-  @version 2
+  @version 3
   @sentinel "TODO_BRIEF_JSON_V1"
   @metadata_key "brief"
   @lease_key "brief_generation"
@@ -96,6 +97,30 @@ defmodule Maraithon.Todos.Brief do
 
   def public(_todo), do: nil
 
+  @doc "Durably schedules a missing or stale brief on the per-user model lane."
+  def enqueue_generation(%Todo{} = todo) do
+    cond do
+      todo.status not in ~w(open snoozed) ->
+        {:ok, nil}
+
+      current(todo) ->
+        {:ok, nil}
+
+      true ->
+        BackgroundJobs.enqueue("todo_brief_generation", %{
+          user_id: todo.user_id,
+          queue: "runtime_model_user",
+          partition_key: tenant_partition(todo.user_id),
+          rate_limit_key: "model",
+          dedupe_key: "todo-brief:#{todo.id}:#{fingerprint(todo)}",
+          max_attempts: 3,
+          payload: %{"todo_id" => todo.id}
+        })
+    end
+  end
+
+  def enqueue_generation(_todo), do: {:error, :invalid_todo}
+
   @doc """
   Generates the brief for a todo and stores it on the todo.
 
@@ -169,7 +194,10 @@ defmodule Maraithon.Todos.Brief do
          {:ok, content} <- response_content(response),
          {:ok, parsed} <- decode_json(content),
          {:ok, brief} <- normalize(parsed, context) do
-      {:ok, brief, response_model(response)}
+      {:ok,
+       brief
+       |> maybe_put("source_history", Context.source_history(context))
+       |> maybe_put("source_subject", Context.source_subject(context)), response_model(response)}
     else
       {:error, reason} -> {:error, reason}
       other -> {:error, {:invalid_brief_response, other}}
@@ -520,5 +548,14 @@ defmodule Maraithon.Todos.Brief do
 
   defp truncate(text, max) when is_binary(text) do
     if String.length(text) <= max, do: text, else: String.slice(text, 0, max) <> " [truncated]"
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, []), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp tenant_partition(user_id) when is_binary(user_id) do
+    digest = :crypto.hash(:sha256, user_id) |> Base.url_encode64(padding: false)
+    "tenant:#{digest}"
   end
 end

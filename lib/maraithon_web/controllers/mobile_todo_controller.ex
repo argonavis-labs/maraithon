@@ -2,6 +2,7 @@ defmodule MaraithonWeb.MobileTodoController do
   use MaraithonWeb, :controller
 
   alias Maraithon.{AssistantChat, Crm, SourceFreshness, Todos}
+  alias Maraithon.Todos.{BriefActions, Todo}
   alias MaraithonWeb.MobileChatJSON
   alias MaraithonWeb.MobileConditional
   alias MaraithonWeb.MobileJSON
@@ -143,6 +144,33 @@ defmodule MaraithonWeb.MobileTodoController do
         conn
         |> put_status(:unprocessable_entity)
         |> json(MobileChatJSON.error(reason))
+    end
+  end
+
+  def reply(conn, %{"id" => todo_id} = params) do
+    user_id = conn.assigns.current_user.id
+
+    with %Todo{} = todo <- Todos.get_for_user(user_id, todo_id),
+         {:ok, result} <-
+           BriefActions.send_reply(user_id, todo, %{
+             "subject" => text_param(params, "subject") || "",
+             "body" => text_param(params, "body") || ""
+           }) do
+      json(conn, %{
+        todo: MobileJSON.todo(result.todo, include_card: true),
+        completed: result.completed?,
+        sent_to: result.target.destination
+      })
+    else
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(MobileJSON.error(:not_found))
+
+      {:error, reason} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(MobileJSON.error(reason))
     end
   end
 

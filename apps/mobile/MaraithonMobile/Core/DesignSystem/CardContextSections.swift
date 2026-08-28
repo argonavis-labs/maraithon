@@ -17,9 +17,17 @@ struct CardConversationSection: View {
                             .frame(width: 2)
 
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(message.speakerLabel)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(message.speakerLabel)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                if let timestamp = message.timestampLabel {
+                                    Text(timestamp)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
 
                             Text(message.text)
                                 .font(.caption)

@@ -149,6 +149,18 @@ struct MobileAPIClient: Sendable {
         let todo: RemoteTodo
     }
 
+    struct TodoReplyResponse: Decodable, Sendable {
+        let todo: RemoteTodo
+        let completed: Bool
+        let sentTo: String?
+
+        enum CodingKeys: String, CodingKey {
+            case todo
+            case completed
+            case sentTo = "sent_to"
+        }
+    }
+
     struct AcknowledgementResponse: Decodable, Sendable {
         let ok: Bool
     }
@@ -1174,6 +1186,26 @@ struct MobileAPIClient: Sendable {
             method: "POST",
             sessionToken: sessionToken,
             responseType: AcknowledgementResponse.self
+        )
+    }
+
+    func sendTodoReply(
+        sessionToken: String,
+        id: UUID,
+        subject: String?,
+        body: String
+    ) async throws -> TodoReplyResponse {
+        var payload: RequestBody = ["body": .string(body)]
+        if let subject, !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["subject"] = .string(subject)
+        }
+
+        return try await send(
+            path: "/todos/\(id.uuidString.lowercased())/reply",
+            method: "POST",
+            sessionToken: sessionToken,
+            body: payload,
+            responseType: TodoReplyResponse.self
         )
     }
 

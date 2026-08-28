@@ -246,6 +246,17 @@ defmodule Maraithon.Todos do
   defp polish_todo_copy(%Todo{} = todo), do: UserFacingCopy.polish_attrs(todo)
   defp polish_todo_copy(other), do: other
 
+  defp enqueue_brief(%Todo{} = todo) do
+    case Brief.enqueue_generation(todo) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("todo brief enqueue failed", todo_id: todo.id, reason: inspect(reason))
+        :ok
+    end
+  end
+
   def sync_many_from_insights(insights) when is_list(insights) do
     insights
     |> Enum.reduce({:ok, []}, fn
@@ -269,8 +280,18 @@ defmodule Maraithon.Todos do
 
   def sync_from_insight(%Insight{} = insight) do
     case SignalGate.allow_insight?(insight) do
-      {:ok, _reason} -> upsert_synced_insight_todo(insight)
-      {:skip, _reason} -> {:ok, nil}
+      {:ok, _reason} ->
+        case upsert_synced_insight_todo(insight) do
+          {:ok, %Todo{} = todo} = result ->
+            enqueue_brief(todo)
+            result
+
+          other ->
+            other
+        end
+
+      {:skip, _reason} ->
+        {:ok, nil}
     end
   end
 
@@ -288,8 +309,14 @@ defmodule Maraithon.Todos do
       end
     end)
     |> case do
-      {:ok, todos} -> {:ok, Enum.reverse(todos)}
-      {:error, reason} -> {:error, reason}
+      {:ok, todos} ->
+        todos = Enum.reverse(todos)
+        Enum.each(todos, &enqueue_brief/1)
+
+        {:ok, todos}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -483,7 +510,9 @@ defmodule Maraithon.Todos do
     |> case do
       {:ok, %Todo{} = todo} ->
         _ = safe_refresh_embedding(todo)
-        {:ok, polish_todo_copy(todo)}
+        todo = polish_todo_copy(todo)
+        enqueue_brief(todo)
+        {:ok, todo}
 
       {:error, :not_found} ->
         {:error, :not_found}

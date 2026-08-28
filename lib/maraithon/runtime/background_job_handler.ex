@@ -25,6 +25,7 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.PeriodicJobs
   alias Maraithon.Runtime.RecurringJobs
+  alias Maraithon.Todos.Brief, as: TodoBrief
 
   require Logger
 
@@ -139,6 +140,22 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
       )
     end
   end
+
+  def execute(
+        %BackgroundJob{
+          job_type: "todo_brief_generation",
+          payload: %{"todo_id" => todo_id}
+        } = job
+      )
+      when is_binary(todo_id) do
+    with {:ok, user_id} <- require_user_id(job),
+         {:ok, _todo} <- TodoBrief.generate_and_store(user_id, todo_id) do
+      {:ok, %{source: "todo_brief_generation", todo_id: todo_id, status: "ready"}}
+    end
+  end
+
+  def execute(%BackgroundJob{job_type: "todo_brief_generation"}),
+    do: {:error, :invalid_todo_brief_payload}
 
   def execute(%BackgroundJob{job_type: "relationship_learning"} = job) do
     with {:ok, user_id} <- require_user_id(job),

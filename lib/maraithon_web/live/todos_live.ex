@@ -1141,13 +1141,15 @@ defmodule MaraithonWeb.TodosLive do
       |> assign(:open_url, Map.get(source_action, "open_url"))
       |> assign(:open_label, Map.get(source_action, "open_label"))
       |> assign(:reply, brief_reply(assigns.brief))
+      |> assign(:source_history, source_history(assigns.brief, source_action))
+      |> assign(:source_subject, source_subject(assigns.brief, source_action))
       |> assign(
         :next_action_form,
         to_form(%{"next_action" => assigns.todo.next_action || ""}, as: :todo)
       )
 
     ~H"""
-    <div id="todo-detail" class="mx-auto max-w-4xl space-y-5">
+    <div id="todo-detail" class="mx-auto max-w-5xl space-y-5">
       <.link
         patch={todos_path(@filters)}
         class="inline-flex items-center gap-1 text-sm/6 font-medium text-zinc-500 hover:text-zinc-950"
@@ -1174,18 +1176,13 @@ defmodule MaraithonWeb.TodosLive do
 
       <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_17rem]">
         <div class="space-y-5">
-          <.brief_panel
-            todo={@todo}
-            brief={@brief}
-            brief_state={@brief_state}
-            brief_progress={@brief_progress}
-            timezone_info={@timezone_info}
-          />
-
           <.reply_panel
-            :if={@reply}
+            :if={@reply || @source_history != []}
             todo={@todo}
             reply={@reply}
+            source_history={@source_history}
+            source_subject={@source_subject}
+            timezone_info={@timezone_info}
             reply_form={@reply_form}
             reply_target={@reply_target}
             reply_target_state={@reply_target_state}
@@ -1193,6 +1190,14 @@ defmodule MaraithonWeb.TodosLive do
             reply_sent={@reply_sent}
             open_url={@open_url}
             open_label={@open_label}
+          />
+
+          <.brief_panel
+            todo={@todo}
+            brief={@brief}
+            brief_state={@brief_state}
+            brief_progress={@brief_progress}
+            timezone_info={@timezone_info}
           />
         </div>
 
@@ -1383,7 +1388,10 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   attr :todo, Todo, required: true
-  attr :reply, :map, required: true
+  attr :reply, :any, default: nil
+  attr :source_history, :list, default: []
+  attr :source_subject, :string, default: nil
+  attr :timezone_info, :any, required: true
   attr :reply_form, :any, required: true
   attr :reply_target, :any, default: nil
   attr :reply_target_state, :atom, required: true
@@ -1393,16 +1401,22 @@ defmodule MaraithonWeb.TodosLive do
   attr :open_label, :string, default: nil
 
   defp reply_panel(assigns) do
+    reply = if is_map(assigns.reply), do: assigns.reply, else: %{}
+
     assigns =
       assigns
-      |> assign(:heading, reply_heading(assigns.reply, assigns.todo))
-      |> assign(:subheading, reply_subheading(assigns.reply, assigns.reply_target))
-      |> assign(:provider_label, reply_provider_label(assigns.reply))
-      |> assign(:gmail?, assigns.reply["channel"] == "gmail")
-      |> assign(:send_label, BriefActions.send_label(assigns.reply["channel"]))
+      |> assign(:heading, source_panel_heading(reply, assigns.todo))
+      |> assign(:reply_heading, reply_heading(reply, assigns.todo))
+      |> assign(
+        :subheading,
+        source_panel_subheading(assigns.source_subject, reply, assigns.reply_target)
+      )
+      |> assign(:provider_label, reply_provider_label(reply))
+      |> assign(:gmail?, reply["channel"] == "gmail" or assigns.todo.source == "gmail")
+      |> assign(:send_label, BriefActions.send_label(reply["channel"]))
 
     ~H"""
-    <.panel id="todo-reply" body_class="px-5 py-5">
+    <.panel id="todo-reply" body_class="p-0">
       <:header>
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
@@ -1414,18 +1428,42 @@ defmodule MaraithonWeb.TodosLive do
         </div>
       </:header>
 
-      <.alert :if={@reply_sent} color="emerald">
-        <%= reply_sent_copy(@reply_sent) %>
-      </.alert>
+      <div :if={@source_history != []} id="todo-source-history" class="divide-y divide-zinc-950/5">
+        <article :for={message <- @source_history} class="flex gap-3 px-5 py-4">
+          <div class={[
+            "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+            if(message["from_user"], do: "bg-zinc-900 text-white", else: "bg-zinc-100 text-zinc-600")
+          ]}>
+            <%= source_message_initial(message) %>
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <p class="text-sm/6 font-semibold text-zinc-950"><%= source_message_speaker(message) %></p>
+              <p :if={present?(message["at"])} class="text-xs/5 text-zinc-400">
+                <%= format_source_message_at(message["at"], @timezone_info) %>
+              </p>
+            </div>
+            <p class="mt-1 whitespace-pre-line break-words text-sm/6 text-zinc-700"><%= message["text"] %></p>
+          </div>
+        </article>
+      </div>
+
+      <div :if={@reply_sent} class="px-5 py-5">
+        <.alert color="emerald"><%= reply_sent_copy(@reply_sent) %></.alert>
+      </div>
 
       <.form
-        :if={is_nil(@reply_sent)}
+        :if={@reply != nil and is_nil(@reply_sent)}
         for={@reply_form}
         id="todo-reply-form"
         phx-change="update_reply"
         phx-submit="send_reply"
-        class="space-y-4"
+        class={["space-y-4 px-5 py-5", @source_history != [] && "border-t border-zinc-950/10"]}
       >
+        <div>
+          <h3 class="text-sm/6 font-semibold text-zinc-950"><%= @reply_heading %></h3>
+          <p class="text-xs/5 text-zinc-500">Review the wording, then send without leaving this todo.</p>
+        </div>
         <.field :if={@gmail?} label="Subject" for="todo-reply-subject">
           <.c_input
             id="todo-reply-subject"
@@ -1511,6 +1549,68 @@ defmodule MaraithonWeb.TodosLive do
     do: reply
 
   defp brief_reply(_brief), do: nil
+
+  defp source_history(%{"source_history" => history}, _source_action)
+       when is_list(history) and history != [],
+       do: Enum.filter(history, &is_map/1)
+
+  defp source_history(_brief, %{"conversation" => history}) when is_list(history),
+    do: Enum.filter(history, &is_map/1)
+
+  defp source_history(_brief, _source_action), do: []
+
+  defp source_subject(%{"source_subject" => subject}, _source_action)
+       when is_binary(subject) and subject != "",
+       do: subject
+
+  defp source_subject(_brief, %{"subject" => subject}) when is_binary(subject), do: subject
+  defp source_subject(_brief, _source_action), do: nil
+
+  defp source_panel_heading(%{"channel" => "gmail"}, _todo), do: "Email thread"
+  defp source_panel_heading(%{"channel" => "slack"}, _todo), do: "Slack thread"
+  defp source_panel_heading(_reply, %Todo{source: "gmail"}), do: "Email thread"
+  defp source_panel_heading(_reply, _todo), do: "Conversation"
+
+  defp source_panel_subheading(subject, reply, target) do
+    [subject, reply_subheading(reply, target)]
+    |> Enum.filter(&present?/1)
+    |> Enum.uniq()
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, " · ")
+    end
+  end
+
+  defp source_message_speaker(%{"from_user" => true}), do: "You"
+
+  defp source_message_speaker(message) when is_map(message) do
+    [Map.get(message, "speaker"), Map.get(message, "from")]
+    |> Enum.find(&present?/1)
+    |> reply_display_name()
+    |> case do
+      nil -> "Them"
+      speaker -> speaker
+    end
+  end
+
+  defp source_message_speaker(_message), do: "Them"
+
+  defp source_message_initial(message) do
+    message
+    |> source_message_speaker()
+    |> String.first()
+    |> to_string()
+    |> String.upcase()
+  end
+
+  defp format_source_message_at(value, timezone_info) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> format_datetime(datetime, nil, timezone_info)
+      _other -> value
+    end
+  end
+
+  defp format_source_message_at(value, _timezone_info), do: value
 
   defp brief_list(brief, key) when is_map(brief) do
     case Map.get(brief, key) do

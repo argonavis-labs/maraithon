@@ -20,6 +20,7 @@ struct TodoDetailView: View {
                     thread: chatThread,
                     contextHeader: todoContextHeader,
                     sourceAction: todo.sourceAction,
+                    sourceActionSend: sendReply,
                     quickPrompts: todoQuickPrompts
                 )
             } else {
@@ -57,7 +58,7 @@ struct TodoDetailView: View {
                     ChatContextHeaderView(header: todoContextHeader)
 
                     if let sourceAction = todo.sourceAction {
-                        SourceActionCardView(action: sourceAction)
+                        SourceActionCardView(action: sourceAction, onSend: sendReply)
                     }
 
                     chatLoadingCard
@@ -195,6 +196,22 @@ struct TodoDetailView: View {
         // Opening must never block the detail view. The durable server write is
         // best-effort here and idempotent across repeated presentations.
         try? await MobileAPIClient().markTodoOpened(sessionToken: sessionToken, id: todo.id)
+    }
+
+    private func sendReply(body: String, subject: String?) async throws {
+        guard let sessionToken = sessionStore.user?.sessionToken else {
+            throw MobileAPIError.unauthorized
+        }
+
+        let response = try await MobileAPIClient().sendTodoReply(
+            sessionToken: sessionToken,
+            id: todo.id,
+            subject: subject,
+            body: body
+        )
+
+        ProductionDataSync.apply(response.todo, to: todo)
+        try? modelContext.save()
     }
 
     private func loadThreadIfNeeded() async {

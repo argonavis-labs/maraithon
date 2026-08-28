@@ -562,6 +562,29 @@ defmodule Maraithon.Connectors.Gmail do
   end
 
   @doc """
+  Fetches all available messages in one Gmail thread with decoded bodies.
+
+  Gmail returns the complete thread in one request, which is both faster and
+  more consistent than hydrating every message with a separate point read.
+  """
+  def fetch_thread_content(user_id_or_token, thread_id, opts \\ []) do
+    with id when is_binary(id) <- normalize_id(thread_id),
+         {:ok, access_token} <- request_access_token(user_id_or_token, opts),
+         {:ok, response} <- fetch_gmail_point_resource(access_token, "threads", id, "full") do
+      case response do
+        %{"messages" => messages} when is_list(messages) ->
+          {:ok, Enum.map(messages, &parse_message_content/1)}
+
+        _response ->
+          {:ok, []}
+      end
+    else
+      nil -> {:error, :invalid_gmail_id}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
   Sends a Gmail message, optionally within an existing thread.
   """
   def send_message(user_id_or_token, attrs) when is_map(attrs) do

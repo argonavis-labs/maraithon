@@ -26,6 +26,7 @@ defmodule Maraithon.Todos.Brief.Context do
   @people_timeout_ms 5_000
   @voice_timeout_ms 3_000
   @max_body_chars 6_000
+  @max_history_body_chars 3_000
   @max_thread_messages 12
   @max_slack_messages 30
   @max_slack_name_lookups 8
@@ -112,6 +113,53 @@ defmodule Maraithon.Todos.Brief.Context do
       true -> nil
     end
   end
+
+  @doc """
+  Returns the bounded, user-facing source history stored with a brief.
+
+  Connector errors and internal identifiers are deliberately left out so
+  product surfaces can render this projection without another source read.
+  """
+  def source_history(%{source: %{} = source}) do
+    messages =
+      case Map.get(source, "thread") do
+        values when is_list(values) and values != [] -> values
+        _other -> List.wrap(Map.get(source, "message"))
+      end
+
+    messages
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(fn message ->
+      %{
+        "speaker" => display_address(read_string(message, "from")),
+        "from" => read_string(message, "from"),
+        "to" => read_string(message, "to"),
+        "subject" => read_string(message, "subject"),
+        "at" => read_string(message, "date"),
+        "text" =>
+          first_present([
+            read_string(message, "body"),
+            read_string(message, "snippet")
+          ])
+          |> truncate(@max_history_body_chars),
+        "from_user" => Map.get(message, "is_from_user") == true
+      }
+      |> compact()
+    end)
+    |> Enum.reject(&(not present?(Map.get(&1, "text"))))
+    |> Enum.take(-@max_thread_messages)
+  end
+
+  def source_history(_context), do: []
+
+  @doc "The subject of the fetched source thread, when available."
+  def source_subject(%{source: %{} = source}) do
+    source
+    |> Map.get("message", %{})
+    |> read_string("subject")
+  end
+
+  def source_subject(_context), do: nil
 
   # ---------------------------------------------------------------------------
   # Todo and card
@@ -257,8 +305,8 @@ defmodule Maraithon.Todos.Brief.Context do
       "from" => read_string(message, :from),
       "to" => read_string(message, :to),
       "subject" => read_string(message, :subject),
-      "date" => read_string(message, :date),
-      "body" => truncate(body, @max_body_chars),
+      "date" => iso(Map.get(message, :internal_date)) || read_string(message, :date),
+      "body" => body |> clean_email_body() |> truncate(@max_body_chars),
       "body_unavailable_reason" => read_string(message, :body_unavailable_reason)
     }
     |> compact()
@@ -270,16 +318,27 @@ defmodule Maraithon.Todos.Brief.Context do
        when is_binary(thread_id) do
     opts = if is_binary(provider), do: [provider: provider], else: []
 
-    case Gmail.fetch_thread(user_id, thread_id, opts) do
-      {:ok, messages} when is_list(messages) and length(messages) > 1 ->
+    case Gmail.fetch_thread_content(user_id, thread_id, opts) do
+      {:ok, messages} when is_list(messages) and messages != [] ->
         messages
         |> Enum.sort_by(&thread_sort_key/1)
         |> Enum.take(-@max_thread_messages)
         |> Enum.map(fn message ->
+          body =
+            first_present([
+              read_string(message, :text_body),
+              message |> read_string(:html_body) |> strip_html(),
+              read_string(message, :snippet)
+            ])
+
           %{
             "from" => read_string(message, :from),
-            "date" => read_string(message, :date),
+            "to" => read_string(message, :to),
+            "subject" => read_string(message, :subject),
+            "date" => iso(Map.get(message, :internal_date)) || read_string(message, :date),
+            "body" => body |> clean_email_body() |> truncate(@max_body_chars),
             "snippet" => read_string(message, :snippet),
+            "is_from_user" => "SENT" in Map.get(message, :labels, []),
             "is_source_message" => read_string(message, :message_id) == source_message_id
           }
           |> compact()
@@ -615,6 +674,30 @@ defmodule Maraithon.Todos.Brief.Context do
     |> String.trim()
     |> non_empty()
   end
+
+  defp display_address(value) when is_binary(value) do
+    case Regex.run(~r/^\s*"?([^"<]+?)"?\s*</, value) do
+      [_all, name] -> String.trim(name)
+      _other -> value |> String.split("@", parts: 2) |> List.first()
+    end
+  end
+
+  defp display_address(_value), do: nil
+
+  defp clean_email_body(value) when is_binary(value) do
+    value
+    |> String.replace("\r\n", "\n")
+    |> String.split(
+      ~r/\n(?:On .+?wrote:|From:\s.+\nSent:\s|-----Original Message-----)\s*/is,
+      parts: 2
+    )
+    |> List.first()
+    |> String.replace(~r/\n>.*(?:\n>.*)*/s, "")
+    |> String.trim()
+    |> non_empty()
+  end
+
+  defp clean_email_body(_value), do: nil
 
   defp truncate(nil, _max), do: nil
 
