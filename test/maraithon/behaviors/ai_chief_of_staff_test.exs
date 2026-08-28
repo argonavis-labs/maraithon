@@ -207,7 +207,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
              }
            }
 
-    assert migrated.skill_states["morning_briefing"].pending_brief_input == nil
+    assert migrated.skill_states["morning_briefing"].pending_effect == nil
+    refute Map.has_key?(migrated.skill_states["morning_briefing"], :pending_brief_input)
     assert migrated.skill_states["inbox_calendar_advisor"].pending_candidates == []
   end
 

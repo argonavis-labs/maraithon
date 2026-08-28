@@ -425,9 +425,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         |> Map.update(:pending_holidays, %{}, &compact_restored_holidays/1)
 
       "morning_briefing" ->
-        skill_state
-        |> Map.put(:pending_brief_input, nil)
-        |> Map.put(:pending_dedupe_key, nil)
+        Map.put(skill_state, :pending_effect, nil)
 
       "inbox_calendar_advisor" ->
         skill_state

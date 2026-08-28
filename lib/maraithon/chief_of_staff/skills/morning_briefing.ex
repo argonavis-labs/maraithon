@@ -312,8 +312,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           "commercial_teammate_domains",
           @commercial_teammate_domains
         ),
-      pending_brief_input: nil,
-      pending_dedupe_key: nil,
+      pending_effect: nil,
       last_generated_keys: %{}
     }
   end
@@ -346,8 +345,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
          %{
            state
            | user_id: user_id,
-             pending_brief_input: nil,
-             pending_dedupe_key: nil,
+             pending_effect: nil,
              last_generated_keys: Map.put(state.last_generated_keys, "morning", period_key)
          }}
 
@@ -360,8 +358,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         pending_state = %{
           state
           | user_id: user_id,
-            pending_brief_input: brief_input,
-            pending_dedupe_key: dedupe_key
+            pending_effect: %{
+              effect_kind: :morning_briefing,
+              cycle_id: context[:assistant_cycle_id],
+              dedupe_key: dedupe_key,
+              issued_at: now
+            }
         }
 
         case llm_params(brief_input, state) do
@@ -438,7 +440,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         finish_reason: llm_finish_reason(response) || "ok"
       },
       fn ->
-        brief_input = state.pending_brief_input || %{}
+        pending_effect = state.pending_effect || %{}
+        input_timestamp = pending_effect_timestamp(pending_effect, context[:timestamp])
+
+        brief_input =
+          build_brief_input(
+            context[:user_id] || state.user_id,
+            input_timestamp,
+            state,
+            context
+          )
+
         parsed_brief = parse_llm_brief(response)
 
         {brief, generation_mode, error_message} =
@@ -461,7 +473,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           "scheduled_for" =>
             read_string(brief_input, "generated_at", DateTime.utc_now() |> DateTime.to_iso8601()),
           "dedupe_key" =>
-            state.pending_dedupe_key ||
+            read_string(pending_effect, "dedupe_key", nil) ||
               "morning_briefing:#{read_string(brief_input, "date", "unknown")}",
           "status" => "pending",
           "title" => read_string(brief, "title", "Morning briefing"),
@@ -532,8 +544,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
               |> Map.merge(todo_payload)},
              %{
                state
-               | pending_brief_input: nil,
-                 pending_dedupe_key: nil,
+               | pending_effect: nil,
                  last_generated_keys: Map.put(state.last_generated_keys, "morning", period_key)
              }}
 
@@ -547,17 +558,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             Logger.warning("Morning briefing record failed",
               user_fingerprint:
                 Maraithon.Redaction.fingerprint(context[:user_id] || state.user_id),
-              dedupe_reference: Maraithon.Redaction.fingerprint(state.pending_dedupe_key),
+              dedupe_reference:
+                Maraithon.Redaction.fingerprint(read_string(pending_effect, "dedupe_key", nil)),
               failure_code: Maraithon.Redaction.error_class(reason)
             )
 
-            {:idle, %{state | pending_brief_input: nil, pending_dedupe_key: nil}}
+            {:idle, %{state | pending_effect: nil}}
         end
       end
     )
   end
 
   def handle_effect_result(_effect_result, state, _context), do: {:idle, state}
+
+  defp pending_effect_timestamp(pending_effect, fallback) do
+    pending_effect
+    |> Map.get(:issued_at, Map.get(pending_effect, "issued_at"))
+    |> parse_event_datetime()
+    |> case do
+      %DateTime{} = timestamp -> timestamp
+      _ -> fallback || DateTime.utc_now()
+    end
+  end
 
   @impl true
   def handle_effect_error(:llm_call, reason, state, context) do

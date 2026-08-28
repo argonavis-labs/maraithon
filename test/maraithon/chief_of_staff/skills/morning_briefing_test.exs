@@ -3,6 +3,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Agents
+  alias Maraithon.Behaviors.SnapshotBudget
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.Skills.MorningBriefing
   alias Maraithon.ChiefOfStaff.SourceBundle
@@ -18,6 +19,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
   alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
   alias Maraithon.Memory
+  alias Maraithon.Runtime.SnapshotFormat
   alias Maraithon.SourceFreshness
   alias Maraithon.Todos
 
@@ -1752,25 +1754,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     [_instructions, input_json] = String.split(prompt, "Brief input JSON:\n", parts: 2)
     input = Jason.decode!(String.trim(input_json))
 
-    {:ok, pending_json} = Jason.encode(state.pending_brief_input)
+    assert {:ok, bytes} = SnapshotBudget.check(state)
+    assert bytes < 128 * 1_024
+    assert {:ok, envelope, ^bytes} = SnapshotFormat.encode(state)
+    assert {:ok, ^state} = SnapshotFormat.decode(envelope)
+    assert state.pending_effect.effect_kind == :morning_briefing
+    assert state.pending_effect.dedupe_key == "morning_briefing:2026-05-07"
+    refute Jason.encode!(state) =~ "Important commercial detail."
 
-    assert String.length(pending_json) < 500_000
     assert String.length(prompt) < 500_000
     assert length(get_in(input, ["gmail", "recent_inbox"])) == 12
     assert length(get_in(input, ["gmail", "recent_unread"])) == 12
 
-    pending_body =
-      get_in(state.pending_brief_input, ["gmail", "recent_inbox", Access.at(0), "body"])
-
-    pending_status =
-      get_in(state.pending_brief_input, ["gmail", "recent_inbox", Access.at(0), "body_status"])
-
     first_body = get_in(input, ["gmail", "recent_inbox", Access.at(0), "body"])
     first_snippet = get_in(input, ["gmail", "recent_inbox", Access.at(0), "snippet"])
 
-    assert String.length(pending_body) < 1_600
-    assert pending_body =~ "[truncated"
-    assert pending_status == "available_truncated"
     # The final 32 KB projection may omit redundant body/snippet fields while
     # retaining the message identity and subject; it must never leak the
     # oversized connector field.
@@ -1941,7 +1939,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert {:effect, {:llm_call, _params}, pending_state} =
              MorningBriefing.handle_wakeup(state, context)
 
-    assert pending_state.pending_dedupe_key == "morning_briefing:2026-05-07"
+    assert pending_state.pending_effect.dedupe_key == "morning_briefing:2026-05-07"
   end
 
   test "idles and records an operator event when no delivery channel exists", %{agent: agent} do
