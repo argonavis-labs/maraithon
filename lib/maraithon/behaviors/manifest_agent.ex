@@ -36,6 +36,19 @@ defmodule Maraithon.Behaviors.ManifestAgent do
   end
 
   @impl true
+  def snapshot_state(%{source_module: module, source_state: source_state} = state)
+      when is_atom(module) and not is_nil(module) do
+    source_state =
+      if function_exported?(module, :snapshot_state, 1),
+        do: module.snapshot_state(source_state),
+        else: source_state
+
+    Maraithon.Behaviors.SnapshotTrim.trim(%{state | source_state: source_state})
+  end
+
+  def snapshot_state(state), do: Maraithon.Behaviors.SnapshotTrim.trim(state)
+
+  @impl true
   def handle_wakeup(state, context) do
     if state.source_module do
       state.source_module.handle_wakeup(state.source_state, context)

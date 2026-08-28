@@ -86,6 +86,25 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffSnapshotStateTest do
     assert byte_size(leaf.body) < 20_000
   end
 
+  test "the manifest wrapper delegates to its source behavior and trims its own results" do
+    big = String.duplicate("z", 70_000)
+
+    state = %{
+      manifest: %{},
+      source_module: AIChiefOfStaff,
+      source_state: %{source_bundle: %{"gmail" => big}, skill_states: %{}},
+      pending_source_effect?: false,
+      tool_results: [%{tool: "search", result: big}],
+      runs: 3
+    }
+
+    snapshot = Maraithon.Behaviors.ManifestAgent.snapshot_state(state)
+    assert snapshot.source_state.source_bundle == nil
+    [%{result: r}] = snapshot.tool_results
+    assert byte_size(r) < 20_000
+    assert snapshot.runs == 3
+  end
+
   test "non-map state passes through" do
     assert AIChiefOfStaff.snapshot_state(:opaque) == :opaque
   end
