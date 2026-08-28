@@ -554,6 +554,9 @@ config :maraithon, Maraithon.Runtime,
   heartbeat_interval_ms: heartbeat_interval_ms,
   checkpoint_interval_ms: checkpoint_interval_ms,
   effect_poll_interval_ms: String.to_integer(System.get_env("EFFECT_POLL_INTERVAL_MS", "1000")),
+  # Bounded reuse of a successful exact-protocol storage proof (0 = re-verify per call).
+  protocol_storage_verification_cache_ms:
+    String.to_integer(System.get_env("PROTOCOL_STORAGE_VERIFICATION_CACHE_MS", "15000")),
   # Telegram asks the provider for one delivery connection. This short grace
   # also lets concurrently admitted requests become visible before the DB head
   # is selected; it is not a substitute for the provider serialization contract.

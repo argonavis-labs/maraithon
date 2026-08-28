@@ -15,6 +15,7 @@ defmodule Maraithon.Effects.ProtocolCutover do
 
   alias Ecto.Adapters.SQL
   alias Maraithon.Repo
+  alias Maraithon.Runtime.Coordination.StorageVerificationCache
 
   @name "effects"
   @legacy "legacy"
@@ -131,12 +132,12 @@ defmodule Maraithon.Effects.ProtocolCutover do
              :ok <- ensure_effect_payloads_encrypted(),
              :ok <- ensure_directive_payloads_encrypted(),
              :ok <- ensure_durable_payload_proofs(),
-             :ok <- ensure_exact_storage_ready() do
+             :ok <- ensure_exact_storage_ready_uncached() do
           :ok
         end
 
       :exact ->
-        ensure_exact_storage_ready()
+        ensure_exact_storage_ready_uncached()
 
       {:blocked, _reason} = blocked ->
         {:error, protocol_error(blocked)}
@@ -156,6 +157,18 @@ defmodule Maraithon.Effects.ProtocolCutover do
   def activate(opts \\ [])
 
   def activate(opts) when is_list(opts) do
+    StorageVerificationCache.invalidate()
+
+    try do
+      do_activate(opts)
+    after
+      StorageVerificationCache.invalidate()
+    end
+  end
+
+  def activate(_opts), do: {:error, :invalid_effect_protocol_activation}
+
+  defp do_activate(opts) do
     case Keyword.get(opts, :confirmation) do
       @confirmation ->
         with {:ok, activation_epoch} <- activation_epoch(Keyword.get(opts, :activation_epoch)),
@@ -168,8 +181,6 @@ defmodule Maraithon.Effects.ProtocolCutover do
         {:error, :effect_protocol_non_rolling_confirmation_required}
     end
   end
-
-  def activate(_opts), do: {:error, :invalid_effect_protocol_activation}
 
   def activation_confirmation, do: @confirmation
 
@@ -225,7 +236,7 @@ defmodule Maraithon.Effects.ProtocolCutover do
 
               :ok = ensure_activation_evidence_matches!(evidence)
               if runtime.mode == "partition_fenced_v1", do: ensure_pair_evidence_matches!(runtime)
-              :ok = ensure_exact_storage_ready!()
+              :ok = ensure_exact_storage_ready_uncached!()
               :already_active
 
             @legacy ->
@@ -249,7 +260,7 @@ defmodule Maraithon.Effects.ProtocolCutover do
               :ok = ensure_effect_payloads_encrypted!()
               :ok = ensure_directive_payloads_encrypted!()
               :ok = ensure_durable_payload_proofs!()
-              :ok = ensure_exact_storage_ready!()
+              :ok = ensure_exact_storage_ready_uncached!()
 
               SQL.query!(
                 Repo,
@@ -390,7 +401,25 @@ defmodule Maraithon.Effects.ProtocolCutover do
     end
   end
 
+  # Bounded positive cache; see StorageVerificationCache. Activation paths
+  # call the *_uncached variants directly.
   defp ensure_exact_storage_ready do
+    StorageVerificationCache.fetch(
+      {__MODULE__, @exact},
+      &ensure_exact_storage_ready_uncached/0,
+      &(&1 == :ok)
+    )
+  end
+
+  defp ensure_exact_storage_ready! do
+    StorageVerificationCache.fetch(
+      {__MODULE__, @exact},
+      &ensure_exact_storage_ready_uncached!/0,
+      &(&1 == :ok)
+    )
+  end
+
+  defp ensure_exact_storage_ready_uncached do
     with :ok <- ensure_exact_migrations_recorded(),
          :ok <- ensure_exact_catalog_helpers_ready(),
          :ok <- ensure_payload_roles_ready(),
@@ -401,7 +430,7 @@ defmodule Maraithon.Effects.ProtocolCutover do
     end
   end
 
-  defp ensure_exact_storage_ready! do
+  defp ensure_exact_storage_ready_uncached! do
     :ok = ensure_exact_migrations_recorded!()
     :ok = ensure_exact_catalog_helpers_ready!()
     :ok = ensure_payload_roles_ready!()

@@ -29,6 +29,8 @@ defmodule Maraithon.Runtime.AgentLeases do
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, Protocol, Scope}
 
+  require Logger
+
   @default_ttl_ms 60_000
   @min_ttl_ms 1_000
   @max_ttl_ms 300_000
@@ -151,7 +153,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         {now, lease_until} = DatabaseClock.window!(ttl_ms)
 
         ensure_exact_live_lease!(lease, owner_token, now)
-        ensure_coordination_lease!(lease, :owner)
+        ensure_coordination_lease!(lease, :owner, scope)
 
         runnable? =
           is_nil(operation) and runnable?(agent) and binding_matches?(agent, binding) and
@@ -205,7 +207,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_binding_matches!(agent, binding)
         ensure_due_recovery_guard!(guard, guard_generation, now)
         ensure_exact_live_lease!(lease, owner_token, now)
-        ensure_coordination_lease!(lease, :owner)
+        ensure_coordination_lease!(lease, :owner, scope)
 
         update_lease!(lease, %{
           renewed_at: now,
@@ -238,7 +240,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_binding_matches!(agent, binding)
         ensure_initial_guard_allows_claim!(guard, now)
         ensure_exact_live_lease!(lease, owner_token, now)
-        ensure_coordination_lease!(lease, :ready)
+        ensure_coordination_lease!(lease, :ready, scope)
 
         # Readiness is deliberately the last authority write in this transaction.
         update_lease!(lease, %{ready_at: now, draining_at: nil, updated_at: now})
@@ -266,7 +268,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         ensure_binding_matches!(agent, binding)
         ensure_due_recovery_guard!(guard, guard_generation, now)
         ensure_exact_live_lease!(lease, owner_token, now)
-        ensure_coordination_lease!(lease, :ready)
+        ensure_coordination_lease!(lease, :ready, scope)
 
         guard
         |> Ecto.Changeset.change(%{
@@ -365,7 +367,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         now = DatabaseClock.now!()
 
         ensure_exact_live_lease!(lease, owner_token, now)
-        ensure_coordination_lease!(lease, :owner)
+        ensure_coordination_lease!(lease, :owner, scope)
 
         update_lease!(lease, %{
           ready_at: nil,
@@ -423,7 +425,7 @@ defmodule Maraithon.Runtime.AgentLeases do
       now = DatabaseClock.now!()
 
       ensure_exact_live_lease!(lease, owner_token, now)
-      ensure_coordination_lease!(lease, :owner)
+      ensure_coordination_lease!(lease, :owner, scope)
       :ok
     else
       _invalid -> Repo.rollback(:runtime_lease_lost)
@@ -478,7 +480,7 @@ defmodule Maraithon.Runtime.AgentLeases do
       ensure_binding_matches!(agent, binding)
       ensure_initial_guard_allows_claim!(guard, now)
       ensure_exact_ready_lease!(lease, owner_token, now)
-      ensure_coordination_lease!(lease, :ready)
+      ensure_coordination_lease!(lease, :ready, scope)
 
       SQL.query!(
         Repo,
@@ -873,7 +875,9 @@ defmodule Maraithon.Runtime.AgentLeases do
         not is_nil(lease.coordination_partition_epoch) and
         not is_nil(lease.coordination_node_incarnation_id)
 
-    case {Scope.active_or_legacy(), coordination_fields?} do
+    scope_result = Scope.active_or_legacy()
+
+    case {scope_result, coordination_fields?} do
       {:legacy, false} ->
         lock_user_privacy!(user_id, privacy_mode)
         %{legacy?: true, user_id: user_id}
@@ -903,9 +907,20 @@ defmodule Maraithon.Runtime.AgentLeases do
         }
 
       _ ->
+        Logger.warning("Agent lease partition scope refused",
+          failure_code: prelock_scope_failure_class(scope_result, coordination_fields?)
+        )
+
         Repo.rollback(:partition_authority_lost)
     end
   end
+
+  defp prelock_scope_failure_class({:error, reason}, _fields?),
+    do: Maraithon.Redaction.error_class(reason)
+
+  defp prelock_scope_failure_class(:legacy, true), do: "legacy_scope_with_coordinated_lease"
+  defp prelock_scope_failure_class({:ok, _session}, false), do: "coordinated_lease_fields_missing"
+  defp prelock_scope_failure_class(_other, _fields?), do: "unknown_error"
 
   defp lock_user_privacy!(user_id, privacy_mode) do
     case SQL.query!(
@@ -1034,7 +1049,12 @@ defmodule Maraithon.Runtime.AgentLeases do
     end
   end
 
-  defp ensure_coordination_lease!(lease, mode), do: Scope.fence_lease!(lease, mode)
+  # The scope proven at prelock (before any row locks) supplies the session so
+  # the fence never blocks on the coordination Session under those locks.
+  defp ensure_coordination_lease!(lease, mode, %{session: %NodeIncarnation{} = session}),
+    do: Scope.fence_lease!(lease, mode, session)
+
+  defp ensure_coordination_lease!(lease, mode, _legacy_scope), do: Scope.fence_lease!(lease, mode)
 
   defp update_lease!(lease, updates) do
     lease

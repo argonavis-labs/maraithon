@@ -14,7 +14,8 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     Protocol,
     TaskAuthority,
     TaskClaims,
-    TaskSupervisor
+    TaskSupervisor,
+    TaskTerminationAttestations
   }
 
   @revision String.duplicate("a", 40)
@@ -615,6 +616,121 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     final = TaskClaims.get(proven.id)
     assert final.state == "outcome_ambiguous"
     assert final.outcome == "provider_outcome_ambiguous"
+    assert Repo.get!(BackgroundJob, running_job.id).last_error == "provider_outcome_ambiguous"
+
+    send(task.pid, :finish)
+    assert_receive {:DOWN, ref, :process, _pid, :normal} when ref == task.ref
+  end
+
+  test "operator background-job attestation proves external destruction for the exact identity only" do
+    %{node: node, partitions: [partition]} = active_authority!(["tenant-a"])
+    insert_user!("tenant-a")
+    _job = insert_job!("tenant-a", "provider-work")
+
+    assert {:ok, {reserved_job, assignment, identity}} =
+             FairScheduler.reserve_next(node, [partition])
+
+    parent = self()
+
+    task =
+      start_bound_task(identity, fn ->
+        result =
+          with {:ok, {running_job, running_assignment}} <-
+                 FairScheduler.activate_job(reserved_job, assignment),
+               {:ok, entered} <- TaskClaims.mark_provider_entered(running_assignment) do
+            {:ok, running_job, entered}
+          end
+
+        send(parent, {:provider_entered, result})
+        receive do: (:finish -> :ok)
+      end)
+
+    assert_receive {:provider_entered, {:ok, running_job, entered}}
+    assert {:ok, requested} = TaskClaims.request_termination(entered)
+    assert requested.provider_boundary == "outcome_unknown"
+
+    evidence_id = "gcp-cloud-run-revision-delete:test-revision"
+    confirmation = TaskTerminationAttestations.confirmation()
+
+    operator_identity = %{
+      assignment_id: requested.id,
+      job_id: requested.work_id,
+      claim_token: requested.claim_token,
+      node_incarnation_id: requested.node_incarnation_id,
+      supervisor_id: requested.supervisor_id,
+      task_id: requested.local_task_id
+    }
+
+    # The deliberate-action interlock, an inexact identity, and the ordinary
+    # runtime role are each refused without writing a proof.
+    assert {:error, :task_termination_attestation_confirmation_required} =
+             TaskTerminationAttestations.record(
+               operator_identity,
+               evidence_id,
+               @activated_by,
+               "PHYSICAL_TASK_TERMINATED?"
+             )
+
+    assert {:error, :task_termination_attestation_identity_mismatch} =
+             in_role!("maraithon_incident_operator", fn ->
+               TaskTerminationAttestations.record(
+                 %{operator_identity | claim_token: Ecto.UUID.generate()},
+                 evidence_id,
+                 @activated_by,
+                 confirmation
+               )
+             end)
+
+    assert {:error, :task_termination_attestation_refused} =
+             TaskTerminationAttestations.record(
+               operator_identity,
+               evidence_id,
+               @activated_by,
+               confirmation
+             )
+
+    assert TaskClaims.get(requested.id).state == "termination_requested"
+
+    assert {:ok, %{task_assignment: proven}} =
+             in_role!("maraithon_incident_operator", fn ->
+               TaskTerminationAttestations.record(
+                 operator_identity,
+                 evidence_id,
+                 @activated_by,
+                 confirmation
+               )
+             end)
+
+    assert proven.state == "termination_proven"
+
+    # Lost-response replay accepts only the identical attestation.
+    assert {:ok, %{task_assignment: %{id: replayed_id}}} =
+             in_role!("maraithon_incident_operator", fn ->
+               TaskTerminationAttestations.record(
+                 operator_identity,
+                 evidence_id,
+                 @activated_by,
+                 confirmation
+               )
+             end)
+
+    assert replayed_id == proven.id
+
+    assert {:error, :task_external_proof_mismatch} =
+             in_role!("maraithon_incident_operator", fn ->
+               TaskTerminationAttestations.record(
+                 operator_identity,
+                 "gcp-cloud-run-revision-delete:other-revision",
+                 @activated_by,
+                 confirmation
+               )
+             end)
+
+    # Ordinary reconciliation settles the job as provider-ambiguous; the
+    # attestation never manufactured an outcome.
+    assert {:ok, [{_, 1, "provider_outcome_ambiguous"}]} = TaskClaims.reconcile_proven(1)
+    final = TaskClaims.get(proven.id)
+    assert final.state == "outcome_ambiguous"
     assert Repo.get!(BackgroundJob, running_job.id).last_error == "provider_outcome_ambiguous"
 
     send(task.pid, :finish)

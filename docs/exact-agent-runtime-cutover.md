@@ -626,6 +626,17 @@ procedure before the normal `make deploy` path may be used.
 
 ## Phase 10 — continuous readiness and ingress restoration
 
+Continuous readiness is re-proven on a bounded schedule, not per statement.
+`StorageVerificationCache` reuses a *successful* storage proof (migrations,
+catalog fingerprints, roles, ACLs, manifest digest) for
+`PROTOCOL_STORAGE_VERIFICATION_CACHE_MS` (default 15s; `0` re-verifies on every
+call). Failures are never cached, activation preconditions and activation
+always verify uncached, and activation clears the cache. Per-call verification
+on managed PostgreSQL cost seconds inside lock-holding coordination
+transactions and queued the Session's lease renewals behind them. The Session
+also publishes its current scope to ETS; `Scope.current/0` reads that
+publication and never blocks on the Session process.
+
 Readiness is not a startup checkbox. Confirm continuously through the canary
 window and alert thereafter:
 
@@ -743,6 +754,30 @@ historical Task proof.
 This proves only physical task destruction. It never claims a provider outcome;
 reconciliation preserves `provider_outcome_ambiguous` after durable provider
 entry and does not replay the Effect.
+
+For a coordinated background-job Task (for example a recurring schedule caught
+mid-provider-call by a Cloud Run revision replacement, which leaves its
+assignment `termination_requested` and its partition `draining` so every job
+on that partition freezes), obtain the complete stored assignment identity
+from `runtime_task_assignments` and use the incident role:
+
+```bash
+MIX_ENV=prod mix maraithon.tasks.attest_terminated \
+  --assignment-id ASSIGNMENT_UUID \
+  --job-id BACKGROUND_JOB_UUID \
+  --claim-token CLAIM_UUID \
+  --node-incarnation-id NODE_INCARNATION_UUID \
+  --supervisor-id SUPERVISOR_UUID \
+  --task-id LOCAL_TASK_UUID \
+  --evidence-id EXTERNAL_EVIDENCE_REFERENCE \
+  --attested-by INCIDENT_OPERATOR \
+  --confirm PHYSICAL_TASK_TERMINATED
+```
+
+It records only an `external_destroyed` Task proof for that exact identity.
+Runtime reconciliation then settles the job (`provider_outcome_ambiguous` after
+provider entry, otherwise `cancelled_before_provider`), and the planner releases
+the partition. Replay accepts only the identical evidence reference.
 
 For an Agent whose original exact `AgentWatcher` monitor proof is permanently
 unavailable, the external incident system must sign the canonical

@@ -9,6 +9,8 @@ defmodule Maraithon.Runtime.Coordination.Scope do
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.Config
 
+  require Logger
+
   alias Maraithon.Runtime.Coordination.{
     NodeIncarnation,
     Partition,
@@ -308,8 +310,18 @@ defmodule Maraithon.Runtime.Coordination.Scope do
     where(query, ^authority)
   end
 
-  @doc "Fences an existing Agent lease against its exact current partition incarnation."
-  def fence_lease!(%AgentRuntimeLease{} = lease, mode) when mode in [:ready, :owner] do
+  @doc """
+  Fences an existing Agent lease against its exact current partition incarnation.
+
+  Pass the `session` already proven earlier in the same transaction (before any
+  row locks were taken) so the fence never waits on the coordination Session
+  while holding node or partition locks the Session's own tick must update.
+  Without a session the current one is resolved from the published scope.
+  """
+  def fence_lease!(lease, mode, session \\ nil)
+
+  def fence_lease!(%AgentRuntimeLease{} = lease, mode, session)
+      when mode in [:ready, :owner] and (is_nil(session) or is_struct(session, NodeIncarnation)) do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "Agent lease partition fence requires transaction")
 
@@ -320,19 +332,38 @@ defmodule Maraithon.Runtime.Coordination.Scope do
           else: Repo.rollback(:runtime_coordination_not_active)
 
       :active ->
-        with {:ok, session} <- current(),
+        with {:ok, session} <- fence_session(session),
              true <- lease.coordination_activation_epoch == session.activation_epoch,
              true <- lease.coordination_node_incarnation_id == session.id,
              :ok <- lock_live_lease_partition(session, lease, mode) do
           :ok
         else
-          _ -> Repo.rollback(:partition_authority_lost)
+          failure ->
+            Logger.warning("Agent lease partition fence refused",
+              failure_code: fence_failure_class(failure)
+            )
+
+            Repo.rollback(:partition_authority_lost)
         end
 
       blocked ->
         Repo.rollback({:coordination_protocol_blocked, blocked})
     end
   end
+
+  defp fence_session(nil), do: current()
+
+  defp fence_session(%NodeIncarnation{} = session) do
+    case live_ready_session(session) do
+      :ok -> {:ok, session}
+      {:error, _reason} = error -> error
+      _stale -> {:error, :coordination_session_stale}
+    end
+  end
+
+  defp fence_failure_class({:error, reason}), do: Maraithon.Redaction.error_class(reason)
+  defp fence_failure_class(false), do: "lease_session_mismatch"
+  defp fence_failure_class(other), do: Maraithon.Redaction.error_class(other)
 
   def active_or_legacy do
     case Protocol.mode() do

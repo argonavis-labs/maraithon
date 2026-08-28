@@ -42,7 +42,9 @@ config :maraithon, Maraithon.Runtime,
   openrouter_model: "qwen/qwen3.7-max",
   openrouter_reasoning_effort: "medium",
   openai_reasoning_effort: "high",
-  telegram_ingress_ordering_grace_ms: 0
+  telegram_ingress_ordering_grace_ms: 0,
+  # Protocol suites break and re-prove storage per call; never serve cached proofs in test.
+  protocol_storage_verification_cache_ms: 0
 
 config :maraithon, :todos, mock_llm_when_unconfigured: true
 

@@ -42,8 +42,25 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
+  @published_table :maraithon_runtime_coordination_session
+
+  @doc """
+  Returns the ready node incarnation from the Session's published scope.
+
+  The Session publishes `{phase, session}` to a protected ETS table after every
+  tick, so readers never wait on the GenServer while it is inside a database
+  transaction (its lease renewals can queue behind row locks held by the very
+  callers asking for the session). The GenServer call remains only as the
+  bootstrap fallback before the first publication.
+  """
   def current do
-    GenServer.call(__MODULE__, :current, 5_000)
+    case :ets.lookup(@published_table, :current) do
+      [{:current, :ready, %NodeIncarnation{} = session}] -> {:ok, session}
+      [{:current, phase, _session}] -> {:error, {:coordination_not_ready, phase}}
+      [] -> GenServer.call(__MODULE__, :current, 5_000)
+    end
+  rescue
+    ArgumentError -> {:error, :coordination_session_unavailable}
   catch
     :exit, _ -> {:error, :coordination_session_unavailable}
   end
@@ -111,6 +128,9 @@ defmodule Maraithon.Runtime.Coordination.Session do
       required_workers: Keyword.get(opts, :required_workers, required_workers())
     }
 
+    _ = :ets.new(@published_table, [:named_table, :protected, :set, read_concurrency: true])
+    publish(state)
+
     send(self(), :coordinate)
     {:ok, state}
   end
@@ -128,12 +148,14 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   def handle_call(:prepare_shutdown, _from, state) do
     {reply, state} = drain(state)
+    publish(state)
     {:reply, reply, state}
   end
 
   @impl true
   def handle_info(:coordinate, state) do
     state = coordinate(state)
+    publish(state)
     Process.send_after(self(), :coordinate, state.tick_ms)
     {:noreply, state}
   end
@@ -141,6 +163,15 @@ defmodule Maraithon.Runtime.Coordination.Session do
   @impl true
   def terminate(_reason, state) do
     _ = drain(state)
+    # The protected table dies with this process; readers then fall back to
+    # `{:error, :coordination_session_unavailable}` instead of a stale scope.
+    :ok
+  end
+
+  # Publication is the only cross-process read path for the current scope.
+  # `phase` other than `:ready` publishes as not-ready so callers fail closed.
+  defp publish(%{phase: phase, session: session}) do
+    :ets.insert(@published_table, {:current, phase, session})
     :ok
   end
 

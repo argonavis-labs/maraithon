@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
   alias Ecto.Adapters.SQL
   alias Maraithon.Effects.ProtocolCutover, as: EffectProtocol
   alias Maraithon.Repo
+  alias Maraithon.Runtime.Coordination.StorageVerificationCache
 
   @name "runtime"
   @dark "dark"
@@ -64,7 +65,7 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
 
   def activation_preconditions do
     with :exact <- EffectProtocol.mode(),
-         true <- storage_ready?(),
+         true <- storage_ready_uncached?(),
          {:ok, %{rows: [[0, 0, 0, 0, 0, 0]]}} <- SQL.query(Repo, quiescence_sql(), []) do
       :ok
     else
@@ -92,6 +93,18 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
   def activate(opts \\ [])
 
   def activate(opts) when is_list(opts) do
+    StorageVerificationCache.invalidate()
+
+    try do
+      do_activate(opts)
+    after
+      StorageVerificationCache.invalidate()
+    end
+  end
+
+  def activate(_), do: {:error, :invalid_coordination_activation}
+
+  defp do_activate(opts) do
     with @confirmation <- Keyword.get(opts, :confirmation),
          {:ok, epoch} <- cast_epoch(Keyword.get(opts, :activation_epoch, Ecto.UUID.generate())),
          {:ok, timeout} <- lock_timeout(Keyword.get(opts, :lock_timeout_ms, 15_000)),
@@ -103,8 +116,6 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
       {:error, _} = error -> error
     end
   end
-
-  def activate(_), do: {:error, :invalid_coordination_activation}
 
   @doc "Attests stopped-fleet evidence before the irreversible Effect cutover."
   def attest_effect_activation_evidence(opts) when is_list(opts) do
@@ -436,7 +447,10 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
     else
       case SQL.query!(Repo, quiescence_sql(), []).rows do
         [[0, 0, 0, 0, 0, 0]] ->
-          if(storage_ready?(), do: :ok, else: {:error, :runtime_coordination_storage_not_ready})
+          if(storage_ready_uncached?(),
+            do: :ok,
+            else: {:error, :runtime_coordination_storage_not_ready}
+          )
 
         [[a, b, c, d, e, f]] ->
           {:error, {:runtime_coordination_requires_drain, a, b, c, d, e, f}}
@@ -457,7 +471,17 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
     """
   end
 
+  # Bounded positive cache; see StorageVerificationCache. Activation paths
+  # call storage_ready_uncached?/0 directly.
   defp storage_ready? do
+    StorageVerificationCache.fetch(
+      {__MODULE__, @active},
+      &storage_ready_uncached?/0,
+      &(&1 == true)
+    )
+  end
+
+  defp storage_ready_uncached? do
     case SQL.query(
            Repo,
            """
