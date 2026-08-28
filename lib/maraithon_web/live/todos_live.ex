@@ -1,12 +1,17 @@
 defmodule MaraithonWeb.TodosLive do
   use MaraithonWeb, :live_view
 
-  alias Maraithon.{ActionCards, BriefingSchedules, Projects, SourceLabels, Timezones}
+  alias Maraithon.{BriefingSchedules, Projects, SourceLabels, Timezones}
   alias Maraithon.Todos
-  alias Maraithon.Todos.{DecisionSignals, Todo}
+  alias Maraithon.Todos.{Brief, BriefActions, DecisionSignals, SourceActions, Todo}
   alias MaraithonWeb.TodoActionCopy
 
+  require Logger
+
   @page_limit 200
+  @brief_poll_ms 3_000
+  @brief_max_polls 40
+  @generating_progress "Reading the source"
   @default_filters %{
     "q" => "",
     "status" => "active",
@@ -100,7 +105,18 @@ defmodule MaraithonWeb.TodosLive do
        selected_todo_ids: MapSet.new(),
        selected_todo_id: nil,
        selected_todo: nil,
-       timezone_info: default_timezone_info()
+       timezone_info: default_timezone_info(),
+       brief: nil,
+       brief_state: :idle,
+       brief_todo_id: nil,
+       brief_progress: nil,
+       brief_polls_left: 0,
+       reply_target: nil,
+       reply_target_state: :idle,
+       reply_target_todo_id: nil,
+       reply_form: to_form(%{"subject" => "", "body" => ""}, as: :reply),
+       reply_sending?: false,
+       reply_sent: nil
      )}
   end
 
@@ -124,6 +140,7 @@ defmodule MaraithonWeb.TodosLive do
       |> assign(:filter_form, to_form(filters, as: :filters))
       |> assign(:selected_todo_id, selected_todo_id)
       |> refresh_todos()
+      |> load_brief()
 
     {:noreply, socket}
   end
@@ -375,6 +392,284 @@ defmodule MaraithonWeb.TodosLive do
     {:noreply, put_flash(socket, :error, "Enter a next action before saving.")}
   end
 
+  def handle_event("regenerate_brief", _params, socket) do
+    case socket.assigns.selected_todo do
+      %Todo{} = todo ->
+        {:noreply,
+         socket
+         |> reset_reply_target()
+         |> start_brief_generation(todo, force: true)}
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("update_reply", %{"reply" => params}, socket) do
+    {:noreply, assign(socket, :reply_form, to_form(reply_form_params(params), as: :reply))}
+  end
+
+  def handle_event("send_reply", %{"reply" => params}, socket) do
+    with %Todo{} = todo <- socket.assigns.selected_todo,
+         false <- socket.assigns.reply_sending? do
+      user_id = current_user_id(socket)
+      edits = reply_form_params(params)
+
+      {:noreply,
+       socket
+       |> assign(:reply_form, to_form(edits, as: :reply))
+       |> assign(:reply_sending?, true)
+       |> assign(:reply_target_state, :sending)
+       |> start_async({:send_reply, todo.id}, fn ->
+         BriefActions.send_reply(user_id, todo, edits)
+       end)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("send_reply", _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_async({:todo_brief, todo_id}, result, socket) do
+    if todo_id == socket.assigns.brief_todo_id do
+      handle_brief_result(result, todo_id, socket)
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_async({:send_reply, todo_id}, result, socket) do
+    socket = assign(socket, :reply_sending?, false)
+
+    case socket.assigns.selected_todo do
+      %Todo{id: ^todo_id} ->
+        case result do
+          {:ok, {:ok, %{completed?: completed?, target: target}}} ->
+            {:noreply,
+             socket
+             |> assign(:reply_sent, %{target: target, completed?: completed?})
+             |> assign(:reply_target_state, :sent)
+             |> refresh_todos()
+             |> put_flash(:info, sent_flash(target, completed?))}
+
+          {:ok, {:error, reason}} ->
+            {:noreply,
+             socket
+             |> assign(:reply_target_state, :failed)
+             |> put_flash(:error, send_error_copy(reason))}
+
+          {:exit, reason} ->
+            {:noreply,
+             socket
+             |> assign(:reply_target_state, :failed)
+             |> put_flash(:error, send_error_copy(reason))}
+        end
+
+      _other ->
+        {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info({:todo_brief_progress, todo_id, label}, socket) do
+    if todo_id == socket.assigns.brief_todo_id and socket.assigns.brief_state == :generating do
+      {:noreply, assign(socket, :brief_progress, label)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:todo_brief_poll, todo_id}, socket) do
+    with true <- todo_id == socket.assigns.brief_todo_id,
+         :waiting <- socket.assigns.brief_state,
+         %Todo{} = todo <- Todos.get_for_user(current_user_id(socket), todo_id) do
+      cond do
+        brief = Brief.current(todo) ->
+          {:noreply,
+           socket
+           |> assign(selected_todo: todo, brief: brief, brief_state: :ready, brief_progress: nil)
+           |> seed_reply_form(todo)}
+
+        Brief.generating?(todo) and socket.assigns.brief_polls_left > 0 ->
+          Process.send_after(self(), {:todo_brief_poll, todo_id}, @brief_poll_ms)
+          {:noreply, assign(socket, :brief_polls_left, socket.assigns.brief_polls_left - 1)}
+
+        true ->
+          {:noreply, start_brief_generation(socket, todo, force: true)}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # Loads the current brief for the selected todo, or starts generating one
+  # for open work. Safe to call on every handle_params: a generation already
+  # in flight for the same todo is left alone.
+  defp load_brief(socket) do
+    case socket.assigns.selected_todo do
+      nil ->
+        socket
+        |> assign(brief: nil, brief_state: :idle, brief_todo_id: nil, brief_progress: nil)
+        |> reset_reply_target()
+
+      %Todo{} = todo ->
+        socket =
+          if socket.assigns.brief_todo_id == todo.id, do: socket, else: reset_reply_target(socket)
+
+        cond do
+          socket.assigns.brief_todo_id == todo.id and
+              socket.assigns.brief_state in [:generating, :waiting] ->
+            socket
+
+          brief = Brief.current(todo) ->
+            socket
+            |> assign(
+              brief: brief,
+              brief_state: :ready,
+              brief_todo_id: todo.id,
+              brief_progress: nil
+            )
+            |> seed_reply_form(todo)
+
+          todo.status in ~w(open snoozed) and connected?(socket) ->
+            start_brief_generation(socket, todo, force: false)
+
+          true ->
+            assign(socket,
+              brief: Brief.stored(todo),
+              brief_state: :idle,
+              brief_todo_id: todo.id,
+              brief_progress: nil
+            )
+        end
+    end
+  end
+
+  defp start_brief_generation(socket, %Todo{} = todo, opts) do
+    user_id = current_user_id(socket)
+    parent = self()
+    force? = Keyword.get(opts, :force, false)
+
+    socket
+    |> assign(
+      brief: if(force?, do: nil, else: socket.assigns.brief),
+      brief_state: :generating,
+      brief_todo_id: todo.id,
+      brief_progress: @generating_progress,
+      brief_polls_left: @brief_max_polls
+    )
+    |> start_async({:todo_brief, todo.id}, fn ->
+      Brief.generate_and_store(user_id, todo.id,
+        force: force?,
+        on_progress: fn label -> send(parent, {:todo_brief_progress, todo.id, label}) end
+      )
+    end)
+  end
+
+  defp handle_brief_result({:ok, {:ok, %Todo{} = todo}}, _todo_id, socket) do
+    {:noreply,
+     socket
+     |> refresh_todos()
+     |> assign(
+       brief: Brief.current(todo) || Brief.stored(todo),
+       brief_state: :ready,
+       brief_progress: nil
+     )
+     |> seed_reply_form(todo)}
+  end
+
+  defp handle_brief_result({:ok, {:error, :in_progress}}, todo_id, socket) do
+    Process.send_after(self(), {:todo_brief_poll, todo_id}, @brief_poll_ms)
+
+    {:noreply,
+     assign(socket,
+       brief_state: :waiting,
+       brief_progress: "Finishing a brief already in progress"
+     )}
+  end
+
+  defp handle_brief_result({:ok, {:error, reason}}, todo_id, socket) do
+    Logger.warning("todo brief failed on detail page", todo_id: todo_id, reason: inspect(reason))
+    {:noreply, assign(socket, brief_state: :failed, brief_progress: nil)}
+  end
+
+  defp handle_brief_result({:exit, reason}, todo_id, socket) do
+    Logger.warning("todo brief crashed on detail page", todo_id: todo_id, reason: inspect(reason))
+    {:noreply, assign(socket, brief_state: :failed, brief_progress: nil)}
+  end
+
+  # Seeds the editable reply from the brief. Preparation of the connected
+  # send target is deliberately deferred to the Send click: resolving a Gmail
+  # target writes a real draft into the mailbox, which must not happen just
+  # because the page was opened.
+  defp seed_reply_form(socket, %Todo{} = todo) do
+    case Brief.reply(todo) do
+      nil ->
+        reset_reply_target(socket)
+
+      reply ->
+        socket
+        |> assign(reply_form: reply_form_for(reply), reply_sent: nil)
+        |> assign(
+          reply_target: nil,
+          reply_target_state: if(BriefActions.sendable?(todo), do: :ready, else: :unavailable),
+          reply_target_todo_id: todo.id
+        )
+    end
+  end
+
+  defp reset_reply_target(socket) do
+    assign(socket,
+      reply_target: nil,
+      reply_target_state: :idle,
+      reply_target_todo_id: nil,
+      reply_form: to_form(%{"subject" => "", "body" => ""}, as: :reply),
+      reply_sending?: false,
+      reply_sent: nil
+    )
+  end
+
+  defp reply_form_for(reply) when is_map(reply) do
+    to_form(
+      %{
+        "subject" => Map.get(reply, "subject") || "",
+        "body" => Map.get(reply, "body") || ""
+      },
+      as: :reply
+    )
+  end
+
+  defp reply_form_params(params) when is_map(params) do
+    %{
+      "subject" => params |> Map.get("subject", "") |> to_string(),
+      "body" => params |> Map.get("body", "") |> to_string()
+    }
+  end
+
+  defp reply_form_params(_params), do: %{"subject" => "", "body" => ""}
+
+  defp sent_flash(%{channel: "slack", destination: destination}, completed?) do
+    where = if is_binary(destination), do: " to #{destination}", else: ""
+    "Posted#{where}." <> completion_suffix(completed?)
+  end
+
+  defp sent_flash(%{channel: "gmail", destination: destination}, completed?) do
+    where = if is_binary(destination), do: " to #{destination}", else: ""
+    "Email sent#{where}." <> completion_suffix(completed?)
+  end
+
+  defp sent_flash(_target, completed?), do: "Sent." <> completion_suffix(completed?)
+
+  defp completion_suffix(true), do: " Marked done."
+  defp completion_suffix(false), do: " Kept open for the remaining work."
+
+  defp send_error_copy({:prepared_action_not_executed, _status, error}) when is_binary(error),
+    do: "Could not send: #{error}"
+
+  defp send_error_copy(_reason),
+    do: "Could not send the reply. Copy it and send it from the source instead."
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -385,6 +680,14 @@ defmodule MaraithonWeb.TodosLive do
           filters={@filters}
           project_options={@project_options}
           timezone_info={@timezone_info}
+          brief={@brief}
+          brief_state={@brief_state}
+          brief_progress={@brief_progress}
+          reply_form={@reply_form}
+          reply_target={@reply_target}
+          reply_target_state={@reply_target_state}
+          reply_sending?={@reply_sending?}
+          reply_sent={@reply_sent}
         />
       <% else %>
         <div class="space-y-4">
@@ -817,19 +1120,27 @@ defmodule MaraithonWeb.TodosLive do
   attr :filters, :map, required: true
   attr :project_options, :list, required: true
   attr :timezone_info, :map, required: true
+  attr :brief, :any, default: nil
+  attr :brief_state, :atom, default: :idle
+  attr :brief_progress, :string, default: nil
+  attr :reply_form, :any, required: true
+  attr :reply_target, :any, default: nil
+  attr :reply_target_state, :atom, default: :idle
+  attr :reply_sending?, :boolean, default: false
+  attr :reply_sent, :any, default: nil
 
   defp todo_detail_panel(assigns) do
     can_edit_next_action = todo_next_action_editable?(assigns.todo)
+    source_action = SourceActions.for_todo(assigns.todo) || %{}
 
     assigns =
       assigns
       |> assign(:can_edit_next_action, can_edit_next_action)
       |> assign(:decision_signal?, todo_decision_signal?(assigns.todo))
-      |> assign(:guidance_fields, todo_guidance_fields(assigns.todo))
-      |> assign(
-        :supporting_fields,
-        todo_supporting_fields(assigns.todo, can_edit_next_action, assigns.timezone_info)
-      )
+      |> assign(:facts, todo_fact_rows(assigns.todo, assigns.timezone_info))
+      |> assign(:open_url, Map.get(source_action, "open_url"))
+      |> assign(:open_label, Map.get(source_action, "open_label"))
+      |> assign(:reply, brief_reply(assigns.brief))
       |> assign(
         :next_action_form,
         to_form(%{"next_action" => assigns.todo.next_action || ""}, as: :todo)
@@ -863,69 +1174,26 @@ defmodule MaraithonWeb.TodosLive do
 
       <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_17rem]">
         <div class="space-y-5">
-          <.panel body_class="px-5 py-5">
-            <:header>
-              <div>
-                <h2 class="text-sm/6 font-semibold text-zinc-950">How to solve this</h2>
-                <p class="text-sm/6 text-zinc-500">Start with the next concrete move, then use the supporting evidence below.</p>
-              </div>
-            </:header>
+          <.brief_panel
+            todo={@todo}
+            brief={@brief}
+            brief_state={@brief_state}
+            brief_progress={@brief_progress}
+            timezone_info={@timezone_info}
+          />
 
-            <dl :if={@guidance_fields != []} class="divide-y divide-zinc-950/5">
-              <div :for={field <- @guidance_fields} class="py-3 first:pt-0 last:pb-0">
-                <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
-                <dd class="mt-1 whitespace-pre-wrap break-words text-sm/6 text-zinc-800"><%= field.value %></dd>
-              </div>
-            </dl>
-
-            <p :if={@guidance_fields == []} class="text-sm/6 text-zinc-600">
-              Add a clear next action, or ask Maraithon to work through the todo with you.
-            </p>
-
-            <.form
-              :if={@can_edit_next_action}
-              for={@next_action_form}
-              id={"todo-next-action-form-#{@todo.id}"}
-              phx-submit="save_todo_next_action"
-              phx-value-id={@todo.id}
-              class="mt-5 border-t border-zinc-950/10 pt-4"
-            >
-              <.field label="Next action" for={"todo-next-action-#{@todo.id}"}>
-                <.c_textarea
-                  id={"todo-next-action-#{@todo.id}"}
-                  name={@next_action_form[:next_action].name}
-                  value={@next_action_form[:next_action].value}
-                  rows={3}
-                  maxlength="1000"
-                  required
-                />
-              </.field>
-              <div class="mt-3 flex justify-end">
-                <.button type="submit" variant="outline" class="text-xs" phx-disable-with="Saving...">
-                  Save next action
-                </.button>
-              </div>
-            </.form>
-
-            <div class="mt-5 border-t border-zinc-950/10 pt-4">
-              <.button navigate={~p"/todos/#{@todo.id}/chat"}>Ask Maraithon</.button>
-              <p :if={@todo.agent_action_requires_approval} class="mt-2 text-xs/5 text-zinc-500">
-                Maraithon will ask for confirmation before any external action.
-              </p>
-            </div>
-          </.panel>
-
-          <.panel :if={@supporting_fields != []} body_class="px-5 py-2">
-            <:header>
-              <h2 class="text-sm/6 font-semibold text-zinc-950">Supporting details</h2>
-            </:header>
-            <dl class="divide-y divide-zinc-950/5">
-              <div :for={field <- @supporting_fields} class="py-3">
-                <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
-                <dd class="mt-1 whitespace-pre-wrap break-words text-sm/6 text-zinc-700"><%= field.value %></dd>
-              </div>
-            </dl>
-          </.panel>
+          <.reply_panel
+            :if={@reply}
+            todo={@todo}
+            reply={@reply}
+            reply_form={@reply_form}
+            reply_target={@reply_target}
+            reply_target_state={@reply_target_state}
+            reply_sending?={@reply_sending?}
+            reply_sent={@reply_sent}
+            open_url={@open_url}
+            open_label={@open_label}
+          />
         </div>
 
         <aside class="space-y-4">
@@ -950,14 +1218,12 @@ defmodule MaraithonWeb.TodosLive do
               </form>
             </div>
 
-            <div class="mt-4 border-t border-zinc-950/10 pt-4">
-              <p class="text-xs/5 font-medium text-zinc-500">Who can help</p>
-              <div class="mt-2">
-                <.badge color={agent_actionability_color(@todo.agent_actionability)}>
-                  <%= agent_actionability_label(@todo) %>
-                </.badge>
+            <dl :if={@facts != []} class="mt-4 space-y-3 border-t border-zinc-950/10 pt-4">
+              <div :for={fact <- @facts}>
+                <dt class="text-xs/5 font-medium text-zinc-500"><%= fact.label %></dt>
+                <dd class="text-sm/6 text-zinc-800"><%= fact.value %></dd>
               </div>
-            </div>
+            </dl>
 
             <div :if={@can_edit_next_action} class="mt-4 grid gap-2 border-t border-zinc-950/10 pt-4">
               <.button type="button" phx-click="complete_todo" phx-value-id={@todo.id}>
@@ -972,6 +1238,39 @@ defmodule MaraithonWeb.TodosLive do
                 </.button>
               </div>
             </div>
+
+            <div class="mt-4 border-t border-zinc-950/10 pt-4">
+              <.button navigate={~p"/todos/#{@todo.id}/chat"} variant="outline" class="w-full">
+                Ask Maraithon
+              </.button>
+            </div>
+
+            <details :if={@can_edit_next_action} class="mt-4 border-t border-zinc-950/10 pt-4">
+              <summary class="cursor-pointer list-none text-xs/5 font-medium text-zinc-500 hover:text-zinc-950">
+                Edit next action
+              </summary>
+              <.form
+                for={@next_action_form}
+                id={"todo-next-action-form-#{@todo.id}"}
+                phx-submit="save_todo_next_action"
+                phx-value-id={@todo.id}
+                class="mt-3"
+              >
+                <.c_textarea
+                  id={"todo-next-action-#{@todo.id}"}
+                  name={@next_action_form[:next_action].name}
+                  value={@next_action_form[:next_action].value}
+                  rows={3}
+                  maxlength="1000"
+                  required
+                />
+                <div class="mt-2 flex justify-end">
+                  <.button type="submit" variant="outline" class="text-xs" phx-disable-with="Saving...">
+                    Save next action
+                  </.button>
+                </div>
+              </.form>
+            </details>
           </.panel>
         </aside>
       </div>
@@ -979,47 +1278,337 @@ defmodule MaraithonWeb.TodosLive do
     """
   end
 
-  defp todo_guidance_fields(%Todo{} = todo) do
-    action_card_fields = todo_decision_review_fields(todo)
+  attr :todo, Todo, required: true
+  attr :brief, :any, default: nil
+  attr :brief_state, :atom, required: true
+  attr :brief_progress, :string, default: nil
+  attr :timezone_info, :any, required: true
 
-    primary =
-      action_card_fields
-      |> Enum.filter(
-        &(&1.label in ["Decision", "Recommended move", "Suggested reply", "Prepared action"])
+  defp brief_panel(assigns) do
+    assigns =
+      assigns
+      |> assign(:loading?, assigns.brief_state in [:generating, :waiting])
+      |> assign(
+        :show_brief?,
+        is_map(assigns.brief) and assigns.brief_state not in [:generating, :waiting]
       )
-      |> Enum.map(fn
-        %{label: "Decision"} = field -> %{field | label: "What requires action"}
-        %{label: "Recommended move"} = field -> %{field | label: "Recommended next move"}
-        field -> field
-      end)
+      |> assign(
+        :can_regenerate?,
+        assigns.todo.status in ~w(open snoozed) and
+          assigns.brief_state not in [:generating, :waiting]
+      )
+      |> assign(:fallback_fields, brief_fallback_fields(assigns.todo))
 
-    fallback = [
+    ~H"""
+    <.panel id="todo-brief" body_class="px-5 py-5">
+      <:header>
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <h2 class="text-sm/6 font-semibold text-zinc-950">Brief</h2>
+            <p :if={@loading?} class="flex items-center gap-2 text-sm/6 text-zinc-500">
+              <span class="inline-block size-2 animate-pulse rounded-full bg-zinc-400" aria-hidden="true"></span>
+              <%= @brief_progress || "Reading the source" %>
+            </p>
+            <p :if={@show_brief? and brief_effort_label(@brief)} class="text-sm/6 text-zinc-500">
+              <%= brief_effort_label(@brief) %>
+            </p>
+          </div>
+          <.button
+            :if={@can_regenerate?}
+            type="button"
+            variant="plain"
+            class="text-xs text-zinc-600"
+            phx-click="regenerate_brief"
+          >
+            Regenerate
+          </.button>
+        </div>
+      </:header>
+
+      <div :if={@loading?} class="space-y-3" aria-busy="true">
+        <div class="h-3 w-2/3 animate-pulse rounded bg-zinc-100"></div>
+        <div class="h-3 w-full animate-pulse rounded bg-zinc-100"></div>
+        <div class="h-3 w-5/6 animate-pulse rounded bg-zinc-100"></div>
+        <div class="h-3 w-1/2 animate-pulse rounded bg-zinc-100"></div>
+      </div>
+
+      <.alert :if={@brief_state == :failed} color="amber" class="mb-4">
+        The brief could not be built right now. Try Regenerate, or ask Maraithon.
+      </.alert>
+
+      <div :if={@show_brief?} class="space-y-5">
+        <section :if={@brief["why_it_matters"]}>
+          <h3 class="text-xs/5 font-semibold uppercase tracking-wide text-zinc-500">Why this matters</h3>
+          <p class="mt-1 text-sm/6 text-zinc-800"><%= @brief["why_it_matters"] %></p>
+        </section>
+
+        <section :if={@brief["situation"]}>
+          <h3 class="text-xs/5 font-semibold uppercase tracking-wide text-zinc-500">The situation</h3>
+          <p class="mt-1 whitespace-pre-line text-sm/6 text-zinc-800"><%= @brief["situation"] %></p>
+        </section>
+
+        <section :if={@brief["recommendation"] || brief_list(@brief, "steps") != []}>
+          <h3 class="text-xs/5 font-semibold uppercase tracking-wide text-zinc-500">Do this</h3>
+          <p :if={@brief["recommendation"]} class="mt-1 text-sm/6 font-medium text-zinc-950">
+            <%= @brief["recommendation"] %>
+          </p>
+          <ol
+            :if={brief_list(@brief, "steps") != []}
+            class="mt-2 list-decimal space-y-1.5 pl-5 text-sm/6 text-zinc-800 marker:text-zinc-400"
+          >
+            <li :for={step <- brief_list(@brief, "steps")}><%= step %></li>
+          </ol>
+        </section>
+
+        <section :if={brief_list(@brief, "open_questions") != []}>
+          <h3 class="text-xs/5 font-semibold uppercase tracking-wide text-zinc-500">Your call</h3>
+          <ul class="mt-1 list-disc space-y-1 pl-5 text-sm/6 text-zinc-800 marker:text-zinc-400">
+            <li :for={question <- brief_list(@brief, "open_questions")}><%= question %></li>
+          </ul>
+        </section>
+
+        <p :if={brief_generated_label(@brief, @timezone_info)} class="border-t border-zinc-950/10 pt-3 text-xs/5 text-zinc-400">
+          <%= brief_generated_label(@brief, @timezone_info) %>
+        </p>
+      </div>
+
+      <dl :if={not @show_brief? and not @loading? and @fallback_fields != []} class="divide-y divide-zinc-950/5">
+        <div :for={field <- @fallback_fields} class="py-3 first:pt-0 last:pb-0">
+          <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
+          <dd class="mt-1 whitespace-pre-wrap break-words text-sm/6 text-zinc-800"><%= field.value %></dd>
+        </div>
+      </dl>
+    </.panel>
+    """
+  end
+
+  attr :todo, Todo, required: true
+  attr :reply, :map, required: true
+  attr :reply_form, :any, required: true
+  attr :reply_target, :any, default: nil
+  attr :reply_target_state, :atom, required: true
+  attr :reply_sending?, :boolean, default: false
+  attr :reply_sent, :any, default: nil
+  attr :open_url, :string, default: nil
+  attr :open_label, :string, default: nil
+
+  defp reply_panel(assigns) do
+    assigns =
+      assigns
+      |> assign(:heading, reply_heading(assigns.reply, assigns.todo))
+      |> assign(:subheading, reply_subheading(assigns.reply, assigns.reply_target))
+      |> assign(:provider_label, reply_provider_label(assigns.reply))
+      |> assign(:gmail?, assigns.reply["channel"] == "gmail")
+      |> assign(:send_label, BriefActions.send_label(assigns.reply["channel"]))
+
+    ~H"""
+    <.panel id="todo-reply" body_class="px-5 py-5">
+      <:header>
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <h2 class="text-sm/6 font-semibold text-zinc-950"><%= @heading %></h2>
+            <p :if={@subheading} class="text-sm/6 text-zinc-500"><%= @subheading %></p>
+          </div>
+          <.badge :if={@reply_target_state == :ready} color="emerald">Ready to send</.badge>
+          <.badge :if={@reply_target_state == :sent} color="blue">Sent</.badge>
+        </div>
+      </:header>
+
+      <.alert :if={@reply_sent} color="emerald">
+        <%= reply_sent_copy(@reply_sent) %>
+      </.alert>
+
+      <.form
+        :if={is_nil(@reply_sent)}
+        for={@reply_form}
+        id="todo-reply-form"
+        phx-change="update_reply"
+        phx-submit="send_reply"
+        class="space-y-4"
+      >
+        <.field :if={@gmail?} label="Subject" for="todo-reply-subject">
+          <.c_input
+            id="todo-reply-subject"
+            name={@reply_form[:subject].name}
+            value={@reply_form[:subject].value}
+            maxlength="255"
+          />
+        </.field>
+
+        <.field label="Message" for="todo-reply-body">
+          <.c_textarea
+            id="todo-reply-body"
+            name={@reply_form[:body].name}
+            value={@reply_form[:body].value}
+            rows={if(@gmail?, do: 10, else: 6)}
+            maxlength="8000"
+            required
+          />
+        </.field>
+
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <p
+            :if={@reply_sending?}
+            class="mr-auto flex items-center gap-2 text-xs/5 text-zinc-500"
+          >
+            <span class="inline-block size-2 animate-pulse rounded-full bg-zinc-400" aria-hidden="true"></span>
+            Sending through <%= @provider_label %>
+          </p>
+          <p :if={@reply_target_state == :unavailable} class="mr-auto text-xs/5 text-zinc-500">
+            Direct send is not available here. Copy it and send from <%= @provider_label %>.
+          </p>
+          <.button
+            type="button"
+            variant="outline"
+            id="todo-reply-copy"
+            phx-hook=".CopyReply"
+            data-copy-target="todo-reply-body"
+          >
+            Copy
+          </.button>
+          <.button :if={@open_url} href={@open_url} target="_blank" rel="noopener" variant="outline">
+            <%= @open_label || "Open source" %>
+          </.button>
+          <.button
+            :if={@reply_target_state in [:ready, :sending, :failed]}
+            type="submit"
+            disabled={@reply_sending?}
+            phx-disable-with="Sending..."
+          >
+            <%= @send_label %>
+          </.button>
+        </div>
+      </.form>
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyReply">
+        export default {
+          mounted() {
+            this.el.addEventListener("click", () => {
+              const target = document.getElementById(this.el.dataset.copyTarget)
+              if (!target) return
+              const text = target.value || target.textContent || ""
+              const done = () => {
+                const original = this.el.textContent
+                this.el.textContent = "Copied"
+                setTimeout(() => { this.el.textContent = original }, 1500)
+              }
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(done).catch(() => {})
+              } else {
+                target.select()
+                document.execCommand("copy")
+                done()
+              }
+            })
+          }
+        }
+      </script>
+    </.panel>
+    """
+  end
+
+  defp brief_reply(%{"reply" => %{"body" => body} = reply}) when is_binary(body) and body != "",
+    do: reply
+
+  defp brief_reply(_brief), do: nil
+
+  defp brief_list(brief, key) when is_map(brief) do
+    case Map.get(brief, key) do
+      values when is_list(values) -> Enum.filter(values, &is_binary/1)
+      _ -> []
+    end
+  end
+
+  defp brief_list(_brief, _key), do: []
+
+  defp brief_effort_label(%{"effort" => "under_2_min"}), do: "Under 2 minutes"
+  defp brief_effort_label(%{"effort" => "under_15_min"}), do: "Under 15 minutes"
+  defp brief_effort_label(%{"effort" => "longer"}), do: "Needs a focused block"
+  defp brief_effort_label(_brief), do: nil
+
+  defp brief_generated_label(%{"generated_at" => iso} = brief, timezone_info)
+       when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, at, _offset} ->
+        model = Map.get(brief, "model")
+        base = "Generated #{format_datetime(at, nil, timezone_info)}"
+        if is_binary(model) and model != "", do: base <> " with " <> model, else: base
+
+      _ ->
+        nil
+    end
+  end
+
+  defp brief_generated_label(_brief, _timezone_info), do: nil
+
+  defp brief_fallback_fields(%Todo{} = todo) do
+    [
       %{label: "Next action", value: todo.next_action},
       %{label: "Action plan", value: todo.action_plan}
     ]
-
-    (primary ++ fallback)
     |> Enum.reject(&blank?(&1.value))
-    |> Enum.uniq_by(& &1.value)
-    |> Enum.take(6)
   end
 
-  defp todo_supporting_fields(%Todo{} = todo, next_action_editable?, timezone_info) do
-    context =
-      todo
-      |> todo_decision_review_fields()
-      |> Enum.reject(
-        &(&1.label in ["Decision", "Recommended move", "Suggested reply", "Prepared action"])
-      )
+  defp reply_heading(reply, %Todo{} = todo) do
+    name =
+      [Map.get(reply, "to"), todo.counterparty_label]
+      |> Enum.find(&present?/1)
+      |> reply_display_name()
 
-    details =
-      todo
-      |> todo_detail_fields(next_action_editable?, timezone_info)
-      |> Enum.reject(&(&1.label in ["Next action", "Action plan", "Summary"]))
+    if name, do: "Reply to #{name}", else: "Reply"
+  end
 
-    (context ++ details)
+  defp reply_display_name(nil), do: nil
+
+  defp reply_display_name(value) when is_binary(value) do
+    value
+    |> String.replace(~r/<[^>]+>/, "")
+    |> String.trim()
+    |> case do
+      "" -> nil
+      name -> name
+    end
+  end
+
+  defp reply_subheading(reply, target) do
+    provider = reply_provider_label(reply)
+
+    destination =
+      case target do
+        %{destination: destination} when is_binary(destination) -> destination
+        _ -> nil
+      end
+
+    [provider, destination]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, " · ")
+    end
+  end
+
+  defp reply_provider_label(%{"channel" => "gmail"}), do: "Email"
+  defp reply_provider_label(%{"channel" => "slack"}), do: "Slack"
+  defp reply_provider_label(%{"channel" => "imessage"}), do: "Messages"
+  defp reply_provider_label(%{"channel" => "whatsapp"}), do: "WhatsApp"
+  defp reply_provider_label(_reply), do: "the source"
+
+  defp reply_sent_copy(%{target: target, completed?: completed?}) do
+    sent_flash(target, completed?)
+  end
+
+  defp reply_sent_copy(_sent), do: "Sent."
+
+  defp todo_fact_rows(%Todo{} = todo, timezone_info) do
+    [
+      %{label: "Source", value: todo_source_label(todo.source)},
+      %{label: "Account", value: todo_source_account_value(todo)},
+      %{label: "Suggested project", value: todo_project_suggestion(todo)},
+      %{label: "Due", value: format_datetime(todo.due_at, nil, timezone_info)},
+      %{label: "Snoozed until", value: format_datetime(todo.snoozed_until, nil, timezone_info)},
+      %{label: "Updated", value: format_datetime(todo.updated_at, nil, timezone_info)}
+    ]
     |> Enum.reject(&blank?(&1.value))
-    |> Enum.uniq_by(fn field -> {field.label, field.value} end)
   end
 
   defp todo_next_action_editable?(%Todo{status: status}), do: status in ~w(open snoozed)
@@ -1446,72 +2035,6 @@ defmodule MaraithonWeb.TodosLive do
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" ")
   end
-
-  defp todo_detail_fields(%Todo{} = todo, next_action_editable?, timezone_info) do
-    [
-      %{label: "Source", value: todo_source_label(todo.source)},
-      %{label: "Account", value: todo_source_account_value(todo)},
-      %{label: "Suggested project", value: todo_project_suggestion(todo)},
-      %{label: "Summary", value: todo.summary},
-      %{label: "Next action", value: if(next_action_editable?, do: nil, else: todo.next_action)},
-      %{label: "Due", value: format_datetime(todo.due_at, nil, timezone_info)},
-      %{label: "Snoozed until", value: format_datetime(todo.snoozed_until, nil, timezone_info)},
-      %{label: "Updated", value: format_datetime(todo.updated_at, nil, timezone_info)},
-      %{label: "Notes", value: todo.notes},
-      %{label: "Action plan", value: todo.action_plan}
-    ]
-    |> Enum.reject(fn field -> blank?(field.value) end)
-  end
-
-  # Context renders for every open todo, not only decision-flagged ones —
-  # the detail panel is the web counterpart of the mobile work-item view.
-  defp todo_decision_review_fields(%Todo{} = todo) do
-    if todo.status in ["open", "snoozed"] or todo_decision_signal?(todo) do
-      card = ActionCards.for_todo(todo, include_disconnected: true)
-      context = Map.get(card, "context_pack") || %{}
-
-      core_fields = [
-        %{label: "Decision", value: Map.get(card, "decision_prompt")},
-        %{label: "Recommended move", value: Map.get(card, "next_best_action")},
-        %{label: "Suggested reply", value: ActionCards.draft_preview(card)},
-        %{label: "Why now", value: Map.get(card, "why_now")},
-        %{label: "What this is based on", value: ActionCards.evidence_excerpt(card)},
-        %{
-          label: "Sources checked",
-          value: ActionCards.source_health_note(card) || todo_source_check_value(todo)
-        },
-        %{label: "Prepared action", value: ActionCards.prepared_action_hint(card)},
-        %{label: "Person and thread", value: Map.get(context, "summary")}
-      ]
-
-      context_fields =
-        card
-        |> ActionCards.context_items()
-        |> Enum.map(fn item -> %{label: item.label, value: item.value} end)
-
-      (core_fields ++ context_fields)
-      |> Enum.map(fn field -> %{field | value: normalize_context_value(field.value)} end)
-      |> Enum.reject(fn field -> blank?(field.value) end)
-      |> Enum.uniq_by(fn field -> {field.label, field.value} end)
-      |> Enum.take(10)
-    else
-      []
-    end
-  end
-
-  defp todo_source_check_value(%Todo{source: source}) do
-    case todo_source_label(source) do
-      nil -> nil
-      "" -> nil
-      label -> "Used #{label}."
-    end
-  end
-
-  defp normalize_context_value(value) when is_binary(value), do: normalize_text(value)
-  defp normalize_context_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp normalize_context_value(value) when is_float(value), do: Float.to_string(value)
-  defp normalize_context_value(value) when is_boolean(value), do: to_string(value)
-  defp normalize_context_value(_value), do: nil
 
   defp todo_project_suggestion(%Todo{metadata: metadata}) when is_map(metadata) do
     case fetch_map_value(metadata, "project_suggestion") do

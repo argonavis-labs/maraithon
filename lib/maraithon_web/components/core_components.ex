@@ -136,7 +136,7 @@ defmodule MaraithonWeb.CoreComponents do
   attr :color, :string, default: "dark"
   attr :disabled, :boolean, default: false
   attr :class, :string, default: nil
-  attr :rest, :global
+  attr :rest, :global, include: ~w(target rel download form)
   slot :inner_block, required: true
 
   def button(assigns) do

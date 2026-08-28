@@ -45,14 +45,23 @@ defmodule Maraithon.AssistantChat do
     end
   end
 
-  def get_or_create_todo_thread(user_id, todo_id)
-      when is_binary(user_id) and is_binary(todo_id) do
+  @doc """
+  Finds or creates the mobile chat thread linked to a todo and primes it.
+
+  Options are passed to `TodoThreadPrimer.ensure/3`; web callers use
+  `prepare_timeout_ms` to give Gmail/Slack target resolution more room than
+  the mobile default.
+  """
+  def get_or_create_todo_thread(user_id, todo_id, opts \\ [])
+
+  def get_or_create_todo_thread(user_id, todo_id, opts)
+      when is_binary(user_id) and is_binary(todo_id) and is_list(opts) do
     with :ok <- WriteFence.check_user(user_id) do
-      do_get_or_create_todo_thread(user_id, todo_id)
+      do_get_or_create_todo_thread(user_id, todo_id, opts)
     end
   end
 
-  defp do_get_or_create_todo_thread(user_id, todo_id) do
+  defp do_get_or_create_todo_thread(user_id, todo_id, opts) do
     case Todos.get_for_user(user_id, todo_id) do
       nil ->
         {:error, :not_found}
@@ -65,7 +74,7 @@ defmodule Maraithon.AssistantChat do
             conversation
             |> TelegramConversations.update_metadata(metadata)
             |> case do
-              {:ok, updated_conversation} -> prime_todo_thread(updated_conversation, todo)
+              {:ok, updated_conversation} -> prime_todo_thread(updated_conversation, todo, opts)
               {:error, reason} -> {:error, reason}
             end
 
@@ -79,11 +88,11 @@ defmodule Maraithon.AssistantChat do
 
             case TelegramConversations.create_mobile_thread(user_id, attrs) do
               {:ok, conversation} ->
-                prime_todo_thread(conversation, todo)
+                prime_todo_thread(conversation, todo, opts)
 
               {:error, _changeset} ->
                 case TelegramConversations.get_mobile_thread_for_todo(user_id, todo.id) do
-                  %Conversation{} = conversation -> prime_todo_thread(conversation, todo)
+                  %Conversation{} = conversation -> prime_todo_thread(conversation, todo, opts)
                   nil -> {:error, :thread_create_failed}
                 end
             end
@@ -831,8 +840,8 @@ defmodule Maraithon.AssistantChat do
     }
   end
 
-  defp prime_todo_thread(%Conversation{} = conversation, todo) do
-    with {:ok, primed_conversation} <- TodoThreadPrimer.ensure(conversation, todo) do
+  defp prime_todo_thread(%Conversation{} = conversation, todo, opts) do
+    with {:ok, primed_conversation} <- TodoThreadPrimer.ensure(conversation, todo, opts) do
       {:ok, reload_thread(primed_conversation)}
     end
   end

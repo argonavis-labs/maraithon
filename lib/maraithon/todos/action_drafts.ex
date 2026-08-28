@@ -10,14 +10,44 @@ defmodule Maraithon.Todos.ActionDrafts do
   def ensure(attrs, existing \\ nil)
 
   def ensure(attrs, existing) when is_map(attrs) do
-    if action_draft_present?(read_value(attrs, "action_draft") || read_value(attrs, "draft")) do
-      attrs
-    else
-      put_value(attrs, "action_draft", next_step_draft(attrs, existing))
+    cond do
+      action_draft_present?(read_value(attrs, "action_draft") || read_value(attrs, "draft")) ->
+        attrs
+
+      # A partial update (project change, note edit) must never replace real
+      # draft material the todo already carries with a placeholder next step.
+      real_draft?(existing_action_draft(existing)) ->
+        attrs
+
+      true ->
+        put_value(attrs, "action_draft", next_step_draft(attrs, existing))
     end
   end
 
   def ensure(attrs, _existing), do: attrs
+
+  @doc """
+  True when the draft is a synthesized "next step" placeholder rather than
+  prepared reply material.
+  """
+  def placeholder?(draft) when is_map(draft) do
+    read_string(draft, "kind") == "next_step" or
+      read_string(draft, "source") == "todo_write_boundary"
+  end
+
+  def placeholder?(_draft), do: false
+
+  @doc """
+  True when the draft carries real prepared material (not a placeholder).
+  """
+  def real_draft?(draft) when is_map(draft),
+    do: action_draft_present?(draft) and not placeholder?(draft)
+
+  def real_draft?(_draft), do: false
+
+  defp existing_action_draft(%{action_draft: draft}) when is_map(draft), do: draft
+  defp existing_action_draft(%{"action_draft" => draft}) when is_map(draft), do: draft
+  defp existing_action_draft(_existing), do: nil
 
   def preview(%{} = draft) do
     [

@@ -79,6 +79,32 @@ defmodule Maraithon.LLM do
   end
 
   @doc """
+  Get the brief-tier model: the highest-intelligence option, used for
+  per-todo chief-of-staff briefs. Falls back to `model/0` when unset.
+  """
+  def brief_model do
+    runtime_config()
+    |> Keyword.get(:llm_brief_model)
+    |> case do
+      nil -> model()
+      "" -> model()
+      other -> other
+    end
+  end
+
+  @doc """
+  Reasoning effort for brief-tier calls. Defaults to "xhigh".
+  """
+  def brief_reasoning_effort do
+    runtime_config()
+    |> Keyword.get(:llm_brief_reasoning_effort)
+    |> case do
+      value when value in [nil, ""] -> "xhigh"
+      value -> value
+    end
+  end
+
+  @doc """
   Get the active reasoning/intelligence setting for model calls.
   """
   def intelligence do
@@ -193,6 +219,45 @@ defmodule Maraithon.LLM do
     cond do
       is_map_key(params, "model") -> complete(params)
       true -> complete(Map.put(params, "model", chat_model()))
+    end
+  end
+
+  @doc """
+  Complete a request on the brief tier: the highest-intelligence model at
+  brief reasoning effort. Used for per-todo chief-of-staff briefs where depth
+  matters more than latency.
+
+  If the brief model rejects the request (unknown model, unsupported
+  reasoning effort), the call retries once on the primary model at "high"
+  so a misconfigured tier degrades to a good answer instead of an error.
+  """
+  def complete_brief(params) when is_map(params) do
+    primary = model()
+    brief = brief_model()
+
+    brief_params =
+      params
+      |> Map.put_new("model", brief)
+      |> Map.put_new("reasoning_effort", brief_reasoning_effort())
+
+    case complete(brief_params) do
+      {:ok, _response} = ok ->
+        ok
+
+      {:error, _reason} = error ->
+        if brief_params["model"] == primary and brief_params["reasoning_effort"] == "high" do
+          error
+        else
+          fallback_params =
+            params
+            |> Map.put("model", primary)
+            |> Map.put("reasoning_effort", "high")
+
+          case complete(fallback_params) do
+            {:ok, _response} = ok -> ok
+            {:error, _fallback_reason} -> error
+          end
+        end
     end
   end
 

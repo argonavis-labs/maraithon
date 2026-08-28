@@ -422,6 +422,30 @@ llm_api_key =
     _ -> nil
   end
 
+# Brief tier: the highest-intelligence model available, used for per-todo
+# chief-of-staff briefs (why it matters, the situation, the ready-to-send
+# reply). Provider-specific `<PROVIDER>_BRIEF_MODEL` wins, then the generic
+# `LLM_BRIEF_MODEL`; unset means the primary model at brief reasoning effort.
+llm_brief_model =
+  [
+    case llm_provider_name do
+      "anthropic" -> System.get_env("ANTHROPIC_BRIEF_MODEL", "")
+      "openai" -> System.get_env("OPENAI_BRIEF_MODEL", "")
+      "openrouter" -> System.get_env("OPENROUTER_BRIEF_MODEL", "")
+      "mock" -> "mock-v1"
+      _ -> ""
+    end,
+    System.get_env("LLM_BRIEF_MODEL", "")
+  ]
+  |> Enum.map(&String.trim/1)
+  |> Enum.find(&(&1 != ""))
+
+llm_brief_reasoning_effort =
+  case System.get_env("LLM_BRIEF_REASONING_EFFORT", "xhigh") |> String.trim() do
+    "" -> "xhigh"
+    value -> value
+  end
+
 config :maraithon, :openrouter,
   base_url:
     System.get_env(
@@ -497,6 +521,8 @@ config :maraithon, Maraithon.Runtime,
   llm_routing_model: llm_routing_model,
   llm_chat_model: llm_chat_model,
   llm_fast_model: llm_fast_model,
+  llm_brief_model: llm_brief_model,
+  llm_brief_reasoning_effort: llm_brief_reasoning_effort,
   llm_api_key: llm_api_key,
   anthropic_api_key: anthropic_api_key,
   anthropic_model: anthropic_model,

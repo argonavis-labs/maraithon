@@ -167,7 +167,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     [todo] = Todos.list_for_user(@user_email, source: "manual", limit: 5)
 
-    assert_patch(view, "/todos?todo_id=#{todo.id}")
+    assert_patch(view, "/todos/#{todo.id}")
 
     html = render(view)
     assert html =~ "Added follow-up."
@@ -435,25 +435,26 @@ defmodule MaraithonWeb.TodosLiveTest do
       |> element("#todo-#{decision.id}")
       |> render_click()
 
-    assert_patch(view, "/todos?attention=decision&todo_id=#{decision.id}")
-    assert detail_html =~ "Decision to make"
-    assert detail_html =~ "Recommended move"
-    assert detail_html =~ "Why now"
-    assert detail_html =~ "What this is based on"
-    assert detail_html =~ "Sources checked"
-    assert String.match?(detail_html, ~r/Decision to make.*Next action/s)
+    assert_patch(view, "/todos/#{decision.id}?attention=decision")
+    assert detail_html =~ "Approve investor reply"
+    assert detail_html =~ "Brief"
+    refute detail_html =~ "Decision to make"
+    refute detail_html =~ "Sources checked"
+    refute detail_html =~ "Supporting details"
     refute detail_html =~ "Decision ready for review"
-    refute detail_html =~ "Source evidence"
-    assert detail_html =~ "Choose the next move with Jordan Lee."
-    assert detail_html =~ "Send the revised terms and confirm the review window."
-    assert detail_html =~ "Jordan is waiting on your approval."
-    assert detail_html =~ "Can you approve the revised terms?"
-    assert detail_html =~ "Used Gmail."
-    refute detail_html =~ "Decision context"
     refute detail_html =~ "Handle this now, snooze it, or dismiss it."
+
+    # The brief is generated asynchronously on the brief model tier.
+    brief_html = render_async(view, 10_000)
+    assert brief_html =~ "Why this matters"
+    assert brief_html =~ "Mock Person is blocked on this and it is due today."
+    assert brief_html =~ "Do this"
+    assert brief_html =~ "Send the reply below and mark it done."
+    assert brief_html =~ "Reply to"
+    assert brief_html =~ "Thanks for the nudge"
   end
 
-  test "detail panel discloses missing Mac companion context for personal logistics", %{
+  test "detail panel keeps source-health internals off the page", %{
     conn: conn
   } do
     assert {:ok, [todo]} =
@@ -485,12 +486,13 @@ defmodule MaraithonWeb.TodosLiveTest do
       |> element("#todo-detail")
       |> render()
 
-    assert detail_html =~ "Sources checked"
-    assert detail_html =~ "Used Gmail."
-    assert detail_html =~ "Mac companion context was not available"
-    assert detail_html =~ "Open the Mac companion to refresh it."
+    assert detail_html =~ "Confirm Tuesday pickup with school"
+    assert detail_html =~ "Source"
+    assert detail_html =~ "Gmail"
+    refute detail_html =~ "Sources checked"
     refute detail_html =~ "source_health"
     refute detail_html =~ "desktop: not connected"
+    refute detail_html =~ "school logistics"
   end
 
   test "source filter includes local companion sources", %{conn: conn} do
@@ -724,33 +726,47 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert has_element?(view, "#todo-detail")
     assert detail_html =~ "Review detail work item"
     assert detail_html =~ "This work item should show a fuller detail view."
-    assert detail_html =~ "Open the thread and reply."
-    assert detail_html =~ "Keep the answer short."
-    assert detail_html =~ "Decision to make"
-    assert detail_html =~ "Choose the next move with Michael Berlingo."
-    assert detail_html =~ "Recommended move"
-    assert detail_html =~ "Why now"
-    assert detail_html =~ "What this is based on"
-    assert detail_html =~ "Sources checked"
+    assert detail_html =~ "Brief"
     assert detail_html =~ @user_email
-    assert detail_html =~ "Starteryou campaign reply"
-    assert detail_html =~ "Michael is waiting on the campaign decision."
-    assert detail_html =~ "Michael Berlingo"
-    assert detail_html =~ "Starteryou"
-    assert detail_html =~ "The customer asked for a status, owner, and ETA."
-    assert detail_html =~ "Used Gmail."
+    assert detail_html =~ "Back to todos"
+    assert detail_html =~ "Ask Maraithon"
+    assert detail_html =~ "Mark done"
+    assert has_element?(view, "#todo-next-action-form-#{todo.id}")
+    refute detail_html =~ "Decision to make"
+    refute detail_html =~ "Recommended move"
+    refute detail_html =~ "Sources checked"
+    refute detail_html =~ "Supporting details"
     refute detail_html =~ "Source metadata"
     refute detail_html =~ "Decision context"
     refute detail_html =~ "Decision ready for review"
     refute detail_html =~ "Source evidence"
     refute detail_html =~ "Archive-only implementation detail"
     refute detail_html =~ "Resolution note"
-    refute detail_html =~ "Why it matters"
     refute detail_html =~ "thread-123"
     refute detail_html =~ "insight-secret"
     refute detail_html =~ "confidence"
     refute detail_html =~ "Model score"
     refute detail_html =~ "secret-token"
+
+    brief_html = render_async(view, 10_000)
+    assert brief_html =~ "Why this matters"
+    assert brief_html =~ "The situation"
+    assert brief_html =~ "Do this"
+    assert brief_html =~ "Open the source thread and confirm nothing changed."
+    assert brief_html =~ "Under 2 minutes"
+    assert brief_html =~ "Reply to"
+    assert brief_html =~ "Subject"
+    assert brief_html =~ "Re: Mock thread"
+    assert brief_html =~ "Thanks for the nudge"
+    assert brief_html =~ "Copy"
+    assert brief_html =~ "Open in Gmail"
+    # The Gmail deep link intentionally carries the thread id, the same way
+    # the mobile source_action does. Internal scoring fields still must not
+    # reach the page.
+    assert brief_html =~ "mail.google.com/mail/u/0/#all/thread-123"
+    refute brief_html =~ "secret-token"
+
+    assert Todos.get_for_user(@user_email, todo.id).action_draft["style"] == "ready_to_send"
 
     {:ok, click_view, _html} = live(conn, "/todos")
 
@@ -758,7 +774,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     |> element("#todo-#{todo.id}")
     |> render_click()
 
-    assert_patch(click_view, "/todos?todo_id=#{todo.id}")
+    assert_patch(click_view, "/todos/#{todo.id}")
     assert render(click_view) =~ "Review detail work item"
   end
 

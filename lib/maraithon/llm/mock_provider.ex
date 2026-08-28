@@ -40,6 +40,9 @@ defmodule Maraithon.LLM.MockProvider do
       String.contains?(prompt, Maraithon.Todos.Intelligence.sentinel()) ->
         todo_intelligence_response(prompt)
 
+      String.contains?(prompt, Maraithon.Todos.Brief.sentinel()) ->
+        todo_brief_response(prompt)
+
       String.contains?(prompt, Maraithon.Todos.OutcomeLearner.sentinel()) ->
         todo_outcome_learning_response()
 
@@ -79,6 +82,50 @@ defmodule Maraithon.LLM.MockProvider do
         Share the decision, source material, or action you want Maraithon to handle, and I'll turn it into a concise next step.
         """
     end
+  end
+
+  defp todo_brief_response(prompt) do
+    channel =
+      cond do
+        String.contains?(prompt, "REPLY CHANNEL:\nslack") -> "slack"
+        String.contains?(prompt, "REPLY CHANNEL:\ngmail") -> "gmail"
+        true -> nil
+      end
+
+    reply =
+      case channel do
+        "slack" ->
+          %{
+            "channel" => "slack",
+            "to" => "Mock Person",
+            "subject" => nil,
+            "body" => "On it. I will have this to you by end of day.",
+            "resolves_todo" => true
+          }
+
+        "gmail" ->
+          %{
+            "channel" => "gmail",
+            "to" => "mock.person@example.com",
+            "subject" => "Re: Mock thread",
+            "body" =>
+              "Hi,\n\nThanks for the nudge. I will have this to you by end of day.\n\nKent",
+            "resolves_todo" => true
+          }
+
+        nil ->
+          nil
+      end
+
+    Jason.encode!(%{
+      "why_it_matters" => "Mock Person is blocked on this and it is due today.",
+      "situation" => "Mock Person asked for this in the source thread and has not heard back.",
+      "recommendation" => "Send the reply below and mark it done.",
+      "steps" => ["Open the source thread and confirm nothing changed."],
+      "reply" => reply,
+      "open_questions" => [],
+      "effort" => "under_2_min"
+    })
   end
 
   defp todo_intelligence_response(prompt) do

@@ -18,6 +18,7 @@ defmodule Maraithon.Todos do
     ActionDrafts,
     ActivityEvent,
     AttentionRanker,
+    Brief,
     CounterpartyResolver,
     DecisionSignals,
     Intelligence,
@@ -496,6 +497,77 @@ defmodule Maraithon.Todos do
   end
 
   def update_for_user(_user_id, _todo_id, _attrs, _opts), do: {:error, :not_found}
+
+  @doc """
+  Merges top-level keys into the todo's metadata with a direct write. This
+  skips the full update pipeline (insight sync, embedding refresh, outcome
+  learning), so it is only for bookkeeping keys such as brief leases.
+  """
+  def merge_metadata(user_id, todo_id, metadata)
+      when is_binary(user_id) and is_binary(todo_id) and is_map(metadata) do
+    Repo.transaction(fn ->
+      case get_todo_for_update(user_id, todo_id) do
+        %Todo{} = todo ->
+          merged = Map.merge(todo.metadata || %{}, stringify_top_level_keys(metadata))
+
+          case todo |> Todo.changeset(%{metadata: merged}) |> Repo.update() do
+            {:ok, updated} -> updated
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        nil ->
+          Repo.rollback(:not_found)
+      end
+    end)
+    |> case do
+      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def merge_metadata(_user_id, _todo_id, _metadata), do: {:error, :not_found}
+
+  @doc """
+  Stores a generated chief-of-staff brief on the todo and, when the brief
+  includes a reply, replaces the todo's `action_draft` with it. Clears any
+  generation lease. Uses a direct write because the todo's own copy (title,
+  summary, next action) does not change.
+  """
+  def put_brief(user_id, todo_id, brief, action_draft)
+      when is_binary(user_id) and is_binary(todo_id) and is_map(brief) do
+    Repo.transaction(fn ->
+      case get_todo_for_update(user_id, todo_id) do
+        %Todo{} = todo ->
+          metadata =
+            (todo.metadata || %{})
+            |> Map.put(Brief.metadata_key(), brief)
+            |> Map.delete("brief_generation")
+
+          changes =
+            %{metadata: metadata}
+            |> maybe_put_action_draft(action_draft)
+
+          case todo |> Todo.changeset(changes) |> Repo.update() do
+            {:ok, updated} -> updated
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        nil ->
+          Repo.rollback(:not_found)
+      end
+    end)
+    |> case do
+      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def put_brief(_user_id, _todo_id, _brief, _action_draft), do: {:error, :not_found}
+
+  defp maybe_put_action_draft(changes, %{} = draft) when map_size(draft) > 0,
+    do: Map.put(changes, :action_draft, draft)
+
+  defp maybe_put_action_draft(changes, _draft), do: changes
 
   def annotate_scope(user_id, todo_id, attrs \\ [])
 

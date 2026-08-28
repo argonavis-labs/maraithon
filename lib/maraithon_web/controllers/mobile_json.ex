@@ -10,6 +10,7 @@ defmodule MaraithonWeb.MobileJSON do
   alias Maraithon.Goals
   alias Maraithon.Goals.{Goal, GoalLink, ProgressUpdate, ReviewRun}
   alias Maraithon.Todos.{ActivityEvent, PublicMetadata, SourceActions, Todo, UserFacingCopy}
+  alias Maraithon.Todos.Brief, as: TodoBrief
   alias MaraithonWeb.ApiErrorCopy
 
   def user(%User{} = user, %UserSession{} = session) do
@@ -53,6 +54,7 @@ defmodule MaraithonWeb.MobileJSON do
       closed_at: json_value(todo.closed_at),
       source_occurred_at: json_value(todo.source_occurred_at),
       metadata: public_todo_metadata(todo.metadata || %{}),
+      brief: TodoBrief.public(todo),
       related_people: related_people(todo, opts),
       inserted_at: json_value(todo.inserted_at),
       updated_at: json_value(todo.updated_at)

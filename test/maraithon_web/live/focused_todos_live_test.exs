@@ -68,14 +68,18 @@ defmodule MaraithonWeb.FocusedTodosLiveTest do
     {:ok, view, html} = live(conn, "/todos/#{todo.id}")
 
     assert has_element?(view, "#todo-detail")
-    assert html =~ "How to solve this"
-    assert html =~ "Recommended next move"
-    assert html =~ "Send the decision and name the owner."
-    assert html =~ "Supporting details"
-    assert html =~ "The next phase is blocked on this answer."
-    assert html =~ "Keep the reply concise."
+    assert html =~ "Brief"
+    assert html =~ "Reply with the launch decision"
     assert html =~ "Back to todos"
     assert html =~ "Ask Maraithon"
+    refute html =~ "How to solve this"
+    refute html =~ "Supporting details"
     refute html =~ "must-not-render"
+
+    brief_html = render_async(view, 10_000)
+    assert brief_html =~ "Why this matters"
+    assert brief_html =~ "Do this"
+    assert brief_html =~ "Send the reply below and mark it done."
+    refute brief_html =~ "must-not-render"
   end
 end

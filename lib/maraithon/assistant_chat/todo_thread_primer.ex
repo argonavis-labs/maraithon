@@ -33,19 +33,21 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   @prepared_action_timeout_ms 2_500
   @legacy_turn_scan_limit 500
 
-  def ensure(%Conversation{} = conversation, %Todo{} = todo) do
+  def ensure(conversation, todo, opts \\ [])
+
+  def ensure(%Conversation{} = conversation, %Todo{} = todo, opts) when is_list(opts) do
     card = ActionCards.for_todo(todo, include_disconnected: true)
     draft = draft_for(todo, card)
     text = primer_text(todo, card, draft)
 
     case primer_turn(conversation, todo.id) do
       %Turn{} = turn ->
-        attrs = primer_turn_attrs(conversation, todo, card, draft, text, turn)
+        attrs = primer_turn_attrs(conversation, todo, card, draft, text, turn, opts)
         update_primer_turn(turn, attrs)
         {:ok, conversation}
 
       nil ->
-        attrs = primer_turn_attrs(conversation, todo, card, draft, text, nil)
+        attrs = primer_turn_attrs(conversation, todo, card, draft, text, nil, opts)
 
         case TelegramConversations.append_turn(conversation, attrs) do
           {:ok, {updated_conversation, _turn}} -> {:ok, updated_conversation}
@@ -54,7 +56,29 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
     end
   end
 
-  def ensure(_conversation, _todo), do: {:error, :invalid_todo_thread}
+  def ensure(_conversation, _todo, _opts), do: {:error, :invalid_todo_thread}
+
+  @doc """
+  Returns the prepared action the primer currently holds for this todo when it
+  is still awaiting confirmation and unexpired, otherwise nil. Web surfaces
+  use this to offer Send / Post directly from the todo page.
+  """
+  def prepared_action_for(%Conversation{} = conversation, %Todo{} = todo) do
+    with %Turn{} = turn <- primer_turn(conversation, todo.id),
+         prepared_action_id when is_binary(prepared_action_id) <-
+           get_in(turn.structured_data || %{}, ["prepared_action_id"]),
+         %PreparedAction{status: "awaiting_confirmation"} = prepared_action <-
+           prepared_action_id
+           |> then(&Repo.get(PreparedAction, &1))
+           |> PreparedAction.hydrate_payload(),
+         false <- stale_prepared_action?(prepared_action) do
+      prepared_action
+    else
+      _ -> nil
+    end
+  end
+
+  def prepared_action_for(_conversation, _todo), do: nil
 
   @doc """
   Resolves a todo's current `action_draft` into `prepare_external_action`-shaped
@@ -70,16 +94,27 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   `Maraithon.TelegramAssistant.TodoActions` for the Telegram todo "Send"
   button so both surfaces share one resolution path.
   """
-  def resolve_send_action_attrs(%Conversation{} = conversation, %Todo{} = todo) do
+  def resolve_send_action_attrs(conversation, todo, opts \\ [])
+
+  def resolve_send_action_attrs(%Conversation{} = conversation, %Todo{} = todo, opts)
+      when is_list(opts) do
     card = ActionCards.for_todo(todo, include_disconnected: true)
     draft = draft_for(todo, card)
-    prepared_action_attrs_with_timeout(conversation, todo, draft)
+    prepared_action_attrs_with_timeout(conversation, todo, draft, opts)
   end
 
-  def resolve_send_action_attrs(_conversation, _todo), do: :skip
+  def resolve_send_action_attrs(_conversation, _todo, _opts), do: :skip
 
-  defp primer_turn_attrs(%Conversation{} = conversation, %Todo{} = todo, card, draft, text, turn) do
-    prepared_action_id = prepared_action_id_for(conversation, todo, draft, turn)
+  defp primer_turn_attrs(
+         %Conversation{} = conversation,
+         %Todo{} = todo,
+         card,
+         draft,
+         text,
+         turn,
+         opts
+       ) do
+    prepared_action_id = prepared_action_id_for(conversation, todo, draft, turn, opts)
 
     %{
       "role" => "assistant",
@@ -216,9 +251,9 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
 
   defp draft_section(_draft), do: nil
 
-  defp prepared_action_id_for(%Conversation{} = conversation, %Todo{} = todo, draft, turn) do
+  defp prepared_action_id_for(%Conversation{} = conversation, %Todo{} = todo, draft, turn, opts) do
     reusable_prepared_action_id(conversation, turn, todo, draft) ||
-      create_primer_prepared_action(conversation, todo, draft)
+      create_primer_prepared_action(conversation, todo, draft, opts)
   end
 
   defp reusable_prepared_action_id(
@@ -293,8 +328,8 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   defp prepared_action_matches_current_draft?(_prepared_action, _conversation, _todo, _draft),
     do: false
 
-  defp create_primer_prepared_action(%Conversation{} = conversation, %Todo{} = todo, draft) do
-    case prepared_action_attrs_with_timeout(conversation, todo, draft) do
+  defp create_primer_prepared_action(%Conversation{} = conversation, %Todo{} = todo, draft, opts) do
+    case prepared_action_attrs_with_timeout(conversation, todo, draft, opts) do
       {:ok, attrs} ->
         with {:ok, run} <- create_primer_run(conversation, todo, attrs),
              {:ok, prepared_action} <-
@@ -315,7 +350,13 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
     _kind, _reason -> nil
   end
 
-  defp prepared_action_attrs_with_timeout(%Conversation{} = conversation, %Todo{} = todo, draft) do
+  defp prepared_action_attrs_with_timeout(
+         %Conversation{} = conversation,
+         %Todo{} = todo,
+         draft,
+         opts
+       ) do
+    timeout_ms = Keyword.get(opts, :prepare_timeout_ms, @prepared_action_timeout_ms)
     parent = self()
     ref = make_ref()
 
@@ -343,7 +384,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
       {:DOWN, ^monitor_ref, :process, ^pid, _reason} ->
         :skip
     after
-      @prepared_action_timeout_ms ->
+      timeout_ms ->
         Process.demonitor(monitor_ref, [:flush])
         Process.exit(pid, :kill)
         :skip
@@ -717,11 +758,23 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   defp prepared_message_body(%Todo{} = todo, draft) do
     case draft_body(todo, draft) do
       body when is_binary(body) ->
-        quoted_message(body) || if(instruction_text?(body), do: nil, else: body)
+        if ready_to_send_draft?(todo, draft) do
+          body
+        else
+          quoted_message(body) || if(instruction_text?(body), do: nil, else: body)
+        end
 
       _other ->
         nil
     end
+  end
+
+  # Briefs produce finished replies. They must go out verbatim rather than
+  # through the quote-extraction and synthesized-message heuristics meant for
+  # instruction-style placeholder drafts.
+  defp ready_to_send_draft?(%Todo{action_draft: action_draft}, draft) do
+    read_string(action_draft || %{}, "style") == "ready_to_send" or
+      read_string(draft || %{}, "style") == "ready_to_send"
   end
 
   defp prepared_slack_message_body(user_id, %Todo{} = todo, draft) do
@@ -731,9 +784,13 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
     case draft_body(todo, draft) do
       body when is_binary(body) ->
         body =
-          usable_quoted_slack_message(body) ||
-            synthesized_slack_message(todo, body, draft_map, metadata) ||
-            if(instruction_text?(body), do: nil, else: body)
+          if ready_to_send_draft?(todo, draft) do
+            body
+          else
+            usable_quoted_slack_message(body) ||
+              synthesized_slack_message(todo, body, draft_map, metadata) ||
+              if(instruction_text?(body), do: nil, else: body)
+          end
 
         if is_binary(body) do
           calendar_enriched_message_body(user_id, todo, %{}, body)
