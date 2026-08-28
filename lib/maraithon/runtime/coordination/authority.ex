@@ -1059,6 +1059,76 @@ defmodule Maraithon.Runtime.Coordination.Authority do
     end
   end
 
+  @doc """
+  Fences every partition in one statement with the same predicates as
+  `fence_partition!/4`: the node once, then all `{partition_id, ownership_epoch}`
+  pairs `FOR SHARE`. Fair runners fence their whole owned set on every poll;
+  one round trip instead of two per partition keeps the node row's lock queue
+  short for the Session's renewals.
+  """
+  def fence_partitions!(%NodeIncarnation{} = session, partitions, mode \\ :ready)
+      when is_list(partitions) and mode in [:ready, :owner] do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "partition fence requires transaction")
+
+    _ = Protocol.locked_active!()
+    states = if mode == :ready, do: ["ready"], else: ["ready", "draining"]
+
+    case SQL.query!(
+           Repo,
+           """
+           SELECT id FROM public.runtime_node_incarnations
+           WHERE id = $1::uuid AND activation_epoch = $2::uuid
+             AND state = ANY($3::text[])
+             AND ($4::boolean = false OR ready_at IS NOT NULL)
+             AND lease_expires_at > timezone('UTC', clock_timestamp())
+           FOR SHARE
+           """,
+           [
+             Ecto.UUID.dump!(session.id),
+             Ecto.UUID.dump!(session.activation_epoch),
+             states,
+             mode == :ready
+           ]
+         ).rows do
+      [[_id]] -> :ok
+      [] -> Repo.rollback(:node_authority_lost)
+    end
+
+    ids = Enum.map(partitions, & &1.partition_id)
+    epochs = Enum.map(partitions, & &1.ownership_epoch)
+
+    fenced =
+      SQL.query!(
+        Repo,
+        """
+        SELECT partition.partition_id
+        FROM public.runtime_partitions AS partition
+        JOIN unnest($1::smallint[], $2::bigint[]) AS expected(partition_id, ownership_epoch)
+          ON expected.partition_id = partition.partition_id
+         AND expected.ownership_epoch = partition.ownership_epoch
+        WHERE partition.activation_epoch = $3::uuid
+          AND partition.owner_node_incarnation_id = $4::uuid
+          AND partition.state = ANY($5::text[])
+          AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
+        ORDER BY partition.partition_id
+        FOR SHARE OF partition
+        """,
+        [
+          ids,
+          epochs,
+          Ecto.UUID.dump!(session.activation_epoch),
+          Ecto.UUID.dump!(session.id),
+          states
+        ]
+      ).rows
+      |> List.flatten()
+
+    if Enum.sort(fenced) == Enum.sort(ids),
+      do: :ok,
+      else: Repo.rollback(:partition_authority_lost)
+  end
+
   # Drain transactions compose with exact Effect cancellation. Take the complete
   # protocol prefix before leader, node, or partition locks; the cancellation
   # helper later revalidates the pair while these locks are already held.

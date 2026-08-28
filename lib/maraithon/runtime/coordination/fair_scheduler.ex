@@ -91,6 +91,10 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
         Process.delete(@pending_physical_key)
         do_reserve(session, partitions, task_ttl_ms, attempts - 1)
 
+      {:error, :fair_scheduler_busy} ->
+        Process.delete(@pending_physical_key)
+        {:ok, nil}
+
       other ->
         case Process.delete(@pending_physical_key) do
           nil -> :ok
@@ -103,17 +107,7 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
 
   defp reserve_locked(session, partitions, task_ttl_ms) do
     lock_session_reservations!(session)
-
-    partitions
-    |> Enum.sort_by(& &1.partition_id)
-    |> Enum.each(fn partition ->
-      Authority.fence_partition!(
-        session,
-        partition.partition_id,
-        partition.ownership_epoch,
-        :ready
-      )
-    end)
+    Authority.fence_partitions!(session, Enum.sort_by(partitions, & &1.partition_id), :ready)
 
     partition_ids = Enum.map(partitions, & &1.partition_id)
     partition_epochs = Enum.map(partitions, & &1.ownership_epoch)
@@ -357,17 +351,20 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   # upgrade, including through the tenant `ON CONFLICT` path. Serialize before
   # taking any canonical row lock; partitions owned by other nodes remain fully
   # independent.
+  # A runner that finds another fair runner mid-reservation yields this poll
+  # instead of queueing on the lock with an idle-in-transaction connection.
   defp lock_session_reservations!(session) do
     lock_key = "maraithon.fair_scheduler:#{session.id}"
 
-    SQL.query!(
-      Repo,
-      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
-      [lock_key],
-      log: false
-    )
-
-    :ok
+    case SQL.query!(
+           Repo,
+           "SELECT pg_try_advisory_xact_lock(hashtextextended($1::text, 0))",
+           [lock_key],
+           log: false
+         ).rows do
+      [[true]] -> :ok
+      _busy -> Repo.rollback(:fair_scheduler_busy)
+    end
   end
 
   defp ensure_tenants!(session, ids, epochs) do
