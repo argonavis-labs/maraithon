@@ -53,6 +53,7 @@ jobs:
           MARAITHON_GCP_REGION: us-central1
           MARAITHON_GCP_SERVICE: maraithon
           MARAITHON_VALIDATE_TODO_LAUNCH_USER: kent@runner.now
+          MARAITHON_AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY: ${{ vars.AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY }}
 
       - name: Validate production Todo outcome learning
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'validate-todo'
