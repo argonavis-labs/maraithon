@@ -278,6 +278,91 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
     })
   end
 
+  @doc "Builds the per-cycle identifier index used by content-on-demand lookups."
+  def index(bundle) when is_map(bundle) do
+    %{
+      gmail:
+        bundle
+        |> gmail_index_messages()
+        |> index_by(fn message ->
+          read_string(message, "message_id") || read_string(message, "id")
+        end),
+      calendar:
+        bundle
+        |> calendar_events()
+        |> Kernel.++(calendar_local_events(bundle))
+        |> index_by(fn event -> read_string(event, "event_id") || read_string(event, "id") end),
+      slack:
+        bundle
+        |> slack_index_messages()
+        |> index_by(fn message ->
+          channel_id = read_string(message, "channel_id")
+          ts = read_string(message, "ts")
+          if channel_id && ts, do: {channel_id, ts}
+        end)
+    }
+  end
+
+  def index(_bundle), do: %{gmail: %{}, calendar: %{}, slack: %{}}
+
+  @doc "Attaches a built index to a source bundle for O(1) cycle-local lookups."
+  def with_index(bundle) when is_map(bundle), do: Map.put(bundle, "_index", index(bundle))
+  def with_index(bundle), do: bundle
+
+  @doc "Returns one Gmail message by provider message id."
+  def gmail_message(bundle, message_id) when is_binary(message_id) do
+    bundle |> bundle_index(:gmail) |> Map.get(message_id)
+  end
+
+  def gmail_message(_bundle, _message_id), do: nil
+
+  @doc "Returns one Google or local calendar event by event id."
+  def calendar_event(bundle, event_id) when is_binary(event_id) do
+    bundle |> bundle_index(:calendar) |> Map.get(event_id)
+  end
+
+  def calendar_event(_bundle, _event_id), do: nil
+
+  @doc "Returns one Slack message by channel id and message timestamp."
+  def slack_message(bundle, channel_id, ts) when is_binary(channel_id) and is_binary(ts) do
+    bundle |> bundle_index(:slack) |> Map.get({channel_id, ts})
+  end
+
+  def slack_message(_bundle, _channel_id, _ts), do: nil
+
+  defp bundle_index(bundle, source) do
+    case Map.get(bundle, "_index", Map.get(bundle, :_index)) do
+      %{^source => source_index} when is_map(source_index) -> source_index
+      %{} = cached -> Map.get(cached, Atom.to_string(source), %{})
+      _ -> bundle |> index() |> Map.fetch!(source)
+    end
+  end
+
+  defp gmail_index_messages(bundle) do
+    gmail = read_map(bundle, "gmail")
+
+    read_list(gmail, "messages") ++
+      read_list(gmail, "inbox_messages") ++
+      read_list(gmail, "sent_messages") ++
+      (gmail
+       |> read_map("messages_by_provider")
+       |> Map.values()
+       |> Enum.flat_map(&List.wrap/1))
+  end
+
+  defp slack_index_messages(bundle) do
+    slack_messages(bundle) ++ slack_mentions(bundle)
+  end
+
+  defp index_by(items, key_fun) do
+    Enum.reduce(items, %{}, fn item, acc ->
+      case key_fun.(item) do
+        nil -> acc
+        key -> Map.put_new(acc, key, item)
+      end
+    end)
+  end
+
   def gmail_messages(bundle), do: bundle |> read_map("gmail") |> read_list("messages")
   def gmail_inbox_messages(bundle), do: bundle |> read_map("gmail") |> read_list("inbox_messages")
   def gmail_sent_messages(bundle), do: bundle |> read_map("gmail") |> read_list("sent_messages")

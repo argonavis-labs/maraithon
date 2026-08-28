@@ -61,6 +61,7 @@ defmodule Maraithon.Runtime.Agent do
     :agent_package_version_id,
     :behavior_module,
     :behavior_state,
+    :behavior_cycle_context,
     :config,
     :budget,
     :sequence_num,
@@ -420,6 +421,7 @@ defmodule Maraithon.Runtime.Agent do
         agent_package_id: agent.agent_package_id,
         agent_package_version_id: agent.agent_package_version_id,
         behavior_state: behavior_state,
+        behavior_cycle_context: nil,
         config: agent_config,
         budget: budget,
         sequence_num: Events.latest_sequence_num(agent.id),
@@ -764,24 +766,24 @@ defmodule Maraithon.Runtime.Agent do
     data = ensure_current_run(data)
     context = build_context(data)
 
-    case data.behavior_module.handle_wakeup(data.behavior_state, context) do
+    case data.behavior_module.handle_wakeup(behavior_state_for_call(data), context) do
       {:effect, effect, new_behavior_state} ->
-        data = %{data | behavior_state: new_behavior_state}
+        data = put_behavior_state(data, new_behavior_state)
         request_effect(data, effect)
 
       {:emit, {event_type, payload}, new_behavior_state} ->
-        data = %{data | behavior_state: new_behavior_state}
+        data = put_behavior_state(data, new_behavior_state)
         data = complete_current_run(data, event_type, payload)
         data = clear_transient_context(data)
         schedule_next_wakeup(data)
         {:next_state, :idle, data}
 
       {:continue, new_behavior_state} ->
-        data = %{data | behavior_state: new_behavior_state}
+        data = put_behavior_state(data, new_behavior_state)
         {:keep_state, data, [{:next_event, :internal, :execute_behavior}]}
 
       {:idle, new_behavior_state} ->
-        data = %{data | behavior_state: new_behavior_state}
+        data = put_behavior_state(data, new_behavior_state)
         data = complete_current_run(data, :idle, %{})
         data = clear_transient_context(data)
         schedule_next_wakeup(data)
@@ -887,29 +889,29 @@ defmodule Maraithon.Runtime.Agent do
       case data.behavior_module.handle_effect_error(
              effect_info.type,
              :effect_timeout,
-             data.behavior_state,
+             behavior_state_for_call(data),
              context
            ) do
         {:emit, {event_type, payload}, new_behavior_state} ->
-          data = %{data | behavior_state: new_behavior_state}
+          data = put_behavior_state(data, new_behavior_state)
           data = complete_current_run(data, event_type, payload)
           data = clear_transient_context(data)
           schedule_next_wakeup(data)
           {:next_state, :idle, data}
 
         {:idle, new_behavior_state} ->
-          data = %{data | behavior_state: new_behavior_state}
+          data = put_behavior_state(data, new_behavior_state)
           data = complete_current_run(data, :idle, %{})
           data = clear_transient_context(data)
           schedule_next_wakeup(data)
           {:next_state, :idle, data}
 
         {:effect, effect, new_behavior_state} ->
-          data = %{data | behavior_state: new_behavior_state}
+          data = put_behavior_state(data, new_behavior_state)
           request_effect(data, effect)
 
         {:continue, new_behavior_state} ->
-          data = %{data | behavior_state: new_behavior_state}
+          data = put_behavior_state(data, new_behavior_state)
           {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
       end
     else
@@ -1012,29 +1014,29 @@ defmodule Maraithon.Runtime.Agent do
 
             case data.behavior_module.handle_effect_result(
                    {effect_info.type, result_data},
-                   data.behavior_state,
+                   behavior_state_for_call(data),
                    context
                  ) do
               {:emit, {event_type, payload}, new_behavior_state} ->
-                data = %{data | behavior_state: new_behavior_state}
+                data = put_behavior_state(data, new_behavior_state)
                 data = complete_current_run(data, event_type, payload)
                 data = clear_transient_context(data)
                 schedule_next_wakeup(data)
                 {:next_state, :idle, data}
 
               {:idle, new_behavior_state} ->
-                data = %{data | behavior_state: new_behavior_state}
+                data = put_behavior_state(data, new_behavior_state)
                 data = complete_current_run(data, :idle, %{})
                 data = clear_transient_context(data)
                 schedule_next_wakeup(data)
                 {:next_state, :idle, data}
 
               {:effect, effect, new_behavior_state} ->
-                data = %{data | behavior_state: new_behavior_state}
+                data = put_behavior_state(data, new_behavior_state)
                 request_effect(data, effect)
 
               {:continue, new_behavior_state} ->
-                data = %{data | behavior_state: new_behavior_state}
+                data = put_behavior_state(data, new_behavior_state)
                 {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
             end
 
@@ -1047,29 +1049,29 @@ defmodule Maraithon.Runtime.Agent do
               case data.behavior_module.handle_effect_error(
                      effect_info.type,
                      reason,
-                     data.behavior_state,
+                     behavior_state_for_call(data),
                      context
                    ) do
                 {:emit, {event_type, payload}, new_behavior_state} ->
-                  data = %{data | behavior_state: new_behavior_state}
+                  data = put_behavior_state(data, new_behavior_state)
                   data = complete_current_run(data, event_type, payload)
                   data = clear_transient_context(data)
                   schedule_next_wakeup(data)
                   {:next_state, :idle, data}
 
                 {:idle, new_behavior_state} ->
-                  data = %{data | behavior_state: new_behavior_state}
+                  data = put_behavior_state(data, new_behavior_state)
                   data = complete_current_run(data, :idle, %{})
                   data = clear_transient_context(data)
                   schedule_next_wakeup(data)
                   {:next_state, :idle, data}
 
                 {:effect, effect, new_behavior_state} ->
-                  data = %{data | behavior_state: new_behavior_state}
+                  data = put_behavior_state(data, new_behavior_state)
                   request_effect(data, effect)
 
                 {:continue, new_behavior_state} ->
-                  data = %{data | behavior_state: new_behavior_state}
+                  data = put_behavior_state(data, new_behavior_state)
                   {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
               end
             else
@@ -1475,6 +1477,30 @@ defmodule Maraithon.Runtime.Agent do
         )
 
         Repo.rollback({:snapshot_persist_failed, reason})
+    end
+  end
+
+  defp behavior_state_for_call(%{
+         behavior_module: module,
+         behavior_state: state,
+         behavior_cycle_context: cycle_context
+       }) do
+    if is_atom(module) and function_exported?(module, :put_cycle_context, 2),
+      do: module.put_cycle_context(state, cycle_context || %{}),
+      else: state
+  end
+
+  defp put_behavior_state(%{behavior_module: module} = data, state) do
+    if is_atom(module) and function_exported?(module, :pop_cycle_context, 1) do
+      case module.pop_cycle_context(state) do
+        {durable_state, cycle_context} ->
+          %{data | behavior_state: durable_state, behavior_cycle_context: cycle_context}
+
+        durable_state ->
+          %{data | behavior_state: durable_state}
+      end
+    else
+      %{data | behavior_state: state}
     end
   end
 
@@ -2765,7 +2791,7 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp build_context(data) do
-    %{
+    context = %{
       agent_id: data.agent_id,
       user_id: data.user_id,
       project_id: data.project_id,
@@ -2798,6 +2824,8 @@ defmodule Maraithon.Runtime.Agent do
       trigger: data.current_trigger,
       event: data.current_event
     }
+
+    Map.merge(context, data.behavior_cycle_context || %{})
   end
 
   defp recent_operator_events(user_id) when is_binary(user_id) do
@@ -2956,7 +2984,8 @@ defmodule Maraithon.Runtime.Agent do
         current_event: nil,
         current_message: nil,
         current_message_metadata: %{},
-        current_message_id: nil
+        current_message_id: nil,
+        behavior_cycle_context: nil
     }
   end
 
@@ -2968,6 +2997,7 @@ defmodule Maraithon.Runtime.Agent do
         current_message: nil,
         current_message_metadata: %{},
         current_message_id: nil,
+        behavior_cycle_context: nil,
         current_directive_id: nil,
         current_directive_claim_token: nil,
         current_directive_kind: nil

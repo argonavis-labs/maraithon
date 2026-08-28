@@ -148,8 +148,84 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
               end)
   end
 
-  test "declares snapshot schema_version 1 (SPEC 08 R5)" do
-    assert AIChiefOfStaff.schema_version() == 1
+  test "declares payload-diet snapshot schema_version 2" do
+    assert AIChiefOfStaff.schema_version() == 2
+  end
+
+  test "migrates version 1 by dropping cycle payloads and pending prompt inputs" do
+    legacy = %{
+      source_bundle: %{"gmail" => %{"messages" => [%{"body" => "raw"}]}},
+      assistant_fetch_telemetry: %{"sources" => %{}},
+      cycle_skill_ids: ["commitment_tracker"],
+      assistant_cycle_id: "cycle-1",
+      pending_effect_skill_id: "commitment_tracker",
+      resume_index: 1,
+      pending_watermarks: [%{kind: "history"}],
+      pending_emit: {:briefs_recorded, %{count: 1}},
+      pending_emits: [%{skill_id: "commitment_tracker"}],
+      cycle_memo_generated: true,
+      skill_states: %{
+        "commitment_tracker" => %{
+          pending_tracker_input: %{"gmail" => %{"body" => "raw"}},
+          pending_dedupe_key: "old"
+        },
+        "calendar_check_in" => %{pending_check_in_input: %{"prompt" => "raw"}},
+        "holiday_radar" => %{
+          pending_holidays: %{
+            "h" => %{
+              "id" => "h",
+              "name" => "Labor Day",
+              "date" => "2026-09-07",
+              "region" => "US",
+              "planning_note" => "raw"
+            }
+          }
+        },
+        "morning_briefing" => %{pending_brief_input: %{"gmail" => %{"body" => "raw"}}},
+        "inbox_calendar_advisor" => %{pending_candidates: [%{"body" => "raw"}]}
+      }
+    }
+
+    migrated = AIChiefOfStaff.migrate_state(1, legacy, %{})
+
+    refute Map.has_key?(migrated, :source_bundle)
+    refute Map.has_key?(migrated, :assistant_fetch_telemetry)
+    assert migrated.cycle_skill_ids == nil
+    assert migrated.assistant_cycle_id == nil
+    assert migrated.resume_index == 0
+    assert migrated.pending_watermarks == []
+    assert migrated.skill_states["commitment_tracker"].pending_effect == nil
+    refute Map.has_key?(migrated.skill_states["commitment_tracker"], :pending_tracker_input)
+    assert migrated.skill_states["calendar_check_in"].pending_effect == nil
+
+    assert migrated.skill_states["holiday_radar"].pending_holidays == %{
+             "h" => %{
+               "id" => "h",
+               "name" => "Labor Day",
+               "date" => "2026-09-07",
+               "region" => "US"
+             }
+           }
+
+    assert migrated.skill_states["morning_briefing"].pending_brief_input == nil
+    assert migrated.skill_states["inbox_calendar_advisor"].pending_candidates == []
+  end
+
+  test "moves source acquisition into transient cycle context" do
+    state = AIChiefOfStaff.init(%{"user_id" => "chief@example.com"})
+    bundle = %{"gmail" => %{"messages" => [%{"message_id" => "m1", "body" => "raw"}]}}
+
+    hydrated =
+      AIChiefOfStaff.put_cycle_context(state, %{
+        source_bundle: bundle,
+        assistant_fetch_telemetry: %{"sources" => %{}}
+      })
+
+    {durable, cycle_context} = AIChiefOfStaff.pop_cycle_context(hydrated)
+
+    refute Map.has_key?(durable, :source_bundle)
+    refute Map.has_key?(durable, :assistant_fetch_telemetry)
+    assert cycle_context.source_bundle == bundle
   end
 
   describe "reconcile_restored_state/2 (SPEC 08 R6)" do
@@ -184,7 +260,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
       assert reconciled.skill_states["alpha"].accumulated_marker == 42
     end
 
-    test "leaves in-flight and accumulated keys untouched while enabled_skill_ids reflects the new list" do
+    test "restarts an in-flight restored cycle while preserving accumulated memory" do
       Skills.put_process_override(
         skill_modules: %{"alpha" => ChiefOfStaffTestSkill},
         default_enabled_ids: ["alpha"]
@@ -209,21 +285,21 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
 
       reconciled = AIChiefOfStaff.reconcile_restored_state(mid_cycle_state, config)
 
-      # In-flight keys: untouched — the running cycle keeps its frozen list.
-      assert reconciled.cycle_skill_ids == ["alpha"]
-      assert reconciled.resume_index == 1
-      assert reconciled.pending_effect_skill_id == "alpha"
-      assert reconciled.pending_watermarks == [%{kind: "history"}]
-      # Accumulated keys: untouched.
+      # Effect continuation and its cycle-local acquisition context are not
+      # durable. Recovery starts a fresh cycle from the last durable memory.
+      assert reconciled.cycle_skill_ids == nil
+      assert reconciled.resume_index == 0
+      assert reconciled.pending_effect_skill_id == nil
+      assert reconciled.pending_watermarks == []
+      # Accumulated keys survive the restart.
       assert reconciled.last_watermarks == %{"gmail:history" => "123"}
       assert reconciled.cycle_memory["memo"] == "held two threads"
-      # Config-derived keys: reflect the live config immediately; the next
-      # fresh cycle (ensure_cycle with cycle_skill_ids == nil) picks this up.
+      # Config-derived keys reflect the live config immediately.
       assert reconciled.enabled_skill_ids == ["alpha", "beta"]
       assert Map.has_key?(reconciled.skill_states, "beta")
     end
 
-    test "never prunes a skill_states entry referenced by the in-flight cycle" do
+    test "prunes disabled skill state after the restored cycle is restarted" do
       Skills.put_process_override(
         skill_modules: %{"alpha" => ChiefOfStaffTestSkill, "beta" => ChiefOfStaffTestSkill},
         default_enabled_ids: ["alpha", "beta"]
@@ -242,11 +318,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
       reconciled = AIChiefOfStaff.reconcile_restored_state(old_state, config)
 
       assert reconciled.enabled_skill_ids == ["alpha"]
-      # ...but the in-flight cycle still Map.fetch!-es "beta": its state and
-      # config entries must survive until that cycle finishes.
-      assert Map.has_key?(reconciled.skill_states, "beta")
-      assert Map.has_key?(reconciled.skill_configs, "beta")
-      assert reconciled.cycle_skill_ids == ["beta"]
+      refute Map.has_key?(reconciled.skill_states, "beta")
+      refute Map.has_key?(reconciled.skill_configs, "beta")
+      assert reconciled.cycle_skill_ids == nil
     end
 
     test "degenerate config guard: a collapsed live skill list defers to the snapshot, dropping nothing" do

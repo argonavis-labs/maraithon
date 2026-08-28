@@ -24,8 +24,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffSnapshotStateTest do
 
     snapshot = AIChiefOfStaff.snapshot_state(state)
 
-    assert snapshot.source_bundle == nil
-    assert snapshot.assistant_fetch_telemetry == nil
+    refute Map.has_key?(snapshot, :source_bundle)
+    refute Map.has_key?(snapshot, :assistant_fetch_telemetry)
     assert snapshot.skill_states["followthrough"].inbox_state == %{source_bundle: nil, keep: 1}
     assert snapshot.skill_states["goal_alignment"] == %{review_interval_hours: 24}
     assert snapshot.decided == state.decided
@@ -99,9 +99,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffSnapshotStateTest do
     }
 
     snapshot = Maraithon.Behaviors.ManifestAgent.snapshot_state(state)
-    assert snapshot.source_state.source_bundle == nil
-    [%{result: r}] = snapshot.tool_results
-    assert byte_size(r) < 20_000
+    refute Map.has_key?(snapshot, :manifest)
+    refute Map.has_key?(snapshot.source_state, :source_bundle)
+    [%{tool: "search", summary: summary}] = snapshot.tool_results
+    assert byte_size(summary) <= 2_048
     assert snapshot.runs == 3
   end
 

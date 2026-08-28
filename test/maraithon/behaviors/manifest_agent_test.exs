@@ -1,7 +1,7 @@
 defmodule Maraithon.Behaviors.ManifestAgentTest do
   use ExUnit.Case, async: true
 
-  alias Maraithon.Behaviors.ManifestAgent
+  alias Maraithon.Behaviors.{AIChiefOfStaff, ManifestAgent}
 
   test "requests a model call from a hydrated manifest and markdown skill context" do
     state =
@@ -113,6 +113,69 @@ defmodule Maraithon.Behaviors.ManifestAgentTest do
     [converted] = restored.tool_results
     assert converted.tool == "search"
     assert byte_size(converted.summary) <= 2_048
+  end
+
+  test "omits reconstructable manifest prompts from checkpoints and restores them from config" do
+    config = %{
+      "_harness_manifest" => %{
+        model: "gpt-5.4",
+        intelligence: "high",
+        system_prompt: String.duplicate("prompt ", 4_000),
+        skills: [%{name: "Large", instructions: String.duplicate("instructions ", 4_000)}]
+      }
+    }
+
+    state = ManifestAgent.init(config)
+    checkpoint_state = ManifestAgent.snapshot_state(state)
+    refute Map.has_key?(checkpoint_state, :manifest)
+
+    snapshot = %{
+      behavior_state: checkpoint_state,
+      budget: %{llm_calls: 3, tool_calls: 4},
+      schema_version: 0
+    }
+
+    {restored, _budget} =
+      Maraithon.Runtime.Agent.restore_from_snapshot(ManifestAgent, config, snapshot, "agent-1")
+
+    assert restored.manifest.system_prompt == state.manifest.system_prompt
+    assert hd(restored.manifest.skills).instructions == hd(state.manifest.skills).instructions
+  end
+
+  test "delegates transient cycle context and source-state recovery" do
+    source_state =
+      AIChiefOfStaff.init(%{"user_id" => "manifest-chief@example.com"})
+      |> Map.put(:source_bundle, %{"gmail" => %{"messages" => [%{"body" => "raw"}]}})
+      |> Map.put(:assistant_fetch_telemetry, %{"sources" => %{}})
+      |> Map.put(:cycle_skill_ids, ["commitment_tracker"])
+
+    wrapper = %{
+      manifest: %{},
+      source_behavior: "ai_chief_of_staff",
+      source_module: AIChiefOfStaff,
+      source_state: source_state,
+      pending_source_effect?: true,
+      last_message_id: nil,
+      pending_tool_call: nil,
+      tool_results: [],
+      runs: 0
+    }
+
+    {durable, cycle_context} = ManifestAgent.pop_cycle_context(wrapper)
+    refute Map.has_key?(durable.source_state, :source_bundle)
+    assert cycle_context.source_bundle["gmail"]["messages"] != []
+
+    hydrated = ManifestAgent.put_cycle_context(durable, cycle_context)
+    assert hydrated.source_state.source_bundle == cycle_context.source_bundle
+
+    restored =
+      ManifestAgent.reconcile_restored_state(hydrated, %{
+        "user_id" => "manifest-chief@example.com"
+      })
+
+    refute Map.has_key?(restored.source_state, :source_bundle)
+    assert restored.source_state.cycle_skill_ids == nil
+    assert restored.source_state.resume_index == 0
   end
 
   test "rejects structured model tool requests outside the allowlist" do

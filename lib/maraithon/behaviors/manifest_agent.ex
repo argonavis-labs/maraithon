@@ -44,14 +44,56 @@ defmodule Maraithon.Behaviors.ManifestAgent do
         do: module.snapshot_state(source_state),
         else: source_state
 
-    Maraithon.Behaviors.SnapshotTrim.trim(%{state | source_state: source_state})
+    state
+    |> Map.put(:source_state, source_state)
+    |> Map.drop([:manifest, "manifest"])
+    |> compact_tool_result_state()
+    |> Maraithon.Behaviors.SnapshotTrim.trim()
   end
 
-  def snapshot_state(state), do: Maraithon.Behaviors.SnapshotTrim.trim(state)
+  def snapshot_state(state) when is_map(state) do
+    state
+    |> Map.drop([:manifest, "manifest"])
+    |> compact_tool_result_state()
+    |> Maraithon.Behaviors.SnapshotTrim.trim()
+  end
+
+  def snapshot_state(state), do: state
+
+  @doc false
+  def put_cycle_context(
+        %{source_module: module, source_state: source_state} = state,
+        cycle_context
+      )
+      when is_atom(module) and not is_nil(module) do
+    if function_exported?(module, :put_cycle_context, 2),
+      do: %{state | source_state: module.put_cycle_context(source_state, cycle_context)},
+      else: state
+  end
+
+  def put_cycle_context(state, _cycle_context), do: state
+
+  @doc false
+  def pop_cycle_context(%{source_module: module, source_state: source_state} = state)
+      when is_atom(module) and not is_nil(module) do
+    if function_exported?(module, :pop_cycle_context, 1) do
+      case module.pop_cycle_context(source_state) do
+        {durable_source_state, cycle_context} ->
+          {%{state | source_state: durable_source_state}, cycle_context}
+
+        durable_source_state ->
+          %{state | source_state: durable_source_state}
+      end
+    else
+      state
+    end
+  end
+
+  def pop_cycle_context(state), do: state
 
   @doc false
   @impl true
-  def reconcile_restored_state(state, _config) when is_map(state) do
+  def reconcile_restored_state(state, config) when is_map(state) do
     tool_results =
       state
       |> Map.get(:tool_results, Map.get(state, "tool_results", []))
@@ -62,6 +104,7 @@ defmodule Maraithon.Behaviors.ManifestAgent do
     state
     |> Map.put(:tool_results, tool_results)
     |> Map.update(:pending_tool_call, nil, &compact_pending_tool_call/1)
+    |> reconcile_source_state(config)
   end
 
   def reconcile_restored_state(state, _config), do: state
@@ -176,6 +219,47 @@ defmodule Maraithon.Behaviors.ManifestAgent do
   end
 
   def next_wakeup(_state), do: :none
+
+  defp reconcile_source_state(
+         %{source_module: module, source_state: source_state} = state,
+         config
+       )
+       when is_atom(module) and not is_nil(module) do
+    source_config =
+      if is_map(config),
+        do: Map.drop(config, ["_harness_manifest", "harness_manifest"]),
+        else: %{}
+
+    source_state =
+      if module == Maraithon.Behaviors.AIChiefOfStaff and
+           function_exported?(module, :migrate_state, 3) do
+        module.migrate_state(1, source_state, source_config)
+      else
+        source_state
+      end
+
+    source_state =
+      if function_exported?(module, :reconcile_restored_state, 2),
+        do: module.reconcile_restored_state(source_state, source_config),
+        else: source_state
+
+    %{state | source_state: source_state}
+  end
+
+  defp reconcile_source_state(state, _config), do: state
+
+  defp compact_tool_result_state(state) do
+    tool_results =
+      state
+      |> Map.get(:tool_results, [])
+      |> List.wrap()
+      |> Enum.map(&normalize_restored_tool_result/1)
+      |> Enum.take(10)
+
+    state
+    |> Map.put(:tool_results, tool_results)
+    |> Map.update(:pending_tool_call, nil, &compact_pending_tool_call/1)
+  end
 
   defp summarize_tool_result(pending_tool_call, result, context) do
     %{

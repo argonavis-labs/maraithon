@@ -8,7 +8,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   @behaviour Maraithon.Behaviors.Behavior
 
-  alias Maraithon.ChiefOfStaff.{Acquisition, AttentionArbiter, Skills}
+  alias Maraithon.ChiefOfStaff.{Acquisition, AttentionArbiter, Skills, SourceBundle}
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.OperatorEvents
 
@@ -46,8 +46,6 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       skill_states: skill_states,
       cycle_skill_ids: nil,
       assistant_cycle_id: nil,
-      source_bundle: nil,
-      assistant_fetch_telemetry: nil,
       pending_emit: nil,
       pending_emits: [],
       pending_effect_skill_id: nil,
@@ -81,6 +79,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   # (observed in prod 2026-07-03 with :pending_watermarks). Seed any missing
   # keys with their init/1 defaults before the cycle logic touches them.
   @state_key_defaults %{
+    source_bundle: nil,
+    assistant_fetch_telemetry: nil,
     pending_watermarks: [],
     last_watermarks: %{},
     last_cycle_stats: %{},
@@ -256,7 +256,35 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   defp effect_type_label(_effect_type), do: "unknown"
 
   @impl true
-  def snapshot_state(state), do: Maraithon.Behaviors.SnapshotTrim.trim(state)
+  def snapshot_state(state) when is_map(state) do
+    state
+    |> Map.drop([:source_bundle, :assistant_fetch_telemetry])
+    |> Maraithon.Behaviors.SnapshotTrim.trim()
+  end
+
+  def snapshot_state(state), do: state
+
+  @doc false
+  def pop_cycle_context(state) when is_map(state) do
+    source_bundle = Map.get(state, :source_bundle)
+    telemetry = Map.get(state, :assistant_fetch_telemetry)
+
+    cycle_context =
+      if is_nil(source_bundle) and is_nil(telemetry) do
+        nil
+      else
+        %{source_bundle: source_bundle, assistant_fetch_telemetry: telemetry}
+      end
+
+    {Map.drop(state, [:source_bundle, :assistant_fetch_telemetry]), cycle_context}
+  end
+
+  @doc false
+  def put_cycle_context(state, cycle_context) when is_map(state) and is_map(cycle_context) do
+    state
+    |> Map.put(:source_bundle, Map.get(cycle_context, :source_bundle))
+    |> Map.put(:assistant_fetch_telemetry, Map.get(cycle_context, :assistant_fetch_telemetry))
+  end
 
   @impl true
   def next_wakeup(state) do
@@ -274,13 +302,15 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   def default_skill_ids, do: Skills.default_enabled_ids()
 
-  # SPEC 08 R5: version 1 is the contract that includes the runtime's generic
-  # default-merge on restore plus reconcile_restored_state/2 below. Bump this
-  # and add a matching migrate_state/3 clause only when a future change needs
-  # bespoke restructuring (renaming/reshaping a key) beyond what the generic
-  # merge handles.
   @impl true
-  def schema_version, do: 1
+  def schema_version, do: 2
+
+  @impl true
+  def migrate_state(stored_version, state, _config) when stored_version < 2 and is_map(state) do
+    restart_restored_cycle(state)
+  end
+
+  def migrate_state(_stored_version, state, _config), do: state
 
   # SPEC 08 R6: called by the runtime only at restore time (never per-wakeup —
   # context deliberately does not carry raw agent_config). Recomputes the
@@ -293,6 +323,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   # accumulated per-skill history). Pure and idempotent.
   @impl true
   def reconcile_restored_state(state, config) do
+    state = restart_restored_cycle(state)
     live_ids = Skills.enabled_ids(config)
 
     # A snapshot can carry skill ids a later release removed or renamed;
@@ -337,6 +368,98 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         cycle_skill_ids: if(is_list(state.cycle_skill_ids), do: in_flight_ids)
     }
   end
+
+  defp restart_restored_cycle(state) do
+    skill_states =
+      state
+      |> Map.get(:skill_states, %{})
+      |> Map.new(fn {skill_id, skill_state} ->
+        {skill_id, reset_transient_skill_state(skill_id, skill_state)}
+      end)
+
+    state
+    |> Map.drop([:source_bundle, :assistant_fetch_telemetry])
+    |> Map.merge(%{
+      skill_states: skill_states,
+      cycle_skill_ids: nil,
+      assistant_cycle_id: nil,
+      pending_emit: nil,
+      pending_emits: [],
+      pending_effect_skill_id: nil,
+      resume_index: 0,
+      pending_watermarks: [],
+      cycle_memo_generated: false
+    })
+  end
+
+  @legacy_transient_skill_keys [
+    :pending_tracker_input,
+    :pending_check_in_input,
+    :pending_brief_input,
+    :pending_dedupe_key
+  ]
+
+  defp reset_transient_skill_state(skill_id, skill_state) when is_map(skill_state) do
+    string_keys = Enum.map(@legacy_transient_skill_keys, &Atom.to_string/1)
+
+    skill_state =
+      skill_state
+      |> Map.drop(@legacy_transient_skill_keys ++ string_keys)
+      |> Map.drop([
+        :source_bundle,
+        "source_bundle",
+        :assistant_fetch_telemetry,
+        "assistant_fetch_telemetry"
+      ])
+
+    case skill_id do
+      "commitment_tracker" ->
+        Map.put(skill_state, :pending_effect, nil)
+
+      "calendar_check_in" ->
+        Map.put(skill_state, :pending_effect, nil)
+
+      "holiday_radar" ->
+        skill_state
+        |> Map.put(:pending_review_key, nil)
+        |> Map.update(:pending_holidays, %{}, &compact_restored_holidays/1)
+
+      "morning_briefing" ->
+        skill_state
+        |> Map.put(:pending_brief_input, nil)
+        |> Map.put(:pending_dedupe_key, nil)
+
+      "inbox_calendar_advisor" ->
+        skill_state
+        |> Map.put(:pending_candidates, [])
+        |> Map.put(:pending_direct_insights, [])
+        |> Map.put(:pending_relationship_observations, [])
+        |> Map.put(:pending_llm_kind, nil)
+        |> Map.put(:pending_emit, nil)
+
+      _other ->
+        if Map.has_key?(skill_state, :pending_candidates),
+          do: Map.put(skill_state, :pending_candidates, []),
+          else: skill_state
+    end
+  end
+
+  defp reset_transient_skill_state(_skill_id, skill_state), do: skill_state
+
+  defp compact_restored_holidays(holidays) when is_map(holidays) do
+    Map.new(holidays, fn {id, holiday} ->
+      compact =
+        if is_map(holiday) do
+          Map.take(holiday, [:id, :name, :date, :region, "id", "name", "date", "region"])
+        else
+          %{}
+        end
+
+      {id, compact}
+    end)
+  end
+
+  defp compact_restored_holidays(_holidays), do: %{}
 
   # Guard against a transient/misread config being mistaken for a deliberate
   # "disable (almost) everything" operator change. `Skills.enabled_ids/1`
@@ -710,7 +833,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       state
       | cycle_skill_ids: cycle_skill_ids,
         assistant_cycle_id: Ecto.UUID.generate(),
-        source_bundle: source_bundle,
+        source_bundle: SourceBundle.with_index(source_bundle),
         assistant_fetch_telemetry: assistant_fetch_telemetry,
         pending_watermarks: proposed_watermarks,
         cycle_memo_generated: false,
@@ -795,7 +918,19 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   end
 
   defp put_skill_state(state, skill_id, next_skill_state) do
-    put_in(state, [:skill_states, skill_id], next_skill_state)
+    durable_skill_state =
+      if is_map(next_skill_state) do
+        Map.drop(next_skill_state, [
+          :source_bundle,
+          "source_bundle",
+          :assistant_fetch_telemetry,
+          "assistant_fetch_telemetry"
+        ])
+      else
+        next_skill_state
+      end
+
+    put_in(state, [:skill_states, skill_id], durable_skill_state)
   end
 
   defp stash_emit(state, emit, skill_id, index) do

@@ -50,4 +50,31 @@ defmodule Maraithon.ChiefOfStaff.SourceBundleTest do
     assert [%{"text" => "<@UKENT> ping"}] = SourceBundle.slack_mentions(bundle)
     assert get_in(SourceBundle.freshness(bundle), ["slack", "counts", "message_count"]) == 1
   end
+
+  test "indexes Gmail, calendar, and Slack content for cycle-local id lookups" do
+    gmail = %{"message_id" => "m-1", "thread_id" => "t-1", "body_text" => "full body"}
+    event = %{"event_id" => "e-1", "summary" => "Planning"}
+
+    bundle =
+      %{}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{"messages" => [gmail]})
+      |> SourceBundle.put_calendar(%{"events" => [event]})
+      |> SourceBundle.put_slack(%{
+        "workspaces" => [
+          %{
+            "team_id" => "T1",
+            "key_channels" => [
+              %{"id" => "C1", "messages" => [%{"ts" => "10.0", "text" => "full text"}]}
+            ]
+          }
+        ]
+      })
+      |> SourceBundle.with_index()
+
+    assert SourceBundle.gmail_message(bundle, "m-1")["body_text"] == "full body"
+    assert SourceBundle.calendar_event(bundle, "e-1")["summary"] == "Planning"
+    assert SourceBundle.slack_message(bundle, "C1", "10.0")["text"] == "full text"
+    assert SourceBundle.gmail_message(bundle, "missing") == nil
+  end
 end
