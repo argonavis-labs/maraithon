@@ -8,7 +8,7 @@ Follow `AGENTS.md` for engineering rules and `DESIGN.md` for product UI directio
 - A local `make deploy` needs `gcloud` access to the `maraithon` project and `MARAITHON_AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY` (64 hex chars; CI reads it from the repo variable `AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY`).
 - Read-only production DB checks: execute the `maraithon-todo-validation` or `maraithon-migrate` Cloud Run job with `--args="^@^eval@<elixir>"` and `--update-env-vars POOL_SIZE=2`; read the printed marker back with `gcloud logging read`. Never `GRANT` anything to the six canonical `maraithon_*` database roles: the readiness proofs fingerprint their memberships and every new revision will refuse to boot.
 - Incident-role work (task/agent termination attestations) uses `MARAITHON_INCIDENT_DATABASE_URL`; see `docs/exact-agent-runtime-cutover.md`.
-- Never commit Fly/GCP tokens, operator credentials, API tokens, database URLs, or OAuth secrets. The Fly notes below are historical.
+- Never commit Fly/GCP tokens, operator credentials, API tokens, database URLs, or OAuth secrets.
 
 ## Current Verification Mode
 

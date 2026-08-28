@@ -209,6 +209,11 @@ defmodule MaraithonWeb.Router do
   scope "/api/v1", MaraithonWeb do
     pipe_through [:api, :api_auth]
 
+    # Exact runtime lifecycle (deploy handover)
+    get "/runtime/status", RuntimeController, :status
+    post "/runtime/drain", RuntimeController, :drain
+    post "/runtime/rejoin", RuntimeController, :rejoin
+
     # Agent management
     get "/agent-architecture", AgentController, :architectures
     post "/agents", AgentController, :create

@@ -67,6 +67,28 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   def prepare_shutdown, do: GenServer.call(__MODULE__, :prepare_shutdown, 30_000)
 
+  @doc """
+  Starts a drain without waiting for it. Used by the deploy pipeline before a
+  revision replacement: the node revokes its partitions, stops local Agents
+  with local proofs, and settles its tasks while it still has all the time it
+  needs, instead of racing the platform's SIGTERM grace period.
+  """
+  def request_drain, do: GenServer.cast(__MODULE__, :drain)
+
+  @doc "Leaves a drained state so the next tick registers a fresh incarnation."
+  def rejoin, do: GenServer.call(__MODULE__, :rejoin, 5_000)
+
+  @doc "Published phase and incarnation id, without touching the GenServer."
+  def status do
+    case :ets.lookup(@published_table, :current) do
+      [{:current, phase, %NodeIncarnation{id: id}}] -> %{phase: phase, node_incarnation_id: id}
+      [{:current, phase, _}] -> %{phase: phase, node_incarnation_id: nil}
+      [] -> %{phase: :unknown, node_incarnation_id: nil}
+    end
+  rescue
+    ArgumentError -> %{phase: :unavailable, node_incarnation_id: nil}
+  end
+
   @doc false
   def terminate_background_job_assignment(assignment_id) when is_binary(assignment_id) do
     case TaskClaims.get(assignment_id) do
@@ -150,6 +172,25 @@ defmodule Maraithon.Runtime.Coordination.Session do
     {reply, state} = drain(state)
     publish(state)
     {:reply, reply, state}
+  end
+
+  def handle_call(:rejoin, _from, %{phase: phase} = state)
+      when phase in [:draining, :uncertain] do
+    state = %{state | session: nil, leader: nil, phase: :dormant, joining_attempts: 0}
+    publish(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:rejoin, _from, state),
+    do: {:reply, {:error, {:not_drained, state.phase}}, state}
+
+  @impl true
+  def handle_cast(:drain, %{phase: :draining} = state), do: {:noreply, state}
+
+  def handle_cast(:drain, state) do
+    {_reply, state} = drain(state)
+    publish(state)
+    {:noreply, state}
   end
 
   @impl true
