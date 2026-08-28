@@ -283,7 +283,16 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   defp strip_transient(value, _path, depth, paths) when depth > @transient_strip_depth,
     do: {value, paths}
 
-  defp strip_transient(%{__struct__: _} = value, _path, _depth, paths), do: {value, paths}
+  # Calendar structs carry no payloads; every other struct (LLM responses,
+  # usage, provider records) is walked field by field and rebuilt.
+  defp strip_transient(%{__struct__: module} = value, _path, _depth, paths)
+       when module in [DateTime, NaiveDateTime, Date, Time, Decimal, Regex, MapSet],
+       do: {value, paths}
+
+  defp strip_transient(%{__struct__: module} = value, path, depth, paths) do
+    {fields, paths} = strip_transient(Map.from_struct(value), path, depth, paths)
+    {struct(module, fields), paths}
+  end
 
   defp strip_transient(value, path, depth, paths) when is_map(value) do
     Enum.reduce(value, {%{}, paths}, fn

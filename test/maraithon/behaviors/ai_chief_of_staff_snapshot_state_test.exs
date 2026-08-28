@@ -51,6 +51,17 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffSnapshotStateTest do
     assert snapshot.skill_states["inbox"].memo == "short"
   end
 
+  test "oversized strings inside structs are truncated and the struct kept" do
+    big = String.duplicate("x", 70_000)
+    state = %{skill_states: %{"inbox" => %{last_response: %URI{scheme: "https", path: big}}}}
+
+    snapshot = AIChiefOfStaff.snapshot_state(state)
+    %URI{scheme: "https", path: path} = snapshot.skill_states["inbox"].last_response
+
+    assert byte_size(path) < 20_000
+    assert String.ends_with?(path, "[truncated for checkpoint]")
+  end
+
   test "non-map state passes through" do
     assert AIChiefOfStaff.snapshot_state(:opaque) == :opaque
   end
