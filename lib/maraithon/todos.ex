@@ -186,12 +186,22 @@ defmodule Maraithon.Todos do
 
     ActivityEvent
     |> where([event], event.user_id == ^user_id)
+    |> maybe_filter_activity_event_type(Keyword.get(opts, :event_type))
     |> order_by([event], desc: event.occurred_at, desc: event.inserted_at)
     |> limit(^limit)
     |> Repo.all()
   end
 
   def list_activity_for_user(_user_id, _opts), do: []
+
+  defp maybe_filter_activity_event_type(query, nil), do: query
+
+  defp maybe_filter_activity_event_type(query, event_type)
+       when event_type in ["created", "deleted", "marked_done"] do
+    where(query, [event], event.event_type == ^event_type)
+  end
+
+  defp maybe_filter_activity_event_type(query, _invalid), do: where(query, [event], false)
 
   def list_by_ids(user_id, todo_ids, opts \\ [])
 

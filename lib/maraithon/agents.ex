@@ -460,6 +460,53 @@ defmodule Maraithon.Agents do
   end
 
   @doc """
+  Lists the latest durable OTP agent runs for one user.
+
+  The result contains only user-safe scalar run and step headers. Private run,
+  request, and response payloads are intentionally not loaded.
+  """
+  def list_recent_runs_for_user(user_id, opts \\ [])
+
+  def list_recent_runs_for_user(user_id, opts)
+      when is_binary(user_id) and is_list(opts) do
+    limit = recent_run_limit(opts)
+
+    runs =
+      AgentRun
+      |> join(:inner, [run], agent in Agent,
+        on: agent.id == run.agent_id and agent.user_id == run.user_id
+      )
+      |> join(:left, [run, _agent], package in AgentPackage,
+        on: package.id == run.agent_package_id
+      )
+      |> where([run, agent, _package], run.user_id == ^user_id and agent.user_id == ^user_id)
+      |> order_by([run, _agent, _package], desc: run.started_at, desc: run.id)
+      |> limit(^limit)
+      |> select([run, _agent, package], %{
+        id: run.id,
+        agent_id: run.agent_id,
+        package_name: package.name,
+        behavior: run.behavior,
+        status: run.status,
+        trigger_type: run.trigger_type,
+        budget_llm_calls: run.budget_llm_calls,
+        budget_tool_calls: run.budget_tool_calls,
+        error: run.error,
+        started_at: run.started_at,
+        completed_at: run.completed_at
+      })
+      |> Repo.all()
+
+    steps_by_run = recent_run_step_headers(user_id, Enum.map(runs, & &1.id))
+
+    Enum.map(runs, fn run ->
+      Map.put(run, :steps, Map.get(steps_by_run, run.id, []))
+    end)
+  end
+
+  def list_recent_runs_for_user(_user_id, _opts), do: []
+
+  @doc """
   Returns eligible and deferred legacy AgentRunStep ciphertext backlog counts.
 
   Deferred rows are requested, belong to a running run, or belong to a run
@@ -1738,6 +1785,62 @@ defmodule Maraithon.Agents do
     else
       {:error, :invalid_agent_run_step_payload_retention}
     end
+  end
+
+  defp recent_run_limit(opts) do
+    value = if Keyword.keyword?(opts), do: Keyword.get(opts, :limit, 50), else: 50
+
+    case value do
+      limit when is_integer(limit) -> limit |> max(1) |> min(50)
+      _invalid -> 50
+    end
+  end
+
+  defp recent_run_step_headers(_user_id, []), do: %{}
+
+  defp recent_run_step_headers(user_id, run_ids) do
+    ranked_steps =
+      from(step in AgentRunStep,
+        join: run in AgentRun,
+        on: run.id == step.agent_run_id and run.agent_id == step.agent_id,
+        join: agent in Agent,
+        on: agent.id == run.agent_id and agent.user_id == run.user_id,
+        where: step.agent_run_id in ^run_ids,
+        where: run.user_id == ^user_id and agent.user_id == ^user_id,
+        windows: [
+          per_run: [partition_by: step.agent_run_id, order_by: [desc: step.sequence]]
+        ],
+        select: %{
+          id: step.id,
+          agent_run_id: step.agent_run_id,
+          sequence: step.sequence,
+          step_type: step.step_type,
+          status: step.status,
+          tool_name: step.tool_name,
+          effect_type: step.effect_type,
+          started_at: step.started_at,
+          completed_at: step.completed_at,
+          position: over(row_number(), :per_run)
+        }
+      )
+
+    ranked_steps
+    |> subquery()
+    |> where([step], step.position <= 8)
+    |> order_by([step], asc: step.agent_run_id, asc: step.sequence)
+    |> select([step], %{
+      id: step.id,
+      agent_run_id: step.agent_run_id,
+      sequence: step.sequence,
+      step_type: step.step_type,
+      status: step.status,
+      tool_name: step.tool_name,
+      effect_type: step.effect_type,
+      started_at: step.started_at,
+      completed_at: step.completed_at
+    })
+    |> Repo.all()
+    |> Enum.group_by(& &1.agent_run_id)
   end
 
   defp hydrate_run_step_payloads!(%AgentRun{steps: steps} = run) when is_list(steps) do
