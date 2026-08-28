@@ -1,4 +1,6 @@
 defmodule Maraithon.Runtime.SnapshotFormat do
+  require Logger
+
   @moduledoc """
   Closed, bounded, versioned JSON encoding for durable Agent snapshots.
 
@@ -236,8 +238,10 @@ defmodule Maraithon.Runtime.SnapshotFormat do
   defp encode_node(%Time{calendar: Calendar.ISO} = value, _depth, nodes),
     do: {:ok, %{"$type" => "time", "value" => Time.to_iso8601(value)}, nodes + 1}
 
-  defp encode_node(%{__struct__: _module}, _depth, _nodes),
-    do: {:error, :unsupported_snapshot_type}
+  defp encode_node(%{__struct__: module}, _depth, _nodes) do
+    Logger.warning("Snapshot value type is not encodable", value_type: inspect(module))
+    {:error, :unsupported_snapshot_type}
+  end
 
   defp encode_node(value, depth, nodes) when is_tuple(value) do
     items = Tuple.to_list(value)
@@ -268,7 +272,16 @@ defmodule Maraithon.Runtime.SnapshotFormat do
     end
   end
 
-  defp encode_node(_value, _depth, _nodes), do: {:error, :unsupported_snapshot_type}
+  defp encode_node(value, _depth, _nodes) do
+    Logger.warning("Snapshot value type is not encodable", value_type: erlang_type(value))
+    {:error, :unsupported_snapshot_type}
+  end
+
+  defp erlang_type(value) when is_pid(value), do: "pid"
+  defp erlang_type(value) when is_reference(value), do: "reference"
+  defp erlang_type(value) when is_function(value), do: "function"
+  defp erlang_type(value) when is_port(value), do: "port"
+  defp erlang_type(_value), do: "unknown"
 
   defp encode_many(values, depth, nodes) do
     Enum.reduce_while(values, {:ok, [], nodes}, fn value, {:ok, encoded, count} ->

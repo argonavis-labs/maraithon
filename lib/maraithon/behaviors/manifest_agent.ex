@@ -120,7 +120,8 @@ defmodule Maraithon.Behaviors.ManifestAgent do
 
   @impl true
   def handle_effect_error(:llm_call, reason, state, context) do
-    if state.pending_source_effect? and state.source_module and
+    if state.pending_source_effect? and is_atom(state.source_module) and
+         not is_nil(state.source_module) and
          function_exported?(state.source_module, :handle_effect_error, 4) do
       state.source_module.handle_effect_error(:llm_call, reason, state.source_state, context)
       |> route_source_result(%{state | pending_source_effect?: false})
@@ -131,7 +132,8 @@ defmodule Maraithon.Behaviors.ManifestAgent do
 
   @impl true
   def handle_effect_error(:tool_call, reason, state, context) do
-    if state.pending_source_effect? and state.source_module and
+    if state.pending_source_effect? and is_atom(state.source_module) and
+         not is_nil(state.source_module) and
          function_exported?(state.source_module, :handle_effect_error, 4) do
       state.source_module.handle_effect_error(:tool_call, reason, state.source_state, context)
       |> route_source_result(%{state | pending_source_effect?: false})

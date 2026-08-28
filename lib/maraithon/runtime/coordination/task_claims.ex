@@ -813,6 +813,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
         _lease_cap =
           fence_effect_authority_in_transaction!(locked, agent_id, owner_generation, :owner)
 
+        set_action!(locked.id)
         settle_with_boundary!(locked, "not_entered", "cancelled_before_provider")
 
       %TaskAssignment{
@@ -842,6 +843,9 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
         _lease_cap =
           fence_effect_authority_in_transaction!(locked, agent_id, owner_generation, :owner)
 
+        # Outcome evidence and the settlement UPDATE are trigger-fenced to the
+        # exact task action, exactly like activation and provider entry.
+        set_action!(locked.id)
         record_outcome_and_settle!(locked, outcome)
 
       %TaskAssignment{state: "settled", provider_boundary: boundary, outcome: ^outcome}
