@@ -256,6 +256,31 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   defp effect_type_label(_effect_type), do: "unknown"
 
   @impl true
+  def snapshot_state(state) when is_map(state) do
+    strip_transient(state, 0)
+  end
+
+  def snapshot_state(state), do: state
+
+  # Source bundles are re-fetched every cycle and can be megabytes; a checkpoint
+  # taken mid-cycle must not carry them (or any nested skill's copy).
+  @transient_snapshot_keys [:source_bundle, :assistant_fetch_telemetry]
+  @transient_strip_depth 6
+
+  defp strip_transient(value, depth) when depth > @transient_strip_depth, do: value
+
+  defp strip_transient(%{__struct__: _} = value, _depth), do: value
+
+  defp strip_transient(value, depth) when is_map(value) do
+    Map.new(value, fn
+      {key, _inner} when key in @transient_snapshot_keys -> {key, nil}
+      {key, inner} -> {key, strip_transient(inner, depth + 1)}
+    end)
+  end
+
+  defp strip_transient(value, _depth), do: value
+
+  @impl true
   def next_wakeup(state) do
     scan_schedule = {:relative, Map.get(state, :wakeup_interval_ms, @default_wakeup_interval_ms)}
 

@@ -40,10 +40,22 @@ defmodule Maraithon.Runtime.SnapshotFormat do
          true <- byte_size(json) <= @max_encoded_bytes do
       {:ok, envelope, byte_size(json)}
     else
-      false -> {:error, :snapshot_too_large}
-      {:error, %Jason.EncodeError{}} -> {:error, :unsupported_snapshot_type}
-      {:error, reason} when is_atom(reason) -> {:error, reason}
-      _other -> {:error, :unsupported_snapshot_type}
+      false ->
+        Logger.warning("Snapshot exceeds the encoded size cap",
+          failure_code: "snapshot_too_large",
+          snapshot_bytes: encoded_size(term)
+        )
+
+        {:error, :snapshot_too_large}
+
+      {:error, %Jason.EncodeError{}} ->
+        {:error, :unsupported_snapshot_type}
+
+      {:error, reason} when is_atom(reason) ->
+        {:error, reason}
+
+      _other ->
+        {:error, :unsupported_snapshot_type}
     end
   rescue
     _error -> {:error, :unsupported_snapshot_type}
@@ -508,6 +520,15 @@ defmodule Maraithon.Runtime.SnapshotFormat do
       _invalid_entry, _acc ->
         {:halt, {:error, :invalid_snapshot_format}}
     end)
+  end
+
+  defp encoded_size(term) do
+    case encode_node(term, 0, 0) do
+      {:ok, encoded, _nodes} -> encoded |> Jason.encode!() |> byte_size()
+      _error -> nil
+    end
+  rescue
+    _error -> nil
   end
 
   defp existing_struct_module(name) do

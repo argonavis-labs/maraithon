@@ -1447,13 +1447,29 @@ defmodule Maraithon.Runtime.Agent do
            data.agent_id,
            data.sequence_num,
            :idle,
-           data.behavior_state,
+           snapshot_behavior_state(data),
            data.budget,
            behavior_schema_version(data.behavior_module)
          ) do
-      {:ok, _snapshot} -> :ok
-      {:error, reason} -> Repo.rollback({:snapshot_persist_failed, reason})
+      {:ok, _snapshot} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Exact Agent snapshot persist failed",
+          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        Repo.rollback({:snapshot_persist_failed, reason})
     end
+  end
+
+  # Behaviors may trim transient working data (fetched source bundles) before a
+  # checkpoint; the live state is untouched.
+  defp snapshot_behavior_state(%{behavior_module: module, behavior_state: state}) do
+    if is_atom(module) and function_exported?(module, :snapshot_state, 1),
+      do: module.snapshot_state(state),
+      else: state
   end
 
   # Best-effort only for the retained legacy compatibility path. Exact
@@ -1464,7 +1480,7 @@ defmodule Maraithon.Runtime.Agent do
            data.agent_id,
            data.sequence_num,
            :idle,
-           data.behavior_state,
+           snapshot_behavior_state(data),
            data.budget,
            behavior_schema_version(data.behavior_module)
          ) do

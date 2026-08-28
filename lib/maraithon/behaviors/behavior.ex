@@ -102,8 +102,18 @@ defmodule Maraithon.Behaviors.Behavior do
   """
   @callback reconcile_restored_state(state(), config :: map()) :: state()
 
+  @doc """
+  Returns the state to persist in a checkpoint snapshot.
+
+  Behaviors that hold large transient working data (fetched source bundles,
+  raw provider payloads) strip it here so checkpoints stay within the
+  snapshot size cap; restored state must tolerate those fields being empty.
+  """
+  @callback snapshot_state(state()) :: state()
+
   @optional_callbacks handle_effect_error: 4,
                       schema_version: 0,
                       migrate_state: 3,
-                      reconcile_restored_state: 2
+                      reconcile_restored_state: 2,
+                      snapshot_state: 1
 end

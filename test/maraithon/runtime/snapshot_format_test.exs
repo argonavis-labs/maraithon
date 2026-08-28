@@ -60,7 +60,21 @@ defmodule Maraithon.Runtime.SnapshotFormatTest do
     assert {:error, :snapshot_integer_out_of_range} =
              SnapshotFormat.encode(9_223_372_036_854_775_808)
 
-    assert {:error, :unsupported_snapshot_type} = SnapshotFormat.encode(%URI{scheme: "https"})
+    # Plain data structs are part of the grammar (behavior state carries LLM
+    # response/usage structs); they round-trip only into existing struct modules.
+    assert {:ok, envelope, _bytes} = SnapshotFormat.encode(%URI{scheme: "https"})
+    assert {:ok, %URI{scheme: "https", host: nil}} = SnapshotFormat.decode(envelope)
+
+    assert {:error, :unknown_snapshot_struct} =
+             SnapshotFormat.decode(%{
+               envelope
+               | "value" => %{
+                   "$type" => "struct",
+                   "module" => "Elixir.Maraithon.NoSuchStruct",
+                   "entries" => []
+                 }
+             })
+
     assert {:error, :unsupported_snapshot_type} = SnapshotFormat.encode(self())
   end
 
