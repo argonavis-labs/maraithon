@@ -1,9 +1,17 @@
-This is a web application written using the Phoenix web framework.
+# Maraithon engineering rules
+
+Maraithon is a todo list that keeps itself current. A user's Chief of Staff
+agent reads their inbox, calendar, Slack, and other sources, turns commitments
+and follow-ups into todos, keeps them ranked, marks them done when the world
+says so, and briefs the user. Everything else in this repository (connectors,
+runtime, mobile, companion) exists to make that todo list trustworthy. When a
+change does not make the todo list more accurate, timelier, or easier to act
+on, question it.
 
 ## Monorepo layout
 
-- The Phoenix web app, API, connectors, OTP runtime, migrations, Dockerfile,
-  and Fly deployment live at the repository root.
+- The Phoenix web app, API, connectors, OTP runtime, migrations, and Dockerfile
+  live at the repository root.
 - The native macOS companion app lives in `apps/companion`.
 - The native iOS app lives in `apps/mobile`.
 - Use the root `Makefile` for cross-stack workflows:
@@ -15,17 +23,89 @@ This is a web application written using the Phoenix web framework.
 - Native apps use XcodeGen. Treat each `project.yml` as the source of truth
   and do not commit generated `.xcodeproj` files.
 
+## Product focus: the todo list
+
+- The unit of value is a todo the user trusts: sourced from something real
+  (an email, a meeting, a Slack thread), explained in one line, ranked, and
+  closed automatically when evidence arrives. Todo surfaces (`/todos`, the
+  mobile todo list, the daily brief) come first; connector and runtime pages
+  are operational and stay row-oriented and quiet.
+- The Chief of Staff (`Maraithon.Behaviors.AIChiefOfStaff` plus the skills in
+  `lib/maraithon/chief_of_staff/skills`) wakes every 10 minutes by default,
+  fetches a source bundle, runs its enabled skills as LLM effects, and emits
+  todos, insights, and briefs. Recurring discovery schedules
+  (`Maraithon.Runtime.RecurringJobs`) run every 1 to 30 minutes and fan work
+  out to per-account and per-user partitions. Both must be observably alive in
+  production; see "Runtime health" below.
+
+## The exact OTP runtime
+
+- PostgreSQL is the authority for ownership; BEAM processes are hints. Node
+  incarnations, partitions, leaders, Agent leases, and task assignments are
+  leased rows fenced by triggers. Never persist ownership or outcomes from a
+  process that cannot prove its lease in the same transaction.
+- `Maraithon.Runtime.Coordination.Session` (one per node) registers the node,
+  renews node and partition leases every 2s, runs the planner, and publishes
+  its scope to ETS. `Scope.current/0` reads that publication and never blocks
+  on the GenServer. Do not add synchronous calls into the Session from inside
+  database transactions that hold row locks.
+- Exact-protocol storage verification (catalog fingerprints, roles, ACLs,
+  manifest digest) is expensive on managed PostgreSQL. It runs through
+  `StorageVerificationCache` (bounded, positive-only, cleared on activation).
+  Activation preconditions and activation itself always verify uncached.
+- Every write that records a task outcome, activates a task, or settles an
+  assignment must set the transaction-local task action (`set_action!`)
+  before touching `runtime_task_outcome_evidence` or
+  `runtime_task_assignments`; the triggers reject anything else.
+- Each user's Chief of Staff is a `gen_statem` (`Maraithon.Runtime.Agent`)
+  with an `AgentWatcher` monitor, a durable restart guard (3 crashes per 10
+  minutes trips it and stops the Agent), and checkpoint snapshots capped at
+  1 MiB. Behaviors that carry large transient data implement
+  `snapshot_state/1` to strip it before a checkpoint.
+- A node that dies with unproven tasks leaves its partition `draining` until
+  the tasks are proven terminated. Deploys drain the serving revision through
+  `/api/v1/runtime/drain` before replacing it. A stranded task needs an
+  incident-role attestation (`mix maraithon.tasks.attest_terminated` for
+  background jobs, `mix maraithon.effects.attest_terminated` for Effects,
+  `mix maraithon.agents.attest_terminated` for Agents) with real destruction
+  evidence; see `docs/exact-agent-runtime-cutover.md`.
+- The six canonical database roles (`maraithon_object_owner`, `_migrator`,
+  `_runtime`, `_payload_verifier`, `_incident_operator`,
+  `_activation_operator`) are fingerprinted including their memberships. Never
+  `GRANT` other roles to them; every readiness proof turns false and new
+  revisions refuse to boot.
+
+## Runtime health
+
+Before calling the runtime healthy, check all of these in production:
+
+- `runtime_partitions`: every row `ready` with a live lease; no `draining`.
+- `runtime_task_assignments`: nothing stuck in `termination_requested`.
+- `background_jobs WHERE queue = 'runtime_recurring'`: each schedule's
+  `scheduled_at` is in the near future and advancing on its interval.
+- The Chief of Staff logs `Exact Agent recovered, transitioning to idle`
+  within seconds of a start, `effect_completed` events with matching
+  `runtime_task_outcome_evidence` rows, and `checkpoint_created` events with
+  no `snapshot_persist_failed`.
+- `pg_stat_statements` (enabled) shows no verification or renewal query
+  dominating total time.
+
+Cloud SQL server logs (`resource.type="cloudsql_database"`) show trigger
+messages the application redacts; read them first when the app reports
+"database access failed".
+
 ## Project guidelines
 
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
-- Deploy production to Google Cloud with `make deploy`. Production is pinned to project `maraithon`, region `us-central1`, Cloud Run service `maraithon`, and Cloud SQL instance `maraithon-db`.
+- Deploy production to Google Cloud with `make deploy`. Production is pinned to project `maraithon`, region `us-central1`, Cloud Run service `maraithon`, and Cloud SQL instance `maraithon-db`. Every push to `main` deploys through `.github/workflows/deploy-gcp.yml`.
 - CI authenticates keylessly through the `maraithon-github` Workload Identity provider as `admin-deployer@maraithon.iam.gserviceaccount.com`; do not create or commit service-account keys.
 - Keep operator credentials outside the repo and application secrets in Google Secret Manager. Never commit admin passwords, API bearer tokens, database URLs, LLM provider keys, or OAuth secrets.
+- Production checks run as Cloud Run job executions with an `eval` override (`--args="^@^eval@<elixir>"`, `--update-env-vars POOL_SIZE=2`), never from a laptop against the database.
 
 ## Current verification mode
 
 - Product iteration is currently production-first. Until Kent explicitly re-enables broad test runs, do not run `mix test`, `mix precommit`, `make test`, `make verify`, Xcode test actions, SwiftPM tests, or other expensive test suites by default.
-- Use compile/build sanity checks instead: `mix compile`, `make build-web`, `make build-api`, `make build-mobile`, `swift build`, or the narrowest build command relevant to the changed slice.
+- Use compile/build sanity checks instead: `mix compile --warnings-as-errors`, `make build-web`, `make build-api`, `make build-mobile`, `swift build`, or the narrowest build command relevant to the changed slice. Running the single test file you touched is fine.
 - If a narrow test would materially reduce risk, ask first or explain why it is necessary before running it. Prefer getting the change deployed quickly for live product feedback.
 - Do not delete, gut, skip, or game the existing test suite. This is an operating mode for faster iteration, not permission to remove coverage. When Kent says to harden again, restore normal test/precommit discipline.
 
