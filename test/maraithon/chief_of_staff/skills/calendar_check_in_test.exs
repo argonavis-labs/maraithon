@@ -75,7 +75,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
              CalendarCheckIn.handle_wakeup(state, context(ctx, events))
 
     assert is_map(params)
-    assert pending.pending_check_in_input["openings"] != []
+    assert pending.pending_effect.effect_kind == :calendar_check_in
+    assert pending.pending_effect.openings != []
+    refute Map.has_key?(pending, :pending_check_in_input)
   end
 
   test "uses named timezone offsets and labels for openings", %{user_id: user_id} = ctx do
@@ -258,7 +260,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
 
     assert payload.cadences == ["check_in"]
     assert final_state.last_check_in_at != nil
-    assert final_state.pending_check_in_input == nil
+    assert final_state.pending_effect == nil
 
     brief = Repo.get(Brief, payload.brief_id)
     assert brief.cadence == "check_in"
@@ -516,7 +518,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
              )
 
     assert final_state.last_check_in_at == nil
-    assert final_state.pending_check_in_input == nil
+    assert final_state.pending_effect == nil
   end
 
   test "idles when recently checked in", %{state: state} = ctx do

@@ -118,8 +118,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
         integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 256, 8_000),
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
-      pending_check_in_input: nil,
-      pending_dedupe_key: nil,
+      pending_effect: nil,
       last_check_in_at: nil
     }
   end
@@ -153,8 +152,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
           pending_state = %{
             state
             | user_id: user_id,
-              pending_check_in_input: check_in_input,
-              pending_dedupe_key: "calendar_check_in:#{check_in_input["window_key"]}"
+              pending_effect: pending_effect(check_in_input, context, now)
           }
 
           case llm_params(check_in_input, state) do
@@ -335,6 +333,106 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   # Model call + delivery
   # ==========================================================================
 
+  defp pending_effect(check_in_input, context, now) do
+    %{
+      effect_kind: :calendar_check_in,
+      cycle_id: context[:assistant_cycle_id],
+      candidate_refs: check_in_candidate_refs(check_in_input),
+      dedupe_key: "calendar_check_in:#{check_in_input["window_key"]}",
+      window_key: check_in_input["window_key"],
+      openings: Enum.map(check_in_input["openings"] || [], &compact_opening/1),
+      issued_at: DateTime.to_iso8601(now)
+    }
+  end
+
+  defp check_in_candidate_refs(check_in_input) do
+    event_refs =
+      check_in_input
+      |> Map.get("todays_events", [])
+      |> Enum.take(20)
+      |> Enum.map(fn event ->
+        %{
+          "kind" => "calendar_event",
+          "event_id" => read_string(event, "event_id", nil),
+          "subject" => read_string(event, "summary", nil),
+          "occurred_at" => read_string(event, "start", read_string(event, "local_start", nil))
+        }
+        |> compact_map()
+      end)
+
+    todo_refs =
+      check_in_input
+      |> read_map("open_work")
+      |> read_list("todos")
+      |> Enum.take(5)
+      |> Enum.map(fn todo ->
+        %{
+          "kind" => "todo",
+          "todo_id" => read_string(todo, "id", nil),
+          "title" => truncate(read_string(todo, "title", nil), 300),
+          "summary" => truncate(read_string(todo, "summary", nil), 500),
+          "next_action" => truncate(read_string(todo, "next_action", nil), 500),
+          "occurred_at" =>
+            read_string(todo, "source_occurred_at", read_string(todo, "due_at", nil))
+        }
+        |> compact_map()
+      end)
+
+    held_refs =
+      check_in_input
+      |> read_map("open_work")
+      |> read_list("held_interruptions")
+      |> Enum.take(25)
+      |> Enum.map(fn item ->
+        %{"kind" => "held_interruption", "id" => read_string(item, "id", nil)}
+        |> compact_map()
+      end)
+
+    event_refs ++ todo_refs ++ held_refs
+  end
+
+  defp compact_opening(opening) when is_map(opening) do
+    opening
+    |> stringify_top_level_keys()
+    |> Map.take([
+      "local_start",
+      "local_end",
+      "display_range",
+      "timezone",
+      "duration_minutes",
+      "next_event_id",
+      "next_event_subject",
+      "next_event_start"
+    ])
+    |> compact_map()
+  end
+
+  defp compact_opening(_opening), do: %{}
+
+  defp check_in_input_for_result(pending_effect) do
+    refs = Map.get(pending_effect, :candidate_refs, Map.get(pending_effect, "candidate_refs", []))
+
+    todos =
+      refs
+      |> Enum.filter(&(read_string(&1, "kind", nil) == "todo"))
+      |> Enum.map(fn ref ->
+        ref
+        |> Map.put("id", read_string(ref, "todo_id", nil))
+        |> Map.drop(["kind", "todo_id"])
+      end)
+
+    held =
+      refs
+      |> Enum.filter(&(read_string(&1, "kind", nil) == "held_interruption"))
+      |> Enum.map(&%{"id" => read_string(&1, "id", nil)})
+
+    %{
+      "window_key" => read_string(pending_effect, "window_key", nil),
+      "openings" => Map.get(pending_effect, :openings, Map.get(pending_effect, "openings", [])),
+      "open_work" => %{"todos" => todos, "held_interruptions" => held}
+    }
+  end
+
   defp llm_params(check_in_input, state) do
     with {:ok, input_json} <- Jason.encode(check_in_input) do
       params =
@@ -410,7 +508,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   defp deliver_check_in(response, state, context) do
     user_id = context[:user_id] || state.user_id
     now = DateTime.utc_now()
-    cleared = %{state | pending_check_in_input: nil, pending_dedupe_key: nil}
+    cleared = %{state | pending_effect: nil}
 
     case parse_response(response) do
       {:ok, %{"decision" => "send"} = check_in} ->
@@ -430,13 +528,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp record_and_emit(check_in, cleared_state, state, user_id, context, now) do
-    check_in_input = state.pending_check_in_input || %{}
+    pending_effect = state.pending_effect || %{}
+    check_in_input = check_in_input_for_result(pending_effect)
     check_in = user_facing_check_in(check_in, check_in_input)
 
     attrs = %{
       "cadence" => "check_in",
       "scheduled_for" => DateTime.to_iso8601(now),
-      "dedupe_key" => state.pending_dedupe_key || "calendar_check_in:#{DateTime.to_iso8601(now)}",
+      "dedupe_key" =>
+        read_string(pending_effect, "dedupe_key", nil) ||
+          "calendar_check_in:#{DateTime.to_iso8601(now)}",
       "status" => "pending",
       "title" => check_in["title"],
       "summary" => check_in["summary"],
@@ -1100,6 +1201,26 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
       _ -> default
     end
   end
+
+  defp stringify_top_level_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
+  end
+
+  defp compact_map(map) when is_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", [], %{}] end)
+    |> Map.new()
+  end
+
+  defp truncate(nil, _max), do: nil
+
+  defp truncate(value, max) when is_binary(value) do
+    if String.length(value) <= max,
+      do: value,
+      else: String.slice(value, 0, max - 3) <> "..."
+  end
+
+  defp truncate(value, _max), do: value
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, _key, ""), do: map
