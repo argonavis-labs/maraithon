@@ -439,6 +439,9 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert_patch(view, "/todos/#{decision.id}?attention=decision")
     assert detail_html =~ "Approve investor reply"
     assert detail_html =~ "Brief"
+    assert detail_html =~ "Send the revised terms and confirm the review window."
+    refute detail_html =~ "Thinking it through"
+    refute detail_html =~ ~s(aria-busy="true")
     refute detail_html =~ "Decision to make"
     refute detail_html =~ "Sources checked"
     refute detail_html =~ "Supporting details"

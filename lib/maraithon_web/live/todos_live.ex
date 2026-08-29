@@ -1310,7 +1310,10 @@ defmodule MaraithonWeb.TodosLive do
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
             <h2 class="text-sm/6 font-semibold text-zinc-950">Brief</h2>
-            <p :if={@loading?} class="flex items-center gap-2 text-sm/6 text-zinc-500">
+            <p
+              :if={@loading? and @fallback_fields == []}
+              class="flex items-center gap-2 text-sm/6 text-zinc-500"
+            >
               <span class="inline-block size-2 animate-pulse rounded-full bg-zinc-400" aria-hidden="true"></span>
               <%= @brief_progress || "Reading the source" %>
             </p>
@@ -1330,7 +1333,7 @@ defmodule MaraithonWeb.TodosLive do
         </div>
       </:header>
 
-      <div :if={@loading?} class="space-y-3" aria-busy="true">
+      <div :if={@loading? and @fallback_fields == []} class="space-y-3" aria-busy="true">
         <div class="h-3 w-2/3 animate-pulse rounded bg-zinc-100"></div>
         <div class="h-3 w-full animate-pulse rounded bg-zinc-100"></div>
         <div class="h-3 w-5/6 animate-pulse rounded bg-zinc-100"></div>
@@ -1377,7 +1380,7 @@ defmodule MaraithonWeb.TodosLive do
         </p>
       </div>
 
-      <dl :if={not @show_brief? and not @loading? and @fallback_fields != []} class="divide-y divide-zinc-950/5">
+      <dl :if={not @show_brief? and @fallback_fields != []} class="divide-y divide-zinc-950/5">
         <div :for={field <- @fallback_fields} class="py-3 first:pt-0 last:pb-0">
           <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
           <dd class="mt-1 whitespace-pre-wrap break-words text-sm/6 text-zinc-800"><%= field.value %></dd>
