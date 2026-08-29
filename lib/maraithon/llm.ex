@@ -93,13 +93,13 @@ defmodule Maraithon.LLM do
   end
 
   @doc """
-  Reasoning effort for brief-tier calls. Defaults to "xhigh".
+  Reasoning effort for brief-tier calls. Defaults to "high".
   """
   def brief_reasoning_effort do
     runtime_config()
     |> Keyword.get(:llm_brief_reasoning_effort)
     |> case do
-      value when value in [nil, ""] -> "xhigh"
+      value when value in [nil, ""] -> "high"
       value -> value
     end
   end
@@ -150,7 +150,7 @@ defmodule Maraithon.LLM do
 
   def openrouter_model do
     runtime_config()
-    |> Keyword.get(:openrouter_model, "qwen/qwen3.7-max")
+    |> Keyword.get(:openrouter_model, "moonshotai/kimi-k3")
   end
 
   def openrouter_api_key do
@@ -160,7 +160,7 @@ defmodule Maraithon.LLM do
 
   def openrouter_reasoning_effort do
     runtime_config()
-    |> Keyword.get(:openrouter_reasoning_effort, "medium")
+    |> Keyword.get(:openrouter_reasoning_effort, "high")
   end
 
   def openrouter_http_referer do

@@ -762,7 +762,7 @@ flyctl secrets set -a maraithon \
   AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY="base64-or-hex-ed25519-public-key" \
   OPENAI_API_KEY="sk-proj-..." \
   OPENROUTER_API_KEY="sk-or-v1-..." \
-  LLM_MODEL="qwen/qwen3.7-max" \
+  LLM_MODEL="moonshotai/kimi-k3" \
   FLY_API_TOKEN="replace-with-fly-token" \
   FLY_LOG_APPS="maraithon" \
   FLY_LOG_REGION="yyz" \
@@ -877,7 +877,7 @@ Never commit deployment secrets.
 # Required for LLM. Set both keys once, then switch models with LLM_MODEL.
 export OPENAI_API_KEY="sk-proj-..."
 export OPENROUTER_API_KEY="sk-or-v1-..."
-export LLM_MODEL="qwen/qwen3.7-max" # or "gpt-5.4" for direct OpenAI
+export LLM_MODEL="moonshotai/kimi-k3" # or "gpt-5.4" for direct OpenAI
 
 # Required for production security
 export ADMIN_USERNAME="admin"
@@ -895,7 +895,7 @@ export DB_QUEUE_INTERVAL_MS="2000"
 
 # Optional
 export OPENAI_REASONING_EFFORT="high"
-export OPENROUTER_REASONING_EFFORT="medium"
+export OPENROUTER_REASONING_EFFORT="high"
 export LLM_PROVIDER="openai" # optional legacy override; LLM_MODEL wins when set
 export ANTHROPIC_API_KEY="sk-ant-..." # optional alternate provider
 export ANTHROPIC_MODEL="claude-sonnet-4-20250514"

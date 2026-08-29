@@ -13,6 +13,8 @@ defmodule Maraithon.RuntimeConfigTest do
     OPENROUTER_CHAT_MODEL
     OPENROUTER_ROUTING_MODEL
     OPENROUTER_FAST_MODEL
+    OPENROUTER_REASONING_EFFORT
+    LLM_BRIEF_REASONING_EFFORT
     ANTHROPIC_API_KEY
     ANTHROPIC_MODEL
     ANTHROPIC_CHAT_MODEL
@@ -47,6 +49,24 @@ defmodule Maraithon.RuntimeConfigTest do
     assert Keyword.fetch!(runtime, :llm_model) == "qwen/qwen3.7-max"
     assert Keyword.fetch!(runtime, :llm_chat_model) == "qwen/qwen3.7-max"
     assert Keyword.fetch!(runtime, :llm_routing_model) == "qwen/qwen3.7-max"
+    assert Keyword.fetch!(runtime, :llm_api_key) == "test-openrouter-key"
+  end
+
+  test "LLM_MODEL=kimi-k3 selects Kimi K3 on OpenRouter at high intelligence" do
+    System.put_env("LLM_MODEL", "kimi-k3")
+    System.put_env("LLM_PROVIDER", "openai")
+    System.put_env("OPENAI_API_KEY", "test-openai-key")
+    System.put_env("OPENROUTER_API_KEY", "test-openrouter-key")
+
+    runtime = runtime_config()
+
+    assert Keyword.fetch!(runtime, :llm_provider_name) == "openrouter"
+    assert Keyword.fetch!(runtime, :llm_provider) == Maraithon.LLM.OpenRouterProvider
+    assert Keyword.fetch!(runtime, :llm_model) == "moonshotai/kimi-k3"
+    assert Keyword.fetch!(runtime, :llm_chat_model) == "moonshotai/kimi-k3"
+    assert Keyword.fetch!(runtime, :llm_routing_model) == "moonshotai/kimi-k3"
+    assert Keyword.fetch!(runtime, :openrouter_reasoning_effort) == "high"
+    assert Keyword.fetch!(runtime, :llm_brief_reasoning_effort) == "high"
     assert Keyword.fetch!(runtime, :llm_api_key) == "test-openrouter-key"
   end
 

@@ -399,7 +399,10 @@ defmodule Maraithon.LLM.OpenRouterProvider do
 
   defp build_body(params) when is_map(params) do
     model =
-      configured_model(params["model"] || Maraithon.LLM.openrouter_model(), "qwen/qwen3.7-max")
+      configured_model(
+        params["model"] || Maraithon.LLM.openrouter_model(),
+        "moonshotai/kimi-k3"
+      )
 
     %{
       model: model,

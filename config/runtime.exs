@@ -121,7 +121,8 @@ config :maraithon, MaraithonWeb.Endpoint, http: [ip: {0, 0, 0, 0}, port: port]
 
 # LLM Provider Configuration
 default_openai_model = "gpt-5.4"
-default_openrouter_model = "qwen/qwen3.7-max"
+default_openrouter_model = "moonshotai/kimi-k3"
+default_qwen_model = "qwen/qwen3.7-max"
 
 llm_model_selector =
   System.get_env("LLM_MODEL", "")
@@ -137,6 +138,12 @@ selected_llm_provider =
 
     "gpt" ->
       "openai"
+
+    "kimi" ->
+      "openrouter"
+
+    "kimi-k3" ->
+      "openrouter"
 
     "qwen" ->
       "openrouter"
@@ -185,8 +192,10 @@ selected_llm_model =
     "" -> nil
     "openai" -> default_openai_model
     "gpt" -> default_openai_model
-    "qwen" -> default_openrouter_model
-    "qwen-max" -> default_openrouter_model
+    "kimi" -> default_openrouter_model
+    "kimi-k3" -> default_openrouter_model
+    "qwen" -> default_qwen_model
+    "qwen-max" -> default_qwen_model
     "openrouter" -> default_openrouter_model
     "openrouter:" <> model -> String.trim(model)
     "openai:" <> model -> String.trim(model)
@@ -222,7 +231,7 @@ openrouter_model =
     System.get_env("OPENROUTER_MODEL", default_openrouter_model)
   end
 
-openrouter_reasoning_effort = System.get_env("OPENROUTER_REASONING_EFFORT", "medium")
+openrouter_reasoning_effort = System.get_env("OPENROUTER_REASONING_EFFORT", "high")
 openrouter_http_referer = System.get_env("OPENROUTER_HTTP_REFERER", "https://maraithon.app")
 openrouter_app_title = System.get_env("OPENROUTER_APP_TITLE", "Maraithon")
 
@@ -441,8 +450,8 @@ llm_brief_model =
   |> Enum.find(&(&1 != ""))
 
 llm_brief_reasoning_effort =
-  case System.get_env("LLM_BRIEF_REASONING_EFFORT", "xhigh") |> String.trim() do
-    "" -> "xhigh"
+  case System.get_env("LLM_BRIEF_REASONING_EFFORT", "high") |> String.trim() do
+    "" -> "high"
     value -> value
   end
 

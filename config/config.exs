@@ -93,8 +93,8 @@ config :maraithon, Maraithon.Runtime,
   llm_model: "gpt-5.4",
   anthropic_model: "claude-sonnet-4-20250514",
   openai_model: "gpt-5.4",
-  openrouter_model: "qwen/qwen3.7-max",
-  openrouter_reasoning_effort: "medium",
+  openrouter_model: "moonshotai/kimi-k3",
+  openrouter_reasoning_effort: "high",
   openai_reasoning_effort: "high",
   llm_primary_max_tokens: 32_000
 
