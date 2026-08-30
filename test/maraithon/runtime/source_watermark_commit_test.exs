@@ -6,15 +6,14 @@ defmodule Maraithon.Runtime.SourceWatermarkCommitTest do
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.BackgroundJobs
+  alias Maraithon.Runtime.SourceCycle
   alias Maraithon.Runtime.SourceWatermarkCommit
 
   test "commits and sanitizes a deferred cursor inside the caller transaction" do
     account = connected_account("atomic")
 
-    job = %BackgroundJob{
-      user_id: account.user_id,
-      job_type: "runtime_partition:source_account_discovery"
-    }
+    job = source_job(account, "runtime_partition:source_account_discovery", "atomic")
 
     handler_result =
       {:ok,
@@ -42,10 +41,19 @@ defmodule Maraithon.Runtime.SourceWatermarkCommitTest do
                assert %{value: "1700000600"} =
                         SourceCursors.get(account.id, "gmail_discovery_watermark")
 
+               assert %SourceCycle{acquisition_job_id: acquisition_job_id} =
+                        Repo.get_by(SourceCycle,
+                          connected_account_id: account.id,
+                          role: "discovery"
+                        )
+
+               assert acquisition_job_id == job.id
+
                Repo.rollback(:rollback_probe)
              end)
 
     refute SourceCursors.get(account.id, "gmail_discovery_watermark")
+    refute Repo.get_by(SourceCycle, connected_account_id: account.id, role: "discovery")
   end
 
   test "rejects a deferred cursor on the wrong job role without writing it" do
@@ -85,5 +93,18 @@ defmodule Maraithon.Runtime.SourceWatermarkCommitTest do
       })
 
     account
+  end
+
+  defp source_job(account, job_type, suffix) do
+    {:ok, job} =
+      BackgroundJobs.enqueue(job_type, %{
+        user_id: account.user_id,
+        queue: "runtime_model_user",
+        dedupe_key: "source-watermark-proof:#{suffix}:#{account.id}",
+        scheduled_at: DateTime.utc_now(),
+        payload: %{"account_id" => account.id}
+      })
+
+    job
   end
 end

@@ -111,7 +111,6 @@ defmodule Maraithon.Runtime.SourceCycle do
       less_than_or_equal_to: 20_000
     )
     |> validate_reason_jobs()
-    |> validate_cursor_interval()
     |> validate_role_shape()
     |> validate_fanout_shape()
     |> validate_denominator_fanout()
@@ -160,15 +159,6 @@ defmodule Maraithon.Runtime.SourceCycle do
     end)
   end
 
-  defp validate_cursor_interval(changeset) do
-    lower = get_field(changeset, :lower_cursor)
-    upper = get_field(changeset, :upper_cursor)
-
-    if is_binary(lower) and lower == upper,
-      do: add_error(changeset, :upper_cursor, "must differ from lower_cursor"),
-      else: changeset
-  end
-
   defp validate_role_shape(changeset) do
     if get_field(changeset, :role) == "discovery" and
          get_field(changeset, :todo_snapshot_count, 0) != 0 do
@@ -205,7 +195,7 @@ defmodule Maraithon.Runtime.SourceCycle do
         _other -> 0
       end
 
-    if (denominator_count == 0) == (reason_job_count == 0) do
+    if denominator_count == 0 == (reason_job_count == 0) do
       changeset
     else
       add_error(changeset, :reason_job_count, "must match whether the cycle has work")

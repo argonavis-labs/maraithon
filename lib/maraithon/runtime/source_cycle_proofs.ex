@@ -94,6 +94,105 @@ defmodule Maraithon.Runtime.SourceCycleProofs do
 
   def reference_digest(_reference), do: nil
 
+  @doc "Returns source reference/revision pairs already sealed for an account role."
+  def settled_revision_pairs(account_id, role, proof_items)
+      when is_integer(account_id) and account_id > 0 and role in ["discovery", "closure"] and
+             is_list(proof_items) do
+    ref_digests =
+      proof_items
+      |> Enum.map(&value(&1, :source_ref_digest))
+      |> Enum.filter(&(is_binary(&1) and byte_size(&1) == 32))
+      |> Enum.uniq()
+
+    if ref_digests == [] do
+      MapSet.new()
+    else
+      base =
+        from(item in SourceCycleItem,
+          join: cycle in SourceCycle,
+          on: cycle.id == item.cycle_id,
+          where:
+            cycle.connected_account_id == ^account_id and cycle.role == ^role and
+              item.source_ref_digest in ^ref_digests,
+          select: {item.source_ref_digest, item.source_revision_digest}
+        )
+
+      query =
+        if role == "discovery" do
+          from([item, cycle] in base,
+            join: receipt in SourceDecisionReceipt,
+            on:
+              receipt.cycle_id == cycle.id and
+                receipt.source_ref_digest == item.source_ref_digest
+          )
+        else
+          base
+        end
+
+      query
+      |> Repo.all()
+      |> MapSet.new()
+    end
+  end
+
+  def settled_revision_pairs(_account_id, _role, _proof_items), do: MapSet.new()
+
+  @doc "Returns a privacy-safe exact proof audit for a bounded half-open time window."
+  def verify_window(%DateTime{} = since, %DateTime{} = until_time) do
+    if DateTime.compare(since, until_time) == :lt,
+      do: verify_valid_window(since, until_time),
+      else: {:error, :invalid_source_cycle_window}
+  end
+
+  def verify_window(_since, _until_time), do: {:error, :invalid_source_cycle_window}
+
+  defp verify_valid_window(since, until_time) do
+    cycles =
+      SourceCycle
+      |> where([cycle], cycle.captured_at >= ^since and cycle.captured_at < ^until_time)
+      |> order_by(
+        [cycle],
+        asc: cycle.connected_account_id,
+        asc: cycle.role,
+        asc: cycle.cursor_kind,
+        asc: cycle.captured_at,
+        asc: cycle.id
+      )
+      |> Repo.all()
+
+    audited = Enum.map(cycles, &audit_cycle/1)
+    chain_errors = cursor_chain_errors(cycles)
+    errors = Enum.flat_map(audited, & &1.errors) ++ chain_errors
+    job_ids = Enum.flat_map(cycles, &cycle_job_ids/1)
+    visible_jobs = activity_visible_job_ids(job_ids)
+
+    %{
+      healthy?: errors == [] and length(visible_jobs) == length(Enum.uniq(job_ids)),
+      since: DateTime.to_iso8601(since),
+      until: DateTime.to_iso8601(until_time),
+      cycles: length(cycles),
+      exact_cycles: Enum.count(audited, &(&1.errors == [])),
+      cycle_coverage_percent: percent(Enum.count(audited, &(&1.errors == [])), length(cycles)),
+      source_items: Enum.sum(Enum.map(audited, & &1.source_items)),
+      source_decisions: Enum.sum(Enum.map(audited, & &1.source_decisions)),
+      todo_snapshots: Enum.sum(Enum.map(audited, & &1.todo_snapshots)),
+      todo_closures: Enum.sum(Enum.map(audited, & &1.todo_closures)),
+      expected_activity_rows: length(Enum.uniq(job_ids)),
+      visible_activity_rows: length(visible_jobs),
+      activity_coverage_percent: percent(length(visible_jobs), length(Enum.uniq(job_ids))),
+      cursor_chain_errors: length(chain_errors),
+      roles: Enum.frequencies_by(cycles, & &1.role),
+      providers:
+        cycles
+        |> Enum.map(fn cycle ->
+          if String.starts_with?(cycle.provider, "slack:"), do: "slack", else: "gmail"
+        end)
+        |> Enum.frequencies(),
+      error_codes: Enum.frequencies(errors),
+      failures: Enum.reject(audited, &(&1.errors == []))
+    }
+  end
+
   def create_cycle(attrs, source_items, todo_snapshots)
       when is_map(attrs) and is_list(source_items) and is_list(todo_snapshots) do
     transact(fn -> create_cycle_in_transaction(attrs, source_items, todo_snapshots) end)
@@ -583,6 +682,54 @@ defmodule Maraithon.Runtime.SourceCycleProofs do
       {:error, :source_cycle_incomplete}
     end
   end
+
+  defp audit_cycle(cycle) do
+    counts = proof_counts(cycle)
+
+    errors =
+      []
+      |> maybe_error(verify_job_visibility(cycle), :activity_job_missing)
+      |> maybe_error(verify_counts(cycle, counts), :receipt_count_mismatch)
+
+    counts
+    |> Map.put(:cycle_reference, String.slice(cycle.id, 0, 8))
+    |> Map.put(:account_id, cycle.connected_account_id)
+    |> Map.put(:role, cycle.role)
+    |> Map.put(:errors, errors)
+  end
+
+  defp maybe_error(errors, :ok, _code), do: errors
+  defp maybe_error(errors, {:error, _reason}, code), do: errors ++ [code]
+
+  defp cursor_chain_errors(cycles) do
+    cycles
+    |> Enum.group_by(&{&1.connected_account_id, &1.role, &1.cursor_kind})
+    |> Enum.flat_map(fn {_identity, account_cycles} ->
+      account_cycles
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.flat_map(fn [previous, current] ->
+        if current.lower_cursor == previous.upper_cursor,
+          do: [],
+          else: [:cursor_chain_gap]
+      end)
+    end)
+  end
+
+  defp cycle_job_ids(cycle) do
+    [cycle.acquisition_job_id | cycle.reason_job_ids] ++ List.wrap(cycle.finalizer_job_id)
+  end
+
+  defp activity_visible_job_ids([]), do: []
+
+  defp activity_visible_job_ids(job_ids) do
+    Maraithon.Runtime.BackgroundJob
+    |> where([job], job.id in ^Enum.uniq(job_ids))
+    |> select([job], job.id)
+    |> Repo.all()
+  end
+
+  defp percent(_part, 0), do: 100.0
+  defp percent(part, total), do: Float.round(part * 100.0 / total, 2)
 
   defp count(schema, cycle_id) do
     Repo.aggregate(from(row in schema, where: row.cycle_id == ^cycle_id), :count)

@@ -22,6 +22,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   alias Maraithon.PromptBudget
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.SourceCycleProofs
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
 
@@ -65,6 +66,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     with :ok <- validate_ownership(account, agent),
          {bundle, telemetry, proposals} <- acquire_bundle(account, agent, opts),
          :ok <- validate_complete_acquisition(account, telemetry),
+         bundle <- filter_settled_source_items(bundle, account, "discovery"),
          watermarks <- serialize_watermarks(proposals, account.id),
          :ok <- validate_watermarks(watermarks),
          {:ok, partitions} <- partition_bundle(bundle),
@@ -79,6 +81,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
                outcome: "empty_delta",
                account_id: account.id,
                source_items: 0,
+               source_item_refs: [],
                model_calls: 0
              },
              watermark_result
@@ -437,6 +440,47 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   def source_item_refs(_bundle), do: []
+
+  @doc false
+  def source_proof_items(bundle) when is_map(bundle) do
+    Enum.map(source_records(bundle), fn record ->
+      source_ref = Atom.to_string(record.source) <> ":" <> record.identity
+
+      %{
+        source_ref: source_ref,
+        source_ref_digest: SourceCycleProofs.reference_digest(source_ref),
+        source_identity_digest: :crypto.hash(:sha256, source_ref),
+        source_revision_digest:
+          :crypto.hash(:sha256, :erlang.term_to_binary(record.item, [:deterministic])),
+        provider_occurred_at: provider_occurred_at(record)
+      }
+    end)
+  end
+
+  def source_proof_items(_bundle), do: []
+
+  @doc false
+  def filter_settled_source_items(bundle, %ConnectedAccount{} = account, role)
+      when is_map(bundle) and role in ["discovery", "closure"] do
+    records = source_records(bundle)
+    proof_items = source_proof_items(bundle)
+    settled = SourceCycleProofs.settled_revision_pairs(account.id, role, proof_items)
+
+    remaining =
+      records
+      |> Enum.zip(proof_items)
+      |> Enum.reject(fn {_record, proof_item} ->
+        MapSet.member?(settled, {
+          proof_item.source_ref_digest,
+          proof_item.source_revision_digest
+        })
+      end)
+      |> Enum.map(&elem(&1, 0))
+
+    partition_source_bundle(bundle, remaining)
+  end
+
+  def filter_settled_source_items(bundle, _account, _role), do: bundle
 
   @doc false
   def refs_digest(refs) when is_list(refs) do
@@ -1230,6 +1274,40 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp source_group_identity(%{source: :slack, identity: identity, item: item}) do
     {:slack, read_string(item, "team_id"), read_string(item, "channel_id"),
      read_string(item, "thread_ts") || read_string(item, "ts") || identity}
+  end
+
+  defp provider_occurred_at(%{source: :gmail, item: item}) do
+    item
+    |> read_string("internal_date")
+    |> parse_provider_datetime()
+  end
+
+  defp provider_occurred_at(%{source: :slack, item: item}) do
+    item
+    |> read_string("ts")
+    |> parse_provider_datetime()
+  end
+
+  defp provider_occurred_at(_record), do: nil
+
+  defp parse_provider_datetime(nil), do: nil
+
+  defp parse_provider_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} ->
+        datetime
+
+      _invalid ->
+        case Float.parse(value) do
+          {seconds, ""} when seconds >= 0 ->
+            DateTime.from_unix!(round(seconds * 1_000_000), :microsecond)
+
+          _invalid ->
+            nil
+        end
+    end
+  rescue
+    _error -> nil
   end
 
   defp split_source_groups(groups, limit) do

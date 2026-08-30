@@ -5,6 +5,7 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.SourceCycleSettlement
 
   @job_watermark_kinds %{
     "runtime_partition:source_account_discovery" =>
@@ -30,6 +31,7 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
              %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
              true <- account.user_id == job.user_id,
              :ok <- validate_watermarks(watermarks, account_id, allowed_kinds),
+             {:ok, _proof} <- SourceCycleSettlement.seal(job, result, account, watermarks),
              :ok <- commit_watermarks(account, watermarks) do
           {:ok, {:ok, sanitize_result(result, length(watermarks))}}
         else
@@ -88,6 +90,10 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
     result
     |> Map.delete(:deferred_watermarks)
     |> Map.delete("deferred_watermarks")
+    |> Map.delete(:source_item_refs)
+    |> Map.delete("source_item_refs")
+    |> Map.delete(:source_proof_items)
+    |> Map.delete("source_proof_items")
     |> Map.put(:advanced_watermarks, advanced_count)
   end
 

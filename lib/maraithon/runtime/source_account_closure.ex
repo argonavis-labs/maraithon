@@ -27,19 +27,28 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     with {:ok, bundle, proposals} <- TodoCompletionSweep.acquire_account_delta(account, opts),
          watermarks <- serialize_watermarks(proposals, account.id),
          :ok <- validate_watermarks(watermarks),
+         bundle <- SourceAccountDiscovery.filter_settled_source_items(bundle, account, "closure"),
          {:ok, source_partitions} <- SourceAccountDiscovery.partition_bundle(bundle),
          source_items <-
            Enum.sum(Enum.map(source_partitions, &SourceAccountDiscovery.source_item_count/1)),
          source_refs <- SourceAccountDiscovery.source_item_refs(bundle),
          true <- length(source_refs) == source_items,
+         source_proof_items <- SourceAccountDiscovery.source_proof_items(bundle),
+         true <- length(source_proof_items) == source_items,
          todo_snapshots <- TodoCompletionSweep.open_todo_snapshots_for_account(account, opts),
          todo_ids <- Enum.map(todo_snapshots, &Map.fetch!(&1, "id")) do
       cond do
         source_items == 0 ->
-          settle_without_fanout(account, watermarks, "empty_delta", 0, opts)
+          settle_without_fanout(account, watermarks, "empty_delta", [], opts)
 
         todo_ids == [] ->
-          settle_without_fanout(account, watermarks, "no_open_todos", source_items, opts)
+          settle_without_fanout(
+            account,
+            watermarks,
+            "no_open_todos",
+            source_proof_items,
+            opts
+          )
 
         true ->
           build_fanout(account, bundle, watermarks, source_refs, todo_snapshots, opts)
@@ -59,14 +68,16 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   def acquire(%ConnectedAccount{}, _opts), do: {:skip, :account_not_connected}
   def acquire(_account, _opts), do: {:error, :invalid_source_account}
 
-  defp settle_without_fanout(account, watermarks, outcome, source_items, opts) do
+  defp settle_without_fanout(account, watermarks, outcome, source_proof_items, opts) do
     with {:ok, watermark_result} <- settle_watermarks(account, watermarks, opts) do
       {:ok,
        Map.merge(
          %{
            outcome: outcome,
            account_id: account.id,
-           source_items: source_items,
+           source_items: length(source_proof_items),
+           source_item_refs: Enum.map(source_proof_items, & &1.source_ref),
+           source_proof_items: source_proof_items,
            todo_decision_count: 0,
            model_calls: 0
          },

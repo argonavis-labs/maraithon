@@ -87,7 +87,6 @@ defmodule Maraithon.Repo.Migrations.CreateSourceCycleProofs do
              octet_length(cursor_kind) BETWEEN 1 AND 80 AND cursor_kind !~ '[[:space:][:cntrl:]]' AND
              (lower_cursor IS NULL OR octet_length(lower_cursor) BETWEEN 1 AND 4096) AND
              octet_length(upper_cursor) BETWEEN 1 AND 4096 AND
-             lower_cursor IS DISTINCT FROM upper_cursor AND
              reason_job_count >= 0 AND reason_job_count <= 20000 AND
              cardinality(reason_job_ids) = reason_job_count AND
              ((reason_job_count = 0 AND finalizer_job_id IS NULL) OR
@@ -402,6 +401,10 @@ defmodule Maraithon.Repo.Migrations.CreateSourceCycleProofs do
         acquisition_type text;
         reason_type text;
         finalizer_type text;
+        actual_acquisition_type text;
+        actual_acquisition_user_id text;
+        actual_finalizer_type text;
+        actual_finalizer_user_id text;
         actual_reason_count bigint;
         actual_job_digest bytea;
       BEGIN
@@ -415,18 +418,28 @@ defmodule Maraithon.Repo.Migrations.CreateSourceCycleProofs do
           finalizer_type := 'runtime_partition:source_account_closure_finalize';
         END IF;
 
-        IF NOT EXISTS (
-          SELECT 1 FROM public.background_jobs job
-          WHERE job.id = NEW.acquisition_job_id
-            AND job.user_id = NEW.user_id
-            AND job.job_type = acquisition_type
-        ) OR (NEW.finalizer_job_id IS NOT NULL AND NOT EXISTS (
-          SELECT 1 FROM public.background_jobs job
-          WHERE job.id = NEW.finalizer_job_id
-            AND job.user_id = NEW.user_id
-            AND job.job_type = finalizer_type
-        )) THEN
-          RAISE EXCEPTION 'source cycle job owner or type mismatch' USING ERRCODE = '23514';
+        SELECT job.job_type, job.user_id
+        INTO actual_acquisition_type, actual_acquisition_user_id
+        FROM public.background_jobs job
+        WHERE job.id = NEW.acquisition_job_id;
+
+        IF actual_acquisition_type IS DISTINCT FROM acquisition_type OR
+           actual_acquisition_user_id IS DISTINCT FROM NEW.user_id THEN
+          RAISE EXCEPTION 'source cycle acquisition job owner or type mismatch'
+            USING ERRCODE = '23514';
+        END IF;
+
+        IF NEW.finalizer_job_id IS NOT NULL THEN
+          SELECT job.job_type, job.user_id
+          INTO actual_finalizer_type, actual_finalizer_user_id
+          FROM public.background_jobs job
+          WHERE job.id = NEW.finalizer_job_id;
+
+          IF actual_finalizer_type IS DISTINCT FROM finalizer_type OR
+             actual_finalizer_user_id IS DISTINCT FROM NEW.user_id THEN
+            RAISE EXCEPTION 'source cycle finalizer job owner or type mismatch'
+              USING ERRCODE = '23514';
+          END IF;
         END IF;
 
         SELECT count(*) INTO actual_reason_count
