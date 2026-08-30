@@ -79,7 +79,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   defp do_acquire(account, agent, opts) do
     with :ok <- validate_ownership(account, agent),
-         {bundle, _telemetry, proposals} <- acquire_bundle(account, agent, opts),
+         {bundle, telemetry, proposals} <- acquire_bundle(account, agent, opts),
+         :ok <- validate_complete_acquisition(account, telemetry),
          compact_bundle when is_map(compact_bundle) <- compact_bundle(bundle),
          watermarks <- serialize_watermarks(proposals, account.id),
          source_items <- source_item_count(compact_bundle) do
@@ -201,7 +202,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       recent_events: [],
       source_scope: source_scope,
       source_watermark_role: "discovery",
-      defer_watermark_advance: true
+      defer_watermark_advance: true,
+      exhaustive_account_delta: true,
+      account_delta_source: account_delta_source(account)
     }
 
     acquisition.(
@@ -465,6 +468,19 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp account_event_topic(%ConnectedAccount{id: id}), do: "email:account-#{id}"
+
+  defp account_delta_source(%ConnectedAccount{provider: "slack:" <> _rest}), do: "slack"
+  defp account_delta_source(%ConnectedAccount{}), do: "gmail"
+
+  defp validate_complete_acquisition(account, telemetry) do
+    source = account_delta_source(account)
+
+    if Acquisition.source_complete?(telemetry, source) do
+      :ok
+    else
+      {:error, {:source_discovery_acquisition_incomplete, source}}
+    end
+  end
 
   defp payload_count(payload) when is_map(payload) do
     case Map.get(payload, :count, Map.get(payload, "count", 0)) do

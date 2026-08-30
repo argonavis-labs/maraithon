@@ -49,6 +49,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @slack_user_directory_limit 80
   @slack_user_directory_timeout_ms 1_500
   @slack_conversations_page_limit 1_000
+  @slack_history_page_limit 200
+  @slack_replies_page_limit 200
+  @max_slack_pagination_pages 2_000
   @slack_self_authored_search_result_limit 50
   @slack_broadcast_search_result_limit 100
   @slack_broadcast_mentions [
@@ -157,6 +160,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
      }, []}
   end
 
+  @doc "Returns true only when one provider source was enumerated without a partial result."
+  def source_complete?(telemetry, source)
+      when is_map(telemetry) and source in ["gmail", "slack"] do
+    summary = telemetry |> Map.get("sources", %{}) |> Map.get(source, %{})
+
+    summary["status"] == "ready" and
+      normalize_list(summary["failed_providers"]) == [] and
+      normalize_list(summary["partial_providers"]) == []
+  end
+
+  def source_complete?(_telemetry, _source), do: false
+
   # R10/R11 (SPEC 07): a :pubsub_event trigger on one of the three subscribed
   # topic families (email:/calendar:/slack: — the only topics
   # SourceScope.subscriptions/2 ever returns) fetches gmail + calendar +
@@ -180,18 +195,26 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       end)
     ]
 
-    if pubsub_scoped_trigger?(context) do
-      connector_fetchers
-    else
-      connector_fetchers ++
-        [
-          source_fetcher("news", news_fetch_timeout_ms(plan), fn state ->
-            maybe_fetch_news(state, user_id, source_scope, plan, context)
-          end),
-          source_fetcher("weather", weather_fetch_timeout_ms(plan), fn state ->
-            maybe_fetch_weather(state, user_id, source_scope, plan, context)
-          end)
-        ] ++ companion_source_fetchers(user_id, plan, context)
+    cond do
+      plan[:account_delta_source] == "gmail" ->
+        Enum.filter(connector_fetchers, &(&1.source == "gmail"))
+
+      plan[:account_delta_source] == "slack" ->
+        Enum.filter(connector_fetchers, &(&1.source == "slack"))
+
+      pubsub_scoped_trigger?(context) ->
+        connector_fetchers
+
+      true ->
+        connector_fetchers ++
+          [
+            source_fetcher("news", news_fetch_timeout_ms(plan), fn state ->
+              maybe_fetch_news(state, user_id, source_scope, plan, context)
+            end),
+            source_fetcher("weather", weather_fetch_timeout_ms(plan), fn state ->
+              maybe_fetch_weather(state, user_id, source_scope, plan, context)
+            end)
+          ] ++ companion_source_fetchers(user_id, plan, context)
     end
   end
 
@@ -945,7 +968,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       conversations =
         conversations
         |> Enum.sort_by(&slack_channel_priority(&1, plan.slack_key_channels))
-        |> Enum.take(max(plan.slack_channel_limit, 0))
+        |> maybe_take_slack_conversations(plan)
 
       {direct_mentions, mention_fetches} =
         fetch_slack_mentions(user_id, team_id, workspace, plan, oldest)
@@ -958,16 +981,19 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       {self_authored_messages, self_authored_fetches} =
         fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest)
 
-      {channels, fetches, _user_directory} =
-        Enum.reduce(conversations, {[], [], %{}}, fn channel,
-                                                     {channel_acc, fetch_acc, directory_acc} ->
+      {channels, fetches, _user_directory, coverage_errors} =
+        Enum.reduce(conversations, {[], [], %{}, []}, fn channel,
+                                                         {channel_acc, fetch_acc, directory_acc,
+                                                          error_acc} ->
           channel_id = channel["id"]
 
           case call_with_timeout(
                  fn ->
-                   slack_module().get_conversation_history(token.access_token, channel_id,
-                     limit: plan.slack_message_limit,
-                     oldest: oldest
+                   fetch_slack_conversation_history(
+                     token.access_token,
+                     channel_id,
+                     oldest,
+                     plan
                    )
                  end,
                  slack_channel_fetch_timeout_ms(plan)
@@ -978,7 +1004,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 |> Map.get("messages", [])
                 |> normalize_list()
 
-              {raw_messages, thread_fetches} =
+              {raw_messages, thread_fetches, thread_errors} =
                 expand_slack_threads(token.access_token, channel_id, raw_messages, plan)
 
               user_directory =
@@ -1012,7 +1038,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                   }
                   | thread_fetches ++ fetch_acc
                 ],
-                user_directory
+                user_directory,
+                thread_errors ++ error_acc
               }
 
             {:error, reason} ->
@@ -1030,7 +1057,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                   }
                   | fetch_acc
                 ],
-                directory_acc
+                directory_acc,
+                [{:conversation_history_failed, channel_id, reason} | error_acc]
               }
           end
         end)
@@ -1051,8 +1079,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         }
       }
 
-      {:ok, workspace_payload,
-       self_authored_fetches ++ broadcast_fetches ++ mention_fetches ++ fetches}
+      workspace_fetches = self_authored_fetches ++ broadcast_fetches ++ mention_fetches ++ fetches
+
+      if plan.exhaustive_account_delta? and coverage_errors != [] do
+        {:error, {:slack_workspace_incomplete, length(coverage_errors)}, workspace_fetches}
+      else
+        {:ok, workspace_payload, workspace_fetches}
+      end
     else
       {:error, reason} -> {:error, reason, []}
     end
@@ -1398,15 +1431,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp expand_slack_threads(access_token, channel_id, raw_messages, plan)
        when is_binary(access_token) and is_binary(channel_id) and is_list(raw_messages) do
-    raw_messages
-    |> slack_thread_ids_from_messages()
-    |> Enum.take(@slack_thread_fetch_limit)
-    |> Enum.reduce({raw_messages, []}, fn thread_ts, {message_acc, fetch_acc} ->
+    thread_ids =
+      raw_messages
+      |> slack_thread_ids_from_messages()
+      |> maybe_take_slack_threads(plan)
+
+    Enum.reduce(thread_ids, {raw_messages, [], []}, fn thread_ts,
+                                                       {message_acc, fetch_acc, error_acc} ->
       case call_with_timeout(
              fn ->
-               slack_module().get_thread_replies(access_token, channel_id, thread_ts,
-                 limit: slack_thread_reply_limit(plan)
-               )
+               fetch_slack_thread_replies(access_token, channel_id, thread_ts, plan)
              end,
              slack_channel_fetch_timeout_ms(plan)
            ) do
@@ -1426,7 +1460,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             "has_more" => response["has_more"] || false
           }
 
-          {merge_slack_messages(message_acc, replies), [fetch | fetch_acc]}
+          {merge_slack_messages(message_acc, replies), [fetch | fetch_acc], error_acc}
 
         {:error, reason} ->
           fetch = %{
@@ -1438,13 +1472,19 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             "reason" => Redaction.error_class(reason)
           }
 
-          {message_acc, [fetch | fetch_acc]}
+          {message_acc, [fetch | fetch_acc],
+           [{:thread_replies_failed, channel_id, thread_ts, reason} | error_acc]}
       end
     end)
   end
 
   defp expand_slack_threads(_access_token, _channel_id, raw_messages, _plan),
-    do: {raw_messages, []}
+    do: {raw_messages, [], []}
+
+  defp maybe_take_slack_threads(thread_ids, %{exhaustive_account_delta?: true}), do: thread_ids
+
+  defp maybe_take_slack_threads(thread_ids, _plan),
+    do: Enum.take(thread_ids, @slack_thread_fetch_limit)
 
   defp slack_thread_ids_from_messages(messages) when is_list(messages) do
     messages
@@ -1498,6 +1538,72 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp slack_thread_reply_limit(_plan), do: @default_slack_message_limit
+
+  defp fetch_slack_thread_replies(access_token, channel_id, thread_ts, %{
+         exhaustive_account_delta?: true
+       }) do
+    fetch_all_slack_thread_replies(access_token, channel_id, thread_ts, nil, [], 0)
+  end
+
+  defp fetch_slack_thread_replies(access_token, channel_id, thread_ts, plan) do
+    slack_module().get_thread_replies(access_token, channel_id, thread_ts,
+      limit: slack_thread_reply_limit(plan)
+    )
+  end
+
+  defp fetch_all_slack_thread_replies(
+         access_token,
+         channel_id,
+         thread_ts,
+         cursor,
+         acc,
+         page_count
+       )
+       when page_count < @max_slack_pagination_pages do
+    opts =
+      [limit: @slack_replies_page_limit]
+      |> maybe_put_cursor(cursor)
+
+    case slack_module().get_thread_replies(access_token, channel_id, thread_ts, opts) do
+      {:ok, response} ->
+        messages = acc ++ normalize_list(response["messages"])
+        next_cursor = slack_next_cursor(response)
+
+        cond do
+          next_cursor ->
+            fetch_all_slack_thread_replies(
+              access_token,
+              channel_id,
+              thread_ts,
+              next_cursor,
+              messages,
+              page_count + 1
+            )
+
+          response["has_more"] == true ->
+            {:error, :slack_thread_pagination_incomplete}
+
+          true ->
+            {:ok,
+             response
+             |> Map.put("messages", dedupe_raw_slack_messages(messages))
+             |> Map.put("has_more", false)}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_all_slack_thread_replies(
+         _access_token,
+         _channel_id,
+         _thread_ts,
+         _cursor,
+         _acc,
+         _page_count
+       ),
+       do: {:error, :slack_thread_pagination_limit}
 
   defp merge_slack_messages(messages, replies) do
     (normalize_list(messages) ++ normalize_list(replies))
@@ -1603,9 +1709,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       # here would reintroduce old mail into an otherwise exact delta and send
       # the same batch through the model on every poll.
       commercial_providers =
-        provider_specs
-        |> Enum.filter(fn {_provider, _account, query, _quota} -> query == fallback_query end)
-        |> Enum.map(&elem(&1, 0))
+        if plan.exhaustive_account_delta? do
+          []
+        else
+          provider_specs
+          |> Enum.filter(fn {_provider, _account, query, _quota} -> query == fallback_query end)
+          |> Enum.map(&elem(&1, 0))
+        end
 
       provider_results =
         Task.async_stream(
@@ -1619,7 +1729,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 query,
                 quota.base,
                 detail_concurrency,
-                detail_timeout
+                detail_timeout,
+                plan.exhaustive_account_delta?
               )
             end)
           end,
@@ -1735,7 +1846,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         providers
         |> interleave_gmail_provider_messages(raw_messages_by_provider)
         |> dedupe_messages()
-        |> Enum.take(plan.gmail_message_limit)
+        |> maybe_take_gmail_messages(plan)
         |> enrich_gmail_messages(user_id, nil, plan)
         |> sort_messages()
 
@@ -1861,7 +1972,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          _query,
          message_limit,
          _detail_concurrency,
-         _detail_timeout
+         _detail_timeout,
+         _exhaustive?
        )
        when not is_integer(message_limit) or message_limit <= 0 do
     {:ok, [], gmail_fetch_metadata(0, 0, 0, false, false)}
@@ -1874,9 +1986,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          query,
          message_limit,
          detail_concurrency,
-         detail_timeout
+         detail_timeout,
+         exhaustive?
        ) do
-    fetch_opts = gmail_candidate_fetch_opts(detail_concurrency, detail_timeout)
+    fetch_opts = gmail_candidate_fetch_opts(detail_concurrency, detail_timeout, exhaustive?)
 
     case gmail_module().fetch_messages(
            user_id,
@@ -2042,7 +2155,17 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
        ),
        do: {messages_by_provider, provider_statuses}
 
-  defp gmail_candidate_fetch_opts(detail_concurrency, detail_timeout) do
+  defp gmail_candidate_fetch_opts(detail_concurrency, detail_timeout, true) do
+    [
+      message_format: :full,
+      message_fetch_concurrency: detail_concurrency,
+      message_fetch_timeout_ms: detail_timeout,
+      include_fetch_metadata: true,
+      paginate: true
+    ]
+  end
+
+  defp gmail_candidate_fetch_opts(detail_concurrency, detail_timeout, _exhaustive?) do
     [
       message_format: :metadata,
       message_fetch_concurrency: detail_concurrency,
@@ -2050,6 +2173,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       include_fetch_metadata: true
     ]
   end
+
+  defp maybe_take_gmail_messages(messages, %{exhaustive_account_delta?: true}), do: messages
+
+  defp maybe_take_gmail_messages(messages, plan),
+    do: Enum.take(messages, plan.gmail_message_limit)
 
   defp gmail_commercial_fetch_opts(query_concurrency, detail_timeout, query_timeout) do
     [
@@ -2463,6 +2591,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     weather_config = weather_config(skill_ids, skill_configs)
     morning_brief? = morning_brief_trigger?(user_id, skill_ids, skill_configs, context)
     account_message_sources? = not truthy?(Map.get(context, :skip_account_message_sources))
+    exhaustive_account_delta? = truthy?(Map.get(context, :exhaustive_account_delta))
+
+    account_delta_source =
+      case Map.get(context, :account_delta_source, Map.get(context, "account_delta_source")) do
+        source when source in ["gmail", "slack"] -> source
+        _other -> nil
+      end
 
     # R2 (SPEC 04): scheduled scans cap the no-cursor fallback window to 48h
     # regardless of what any individual skill's own `lookback_hours` config
@@ -2502,9 +2637,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       weather: morning_brief? and weather_enabled?(weather_config),
       weather_config: weather_config,
       web_context: morning_brief?,
+      exhaustive_account_delta?: exhaustive_account_delta?,
+      account_delta_source: account_delta_source,
       inbox_limit: max(max_email_scan_limit, 100),
       sent_limit: max(max_email_scan_limit * 2, 100),
-      gmail_message_limit: min(max_email_scan_limit * 4, @max_gmail_message_limit),
+      gmail_message_limit:
+        if(exhaustive_account_delta?,
+          do: @max_gmail_message_limit,
+          else: min(max_email_scan_limit * 4, @max_gmail_message_limit)
+        ),
       gmail_body_fetch_limit:
         max_skill_integer(
           skill_ids,
@@ -2520,11 +2661,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           configured_gmail_body_fetch_timeout_ms()
         ),
       gmail_fetch_timeout_ms:
-        max_skill_integer(
-          skill_ids,
-          skill_configs,
-          "gmail_fetch_timeout_ms",
-          @default_gmail_fetch_timeout_ms
+        if(exhaustive_account_delta?,
+          do: 180_000,
+          else:
+            max_skill_integer(
+              skill_ids,
+              skill_configs,
+              "gmail_fetch_timeout_ms",
+              @default_gmail_fetch_timeout_ms
+            )
         ),
       calendar_fetch_timeout_ms:
         max_skill_integer(
@@ -2541,18 +2686,26 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       calendar_time_min: calendar_time_min(skill_ids, skill_configs, context, morning_brief?),
       slack_channel_limit: max_slack_channel_limit,
       slack_fetch_timeout_ms:
-        max_skill_integer(
-          skill_ids,
-          skill_configs,
-          "slack_fetch_timeout_ms",
-          @default_slack_fetch_timeout_ms
+        if(exhaustive_account_delta?,
+          do: 300_000,
+          else:
+            max_skill_integer(
+              skill_ids,
+              skill_configs,
+              "slack_fetch_timeout_ms",
+              @default_slack_fetch_timeout_ms
+            )
         ),
       slack_channel_fetch_timeout_ms:
-        max_skill_integer(
-          skill_ids,
-          skill_configs,
-          "slack_channel_fetch_timeout_ms",
-          @default_slack_channel_fetch_timeout_ms
+        if(exhaustive_account_delta?,
+          do: 60_000,
+          else:
+            max_skill_integer(
+              skill_ids,
+              skill_configs,
+              "slack_channel_fetch_timeout_ms",
+              @default_slack_channel_fetch_timeout_ms
+            )
         ),
       slack_search_timeout_ms:
         max_skill_integer(
@@ -3182,6 +3335,19 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp gmail_body_fetch_limit(_plan), do: @default_gmail_body_fetch_limit
+
+  defp gmail_phase_budgets(%{exhaustive_account_delta?: true} = plan) do
+    total = max(gmail_fetch_timeout_ms(plan), 4)
+    reserve = min(5_000, max(div(total, 20), 1))
+
+    %{
+      provider: max(total - reserve, 1),
+      commercial: 1,
+      body: 1,
+      reserve: reserve,
+      total: total
+    }
+  end
 
   defp gmail_phase_budgets(plan) do
     total = max(gmail_fetch_timeout_ms(plan), 4)
@@ -3933,6 +4099,82 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp slack_channel_priority(_channel, _key_channels), do: 6
+
+  defp maybe_take_slack_conversations(conversations, %{exhaustive_account_delta?: true}),
+    do: conversations
+
+  defp maybe_take_slack_conversations(conversations, plan),
+    do: Enum.take(conversations, max(plan.slack_channel_limit, 0))
+
+  defp fetch_slack_conversation_history(
+         access_token,
+         channel_id,
+         oldest,
+         %{exhaustive_account_delta?: true}
+       ) do
+    fetch_all_slack_history(access_token, channel_id, oldest, nil, [], 0)
+  end
+
+  defp fetch_slack_conversation_history(access_token, channel_id, oldest, plan) do
+    slack_module().get_conversation_history(access_token, channel_id,
+      limit: plan.slack_message_limit,
+      oldest: oldest
+    )
+  end
+
+  defp fetch_all_slack_history(access_token, channel_id, oldest, cursor, acc, page_count)
+       when page_count < @max_slack_pagination_pages do
+    opts =
+      [limit: @slack_history_page_limit, oldest: oldest, inclusive: true]
+      |> maybe_put_cursor(cursor)
+
+    case slack_module().get_conversation_history(access_token, channel_id, opts) do
+      {:ok, response} ->
+        messages = acc ++ normalize_list(response["messages"])
+        next_cursor = slack_next_cursor(response)
+
+        cond do
+          next_cursor ->
+            fetch_all_slack_history(
+              access_token,
+              channel_id,
+              oldest,
+              next_cursor,
+              messages,
+              page_count + 1
+            )
+
+          response["has_more"] == true ->
+            {:error, :slack_history_pagination_incomplete}
+
+          true ->
+            {:ok,
+             response
+             |> Map.put("messages", dedupe_raw_slack_messages(messages))
+             |> Map.put("has_more", false)}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_all_slack_history(_access_token, _channel_id, _oldest, _cursor, _acc, _page_count),
+    do: {:error, :slack_history_pagination_limit}
+
+  defp slack_next_cursor(response) when is_map(response) do
+    response
+    |> get_in(["response_metadata", "next_cursor"])
+    |> normalize_string()
+  end
+
+  defp slack_next_cursor(_response), do: nil
+
+  defp dedupe_raw_slack_messages(messages) do
+    messages
+    |> normalize_list()
+    |> Enum.uniq_by(&normalize_string(&1["ts"]))
+  end
 
   defp list_all_slack_conversations(access_token, opts) when is_binary(access_token) do
     list_all_slack_conversations(access_token, opts, nil, [])

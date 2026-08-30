@@ -100,10 +100,12 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
       recent_events: [],
       source_scope: source_scope,
       source_watermark_role: "closure",
-      defer_watermark_advance: true
+      defer_watermark_advance: true,
+      exhaustive_account_delta: true,
+      account_delta_source: account_delta_source(account)
     }
 
-    {bundle, _telemetry, proposed_watermarks} =
+    {bundle, telemetry, proposed_watermarks} =
       Acquisition.build(
         account.user_id,
         ["followthrough"],
@@ -111,7 +113,11 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         context
       )
 
-    {:ok, bundle, proposed_watermarks}
+    if Acquisition.source_complete?(telemetry, account_delta_source(account)) do
+      {:ok, bundle, proposed_watermarks}
+    else
+      {:error, {:source_closure_acquisition_incomplete, account_delta_source(account)}}
+    end
   rescue
     error -> {:error, Maraithon.Redaction.error_class(error)}
   catch
@@ -153,6 +159,9 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   end
 
   defp account_event_topic(%ConnectedAccount{id: id}), do: "email:account-#{id}"
+
+  defp account_delta_source(%ConnectedAccount{provider: "slack:" <> _rest}), do: "slack"
+  defp account_delta_source(%ConnectedAccount{}), do: "gmail"
 
   defp run_cross_source_user(user_id, opts) do
     cross_source_opts =

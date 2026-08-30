@@ -66,6 +66,8 @@ defmodule Maraithon.Connectors.Gmail do
   # the first 20 while the caller still advanced the history cursor
   # permanently dropped everything past the truncation point.
   @history_message_fetch_chunk 100
+  @messages_page_size 500
+  @max_message_list_pages 200
 
   @doc "Returns true when a connected Google account granted a Gmail service scope."
   def enabled_for_account?(%{metadata: metadata, scopes: scopes}) do
@@ -285,9 +287,10 @@ defmodule Maraithon.Connectors.Gmail do
   defp incremental_sync(user_id, account, token, history_id) do
     case fetch_history(token, history_id) do
       {:ok, messages, latest_history_id} ->
-        ingest_messages(user_id, messages)
-        persist_history_cursor(account, latest_history_id || history_id)
-        {:ok, %{count: length(messages), history_id: latest_history_id, mode: :incremental}}
+        with :ok <- ingest_messages(user_id, messages),
+             {:ok, _cursor} <- persist_history_cursor(account, latest_history_id || history_id) do
+          {:ok, %{count: length(messages), history_id: latest_history_id, mode: :incremental}}
+        end
 
       {:error, :history_expired} ->
         full_resync(user_id, account, token)
@@ -302,18 +305,14 @@ defmodule Maraithon.Connectors.Gmail do
            max_results: @full_resync_message_limit,
            label_ids: [],
            query: @full_resync_window_query,
-           access_token: true
+           access_token: true,
+           paginate: true
          ) do
       {:ok, messages} ->
-        ingest_messages(user_id, messages)
-
-        case current_history_id(token) do
-          {:ok, history_id} ->
-            persist_history_cursor(account, history_id)
-            {:ok, %{count: length(messages), history_id: history_id, mode: :full_resync}}
-
-          {:error, reason} ->
-            {:error, reason}
+        with :ok <- ingest_messages(user_id, messages),
+             {:ok, history_id} <- current_history_id(token),
+             {:ok, _cursor} <- persist_history_cursor(account, history_id) do
+          {:ok, %{count: length(messages), history_id: history_id, mode: :full_resync}}
         end
 
       {:error, reason} ->
@@ -369,34 +368,23 @@ defmodule Maraithon.Connectors.Gmail do
     max_results = Keyword.get(opts, :max_results, 10)
     label_ids = Keyword.get(opts, :label_ids, [])
     query = Keyword.get(opts, :query)
+    paginate? = Keyword.get(opts, :paginate, false)
 
     case request_access_token(user_id_or_token, opts) do
       {:ok, token} ->
-        params =
-          [{"maxResults", max_results}]
-          |> maybe_append_query("q", query)
-          |> append_repeated_query("labelIds", label_ids)
-          |> Enum.map(&URI.encode_query([&1]))
-          |> Enum.join("&")
-
-        url = "#{api_base_url()}/users/me/messages?#{params}"
-
-        case Google.api_request(:get, url, token) do
-          {:ok, response} when is_map(response) ->
-            messages = Map.get(response, "messages", [])
-            messages = if is_list(messages), do: messages, else: []
-            selected = Enum.take(messages, max_results)
+        case list_message_refs(token, query, label_ids, max_results, paginate?) do
+          {:ok, selected, list_metadata} ->
             {detailed, detail_failure_count} = fetch_message_details(selected, token, opts)
             body_fallback_count = Enum.count(detailed, &metadata_body_fallback?/1)
 
             fetch_metadata = %{
-              listed_count: length(messages),
+              listed_count: length(selected),
               requested_count: length(selected),
               detail_success_count: length(detailed),
               detail_failure_count: detail_failure_count,
               body_fallback_count: body_fallback_count,
-              truncated?:
-                present?(Map.get(response, "nextPageToken")) or length(messages) > max_results
+              page_count: list_metadata.page_count,
+              truncated?: list_metadata.truncated?
             }
 
             fetch_metadata =
@@ -421,6 +409,63 @@ defmodule Maraithon.Connectors.Gmail do
         {:error, reason}
     end
   end
+
+  defp list_message_refs(token, query, label_ids, max_results, false) do
+    with {:ok, response} <- request_message_list_page(token, query, label_ids, max_results, nil) do
+      messages = normalize_message_refs(response["messages"])
+
+      {:ok, Enum.take(messages, max_results),
+       %{page_count: 1, truncated?: present?(response["nextPageToken"])}}
+    end
+  end
+
+  defp list_message_refs(token, query, label_ids, _max_results, true) do
+    list_all_message_refs(token, query, label_ids, nil, [], 0)
+  end
+
+  defp list_all_message_refs(token, query, label_ids, page_token, acc, page_count)
+       when page_count < @max_message_list_pages do
+    with {:ok, response} <-
+           request_message_list_page(token, query, label_ids, @messages_page_size, page_token) do
+      messages = acc ++ normalize_message_refs(response["messages"])
+      next_page_token = response["nextPageToken"]
+      next_page_count = page_count + 1
+
+      if present?(next_page_token) do
+        list_all_message_refs(
+          token,
+          query,
+          label_ids,
+          next_page_token,
+          messages,
+          next_page_count
+        )
+      else
+        {:ok, Enum.uniq_by(messages, & &1["id"]),
+         %{page_count: next_page_count, truncated?: false}}
+      end
+    end
+  end
+
+  defp list_all_message_refs(_token, _query, _label_ids, _page_token, _acc, _page_count),
+    do: {:error, :gmail_message_pagination_limit}
+
+  defp request_message_list_page(token, query, label_ids, max_results, page_token) do
+    params =
+      [{"maxResults", max_results}]
+      |> maybe_append_query("q", query)
+      |> append_repeated_query("labelIds", label_ids)
+      |> maybe_append_query("pageToken", page_token)
+      |> Enum.map(&URI.encode_query([&1]))
+      |> Enum.join("&")
+
+    Google.api_request(:get, "#{api_base_url()}/users/me/messages?#{params}", token)
+  end
+
+  defp normalize_message_refs(messages) when is_list(messages),
+    do: Enum.filter(messages, &(is_map(&1) and present?(&1["id"])))
+
+  defp normalize_message_refs(_messages), do: []
 
   defp fetch_message_details(messages, token, opts) do
     format = Keyword.get(opts, :message_format, :full)
@@ -892,29 +937,44 @@ defmodule Maraithon.Connectors.Gmail do
     # cursor to latest_history_id afterwards, so any id skipped here would be
     # silently lost forever. Chunking bounds each fetch burst; the total is
     # already bounded by the history pagination safety cap.
-    messages =
+    {messages, failure_count} =
       message_ids
       |> Enum.chunk_every(@history_message_fetch_chunk)
-      |> Enum.flat_map(fn chunk ->
-        chunk
-        |> Task.async_stream(
-          fn id ->
-            fetch_message_content(access_token, id,
-              access_token: true,
-              listed_message: true
-            )
-          end,
-          max_concurrency: 8,
-          ordered: true,
-          timeout: :infinity
-        )
-        |> Enum.flat_map(fn
-          {:ok, {:ok, message}} -> [message]
-          _ -> []
-        end)
+      |> Enum.reduce({[], 0}, fn chunk, {message_acc, failure_acc} ->
+        {chunk_messages, chunk_failures} =
+          chunk
+          |> Task.async_stream(
+            fn id ->
+              fetch_message_content(access_token, id,
+                access_token: true,
+                listed_message: true
+              )
+            end,
+            max_concurrency: 8,
+            ordered: true,
+            timeout: :infinity
+          )
+          |> Enum.reduce({[], 0}, fn
+            {:ok, {:ok, message}}, {messages, failures} ->
+              {[message | messages], failures}
+
+            _failure, {messages, failures} ->
+              {messages, failures + 1}
+          end)
+
+        {message_acc ++ Enum.reverse(chunk_messages), failure_acc + chunk_failures}
       end)
 
-    {:ok, messages, latest_history_id}
+    if failure_count == 0 do
+      {:ok, messages, latest_history_id}
+    else
+      Logger.warning("Gmail history sync left messages unread; preserving the prior cursor",
+        listed_message_count: length(message_ids),
+        failed_message_count: failure_count
+      )
+
+      {:error, {:gmail_history_message_fetch_incomplete, failure_count}}
+    end
   end
 
   defp maybe_put_page_token(params, page_token) when is_binary(page_token) and page_token != "",
@@ -1179,53 +1239,62 @@ defmodule Maraithon.Connectors.Gmail do
   def ingest_messages(user_id, messages) when is_binary(user_id) and is_list(messages) do
     user_email = String.downcase(user_id)
 
-    Enum.each(messages, fn message ->
-      case to_observation(message, user_id, user_email) do
-        {:ok, changeset} ->
-          result = Ingest.observe(user_id, changeset)
+    failure_count =
+      Enum.reduce(messages, 0, fn message, failures ->
+        case to_observation(message, user_id, user_email) do
+          {:ok, changeset} ->
+            case Ingest.observe(user_id, changeset) do
+              {:ok, _} ->
+                failures
 
-          case result do
-            {:ok, _} ->
-              :ok
+              {:ok, _, _} ->
+                failures
 
-            {:ok, _, _} ->
-              :ok
+              {:ok, _, _, _} ->
+                failures
 
-            {:ok, _, _, _} ->
-              :ok
+              {:error, reason} ->
+                Logger.warning("CRM ingest could not persist a Gmail message",
+                  user_id: user_id,
+                  source_item_id: message[:message_id] || message["message_id"],
+                  reason: inspect(reason)
+                )
 
-            {:error, reason} ->
-              Logger.warning("CRM ingest skipped a Gmail message",
-                user_id: user_id,
-                source_item_id: message[:message_id],
-                reason: inspect(reason)
-              )
+                failures + 1
 
-            other ->
-              Logger.warning("CRM ingest unexpected result for Gmail message",
-                user_id: user_id,
-                source_item_id: message[:message_id],
-                result: inspect(other)
-              )
-          end
+              other ->
+                Logger.warning("CRM ingest returned an unexpected Gmail result",
+                  user_id: user_id,
+                  source_item_id: message[:message_id] || message["message_id"],
+                  result: inspect(other)
+                )
 
-        :skip ->
-          :ok
-      end
-    end)
+                failures + 1
+            end
 
-    case Ingest.flush_pending(user_id, "gmail") do
-      {:error, reason} ->
-        Logger.warning("CRM ingest could not flush Gmail observations",
-          user_id: user_id,
-          reason: inspect(reason)
-        )
+          :skip ->
+            failures + 1
+        end
+      end)
 
-      _result ->
-        :ok
+    cond do
+      failure_count > 0 ->
+        {:error, {:gmail_ingest_incomplete, failure_count}}
+
+      true ->
+        case Ingest.flush_pending(user_id, "gmail") do
+          {:error, reason} ->
+            Logger.warning("CRM ingest could not flush Gmail observations",
+              user_id: user_id,
+              reason: inspect(reason)
+            )
+
+            {:error, {:gmail_ingest_flush_failed, reason}}
+
+          _result ->
+            :ok
+        end
     end
-
-    :ok
   end
 
   def ingest_messages(_user_id, _messages), do: :ok
