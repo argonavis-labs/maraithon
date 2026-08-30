@@ -1481,6 +1481,90 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
              end)
   end
 
+  test "heartbeat preserves a live running task until its upstream lease cap advances" do
+    assert {:ok, :activated} = activate_exact()
+    {agent, owner_generation} = exact_agent("effect-heartbeat-unchanged-cap")
+    configure_blocking_provider()
+    BootGate.open()
+    LLMRateLimiter.reset()
+
+    assert {:ok, effect_id} =
+             Effects.request(
+               agent.id,
+               :llm_call,
+               nil,
+               %{
+                 "model" => "blocking-v1",
+                 "messages" => [%{"role" => "user", "content" => "unchanged cap"}]
+               },
+               runtime_owner_generation: owner_generation
+             )
+
+    stop_existing_runner()
+    runner = start_supervised!({EffectRunner, []})
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), runner)
+    send(runner, :poll)
+
+    _ = :sys.get_state(runner, 15_000)
+    assert_receive {:exact_provider_entered, worker, _params}, 10_000
+    worker_ref = Process.monitor(worker)
+
+    effect = Repo.get!(Effect, effect_id)
+    assignment = TaskClaims.get(effect.coordination_task_assignment_id)
+
+    assert assignment.state == "running"
+    assert effect.claim_expires_at == assignment.lease_expires_at
+
+    {1, _rows} =
+      Repo.update_all(
+        from(lease in Maraithon.Runtime.AgentRuntimeLease,
+          where: lease.agent_id == ^agent.id,
+          where: lease.owner_token == ^owner_generation
+        ),
+        set: [lease_until: assignment.lease_expires_at]
+      )
+
+    renewer = Process.whereis(EffectClaimRenewer)
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), renewer)
+
+    assert {:ok, %{active: 1, lost: 0}} = EffectClaimRenewer.renew_now()
+
+    renewal_key = {
+      effect.id,
+      effect.agent_id,
+      effect.claim_token,
+      effect.coordination_task_assignment_id,
+      effect.claim_supervisor_id,
+      effect.claim_task_id
+    }
+
+    first_deadline =
+      renewer
+      |> :sys.get_state(30_000)
+      |> Map.fetch!(:renewal_deadlines)
+      |> Map.fetch!(renewal_key)
+
+    assert Repo.get!(Effect, effect_id).claim_expires_at == effect.claim_expires_at
+    assert TaskClaims.get(assignment.id).lease_expires_at == assignment.lease_expires_at
+    assert Process.alive?(worker)
+    assert Process.whereis(EffectClaimRenewer) == renewer
+    refute_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 0
+
+    assert {:ok, %{active: 1, lost: 0}} = EffectClaimRenewer.renew_now()
+
+    second_deadline =
+      renewer
+      |> :sys.get_state(30_000)
+      |> Map.fetch!(:renewal_deadlines)
+      |> Map.fetch!(renewal_key)
+
+    assert second_deadline == first_deadline
+    assert Process.alive?(worker)
+    refute_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 0
+
+    send(worker, :release)
+  end
+
   test "generic cancellation cannot forge a pre-provider outcome intent" do
     assert {:ok, :activated} = activate_exact()
     {agent, owner_generation} = exact_agent("effect-preflight-intent-forgery")

@@ -85,11 +85,11 @@ defmodule MaraithonWeb.ActivityLive do
       agent_name: agent_name(run),
       status: run.status,
       trigger: trigger_label(run.trigger_type),
-      summary: run_summary(run.status, run.budget_tool_calls),
+      summary: run_summary(run.status, run.step_count),
       safe_error: RunErrorCopy.agent_run(run.error),
       duration: duration_label(run.started_at, run.completed_at),
-      llm_calls: normalize_count(run.budget_llm_calls),
-      tool_calls: normalize_count(run.budget_tool_calls),
+      llm_calls: normalize_count(run.llm_call_count),
+      tool_calls: normalize_count(run.tool_call_count),
       steps: steps,
       last_action: steps |> List.last() |> then(&(&1 && &1.label)),
       occurred_at: run.started_at
@@ -150,12 +150,13 @@ defmodule MaraithonWeb.ActivityLive do
   defp agent_name(%{behavior: "prompt_agent"}), do: "Custom assistant"
   defp agent_name(_run), do: "Maraithon agent"
 
-  defp run_summary("running", _tool_calls), do: "Working now"
+  defp run_summary("running", _steps), do: "Working now"
   defp run_summary("completed", 0), do: "Finished successfully"
-  defp run_summary("completed", tool_calls), do: "Finished after #{tool_calls} actions"
-  defp run_summary("failed", _tool_calls), do: "Stopped before it could finish"
-  defp run_summary("cancelled", _tool_calls), do: "Stopped safely"
-  defp run_summary(_status, _tool_calls), do: "Run status updated"
+  defp run_summary("completed", 1), do: "Finished after 1 step"
+  defp run_summary("completed", steps), do: "Finished after #{steps} steps"
+  defp run_summary("failed", _steps), do: "Stopped before it could finish"
+  defp run_summary("cancelled", _steps), do: "Stopped safely"
+  defp run_summary(_status, _steps), do: "Run status updated"
 
   defp trigger_label(value) when value in ["schedule", "scheduled", "cron", "wakeup"],
     do: "Scheduled"
@@ -303,7 +304,9 @@ defmodule MaraithonWeb.ActivityLive do
                       <h3 class="text-sm/6 font-semibold text-zinc-950">{item.agent_name}</h3>
                       <.badge color={status_color(item.status)}>{status_label(item.status)}</.badge>
                     </div>
-                    <p class="mt-1 text-sm/6 text-zinc-700">{item.summary}</p>
+                    <p id={"#{item.id}-summary"} class="mt-1 text-sm/6 text-zinc-700">
+                      {item.summary}
+                    </p>
                   </div>
                   <time class="shrink-0 text-xs/5 text-zinc-400">
                     {format_time(item.occurred_at, @timezone_info)}
@@ -347,9 +350,9 @@ defmodule MaraithonWeb.ActivityLive do
                     <dt>Trigger</dt>
                     <dd class="text-zinc-700">{item.trigger}</dd>
                     <dt>AI calls</dt>
-                    <dd class="text-zinc-700">{item.llm_calls}</dd>
+                    <dd id={"#{item.id}-llm-calls"} class="text-zinc-700">{item.llm_calls}</dd>
                     <dt>Actions</dt>
-                    <dd class="text-zinc-700">{item.tool_calls}</dd>
+                    <dd id={"#{item.id}-tool-calls"} class="text-zinc-700">{item.tool_calls}</dd>
                     <dt :if={item.last_action}>Last action</dt>
                     <dd :if={item.last_action} class="text-zinc-700">{item.last_action}</dd>
                   </dl>

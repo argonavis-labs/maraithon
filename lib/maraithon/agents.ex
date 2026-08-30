@@ -497,10 +497,18 @@ defmodule Maraithon.Agents do
       })
       |> Repo.all()
 
-    steps_by_run = recent_run_step_headers(user_id, Enum.map(runs, & &1.id))
+    run_ids = Enum.map(runs, & &1.id)
+    steps_by_run = recent_run_step_headers(user_id, run_ids)
+    counts_by_run = recent_run_step_counts(user_id, run_ids)
 
     Enum.map(runs, fn run ->
-      Map.put(run, :steps, Map.get(steps_by_run, run.id, []))
+      counts = Map.get(counts_by_run, run.id, %{steps: 0, llm_calls: 0, tool_calls: 0})
+
+      run
+      |> Map.put(:steps, Map.get(steps_by_run, run.id, []))
+      |> Map.put(:step_count, counts.steps)
+      |> Map.put(:llm_call_count, counts.llm_calls)
+      |> Map.put(:tool_call_count, counts.tool_calls)
     end)
   end
 
@@ -1794,6 +1802,44 @@ defmodule Maraithon.Agents do
       limit when is_integer(limit) -> limit |> max(1) |> min(50)
       _invalid -> 50
     end
+  end
+
+  defp recent_run_step_counts(_user_id, []), do: %{}
+
+  defp recent_run_step_counts(user_id, run_ids) do
+    AgentRunStep
+    |> join(:inner, [step], run in AgentRun,
+      on: run.id == step.agent_run_id and run.agent_id == step.agent_id
+    )
+    |> join(:inner, [_step, run], agent in Agent,
+      on: agent.id == run.agent_id and agent.user_id == run.user_id
+    )
+    |> where(
+      [step, run, agent],
+      step.agent_run_id in ^run_ids and run.user_id == ^user_id and agent.user_id == ^user_id
+    )
+    |> group_by([step], step.agent_run_id)
+    |> select([step], {
+      step.agent_run_id,
+      %{
+        steps: count(step.id),
+        llm_calls:
+          fragment(
+            "COUNT(*) FILTER (WHERE ? = 'llm_call' OR ? = 'llm_call')",
+            step.step_type,
+            step.effect_type
+          ),
+        tool_calls:
+          fragment(
+            "COUNT(*) FILTER (WHERE ? IS NOT NULL OR ? = 'tool_call' OR ? = 'tool_call')",
+            step.tool_name,
+            step.step_type,
+            step.effect_type
+          )
+      }
+    })
+    |> Repo.all()
+    |> Map.new()
   end
 
   defp recent_run_step_headers(_user_id, []), do: %{}

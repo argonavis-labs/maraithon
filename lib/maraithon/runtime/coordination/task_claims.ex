@@ -714,10 +714,11 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
 
         renewed = load!(result, :coordination_task_authority_lost)
 
-        unless DateTime.compare(renewed.lease_expires_at, locked.lease_expires_at) == :gt,
-          do: Repo.rollback(:coordination_task_authority_lost)
-
-        {:renewed, renewed}
+        case DateTime.compare(renewed.lease_expires_at, locked.lease_expires_at) do
+          :gt -> {:renewed, renewed}
+          :eq -> {:unchanged, renewed}
+          :lt -> Repo.rollback(:coordination_task_authority_lost)
+        end
 
       _noncanonical ->
         Repo.rollback(:coordination_task_authority_lost)

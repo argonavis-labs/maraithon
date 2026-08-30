@@ -25,7 +25,7 @@ defmodule MaraithonWeb.ActivityLiveTest do
     {:ok, run} =
       Agents.start_agent_run(agent, %{
         trigger_type: "schedule",
-        budget_snapshot: %{"llm_calls" => 1, "tool_calls" => 1}
+        budget_snapshot: %{"llm_calls" => 500, "tool_calls" => 520}
       })
 
     {:ok, step} =
@@ -51,12 +51,16 @@ defmodule MaraithonWeb.ActivityLiveTest do
         actor_type: :agent
       )
 
-    {:ok, _view, html} = live(conn, "/activity")
+    {:ok, view, html} = live(conn, "/activity")
 
     assert html =~ "Latest activity"
     assert html =~ "Custom assistant"
     assert html =~ "Completed"
     assert html =~ "Created or updated todos"
+    assert has_element?(view, "#run-#{run.id}-summary", "Finished after 1 step")
+    refute html =~ "Finished after 520 actions"
+    assert has_element?(view, "#run-#{run.id}-llm-calls", "0")
+    assert has_element?(view, "#run-#{run.id}-tool-calls", "1")
     assert html =~ "Todo created"
     assert html =~ "Send the Acme proposal"
     assert html =~ "Run details"
