@@ -1822,6 +1822,18 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       if defer?, do: Map.put(base, :defer_watermark_advance, true), else: base
     end
 
+    defp gmail_window_message(id, internal_date) do
+      %{
+        message_id: id,
+        thread_id: "thread-#{id}",
+        subject: "Window message #{id}",
+        labels: ["INBOX"],
+        internal_date: internal_date,
+        from: "sender@example.com",
+        text_body: "Message #{id}"
+      }
+    end
+
     test "uses and proposes the independent closure watermark", %{
       user_id: user_id,
       provider: provider,
@@ -1829,6 +1841,9 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     } do
       closure_watermark = "1780311600"
       cycle_boundary = "1780315200"
+
+      expected_query =
+        "after:#{String.to_integer(closure_watermark) - 3_601} before:#{String.to_integer(cycle_boundary) + 1}"
 
       {:ok, _cursor} =
         Maraithon.Connectors.SourceCursors.put(account, "gmail_closure_watermark", %{
@@ -1838,7 +1853,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       TravelGmailStub.configure(
         messages: [],
         messages_by_query_match: [
-          {"after:#{closure_watermark} before:#{cycle_boundary}",
+          {expected_query,
            [
              %{
                message_id: "closure-delta-message",
@@ -1876,18 +1891,134 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
           context
         )
 
+      assert Keyword.get(TravelGmailStub.last_fetch_opts(), :query) ==
+               expected_query
+
       assert Enum.any?(
                SourceBundle.gmail_messages(bundle),
                &(&1["message_id"] == "closure-delta-message")
              )
 
-      assert Keyword.get(TravelGmailStub.last_fetch_opts(), :query) ==
-               "after:#{closure_watermark} before:#{cycle_boundary}"
-
       assert get_in(telemetry, ["sources", "gmail", "commercial_provider_count"]) == 0
 
       assert [%{kind: "gmail_closure_watermark", value: value}] = proposed_watermarks
       assert is_binary(value)
+    end
+
+    test "replays late-indexed Gmail messages and filters the exact local window", %{
+      user_id: user_id,
+      provider: provider,
+      account: account
+    } do
+      previous_boundary = ~U[2026-06-01 11:00:00Z]
+      current_boundary = ~U[2026-06-01 12:00:00Z]
+      next_boundary = ~U[2026-06-01 12:01:00Z]
+      previous_watermark = DateTime.to_unix(previous_boundary)
+      current_watermark = DateTime.to_unix(current_boundary)
+
+      assert {:ok, _token} =
+               OAuth.store_tokens(user_id, provider, %{
+                 access_token: "overlap-token",
+                 scopes: Google.scopes_for(["gmail"]),
+                 metadata: %{"account_email" => "watermark@example.com"}
+               })
+
+      source_scope = %{
+        "google_accounts" => [
+          %{
+            "provider" => provider,
+            "account_email" => "watermark@example.com",
+            "services" => ["gmail"]
+          }
+        ]
+      }
+
+      skill_configs = %{"followthrough" => %{"source_scope" => source_scope}}
+
+      exact_context = fn timestamp ->
+        user_id
+        |> watermark_build_context(true)
+        |> Map.merge(%{
+          timestamp: timestamp,
+          source_scope: source_scope,
+          source_watermark_role: "closure",
+          exhaustive_account_delta: true,
+          account_delta_source: "gmail"
+        })
+      end
+
+      TravelGmailStub.configure(messages: [], contents: %{})
+
+      {_first_bundle, first_telemetry, first_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          skill_configs,
+          exact_context.(previous_boundary)
+        )
+
+      assert Acquisition.source_complete?(first_telemetry, "gmail")
+
+      assert [%{kind: "gmail_closure_watermark", value: first_value}] = first_watermarks
+      assert first_value == Integer.to_string(previous_watermark)
+
+      assert {:ok, _cursor} =
+               SourceCursors.put(account, "gmail_closure_watermark", %{"value" => first_value})
+
+      exact_lower = DateTime.add(previous_boundary, -1, :hour)
+
+      messages = [
+        gmail_window_message("exact-lower", exact_lower),
+        gmail_window_message("late-prior-window", DateTime.add(previous_boundary, -5, :minute)),
+        gmail_window_message("inside-upper", DateTime.add(current_boundary, -1, :second)),
+        gmail_window_message("before-lower", DateTime.add(exact_lower, -1, :second)),
+        gmail_window_message("exact-upper", current_boundary)
+      ]
+
+      TravelGmailStub.configure(messages: messages, contents: %{})
+
+      {second_bundle, second_telemetry, second_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          skill_configs,
+          exact_context.(current_boundary)
+        )
+
+      assert Acquisition.source_complete?(second_telemetry, "gmail")
+
+      assert Keyword.get(TravelGmailStub.last_fetch_opts(), :query) ==
+               "after:#{DateTime.to_unix(exact_lower) - 1} before:#{current_watermark + 1}"
+
+      assert second_bundle
+             |> SourceBundle.gmail_messages()
+             |> Enum.map(& &1["message_id"])
+             |> Enum.sort() == ["exact-lower", "inside-upper", "late-prior-window"]
+
+      assert [%{kind: "gmail_closure_watermark", value: second_value}] = second_watermarks
+      assert second_value == Integer.to_string(current_watermark)
+
+      assert {:ok, _cursor} =
+               SourceCursors.put(account, "gmail_closure_watermark", %{"value" => second_value})
+
+      TravelGmailStub.configure(
+        messages: [gmail_window_message("exact-upper", current_boundary)],
+        contents: %{}
+      )
+
+      {third_bundle, third_telemetry, _third_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          skill_configs,
+          exact_context.(next_boundary)
+        )
+
+      assert Acquisition.source_complete?(third_telemetry, "gmail")
+
+      assert Enum.map(SourceBundle.gmail_messages(third_bundle), & &1["message_id"]) == [
+               "exact-upper"
+             ]
     end
 
     test "exact discovery hydrates complete Gmail threads without promoting historical messages",

@@ -39,6 +39,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @gmail_provider_phase_timeout_ms 9_000
   @gmail_targeted_search_phase_timeout_ms 4_000
   @gmail_candidate_detail_timeout_ms 5_000
+  @default_gmail_poll_safety_overlap_seconds 60 * 60
+  @gmail_query_boundary_overlap_seconds 1
   @gmail_body_fetch_concurrency 8
   @gmail_body_phase_timeout_ms 8_000
   @default_calendar_limit 250
@@ -2073,11 +2075,17 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> DateTime.to_unix(:second)
         |> Integer.to_string()
 
+      query_upper_watermark =
+        now_watermark
+        |> String.to_integer()
+        |> Kernel.+(@gmail_query_boundary_overlap_seconds)
+        |> Integer.to_string()
+
       lookback_days = max(div(plan.lookback_hours, 24), @commercial_gmail_lookback_days)
-      fallback_query = "newer_than:#{lookback_days}d before:#{now_watermark}"
+      fallback_query = "newer_than:#{lookback_days}d before:#{query_upper_watermark}"
 
       commercial_gmail_queries =
-        Enum.map(plan.commercial_gmail_queries, &"#{&1} before:#{now_watermark}")
+        Enum.map(plan.commercial_gmail_queries, &"#{&1} before:#{query_upper_watermark}")
 
       watermark_mode = watermark_advance_mode(context, plan)
       deep_lookback? = deep_lookback_fetch?(plan)
@@ -2114,8 +2122,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         Enum.map(providers, fn provider ->
           account = ConnectedAccounts.get(user_id, provider)
 
-          query =
-            gmail_poll_query(
+          window =
+            gmail_poll_window(
               account,
               fallback_query,
               deep_lookback?,
@@ -2124,7 +2132,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             )
 
           quota = Map.fetch!(provider_quotas, provider)
-          {provider, account, query, quota}
+          {provider, account, window, quota}
         end)
 
       # Targeted commercial searches are useful on the first bounded lookback
@@ -2138,24 +2146,27 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           []
         else
           provider_specs
-          |> Enum.filter(fn {_provider, _account, query, _quota} -> query == fallback_query end)
+          |> Enum.filter(fn {_provider, _account, window, _quota} ->
+            window.query == fallback_query
+          end)
           |> Enum.map(&elem(&1, 0))
         end
 
       provider_results =
         Task.async_stream(
           provider_specs,
-          fn {provider, _account, query, quota} ->
+          fn {provider, _account, window, quota} ->
             safe_gmail_task(fn ->
               fetch_gmail_provider_candidates(
                 user_id,
                 source_scope,
                 provider,
-                query,
+                window.query,
                 quota.base,
                 detail_concurrency,
                 detail_timeout,
-                plan.exhaustive_account_delta?
+                plan.exhaustive_account_delta?,
+                window
               )
             end)
           end,
@@ -2169,7 +2180,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         provider_specs
         |> Enum.zip(provider_results)
         |> Enum.reduce({%{}, %{}, []}, fn
-          {{provider, account, _query, _quota}, {:ok, {:ok, messages, fetch_metadata}}},
+          {{provider, account, _window, _quota}, {:ok, {:ok, messages, fetch_metadata}}},
           {message_acc, status_acc, watermark_acc} ->
             outcome = gmail_candidate_fetch_outcome(fetch_metadata)
 
@@ -2206,7 +2217,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               watermark_acc
             }
 
-          {{provider, _account, _query, _quota}, {:ok, {:error, reason}}},
+          {{provider, _account, _window, _quota}, {:ok, {:error, reason}}},
           {message_acc, status_acc, watermark_acc} ->
             ConnectedAccounts.report_access_issue(user_id, provider, reason)
 
@@ -2222,7 +2233,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               watermark_acc
             }
 
-          {{provider, _account, _query, _quota}, {:ok, {:task_failure, reason}}},
+          {{provider, _account, _window, _quota}, {:ok, {:task_failure, reason}}},
           {message_acc, status_acc, watermark_acc} ->
             Logger.warning("ChiefOfStaff Gmail provider task failed",
               user_fingerprint: Redaction.fingerprint(user_id),
@@ -2236,7 +2247,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               watermark_acc
             }
 
-          {{provider, _account, _query, _quota}, {:exit, reason}},
+          {{provider, _account, _window, _quota}, {:exit, reason}},
           {message_acc, status_acc, watermark_acc} ->
             # A bounded task timeout is a cycle-budget failure, not evidence
             # that the account needs OAuth repair.
@@ -2398,7 +2409,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          message_limit,
          _detail_concurrency,
          _detail_timeout,
-         _exhaustive?
+         _exhaustive?,
+         _window
        )
        when not is_integer(message_limit) or message_limit <= 0 do
     {:ok, [], gmail_fetch_metadata(0, 0, 0, false, false)}
@@ -2412,7 +2424,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          message_limit,
          detail_concurrency,
          detail_timeout,
-         exhaustive?
+         exhaustive?,
+         window
        ) do
     fetch_opts = gmail_candidate_fetch_opts(detail_concurrency, detail_timeout, exhaustive?)
 
@@ -2442,7 +2455,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             metadata
           )
 
-        {:ok, annotated, metadata}
+        {:ok, filter_gmail_messages_to_window(annotated, window), metadata}
 
       {:ok, messages} when is_list(messages) ->
         # Test doubles and older connector implementations do not expose
@@ -2462,7 +2475,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             metadata
           )
 
-        {:ok, annotated, metadata}
+        {:ok, filter_gmail_messages_to_window(annotated, window), metadata}
 
       {:error, reason} ->
         {:error, reason}
@@ -3073,23 +3086,84 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
-  # Every scheduled account fetch is fenced to `[last_watermark, now)`. The
-  # upper fence prevents mail arriving during provider work from being included
-  # in a cycle whose committed watermark predates it; that mail remains for the
-  # next wake. Deep lookbacks retain their wider lower bound but the same upper
-  # fence.
-  defp gmail_poll_query(_account, fallback_query, true, _kind, _now), do: fallback_query
+  # Gmail search operators are strict at both timestamp boundaries, and a
+  # message can become search-visible after a cycle has already committed a
+  # later watermark. Each poll therefore replays a bounded interval below the
+  # durable cursor. The provider query is widened by one additional second on
+  # both sides, then hydrated messages are filtered locally to the exact
+  # `[cursor - safety_overlap, now)` interval.
+  defp gmail_poll_window(_account, fallback_query, true, _kind, now),
+    do: %{query: fallback_query, lower: nil, upper: watermark_integer(now)}
 
-  defp gmail_poll_query(nil, fallback_query, _deep_lookback?, _kind, _now),
-    do: fallback_query
+  defp gmail_poll_window(nil, fallback_query, _deep_lookback?, _kind, now),
+    do: %{query: fallback_query, lower: nil, upper: watermark_integer(now)}
 
-  defp gmail_poll_query(account, fallback_query, _deep_lookback?, kind, now) do
+  defp gmail_poll_window(account, fallback_query, _deep_lookback?, kind, now) do
+    upper = watermark_integer(now)
+
     case SourceCursors.get(account.id, kind) do
       %{value: value} when is_binary(value) and value != "" ->
-        "after:#{value} before:#{now}"
+        case watermark_integer(value) do
+          cursor when is_integer(cursor) ->
+            lower = max(cursor - configured_gmail_poll_safety_overlap_seconds(), 0)
+            query_lower = max(lower - @gmail_query_boundary_overlap_seconds, 0)
+            query_upper = upper + @gmail_query_boundary_overlap_seconds
+
+            %{
+              query: "after:#{query_lower} before:#{query_upper}",
+              lower: lower,
+              upper: upper
+            }
+
+          nil ->
+            %{query: fallback_query, lower: nil, upper: upper}
+        end
 
       _ ->
-        fallback_query
+        %{query: fallback_query, lower: nil, upper: upper}
+    end
+  end
+
+  defp filter_gmail_messages_to_window(messages, %{lower: lower, upper: upper})
+       when is_list(messages) and (is_nil(lower) or is_integer(lower)) and is_integer(upper) do
+    lower_frontier = if is_integer(lower), do: lower * 1_000_000
+    upper_frontier = upper * 1_000_000
+
+    Enum.filter(messages, fn message ->
+      case gmail_message_frontier(message) do
+        frontier when is_integer(frontier) ->
+          (is_nil(lower_frontier) or frontier >= lower_frontier) and frontier < upper_frontier
+
+        _missing ->
+          false
+      end
+    end)
+  end
+
+  defp filter_gmail_messages_to_window(messages, _window) when is_list(messages), do: messages
+
+  defp watermark_integer(value) when is_integer(value), do: value
+
+  defp watermark_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer >= 0 -> integer
+      _invalid -> nil
+    end
+  end
+
+  defp watermark_integer(_value), do: nil
+
+  defp configured_gmail_poll_safety_overlap_seconds do
+    :maraithon
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(
+      :gmail_poll_safety_overlap_seconds,
+      @default_gmail_poll_safety_overlap_seconds
+    )
+    |> parse_integer()
+    |> case do
+      value when is_integer(value) and value > 0 -> value
+      _invalid -> @default_gmail_poll_safety_overlap_seconds
     end
   end
 
