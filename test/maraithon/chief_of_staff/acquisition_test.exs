@@ -5,8 +5,11 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle, SourceScope}
+  alias Maraithon.Crm.Observation
+  alias Maraithon.LogBuffer
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
+  alias Maraithon.Repo
   alias Maraithon.TestSupport.{NewsStub, TravelCalendarStub, TravelGmailStub}
 
   setup do
@@ -296,6 +299,229 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert get_in(telemetry, ["sources", "slack", "message_count"]) == 4
   end
 
+  test "exact Slack acquisition skips unreadable channel history and retains durable event threads" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    user_id = "chief-slack-access-boundary@example.com"
+    team_id = "T-ACCESS-BOUNDARY"
+    bypass = Bypass.open()
+    test_pid = self()
+
+    _user = Accounts.get_or_create_user_by_email(user_id)
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+               access_token: "xoxb-bot-token",
+               scopes: ["channels:read", "channels:history"],
+               metadata: %{"team_id" => team_id}
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}:user:U-SELF", %{
+               access_token: "xoxp-user-token",
+               scopes: [
+                 "channels:read",
+                 "channels:history",
+                 "groups:read",
+                 "groups:history",
+                 "im:read",
+                 "im:history",
+                 "mpim:read",
+                 "mpim:history",
+                 "search:read"
+               ]
+             })
+
+    event_ts = slack_test_ts(now)
+    thread_ts = slack_test_ts(DateTime.add(now, -120, :second))
+
+    assert {:ok, _observation} =
+             Observation.new(%{
+               user_id: user_id,
+               source: "slack",
+               source_account: team_id,
+               source_item_id: "#{team_id}:C-OUTSIDE:#{event_ts}",
+               occurred_at: now,
+               direction: "inbound",
+               participants: [
+                 %{"role" => "from", "identifier" => %{"slack_id" => "U-SENDER"}}
+               ],
+               excerpt: "A fresh reply from an inaccessible historical thread",
+               metadata: %{
+                 "team_id" => team_id,
+                 "channel" => "C-OUTSIDE",
+                 "ts" => event_ts,
+                 "thread_ts" => thread_ts
+               }
+             })
+             |> Repo.insert()
+
+    Bypass.stub(bypass, "GET", "/api/conversations.list", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "channels" => [
+            %{"id" => "C-READABLE", "name" => "team", "is_member" => true},
+            %{"id" => "C-OUTSIDE", "name" => "outside", "is_member" => false},
+            %{"id" => "D-READABLE", "is_im" => true, "user" => "U-DM"},
+            %{"id" => "G-READABLE", "is_mpim" => true, "name" => "mpdm"}
+          ]
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.history", fn conn ->
+      channel_id = conn.query_string |> Plug.Conn.Query.decode() |> Map.fetch!("channel")
+      send(test_pid, {:slack_history_channel, channel_id})
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "messages" => []}))
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.replies", fn conn ->
+      send(test_pid, :unexpected_slack_thread_fetch)
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "messages" => []}))
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/search.messages", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"ok" => true, "messages" => %{"total" => 0, "matches" => []}})
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/users.info", fn conn ->
+      user_id = conn.query_string |> Plug.Conn.Query.decode() |> Map.fetch!("user")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"ok" => true, "user" => %{"id" => user_id, "profile" => %{}}})
+      )
+    end)
+
+    {bundle, telemetry, _watermarks} =
+      Acquisition.build(
+        user_id,
+        ["followthrough"],
+        slack_exact_skill_configs(team_id),
+        slack_exact_build_context(user_id, team_id, now)
+      )
+
+    assert Acquisition.source_complete?(telemetry, "slack")
+
+    assert_received {:slack_history_channel, "C-READABLE"}
+    assert_received {:slack_history_channel, "D-READABLE"}
+    assert_received {:slack_history_channel, "G-READABLE"}
+    refute_received {:slack_history_channel, "C-OUTSIDE"}
+    refute_received :unexpected_slack_thread_fetch
+
+    assert Enum.any?(
+             SourceBundle.slack_messages(bundle),
+             &(&1["text"] == "A fresh reply from an inaccessible historical thread")
+           )
+
+    assert [workspace] = SourceBundle.slack_workspaces(bundle)
+    assert get_in(workspace, ["metadata", "conversation_count"]) == 3
+    refute Enum.any?(workspace["channels"], &(&1["id"] == "C-OUTSIDE"))
+
+    assert Enum.any?(telemetry["fetches"], fn fetch ->
+             fetch["mode"] == "event_thread_replies" and fetch["status"] == "terminal" and
+               fetch["reason"] == "access_boundary" and fetch["channel_id"] == "C-OUTSIDE"
+           end)
+  end
+
+  test "exact Slack acquisition remains fail-closed and logs structured scope failures" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    user_id = "chief-slack-scope-failure@example.com"
+    team_id = "T-SCOPE-FAILURE"
+    bypass = Bypass.open()
+
+    _user = Accounts.get_or_create_user_by_email(user_id)
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+               access_token: "xoxb-bot-token",
+               scopes: ["channels:read", "channels:history"],
+               metadata: %{"team_id" => team_id}
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}:user:U-SELF", %{
+               access_token: "xoxp-user-token",
+               scopes: ["channels:read", "channels:history", "search:read"]
+             })
+
+    Bypass.stub(bypass, "GET", "/api/conversations.list", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "channels" => [%{"id" => "C-READABLE", "name" => "team", "is_member" => true}]
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.history", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => false, "error" => "missing_scope"}))
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/search.messages", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"ok" => true, "messages" => %{"total" => 0, "matches" => []}})
+      )
+    end)
+
+    {_bundle, telemetry, proposed_watermarks} =
+      Acquisition.build(
+        user_id,
+        ["followthrough"],
+        slack_exact_skill_configs(team_id),
+        slack_exact_build_context(user_id, team_id, now)
+      )
+
+    refute Acquisition.source_complete?(telemetry, "slack")
+    assert proposed_watermarks == []
+    assert get_in(telemetry, ["sources", "slack", "status"]) == "partial"
+
+    assert Enum.any?(telemetry["fetches"], fn fetch ->
+             fetch["mode"] == "connector" and fetch["status"] == "error" and
+               fetch["reason"] == "slack_workspace_incomplete"
+           end)
+
+    :ok = Logger.flush()
+    _ = :sys.get_state(LogBuffer)
+
+    [entry | _rest] =
+      LogBuffer.recent_matching(5, fn entry ->
+        entry.message == "ChiefOfStaff acquisition failed to fetch Slack" and
+          entry.metadata["failure_code"] == "slack_workspace_incomplete"
+      end)
+
+    assert entry.metadata["failure_codes"] =~
+             "conversation_history_failed:slack_missing_scope"
+  end
+
   test "limits Slack history scans after priority sorting" do
     now = ~U[2026-06-18 15:00:00Z]
     bypass = Bypass.open()
@@ -318,8 +544,18 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         Jason.encode!(%{
           "ok" => true,
           "channels" => [
-            %{"id" => "CLOW", "name" => "random", "is_private" => false},
-            %{"id" => "CEXEC", "name" => "exec-real-estate", "is_private" => true},
+            %{
+              "id" => "CLOW",
+              "name" => "random",
+              "is_private" => false,
+              "is_member" => true
+            },
+            %{
+              "id" => "CEXEC",
+              "name" => "exec-real-estate",
+              "is_private" => true,
+              "is_member" => true
+            },
             %{"id" => "CDM", "name" => nil, "is_im" => true, "user" => "UBENJI"}
           ]
         })
@@ -430,7 +666,9 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         200,
         Jason.encode!(%{
           "ok" => true,
-          "channels" => [%{"id" => "CSELECTED", "name" => "exec-priority"}]
+          "channels" => [
+            %{"id" => "CSELECTED", "name" => "exec-priority", "is_member" => true}
+          ]
         })
       )
     end)
@@ -563,7 +801,12 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         Jason.encode!(%{
           "ok" => true,
           "channels" => [
-            %{"id" => "C111", "name" => "runner-general", "is_private" => false}
+            %{
+              "id" => "C111",
+              "name" => "runner-general",
+              "is_private" => false,
+              "is_member" => true
+            }
           ]
         })
       )
@@ -1854,6 +2097,46 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       assert %{value: "1717200000"} =
                Maraithon.Connectors.SourceCursors.get(account.id, "gmail_poll_watermark")
     end
+  end
+
+  defp slack_exact_skill_configs(team_id) do
+    %{
+      "followthrough" => %{
+        "source_scope" => %{
+          "slack_workspaces" => [
+            %{"team_id" => team_id, "team_name" => "Exact workspace", "services" => ["channels"]}
+          ]
+        },
+        "lookback_hours" => 48,
+        "slack_message_scan_limit" => 100
+      }
+    }
+  end
+
+  defp slack_exact_build_context(user_id, team_id, now) do
+    %{
+      agent_id: "chief-agent-#{team_id}",
+      user_id: user_id,
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "runtime_partition:source_account_discovery"},
+      event: nil,
+      source_scope: %{
+        "slack_workspaces" => [
+          %{"team_id" => team_id, "team_name" => "Exact workspace", "services" => ["channels"]}
+        ]
+      },
+      exhaustive_account_delta: true,
+      account_delta_source: "slack",
+      defer_watermark_advance: true
+    }
+  end
+
+  defp slack_test_ts(%DateTime{} = datetime) do
+    seconds = DateTime.to_unix(datetime, :second)
+    microseconds = elem(datetime.microsecond, 0)
+    "#{seconds}.#{microseconds |> Integer.to_string() |> String.pad_leading(6, "0")}"
   end
 
   # SPEC 07 R10/R11: pubsub-triggered cycles on the three subscribed topic

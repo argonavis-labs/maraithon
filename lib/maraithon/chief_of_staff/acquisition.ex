@@ -64,6 +64,20 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     {"@channel", "<!channel>"},
     {"@everyone", "<!everyone>"}
   ]
+  @slack_loggable_api_error_codes ~w(
+    account_inactive
+    channel_not_found
+    internal_error
+    invalid_auth
+    missing_scope
+    not_authed
+    not_in_channel
+    rate_limited
+    ratelimited
+    restricted_action
+    thread_not_found
+    token_revoked
+  )
   @slack_self_authored_search_queries [
     "\"I am going to\"",
     "\"I'm going to\"",
@@ -535,7 +549,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               Logger.warning("ChiefOfStaff acquisition failed to fetch Slack",
                 user_fingerprint: Redaction.fingerprint(user_id),
                 workspace_reference: Redaction.fingerprint(team_id),
-                failure_code: Redaction.error_class(reason)
+                failure_code: Redaction.error_class(reason),
+                failure_codes: slack_workspace_failure_counts(reason)
               )
 
               {workspace_acc,
@@ -970,9 +985,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
            ) do
       workspace = SourceScope.slack_workspace_for_team(source_scope, team_id) || %{}
 
-      conversations =
+      readable_conversations =
         conversations
+        |> Enum.filter(&slack_readable_conversation?/1)
         |> Enum.sort_by(&slack_channel_priority(&1, plan.slack_key_channels))
+
+      conversations =
+        readable_conversations
         |> maybe_take_slack_conversations(plan)
 
       {direct_mentions, mention_fetches} =
@@ -1075,7 +1094,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           token.access_token,
           team_id,
           workspace,
-          conversations,
+          readable_conversations,
           event_messages,
           plan
         )
@@ -1115,7 +1134,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         ]
 
       if plan.exhaustive_account_delta? and coverage_errors != [] do
-        {:error, {:slack_workspace_incomplete, length(coverage_errors)}, workspace_fetches}
+        {:error, {:slack_workspace_incomplete, slack_coverage_failure_counts(coverage_errors)},
+         workspace_fetches}
       else
         {:ok, workspace_payload, workspace_fetches}
       end
@@ -1164,6 +1184,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          event_messages,
          plan
        ) do
+    readable_channel_ids =
+      conversations
+      |> Enum.map(&normalize_string(&1["id"]))
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
     thread_refs =
       event_messages
       |> Enum.flat_map(fn message ->
@@ -1175,47 +1201,65 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
     Enum.reduce(thread_refs, {event_messages, [], []}, fn {channel_id, thread_ts},
                                                           {message_acc, fetch_acc, error_acc} ->
-      case call_with_timeout(
-             fn -> fetch_slack_thread_replies(access_token, channel_id, thread_ts, plan) end,
-             slack_channel_fetch_timeout_ms(plan)
-           ) do
-        {:ok, response} ->
-          raw_messages = response |> Map.get("messages", []) |> normalize_list()
-          channel = Enum.find(conversations, &(&1["id"] == channel_id)) || %{"id" => channel_id}
-          directory = slack_user_directory(access_token, raw_messages, channel, %{})
+      if MapSet.member?(readable_channel_ids, channel_id) do
+        case call_with_timeout(
+               fn -> fetch_slack_thread_replies(access_token, channel_id, thread_ts, plan) end,
+               slack_channel_fetch_timeout_ms(plan)
+             ) do
+          {:ok, response} ->
+            raw_messages = response |> Map.get("messages", []) |> normalize_list()
 
-          serialized =
-            Enum.map(
-              raw_messages,
-              &serialize_slack_message(&1, channel, team_id, workspace, directory)
-            )
+            channel =
+              Enum.find(conversations, &(&1["id"] == channel_id)) || %{"id" => channel_id}
 
-          fetch = %{
-            "source" => "slack",
-            "team_id" => team_id,
-            "channel_id" => channel_id,
-            "thread_ts" => thread_ts,
-            "mode" => "event_thread_replies",
-            "status" => "ok",
-            "count" => length(serialized)
-          }
+            directory = slack_user_directory(access_token, raw_messages, channel, %{})
 
-          {merge_serialized_slack_messages(message_acc, serialized), [fetch | fetch_acc],
-           error_acc}
+            serialized =
+              Enum.map(
+                raw_messages,
+                &serialize_slack_message(&1, channel, team_id, workspace, directory)
+              )
 
-        {:error, reason} ->
-          fetch = %{
-            "source" => "slack",
-            "team_id" => team_id,
-            "channel_id" => channel_id,
-            "thread_ts" => thread_ts,
-            "mode" => "event_thread_replies",
-            "status" => "error",
-            "reason" => Redaction.error_class(reason)
-          }
+            fetch = %{
+              "source" => "slack",
+              "team_id" => team_id,
+              "channel_id" => channel_id,
+              "thread_ts" => thread_ts,
+              "mode" => "event_thread_replies",
+              "status" => "ok",
+              "count" => length(serialized)
+            }
 
-          {message_acc, [fetch | fetch_acc],
-           [{:event_thread_replies_failed, channel_id, thread_ts, reason} | error_acc]}
+            {merge_serialized_slack_messages(message_acc, serialized), [fetch | fetch_acc],
+             error_acc}
+
+          {:error, reason} ->
+            fetch = %{
+              "source" => "slack",
+              "team_id" => team_id,
+              "channel_id" => channel_id,
+              "thread_ts" => thread_ts,
+              "mode" => "event_thread_replies",
+              "status" => "error",
+              "reason" => Redaction.error_class(reason)
+            }
+
+            {message_acc, [fetch | fetch_acc],
+             [{:event_thread_replies_failed, channel_id, thread_ts, reason} | error_acc]}
+        end
+      else
+        fetch = %{
+          "source" => "slack",
+          "team_id" => team_id,
+          "channel_id" => channel_id,
+          "thread_ts" => thread_ts,
+          "mode" => "event_thread_replies",
+          "status" => "terminal",
+          "reason" => "access_boundary",
+          "count" => 0
+        }
+
+        {message_acc, [fetch | fetch_acc], error_acc}
       end
     end)
   end
@@ -4412,6 +4456,39 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp slack_next_cursor(_response), do: nil
 
+  defp slack_coverage_failure_counts(errors) when is_list(errors) do
+    Enum.frequencies_by(errors, &slack_coverage_failure_code/1)
+  end
+
+  defp slack_coverage_failure_counts(_errors), do: %{}
+
+  defp slack_coverage_failure_code({phase, _channel_id, reason}) when is_atom(phase),
+    do: "#{phase}:#{slack_coverage_reason_code(reason)}"
+
+  defp slack_coverage_failure_code({phase, _channel_id, _thread_ts, reason})
+       when is_atom(phase),
+       do: "#{phase}:#{slack_coverage_reason_code(reason)}"
+
+  defp slack_coverage_failure_code(_error), do: "unknown_error"
+
+  defp slack_coverage_reason_code({:slack_error, code})
+       when code in @slack_loggable_api_error_codes,
+       do: "slack_#{code}"
+
+  defp slack_coverage_reason_code({:slack_error, _code}), do: "slack_error"
+
+  defp slack_coverage_reason_code({:http_status, status, _body})
+       when is_integer(status) and status >= 100 and status <= 599,
+       do: "http_status_#{status}"
+
+  defp slack_coverage_reason_code(reason), do: Redaction.error_class(reason)
+
+  defp slack_workspace_failure_counts({:slack_workspace_incomplete, counts})
+       when is_map(counts),
+       do: counts
+
+  defp slack_workspace_failure_counts(_reason), do: %{}
+
   defp dedupe_raw_slack_messages(messages) do
     messages
     |> normalize_list()
@@ -4461,6 +4538,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp slack_conversation_kind(%{"is_mpim" => true}), do: "group_dm"
   defp slack_conversation_kind(%{"is_private" => true}), do: "private_channel"
   defp slack_conversation_kind(_channel), do: "public_channel"
+
+  defp slack_readable_conversation?(%{"is_im" => true}), do: true
+  defp slack_readable_conversation?(%{"is_mpim" => true}), do: true
+  defp slack_readable_conversation?(%{"is_member" => true}), do: true
+  defp slack_readable_conversation?(_channel), do: false
 
   defp normalize_list(values) when is_list(values), do: values
   defp normalize_list(_values), do: []
