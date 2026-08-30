@@ -6,7 +6,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.SourceCursors
+  alias Maraithon.DurablePayload
   alias Maraithon.OAuth
+  alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.SourceAccountDiscovery
 
   test "empty account delta advances without a model handoff" do
@@ -366,6 +368,62 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
     assert SourceAccountDiscovery.source_item_refs(restored) == [
              "gmail:unknown:oversized-message"
            ]
+  end
+
+  test "losslessly seals a structurally deep bundle at the durable handoff boundary" do
+    {account, agent} = discovery_identity("deep-handoff")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    deep_payload =
+      Enum.reduce(1..20, "exact leaf", fn index, nested ->
+        %{"level_#{index}" => nested}
+      end)
+
+    message =
+      now
+      |> routine_message()
+      |> Map.put("id", "deep-message")
+      |> Map.put("thread_id", "deep-thread")
+      |> Map.put("payload", deep_payload)
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => [message],
+        "inbox_messages" => [message],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    acquisition = fn _user_id, _skills, _configs, _context ->
+      {bundle, complete_telemetry(),
+       [%{account: account, kind: "gmail_discovery_watermark", value: "1700000400"}]}
+    end
+
+    assert {:ok, %{handoffs: [handoff]}} =
+             SourceAccountDiscovery.acquire(account, agent,
+               acquisition: acquisition,
+               acquisition_job_id: "deep-acquisition",
+               now: now
+             )
+
+    assert {:ok, _canonical} =
+             DurablePayload.prepare_map(
+               handoff,
+               BackgroundJob.max_payload_bytes(),
+               BackgroundJob.payload_bounds()
+             )
+
+    assert %{"__maraithon_bounded_source_bundle_v1__" => _sealed} =
+             handoff["source_bundle"]
+
+    assert {:ok, restored} =
+             SourceAccountDiscovery.restore_partition_bundle(handoff["source_bundle"])
+
+    assert [restored_message] = SourceBundle.gmail_messages(restored)
+    assert restored_message["payload"] == deep_payload
   end
 
   test "rejects unidentified source rows and preserves long message content losslessly" do
