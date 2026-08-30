@@ -45,6 +45,26 @@ defmodule Maraithon.Connectors.SourceCursorsTest do
       assert %{value: "2000"} = SourceCursors.get(account.id, "slack_watermark")
     end
 
+    test "keeps discovery and closure role cursors independently monotonic", %{account: account} do
+      {:ok, _cursor} =
+        SourceCursors.put(account, "gmail_discovery_watermark", %{"value" => "2000"})
+
+      {:ok, _cursor} =
+        SourceCursors.put(account, "gmail_closure_watermark", %{"value" => "1500"})
+
+      {:ok, _cursor} =
+        SourceCursors.put(account, "gmail_discovery_watermark", %{"value" => "1000"})
+
+      {:ok, _cursor} =
+        SourceCursors.put(account, "gmail_closure_watermark", %{"value" => "2500"})
+
+      assert %{value: "2000"} =
+               SourceCursors.get(account.id, "gmail_discovery_watermark")
+
+      assert %{value: "2500"} =
+               SourceCursors.get(account.id, "gmail_closure_watermark")
+    end
+
     test "does not guard non-numeric values, matching the prior unconditional replace", %{
       account: account
     } do

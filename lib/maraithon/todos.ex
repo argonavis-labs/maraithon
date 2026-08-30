@@ -6,6 +6,7 @@ defmodule Maraithon.Todos do
   import Ecto.Query
 
   alias Maraithon.BriefingSchedules
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Insights.Insight
   alias Maraithon.LLM.Embeddings
   alias Maraithon.LocalEmbeddings
@@ -2112,14 +2113,18 @@ defmodule Maraithon.Todos do
 
   defp synced_insight_attrs(%Insight{} = insight) do
     metadata = insight.metadata || %{}
+    source = insight.source || "system"
+
+    {source_account_id, source_account_label} =
+      source_account_fields(insight.user_id, source, metadata)
 
     %{
       user_id: insight.user_id,
       owner_user_id: insight.user_id,
       owner_label: owner_label_from_metadata(metadata),
-      source: insight.source || "system",
-      source_account_id: read_integer(metadata, "source_account_id", nil),
-      source_account_label: source_account_label_from_metadata(metadata),
+      source: source,
+      source_account_id: source_account_id,
+      source_account_label: source_account_label,
       project_id: resolve_project_id(insight.user_id, metadata, %{}),
       agent_actionability:
         normalize_agent_actionability(read_string(metadata, "agent_actionability", "needs_you")),
@@ -2960,6 +2965,70 @@ defmodule Maraithon.Todos do
   end
 
   defp source_account_label_from_metadata(_metadata), do: nil
+
+  defp source_account_fields(user_id, source, metadata) do
+    explicit_id = read_integer(metadata, "source_account_id", nil)
+    explicit_label = source_account_label_from_metadata(metadata)
+
+    account =
+      if is_nil(explicit_id) do
+        source
+        |> source_account_provider(metadata)
+        |> case do
+          provider when is_binary(provider) -> ConnectedAccounts.get(user_id, provider)
+          _other -> nil
+        end
+      end
+
+    {
+      explicit_id || (account && account.id),
+      explicit_label || connected_account_label(account)
+    }
+  end
+
+  defp source_account_provider(source, metadata) when source in ["gmail", "email"] do
+    read_string(metadata, "google_provider", nil) ||
+      metadata
+      |> source_account_label_from_metadata()
+      |> google_provider_from_label()
+  end
+
+  defp source_account_provider("slack", metadata) do
+    case read_string(metadata, "team_id", nil) do
+      team_id when is_binary(team_id) -> "slack:#{team_id}"
+      _other -> nil
+    end
+  end
+
+  defp source_account_provider(_source, _metadata), do: nil
+
+  defp google_provider_from_label("google:" <> _account = provider), do: provider
+
+  defp google_provider_from_label(label) when is_binary(label) do
+    if String.contains?(label, "@"), do: "google:#{String.downcase(label)}"
+  end
+
+  defp google_provider_from_label(_label), do: nil
+
+  defp connected_account_label(%{provider: provider, metadata: metadata}) do
+    metadata = metadata || %{}
+
+    read_string(
+      metadata,
+      "account_email",
+      read_string(
+        metadata,
+        "email",
+        read_string(metadata, "team_name", connected_account_provider_label(provider))
+      )
+    )
+  end
+
+  defp connected_account_label(_account), do: nil
+
+  defp connected_account_provider_label("google:" <> account), do: account
+  defp connected_account_provider_label("slack:" <> team_id), do: team_id
+  defp connected_account_provider_label(_provider), do: nil
 
   defp owner_label_from_metadata(metadata) when is_map(metadata) do
     read_string(

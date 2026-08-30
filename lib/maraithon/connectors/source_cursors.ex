@@ -23,7 +23,14 @@ defmodule Maraithon.Connectors.SourceCursors do
   # incorrectly is the dangerous direction, so only guard against rewinding.
   # `gmail_history_id`/sync-token kinds are opaque provider cursors, not
   # comparable integers, and are left untouched.
-  @monotonic_watermark_kinds ["gmail_poll_watermark", "slack_watermark"]
+  @monotonic_watermark_kinds [
+    "gmail_poll_watermark",
+    "slack_watermark",
+    "gmail_discovery_watermark",
+    "gmail_closure_watermark",
+    "slack_discovery_watermark",
+    "slack_closure_watermark"
+  ]
 
   @doc """
   Fetches the cursor for a `(connected_account_id, kind)` pair, or `nil`.

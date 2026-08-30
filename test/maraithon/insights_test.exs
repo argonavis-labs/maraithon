@@ -3,6 +3,7 @@ defmodule Maraithon.InsightsTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Agents
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
   alias Maraithon.Todos
@@ -22,6 +23,42 @@ defmodule Maraithon.InsightsTest do
   end
 
   describe "record_many/3" do
+    test "links a sourced insight todo to its exact connected account", %{
+      user_id: user_id,
+      agent: agent
+    } do
+      {:ok, account} =
+        ConnectedAccounts.upsert_manual(user_id, "google:ops@example.com", %{
+          metadata: %{"account_email" => "ops@example.com"}
+        })
+
+      {:ok, [_insight]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply to operations",
+            "summary" => "Operations asked for an approval today.",
+            "recommended_action" => "Reply with the approval decision.",
+            "priority" => 88,
+            "confidence" => 0.93,
+            "dedupe_key" => "ops-account-link:rev-1",
+            "tracking_key" => "ops-account-link",
+            "source_id" => "ops-thread",
+            "metadata" => %{
+              "thread_id" => "ops-thread",
+              "google_provider" => "google:ops@example.com",
+              "google_account_email" => "ops@example.com",
+              "source_excerpt" => "Can you approve the operations plan today?"
+            }
+          }
+        ])
+
+      [todo] = Todos.list_open_for_user(user_id, source_account_id: account.id)
+      assert todo.source_account_id == account.id
+      assert todo.source_account_label == "ops@example.com"
+    end
+
     test "inserts and upserts open insights by dedupe key", %{user_id: user_id, agent: agent} do
       {:ok, [first]} =
         Insights.record_many(user_id, agent.id, [
