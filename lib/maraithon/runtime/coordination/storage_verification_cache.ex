@@ -10,7 +10,7 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCache do
   authority.
 
   A successful verification is reused for a bounded window
-  (`:protocol_storage_verification_cache_ms`, default 15s; `0` disables the
+  (`:protocol_storage_verification_cache_ms`, default 5m; `0` disables the
   cache and restores per-call verification). Only successes are cached: every
   failure is re-verified on the next call, and protocol activation clears the
   cache so a mode transition is never served from a stale proof. Activation
@@ -19,7 +19,7 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCache do
 
   alias Maraithon.Runtime.Config
 
-  @default_ttl_ms 15_000
+  @default_ttl_ms :timer.minutes(5)
   @term_key {__MODULE__, :entries}
 
   @doc """

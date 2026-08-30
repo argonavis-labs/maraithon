@@ -63,7 +63,7 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCacheTest do
 
   test "keys are independent and an invalid setting falls back to the default window" do
     put_ttl(:bogus)
-    assert Cache.ttl_ms() == 15_000
+    assert Cache.ttl_ms() == :timer.minutes(5)
 
     assert Cache.fetch({__MODULE__, :a}, counting_verify(self(), :ok), &(&1 == :ok))
     assert_received {:verified, :ok}
