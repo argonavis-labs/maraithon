@@ -5,7 +5,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   Provider work fetches only the delta after that account's discovery cursor.
   Empty deltas advance without a model call. Non-empty deltas are compacted
   into an encrypted background-job payload, reasoned over once, and advance
-  only after the resulting insight/todo writes have settled.
+  only after the resulting insight/todo writes have settled. An enabled Chief
+  contributes its Follow-through configuration; accounts without one use the
+  same safe defaults without requiring a long-lived Agent row.
   """
 
   alias Maraithon.Accounts.ConnectedAccount
@@ -62,6 +64,20 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         opts
       )
       when is_list(opts) do
+    do_acquire(account, agent, opts)
+  end
+
+  def acquire(%ConnectedAccount{status: "connected"} = account, nil, opts)
+      when is_list(opts) do
+    do_acquire(account, nil, opts)
+  end
+
+  def acquire(%ConnectedAccount{}, agent, _opts) when is_nil(agent) or is_struct(agent, Agent),
+    do: {:skip, :account_not_connected}
+
+  def acquire(_account, _agent, _opts), do: {:error, :invalid_source_discovery_identity}
+
+  defp do_acquire(account, agent, opts) do
     with :ok <- validate_ownership(account, agent),
          {bundle, _telemetry, proposals} <- acquire_bundle(account, agent, opts),
          compact_bundle when is_map(compact_bundle) <- compact_bundle(bundle),
@@ -84,13 +100,14 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
            outcome: "handoff_ready",
            account_id: account.id,
            source_items: source_items,
-           handoff: %{
-             "account_id" => account.id,
-             "agent_id" => agent.id,
-             "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
-             "source_bundle" => compact_bundle,
-             "watermarks" => watermarks
-           }
+           handoff:
+             %{
+               "account_id" => account.id,
+               "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
+               "source_bundle" => compact_bundle,
+               "watermarks" => watermarks
+             }
+             |> maybe_put_agent_id(agent)
          }}
       end
     else
@@ -104,14 +121,22 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
 
-  def acquire(%ConnectedAccount{}, %Agent{}, _opts), do: {:skip, :account_not_connected}
-  def acquire(_account, _agent, _opts), do: {:error, :invalid_source_discovery_identity}
-
   @doc "Reasons over one sealed account delta and advances its discovery cursor after writes settle."
   def reason(account, agent, payload, opts \\ [])
 
   def reason(%ConnectedAccount{} = account, %Agent{} = agent, payload, opts)
       when is_map(payload) and is_list(opts) do
+    do_reason(account, agent, payload, opts)
+  end
+
+  def reason(%ConnectedAccount{} = account, nil, payload, opts)
+      when is_map(payload) and is_list(opts) do
+    do_reason(account, nil, payload, opts)
+  end
+
+  def reason(_account, _agent, _payload, _opts), do: {:error, :invalid_source_discovery_payload}
+
+  defp do_reason(account, agent, payload, opts) do
     with :ok <- validate_ownership(account, agent),
          {:ok, bundle} <- fetch_map(payload, "source_bundle"),
          {:ok, watermarks} <- fetch_list(payload, "watermarks"),
@@ -132,8 +157,6 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   catch
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
-
-  def reason(_account, _agent, _payload, _opts), do: {:error, :invalid_source_discovery_payload}
 
   @doc false
   def compact_bundle(bundle) when is_map(bundle) do
@@ -171,7 +194,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
     context = %{
       user_id: account.user_id,
-      agent_id: agent.id,
+      agent_id: agent_id(agent),
       timestamp: now,
       trigger: %{type: :pubsub_event, job_type: "source_account_discovery"},
       event: %{topic: account_event_topic(account), payload: %{}},
@@ -184,7 +207,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     acquisition.(
       account.user_id,
       ["followthrough"],
-      %{"followthrough" => discovery_config(agent, source_scope)},
+      %{"followthrough" => discovery_config(agent, account.user_id, source_scope)},
       context
     )
   end
@@ -197,7 +220,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
     context = %{
       user_id: account.user_id,
-      agent_id: agent.id,
+      agent_id: agent_id(agent),
       timestamp: now,
       trigger: %{type: :wakeup, job_type: "source_account_discovery_reason"},
       recent_events: [],
@@ -205,7 +228,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       source_bundle: bundle
     }
 
-    state = module.init(discovery_config(agent, source_scope))
+    state = module.init(discovery_config(agent, account.user_id, source_scope))
     drive_outcome(module.handle_wakeup(state, context), module, context, llm_complete, 0, 0)
   end
 
@@ -298,8 +321,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp pending_llm_kind(%{inbox_state: %{pending_llm_kind: kind}}), do: kind
   defp pending_llm_kind(_state), do: nil
 
-  defp discovery_config(%Agent{config: agent_config, user_id: user_id}, source_scope) do
-    agent_config = agent_config || %{}
+  defp discovery_config(agent, user_id, source_scope) do
+    agent_config = if is_struct(agent, Agent), do: agent.config || %{}, else: %{}
 
     Followthrough.default_config()
     |> Map.merge(shared_config(agent_config))
@@ -404,9 +427,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp validate_ownership(%ConnectedAccount{user_id: user_id}, %Agent{user_id: user_id}), do: :ok
+  defp validate_ownership(%ConnectedAccount{}, nil), do: :ok
   defp validate_ownership(_account, _agent), do: {:error, :source_discovery_user_mismatch}
 
-  defp validate_payload_identity(account, agent, payload) do
+  defp validate_payload_identity(account, %Agent{} = agent, payload) do
     if read_integer(payload, "account_id") == account.id and
          read_string(payload, "agent_id") == agent.id do
       :ok
@@ -414,6 +438,21 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       {:error, :source_discovery_payload_identity_mismatch}
     end
   end
+
+  defp validate_payload_identity(account, nil, payload) do
+    if read_integer(payload, "account_id") == account.id and
+         is_nil(read_string(payload, "agent_id")) do
+      :ok
+    else
+      {:error, :source_discovery_payload_identity_mismatch}
+    end
+  end
+
+  defp maybe_put_agent_id(payload, %Agent{id: id}), do: Map.put(payload, "agent_id", id)
+  defp maybe_put_agent_id(payload, nil), do: payload
+
+  defp agent_id(%Agent{id: id}), do: id
+  defp agent_id(nil), do: nil
 
   defp account_source_scope(%ConnectedAccount{provider: provider} = account) do
     service = if provider == "google" or String.starts_with?(provider, "google:"), do: "gmail"

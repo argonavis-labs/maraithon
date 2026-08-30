@@ -212,12 +212,13 @@ Implemented as of 2026-08-30:
 - Gmail and Slack consumers treat a supplied source bundle, including an empty bundle, as authoritative and do not fetch the provider twice.
 - Live source scope can be intersected down to one connected Gmail account or one canonical Slack workspace.
 - New todos resolve exact `source_account_id` lineage and discovery/closure cursors are independent and monotonic.
-- One-minute closure jobs fan out by account and use the closure cursor, with a zero-model quiet path.
+- Closure jobs fan out by account on ingress and on the configured 30-minute anti-entropy cadence, using the closure cursor with a zero-model quiet path.
 - One-minute discovery jobs fan out in `runtime_provider_account`, acquire only the discovery delta, and seal non-empty bounded bundles in encrypted durable payloads for `runtime_model_user`.
 - Discovery reasoning uses the existing Follow-through intelligence path, makes at most one todo-triage model call, defers secondary relationship learning, and advances only after the reasoning job settles its writes.
 - Gmail incremental-sync completion and Slack message/mention ingress wake the exact account immediately; active-job dedupe collapses bursts and the one-minute schedule remains anti-entropy.
 - Closure acquisition now runs in `runtime_provider_account`; empty deltas advance with zero model calls, while non-empty bounded deltas are sealed for account-scoped completion reasoning in `runtime_model_user`.
 - Closure cursors advance only after the model-side completion pass settles. The previous direct model job remains executable during revision drain, but no new work is scheduled through it.
+- Account discovery inherits an enabled Chief's Follow-through configuration when present. If a user has no Chief row, the cheap account assignment still runs with safe default Follow-through intelligence; an explicitly paused or unavailable Chief remains respected.
 
 Still required for cutover:
 

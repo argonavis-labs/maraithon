@@ -7,9 +7,9 @@
   "created_at": "2026-08-30T03:04:00Z",
   "approved_at": "2026-08-30T03:04:00Z",
   "started_at": "2026-08-30T03:04:00Z",
-  "updated_at": "2026-08-30T03:43:10Z",
-  "summary": "Implementation is active. Gmail sync completion and Slack message/mention ingress wake the exact account immediately, while active-job dedupe collapses bursts and the one-minute schedule remains anti-entropy. Discovery and closure both use sealed provider-to-model delta handoffs; empty deltas cost zero model calls and non-empty reasoning remains account-scoped.",
-  "next_action": "Deploy the complete account-worker topology, prove production parity and runtime health, then cut ordinary Chief acquisition over to persisted results.",
+  "updated_at": "2026-08-30T04:18:32Z",
+  "summary": "Implementation is active. Exact Gmail/Slack account assignments use sealed provider-to-model delta handoffs, wake immediately from source ingress, and cost zero model calls on empty deltas. Discovery inherits an enabled Chief's configuration when present and safely uses default Follow-through intelligence when no Chief row exists.",
+  "next_action": "Deploy the bootstrap-independent discovery workers, prove account jobs and cursors advance in production, then cut ordinary Chief acquisition over to persisted results.",
   "blockers": [],
   "review_policy": {
     "final_vetting": "off"
@@ -28,12 +28,12 @@
     "tests": "passed",
     "spec_review": "pending",
     "final_vetting": "skipped",
-    "notes": "Plain spectacula invocation sets final_vetting off. Development and test compilation with warnings-as-errors pass; source-account discovery, closure, completion, and periodic tests pass, Gmail advisor passes 22/22, Gmail ingress handler passes 4/4, and the exact Slack ingress wake test passes. Two stale connector expectations encountered during verification were deliberately updated to assert the production query contract and redacted rate-limit error. Broad suites remain intentionally skipped under repository policy."
+    "notes": "Plain spectacula invocation sets final_vetting off. Development and test compilation with warnings-as-errors pass; source-account discovery, closure, completion, and periodic tests pass, including the sealed no-Chief discovery handoff. Gmail advisor passes 22/22, Gmail ingress handler passes 4/4, and exact Gmail/Slack ingress wake tests pass. Production exact-runtime diagnosis is clean at 64 ready partitions with no draining, blocked, unassigned, or unsettled task assignments. Two stale connector expectations encountered during verification were deliberately updated to assert the production query contract and redacted rate-limit error. Broad suites remain intentionally skipped under repository policy."
   },
   "resume_context": {
-    "last_completed_step": "Moved account closure acquisition into the provider lane with a bounded encrypted model handoff, zero-model empty-delta settlement, and cursor advancement only after completion reasoning settles.",
+    "last_completed_step": "Removed the account discovery scheduler's dependency on a preinstalled Chief row while preserving enabled Chief configuration and explicit pause semantics.",
     "pending_steps": [
-      "Prove the account-worker topology and runtime health in production.",
+      "Deploy and prove account jobs and cursors advance across the three production token-backed accounts.",
       "Cut ordinary Chief cycles over to persisted account-worker results after production parity."
     ],
     "open_questions": [],
@@ -100,7 +100,7 @@
       "event": "checkpoint",
       "from_stage": "inprogress",
       "to_stage": "inprogress",
-      "note": "Exact account closure jobs run on a one-minute anti-entropy cadence, consume only closure deltas, skip the model on empty bundles, and leave cursors unchanged on unsettled evaluation."
+      "note": "Exact account closure jobs wake on ingress and run on the configured 30-minute anti-entropy cadence, consume only closure deltas, skip the model on empty bundles, and leave cursors unchanged on unsettled evaluation."
     },
     {
       "at": "2026-08-30T03:33:28Z",
@@ -122,6 +122,13 @@
       "from_stage": "inprogress",
       "to_stage": "inprogress",
       "note": "Closure now acquires account deltas in the provider lane and seals non-empty bundles for model-lane completion; quiet cycles use zero model calls and cursors advance only after settled reasoning. Legacy direct closure jobs remain executable solely for revision-drain compatibility."
+    },
+    {
+      "at": "2026-08-30T04:18:32Z",
+      "event": "checkpoint",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Production audit found three token-backed source accounts but no Chief rows, preventing discovery fan-out. Discovery now uses safe default Follow-through intelligence when no Chief exists, still inherits enabled Chief configuration, and respects explicitly unavailable Chief installations. Focused scheduler, sealed-handoff, Gmail ingress, and Slack ingress tests pass."
     }
   ]
 }

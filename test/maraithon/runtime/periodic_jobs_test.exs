@@ -178,6 +178,66 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
              PeriodicJobs.schedule("source_account_discovery")
   end
 
+  test "discovery coordinator does not require a preinstalled Chief row" do
+    user_id = "periodic-default-discovery-#{System.unique_integer([:positive])}@example.com"
+    provider = "google:#{user_id}"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, provider, %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, provider, %{
+        access_token: "default-discovery-access",
+        refresh_token: "default-discovery-refresh",
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    assert {:ok, %{discovered: 1, enqueued: 1}} =
+             PeriodicJobs.schedule("source_account_discovery")
+
+    job =
+      Repo.one!(
+        from(job in BackgroundJob,
+          where: job.job_type == "runtime_partition:source_account_discovery"
+        )
+      )
+
+    assert job.payload["account_id"] == account.id
+    refute Map.has_key?(job.payload, "agent_id")
+  end
+
+  test "discovery coordinator respects an explicitly stopped Chief" do
+    user_id = "periodic-paused-discovery-#{System.unique_integer([:positive])}@example.com"
+    provider = "google:#{user_id}"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, provider, %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, provider, %{
+        access_token: "paused-discovery-access",
+        refresh_token: "paused-discovery-refresh",
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, _agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{},
+        status: "stopped"
+      })
+
+    assert {:ok, %{discovered: 0, enqueued: 0}} =
+             PeriodicJobs.schedule("source_account_discovery")
+  end
+
   test "completion coordinator fans out one durable closure job per source account" do
     user_id = "periodic-closure-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

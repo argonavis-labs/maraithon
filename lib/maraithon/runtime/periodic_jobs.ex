@@ -284,21 +284,37 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp schedule_source_account_discovery do
     now = database_now!()
     batch_size = Config.positive_integer(:source_account_discovery_batch_size, 100)
-    account_agents = source_discovery_account_agents(batch_size)
+    account_identities = source_discovery_account_identities(batch_size)
 
-    enqueue_many(account_agents, fn {account, agent} ->
+    enqueue_many(account_identities, fn {account, agent} ->
       enqueue_source_discovery_job(account, agent, now)
     end)
-    |> schedule_summary("source_account_discovery", length(account_agents))
+    |> schedule_summary("source_account_discovery", length(account_identities))
   end
 
-  defp source_discovery_account_agents(limit) do
+  defp source_discovery_account_identities(limit) do
+    accounts = source_discovery_accounts(limit)
+
+    accounts
+    |> Enum.map(& &1.user_id)
+    |> Enum.uniq()
+    |> discovery_agents_by_user()
+    |> then(fn agents_by_user ->
+      Enum.flat_map(accounts, fn account ->
+        case discovery_identity(Map.get(agents_by_user, account.user_id, [])) do
+          {:ok, agent} -> [{account, agent}]
+          {:skip, _reason} -> []
+        end
+      end)
+    end)
+  end
+
+  defp source_discovery_accounts(limit) do
     ConnectedAccount
-    |> join(:inner, [account], agent in Agent, on: agent.user_id == account.user_id)
-    |> join(:inner, [account, _agent], source_token in Token,
+    |> join(:inner, [account], source_token in Token,
       on: source_token.user_id == account.user_id and source_token.provider == account.provider
     )
-    |> join(:left, [account, _agent, _source_token], acquisition_job in BackgroundJob,
+    |> join(:left, [account, _source_token], acquisition_job in BackgroundJob,
       on:
         acquisition_job.dedupe_key ==
           fragment("'runtime-partition:source-account-discovery:' || ?::text", account.id) and
@@ -306,7 +322,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     )
     |> join(
       :left,
-      [account, _agent, _source_token, _acquisition_job],
+      [account, _source_token, _acquisition_job],
       reason_job in BackgroundJob,
       on:
         reason_job.dedupe_key ==
@@ -317,44 +333,34 @@ defmodule Maraithon.Runtime.PeriodicJobs do
           reason_job.status in @active_statuses
     )
     |> where(
-      [account, agent, _source_token, acquisition_job, reason_job],
-      account.status == "connected" and agent.behavior == "ai_chief_of_staff" and
-        agent.install_status == "enabled" and
-        agent.status in ["running", "recovering", "degraded"] and
-        is_nil(acquisition_job.id) and is_nil(reason_job.id)
+      [account, _source_token, acquisition_job, reason_job],
+      account.status == "connected" and is_nil(acquisition_job.id) and is_nil(reason_job.id)
     )
     |> where(
-      [account, _agent, _source_token, _acquisition_job, _reason_job],
+      [account, _source_token, _acquisition_job, _reason_job],
       like(account.provider, "google%") or
         fragment("? ~ '^slack:[^:]+$'", account.provider)
     )
-    |> distinct([account, _agent, _source_token, _acquisition_job, _reason_job], account.id)
-    |> order_by([account, agent, _source_token, _acquisition_job, _reason_job],
-      asc: account.id,
-      asc: agent.id
-    )
-    |> limit(^(limit * 3))
-    |> select([account, agent, _source_token, _acquisition_job, _reason_job], {account, agent})
+    |> distinct([account, _source_token, _acquisition_job, _reason_job], account.id)
+    |> order_by([account, _source_token, _acquisition_job, _reason_job], asc: account.id)
+    |> limit(^limit)
+    |> select([account, _source_token, _acquisition_job, _reason_job], account)
     |> Repo.all()
-    |> Enum.filter(fn {_account, agent} ->
-      "followthrough" in Skills.enabled_ids(agent.config || %{})
-    end)
-    |> Enum.take(limit)
   end
 
   defp enqueue_source_account_discovery(account, now) do
-    case discovery_agent_for_user(account.user_id) do
-      %Agent{} = agent ->
+    case discovery_identity_for_user(account.user_id) do
+      {:ok, agent} ->
         case enqueue_source_discovery_job(account, agent, now) do
           {:ok, %BackgroundJob{} = job} ->
-            {:ok, %{outcome: "enqueued", job_id: job.id, agent_id: agent.id}}
+            {:ok, %{outcome: "enqueued", job_id: job.id, agent_id: agent_id(agent)}}
 
           {:error, reason} ->
             {:error, {:source_discovery_enqueue_failed, reason}}
         end
 
-      nil ->
-        {:ok, %{outcome: "skipped", reason: "no_enabled_chief"}}
+      {:skip, reason} ->
+        {:ok, %{outcome: "skipped", reason: to_string(reason)}}
     end
   end
 
@@ -367,27 +373,55 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       rate_limit_key: TokenRefresher.provider_family(account.provider),
       max_attempts: 5,
       scheduled_at: now,
-      payload: %{
-        "user_id" => account.user_id,
-        "account_id" => account.id,
-        "agent_id" => agent.id,
-        "role" => "discovery"
-      }
+      payload:
+        %{
+          "user_id" => account.user_id,
+          "account_id" => account.id,
+          "role" => "discovery"
+        }
+        |> maybe_put_discovery_agent_id(agent)
     })
   end
 
-  defp discovery_agent_for_user(user_id) do
+  defp discovery_identity_for_user(user_id) do
     Agent
     |> where(
       [agent],
       agent.user_id == ^user_id and agent.behavior == "ai_chief_of_staff" and
-        agent.install_status == "enabled" and
-        agent.status in ["running", "recovering", "degraded"]
+        agent.install_status != "removed"
     )
     |> order_by([agent], asc: agent.id)
-    |> limit(10)
     |> Repo.all()
-    |> Enum.find(fn agent -> "followthrough" in Skills.enabled_ids(agent.config || %{}) end)
+    |> discovery_identity()
+  end
+
+  defp discovery_agents_by_user([]), do: %{}
+
+  defp discovery_agents_by_user(user_ids) do
+    Agent
+    |> where(
+      [agent],
+      agent.user_id in ^user_ids and agent.behavior == "ai_chief_of_staff" and
+        agent.install_status != "removed"
+    )
+    |> order_by([agent], asc: agent.id)
+    |> Repo.all()
+    |> Enum.group_by(& &1.user_id)
+  end
+
+  defp discovery_identity([]), do: {:ok, nil}
+
+  defp discovery_identity(agents) do
+    case Enum.find(agents, &eligible_discovery_agent?/1) do
+      %Agent{} = agent -> {:ok, agent}
+      nil -> {:skip, :chief_not_available}
+    end
+  end
+
+  defp eligible_discovery_agent?(%Agent{} = agent) do
+    agent.install_status == "enabled" and
+      agent.status in ["running", "recovering", "degraded"] and
+      "followthrough" in Skills.enabled_ids(agent.config || %{})
   end
 
   defp maybe_enqueue_source_account_closure(account, now) do
@@ -616,15 +650,14 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp execute_provider(%BackgroundJob{job_type: @source_discovery_job} = job) do
     with {:ok, account_id} <- payload_integer(job, "account_id"),
-         {:ok, agent_id} <- payload_string(job, "agent_id"),
          %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
-         %Agent{} = agent <- Repo.get(Agent, agent_id),
+         {:ok, agent} <- discovery_agent_from_payload(job.payload || %{}),
          true <- discovery_identity_valid?(job, account, agent),
          {:ok, result} <-
            SourceAccountDiscovery.acquire(account, agent, acquisition_job_id: job.id) do
       maybe_enqueue_discovery_reason(job, account, result)
     else
-      nil -> {:error, :source_discovery_identity_not_found}
+      nil -> {:error, :source_discovery_account_not_found}
       false -> {:error, :source_discovery_identity_mismatch}
       {:error, _reason} = error -> error
       {:skip, _reason} = skip -> normalize_work_result(skip)
@@ -681,14 +714,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp execute_model(%BackgroundJob{job_type: @source_discovery_reason_job} = job) do
     with {:ok, account_id} <- payload_integer(job, "account_id"),
-         {:ok, agent_id} <- payload_string(job, "agent_id"),
          %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
-         %Agent{} = agent <- Repo.get(Agent, agent_id),
+         {:ok, agent} <- discovery_agent_from_payload(job.payload || %{}),
          true <- discovery_identity_valid?(job, account, agent),
          {:ok, result} <- SourceAccountDiscovery.reason(account, agent, job.payload || %{}) do
       normalize_work_result(result)
     else
-      nil -> {:error, :source_discovery_identity_not_found}
+      nil -> {:error, :source_discovery_account_not_found}
       false -> {:error, :source_discovery_identity_mismatch}
       {:error, _reason} = error -> normalize_work_result(error)
     end
@@ -806,13 +838,41 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp maybe_enqueue_closure_reason(_job, _account, result),
     do: normalize_work_result(result)
 
-  defp discovery_identity_valid?(job, account, agent) do
+  defp discovery_identity_valid?(job, account, %Agent{} = agent) do
     account.user_id == job.user_id and agent.user_id == job.user_id and
       account.status == "connected" and agent.behavior == "ai_chief_of_staff" and
       agent.install_status == "enabled" and
       agent.status in ["running", "recovering", "degraded"] and
       "followthrough" in Skills.enabled_ids(agent.config || %{})
   end
+
+  defp discovery_identity_valid?(job, account, nil) do
+    account.user_id == job.user_id and account.status == "connected"
+  end
+
+  defp discovery_agent_from_payload(payload) do
+    case Map.get(payload, "agent_id") do
+      nil ->
+        {:ok, nil}
+
+      agent_id when is_binary(agent_id) ->
+        case Repo.get(Agent, agent_id) do
+          %Agent{} = agent -> {:ok, agent}
+          nil -> {:error, :source_discovery_agent_not_found}
+        end
+
+      _other ->
+        {:error, :invalid_source_discovery_agent_id}
+    end
+  end
+
+  defp maybe_put_discovery_agent_id(payload, %Agent{id: id}),
+    do: Map.put(payload, "agent_id", id)
+
+  defp maybe_put_discovery_agent_id(payload, nil), do: payload
+
+  defp agent_id(%Agent{id: id}), do: id
+  defp agent_id(nil), do: nil
 
   # Provider clients wrap HTTP failures (for example
   # `{:token_refresh_failed, {:rate_limited, ...}}`). Walk only a small tuple

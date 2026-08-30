@@ -6,6 +6,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.SourceCursors
+  alias Maraithon.OAuth
   alias Maraithon.Runtime.SourceAccountDiscovery
 
   test "empty account delta advances without a model handoff" do
@@ -92,6 +93,64 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
     refute_received :model_called
 
     assert %{value: "1700000100"} =
+             SourceCursors.get(account.id, "gmail_discovery_watermark")
+  end
+
+  test "account worker uses default follow-through intelligence without a Chief row" do
+    user_id =
+      "source-account-discovery-default-#{System.unique_integer([:positive])}@example.com"
+
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:#{user_id}", %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:#{user_id}", %{
+        access_token: "default-discovery-access",
+        refresh_token: "default-discovery-refresh",
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => [routine_message(now)],
+        "inbox_messages" => [routine_message(now)],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    acquisition = fn ^user_id, ["followthrough"], configs, context ->
+      assert [%{"provider" => "google:" <> _rest}] =
+               configs["followthrough"]["source_scope"]["google_accounts"]
+
+      assert context.agent_id == nil
+
+      {bundle, %{}, [%{account: account, kind: "gmail_discovery_watermark", value: "1700000200"}]}
+    end
+
+    assert {:ok, %{outcome: "handoff_ready", handoff: handoff}} =
+             SourceAccountDiscovery.acquire(account, nil,
+               acquisition: acquisition,
+               now: now
+             )
+
+    refute Map.has_key?(handoff, "agent_id")
+
+    assert {:ok, %{model_calls: 0, advanced_watermarks: 1}} =
+             SourceAccountDiscovery.reason(account, nil, handoff,
+               now: now,
+               llm_complete: fn _params -> {:error, :unexpected_model_call} end
+             )
+
+    assert %{value: "1700000200"} =
              SourceCursors.get(account.id, "gmail_discovery_watermark")
   end
 
