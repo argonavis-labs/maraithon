@@ -144,6 +144,18 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
                Map.put(child_result, :decision_refs, ["gmail:wrong-item"])
              ])
 
+    tampered_manifest =
+      update_in(child_result.todo_decision_manifest, fn [entry] ->
+        [%{entry | action: "superseded"}]
+      end)
+
+    assert {:error, :source_closure_incomplete_decisions} =
+             SourceAccountClosure.finalize(
+               account,
+               finalizer,
+               [%{child_result | todo_decision_manifest: tampered_manifest}]
+             )
+
     refute SourceCursors.get(account.id, "gmail_closure_watermark")
 
     assert {:ok,
@@ -224,6 +236,70 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
     old_source_partition_work = ceil(12 / 5) * ceil(21 / 10)
     assert length(handoffs) == 3
     assert length(handoffs) < old_source_partition_work
+  end
+
+  test "records a todo closed after acquisition as superseded instead of evaluated" do
+    account = closure_account("superseded")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(account.user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Finish before the completion worker runs",
+          "summary" => "The user may close this after the source delta is acquired.",
+          "next_action" => "Finish the work.",
+          "source_account_id" => account.id,
+          "source_item_id" => "superseded-thread",
+          "dedupe_key" => "source-account-closure:superseded"
+        }
+      ])
+
+    message = %{
+      "id" => "superseded-later-message",
+      "thread_id" => "superseded-thread",
+      "subject" => "Later evidence",
+      "body" => "Later source evidence.",
+      "from" => "sender@example.com",
+      "to" => [account.user_id],
+      "label_ids" => ["INBOX"],
+      "internal_date" => DateTime.to_unix(now, :millisecond)
+    }
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => [message],
+        "inbox_messages" => [message],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    assert {:ok, %{handoffs: [handoff], finalizer: finalizer}} =
+             SourceAccountClosure.acquire(account,
+               source_bundle: bundle,
+               proposed_watermarks: [closure_watermark(account, "1700000450")]
+             )
+
+    assert {:ok, _todo} = Todos.mark_done(account.user_id, todo.id)
+
+    assert {:ok,
+            %{
+              decision_refs: [decision_ref],
+              evaluated_todo_decision_count: 0,
+              evaluated_todo_decision_refs: [],
+              superseded_todo_decision_count: 1,
+              superseded_todo_decision_refs: [superseded_ref]
+            } = child_result} = SourceAccountClosure.reason(account, handoff, now: now)
+
+    assert decision_ref == todo.id
+    assert superseded_ref == todo.id
+
+    assert {:ok, %{decision_count: 1}} =
+             SourceAccountClosure.finalize(account, finalizer, [child_result])
   end
 
   test "losslessly seals a completion delta larger than the durable job payload" do

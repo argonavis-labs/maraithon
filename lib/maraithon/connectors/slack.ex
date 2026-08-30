@@ -41,8 +41,12 @@ defmodule Maraithon.Connectors.Slack do
 
   @behaviour Maraithon.Connectors.Connector
 
+  import Ecto.Query
+
+  alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.OAuth.Slack, as: SlackOAuth
   alias Maraithon.Connectors.Connector
+  alias Maraithon.Repo
   alias Maraithon.Runtime.PeriodicJobs
 
   require Logger
@@ -157,7 +161,9 @@ defmodule Maraithon.Connectors.Slack do
 
     normalized = build_slack_event(event_type, data, params)
 
-    case ingest_slack_message(team_id, Map.put(event, "user", sender_id), event_type) do
+    ingress_event = normalize_slack_message_ingress(event, event_type, params)
+
+    case ingest_slack_message(team_id, ingress_event, event_type) do
       :ok ->
         Logger.info("Slack message received",
           team_id: team_id,
@@ -174,10 +180,33 @@ defmodule Maraithon.Connectors.Slack do
 
   defp ingest_slack_message(team_id, event, event_type) when is_binary(team_id) do
     if content_bearing_slack_message?(event_type, event) do
-      with :ok <- validate_slack_message_identity(event),
-           {:ok, durable_content} <- durable_slack_content(event),
-           {:ok, accounts} <- lookup_slack_accounts(team_id) do
-        Enum.reduce_while(accounts, :ok, fn %{user_id: user_id} = account, :ok ->
+      case validate_slack_message_identity(event) do
+        :ok ->
+          persist_slack_message(team_id, event)
+
+        {:error, _reason} when event_type in ["message_changed", "message_deleted"] ->
+          :ok
+
+        {:error, _reason} = error ->
+          error
+      end
+    else
+      :ok
+    end
+  end
+
+  defp ingest_slack_message(_team_id, _event, _event_type), do: :ok
+
+  defp persist_slack_message(team_id, event) do
+    with {:ok, durable_content} <- durable_slack_content(event),
+         {:ok, accounts} <-
+           lookup_slack_accounts(
+             team_id,
+             event["authorized_user_ids"],
+             event["event_context"]
+           ) do
+      results =
+        Enum.map(accounts, fn %{user_id: user_id} = account ->
           with :ok <-
                  maybe_observe_slack_message(
                    user_id,
@@ -187,22 +216,20 @@ defmodule Maraithon.Connectors.Slack do
                    durable_content
                  ),
                :ok <- wake_source_account(account, "slack_message") do
-            {:cont, :ok}
-          else
-            {:error, reason} -> {:halt, {:error, reason}}
+            :ok
           end
         end)
+
+      case Enum.find(results, &match?({:error, _reason}, &1)) do
+        nil -> :ok
+        {:error, reason} -> {:error, reason}
       end
-    else
-      :ok
     end
   end
 
-  defp ingest_slack_message(_team_id, _event, _event_type), do: :ok
-
   defp content_bearing_slack_message?(event_type, event) do
-    event_type not in ["message_changed", "message_deleted"] and
-      (event_type == "app_mention" or String.starts_with?(event_type, "message")) and
+    (event_type in ["reaction_added", "reaction_removed"] or event_type == "app_mention" or
+       String.starts_with?(event_type, "message")) and
       ((is_binary(event["text"]) and event["text"] != "") or
          (is_list(event["files"]) and event["files"] != []) or
          (is_list(event["blocks"]) and event["blocks"] != []))
@@ -236,7 +263,13 @@ defmodule Maraithon.Connectors.Slack do
 
   defp valid_slack_timestamp?(_ts), do: false
 
-  defp lookup_slack_accounts(team_id) do
+  defp lookup_slack_accounts(team_id, authorized_user_ids, _event_context) do
+    authorized_user_ids =
+      authorized_user_ids
+      |> List.wrap()
+      |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      |> MapSet.new()
+
     accounts = Maraithon.ConnectedAccounts.list_connected_provider("slack:#{team_id}")
 
     accounts =
@@ -251,7 +284,23 @@ defmodule Maraithon.Connectors.Slack do
           connected
       end
 
-    {:ok, accounts}
+    case accounts do
+      [] ->
+        {:ok, []}
+
+      [account] ->
+        account_user_id = slack_account_user_id(account)
+
+        if MapSet.size(authorized_user_ids) == 0 or
+             (is_binary(account_user_id) and MapSet.member?(authorized_user_ids, account_user_id)) do
+          {:ok, [account]}
+        else
+          {:error, :slack_event_account_authorization_mismatch}
+        end
+
+      _multiple_accounts ->
+        {:error, :slack_event_authorization_expansion_required}
+    end
   rescue
     exception ->
       Logger.warning("Slack account lookup failed",
@@ -268,6 +317,13 @@ defmodule Maraithon.Connectors.Slack do
       )
 
       {:error, :slack_account_lookup_failed}
+  end
+
+  defp slack_account_user_id(account) do
+    metadata = account.metadata || %{}
+
+    metadata["authed_user_id"] || metadata[:authed_user_id] ||
+      metadata["slack_user_id"] || metadata[:slack_user_id]
   end
 
   defp maybe_observe_slack_message(user_id, account, team_id, event, durable_content) do
@@ -307,6 +363,10 @@ defmodule Maraithon.Connectors.Slack do
               "channel" => event["channel"],
               "ts" => ts,
               "thread_ts" => event["thread_ts"],
+              "target_ts" => event["target_ts"],
+              "event_type" => event["event_type"],
+              "provider_event_id" => event["provider_event_id"],
+              "text" => durable_content.text,
               "files" => durable_content.files,
               "file_count" => durable_content.file_count,
               "blocks" => durable_content.blocks,
@@ -314,7 +374,7 @@ defmodule Maraithon.Connectors.Slack do
             }
           })
 
-        case Maraithon.Crm.Ingest.observe(user_id, changeset) do
+        case observe_with_account_lock(account, user_id, changeset) do
           {:ok, :buffered, _observation_id} ->
             :ok
 
@@ -336,26 +396,43 @@ defmodule Maraithon.Connectors.Slack do
     end
   end
 
+  defp observe_with_account_lock(account, user_id, changeset) do
+    Repo.transaction(fn ->
+      _locked_account_id =
+        ConnectedAccount
+        |> where([candidate], candidate.id == ^account.id)
+        |> lock("FOR UPDATE")
+        |> select([candidate], candidate.id)
+        |> Repo.one!()
+
+      Maraithon.Crm.Ingest.observe(user_id, changeset)
+    end)
+    |> case do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp durable_slack_content(event) when is_map(event) do
     files = compact_slack_files(event["files"])
     blocks = compact_slack_blocks(event["blocks"])
 
-    excerpt =
-      [normalize_content_text(event["text"])] ++
-        Enum.map(files, &slack_file_excerpt/1) ++ Enum.map(blocks, &Map.get(&1, "text"))
-
-    excerpt =
-      excerpt
+    text =
+      ([normalize_content_text(event["text"])] ++
+         Enum.flat_map(List.wrap(event["files"]), &slack_file_semantic_texts/1) ++
+         slack_block_texts(event["blocks"]))
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
       |> Enum.join("\n")
-      |> clip_text()
       |> normalize_content_text()
+
+    excerpt = clip_text(text)
 
     if is_binary(excerpt) do
       {:ok,
        %{
          excerpt: excerpt,
+         text: text,
          files: files,
          file_count: count_slack_items(event["files"]),
          blocks: blocks,
@@ -464,6 +541,20 @@ defmodule Maraithon.Connectors.Slack do
 
   defp slack_file_excerpt(_file), do: nil
 
+  defp slack_file_semantic_texts(file) when is_map(file) do
+    compact = compact_slack_file(file)
+
+    [
+      compact && slack_file_excerpt(compact),
+      normalize_content_text(file["preview_plain_text"]),
+      normalize_content_text(file["preview"]),
+      normalize_content_text(get_in(file, ["initial_comment", "comment"])),
+      normalize_content_text(get_in(file, ["initial_comment", "text"]))
+    ]
+  end
+
+  defp slack_file_semantic_texts(_file), do: []
+
   defp count_slack_items(items) when is_list(items), do: length(items)
   defp count_slack_items(_items), do: 0
 
@@ -536,7 +627,12 @@ defmodule Maraithon.Connectors.Slack do
 
     normalized = build_slack_event("app_mention", data, params)
 
-    with :ok <- ingest_slack_message(team_id, event, "app_mention") do
+    with :ok <-
+           ingest_slack_message(
+             team_id,
+             normalize_slack_message_ingress(event, "app_mention", params),
+             "app_mention"
+           ) do
       Logger.info("Slack app mention",
         team_id: team_id,
         channel: channel,
@@ -580,7 +676,77 @@ defmodule Maraithon.Connectors.Slack do
     }
 
     normalized = build_slack_event(event_type, data, params)
-    {:ok, topic, normalized}
+
+    if get_in(event, ["item", "type"]) == "message" and is_binary(channel) do
+      ingress_event = %{
+        "channel" => channel,
+        "user" => event["user"],
+        "text" => "Slack #{event_type}: :#{event["reaction"]}: on message",
+        "ts" => event["event_ts"] || get_in(event, ["item", "ts"]),
+        "target_ts" => get_in(event, ["item", "ts"]),
+        "event_type" => event_type,
+        "provider_event_id" => params["event_id"],
+        "event_context" => params["event_context"],
+        "authorized_user_ids" => authorized_user_ids(params)
+      }
+
+      with :ok <- ingest_slack_message(team_id, ingress_event, event_type) do
+        {:ok, topic, normalized}
+      else
+        {:error, reason} -> {:error, {:slack_reaction_persistence_failed, reason}}
+      end
+    else
+      {:ok, topic, normalized}
+    end
+  end
+
+  defp normalize_slack_message_ingress(event, "message_changed" = event_type, params) do
+    message = event["message"] || %{}
+    target_ts = message["ts"] || event["ts"]
+
+    %{
+      "channel" => event["channel"] || message["channel"],
+      "user" =>
+        message["user"] || event["user"] || message["bot_id"] ||
+          get_in(event, ["edited", "user"]) || "slack-system",
+      "text" => message["text"] || "Slack message edited",
+      "ts" => event["event_ts"] || target_ts,
+      "thread_ts" => message["thread_ts"] || target_ts,
+      "target_ts" => target_ts,
+      "blocks" => message["blocks"],
+      "files" => message["files"],
+      "event_type" => event_type,
+      "provider_event_id" => params["event_id"],
+      "event_context" => params["event_context"],
+      "authorized_user_ids" => authorized_user_ids(params)
+    }
+  end
+
+  defp normalize_slack_message_ingress(event, "message_deleted" = event_type, params) do
+    previous = event["previous_message"] || %{}
+    target_ts = event["deleted_ts"] || previous["ts"] || event["ts"]
+
+    %{
+      "channel" => event["channel"] || previous["channel"],
+      "user" => previous["user"] || event["user"] || previous["bot_id"] || "slack-system",
+      "text" => "Slack message deleted",
+      "ts" => event["event_ts"] || target_ts,
+      "thread_ts" => previous["thread_ts"],
+      "target_ts" => target_ts,
+      "event_type" => event_type,
+      "provider_event_id" => params["event_id"],
+      "event_context" => params["event_context"],
+      "authorized_user_ids" => authorized_user_ids(params)
+    }
+  end
+
+  defp normalize_slack_message_ingress(event, event_type, params) do
+    event
+    |> Map.put("user", event["user"] || event["bot_id"])
+    |> Map.put("event_type", event_type)
+    |> Map.put("provider_event_id", params["event_id"])
+    |> Map.put("event_context", params["event_context"])
+    |> Map.put("authorized_user_ids", authorized_user_ids(params))
   end
 
   defp handle_member_event(team_id, event, params, event_type) do
@@ -737,35 +903,29 @@ defmodule Maraithon.Connectors.Slack do
   end
 
   defp authorized_user_id(params) when is_map(params) do
-    authorization_user_id(params["authorizations"]) ||
-      first_string(params["authed_users"]) ||
-      string_value(params["authed_user_id"])
+    params
+    |> authorized_user_ids()
+    |> List.first()
   end
 
   defp authorized_user_id(_params), do: nil
 
-  defp authorization_user_id(authorizations) when is_list(authorizations) do
-    authorizations
-    |> Enum.find_value(fn
-      %{"user_id" => user_id, "is_bot" => false} -> string_value(user_id)
-      _authorization -> nil
-    end)
-    |> case do
-      nil ->
-        Enum.find_value(authorizations, fn
-          %{"user_id" => user_id} -> string_value(user_id)
-          _authorization -> nil
-        end)
+  defp authorized_user_ids(params) when is_map(params) do
+    authorization_ids =
+      params["authorizations"]
+      |> List.wrap()
+      |> Enum.flat_map(fn
+        %{"user_id" => user_id} -> [string_value(user_id)]
+        _authorization -> []
+      end)
 
-      user_id ->
-        user_id
-    end
+    (authorization_ids ++
+       List.wrap(params["authed_users"]) ++ [string_value(params["authed_user_id"])])
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
   end
 
-  defp authorization_user_id(_authorizations), do: nil
-
-  defp first_string(values) when is_list(values), do: Enum.find_value(values, &string_value/1)
-  defp first_string(_values), do: nil
+  defp authorized_user_ids(_params), do: []
 
   defp string_value(value) when is_binary(value) do
     case String.trim(value) do

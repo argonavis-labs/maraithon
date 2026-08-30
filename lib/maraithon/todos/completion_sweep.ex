@@ -34,7 +34,6 @@ defmodule Maraithon.Todos.CompletionSweep do
   @max_limit 20
   @max_user_runtime_ms 120_000
   @max_gmail_operation_ms 10_000
-  @max_gmail_messages 200
   @calendar_conflict_grace_hours 24
 
   @type summary :: %{
@@ -269,9 +268,7 @@ defmodule Maraithon.Todos.CompletionSweep do
     do: {:fetch_error, :invalid_gmail_response}
 
   defp gmail_message_result(messages, provider, thread_id, source_at, self_emails) do
-    case messages
-         |> Enum.take(@max_gmail_messages)
-         |> later_self_message(source_at, self_emails) do
+    case later_self_message(messages, source_at, self_emails) do
       nil ->
         :open
 
@@ -373,17 +370,35 @@ defmodule Maraithon.Todos.CompletionSweep do
 
   defp later_self_message(messages, %DateTime{} = source_at, self_emails) do
     messages
-    |> Enum.filter(fn message ->
-      from_self?(message, self_emails) and
+    |> Enum.reduce(nil, fn message, earliest ->
+      if from_self?(message, self_emails) do
         case message_datetime(message) do
-          %DateTime{} = message_at -> DateTime.compare(message_at, source_at) == :gt
-          _ -> false
+          %DateTime{} = message_at ->
+            if DateTime.compare(message_at, source_at) == :gt do
+              case earliest do
+                nil ->
+                  {message_at, message}
+
+                {earliest_at, _earliest_message} ->
+                  if DateTime.compare(message_at, earliest_at) == :lt,
+                    do: {message_at, message},
+                    else: earliest
+              end
+            else
+              earliest
+            end
+
+          _ ->
+            earliest
         end
+      else
+        earliest
+      end
     end)
-    |> Enum.sort_by(fn message ->
-      message |> message_datetime() |> DateTime.to_unix(:microsecond)
-    end)
-    |> List.first()
+    |> case do
+      {_message_at, message} -> message
+      nil -> nil
+    end
   end
 
   defp later_self_message(_messages, _source_at, _self_emails), do: nil

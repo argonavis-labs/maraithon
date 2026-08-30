@@ -88,6 +88,64 @@ defmodule Maraithon.Todos.CompletionSweepTest do
     assert updated.metadata["resolution_note"] =~ "Sent Gmail reply reply-1"
   end
 
+  test "checks every message in the exact Gmail thread for a later self-sent reply" do
+    user_id = unique_user!()
+    now = ~U[2026-06-02 12:00:00Z]
+    source_at = DateTime.add(now, -3_600, :second)
+    reply_at = DateTime.add(now, -900, :second)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("gmail", "thread-201", "Reply owed: long thread", source_at,
+          metadata: %{
+            "thread_id" => "thread-201",
+            "google_account_email" => user_id
+          }
+        )
+      ])
+
+    first_200_messages =
+      Enum.map(1..200, fn index ->
+        %{
+          message_id: "incoming-#{index}",
+          from: "Customer #{index} <customer-#{index}@example.com>",
+          internal_date: DateTime.add(source_at, index, :second),
+          subject: "Long thread"
+        }
+      end)
+
+    messages =
+      first_200_messages ++
+        [
+          %{
+            message_id: "reply-201",
+            from: "Kent <#{user_id}>",
+            internal_date: reply_at,
+            subject: "Re: Long thread"
+          }
+        ]
+
+    gmail_fetcher = fn ^user_id, fetched_todo ->
+      assert fetched_todo.id == todo.id
+      {:ok, "google:#{user_id}", "thread-201", messages}
+    end
+
+    summary =
+      CompletionSweep.run_for_user(user_id,
+        now: now,
+        gmail_fetcher: gmail_fetcher,
+        self_emails: [user_id]
+      )
+
+    assert summary.checked == 1
+    assert summary.completed == 1
+    assert summary.completed_by_reason == %{"gmail_self_reply" => 1}
+
+    updated = Todos.get_for_user(user_id, todo.id)
+    assert updated.status == "done"
+    assert updated.metadata["resolution_note"] =~ "Sent Gmail reply reply-201"
+  end
+
   test "leaves Gmail todos open when self-sent messages predate the source" do
     user_id = unique_user!()
     now = ~U[2026-06-02 12:00:00Z]

@@ -9,10 +9,14 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   the cursor only after the complete todo manifest is proven.
   """
 
+  import Ecto.Query
+
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Connectors.SourceCursors
+  alias Maraithon.Repo
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Runtime.TodoCompletionSweep
+  alias Maraithon.Todos.Todo
 
   @todo_batch_size 10
   @allowed_watermark_kinds ~w(gmail_closure_watermark slack_closure_watermark)
@@ -31,10 +35,10 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          todo_ids <- TodoCompletionSweep.open_todo_ids_for_account(account, opts) do
       cond do
         source_items == 0 ->
-          settle_without_fanout(account, watermarks, "empty_delta", 0)
+          settle_without_fanout(account, watermarks, "empty_delta", 0, opts)
 
         todo_ids == [] ->
-          settle_without_fanout(account, watermarks, "no_open_todos", source_items)
+          settle_without_fanout(account, watermarks, "no_open_todos", source_items, opts)
 
         true ->
           build_fanout(account, bundle, watermarks, source_refs, todo_ids, opts)
@@ -54,17 +58,19 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   def acquire(%ConnectedAccount{}, _opts), do: {:skip, :account_not_connected}
   def acquire(_account, _opts), do: {:error, :invalid_source_account}
 
-  defp settle_without_fanout(account, watermarks, outcome, source_items) do
-    with :ok <- advance_watermarks(account, watermarks) do
+  defp settle_without_fanout(account, watermarks, outcome, source_items, opts) do
+    with {:ok, watermark_result} <- settle_watermarks(account, watermarks, opts) do
       {:ok,
-       %{
-         outcome: outcome,
-         account_id: account.id,
-         source_items: source_items,
-         todo_decision_count: 0,
-         model_calls: 0,
-         advanced_watermarks: length(watermarks)
-       }}
+       Map.merge(
+         %{
+           outcome: outcome,
+           account_id: account.id,
+           source_items: source_items,
+           todo_decision_count: 0,
+           model_calls: 0
+         },
+         watermark_result
+       )}
     end
   end
 
@@ -192,7 +198,13 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
              |> Keyword.put(:source_item_refs, source_item_refs)
              |> Keyword.put(:todo_ids, todo_ids)
            ),
-         true <- settled_result?(result) do
+         true <- settled_result?(result),
+         {:ok, todo_manifest} <-
+           TodoCompletionSweep.resolve_todo_decision_manifest(
+             account,
+             todo_ids,
+             Map.get(result, :todo_decision_refs, [])
+           ) do
       {:ok,
        %{
          outcome: "evaluated",
@@ -200,9 +212,16 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          source_items: expected_source_items,
          source_refs_digest: expected_source_refs_digest,
          decision_count: expected_todo_count,
-         decision_refs: todo_ids,
+         decision_refs: todo_manifest.decision_refs,
          todo_decision_count: expected_todo_count,
-         todo_decision_refs: todo_ids,
+         todo_decision_refs: todo_manifest.decision_refs,
+         evaluated_todo_decision_count: length(todo_manifest.evaluated_refs),
+         evaluated_todo_decision_refs: todo_manifest.evaluated_refs,
+         superseded_todo_decision_count: length(todo_manifest.superseded_refs),
+         superseded_todo_decision_refs: todo_manifest.superseded_refs,
+         todo_decision_manifest:
+           Enum.map(todo_manifest.evaluated_refs, &%{todo_ref: &1, action: "evaluated"}) ++
+             Enum.map(todo_manifest.superseded_refs, &%{todo_ref: &1, action: "superseded"}),
          model_calls: Map.get(result, :model_calls, 0),
          fanout_index: fanout_index,
          fanout_count: fanout_count,
@@ -222,10 +241,10 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   def reason(_account, _payload, _opts), do: {:error, :invalid_source_closure_payload}
 
   @doc "Advances a closure cursor only after all source partitions prove complete."
-  def finalize(account, payload, child_results)
+  def finalize(account, payload, child_results, opts \\ [])
 
-  def finalize(%ConnectedAccount{} = account, payload, child_results)
-      when is_map(payload) and is_list(child_results) do
+  def finalize(%ConnectedAccount{} = account, payload, child_results, opts)
+      when is_map(payload) and is_list(child_results) and is_list(opts) do
     with true <- read_integer(payload, "account_id") == account.id,
          {:ok, watermarks} <- fetch_list(payload, "watermarks"),
          expected_fanouts when is_integer(expected_fanouts) and expected_fanouts > 0 <-
@@ -241,6 +260,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
            read_string(payload, "expected_todo_refs_digest"),
          :ok <-
            validate_child_results(
+             account,
              child_results,
              expected_fanouts,
              expected_source_items,
@@ -248,19 +268,21 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
              expected_todo_count,
              expected_todo_refs_digest
            ),
-         :ok <- advance_watermarks(account, watermarks) do
+         {:ok, watermark_result} <- settle_watermarks(account, watermarks, opts) do
       {:ok,
-       %{
-         outcome: "finalized",
-         account_id: account.id,
-         fanout_count: expected_fanouts,
-         source_items: expected_source_items,
-         todo_count: expected_todo_count,
-         decision_count: expected_todo_count,
-         todo_decision_count: expected_todo_count,
-         model_calls: Enum.sum(Enum.map(child_results, &result_integer(&1, "model_calls"))),
-         advanced_watermarks: length(watermarks)
-       }}
+       Map.merge(
+         %{
+           outcome: "finalized",
+           account_id: account.id,
+           fanout_count: expected_fanouts,
+           source_items: expected_source_items,
+           todo_count: expected_todo_count,
+           decision_count: expected_todo_count,
+           todo_decision_count: expected_todo_count,
+           model_calls: Enum.sum(Enum.map(child_results, &result_integer(&1, "model_calls")))
+         },
+         watermark_result
+       )}
     else
       false -> {:error, :source_closure_finalizer_identity_mismatch}
       {:error, _reason} = error -> error
@@ -272,7 +294,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
 
-  def finalize(_account, _payload, _child_results),
+  def finalize(_account, _payload, _child_results, _opts),
     do: {:error, :invalid_source_closure_finalizer}
 
   defp settled_result?(%{
@@ -287,6 +309,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   defp settled_result?(_result), do: false
 
   defp validate_child_results(
+         account,
          child_results,
          expected_fanouts,
          expected_source_items,
@@ -299,6 +322,13 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     decision_count = Enum.sum(Enum.map(child_results, &result_integer(&1, "decision_count")))
     decision_refs = Enum.flat_map(child_results, &result_string_list(&1, "decision_refs"))
     source_digests = Enum.map(child_results, &result_string(&1, "source_refs_digest"))
+    decision_manifests = Enum.flat_map(child_results, &result_list(&1, "todo_decision_manifest"))
+
+    evaluated_refs =
+      Enum.flat_map(child_results, &result_string_list(&1, "evaluated_todo_decision_refs"))
+
+    superseded_refs =
+      Enum.flat_map(child_results, &result_string_list(&1, "superseded_todo_decision_refs"))
 
     todo_decision_count =
       Enum.sum(Enum.map(child_results, &result_integer(&1, "todo_decision_count")))
@@ -309,7 +339,14 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          decision_count == expected_todo_count and length(decision_refs) == expected_todo_count and
          length(Enum.uniq(decision_refs)) == expected_todo_count and
          SourceAccountDiscovery.refs_digest(decision_refs) == expected_todo_refs_digest and
-         todo_decision_count == expected_todo_count do
+         todo_decision_count == expected_todo_count and
+         valid_closure_decision_manifest?(
+           account,
+           decision_manifests,
+           decision_refs,
+           evaluated_refs,
+           superseded_refs
+         ) do
       :ok
     else
       {:error, :source_closure_incomplete_decisions}
@@ -342,6 +379,65 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   end
 
   defp result_string(_result, _key), do: nil
+
+  defp result_list(result, key) when is_map(result) do
+    case Map.get(result, key, Map.get(result, existing_atom(key), [])) do
+      values when is_list(values) -> values
+      _other -> []
+    end
+  end
+
+  defp result_list(_result, _key), do: []
+
+  defp valid_closure_decision_manifest?(
+         account,
+         manifests,
+         decision_refs,
+         evaluated_refs,
+         superseded_refs
+       ) do
+    manifest_entries =
+      Enum.map(manifests, fn manifest ->
+        {result_string(manifest, "todo_ref"), result_string(manifest, "action")}
+      end)
+
+    manifest_refs = Enum.map(manifest_entries, &elem(&1, 0))
+
+    manifest_evaluated_refs =
+      for {todo_ref, "evaluated"} <- manifest_entries, do: todo_ref
+
+    manifest_superseded_refs =
+      for {todo_ref, "superseded"} <- manifest_entries, do: todo_ref
+
+    length(manifests) == length(decision_refs) and
+      Enum.all?(manifest_entries, fn
+        {todo_ref, action}
+        when is_binary(todo_ref) and action in ["evaluated", "superseded"] ->
+          true
+
+        _invalid ->
+          false
+      end) and
+      Enum.sort(manifest_refs) == Enum.sort(decision_refs) and
+      Enum.sort(manifest_evaluated_refs) == Enum.sort(evaluated_refs) and
+      Enum.sort(manifest_superseded_refs) == Enum.sort(superseded_refs) and
+      length(Enum.uniq(evaluated_refs ++ superseded_refs)) == length(decision_refs) and
+      persisted_todos_exist?(account, decision_refs)
+  end
+
+  defp persisted_todos_exist?(account, todo_ids) do
+    persisted_count =
+      Todo
+      |> where(
+        [todo],
+        todo.user_id == ^account.user_id and todo.source_account_id == ^account.id and
+          todo.id in ^todo_ids
+      )
+      |> select([todo], count(todo.id))
+      |> Repo.one()
+
+    persisted_count == length(todo_ids)
+  end
 
   defp serialize_watermarks(proposals, account_id) when is_list(proposals) do
     proposals
@@ -383,6 +479,17 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
         _other -> {:halt, {:error, :invalid_source_closure_watermark}}
       end
     end)
+  end
+
+  defp settle_watermarks(account, watermarks, opts)
+       when is_list(watermarks) and is_list(opts) do
+    if Keyword.get(opts, :defer_watermark_commit, false) do
+      {:ok, %{advanced_watermarks: 0, deferred_watermarks: watermarks}}
+    else
+      with :ok <- advance_watermarks(account, watermarks) do
+        {:ok, %{advanced_watermarks: length(watermarks)}}
+      end
+    end
   end
 
   defp fetch_map(map, key) do
@@ -428,6 +535,11 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   defp existing_atom("decision_refs"), do: :decision_refs
   defp existing_atom("source_refs_digest"), do: :source_refs_digest
   defp existing_atom("todo_decision_count"), do: :todo_decision_count
+  defp existing_atom("todo_decision_manifest"), do: :todo_decision_manifest
+  defp existing_atom("evaluated_todo_decision_refs"), do: :evaluated_todo_decision_refs
+  defp existing_atom("superseded_todo_decision_refs"), do: :superseded_todo_decision_refs
+  defp existing_atom("todo_ref"), do: :todo_ref
+  defp existing_atom("action"), do: :action
   defp existing_atom("model_calls"), do: :model_calls
   defp existing_atom(_key), do: :__missing__
 end

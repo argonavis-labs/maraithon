@@ -37,6 +37,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @active_statuses ~w(pending running)
   @default_retry_after_seconds 30
   @source_finalizer_retry_seconds 10
+  @source_dependency_retry_ms 10_000
 
   @token_job "runtime_partition:token_refresh"
   @watch_job "runtime_partition:watch_renewal"
@@ -66,9 +67,20 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       when is_list(opts) do
     now = Keyword.get(opts, :now, database_now!())
 
-    with {:ok, discovery} <- enqueue_source_account_discovery(account, now),
-         {:ok, closure} <- maybe_enqueue_source_account_closure(account, now) do
-      {:ok, %{discovery: discovery, closure: closure}}
+    enqueue_source_graph(fn ->
+      with {:ok, discovery} <- enqueue_source_account_discovery(account, now),
+           {:ok, closure} <-
+             maybe_enqueue_source_account_closure(
+               account,
+               now,
+               Map.get(discovery, :job_id)
+             ) do
+        {:ok, %{discovery: discovery, closure: closure}}
+      end
+    end)
+    |> case do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -455,22 +467,31 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       "followthrough" in Skills.enabled_ids(agent.config || %{})
   end
 
-  defp maybe_enqueue_source_account_closure(account, now) do
-    if account_has_open_todos?(account.id) do
-      case enqueue_source_account_closure_job(account, now) do
-        {:ok, %BackgroundJob{} = job} -> {:ok, %{outcome: "enqueued", job_id: job.id}}
-        {:error, reason} -> {:error, {:source_closure_enqueue_failed, reason}}
-      end
-    else
-      {:ok, %{outcome: "skipped", reason: "no_open_todos"}}
+  defp maybe_enqueue_source_account_closure(account, now, discovery_job_id) do
+    open_todos? = account_has_open_todos?(account.id)
+
+    cond do
+      not open_todos? ->
+        {:ok, %{outcome: "skipped", reason: "no_open_todos"}}
+
+      not is_binary(discovery_job_id) or discovery_job_id == "" ->
+        {:error, :source_closure_discovery_dependency_missing}
+
+      true ->
+        case enqueue_source_account_closure_job(account, now, discovery_job_id: discovery_job_id) do
+          {:ok, %BackgroundJob{} = job} -> {:ok, %{outcome: "enqueued", job_id: job.id}}
+          {:error, reason} -> {:error, {:source_closure_enqueue_failed, reason}}
+        end
     end
   end
 
-  defp enqueue_source_account_closure_job(account, now) do
+  defp enqueue_source_account_closure_job(account, now, opts) do
+    discovery_job_id = Keyword.fetch!(opts, :discovery_job_id)
+
     BackgroundJobs.enqueue(@todo_account_closure_acquire_job, %{
       user_id: account.user_id,
       queue: @provider_queue,
-      dedupe_key: source_closure_acquire_dedupe_key(account.id),
+      dedupe_key: source_closure_acquire_dedupe_key(account.id, discovery_job_id),
       partition_key: provider_partition(account.user_id, account.provider),
       rate_limit_key: TokenRefresher.provider_family(account.provider),
       max_attempts: 5,
@@ -478,7 +499,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       payload: %{
         "user_id" => account.user_id,
         "account_id" => account.id,
-        "role" => "closure"
+        "role" => "closure",
+        "discovery_job_id" => discovery_job_id
       }
     })
   end
@@ -527,7 +549,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
     with {:ok, account_count} <-
            enqueue_many(accounts, fn account ->
-             enqueue_source_account_closure_job(account, now)
+             enqueue_source_account_cycle(account, now)
            end),
          {:ok, legacy_count} <-
            enqueue_many(legacy_users, fn user_id ->
@@ -558,6 +580,22 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     end
   end
 
+  defp enqueue_source_account_cycle(account, now) do
+    case wake_source_account(account, now: now) do
+      {:ok, %{closure: %{job_id: closure_job_id}}} ->
+        case Repo.get(BackgroundJob, closure_job_id) do
+          %BackgroundJob{} = job -> {:ok, job}
+          nil -> {:error, :source_account_cycle_closure_missing}
+        end
+
+      {:ok, result} ->
+        {:error, {:source_account_cycle_incomplete, result}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp todo_completion_accounts(limit, cursor) do
     query =
       Todo
@@ -572,8 +610,11 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       )
       |> join(:left, [todo, account, _legacy_job], acquisition_job in BackgroundJob,
         on:
-          acquisition_job.dedupe_key ==
-            fragment("'runtime-partition:source-account-closure-acquire:' || ?::text", account.id) and
+          fragment(
+            "? LIKE 'runtime-partition:source-account-closure-acquire:' || ?::text || '%'",
+            acquisition_job.dedupe_key,
+            account.id
+          ) and
             acquisition_job.status in @active_statuses
       )
       |> join(:left, [todo, account, _legacy_job, _acquisition_job], reason_job in BackgroundJob,
@@ -782,7 +823,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          {:ok, agent} <- discovery_agent_from_payload(job.payload || %{}),
          true <- discovery_identity_valid?(job, account, agent),
          {:ok, result} <-
-           SourceAccountDiscovery.acquire(account, agent, acquisition_job_id: job.id) do
+           SourceAccountDiscovery.acquire(account, agent,
+             acquisition_job_id: job.id,
+             defer_watermark_commit: true
+           ) do
       maybe_enqueue_discovery_reason(job, account, result)
     else
       nil -> {:error, :source_discovery_account_not_found}
@@ -793,10 +837,34 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   defp execute_provider(%BackgroundJob{job_type: @todo_account_closure_acquire_job} = job) do
+    case source_discovery_dependency_status(job) do
+      :ready ->
+        execute_source_account_closure_acquire(job)
+
+      {:waiting, stage} ->
+        {:ok,
+         %{
+           outcome: "waiting_for_discovery",
+           dependency_stage: stage
+         }, {:reschedule_in, @source_dependency_retry_ms}}
+
+      {:error, reason} ->
+        {:error, {:discard, reason}}
+    end
+  end
+
+  defp execute_provider(%BackgroundJob{} = job),
+    do: {:error, {:unknown_provider_partition, job.job_type}}
+
+  defp execute_source_account_closure_acquire(job) do
     with {:ok, account_id} <- payload_integer(job, "account_id"),
          %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
          true <- account.user_id == job.user_id,
-         {:ok, result} <- SourceAccountClosure.acquire(account, acquisition_job_id: job.id) do
+         {:ok, result} <-
+           SourceAccountClosure.acquire(account,
+             acquisition_job_id: job.id,
+             defer_watermark_commit: true
+           ) do
       maybe_enqueue_closure_reason(job, account, result)
     else
       nil -> {:error, :source_account_not_found}
@@ -805,9 +873,6 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       {:skip, _reason} = skip -> normalize_work_result(skip)
     end
   end
-
-  defp execute_provider(%BackgroundJob{} = job),
-    do: {:error, {:unknown_provider_partition, job.job_type}}
 
   defp execute_model(%BackgroundJob{job_type: @proactive_job} = job) do
     with {:ok, user_id} <- partition_user_id(job) do
@@ -862,7 +927,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          true <- discovery_identity_valid?(job, account, agent),
          {:ok, child_results} <- completed_child_results(reason_job_ids),
          {:ok, result} <-
-           SourceAccountDiscovery.finalize(account, agent, job.payload || %{}, child_results) do
+           SourceAccountDiscovery.finalize(
+             account,
+             agent,
+             job.payload || %{},
+             child_results,
+             defer_watermark_commit: true
+           ) do
       normalize_work_result(result)
     else
       nil ->
@@ -903,7 +974,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          true <- account.user_id == job.user_id,
          {:ok, child_results} <- completed_child_results(reason_job_ids),
          {:ok, result} <-
-           SourceAccountClosure.finalize(account, job.payload || %{}, child_results) do
+           SourceAccountClosure.finalize(account, job.payload || %{}, child_results,
+             defer_watermark_commit: true
+           ) do
       normalize_work_result(result)
     else
       nil ->
@@ -974,7 +1047,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
                   BackgroundJobs.enqueue(@source_discovery_finalize_job, %{
                     user_id: account.user_id,
                     queue: @model_queue,
-                    dedupe_key: source_discovery_finalize_dedupe_key(account.id),
+                    dedupe_key:
+                      source_discovery_finalize_dedupe_key(account.id, acquisition_job.id),
                     partition_key: provider_partition(account.user_id, account.provider),
                     rate_limit_key: "model",
                     max_attempts: 25,
@@ -1113,7 +1187,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
                   BackgroundJobs.enqueue(@todo_account_closure_finalize_job, %{
                     user_id: account.user_id,
                     queue: @model_queue,
-                    dedupe_key: source_closure_finalize_dedupe_key(account.id),
+                    dedupe_key:
+                      source_closure_finalize_dedupe_key(account.id, acquisition_job.id),
                     partition_key: provider_partition(account.user_id, account.provider),
                     rate_limit_key: "model",
                     max_attempts: 25,
@@ -1238,6 +1313,128 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp maybe_put_discovery_agent_id(payload, nil), do: payload
 
+  defp source_discovery_dependency_status(%BackgroundJob{payload: payload} = closure_job) do
+    case Map.get(payload || %{}, "discovery_job_id") do
+      nil ->
+        :ready
+
+      discovery_job_id when is_binary(discovery_job_id) and discovery_job_id != "" ->
+        validate_source_discovery_dependency(closure_job, discovery_job_id)
+
+      _invalid ->
+        {:error, :source_discovery_dependency_invalid}
+    end
+  end
+
+  defp validate_source_discovery_dependency(closure_job, discovery_job_id) do
+    with {:ok, account_id} <- payload_integer(closure_job, "account_id"),
+         %BackgroundJob{} = discovery_job <- load_background_job(discovery_job_id),
+         true <- discovery_job.job_type == @source_discovery_job,
+         true <- discovery_job.user_id == closure_job.user_id,
+         {:ok, ^account_id} <- payload_integer(discovery_job, "account_id") do
+      source_discovery_acquisition_status(discovery_job, closure_job, account_id)
+    else
+      nil -> {:error, :source_discovery_dependency_missing}
+      false -> {:error, :source_discovery_dependency_invalid}
+      {:error, _reason} -> {:error, :source_discovery_dependency_invalid}
+    end
+  end
+
+  defp source_discovery_acquisition_status(
+         %BackgroundJob{status: status},
+         _closure_job,
+         _account_id
+       )
+       when status in @active_statuses,
+       do: {:waiting, "acquisition"}
+
+  defp source_discovery_acquisition_status(
+         %BackgroundJob{status: "completed"} = discovery_job,
+         closure_job,
+         account_id
+       ) do
+    case source_result_string(discovery_job.result, "finalizer_job_id") do
+      finalizer_job_id when is_binary(finalizer_job_id) ->
+        validate_source_discovery_finalizer(
+          finalizer_job_id,
+          discovery_job,
+          closure_job,
+          account_id
+        )
+
+      nil ->
+        if source_result_string(discovery_job.result, "outcome") == "empty_delta",
+          do: :ready,
+          else: {:error, :source_discovery_dependency_incomplete}
+    end
+  end
+
+  defp source_discovery_acquisition_status(
+         %BackgroundJob{status: status},
+         _closure_job,
+         _account_id
+       )
+       when status in ["failed", "cancelled"],
+       do: {:error, :source_discovery_dependency_failed}
+
+  defp source_discovery_acquisition_status(_job, _closure_job, _account_id),
+    do: {:error, :source_discovery_dependency_invalid}
+
+  defp validate_source_discovery_finalizer(
+         finalizer_job_id,
+         discovery_job,
+         closure_job,
+         account_id
+       ) do
+    with %BackgroundJob{} = finalizer_job <- load_background_job(finalizer_job_id),
+         true <- finalizer_job.job_type == @source_discovery_finalize_job,
+         true <- finalizer_job.user_id == closure_job.user_id,
+         {:ok, ^account_id} <- payload_integer(finalizer_job, "account_id"),
+         {:ok, discovery_job_id} <- payload_string(finalizer_job, "acquisition_job_id"),
+         true <- discovery_job_id == discovery_job.id do
+      source_discovery_finalizer_status(finalizer_job)
+    else
+      nil -> {:error, :source_discovery_finalizer_missing}
+      false -> {:error, :source_discovery_finalizer_invalid}
+      {:error, _reason} -> {:error, :source_discovery_finalizer_invalid}
+    end
+  end
+
+  defp source_discovery_finalizer_status(%BackgroundJob{status: status})
+       when status in @active_statuses,
+       do: {:waiting, "finalizer"}
+
+  defp source_discovery_finalizer_status(%BackgroundJob{status: "completed"}), do: :ready
+
+  defp source_discovery_finalizer_status(%BackgroundJob{status: status})
+       when status in ["failed", "cancelled"],
+       do: {:error, :source_discovery_finalizer_failed}
+
+  defp source_discovery_finalizer_status(_job),
+    do: {:error, :source_discovery_finalizer_invalid}
+
+  defp load_background_job(job_id) when is_binary(job_id) do
+    BackgroundJob
+    |> Repo.get(job_id)
+    |> BackgroundJob.hydrate_payloads()
+  end
+
+  defp source_result_string(result, "finalizer_job_id") when is_map(result) do
+    case Map.get(result, "finalizer_job_id", Map.get(result, :finalizer_job_id)) do
+      value when is_binary(value) and value != "" -> value
+      _other -> nil
+    end
+  end
+
+  defp source_result_string(result, "outcome") when is_map(result) do
+    case Map.get(result, "outcome", Map.get(result, :outcome)) do
+      value when is_binary(value) and value != "" -> value
+      _other -> nil
+    end
+  end
+
+  defp source_result_string(_result, _key), do: nil
+
   defp agent_id(%Agent{id: id}), do: id
   defp agent_id(nil), do: nil
 
@@ -1360,11 +1557,11 @@ defmodule Maraithon.Runtime.PeriodicJobs do
        do:
          "runtime-partition:source-account-discovery-reason:#{acquisition_job_id}:#{fanout_index}-of-#{fanout_count}:#{account_id}"
 
-  defp source_discovery_finalize_dedupe_key(account_id),
-    do: "runtime-partition:source-account-discovery-finalize:#{account_id}"
+  defp source_discovery_finalize_dedupe_key(account_id, acquisition_job_id),
+    do: "runtime-partition:source-account-discovery-finalize:#{account_id}:#{acquisition_job_id}"
 
-  defp source_closure_acquire_dedupe_key(account_id),
-    do: "runtime-partition:source-account-closure-acquire:#{account_id}"
+  defp source_closure_acquire_dedupe_key(account_id, discovery_job_id),
+    do: "runtime-partition:source-account-closure-acquire:#{account_id}:#{discovery_job_id}"
 
   defp source_closure_reason_dedupe_key(
          acquisition_job_id,
@@ -1375,8 +1572,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
        do:
          "runtime-partition:source-account-closure-reason:#{acquisition_job_id}:#{fanout_index}-of-#{fanout_count}:#{account_id}"
 
-  defp source_closure_finalize_dedupe_key(account_id),
-    do: "runtime-partition:source-account-closure-finalize:#{account_id}"
+  defp source_closure_finalize_dedupe_key(account_id, acquisition_job_id),
+    do: "runtime-partition:source-account-closure-finalize:#{account_id}:#{acquisition_job_id}"
 
   @doc false
   def source_closure_reason_partition_key(user_id, acquisition_job_id, fanout_index)

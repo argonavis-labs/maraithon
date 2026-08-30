@@ -249,6 +249,19 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
     assert {:error, :source_discovery_incomplete_decisions} =
              SourceAccountDiscovery.finalize(account, agent, finalizer, tampered_results)
 
+    tampered_manifest =
+      update_in(first_result.decision_manifest, fn [entry | rest] ->
+        [Map.put(entry, :action, "create") | rest]
+      end)
+
+    assert {:error, :source_discovery_incomplete_decisions} =
+             SourceAccountDiscovery.finalize(
+               account,
+               agent,
+               finalizer,
+               [%{first_result | decision_manifest: tampered_manifest} | remaining_results]
+             )
+
     refute SourceCursors.get(account.id, "gmail_discovery_watermark")
 
     assert {:ok, %{source_items: 12, decision_count: 12, fanout_count: 3}} =
@@ -309,11 +322,17 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
 
     child_results =
       Enum.map(handoffs, fn handoff ->
+        decision_manifest =
+          Enum.map(handoff["source_item_refs"], fn source_ref ->
+            %{source_ref: source_ref, action: "skip", persisted_todo_id: nil}
+          end)
+
         %{
           fanout_index: handoff["fanout_index"],
           decision_count: 1,
           source_items: 1,
           decision_refs: handoff["source_item_refs"],
+          decision_manifest: decision_manifest,
           model_calls: 1
         }
       end)
@@ -344,6 +363,12 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
           |> routine_message()
           |> Map.put("id", "shared-reply")
           |> Map.put("thread_id", "shared-thread")
+          |> Map.put("thread_context", [
+            now
+            |> routine_message()
+            |> Map.put("id", "historical-root")
+            |> Map.put("thread_id", "shared-thread")
+          ])
         ]
 
     bundle =
@@ -364,6 +389,11 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
            |> SourceBundle.gmail_messages()
            |> Enum.map(& &1["id"])
            |> Enum.sort() == ["shared-reply", "shared-root"]
+
+    refute "gmail:unknown:historical-root" in Enum.flat_map(
+             [first, second],
+             &SourceAccountDiscovery.source_item_refs/1
+           )
   end
 
   test "deterministically splits a Gmail thread larger than the fan-out item limit" do
@@ -399,7 +429,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
 
   test "losslessly seals and restores a single source record larger than the handoff limit" do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
-    body = String.duplicate("oversized exact source evidence ", 24_000)
+
+    body =
+      String.duplicate("oversized exact source evidence ", 24_000) <>
+        " TAIL ACTION: send the signed quarterly plan to Alex."
 
     message =
       now
@@ -517,7 +550,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
   test "reasons over a losslessly restored oversized Gmail record within the model budget" do
     {account, agent} = discovery_identity("oversized-reason")
     now = DateTime.utc_now() |> DateTime.truncate(:second)
-    body = String.duplicate("oversized exact source evidence ", 24_000)
+
+    body =
+      String.duplicate("oversized exact source evidence ", 24_000) <>
+        " TAIL ACTION: send the signed quarterly plan to Alex."
 
     message =
       now
@@ -528,6 +564,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
       |> Map.put("google_provider", account.provider)
       |> Map.put("subject", "Quarterly review " <> String.duplicate("important context ", 20_000))
       |> Map.put("body", body)
+      |> Map.put("body_text", body)
       |> Map.put("body_available", true)
       |> Map.put("body_status", "available")
       |> Map.put("provider_payload", %{"raw" => String.duplicate("provider-envelope", 40_000)})
@@ -587,7 +624,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
     assert gmail_source_record["google_provider"] == account.provider
     assert gmail_source_record["body_available"]
     assert gmail_source_record["body_status"] == "available"
-    assert gmail_source_record |> Jason.encode!() |> byte_size() <= 2_000
+    assert gmail_source_record["body_bytes"] == byte_size(body)
+    assert gmail_source_record["body_excerpt"] =~ "TAIL ACTION"
+    assert candidate["summary"] =~ "TAIL ACTION"
+    assert gmail_source_record |> Jason.encode!() |> byte_size() <= 5_000
     assert get_in(candidate, ["metadata", "source_record", "body_truncated"])
     refute prompt =~ String.duplicate("provider-envelope", 10)
 
@@ -603,7 +643,12 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
   test "preserves bounded Slack author and conversation evidence for reasoning" do
     {account, agent, team_id} = slack_discovery_identity("bounded-reason")
     now = DateTime.utc_now() |> DateTime.truncate(:second)
-    text = "Please review the incident response today. " <> String.duplicate("context ", 80_000)
+
+    text =
+      "Please review the incident response today. " <>
+        String.duplicate("context ", 80_000) <>
+        " TAIL ACTION: page the incident commander before 4pm."
+
     message_ts = "1700000400.000100"
 
     message = %{
@@ -685,7 +730,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
     assert source_record["conversation_kind"] == "im"
     assert source_record["is_dm"]
     assert source_record["text_truncated"]
-    assert source_record |> Jason.encode!() |> byte_size() <= 2_000
+    assert source_record["text_excerpt"] =~ "TAIL ACTION"
+    assert candidate["summary"] =~ "TAIL ACTION"
+    assert source_record |> Jason.encode!() |> byte_size() <= 5_000
     refute prompt =~ String.duplicate("slack-envelope", 10)
 
     refute SourceCursors.get(account.id, "slack_discovery_watermark")

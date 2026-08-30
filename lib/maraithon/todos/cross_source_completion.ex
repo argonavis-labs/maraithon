@@ -171,7 +171,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
             case evaluate_fitting(user_id, todos, evidence, now, opts) do
               {:ok, result, evaluated_todos} ->
                 stamp_completion_checked(user_id, evaluated_todos, now)
-                Map.put_new(result, :model_calls, 1)
+
+                result
+                |> Map.put_new(:model_calls, 1)
+                |> Map.put(:decision_refs, Enum.map(evaluated_todos, & &1.id))
 
               {:error, _reason} = error ->
                 error
@@ -184,7 +187,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
                 checked: length(open_todos),
                 completed: 0,
                 model_calls: 0,
-                outcome: "no_completion_evidence"
+                outcome: "no_completion_evidence",
+                decision_refs: Enum.map(open_todos, & &1.id)
               }
             else
               {:skip, :no_evidence}
@@ -373,7 +377,11 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     |> Enum.reject(fn item -> read_string(item, "channel", nil) == "source_health" end)
     |> Enum.reduce(%{item_ids: MapSet.new(), label_items: []}, fn item, acc ->
       ids =
-        [read_string(item, "thread_id", nil), read_string(item, "source_item_id", nil)]
+        [
+          read_string(item, "thread_id", nil),
+          read_string(item, "source_item_id", nil),
+          read_string(item, "target_source_item_id", nil)
+        ]
         |> Enum.reject(&is_nil/1)
 
       acc = %{acc | item_ids: Enum.into(ids, acc.item_ids)}
@@ -793,22 +801,40 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp evidence_bucket(items, mapper, false), do: evidence_bucket(items, mapper)
 
   defp gmail_source_evidence(message, exact?) when is_map(message) and is_boolean(exact?) do
-    text =
-      [
-        read_string(message, "body_text", nil),
-        read_string(message, "text_body", nil),
-        read_string(message, "body", nil),
-        read_string(message, "snippet", nil),
-        read_string(message, "html_body", nil)
-      ]
-      |> first_present()
+    current_text =
+      source_evidence_text(
+        message,
+        ~w(body_text text_body body snippet html_body),
+        exact?
+      )
+
+    thread_context =
+      message
+      |> read_list("thread_context")
+      |> Enum.map(fn reply ->
+        sender = read_string(reply, "from", "Someone")
+
+        text =
+          source_evidence_text(
+            reply,
+            ~w(body_text text_body body snippet html_body),
+            exact?
+          )
+
+        if text, do: "#{sender}: #{text}"
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
 
     evidence_item(
       %{
         "channel" => "gmail",
         "kind" => gmail_kind(message),
         "subject" => read_string(message, "subject", nil),
-        "text" => text,
+        "text" =>
+          [current_text, thread_context]
+          |> Enum.reject(&blank?/1)
+          |> Enum.join("\nEarlier Gmail thread context:\n"),
         "at" => evidence_time(message, ["internal_date", "date"]),
         "source_item_id" => read_string(message, "message_id", read_string(message, "id", nil)),
         "source_ref" => gmail_source_ref(message),
@@ -877,19 +903,43 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   end
 
   defp slack_source_evidence(message, exact?) when is_map(message) and is_boolean(exact?) do
+    current_text = source_evidence_text(message, ~w(text_resolved text), exact?)
+    channel_id = read_string(message, "channel_id", nil)
+    message_ts = read_string(message, "ts", nil)
+
+    target_ts =
+      read_string(
+        message,
+        "target_ts",
+        read_string(message, "thread_ts", message_ts)
+      )
+
+    thread_context =
+      message
+      |> read_list("thread_context")
+      |> Enum.map(fn reply ->
+        sender =
+          read_string(reply, "user_display_name", read_string(reply, "user", "Someone"))
+
+        text = source_evidence_text(reply, ~w(text_resolved text), exact?)
+        if text, do: "#{sender}: #{text}"
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+
     evidence_item(
       %{
         "channel" => "slack",
         "kind" => "slack message",
         "subject" =>
           read_string(message, "channel_name", read_string(message, "channel_id", nil)),
-        "text" => read_string(message, "text_resolved", read_string(message, "text", nil)),
+        "text" =>
+          [current_text, thread_context]
+          |> Enum.reject(&blank?/1)
+          |> Enum.join("\nThread context:\n"),
         "at" => evidence_time(message, ["date", "ts"]),
-        "source_item_id" =>
-          slack_source_item_id(
-            read_string(message, "channel_id", nil),
-            read_string(message, "ts", nil)
-          ),
+        "source_item_id" => slack_source_item_id(channel_id, message_ts),
+        "target_source_item_id" => slack_source_item_id(channel_id, target_ts),
         "source_ref" => slack_source_ref(message),
         "thread_id" => read_string(message, "thread_ts", nil),
         "permalink" => read_string(message, "permalink", nil)
@@ -1013,7 +1063,14 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     do: {:error, :no_prompt_candidates_fit}
 
   defp evaluate_fitting(user_id, todos, evidence, now, opts) do
-    case evaluate(user_id, todos, evidence, now, opts) do
+    evaluation =
+      if Keyword.get(opts, :exact_source_delta, false) do
+        evaluate_exact_evidence_chunks(user_id, todos, evidence, now, opts)
+      else
+        evaluate(user_id, todos, evidence, now, opts)
+      end
+
+    case evaluation do
       %{} = result ->
         {:ok, Map.put_new(result, :model_calls, 1), todos}
 
@@ -1046,7 +1103,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
        when reason in [
               :prompt_base_exceeds_budget,
               :required_evidence_exceeds_budget,
-              :prompt_exceeds_budget
+              :prompt_exceeds_budget,
+              :exact_completion_evidence_exceeds_budget,
+              :exact_completion_evidence_item_exceeds_budget
             ],
        do: true
 
@@ -1055,13 +1114,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp prompt_budget_error?(_reason), do: false
 
   defp evaluate(user_id, todos, evidence, now, opts) do
-    llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, opts))
-
-    with {:ok, {prompt, authorized_evidence}} <-
-           build_prompt(user_id, todos, evidence, now, opts),
-         {:ok, response} <- llm_complete.(prompt),
-         {:ok, resolutions} <- decode_response(response),
-         :ok <- validate_resolution_coverage(resolutions, todos, opts),
+    with {:ok, resolutions, authorized_evidence} <-
+           evaluate_resolutions(user_id, todos, evidence, now, opts),
          {:ok, completed} <-
            apply_resolutions(
              user_id,
@@ -1082,6 +1136,237 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
       other ->
         {:error, {:unexpected_llm_result, other}}
+    end
+  end
+
+  defp evaluate_resolutions(user_id, todos, evidence, now, opts) do
+    llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, opts))
+
+    with {:ok, {prompt, authorized_evidence}} <-
+           build_prompt(user_id, todos, evidence, now, opts),
+         {:ok, response} <- llm_complete.(prompt),
+         {:ok, resolutions} <- decode_response(response),
+         :ok <- validate_resolution_coverage(resolutions, todos, opts) do
+      {:ok, resolutions, authorized_evidence}
+    end
+  end
+
+  defp evaluate_exact_evidence_chunks(user_id, todos, evidence, now, opts) do
+    exact_opts = Keyword.put(opts, :exhaustive_completion, true)
+
+    result =
+      with {:ok, evidence_chunks} <-
+             partition_exact_prompt_evidence(user_id, todos, evidence, now, exact_opts),
+           {:ok, evaluations} <-
+             evaluate_exact_chunks(user_id, todos, evidence_chunks, now, exact_opts),
+           {resolutions, authorized_evidence} <-
+             aggregate_exact_resolutions(todos, evaluations),
+           {:ok, completed} <-
+             apply_resolutions(
+               user_id,
+               Map.new(todos, &{&1.id, &1}),
+               resolutions,
+               authorized_evidence,
+               exact_opts
+             ) do
+        %{
+          checked: length(todos),
+          completed: completed,
+          model_calls: length(evidence_chunks)
+        }
+      end
+
+    case result do
+      %{} = summary ->
+        summary
+
+      {:error, reason} = error ->
+        Logger.warning("Cross-source exact completion pass failed",
+          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
+        error
+    end
+  end
+
+  defp evaluate_exact_chunks(user_id, todos, evidence_chunks, now, opts) do
+    Enum.reduce_while(evidence_chunks, {:ok, []}, fn chunk, {:ok, evaluations} ->
+      case evaluate_resolutions(user_id, todos, chunk, now, opts) do
+        {:ok, resolutions, authorized_evidence} ->
+          {:cont, {:ok, [{resolutions, authorized_evidence} | evaluations]}}
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, evaluations} -> {:ok, Enum.reverse(evaluations)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp aggregate_exact_resolutions(todos, evaluations) do
+    resolutions =
+      Enum.map(todos, fn todo ->
+        candidates =
+          Enum.map(evaluations, fn {chunk_resolutions, authorized_evidence} ->
+            resolution =
+              Enum.find(chunk_resolutions, &(&1["todo_id"] == todo.id)) ||
+                %{"todo_id" => todo.id, "completed" => false}
+
+            {resolution, authorized_evidence}
+          end)
+
+        completion =
+          Enum.find(candidates, fn {resolution, authorized_evidence} ->
+            exact_completion_resolution?(todo, resolution, authorized_evidence)
+          end)
+
+        acknowledgement =
+          Enum.find(candidates, fn {resolution, authorized_evidence} ->
+            exact_acknowledgement_resolution?(todo, resolution, authorized_evidence)
+          end)
+
+        case completion || acknowledgement do
+          {resolution, _authorized_evidence} ->
+            resolution
+
+          nil ->
+            %{"todo_id" => todo.id, "completed" => false}
+        end
+      end)
+
+    authorized_evidence = Enum.flat_map(evaluations, &elem(&1, 1))
+    {resolutions, authorized_evidence}
+  end
+
+  defp exact_completion_resolution?(
+         %Todo{direction: "owed_to_me"},
+         %{"reply_outcome" => "acknowledged_only"},
+         _evidence
+       ),
+       do: false
+
+  defp exact_completion_resolution?(%Todo{} = todo, resolution, evidence) do
+    resolution["completed"] == true and
+      authorized_resolution_evidence?(todo, resolution, evidence)
+  end
+
+  defp exact_acknowledgement_resolution?(
+         %Todo{direction: "owed_to_me"} = todo,
+         %{"reply_outcome" => "acknowledged_only"} = resolution,
+         evidence
+       ) do
+    authorized_acknowledgement_evidence?(todo, resolution, evidence)
+  end
+
+  defp exact_acknowledgement_resolution?(_todo, _resolution, _evidence), do: false
+
+  defp partition_exact_prompt_evidence(user_id, todos, evidence, now, opts) do
+    with {:ok, fragments} <-
+           split_exact_prompt_evidence(user_id, todos, evidence, now, opts),
+         {:ok, chunks} <- pack_exact_prompt_evidence(user_id, todos, fragments, now, opts),
+         :ok <- validate_exact_partition_refs(evidence, chunks) do
+      {:ok, chunks}
+    end
+  end
+
+  defp split_exact_prompt_evidence(user_id, todos, evidence, now, opts) do
+    Enum.reduce_while(evidence, {:ok, []}, fn item, {:ok, fragments} ->
+      case split_exact_prompt_item(user_id, todos, item, now, opts) do
+        {:ok, item_fragments} -> {:cont, {:ok, fragments ++ item_fragments}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp split_exact_prompt_item(user_id, todos, item, now, opts) when is_map(item) do
+    case build_prompt(user_id, todos, [item], now, opts) do
+      {:ok, _prompt} ->
+        {:ok, [item]}
+
+      {:error, {:prompt_base_exceeds_budget, _actual, _limit}} = error ->
+        error
+
+      {:error, _reason} ->
+        with text when is_binary(text) <- exact_string(item, "text", nil),
+             {:ok, left, right} <- split_utf8_text(text),
+             {:ok, left_fragments} <-
+               split_exact_prompt_item(user_id, todos, Map.put(item, "text", left), now, opts),
+             {:ok, right_fragments} <-
+               split_exact_prompt_item(user_id, todos, Map.put(item, "text", right), now, opts) do
+          {:ok, left_fragments ++ right_fragments}
+        else
+          _invalid -> exact_item_budget_error(item)
+        end
+    end
+  end
+
+  defp split_exact_prompt_item(_user_id, _todos, item, _now, _opts),
+    do: exact_item_budget_error(item)
+
+  defp pack_exact_prompt_evidence(user_id, todos, fragments, now, opts) do
+    fragments
+    |> Enum.reduce_while({:ok, [], []}, fn fragment, {:ok, chunks, current} ->
+      candidate = current ++ [fragment]
+
+      case build_prompt(user_id, todos, candidate, now, opts) do
+        {:ok, _prompt} ->
+          {:cont, {:ok, chunks, candidate}}
+
+        {:error, _reason} when current != [] ->
+          {:cont, {:ok, chunks ++ [current], [fragment]}}
+
+        {:error, _reason} ->
+          {:halt, exact_item_budget_error(fragment)}
+      end
+    end)
+    |> case do
+      {:ok, chunks, []} -> {:ok, chunks}
+      {:ok, chunks, current} -> {:ok, chunks ++ [current]}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_exact_partition_refs(evidence, chunks) do
+    expected = exact_source_refs(evidence)
+    actual = chunks |> List.flatten() |> exact_source_refs()
+
+    if expected != [] and actual == expected do
+      :ok
+    else
+      {:error, :cross_source_completion_partition_coverage_incomplete}
+    end
+  end
+
+  defp exact_source_refs(evidence) do
+    evidence
+    |> Enum.map(&read_string(&1, "source_ref", nil))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp exact_item_budget_error(item) do
+    actual = item |> compact_exact_prompt_evidence_item() |> Jason.encode!() |> byte_size()
+    {:error, {:exact_completion_evidence_item_exceeds_budget, actual, @max_prompt_bytes}}
+  end
+
+  defp split_utf8_text(text) when is_binary(text) do
+    if String.valid?(text) do
+      codepoints = String.codepoints(text)
+      split_at = div(length(codepoints), 2)
+
+      case Enum.split(codepoints, split_at) do
+        {left, right} when left != [] and right != [] ->
+          {:ok, IO.iodata_to_binary(left), IO.iodata_to_binary(right)}
+
+        _unsplittable ->
+          {:error, :exact_completion_evidence_text_unsplittable}
+      end
+    else
+      {:error, :exact_completion_evidence_text_invalid_utf8}
     end
   end
 
@@ -1152,10 +1437,11 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "channel" => read_string(item, "channel", nil),
       "kind" => read_string(item, "kind", nil),
       "subject" => read_string(item, "subject", nil),
-      "text" => read_string(item, "text", nil),
+      "text" => exact_string(item, "text", nil),
       "at" => read_string(item, "at", nil),
       "source_ref" => read_string(item, "source_ref", nil),
       "source_item_id" => read_string(item, "source_item_id", nil),
+      "target_source_item_id" => read_string(item, "target_source_item_id", nil),
       "thread_id" => read_string(item, "thread_id", nil),
       "account" => read_string(item, "account", nil),
       "permalink" => read_string(item, "permalink", nil)
@@ -1299,7 +1585,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     is_binary(source_item_id) and source_item_id != "" and
       source_item_id in [
         read_string(item, "source_item_id", nil),
-        read_string(item, "thread_id", nil)
+        read_string(item, "thread_id", nil),
+        read_string(item, "target_source_item_id", nil)
       ]
   end
 
@@ -1385,17 +1672,19 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "text" => bounded_prompt_string(read_string(item, "text", nil), text_limit),
       "at" => bounded_prompt_string(read_string(item, "at", nil), 64),
       "source_item_id" => bounded_prompt_string(read_string(item, "source_item_id", nil), 256),
+      "target_source_item_id" =>
+        bounded_prompt_string(read_string(item, "target_source_item_id", nil), 256),
       "thread_id" => bounded_prompt_string(read_string(item, "thread_id", nil), 256),
       "account" => bounded_prompt_string(read_string(item, "account", nil), 200),
       "permalink" => bounded_prompt_string(read_string(item, "permalink", nil), 500)
     }
     |> compact_map()
     |> PromptBudget.project_fields(
-      ~w(channel kind subject text at source_item_id thread_id account permalink),
+      ~w(channel kind subject text at source_item_id target_source_item_id thread_id account permalink),
       if(channel == "source_health", do: 13_000, else: 1_200),
       string_bytes: text_limit,
       list_items: 4,
-      map_entries: 10,
+      map_entries: 11,
       max_depth: 2,
       key_bytes: 64
     )
@@ -1714,7 +2003,14 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       end)
   end
 
-  defp normalize_evidence_quote(value) when is_binary(value) and byte_size(value) <= 2_000 do
+  # Exact evidence fragments can be substantially larger than the ordinary
+  # compact prompt excerpts. Authorization must search the same lossless text
+  # the model saw; rejecting every fragment over 2KB would make a valid quote
+  # near the end of an oversized Gmail/Slack item impossible to authorize.
+  # A fragment can never exceed the request cap because it was admitted by
+  # `build_prompt/5`, so this remains bounded.
+  defp normalize_evidence_quote(value)
+       when is_binary(value) and byte_size(value) <= @max_prompt_bytes do
     value
     |> String.downcase()
     |> String.replace(~r/\s+/u, " ")
@@ -1855,6 +2151,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       {
         read_string(item, "channel", nil),
         read_string(item, "source_item_id", nil),
+        read_string(item, "target_source_item_id", nil),
         read_string(item, "thread_id", nil),
         read_string(item, "subject", nil),
         read_string(item, "text", nil)
@@ -1968,6 +2265,30 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   end
 
   defp read_list(_map, _key), do: []
+
+  defp source_evidence_text(map, keys, true) when is_map(map) and is_list(keys) do
+    Enum.find_value(keys, fn key ->
+      case exact_string(map, key, nil) do
+        value when is_binary(value) -> if(String.trim(value) == "", do: nil, else: value)
+        _missing -> nil
+      end
+    end)
+  end
+
+  defp source_evidence_text(map, keys, false) when is_map(map) and is_list(keys) do
+    keys
+    |> Enum.map(&read_string(map, &1, nil))
+    |> first_present()
+  end
+
+  defp exact_string(map, key, default) when is_map(map) do
+    case read_value(map, key) do
+      value when is_binary(value) -> if(String.valid?(value), do: value, else: default)
+      _other -> default
+    end
+  end
+
+  defp exact_string(_map, _key, default), do: default
 
   defp read_string(map, key, default) when is_map(map) do
     case read_value(map, key) do

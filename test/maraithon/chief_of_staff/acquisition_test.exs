@@ -359,6 +359,32 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
              })
              |> Repo.insert()
 
+    readable_event_at = DateTime.add(now, -10, :second)
+    readable_event_ts = slack_test_ts(readable_event_at)
+    readable_thread_ts = slack_test_ts(DateTime.add(now, -180, :second))
+
+    assert {:ok, _observation} =
+             Observation.new(%{
+               user_id: user_id,
+               source: "slack",
+               source_account: team_id,
+               source_item_id: "#{team_id}:C-READABLE:#{readable_event_ts}",
+               occurred_at: readable_event_at,
+               direction: "inbound",
+               participants: [
+                 %{"role" => "from", "identifier" => %{"slack_id" => "U-SENDER"}}
+               ],
+               excerpt: "The current readable thread reply",
+               metadata: %{
+                 "team_id" => team_id,
+                 "channel" => "C-READABLE",
+                 "ts" => readable_event_ts,
+                 "thread_ts" => readable_thread_ts,
+                 "text" => "The current readable thread reply"
+               }
+             })
+             |> Repo.insert()
+
     deferred_at = %{DateTime.add(now, 1, :second) | microsecond: {0, 6}}
     deferred_ts = slack_test_ts(deferred_at)
 
@@ -413,11 +439,37 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     end)
 
     Bypass.stub(bypass, "GET", "/api/conversations.replies", fn conn ->
-      send(test_pid, :unexpected_slack_thread_fetch)
+      send(test_pid, {:slack_thread_fetch, conn.query_string})
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "messages" => []}))
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => [
+            %{"ts" => readable_thread_ts, "user" => "U-ROOT", "text" => "Thread root"},
+            %{
+              "ts" => slack_test_ts(DateTime.add(now, -20, :second)),
+              "thread_ts" => readable_thread_ts,
+              "user" => "U-PRIOR",
+              "text" => "Prior reply"
+            },
+            %{
+              "ts" => readable_event_ts,
+              "thread_ts" => readable_thread_ts,
+              "user" => "U-SENDER",
+              "text" => "The current readable thread reply"
+            },
+            %{
+              "ts" => slack_test_ts(DateTime.add(now, 30, :second)),
+              "thread_ts" => readable_thread_ts,
+              "user" => "U-FUTURE",
+              "text" => "Future reply must not leak backward"
+            }
+          ]
+        })
+      )
     end)
 
     Bypass.stub(bypass, "GET", "/api/search.messages", fn conn ->
@@ -452,12 +504,12 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
 
     assert_received :slack_conversations_listed
     refute_received {:slack_history_channel, _channel_id}
-    refute_received :unexpected_slack_thread_fetch
+    assert_received {:slack_thread_fetch, _query}
 
     assert [%{kind: "slack_discovery_watermark", value: frontier}] = proposed_watermarks
     assert frontier == now |> DateTime.to_unix() |> to_string()
 
-    assert Enum.any?(
+    refute Enum.any?(
              SourceBundle.slack_messages(bundle),
              &(&1["text"] == "A fresh reply from an inaccessible historical thread")
            )
@@ -467,13 +519,28 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
              &(&1["text"] == "A concurrently arriving event for the next sealed delta")
            )
 
+    readable_message =
+      Enum.find(
+        SourceBundle.slack_messages(bundle),
+        &(&1["text"] == "The current readable thread reply")
+      )
+
+    assert readable_message["thread_context_complete"]
+    assert readable_message["thread_context_frontier"] == readable_event_ts
+
+    assert Enum.map(readable_message["thread_context"], & &1["text"]) == [
+             "Thread root",
+             "Prior reply"
+           ]
+
     assert [workspace] = SourceBundle.slack_workspaces(bundle)
     assert get_in(workspace, ["metadata", "conversation_count"]) == 3
     refute Enum.any?(workspace["channels"], &(&1["id"] == "C-OUTSIDE"))
 
     assert Enum.any?(telemetry["fetches"], fn fetch ->
-             fetch["mode"] == "event_thread_replies" and fetch["status"] == "terminal" and
-               fetch["reason"] == "access_boundary" and fetch["channel_id"] == "C-OUTSIDE"
+             fetch["mode"] == "durable_event_authorization" and
+               fetch["status"] == "terminal" and fetch["reason"] == "access_boundary" and
+               fetch["channel_id"] == "C-OUTSIDE" and fetch["count"] == 1
            end)
 
     assert Enum.any?(telemetry["fetches"], fn fetch ->
@@ -1761,7 +1828,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       account: account
     } do
       closure_watermark = "1780311600"
-      overlapped_watermark = "1780311300"
+      cycle_boundary = "1780315200"
 
       {:ok, _cursor} =
         Maraithon.Connectors.SourceCursors.put(account, "gmail_closure_watermark", %{
@@ -1771,7 +1838,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       TravelGmailStub.configure(
         messages: [],
         messages_by_query_match: [
-          {"after:#{overlapped_watermark}",
+          {"after:#{closure_watermark} before:#{cycle_boundary}",
            [
              %{
                message_id: "closure-delta-message",
@@ -1815,12 +1882,201 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
              )
 
       assert Keyword.get(TravelGmailStub.last_fetch_opts(), :query) ==
-               "after:#{overlapped_watermark}"
+               "after:#{closure_watermark} before:#{cycle_boundary}"
 
       assert get_in(telemetry, ["sources", "gmail", "commercial_provider_count"]) == 0
 
       assert [%{kind: "gmail_closure_watermark", value: value}] = proposed_watermarks
       assert is_binary(value)
+    end
+
+    test "exact discovery hydrates complete Gmail threads without promoting historical messages",
+         %{
+           user_id: user_id,
+           provider: provider
+         } do
+      assert {:ok, _token} =
+               OAuth.store_tokens(user_id, provider, %{
+                 access_token: "exact-discovery-token",
+                 scopes: Google.scopes_for(["gmail"]),
+                 metadata: %{"account_email" => "watermark@example.com"}
+               })
+
+      root_at = ~U[2026-06-01 10:00:00Z]
+      inbox_at = ~U[2026-06-01 11:00:00Z]
+      sent_at = ~U[2026-06-01 11:30:00Z]
+      future_at = ~U[2026-06-01 12:30:00Z]
+
+      root = %{
+        message_id: "thread-root",
+        thread_id: "shared-thread",
+        subject: "Original request",
+        labels: ["INBOX"],
+        internal_date: root_at,
+        from: "sender@example.com",
+        text_body: "Could you send the signed plan?"
+      }
+
+      inbox_reply = %{
+        message_id: "delta-inbox",
+        thread_id: "shared-thread",
+        subject: "Re: Original request",
+        labels: ["INBOX"],
+        internal_date: inbox_at,
+        from: "sender@example.com",
+        text_body: "A reminder about the signed plan."
+      }
+
+      sent_reply = %{
+        message_id: "delta-sent",
+        thread_id: "shared-thread",
+        subject: "Re: Original request",
+        labels: ["SENT"],
+        internal_date: sent_at,
+        from: "watermark@example.com",
+        text_body: "I will send it today."
+      }
+
+      future_reply = %{
+        message_id: "future-message",
+        thread_id: "shared-thread",
+        subject: "Re: Original request",
+        labels: ["INBOX"],
+        internal_date: future_at,
+        from: "sender@example.com",
+        text_body: "This arrived after the acquisition frontier."
+      }
+
+      TravelGmailStub.configure(
+        messages_by_provider: %{provider => [inbox_reply, sent_reply]},
+        threads_by_provider: %{
+          provider => %{
+            "shared-thread" => [root, inbox_reply, sent_reply, future_reply]
+          }
+        }
+      )
+
+      source_scope = %{
+        "google_accounts" => [
+          %{
+            "provider" => provider,
+            "account_email" => "watermark@example.com",
+            "services" => ["gmail"]
+          }
+        ]
+      }
+
+      context =
+        user_id
+        |> watermark_build_context(true)
+        |> Map.merge(%{
+          source_scope: source_scope,
+          source_watermark_role: "discovery",
+          exhaustive_account_delta: true,
+          account_delta_source: "gmail"
+        })
+
+      {bundle, telemetry, proposed_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          %{"followthrough" => %{"source_scope" => source_scope}},
+          context
+        )
+
+      messages = SourceBundle.gmail_messages(bundle)
+
+      assert telemetry["plan"].exhaustive_account_delta?
+
+      assert messages |> Enum.map(& &1["message_id"]) |> Enum.sort() ==
+               ["delta-inbox", "delta-sent"]
+
+      inbox = Enum.find(messages, &(&1["message_id"] == "delta-inbox"))
+      sent = Enum.find(messages, &(&1["message_id"] == "delta-sent"))
+
+      assert Enum.map(inbox["thread_context"], & &1["message_id"]) == ["thread-root"]
+
+      assert Enum.map(sent["thread_context"], & &1["message_id"]) == [
+               "thread-root",
+               "delta-inbox"
+             ]
+
+      refute Enum.any?(messages, &(&1["message_id"] in ["thread-root", "future-message"]))
+      assert inbox["thread_context_complete"]
+      assert sent["thread_context_complete"]
+      assert Acquisition.source_complete?(telemetry, "gmail")
+      assert [%{kind: "gmail_discovery_watermark"}] = proposed_watermarks
+
+      assert [%{"thread_fetch_count" => 1, "thread_failure_count" => 0}] =
+               Enum.filter(telemetry["fetches"], &(&1["provider"] == provider))
+    end
+
+    test "exact closure fails closed when Gmail thread hydration fails", %{
+      user_id: user_id,
+      provider: provider
+    } do
+      assert {:ok, _token} =
+               OAuth.store_tokens(user_id, provider, %{
+                 access_token: "exact-closure-token",
+                 scopes: Google.scopes_for(["gmail"]),
+                 metadata: %{"account_email" => "watermark@example.com"}
+               })
+
+      delta = %{
+        message_id: "closure-thread-delta",
+        thread_id: "closure-thread",
+        subject: "Closure evidence",
+        labels: ["SENT"],
+        internal_date: ~U[2026-06-01 11:30:00Z],
+        text_body: "The requested work is complete."
+      }
+
+      TravelGmailStub.configure(
+        messages_by_provider: %{provider => [delta]},
+        thread_fetch_errors_by_thread: %{"closure-thread" => :temporarily_unavailable}
+      )
+
+      source_scope = %{
+        "google_accounts" => [
+          %{
+            "provider" => provider,
+            "account_email" => "watermark@example.com",
+            "services" => ["gmail"]
+          }
+        ]
+      }
+
+      context =
+        user_id
+        |> watermark_build_context(true)
+        |> Map.merge(%{
+          source_scope: source_scope,
+          source_watermark_role: "closure",
+          exhaustive_account_delta: true,
+          account_delta_source: "gmail"
+        })
+
+      {_bundle, telemetry, proposed_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          %{"followthrough" => %{"source_scope" => source_scope}},
+          context
+        )
+
+      assert telemetry["plan"].exhaustive_account_delta?
+      assert proposed_watermarks == []
+      refute Acquisition.source_complete?(telemetry, "gmail")
+      assert get_in(telemetry, ["sources", "gmail", "status"]) == "partial"
+
+      assert [
+               %{
+                 "status" => "partial",
+                 "detail_failure_count" => 1,
+                 "thread_fetch_count" => 1,
+                 "thread_failure_count" => 1
+               }
+             ] = Enum.filter(telemetry["fetches"], &(&1["provider"] == provider))
     end
 
     test "defers the watermark advance and proposes it instead when the caller asks", %{

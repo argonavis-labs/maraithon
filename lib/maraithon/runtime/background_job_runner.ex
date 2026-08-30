@@ -51,6 +51,7 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.RecurringJobs
+  alias Maraithon.Runtime.SourceWatermarkCommit
 
   alias Maraithon.Runtime.Coordination.{
     Authority,
@@ -1086,12 +1087,17 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     case Repo.transaction(fn ->
            _settled = TaskClaims.settle_in_transaction(assignment, outcome)
 
-           case persist_job_result(job, handler_result) do
-             {:error, reason} when reason in [:claim_lost, :persistence_deferred] ->
-               Repo.rollback(reason)
+           with {:ok, committed_handler_result} <-
+                  SourceWatermarkCommit.commit_and_sanitize(job, handler_result) do
+             case persist_job_result(job, committed_handler_result) do
+               {:error, reason} when reason in [:claim_lost, :persistence_deferred] ->
+                 Repo.rollback(reason)
 
-             result ->
-               result
+               result ->
+                 result
+             end
+           else
+             {:error, reason} -> Repo.rollback(reason)
            end
          end) do
       {:ok, result} -> result
@@ -1146,27 +1152,31 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp persist_job_result(%BackgroundJob{} = job, handler_result) do
     transition_result =
-      case handler_result do
-        {:ok, data, {:reschedule_in, delay_ms}}
-        when is_integer(delay_ms) and delay_ms > 0 ->
-          mark_rescheduled(job, data, delay_ms)
+      if SourceWatermarkCommit.deferred?(handler_result) do
+        {:error, :deferred_source_watermark_requires_coordinated_settlement}
+      else
+        case handler_result do
+          {:ok, data, {:reschedule_in, delay_ms}}
+          when is_integer(delay_ms) and delay_ms > 0 ->
+            mark_rescheduled(job, data, delay_ms)
 
-        {:ok, data, {:reschedule_at, %DateTime{} = scheduled_at}} ->
-          mark_rescheduled_at(job, data, scheduled_at)
+          {:ok, data, {:reschedule_at, %DateTime{} = scheduled_at}} ->
+            mark_rescheduled_at(job, data, scheduled_at)
 
-        {:ok, data} ->
-          mark_completed(job, data)
+          {:ok, data} ->
+            mark_completed(job, data)
 
-        {:error, {:discard, reason}} ->
-          mark_failed(job, reason, job.attempts + 1)
+          {:error, {:discard, reason}} ->
+            mark_failed(job, reason, job.attempts + 1)
 
-        {:error, {:retry_after, seconds, reason}} when is_integer(seconds) and seconds >= 0 ->
-          # Provider-signaled backoff (e.g. HTTP 429 + Retry-After): reschedule
-          # at the requested delay without burning an attempt.
-          handle_retry_after(job, seconds, reason)
+          {:error, {:retry_after, seconds, reason}} when is_integer(seconds) and seconds >= 0 ->
+            # Provider-signaled backoff (e.g. HTTP 429 + Retry-After): reschedule
+            # at the requested delay without burning an attempt.
+            handle_retry_after(job, seconds, reason)
 
-        {:error, reason} ->
-          persist_failure(job, reason)
+          {:error, reason} ->
+            persist_failure(job, reason)
+        end
       end
 
     classify_persistence_result(job, handler_result, transition_result)

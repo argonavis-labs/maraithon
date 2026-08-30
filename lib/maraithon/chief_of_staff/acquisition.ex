@@ -41,7 +41,6 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @gmail_candidate_detail_timeout_ms 5_000
   @gmail_body_fetch_concurrency 8
   @gmail_body_phase_timeout_ms 8_000
-  @gmail_cursor_overlap_seconds 300
   @default_calendar_limit 250
   @default_calendar_fetch_timeout_ms 15_000
   @default_slack_channel_limit 12
@@ -51,6 +50,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_slack_search_timeout_ms 6_000
   @slack_thread_fetch_limit 6
   @slack_thread_reply_limit 40
+  @slack_thread_context_item_limit 20
   @slack_user_directory_limit 80
   @slack_user_directory_timeout_ms 1_500
   @slack_conversations_page_limit 1_000
@@ -984,8 +984,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp fetch_slack_workspace(user_id, source_scope, team_id, plan, oldest, newest) do
+    token_preference = if plan.exhaustive_account_delta?, do: "user", else: "auto"
+
     with {:ok, token} <-
-           SlackHelpers.resolve_access_token(user_id, team_id, token_preference: "auto"),
+           SlackHelpers.resolve_access_token(user_id, team_id, token_preference: token_preference),
          {:ok, conversations} <-
            list_all_slack_conversations(token.access_token,
              types: ["public_channel", "private_channel", "mpim", "im"]
@@ -1206,8 +1208,30 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         do: query,
         else: limit(query, ^plan.slack_message_limit)
 
-    query
-    |> Repo.all()
+    observations =
+      Repo.transaction(fn ->
+        _locked_account_id =
+          ConnectedAccount
+          |> where(
+            [account],
+            account.user_id == ^user_id and account.provider == ^"slack:#{team_id}" and
+              account.status == "connected"
+          )
+          |> lock("FOR UPDATE")
+          |> select([account], account.id)
+          |> Repo.one()
+
+        Repo.all(query)
+      end)
+      |> case do
+        {:ok, observations} ->
+          observations
+
+        {:error, reason} ->
+          raise "Slack event delta lock failed: #{Redaction.error_class(reason)}"
+      end
+
+    observations
     |> Enum.map(&slack_observation_message(&1, team_id, workspace))
     |> dedupe_slack_messages()
   end
@@ -1226,6 +1250,27 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> Enum.reject(&is_nil/1)
       |> MapSet.new()
 
+    {event_messages, inaccessible_event_messages} =
+      Enum.split_with(event_messages, fn message ->
+        channel_id = normalize_string(message["channel_id"])
+        is_binary(channel_id) and MapSet.member?(readable_channel_ids, channel_id)
+      end)
+
+    access_boundary_fetches =
+      inaccessible_event_messages
+      |> Enum.group_by(&normalize_string(&1["channel_id"]))
+      |> Enum.map(fn {channel_id, messages} ->
+        %{
+          "source" => "slack",
+          "team_id" => team_id,
+          "channel_id" => channel_id,
+          "mode" => "durable_event_authorization",
+          "status" => "terminal",
+          "reason" => "access_boundary",
+          "count" => length(messages)
+        }
+      end)
+
     thread_refs =
       event_messages
       |> Enum.flat_map(fn message ->
@@ -1235,69 +1280,113 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       end)
       |> Enum.uniq()
 
-    Enum.reduce(thread_refs, {event_messages, [], []}, fn {channel_id, thread_ts},
-                                                          {message_acc, fetch_acc, error_acc} ->
-      if MapSet.member?(readable_channel_ids, channel_id) do
-        case call_with_timeout(
-               fn -> fetch_slack_thread_replies(access_token, channel_id, thread_ts, plan) end,
-               slack_channel_fetch_timeout_ms(plan)
-             ) do
-          {:ok, response} ->
-            raw_messages = response |> Map.get("messages", []) |> normalize_list()
+    Enum.reduce(thread_refs, {event_messages, access_boundary_fetches, []}, fn
+      {channel_id, thread_ts}, {message_acc, fetch_acc, error_acc} ->
+        if MapSet.member?(readable_channel_ids, channel_id) do
+          case call_with_timeout(
+                 fn -> fetch_slack_thread_replies(access_token, channel_id, thread_ts, plan) end,
+                 slack_channel_fetch_timeout_ms(plan)
+               ) do
+            {:ok, response} ->
+              raw_messages = response |> Map.get("messages", []) |> normalize_list()
 
-            channel =
-              Enum.find(conversations, &(&1["id"] == channel_id)) || %{"id" => channel_id}
+              channel =
+                Enum.find(conversations, &(&1["id"] == channel_id)) || %{"id" => channel_id}
 
-            directory = slack_user_directory(access_token, raw_messages, channel, %{})
+              directory = slack_user_directory(access_token, raw_messages, channel, %{})
 
-            serialized =
-              Enum.map(
-                raw_messages,
-                &serialize_slack_message(&1, channel, team_id, workspace, directory)
-              )
+              serialized =
+                Enum.map(
+                  raw_messages,
+                  &serialize_slack_message(&1, channel, team_id, workspace, directory)
+                )
 
-            fetch = %{
-              "source" => "slack",
-              "team_id" => team_id,
-              "channel_id" => channel_id,
-              "thread_ts" => thread_ts,
-              "mode" => "event_thread_replies",
-              "status" => "ok",
-              "count" => length(serialized)
-            }
+              fetch = %{
+                "source" => "slack",
+                "team_id" => team_id,
+                "channel_id" => channel_id,
+                "thread_ts" => thread_ts,
+                "mode" => "event_thread_replies",
+                "status" => "ok",
+                "count" => length(serialized)
+              }
 
-            {merge_serialized_slack_messages(message_acc, serialized), [fetch | fetch_acc],
-             error_acc}
+              {attach_slack_thread_context(message_acc, channel_id, thread_ts, serialized),
+               [fetch | fetch_acc], error_acc}
 
-          {:error, reason} ->
-            fetch = %{
-              "source" => "slack",
-              "team_id" => team_id,
-              "channel_id" => channel_id,
-              "thread_ts" => thread_ts,
-              "mode" => "event_thread_replies",
-              "status" => "error",
-              "reason" => Redaction.error_class(reason)
-            }
+            {:error, reason} ->
+              fetch = %{
+                "source" => "slack",
+                "team_id" => team_id,
+                "channel_id" => channel_id,
+                "thread_ts" => thread_ts,
+                "mode" => "event_thread_replies",
+                "status" => "error",
+                "reason" => Redaction.error_class(reason)
+              }
 
-            {message_acc, [fetch | fetch_acc],
-             [{:event_thread_replies_failed, channel_id, thread_ts, reason} | error_acc]}
+              {message_acc, [fetch | fetch_acc],
+               [{:event_thread_replies_failed, channel_id, thread_ts, reason} | error_acc]}
+          end
+        else
+          fetch = %{
+            "source" => "slack",
+            "team_id" => team_id,
+            "channel_id" => channel_id,
+            "thread_ts" => thread_ts,
+            "mode" => "event_thread_replies",
+            "status" => "terminal",
+            "reason" => "access_boundary",
+            "count" => 0
+          }
+
+          {message_acc, [fetch | fetch_acc], error_acc}
         end
-      else
-        fetch = %{
-          "source" => "slack",
-          "team_id" => team_id,
-          "channel_id" => channel_id,
-          "thread_ts" => thread_ts,
-          "mode" => "event_thread_replies",
-          "status" => "terminal",
-          "reason" => "access_boundary",
-          "count" => 0
-        }
+    end)
+  end
 
-        {message_acc, [fetch | fetch_acc], error_acc}
+  defp attach_slack_thread_context(messages, channel_id, thread_ts, thread_messages) do
+    Enum.map(messages, fn message ->
+      if normalize_string(message["channel_id"]) == channel_id and
+           normalize_string(message["thread_ts"]) == thread_ts do
+        context = bounded_slack_thread_context(message, thread_ts, thread_messages)
+
+        message
+        |> Map.put("thread_context", context)
+        |> Map.put("thread_context_complete", true)
+        |> Map.put("thread_context_frontier", normalize_string(message["ts"]))
+      else
+        message
       end
     end)
+  end
+
+  # Thread replies are provider context, not delta candidates. Keep the root
+  # plus the most recent messages that existed at this event's frontier. This
+  # prevents a later reply from influencing an earlier decision and keeps one
+  # noisy thread from making the provider/model handoff unbounded.
+  defp bounded_slack_thread_context(message, thread_ts, thread_messages) do
+    message_ts = normalize_string(message["ts"])
+    frontier = slack_ts_sort_value(message)
+
+    eligible =
+      thread_messages
+      |> Enum.filter(fn thread_message ->
+        thread_message_ts = normalize_string(thread_message["ts"])
+        thread_message_ts != message_ts and slack_ts_sort_value(thread_message) <= frontier
+      end)
+      |> Enum.sort_by(&slack_ts_sort_value/1)
+
+    root = Enum.find(eligible, &(normalize_string(&1["ts"]) == thread_ts))
+
+    recent =
+      eligible
+      |> Enum.reject(&(normalize_string(&1["ts"]) == thread_ts))
+      |> Enum.take(-max(@slack_thread_context_item_limit - 1, 0))
+
+    [root | recent]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(&normalize_string(&1["ts"]))
   end
 
   defp maybe_after_slack_observation(query, oldest) when is_binary(oldest) do
@@ -1339,9 +1428,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "conversation_kind" => "event",
       "ts" => ts,
       "thread_ts" => normalize_string(metadata["thread_ts"]),
+      "target_ts" => normalize_string(metadata["target_ts"]),
+      "subtype" => normalize_string(metadata["event_type"]),
+      "provider_event_id" => normalize_string(metadata["provider_event_id"]),
       "user" => slack_observation_user(observation.participants),
-      "text" => observation.excerpt,
-      "text_resolved" => observation.excerpt,
+      "text" => normalize_string(metadata["text"]) || observation.excerpt,
+      "text_resolved" => normalize_string(metadata["text"]) || observation.excerpt,
       "ingress" => "events_api"
     }
   end
@@ -1976,13 +2068,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       bundle = SourceBundle.mark_unavailable(bundle, "gmail", "google_gmail_not_connected")
       {put_source_summary(telemetry, "gmail", %{"status" => "unavailable"}), bundle}
     else
-      lookback_days = max(div(plan.lookback_hours, 24), @commercial_gmail_lookback_days)
-      fallback_query = "newer_than:#{lookback_days}d"
-
       now_watermark =
         (context[:timestamp] || DateTime.utc_now())
         |> DateTime.to_unix(:second)
         |> Integer.to_string()
+
+      lookback_days = max(div(plan.lookback_hours, 24), @commercial_gmail_lookback_days)
+      fallback_query = "newer_than:#{lookback_days}d before:#{now_watermark}"
+
+      commercial_gmail_queries =
+        Enum.map(plan.commercial_gmail_queries, &"#{&1} before:#{now_watermark}")
 
       watermark_mode = watermark_advance_mode(context, plan)
       deep_lookback? = deep_lookback_fetch?(plan)
@@ -2004,7 +2099,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         gmail_provider_candidate_quotas(
           providers,
           plan.gmail_message_limit,
-          plan.commercial_gmail_queries
+          commercial_gmail_queries
         )
 
       provider_candidate_limits =
@@ -2018,7 +2113,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       provider_specs =
         Enum.map(providers, fn provider ->
           account = ConnectedAccounts.get(user_id, provider)
-          query = gmail_poll_query(account, fallback_query, deep_lookback?, watermark_kind)
+
+          query =
+            gmail_poll_query(
+              account,
+              fallback_query,
+              deep_lookback?,
+              watermark_kind,
+              now_watermark
+            )
+
           quota = Map.fetch!(provider_quotas, provider)
           {provider, account, query, quota}
         end)
@@ -2159,7 +2263,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           provider_quotas,
           detail_concurrency,
           detail_timeout,
-          plan.commercial_gmail_queries,
+          commercial_gmail_queries,
           phase_budgets.commercial
         )
 
@@ -2324,15 +2428,40 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          ) do
       {:ok, messages, metadata} when is_list(messages) and is_map(metadata) ->
         annotated = annotate_google_items(messages, source_scope, provider)
+        metadata = normalize_gmail_fetch_metadata(metadata, message_limit, length(messages))
 
-        {:ok, annotated,
-         normalize_gmail_fetch_metadata(metadata, message_limit, length(messages))}
+        {annotated, metadata} =
+          maybe_hydrate_gmail_thread_context(
+            user_id,
+            annotated,
+            source_scope,
+            provider,
+            exhaustive?,
+            detail_concurrency,
+            detail_timeout,
+            metadata
+          )
+
+        {:ok, annotated, metadata}
 
       {:ok, messages} when is_list(messages) ->
         # Test doubles and older connector implementations do not expose
         # completeness metadata. Their explicit success remains complete.
         annotated = annotate_google_items(messages, source_scope, provider)
         metadata = gmail_fetch_metadata(length(messages), length(messages), 0, false, true)
+
+        {annotated, metadata} =
+          maybe_hydrate_gmail_thread_context(
+            user_id,
+            annotated,
+            source_scope,
+            provider,
+            exhaustive?,
+            detail_concurrency,
+            detail_timeout,
+            metadata
+          )
+
         {:ok, annotated, metadata}
 
       {:error, reason} ->
@@ -2340,6 +2469,206 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       other ->
         {:error, {:unexpected_gmail_fetch_result, summarize_task_value(other)}}
+    end
+  end
+
+  defp maybe_hydrate_gmail_thread_context(
+         _user_id,
+         messages,
+         _source_scope,
+         _provider,
+         false,
+         _concurrency,
+         _timeout,
+         metadata
+       ),
+       do: {messages, Map.merge(metadata, %{thread_fetch_count: 0, thread_failure_count: 0})}
+
+  defp maybe_hydrate_gmail_thread_context(
+         user_id,
+         messages,
+         source_scope,
+         provider,
+         true,
+         concurrency,
+         timeout,
+         metadata
+       ) do
+    {thread_ids, invalid_delta_count} = gmail_delta_thread_ids(messages)
+
+    thread_results =
+      thread_ids
+      |> Task.async_stream(
+        fn thread_id ->
+          result =
+            gmail_module().fetch_thread_content(user_id, thread_id, provider: provider)
+
+          {thread_id, result}
+        end,
+        max_concurrency: max(min(concurrency, max(length(thread_ids), 1)), 1),
+        ordered: true,
+        timeout: timeout,
+        on_timeout: :kill_task
+      )
+      |> Enum.to_list()
+
+    {threads, fetch_failure_count} =
+      Enum.reduce(thread_results, {%{}, invalid_delta_count}, fn
+        {:ok, {thread_id, {:ok, thread_messages}}}, {thread_acc, failure_count}
+        when is_list(thread_messages) and thread_messages != [] ->
+          annotated_thread = annotate_google_items(thread_messages, source_scope, provider)
+
+          if gmail_thread_complete?(thread_id, annotated_thread, messages) do
+            {Map.put(thread_acc, thread_id, annotated_thread), failure_count}
+          else
+            {thread_acc, failure_count + 1}
+          end
+
+        _failure, {thread_acc, failure_count} ->
+          {thread_acc, failure_count + 1}
+      end)
+
+    hydrated =
+      Enum.map(messages, fn message ->
+        thread_id = read_gmail_string(message, "thread_id")
+
+        case Map.get(threads, thread_id) do
+          thread_messages when is_list(thread_messages) ->
+            attach_gmail_thread_context(message, thread_messages)
+
+          _missing ->
+            message
+        end
+      end)
+
+    metadata =
+      metadata
+      |> Map.put(:thread_fetch_count, length(thread_ids))
+      |> Map.put(:thread_failure_count, fetch_failure_count)
+
+    metadata =
+      if fetch_failure_count == 0 do
+        metadata
+      else
+        metadata
+        |> Map.update!(:detail_failure_count, &(&1 + fetch_failure_count))
+        |> Map.put(:complete?, false)
+      end
+
+    {hydrated, metadata}
+  end
+
+  defp gmail_delta_thread_ids(messages) do
+    Enum.reduce(messages, {[], 0}, fn message, {thread_ids, invalid_count} ->
+      case {read_gmail_string(message, "message_id") || read_gmail_string(message, "id"),
+            read_gmail_string(message, "thread_id"), gmail_message_frontier(message)} do
+        {message_id, thread_id, frontier}
+        when is_binary(message_id) and is_binary(thread_id) and is_integer(frontier) ->
+          {[thread_id | thread_ids], invalid_count}
+
+        _invalid ->
+          {thread_ids, invalid_count + 1}
+      end
+    end)
+    |> then(fn {thread_ids, invalid_count} ->
+      {thread_ids |> Enum.reverse() |> Enum.uniq(), invalid_count}
+    end)
+  end
+
+  defp gmail_thread_complete?(thread_id, thread_messages, delta_messages) do
+    hydrated_ids =
+      thread_messages
+      |> Enum.reduce_while(MapSet.new(), fn message, ids ->
+        case {read_gmail_string(message, "message_id") || read_gmail_string(message, "id"),
+              read_gmail_string(message, "thread_id"), gmail_message_frontier(message)} do
+          {message_id, ^thread_id, frontier}
+          when is_binary(message_id) and is_integer(frontier) ->
+            {:cont, MapSet.put(ids, message_id)}
+
+          _invalid ->
+            {:halt, :invalid}
+        end
+      end)
+
+    delta_ids =
+      delta_messages
+      |> Enum.filter(&(read_gmail_string(&1, "thread_id") == thread_id))
+      |> Enum.map(&(read_gmail_string(&1, "message_id") || read_gmail_string(&1, "id")))
+
+    match?(%MapSet{}, hydrated_ids) and
+      Enum.all?(delta_ids, &MapSet.member?(hydrated_ids, &1))
+  end
+
+  defp attach_gmail_thread_context(message, thread_messages) do
+    frontier = gmail_message_frontier(message)
+    delta_id = read_gmail_string(message, "message_id") || read_gmail_string(message, "id")
+
+    context =
+      thread_messages
+      |> Enum.filter(fn thread_message ->
+        message_id =
+          read_gmail_string(thread_message, "message_id") ||
+            read_gmail_string(thread_message, "id")
+
+        thread_frontier = gmail_message_frontier(thread_message)
+
+        message_id != delta_id and is_integer(thread_frontier) and thread_frontier <= frontier
+      end)
+      |> Enum.sort_by(fn thread_message ->
+        {gmail_message_frontier(thread_message),
+         read_gmail_string(thread_message, "message_id") ||
+           read_gmail_string(thread_message, "id")}
+      end)
+
+    message
+    |> Map.put("thread_context", context)
+    |> Map.put("thread_context_complete", true)
+    |> Map.put("thread_context_frontier", frontier)
+  end
+
+  defp gmail_message_frontier(message) when is_map(message) do
+    message
+    |> Map.get("internal_date", Map.get(message, :internal_date))
+    |> gmail_frontier_value()
+  end
+
+  defp gmail_message_frontier(_message), do: nil
+
+  defp gmail_frontier_value(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
+
+  defp gmail_frontier_value(%NaiveDateTime{} = value) do
+    value |> DateTime.from_naive!("Etc/UTC") |> gmail_frontier_value()
+  end
+
+  defp gmail_frontier_value(value) when is_integer(value), do: value * 1_000
+
+  defp gmail_frontier_value(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {milliseconds, ""} -> milliseconds * 1_000
+      _invalid -> parse_gmail_frontier_datetime(value)
+    end
+  end
+
+  defp gmail_frontier_value(_value), do: nil
+
+  defp parse_gmail_frontier_datetime(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> DateTime.to_unix(datetime, :microsecond)
+      _invalid -> nil
+    end
+  end
+
+  defp read_gmail_string(message, key) when is_map(message) do
+    atom_key =
+      case key do
+        "id" -> :id
+        "message_id" -> :message_id
+        "thread_id" -> :thread_id
+      end
+
+    case Map.get(message, key, Map.get(message, atom_key)) do
+      value when is_binary(value) and value != "" -> value
+      _other -> nil
     end
   end
 
@@ -2693,6 +3022,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "requested_count" => fetch_metadata.requested_count,
       "detail_success_count" => fetch_metadata.detail_success_count,
       "detail_failure_count" => fetch_metadata.detail_failure_count,
+      "thread_fetch_count" => Map.get(fetch_metadata, :thread_fetch_count, 0),
+      "thread_failure_count" => Map.get(fetch_metadata, :thread_failure_count, 0),
       "truncated" => fetch_metadata.truncated?,
       "full_body_count" => count_full_body_messages(provider_messages),
       "body_missing_count" => count_body_missing_messages(provider_messages)
@@ -2742,31 +3073,23 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
-  # Gmail's `newer_than:Nd` window fetch always re-scans the whole lookback
-  # window. When a `gmail_poll_watermark` cursor exists for this account,
-  # fetch only messages near the last successful poll instead; a small
-  # overlap closes Gmail's second-granularity/eventual-visibility boundary,
-  # while provider message identities and todo dedupe keys make replays safe.
-  # The window fetch remains the fallback for accounts with no cursor yet. A
-  # deep-lookback fetch always uses the widened window instead of the cursor
-  # (see `slack_poll_oldest/3` for the matching Slack fix).
-  defp gmail_poll_query(_account, fallback_query, true, _kind), do: fallback_query
-  defp gmail_poll_query(nil, fallback_query, _deep_lookback?, _kind), do: fallback_query
+  # Every scheduled account fetch is fenced to `[last_watermark, now)`. The
+  # upper fence prevents mail arriving during provider work from being included
+  # in a cycle whose committed watermark predates it; that mail remains for the
+  # next wake. Deep lookbacks retain their wider lower bound but the same upper
+  # fence.
+  defp gmail_poll_query(_account, fallback_query, true, _kind, _now), do: fallback_query
 
-  defp gmail_poll_query(account, fallback_query, _deep_lookback?, kind) do
+  defp gmail_poll_query(nil, fallback_query, _deep_lookback?, _kind, _now),
+    do: fallback_query
+
+  defp gmail_poll_query(account, fallback_query, _deep_lookback?, kind, now) do
     case SourceCursors.get(account.id, kind) do
       %{value: value} when is_binary(value) and value != "" ->
-        "after:#{overlapped_gmail_cursor(value)}"
+        "after:#{value} before:#{now}"
 
       _ ->
         fallback_query
-    end
-  end
-
-  defp overlapped_gmail_cursor(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> max(seconds - @gmail_cursor_overlap_seconds, 0)
-      _invalid -> value
     end
   end
 

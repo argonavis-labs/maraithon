@@ -409,6 +409,7 @@ defmodule Maraithon.Connectors.SlackTest do
       params = %{
         "type" => "event_callback",
         "team_id" => team_id,
+        "authorizations" => [%{"user_id" => "U-SELF", "is_bot" => false}],
         "event" => %{
           "type" => "message",
           "subtype" => "file_share",
@@ -455,6 +456,7 @@ defmodule Maraithon.Connectors.SlackTest do
       params = %{
         "type" => "event_callback",
         "team_id" => team_id,
+        "authorizations" => [%{"user_id" => "U-SELF", "is_bot" => false}],
         "event" => %{
           "type" => "message",
           "channel" => "C-BLOCKS",
@@ -490,6 +492,48 @@ defmodule Maraithon.Connectors.SlackTest do
                metadata["blocks"]
 
       assert block_text == "*Approve the launch plan* by Friday"
+    end
+
+    test "preserves semantic text beyond compact metadata limits" do
+      {user_id, team_id} = connect_slack_account("lossless-semantic-text")
+      ts = "1787069901.000003"
+      tail = "ACTION REQUIRED: approve the final launch"
+      long_preview = String.duplicate("context ", 180) <> tail
+
+      files =
+        Enum.map(1..20, fn index ->
+          %{"id" => "F-#{index}", "title" => "Reference #{index}"}
+        end) ++
+          [%{"id" => "F-21", "title" => "Final approval", "preview_plain_text" => long_preview}]
+
+      params = %{
+        "type" => "event_callback",
+        "team_id" => team_id,
+        "authorizations" => [%{"user_id" => "U-SELF", "is_bot" => false}],
+        "event" => %{
+          "type" => "message",
+          "subtype" => "file_share",
+          "channel" => "C-LOSSLESS",
+          "user" => "U-SENDER",
+          "text" => "",
+          "ts" => ts,
+          "files" => files
+        }
+      }
+
+      assert {:ok, _topic, _event} = Slack.handle_webhook(conn(:post, "/"), params)
+
+      assert %Observation{metadata: metadata} =
+               Repo.get_by(Observation,
+                 user_id: user_id,
+                 source: "slack",
+                 source_item_id: "#{team_id}:C-LOSSLESS:#{ts}"
+               )
+
+      assert metadata["file_count"] == 21
+      assert length(metadata["files"]) == 20
+      assert metadata["text"] =~ "Final approval"
+      assert String.ends_with?(metadata["text"], tail)
     end
 
     test "fails closed when a nominally content-bearing block has no durable content" do

@@ -99,6 +99,57 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
   def open_todo_ids_for_account(_account, _opts), do: []
 
+  @doc false
+  def resolve_todo_decision_manifest(account, todo_ids, evaluated_refs)
+
+  def resolve_todo_decision_manifest(
+        %ConnectedAccount{} = account,
+        todo_ids,
+        evaluated_refs
+      )
+      when is_list(todo_ids) and is_list(evaluated_refs) do
+    todo_ids = Enum.filter(todo_ids, &(is_binary(&1) and &1 != ""))
+    evaluated_refs = Enum.filter(evaluated_refs, &(is_binary(&1) and &1 != ""))
+
+    rows =
+      Todo
+      |> where([todo], todo.user_id == ^account.user_id)
+      |> where([todo], todo.source_account_id == ^account.id)
+      |> where([todo], todo.id in ^todo_ids)
+      |> select([todo], {todo.id, todo.status})
+      |> Repo.all()
+
+    row_ids = Enum.map(rows, &elem(&1, 0))
+    evaluated_set = MapSet.new(evaluated_refs)
+
+    superseded_refs =
+      rows
+      |> Enum.filter(fn {id, status} ->
+        not MapSet.member?(evaluated_set, id) and status not in ["open", "snoozed"]
+      end)
+      |> Enum.map(&elem(&1, 0))
+
+    decision_refs = Enum.uniq(evaluated_refs ++ superseded_refs)
+
+    if length(todo_ids) == length(Enum.uniq(todo_ids)) and
+         length(evaluated_refs) == length(Enum.uniq(evaluated_refs)) and
+         Enum.sort(row_ids) == Enum.sort(todo_ids) and
+         Enum.all?(evaluated_refs, &(&1 in todo_ids)) and
+         Enum.sort(decision_refs) == Enum.sort(todo_ids) do
+      {:ok,
+       %{
+         decision_refs: todo_ids,
+         evaluated_refs: evaluated_refs,
+         superseded_refs: superseded_refs
+       }}
+    else
+      {:error, :source_closure_todo_decision_manifest_incomplete}
+    end
+  end
+
+  def resolve_todo_decision_manifest(_account, _todo_ids, _evaluated_refs),
+    do: {:error, :source_closure_todo_decision_manifest_incomplete}
+
   defp acquire_account_delta(account, source_scope, opts) when is_list(opts) do
     cond do
       Keyword.has_key?(opts, :source_bundle) ->
@@ -198,6 +249,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         |> Map.put(:eligible_todos, length(initial_ids))
         |> Map.put(:cross_source, cross_source)
         |> Map.put(:model_calls, result_count(cross_source, :model_calls))
+        |> Map.put(:todo_decision_refs, result_string_list(cross_source, :decision_refs))
         |> Map.put(
           :coverage_complete?,
           deterministic.checked == length(initial_ids) and deterministic.errors == 0 and
@@ -226,7 +278,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   end
 
   defp run_cross_source_batches(_user_id, [], _opts) do
-    %{checked: 0, completed: 0, model_calls: 0, expected: 0}
+    %{checked: 0, completed: 0, model_calls: 0, expected: 0, decision_refs: []}
   end
 
   defp run_cross_source_batches(user_id, todo_ids, opts) do
@@ -234,7 +286,13 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
     |> Enum.chunk_every(@cross_source_batch_size)
     |> Enum.with_index()
     |> Enum.reduce_while(
-      %{checked: 0, completed: 0, model_calls: 0, expected: length(todo_ids)},
+      %{
+        checked: 0,
+        completed: 0,
+        model_calls: 0,
+        expected: length(todo_ids),
+        decision_refs: []
+      },
       fn {batch, index}, acc ->
         result =
           run_cross_source_user(
@@ -252,7 +310,8 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
                acc
                | checked: acc.checked + checked,
                  completed: acc.completed + completed,
-                 model_calls: acc.model_calls + result_count(summary, :model_calls)
+                 model_calls: acc.model_calls + result_count(summary, :model_calls),
+                 decision_refs: acc.decision_refs ++ result_string_list(summary, :decision_refs)
              }}
 
           {:skip, :no_open_todos} ->
@@ -332,8 +391,14 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
     Map.merge(left, right, fn _key, a, b -> a + b end)
   end
 
-  defp cross_source_complete?(%{checked: checked, expected: expected}, remaining_ids),
-    do: checked == expected and expected == length(remaining_ids)
+  defp cross_source_complete?(
+         %{checked: checked, expected: expected, decision_refs: decision_refs},
+         remaining_ids
+       ),
+       do:
+         checked == expected and expected == length(remaining_ids) and
+           Enum.sort(decision_refs) == Enum.sort(remaining_ids) and
+           length(Enum.uniq(decision_refs)) == expected
 
   defp cross_source_complete?(_result, _remaining_ids), do: false
 
@@ -341,6 +406,13 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
     case Map.get(result, key) || Map.get(result, Atom.to_string(key)) do
       value when is_integer(value) and value >= 0 -> value
       _other -> 0
+    end
+  end
+
+  defp result_string_list(result, key) when is_map(result) do
+    case Map.get(result, key) || Map.get(result, Atom.to_string(key)) do
+      values when is_list(values) -> Enum.filter(values, &(is_binary(&1) and &1 != ""))
+      _other -> []
     end
   end
 

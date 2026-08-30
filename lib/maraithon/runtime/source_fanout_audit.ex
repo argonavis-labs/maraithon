@@ -33,7 +33,7 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
 
     cutoff = DateTime.add(now, -grace_seconds, :second)
 
-    jobs = load_jobs(since)
+    jobs = load_jobs(since, now)
     jobs_by_id = Map.new(jobs, &{&1.id, &1})
     expected_accounts = expected_accounts()
 
@@ -45,6 +45,12 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       acquisition_jobs
       |> Enum.filter(&cycle_ready_for_audit?(&1, jobs_by_id, cutoff))
       |> Enum.map(&audit_cycle(&1, jobs_by_id))
+
+    stalled_cycles =
+      acquisition_jobs
+      |> Enum.filter(fn job ->
+        DateTime.compare(job.inserted_at, cutoff) != :gt and cycle_in_flight?(job, jobs_by_id)
+      end)
 
     current_cycles = latest_cycles_by_account(cycles)
 
@@ -61,7 +67,13 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
     closure =
       role_summary(cycles, current_cycles, "closure", expected_accounts.closure, jobs, cutoff)
 
-    errors = Enum.flat_map(current_cycles, & &1.errors)
+    errors =
+      Enum.flat_map(current_cycles, & &1.errors) ++
+        if(stalled_cycles == [],
+          do: [],
+          else: List.duplicate(:stalled_cycle, length(stalled_cycles))
+        )
+
     activity = activity_summary(jobs, cycles, cutoff)
 
     closure_covered? =
@@ -71,11 +83,12 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
     %{
       healthy?:
         errors == [] and discovery.missing_account_ids == [] and discovery.cycles > 0 and
-          closure_covered? and activity.every_fanout_visible?,
+          closure_covered? and stalled_cycles == [] and activity.every_fanout_visible?,
       since: DateTime.to_iso8601(since),
       until: DateTime.to_iso8601(now),
       settlement_grace_seconds: grace_seconds,
       in_flight_cycles: Enum.count(acquisition_jobs, &cycle_in_flight?(&1, jobs_by_id)),
+      stalled_cycles: length(stalled_cycles),
       discovery: discovery,
       closure: closure,
       activity: activity,
@@ -120,11 +133,15 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
     end)
   end
 
-  defp load_jobs(since) do
+  defp load_jobs(since, until_time) do
     job_types = BackgroundJobs.source_account_job_types()
 
     BackgroundJob
-    |> where([job], job.job_type in ^job_types and job.inserted_at >= ^since)
+    |> where(
+      [job],
+      job.job_type in ^job_types and job.inserted_at >= ^since and
+        job.inserted_at < ^until_time
+    )
     |> order_by([job], asc: job.inserted_at, asc: job.id)
     |> Repo.all()
     |> Enum.map(&BackgroundJob.hydrate_payloads/1)
@@ -194,10 +211,12 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       acquisition.status != "completed" ->
         %{base | errors: [:acquisition_not_completed]}
 
-      outcome == "empty_delta" and base.source_items == 0 ->
+      outcome == "empty_delta" and base.source_items == 0 and
+          map_integer(result, "advanced_watermarks") == 1 ->
         %{base | exact?: true}
 
-      role == "closure" and outcome == "no_open_todos" ->
+      role == "closure" and outcome == "no_open_todos" and
+          map_integer(result, "advanced_watermarks") == 1 ->
         %{base | exact?: true}
 
       outcome == "fanout_ready" ->
@@ -311,6 +330,10 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
     errors
     |> require_error(child_items == expected_items, :source_item_count_mismatch)
     |> require_decision_manifest(expected_decisions, decision_count, decision_refs)
+    |> require_error(
+      discovery_action_manifest_valid?(child_results, decision_refs),
+      :source_decision_action_manifest_invalid
+    )
   end
 
   defp require_coverage(
@@ -376,7 +399,8 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
   defp finalized_counts_valid?(%BackgroundJob{} = finalizer, source_items, decisions, fanouts) do
     map_integer(finalizer.result, "source_items") == source_items and
       map_integer(finalizer.result, "decision_count") == decisions and
-      map_integer(finalizer.result, "fanout_count") == fanouts
+      map_integer(finalizer.result, "fanout_count") == fanouts and
+      map_integer(finalizer.result, "advanced_watermarks") == 1
   end
 
   defp finalized_counts_valid?(_finalizer, _source_items, _decisions, _fanouts), do: false
@@ -423,6 +447,16 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       missing_account_ids: expected_ids -- covered_ids,
       providers: provider_counts(expected_accounts),
       failures:
+        selected
+        |> Enum.reject(& &1.exact?)
+        |> Enum.map(fn cycle ->
+          %{
+            account_id: cycle.account_id,
+            acquisition_reference: cycle.acquisition_reference,
+            errors: Enum.map(cycle.errors, &Atom.to_string/1)
+          }
+        end),
+      current_failures:
         current
         |> Enum.reject(& &1.exact?)
         |> Enum.map(fn cycle ->
@@ -438,7 +472,7 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
   defp activity_summary(jobs, _cycles, cutoff) do
     settled_jobs = Enum.filter(jobs, &(DateTime.compare(&1.inserted_at, cutoff) != :gt))
     expected_job_ids = Enum.map(jobs, & &1.id)
-    visible_ids = activity_visible_ids(jobs)
+    visible_ids = activity_visible_ids(expected_job_ids)
 
     %{
       rows: length(settled_jobs),
@@ -455,15 +489,20 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
     }
   end
 
-  defp activity_visible_ids(jobs) do
-    jobs
-    |> Enum.map(& &1.user_id)
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> Enum.uniq()
-    |> Enum.flat_map(fn user_id ->
-      BackgroundJobs.list_latest_source_account_runs_for_user(user_id, limit: 10_000)
-    end)
-    |> MapSet.new(& &1.id)
+  defp activity_visible_ids([]), do: MapSet.new()
+
+  defp activity_visible_ids(expected_job_ids) do
+    visible_ids =
+      BackgroundJob
+      |> where(
+        [job],
+        job.id in ^expected_job_ids and job.job_type in ^BackgroundJobs.source_account_job_types() and
+          not is_nil(job.user_id) and not is_nil(job.dedupe_key)
+      )
+      |> select([job], job.id)
+      |> Repo.all()
+
+    MapSet.new(visible_ids)
   end
 
   defp provider_counts(accounts) do
@@ -472,6 +511,21 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       if String.starts_with?(provider, "slack:"), do: "slack", else: "gmail"
     end)
     |> Enum.frequencies()
+  end
+
+  defp discovery_action_manifest_valid?(child_results, decision_refs) do
+    manifests = Enum.flat_map(child_results, &map_list(&1, "decision_manifest"))
+    manifest_refs = Enum.map(manifests, &map_string(&1, "source_ref"))
+
+    length(manifests) == length(decision_refs) and
+      Enum.sort(manifest_refs) == Enum.sort(decision_refs) and
+      Enum.all?(manifests, fn manifest ->
+        action = map_string(manifest, "action")
+        persisted_todo_id = map_string(manifest, "persisted_todo_id")
+
+        action in ["create", "update", "skip"] and
+          if(action == "skip", do: is_nil(persisted_todo_id), else: is_binary(persisted_todo_id))
+      end)
   end
 
   defp require_error(errors, true, _error), do: errors
@@ -509,10 +563,24 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
 
   defp map_string_list(_map, _key), do: []
 
+  defp map_list(map, key) when is_map(map) do
+    case Map.get(map, key, Map.get(map, key_atom(key), [])) do
+      values when is_list(values) -> values
+      _other -> []
+    end
+  end
+
+  defp map_list(_map, _key), do: []
+
   defp key_atom("account_id"), do: :account_id
   defp key_atom("acquisition_job_id"), do: :acquisition_job_id
   defp key_atom("decision_count"), do: :decision_count
   defp key_atom("decision_refs"), do: :decision_refs
+  defp key_atom("decision_manifest"), do: :decision_manifest
+  defp key_atom("action"), do: :action
+  defp key_atom("persisted_todo_id"), do: :persisted_todo_id
+  defp key_atom("source_ref"), do: :source_ref
+  defp key_atom("advanced_watermarks"), do: :advanced_watermarks
   defp key_atom("expected_source_refs_digest"), do: :expected_source_refs_digest
   defp key_atom("expected_todo_refs_digest"), do: :expected_todo_refs_digest
   defp key_atom("fanout_count"), do: :fanout_count

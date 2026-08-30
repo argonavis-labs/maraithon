@@ -29,6 +29,117 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     refute Enum.any?(keys, &String.contains?(&1, "worker@example.com"))
   end
 
+  test "source account wake makes the Activity-visible closure acquisition wait for discovery" do
+    user_id = "periodic-wake-dependency-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:#{user_id}", %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Wait for discovery before checking closure",
+          "summary" => "This todo belongs to the source account being woken.",
+          "next_action" => "Reply after the discovery cycle settles.",
+          "source_account_id" => account.id,
+          "source_account_label" => user_id,
+          "source_item_id" => "wake-dependency-thread",
+          "dedupe_key" => "periodic-wake-dependency"
+        }
+      ])
+
+    now = DateTime.utc_now()
+
+    assert {:ok,
+            %{
+              discovery: %{outcome: "enqueued", job_id: discovery_job_id},
+              closure: %{outcome: "enqueued", job_id: closure_job_id}
+            }} = PeriodicJobs.wake_source_account(account, now: now)
+
+    discovery_job = Repo.get!(BackgroundJob, discovery_job_id)
+    closure_job = Repo.get!(BackgroundJob, closure_job_id)
+
+    assert discovery_job.job_type == "runtime_partition:source_account_discovery"
+    assert closure_job.job_type == "runtime_partition:source_account_closure_acquire"
+    assert closure_job.payload["discovery_job_id"] == discovery_job.id
+
+    assert {:ok, %{outcome: "waiting_for_discovery", dependency_stage: "acquisition"},
+            {:reschedule_in, 10_000}} = PeriodicJobs.execute(closure_job)
+  end
+
+  test "closure acquisition waits for the exact discovery finalizer and proceeds after it settles" do
+    user_id = "periodic-finalizer-dependency-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:#{user_id}", %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, discovery_job} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery", %{
+        user_id: user_id,
+        queue: "runtime_provider_account",
+        dedupe_key: "periodic-finalizer-dependency-discovery:#{account.id}",
+        payload: %{"account_id" => account.id, "role" => "discovery"}
+      })
+
+    {:ok, finalizer_job} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery_finalize", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key: "periodic-finalizer-dependency-finalizer:#{account.id}",
+        payload: %{
+          "account_id" => account.id,
+          "acquisition_job_id" => discovery_job.id,
+          "reason_job_ids" => [Ecto.UUID.generate()]
+        }
+      })
+
+    discovery_job =
+      discovery_job
+      |> BackgroundJob.changeset(%{
+        status: "completed",
+        completed_at: DateTime.utc_now(),
+        result: %{
+          "outcome" => "fanout_ready",
+          "finalizer_job_id" => finalizer_job.id
+        }
+      })
+      |> Repo.update!()
+
+    closure_job = %BackgroundJob{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      queue: "runtime_provider_account",
+      job_type: "runtime_partition:source_account_closure_acquire",
+      payload: %{
+        "account_id" => account.id,
+        "discovery_job_id" => discovery_job.id,
+        "role" => "closure"
+      }
+    }
+
+    assert {:ok, %{outcome: "waiting_for_discovery", dependency_stage: "finalizer"},
+            {:reschedule_in, 10_000}} = PeriodicJobs.execute(closure_job)
+
+    finalizer_job
+    |> Ecto.Changeset.change(status: "completed", completed_at: DateTime.utc_now())
+    |> Repo.update!()
+
+    account
+    |> Ecto.Changeset.change(status: "disconnected")
+    |> Repo.update!()
+
+    assert {:ok, %{outcome: "skipped", reason: :account_not_connected}} =
+             PeriodicJobs.execute(closure_job)
+  end
+
   test "provider coordinator creates a stable account-partitioned refresh row" do
     user_id = "periodic-provider-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -434,7 +545,7 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
              PeriodicJobs.schedule("source_account_discovery")
   end
 
-  test "completion coordinator fans out one durable closure job per source account" do
+  test "completion coordinator fans out paired discovery and closure jobs per source account" do
     user_id = "periodic-closure-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
@@ -474,10 +585,18 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
         )
       )
 
+    discovery_job =
+      Repo.one!(
+        from(job in BackgroundJob,
+          where: job.job_type == "runtime_partition:source_account_discovery"
+        )
+      )
+
     assert job.queue == "runtime_provider_account"
     assert job.user_id == user_id
     assert job.payload["account_id"] == account.id
     assert job.payload["role"] == "closure"
+    assert job.payload["discovery_job_id"] == discovery_job.id
     assert job.rate_limit_key == "google"
     assert String.starts_with?(job.partition_key, "provider-account:")
     refute String.contains?(job.partition_key, user_id)

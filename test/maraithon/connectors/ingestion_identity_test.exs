@@ -1,7 +1,8 @@
 defmodule Maraithon.Connectors.IngestionIdentityTest do
   use Maraithon.DataCase, async: false
 
-  import Plug.Conn
+  import Ecto.Query
+  import Plug.Conn, only: [put_req_header: 3]
 
   alias Maraithon.Accounts
   alias Maraithon.Agents
@@ -103,22 +104,87 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
         status: "running"
       })
 
+    full_text = String.duplicate("context ", 1_100) <> "ACTION REQUIRED after character 8000"
+
     params = %{
       "type" => "event_callback",
       "team_id" => team_id,
+      "authorizations" => [%{"user_id" => sender_id, "is_bot" => false}],
       "event" => %{
         "type" => "message",
         "channel" => "C123",
         "user" => sender_id,
-        "text" => "A bounded regression-test message",
+        "text" => full_text,
         "ts" => "1787069800.000001"
       }
     }
 
     assert {:ok, _topic, _event} = Slack.handle_webhook(Plug.Test.conn(:post, "/"), params)
 
-    assert %Observation{direction: "outbound"} =
+    assert %Observation{direction: "outbound", excerpt: excerpt, metadata: metadata} =
              Repo.get_by(Observation, user_id: user_id, source: "slack")
+
+    assert String.length(excerpt) <= 8_000
+    assert String.length(excerpt) >= 7_900
+    assert metadata["text"] == full_text
+    assert String.ends_with?(metadata["text"], "ACTION REQUIRED after character 8000")
+
+    changed_params = %{
+      "type" => "event_callback",
+      "team_id" => team_id,
+      "event_id" => "Ev-edited-#{System.unique_integer([:positive])}",
+      "authorizations" => [%{"user_id" => sender_id, "is_bot" => false}],
+      "event" => %{
+        "type" => "message",
+        "subtype" => "message_changed",
+        "channel" => "C123",
+        "event_ts" => "1787069801.000002",
+        "message" => %{
+          "user" => sender_id,
+          "text" => "Edited to add an actionable request",
+          "ts" => "1787069800.000001"
+        }
+      }
+    }
+
+    assert {:ok, _topic, _event} =
+             Slack.handle_webhook(Plug.Test.conn(:post, "/"), changed_params)
+
+    reaction_params = %{
+      "type" => "event_callback",
+      "team_id" => team_id,
+      "event_id" => "Ev-reaction-#{System.unique_integer([:positive])}",
+      "authorizations" => [%{"user_id" => sender_id, "is_bot" => false}],
+      "event" => %{
+        "type" => "reaction_added",
+        "user" => sender_id,
+        "reaction" => "white_check_mark",
+        "event_ts" => "1787069802.000003",
+        "item" => %{"type" => "message", "channel" => "C123", "ts" => "1787069800.000001"}
+      }
+    }
+
+    assert {:ok, _topic, _event} =
+             Slack.handle_webhook(Plug.Test.conn(:post, "/"), reaction_params)
+
+    observations =
+      Repo.all(
+        from(observation in Observation,
+          where: observation.user_id == ^user_id and observation.source == "slack"
+        )
+      )
+
+    assert Enum.any?(observations, fn observation ->
+             observation.metadata["event_type"] == "message_changed" and
+               observation.metadata["target_ts"] == "1787069800.000001" and
+               observation.metadata["text"] == "Edited to add an actionable request"
+           end)
+
+    assert Enum.any?(observations, fn observation ->
+             observation.metadata["event_type"] == "reaction_added" and
+               observation.metadata["target_ts"] == "1787069800.000001" and
+               observation.metadata["text"] =~ "white_check_mark"
+           end)
 
     discovery_job = find_job(user_id, "runtime_partition:source_account_discovery")
     assert discovery_job.payload["agent_id"] == agent.id
@@ -131,24 +197,23 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
              )
   end
 
-  test "Slack webhook durably fans one workspace event out to every connected user" do
+  test "Slack webhook persists a private event only for its authorized account" do
     team_id = "T#{System.unique_integer([:positive])}"
     sender_id = "U#{System.unique_integer([:positive])}"
-    user_ids = [unique_email("slack-shared-a"), unique_email("slack-shared-b")]
+    authorized_user_id = unique_email("slack-authorized")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(authorized_user_id)
 
-    Enum.each(user_ids, fn user_id ->
-      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
-
-      {:ok, _token} =
-        OAuth.store_tokens(user_id, "slack:#{team_id}", %{
-          access_token: "slack-token",
-          metadata: %{"team_id" => team_id, "authed_user_id" => "SELF-#{user_id}"}
-        })
-    end)
+    {:ok, _token} =
+      OAuth.store_tokens(authorized_user_id, "slack:#{team_id}", %{
+        access_token: "slack-token",
+        metadata: %{"team_id" => team_id, "authed_user_id" => "U-AUTHORIZED"}
+      })
 
     params = %{
       "type" => "event_callback",
       "team_id" => team_id,
+      "event_context" => "EC-PRIVATE-AUTHORIZED",
+      "authorizations" => [%{"user_id" => "U-AUTHORIZED", "is_bot" => false}],
       "event" => %{
         "type" => "message",
         "channel" => "D123",
@@ -162,17 +227,95 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
     assert {:ok, topic, _event} = Slack.handle_webhook(Plug.Test.conn(:post, "/"), params)
     assert topic == "slack:#{team_id}:dm:#{sender_id}"
 
-    Enum.each(user_ids, fn user_id ->
-      assert %Observation{metadata: metadata, excerpt: "A fresh reply on an old thread"} =
-               Repo.get_by(Observation,
-                 user_id: user_id,
-                 source: "slack",
-                 source_item_id: "#{team_id}:D123:1787069801.000002"
-               )
+    assert %Observation{metadata: metadata, excerpt: "A fresh reply on an old thread"} =
+             Repo.get_by(Observation,
+               user_id: authorized_user_id,
+               source: "slack",
+               source_item_id: "#{team_id}:D123:1787069801.000002"
+             )
 
-      assert metadata["thread_ts"] == "1700000000.000001"
-      assert find_job(user_id, "runtime_partition:source_account_discovery")
-    end)
+    assert metadata["thread_ts"] == "1700000000.000001"
+    assert find_job(authorized_user_id, "runtime_partition:source_account_discovery")
+  end
+
+  test "Slack webhook fails closed when a workspace has multiple installations" do
+    team_id = "T#{System.unique_integer([:positive])}"
+    first_user_id = unique_email("slack-full-auth-first")
+    second_user_id = unique_email("slack-full-auth-second")
+
+    Enum.each(
+      [{first_user_id, "U-FIRST"}, {second_user_id, "U-SECOND"}],
+      fn {user_id, slack_user_id} ->
+        {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+        {:ok, _token} =
+          OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+            access_token: "slack-token",
+            metadata: %{"team_id" => team_id, "authed_user_id" => slack_user_id}
+          })
+      end
+    )
+
+    params = %{
+      "type" => "event_callback",
+      "team_id" => team_id,
+      "event_context" => "EC-FULL-AUTHORIZATION-FANOUT",
+      "authorizations" => [%{"user_id" => "U-FIRST", "is_bot" => false}],
+      "event" => %{
+        "type" => "message",
+        "channel" => "C-SHARED",
+        "user" => "U-SENDER",
+        "text" => "Visible to both connected installations",
+        "ts" => "1787069802.000004"
+      }
+    }
+
+    assert {:error,
+            {:slack_message_persistence_failed, :slack_event_authorization_expansion_required}} =
+             Slack.handle_webhook(Plug.Test.conn(:post, "/"), params)
+
+    for user_id <- [first_user_id, second_user_id] do
+      refute Repo.get_by(Observation,
+               user_id: user_id,
+               source: "slack",
+               source_item_id: "#{team_id}:C-SHARED:1787069802.000004"
+             )
+    end
+  end
+
+  test "Slack webhook rejects an explicit authorization mismatch for one installation" do
+    team_id = "T#{System.unique_integer([:positive])}"
+    user_id = unique_email("slack-authorization-mismatch")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+        access_token: "slack-token",
+        metadata: %{"team_id" => team_id, "authed_user_id" => "U-CONNECTED"}
+      })
+
+    params = %{
+      "type" => "event_callback",
+      "team_id" => team_id,
+      "authorizations" => [%{"user_id" => "U-DIFFERENT", "is_bot" => false}],
+      "event" => %{
+        "type" => "message",
+        "channel" => "D-MISMATCH",
+        "user" => "U-SENDER",
+        "text" => "Private mismatch",
+        "ts" => "1787069803.000005"
+      }
+    }
+
+    assert {:error,
+            {:slack_message_persistence_failed, :slack_event_account_authorization_mismatch}} =
+             Slack.handle_webhook(Plug.Test.conn(:post, "/"), params)
+
+    refute Repo.get_by(Observation,
+             user_id: user_id,
+             source: "slack",
+             source_item_id: "#{team_id}:D-MISMATCH:1787069803.000005"
+           )
   end
 
   defp find_job(user_id, job_type) do

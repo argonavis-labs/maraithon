@@ -10,6 +10,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   same safe defaults without requiring a long-lived Agent row.
   """
 
+  import Ecto.Query
+
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Agents.Agent
   alias Maraithon.BoundedJSON
@@ -18,15 +20,20 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.DurablePayload
   alias Maraithon.PromptBudget
+  alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Todos
+  alias Maraithon.Todos.Todo
 
   @handoff_item_limit 5
   @handoff_binary_chunk_bytes 96_000
   @handoff_max_encoded_source_bundle_bytes 2_000_000
   @handoff_max_restored_binary_bytes 5_000_000
   @handoff_max_restored_bytes 10_000_000
-  @candidate_source_record_max_bytes 2_000
+  @candidate_source_record_max_bytes 5_000
+  @candidate_summary_max_bytes 2_400
+  @candidate_current_text_max_bytes 1_800
+  @candidate_context_text_max_bytes 400
   @bounded_binary_marker "__maraithon_bounded_binary_v1__"
   @bounded_source_bundle_marker "__maraithon_bounded_source_bundle_v1__"
   @allowed_watermark_kinds ~w(gmail_discovery_watermark slack_discovery_watermark)
@@ -64,15 +71,17 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
          {:ok, handoffs} <-
            build_handoffs(partitions, account, agent, Keyword.get(opts, :acquisition_job_id)) do
       if source_items == 0 do
-        with :ok <- advance_watermarks(account, watermarks) do
+        with {:ok, watermark_result} <- settle_watermarks(account, watermarks, opts) do
           {:ok,
-           %{
-             outcome: "empty_delta",
-             account_id: account.id,
-             source_items: 0,
-             model_calls: 0,
-             advanced_watermarks: length(watermarks)
-           }}
+           Map.merge(
+             %{
+               outcome: "empty_delta",
+               account_id: account.id,
+               source_items: 0,
+               model_calls: 0
+             },
+             watermark_result
+           )}
         end
       else
         fanout_count = length(handoffs)
@@ -156,11 +165,11 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   @doc "Advances a discovery cursor only after all child partitions prove exact decisions."
-  def finalize(account, agent, payload, child_results)
+  def finalize(account, agent, payload, child_results, opts \\ [])
 
-  def finalize(%ConnectedAccount{} = account, agent, payload, child_results)
+  def finalize(%ConnectedAccount{} = account, agent, payload, child_results, opts)
       when (is_nil(agent) or is_struct(agent, Agent)) and is_map(payload) and
-             is_list(child_results) do
+             is_list(child_results) and is_list(opts) do
     with :ok <- validate_ownership(account, agent),
          :ok <- validate_payload_identity(account, agent, payload),
          {:ok, watermarks} <- fetch_list(payload, "watermarks"),
@@ -173,22 +182,25 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
            read_string(payload, "expected_source_refs_digest"),
          :ok <-
            validate_child_results(
+             account,
              child_results,
              expected_fanouts,
              expected_source_items,
              expected_source_refs_digest
            ),
-         :ok <- advance_watermarks(account, watermarks) do
+         {:ok, watermark_result} <- settle_watermarks(account, watermarks, opts) do
       {:ok,
-       %{
-         outcome: "finalized",
-         account_id: account.id,
-         fanout_count: expected_fanouts,
-         source_items: expected_source_items,
-         decision_count: expected_source_items,
-         model_calls: Enum.sum(Enum.map(child_results, &result_integer(&1, "model_calls"))),
-         advanced_watermarks: length(watermarks)
-       }}
+       Map.merge(
+         %{
+           outcome: "finalized",
+           account_id: account.id,
+           fanout_count: expected_fanouts,
+           source_items: expected_source_items,
+           decision_count: expected_source_items,
+           model_calls: Enum.sum(Enum.map(child_results, &result_integer(&1, "model_calls")))
+         },
+         watermark_result
+       )}
     else
       {:error, _reason} = error -> error
       _other -> {:error, :invalid_source_discovery_finalizer}
@@ -199,7 +211,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
 
-  def finalize(_account, _agent, _payload, _child_results),
+  def finalize(_account, _agent, _payload, _child_results, _opts),
     do: {:error, :invalid_source_discovery_finalizer}
 
   @doc false
@@ -482,7 +494,15 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
          indexes <- decisions |> Enum.map(&Map.get(&1, :candidate_index)) |> Enum.sort(),
          true <- indexes == Enum.to_list(0..(length(candidates) - 1)),
          decision_refs <- Enum.map(decisions, &Enum.at(source_refs, &1.candidate_index)),
-         true <- Enum.sort(decision_refs) == Enum.sort(source_refs) do
+         true <- Enum.sort(decision_refs) == Enum.sort(source_refs),
+         decision_manifest <-
+           Enum.map(decisions, fn decision ->
+             %{
+               source_ref: Enum.at(source_refs, decision.candidate_index),
+               action: decision.action,
+               persisted_todo_id: Map.get(decision, :persisted_todo_id)
+             }
+           end) do
       {:ok,
        %{
          outcome: "evaluated",
@@ -490,7 +510,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
          todo_count: length(Map.get(result, :todos, [])),
          skipped_count: Map.get(result, :skipped_count, 0),
          decision_count: length(decisions),
-         decision_refs: decision_refs
+         decision_refs: decision_refs,
+         decision_manifest: decision_manifest
        }}
     else
       {:error, _reason} = error -> error
@@ -540,12 +561,16 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       read_string(item, "body_text") || read_string(item, "text_body") ||
         read_string(item, "body") || read_string(item, "html_body")
 
+    thread_context = gmail_thread_context(item)
+
     evidence =
       item
       |> candidate_fields(
-        ~w(id message_id thread_id google_provider subject from to cc snippet labels label_ids internal_date date body_available body_status)
+        ~w(id message_id thread_id google_provider subject from to cc snippet labels label_ids internal_date date body_available body_status thread_context_complete thread_context_frontier)
       )
       |> put_candidate_size("body", body)
+      |> Map.put("body_excerpt", head_tail_excerpt(body, 2_000))
+      |> Map.put("thread_context", thread_context)
 
     PromptBudget.project_fields(
       evidence,
@@ -566,10 +591,14 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         {"body_status", 80},
         {"body_bytes", 32},
         {"body_truncated", 8},
-        {"snippet", 800}
+        {"body_excerpt", 2_200},
+        {"snippet", 800},
+        {"thread_context_complete", 8},
+        {"thread_context_frontier", 32},
+        {"thread_context", 1_000}
       ],
       @candidate_source_record_max_bytes,
-      string_bytes: 800,
+      string_bytes: 2_200,
       list_items: 12,
       map_entries: 32,
       max_depth: 4,
@@ -580,12 +609,25 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp candidate_source_record(%{source: :slack, item: item}) do
     text = read_string(item, "text_resolved") || read_string(item, "text")
 
+    thread_context =
+      item
+      |> Map.get("thread_context", [])
+      |> Enum.map(fn message ->
+        %{
+          "ts" => read_string(message, "ts"),
+          "user" => read_string(message, "user_display_name") || read_string(message, "user"),
+          "text" => read_string(message, "text_resolved") || read_string(message, "text")
+        }
+      end)
+
     evidence =
       item
       |> candidate_fields(
-        ~w(team_id channel_id channel_name conversation_kind is_dm is_mpim ts thread_ts user user_display_name user_name counterparty_id counterparty_display_name bot_id subtype permalink date)
+        ~w(team_id channel_id channel_name conversation_kind is_dm is_mpim ts thread_ts target_ts provider_event_id user user_display_name user_name counterparty_id counterparty_display_name bot_id subtype permalink date thread_context_complete thread_context_frontier)
       )
       |> put_candidate_size("text", text)
+      |> Map.put("text_excerpt", head_tail_excerpt(text, 2_000))
+      |> Map.put("thread_context", thread_context)
 
     PromptBudget.project_fields(
       evidence,
@@ -598,6 +640,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         {"is_mpim", 8},
         {"ts", 128},
         {"thread_ts", 128},
+        {"target_ts", 128},
+        {"provider_event_id", 256},
         {"user", 256},
         {"user_display_name", 300},
         {"user_name", 300},
@@ -607,16 +651,43 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         {"subtype", 80},
         {"text_bytes", 32},
         {"text_truncated", 8},
+        {"text_excerpt", 2_200},
         {"permalink", 500},
-        {"date", 80}
+        {"date", 80},
+        {"thread_context_complete", 8},
+        {"thread_context_frontier", 128},
+        {"thread_context", 1_600}
       ],
       @candidate_source_record_max_bytes,
-      string_bytes: 1_000,
+      string_bytes: 2_200,
       list_items: 12,
       map_entries: 32,
       max_depth: 4,
       key_bytes: 255
     ) || %{}
+  end
+
+  defp gmail_thread_context(item) do
+    item
+    |> Map.get("thread_context", [])
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(fn message ->
+      body =
+        read_string(message, "body_text") || read_string(message, "text_body") ||
+          read_string(message, "body") || read_string(message, "snippet") ||
+          read_string(message, "html_body")
+
+      %{
+        "message_id" => read_string(message, "message_id") || read_string(message, "id"),
+        "from" => read_string(message, "from"),
+        "to" => Map.get(message, "to"),
+        "subject" => read_string(message, "subject"),
+        "internal_date" => Map.get(message, "internal_date", Map.get(message, "date")),
+        "body" => body
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+    end)
   end
 
   defp candidate_fields(item, keys) do
@@ -644,17 +715,77 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       read_string(item, "channel_name") || read_string(item, "channel_id") || "New Slack message"
 
   defp candidate_summary(%{source: :gmail, item: item}) do
-    (read_string(item, "body_text") || read_string(item, "text_body") ||
-       read_string(item, "body") || read_string(item, "snippet") || "Gmail message")
+    current =
+      read_string(item, "body_text") || read_string(item, "text_body") ||
+        read_string(item, "body") || read_string(item, "snippet") || "Gmail message"
+
+    context =
+      item
+      |> gmail_thread_context()
+      |> Enum.map(fn message ->
+        sender = read_string(message, "from") || "Someone"
+        body = read_string(message, "body")
+        if body, do: "#{sender}: #{head_tail_excerpt(body, @candidate_context_text_max_bytes)}"
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+      |> head_tail_excerpt(600)
+
+    [head_tail_excerpt(current, @candidate_current_text_max_bytes), context]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\nEarlier thread context:\n")
     |> candidate_excerpt()
   end
 
   defp candidate_summary(%{source: :slack, item: item}) do
-    (read_string(item, "text_resolved") || read_string(item, "text") || "Slack message")
+    current = read_string(item, "text_resolved") || read_string(item, "text") || "Slack message"
+
+    context =
+      item
+      |> Map.get("thread_context", [])
+      |> Enum.map(fn message ->
+        sender =
+          read_string(message, "user_display_name") || read_string(message, "user") || "Someone"
+
+        text = read_string(message, "text_resolved") || read_string(message, "text")
+        if text, do: "#{sender}: #{head_tail_excerpt(text, @candidate_context_text_max_bytes)}"
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+      |> head_tail_excerpt(600)
+
+    [head_tail_excerpt(current, @candidate_current_text_max_bytes), context]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\nThread context:\n")
     |> candidate_excerpt()
   end
 
-  defp candidate_excerpt(value), do: PromptBudget.truncate_utf8(value, 1_000)
+  defp candidate_excerpt(value), do: head_tail_excerpt(value, @candidate_summary_max_bytes)
+
+  defp head_tail_excerpt(nil, _max_bytes), do: nil
+
+  defp head_tail_excerpt(value, max_bytes)
+       when is_binary(value) and is_integer(max_bytes) and max_bytes >= 0 do
+    marker = "\n… [middle omitted] …\n"
+
+    if byte_size(value) <= max_bytes or max_bytes <= byte_size(marker) do
+      PromptBudget.truncate_utf8(value, max_bytes)
+    else
+      content_bytes = max_bytes - byte_size(marker)
+      head_bytes = div(content_bytes, 2)
+      tail_bytes = content_bytes - head_bytes
+      tail_offset = max(byte_size(value) - tail_bytes, 0)
+
+      head = PromptBudget.truncate_utf8(value, head_bytes)
+
+      tail =
+        value
+        |> binary_part(tail_offset, byte_size(value) - tail_offset)
+        |> PromptBudget.truncate_utf8(tail_bytes)
+
+      head <> marker <> tail
+    end
+  end
 
   defp source_item_id(%{source: :gmail, item: item}),
     do: read_string(item, "message_id") || read_string(item, "id")
@@ -1216,6 +1347,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp maybe_put_role(roles, _role, false), do: roles
 
   defp validate_child_results(
+         account,
          child_results,
          expected_fanouts,
          expected_source_items,
@@ -1229,12 +1361,19 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     decision_count = Enum.sum(Enum.map(child_results, &result_integer(&1, "decision_count")))
     source_items = Enum.sum(Enum.map(child_results, &result_integer(&1, "source_items")))
     decision_refs = Enum.flat_map(child_results, &result_string_list(&1, "decision_refs"))
+    decision_manifest = Enum.flat_map(child_results, &result_list(&1, "decision_manifest"))
 
     if length(child_results) == expected_fanouts and indexes == Enum.to_list(1..expected_fanouts) and
          decision_count == expected_source_items and source_items == expected_source_items and
          length(decision_refs) == expected_source_items and
          length(Enum.uniq(decision_refs)) == expected_source_items and
-         refs_digest(decision_refs) == expected_source_refs_digest do
+         refs_digest(decision_refs) == expected_source_refs_digest and
+         valid_discovery_decision_manifest?(
+           account,
+           decision_manifest,
+           decision_refs,
+           expected_source_refs_digest
+         ) do
       :ok
     else
       {:error, :source_discovery_incomplete_decisions}
@@ -1258,6 +1397,95 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp result_string_list(_result, _key), do: []
+
+  defp result_list(result, key) when is_map(result) do
+    case Map.get(result, key, Map.get(result, existing_atom(key), [])) do
+      values when is_list(values) -> values
+      _other -> []
+    end
+  end
+
+  defp result_list(_result, _key), do: []
+
+  defp valid_discovery_decision_manifest?(
+         %ConnectedAccount{} = account,
+         manifest,
+         decision_refs,
+         expected_source_refs_digest
+       )
+       when is_list(manifest) do
+    manifest_refs = Enum.map(manifest, &manifest_string(&1, "source_ref"))
+
+    persisted_todo_ids =
+      manifest
+      |> Enum.flat_map(fn entry ->
+        case {manifest_action(entry), manifest_string(entry, "persisted_todo_id")} do
+          {action, todo_id} when action in ["create", "update"] and is_binary(todo_id) ->
+            [todo_id]
+
+          _other ->
+            []
+        end
+      end)
+      |> Enum.uniq()
+
+    length(manifest) == length(decision_refs) and
+      Enum.all?(manifest, &valid_discovery_decision_entry?/1) and
+      Enum.sort(manifest_refs) == Enum.sort(decision_refs) and
+      refs_digest(manifest_refs) == expected_source_refs_digest and
+      persisted_todos_exist?(account, persisted_todo_ids)
+  end
+
+  defp valid_discovery_decision_manifest?(_account, _manifest, _decision_refs, _digest),
+    do: false
+
+  defp valid_discovery_decision_entry?(entry) when is_map(entry) do
+    source_ref = manifest_string(entry, "source_ref")
+    action = manifest_action(entry)
+    persisted_todo_id = manifest_string(entry, "persisted_todo_id")
+
+    is_binary(source_ref) and action in ["create", "update", "skip"] and
+      if(action == "skip",
+        do: is_nil(persisted_todo_id),
+        else: is_binary(persisted_todo_id)
+      )
+  end
+
+  defp valid_discovery_decision_entry?(_entry), do: false
+
+  defp manifest_action(entry) when is_map(entry) do
+    case Map.get(entry, "action", Map.get(entry, :action)) do
+      action when action in ["create", "update", "skip"] -> action
+      action when action in [:create, :update, :skip] -> Atom.to_string(action)
+      _other -> nil
+    end
+  end
+
+  defp manifest_action(_entry), do: nil
+
+  defp manifest_string(entry, key) when is_map(entry) do
+    case Map.get(entry, key, Map.get(entry, existing_atom(key))) do
+      value when is_binary(value) and value != "" -> value
+      _other -> nil
+    end
+  end
+
+  defp manifest_string(_entry, _key), do: nil
+
+  defp persisted_todos_exist?(_account, []), do: true
+
+  defp persisted_todos_exist?(account, todo_ids) do
+    count =
+      Todo
+      |> where(
+        [todo],
+        todo.id in ^todo_ids and todo.user_id == ^account.user_id and
+          todo.source_account_id == ^account.id
+      )
+      |> Repo.aggregate(:count, :id)
+
+    count == length(todo_ids)
+  end
 
   defp encoded_bytes(value) do
     case Jason.encode(value) do
@@ -1306,6 +1534,17 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         _other -> {:halt, {:error, :invalid_source_discovery_watermark}}
       end
     end)
+  end
+
+  defp settle_watermarks(account, watermarks, opts)
+       when is_list(watermarks) and is_list(opts) do
+    if Keyword.get(opts, :defer_watermark_commit, false) do
+      {:ok, %{advanced_watermarks: 0, deferred_watermarks: watermarks}}
+    else
+      with :ok <- advance_watermarks(account, watermarks) do
+        {:ok, %{advanced_watermarks: length(watermarks)}}
+      end
+    end
   end
 
   defp validate_ownership(%ConnectedAccount{user_id: user_id}, %Agent{user_id: user_id}), do: :ok

@@ -11,7 +11,7 @@ defmodule Maraithon.Runtime.SourceFanoutAuditTest do
 
   @discovery_acquire "runtime_partition:source_account_discovery"
 
-  test "a later exact cycle supersedes an older failed cycle" do
+  test "a later exact cycle restores health while retaining the older failure diagnostic" do
     now = ~U[2026-08-30 17:30:00Z]
     account = discovery_account("recovered")
 
@@ -20,7 +20,8 @@ defmodule Maraithon.Runtime.SourceFanoutAuditTest do
     insert_acquisition(account, "completed", DateTime.add(now, -600, :second), %{
       "outcome" => "empty_delta",
       "source_items" => 0,
-      "model_calls" => 0
+      "model_calls" => 0,
+      "advanced_watermarks" => 1
     })
 
     audit =
@@ -36,17 +37,23 @@ defmodule Maraithon.Runtime.SourceFanoutAuditTest do
     assert audit.discovery.current_cycles == 1
     assert audit.discovery.current_exact_cycles == 1
     assert audit.discovery.missing_account_ids == []
-    assert audit.discovery.failures == []
+    assert audit.discovery.current_failures == []
+
+    assert [%{account_id: account_id, errors: ["acquisition_not_completed"]}] =
+             audit.discovery.failures
+
+    assert account_id == account.id
   end
 
-  test "an active retry is visible without being reported as a terminal cycle failure" do
+  test "an active retry past the settlement grace is unhealthy" do
     now = ~U[2026-08-30 17:30:00Z]
     account = discovery_account("retrying")
 
     insert_acquisition(account, "completed", DateTime.add(now, -900, :second), %{
       "outcome" => "empty_delta",
       "source_items" => 0,
-      "model_calls" => 0
+      "model_calls" => 0,
+      "advanced_watermarks" => 1
     })
 
     insert_acquisition(
@@ -64,9 +71,10 @@ defmodule Maraithon.Runtime.SourceFanoutAuditTest do
         settlement_grace_seconds: 0
       )
 
-    assert audit.healthy?
-    assert audit.error_codes == %{}
+    refute audit.healthy?
+    assert audit.error_codes == %{"stalled_cycle" => 1}
     assert audit.in_flight_cycles == 1
+    assert audit.stalled_cycles == 1
     assert audit.activity.active_retry_rows == 1
     assert audit.activity.every_fanout_visible?
     assert audit.discovery.cycles == 1
@@ -80,7 +88,8 @@ defmodule Maraithon.Runtime.SourceFanoutAuditTest do
     insert_acquisition(account, "completed", DateTime.add(now, -900, :second), %{
       "outcome" => "empty_delta",
       "source_items" => 0,
-      "model_calls" => 0
+      "model_calls" => 0,
+      "advanced_watermarks" => 1
     })
 
     insert_acquisition(account, "failed", DateTime.add(now, -600, :second), %{}, attempts: 5)

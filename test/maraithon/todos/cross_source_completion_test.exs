@@ -55,6 +55,16 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
     Jason.decode!(captures["json"])
   end
 
+  defp exact_recent_activity(prompt) do
+    captures =
+      Regex.named_captures(
+        ~r/RECENT_ACTIVITY_JSON \(current time [^)]+\):\n(?<json>\[.*?\])\n\nThis is an exact closure sweep/s,
+        prompt
+      )
+
+    Jason.decode!(captures["json"])
+  end
+
   test "an empty complete account delta makes no model call" do
     user_id = unique_user!()
     now = ~U[2099-06-27 14:00:00Z]
@@ -131,7 +141,7 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
                 "name" => "growthcrew-x-runner",
                 "messages" => [
                   %{
-                    "ts" => "4085845393.717109",
+                    "ts" => "4085845400.900001",
                     "thread_ts" => "4085845393.717109",
                     "user" => "U-benji",
                     "text" =>
@@ -154,6 +164,7 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
       assert prompt =~ "Create Luma event for Real Estate Webinar"
       assert prompt =~ "early signs of something worthwhile with the Luma thing"
       assert prompt =~ "evt-real-estate/guests"
+      assert prompt =~ ~s("target_source_item_id":"C-growth:4085845393.717109")
 
       {:ok,
        %{
@@ -1175,5 +1186,352 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
     updated = Todos.get_for_user(user_id, todo.id)
     assert updated.status == "open"
     assert %DateTime{} = updated.next_nudge_at
+  end
+
+  test "exact oversized Gmail and Slack evidence evaluates every todo against every lossless chunk" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-20 12:00:00Z]
+    slack_ts = "#{DateTime.to_unix(now)}.000001"
+    gmail_provider = "google:gmail:exact-large"
+    gmail_ref = "gmail:#{gmail_provider}:gmail-large"
+    slack_ref = "slack:T-large:C-large:#{slack_ts}"
+    gmail_proof = "GMAIL COMPLETION PROOF"
+    slack_proof = "SLACK COMPLETION PROOF"
+
+    gmail_text = String.duplicate("gmail-évidence-🔥 ", 6_000) <> gmail_proof
+    slack_text = String.duplicate("slack-context-🧵 ", 6_000) <> slack_proof
+
+    {:ok, [gmail_todo, slack_todo, unresolved_todo]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Finish the oversized Gmail work", source_at, %{
+          "source" => "gmail",
+          "source_item_id" => "gmail-large"
+        }),
+        open_todo_attrs("Finish the oversized Slack work", source_at, %{
+          "source" => "slack",
+          "source_item_id" => "C-large:#{slack_ts}"
+        }),
+        open_todo_attrs("Keep unresolved work open", source_at, %{
+          "source" => "gmail",
+          "source_item_id" => "unrelated-source-item"
+        })
+      ])
+
+    gmail_message = %{
+      "message_id" => "gmail-large",
+      "thread_id" => "gmail-thread-large",
+      "google_provider" => gmail_provider,
+      "subject" => "Oversized Gmail evidence",
+      "body_text" => gmail_text,
+      "internal_date" => now,
+      "labels" => ["INBOX"]
+    }
+
+    source_bundle =
+      %{timestamp: now, trigger: %{type: :wakeup}}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "status" => "ready",
+        "fetched_at" => now,
+        "messages" => [gmail_message],
+        "inbox_messages" => [gmail_message],
+        "sent_messages" => []
+      })
+      |> SourceBundle.put_slack(%{
+        "status" => "ready",
+        "fetched_at" => now,
+        "workspaces" => [
+          %{
+            "team_id" => "T-large",
+            "channels" => [
+              %{
+                "id" => "C-large",
+                "name" => "large-evidence",
+                "messages" => [
+                  %{
+                    "ts" => slack_ts,
+                    "user" => "U-counterparty",
+                    "text" => slack_text
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      })
+
+    test_pid = self()
+
+    llm_complete = fn prompt ->
+      todos = open_work_items(prompt)
+      activity = exact_recent_activity(prompt)
+      send(test_pid, {:exact_chunk, todos, activity})
+
+      gmail_proven? = Enum.any?(activity, &String.contains?(&1["text"] || "", gmail_proof))
+      slack_proven? = Enum.any?(activity, &String.contains?(&1["text"] || "", slack_proof))
+
+      resolutions =
+        Enum.map(todos, fn todo ->
+          cond do
+            todo["todo_id"] == gmail_todo.id and gmail_proven? ->
+              %{
+                "todo_id" => gmail_todo.id,
+                "completed" => true,
+                "evidence_channel" => "gmail",
+                "evidence_quote" => gmail_proof,
+                "reasoning" => "The Gmail evidence proves completion.",
+                "confidence" => 0.99
+              }
+
+            todo["todo_id"] == slack_todo.id and slack_proven? ->
+              %{
+                "todo_id" => slack_todo.id,
+                "completed" => true,
+                "evidence_channel" => "slack",
+                "evidence_quote" => slack_proof,
+                "reasoning" => "The Slack evidence proves completion.",
+                "confidence" => 0.99
+              }
+
+            true ->
+              %{"todo_id" => todo["todo_id"], "completed" => false}
+          end
+        end)
+
+      {:ok, %{content: Jason.encode!(%{"resolutions" => resolutions})}}
+    end
+
+    assert %{checked: 3, completed: 2, model_calls: model_calls} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               exact_source_delta: true,
+               exhaustive_completion: true,
+               source_item_refs: [gmail_ref, slack_ref],
+               todo_ids: [gmail_todo.id, slack_todo.id, unresolved_todo.id],
+               llm_complete: llm_complete
+             )
+
+    assert model_calls > 1
+
+    chunks =
+      Enum.map(1..model_calls, fn _index ->
+        assert_receive {:exact_chunk, todos, activity}
+
+        assert Enum.sort(Enum.map(todos, & &1["todo_id"])) ==
+                 Enum.sort([gmail_todo.id, slack_todo.id, unresolved_todo.id])
+
+        activity
+      end)
+
+    observed_refs =
+      chunks
+      |> List.flatten()
+      |> Enum.map(& &1["source_ref"])
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    assert observed_refs == MapSet.new([gmail_ref, slack_ref])
+
+    reconstructed_gmail =
+      chunks
+      |> List.flatten()
+      |> Enum.filter(&(&1["source_ref"] == gmail_ref))
+      |> Enum.map_join(& &1["text"])
+
+    reconstructed_slack =
+      chunks
+      |> List.flatten()
+      |> Enum.filter(&(&1["source_ref"] == slack_ref))
+      |> Enum.map_join(& &1["text"])
+
+    assert reconstructed_gmail == gmail_text
+    assert reconstructed_slack == slack_text
+    assert String.valid?(reconstructed_gmail)
+    assert String.valid?(reconstructed_slack)
+    assert Todos.get_for_user(user_id, gmail_todo.id).status == "done"
+    assert Todos.get_for_user(user_id, slack_todo.id).status == "done"
+    assert Todos.get_for_user(user_id, unresolved_todo.id).status == "open"
+  end
+
+  test "exact Gmail closure can use historical thread context without treating it as a delta item" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-20 12:00:00Z]
+    provider = "google:gmail:thread-context"
+    delta_ref = "gmail:#{provider}:gmail-delta"
+    completion_proof = "The signed agreement is attached and the work is complete."
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Finish the agreement", source_at, %{
+          "source" => "gmail",
+          "source_item_id" => "agreement-thread"
+        })
+      ])
+
+    delta_message = %{
+      "message_id" => "gmail-delta",
+      "thread_id" => "agreement-thread",
+      "google_provider" => provider,
+      "subject" => "Re: agreement",
+      "body_text" => "Thanks for the update.",
+      "internal_date" => now,
+      "labels" => ["INBOX"],
+      "thread_context_complete" => true,
+      "thread_context" => [
+        %{
+          "message_id" => "gmail-history-only",
+          "thread_id" => "agreement-thread",
+          "from" => "Elena <elena@example.com>",
+          "body_text" => completion_proof,
+          "internal_date" => DateTime.add(now, -60, :second),
+          "labels" => ["INBOX"]
+        }
+      ]
+    }
+
+    source_bundle =
+      %{timestamp: now, trigger: %{type: :wakeup}}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "status" => "ready",
+        "fetched_at" => now,
+        "messages" => [delta_message],
+        "inbox_messages" => [delta_message],
+        "sent_messages" => []
+      })
+
+    llm_complete = fn prompt ->
+      activity =
+        prompt
+        |> exact_recent_activity()
+        |> Enum.find(&(&1["channel"] == "gmail"))
+
+      assert activity["source_ref"] == delta_ref
+      assert activity["text"] =~ "Thanks for the update."
+      assert activity["text"] =~ completion_proof
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "resolutions" => [
+               %{
+                 "todo_id" => todo.id,
+                 "completed" => true,
+                 "evidence_channel" => "gmail",
+                 "evidence_quote" => completion_proof,
+                 "reasoning" => "The earlier message in the hydrated thread proves completion.",
+                 "confidence" => 0.99
+               }
+             ]
+           })
+       }}
+    end
+
+    assert %{checked: 1, completed: 1, decision_refs: [todo_id]} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               exact_source_delta: true,
+               exhaustive_completion: true,
+               source_item_refs: [delta_ref],
+               todo_ids: [todo.id],
+               llm_complete: llm_complete
+             )
+
+    assert todo_id == todo.id
+    assert Todos.get_for_user(user_id, todo.id).status == "done"
+  end
+
+  test "exact evidence applies no early completion when a later chunk fails" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+    source_at = ~U[2099-06-20 12:00:00Z]
+    slack_ts = "#{DateTime.to_unix(now)}.000002"
+    slack_ref = "slack:T-fail-closed:C-fail-closed:#{slack_ts}"
+    completion_proof = "EARLY CHUNK COMPLETION PROOF"
+    oversized_text = completion_proof <> String.duplicate("🚧", 40_000)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Do not close before every evidence chunk settles", source_at, %{
+          "source" => "slack",
+          "source_item_id" => "C-fail-closed:#{slack_ts}"
+        })
+      ])
+
+    source_bundle =
+      %{timestamp: now, trigger: %{type: :wakeup}}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_slack(%{
+        "status" => "ready",
+        "fetched_at" => now,
+        "workspaces" => [
+          %{
+            "team_id" => "T-fail-closed",
+            "channels" => [
+              %{
+                "id" => "C-fail-closed",
+                "messages" => [
+                  %{"ts" => slack_ts, "user" => "U-proof", "text" => oversized_text}
+                ]
+              }
+            ]
+          }
+        ]
+      })
+
+    counter_key = {:exact_chunk_counter, make_ref()}
+    test_pid = self()
+
+    llm_complete = fn prompt ->
+      call = Process.get(counter_key, 0) + 1
+      Process.put(counter_key, call)
+      send(test_pid, {:exact_fail_closed_chunk, call})
+
+      if call == 1 do
+        assert Enum.any?(
+                 exact_recent_activity(prompt),
+                 &String.contains?(&1["text"] || "", completion_proof)
+               )
+
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "resolutions" => [
+                 %{
+                   "todo_id" => todo.id,
+                   "completed" => true,
+                   "evidence_channel" => "slack",
+                   "evidence_quote" => completion_proof,
+                   "reasoning" => "The first chunk proves completion.",
+                   "confidence" => 0.99
+                 }
+               ]
+             })
+         }}
+      else
+        {:error, :later_exact_chunk_failed}
+      end
+    end
+
+    assert {:error, :later_exact_chunk_failed} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               exact_source_delta: true,
+               exhaustive_completion: true,
+               source_item_refs: [slack_ref],
+               todo_ids: [todo.id],
+               llm_complete: llm_complete
+             )
+
+    assert_receive {:exact_fail_closed_chunk, 1}
+    assert_receive {:exact_fail_closed_chunk, 2}
+    assert Todos.get_for_user(user_id, todo.id).status == "open"
   end
 end
