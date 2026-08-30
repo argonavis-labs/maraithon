@@ -214,15 +214,15 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     job =
       Repo.one!(
         from(job in BackgroundJob,
-          where: job.job_type == "runtime_partition:source_account_closure"
+          where: job.job_type == "runtime_partition:source_account_closure_acquire"
         )
       )
 
-    assert job.queue == "runtime_model_user"
+    assert job.queue == "runtime_provider_account"
     assert job.user_id == user_id
     assert job.payload["account_id"] == account.id
     assert job.payload["role"] == "closure"
-    assert job.rate_limit_key == "model"
+    assert job.rate_limit_key == "google"
     assert String.starts_with?(job.partition_key, "provider-account:")
     refute String.contains?(job.partition_key, user_id)
 

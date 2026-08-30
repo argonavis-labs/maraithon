@@ -67,10 +67,19 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   def run_for_account(%ConnectedAccount{}, _opts), do: {:skip, :account_not_connected}
   def run_for_account(_account, _opts), do: {:error, :invalid_account}
 
+  @doc false
+  def acquire_account_delta(account, opts \\ [])
+
+  def acquire_account_delta(%ConnectedAccount{} = account, opts) when is_list(opts) do
+    acquire_account_delta(account, account_source_scope(account), opts)
+  end
+
+  def acquire_account_delta(_account, _opts), do: {:error, :invalid_account}
+
   defp acquire_account_delta(account, source_scope, opts) when is_list(opts) do
     cond do
       Keyword.has_key?(opts, :source_bundle) ->
-        {:ok, Keyword.get(opts, :source_bundle), []}
+        {:ok, Keyword.get(opts, :source_bundle), Keyword.get(opts, :proposed_watermarks, [])}
 
       Keyword.get(opts, :live_sources, true) == false ->
         {:ok, nil, []}

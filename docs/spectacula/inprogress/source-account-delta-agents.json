@@ -7,9 +7,9 @@
   "created_at": "2026-08-30T03:04:00Z",
   "approved_at": "2026-08-30T03:04:00Z",
   "started_at": "2026-08-30T03:04:00Z",
-  "updated_at": "2026-08-30T03:38:39Z",
-  "summary": "Implementation is active. Gmail sync completion and Slack message/mention ingress now wake the exact account immediately, while active-job dedupe collapses bursts and the one-minute schedule remains anti-entropy. Discovery uses a sealed provider-to-model delta handoff capped at one high-intelligence todo call; paired closure workers retain zero-model quiet cycles.",
-  "next_action": "Move closure acquisition to the sealed provider-to-model handoff, then prove production parity before ordinary Chief acquisition is cut over.",
+  "updated_at": "2026-08-30T03:43:10Z",
+  "summary": "Implementation is active. Gmail sync completion and Slack message/mention ingress wake the exact account immediately, while active-job dedupe collapses bursts and the one-minute schedule remains anti-entropy. Discovery and closure both use sealed provider-to-model delta handoffs; empty deltas cost zero model calls and non-empty reasoning remains account-scoped.",
+  "next_action": "Deploy the complete account-worker topology, prove production parity and runtime health, then cut ordinary Chief acquisition over to persisted results.",
   "blockers": [],
   "review_policy": {
     "final_vetting": "off"
@@ -28,12 +28,12 @@
     "tests": "passed",
     "spec_review": "pending",
     "final_vetting": "skipped",
-    "notes": "Plain spectacula invocation sets final_vetting off. Development and test compilation with warnings-as-errors pass; source-account/periodic tests pass, Gmail advisor passes 22/22, Gmail ingress handler passes 4/4, and the exact Slack ingress wake test passes. Two stale connector expectations encountered during verification were deliberately updated to assert the production query contract and redacted rate-limit error. Broad suites remain intentionally skipped under repository policy."
+    "notes": "Plain spectacula invocation sets final_vetting off. Development and test compilation with warnings-as-errors pass; source-account discovery, closure, completion, and periodic tests pass, Gmail advisor passes 22/22, Gmail ingress handler passes 4/4, and the exact Slack ingress wake test passes. Two stale connector expectations encountered during verification were deliberately updated to assert the production query contract and redacted rate-limit error. Broad suites remain intentionally skipped under repository policy."
   },
   "resume_context": {
-    "last_completed_step": "Connected Gmail incremental-sync completion and Slack message/mention ingress to the exact account discovery/closure wakeup path with durable active-job dedupe.",
+    "last_completed_step": "Moved account closure acquisition into the provider lane with a bounded encrypted model handoff, zero-model empty-delta settlement, and cursor advancement only after completion reasoning settles.",
     "pending_steps": [
-      "Move closure acquisition into the provider lane with a sealed model handoff.",
+      "Prove the account-worker topology and runtime health in production.",
       "Cut ordinary Chief cycles over to persisted account-worker results after production parity."
     ],
     "open_questions": [],
@@ -53,6 +53,7 @@
       "lib/maraithon/connectors/slack.ex",
       "lib/maraithon/runtime/background_job_handler.ex",
       "lib/maraithon/runtime/periodic_jobs.ex",
+      "lib/maraithon/runtime/source_account_closure.ex",
       "lib/maraithon/runtime/source_account_discovery.ex",
       "lib/maraithon/runtime/todo_completion_sweep.ex"
     ],
@@ -114,6 +115,13 @@
       "from_stage": "inprogress",
       "to_stage": "inprogress",
       "note": "Gmail incremental-sync completion and Slack message/mention ingress now wake the exact account workers immediately; burst events collapse through durable active-job dedupe and closure only wakes when account-scoped open work exists."
+    },
+    {
+      "at": "2026-08-30T03:43:10Z",
+      "event": "checkpoint",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Closure now acquires account deltas in the provider lane and seals non-empty bundles for model-lane completion; quiet cycles use zero model calls and cursors advance only after settled reasoning. Legacy direct closure jobs remain executable solely for revision-drain compatibility."
     }
   ]
 }

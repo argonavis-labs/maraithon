@@ -216,10 +216,11 @@ Implemented as of 2026-08-30:
 - One-minute discovery jobs fan out in `runtime_provider_account`, acquire only the discovery delta, and seal non-empty bounded bundles in encrypted durable payloads for `runtime_model_user`.
 - Discovery reasoning uses the existing Follow-through intelligence path, makes at most one todo-triage model call, defers secondary relationship learning, and advances only after the reasoning job settles its writes.
 - Gmail incremental-sync completion and Slack message/mention ingress wake the exact account immediately; active-job dedupe collapses bursts and the one-minute schedule remains anti-entropy.
+- Closure acquisition now runs in `runtime_provider_account`; empty deltas advance with zero model calls, while non-empty bounded deltas are sealed for account-scoped completion reasoning in `runtime_model_user`.
+- Closure cursors advance only after the model-side completion pass settles. The previous direct model job remains executable during revision drain, but no new work is scheduled through it.
 
 Still required for cutover:
 
-- move closure acquisition into the same provider-lane sealed-handoff pattern
 - prove production parity, then stop ordinary Chief cycles from repeating Gmail/Slack acquisition
 
 ## 14. Verification

@@ -24,6 +24,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.ProactiveCheckIn
   alias Maraithon.Runtime.StalenessTriageSweep
   alias Maraithon.Runtime.SourceAccountDiscovery
+  alias Maraithon.Runtime.SourceAccountClosure
   alias Maraithon.Runtime.TodoCompletionSweep
   alias Maraithon.Runtime.TokenRefresher
   alias Maraithon.Runtime.WatchRenewer
@@ -45,7 +46,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @source_discovery_job "runtime_partition:source_account_discovery"
   @source_discovery_reason_job "runtime_partition:source_account_discovery_reason"
   @todo_completion_job "runtime_partition:todo_completion"
+  @todo_account_closure_acquire_job "runtime_partition:source_account_closure_acquire"
   @todo_account_closure_job "runtime_partition:source_account_closure"
+  @todo_account_closure_reason_job "runtime_partition:source_account_closure_reason"
   @nudge_job "runtime_partition:nudge"
   @staleness_job "runtime_partition:staleness_triage"
   @todo_outcome_job "runtime_partition:todo_outcome_learning"
@@ -399,13 +402,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   defp enqueue_source_account_closure_job(account, now) do
-    BackgroundJobs.enqueue(@todo_account_closure_job, %{
+    BackgroundJobs.enqueue(@todo_account_closure_acquire_job, %{
       user_id: account.user_id,
-      queue: @model_queue,
-      dedupe_key: "runtime-partition:todo-account-closure:#{account.id}",
+      queue: @provider_queue,
+      dedupe_key: source_closure_acquire_dedupe_key(account.id),
       partition_key: provider_partition(account.user_id, account.provider),
-      rate_limit_key: "model",
-      max_attempts: 3,
+      rate_limit_key: TokenRefresher.provider_family(account.provider),
+      max_attempts: 5,
       scheduled_at: now,
       payload: %{
         "user_id" => account.user_id,
@@ -489,25 +492,38 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp todo_completion_accounts(limit) do
     Todo
     |> join(:inner, [todo], account in ConnectedAccount, on: account.id == todo.source_account_id)
-    |> join(:left, [todo, account], job in BackgroundJob,
+    |> join(:left, [todo, account], legacy_job in BackgroundJob,
       on:
-        job.dedupe_key ==
+        legacy_job.dedupe_key ==
           fragment("'runtime-partition:todo-account-closure:' || ?::text", account.id) and
-          job.status in @active_statuses
+          legacy_job.status in @active_statuses
+    )
+    |> join(:left, [todo, account, _legacy_job], acquisition_job in BackgroundJob,
+      on:
+        acquisition_job.dedupe_key ==
+          fragment("'runtime-partition:source-account-closure-acquire:' || ?::text", account.id) and
+          acquisition_job.status in @active_statuses
+    )
+    |> join(:left, [todo, account, _legacy_job, _acquisition_job], reason_job in BackgroundJob,
+      on:
+        reason_job.dedupe_key ==
+          fragment("'runtime-partition:source-account-closure-reason:' || ?::text", account.id) and
+          reason_job.status in @active_statuses
     )
     |> where(
-      [todo, account, job],
-      todo.status in ["open", "snoozed"] and account.status == "connected" and is_nil(job.id)
+      [todo, account, legacy_job, acquisition_job, reason_job],
+      todo.status in ["open", "snoozed"] and account.status == "connected" and
+        is_nil(legacy_job.id) and is_nil(acquisition_job.id) and is_nil(reason_job.id)
     )
     |> where(
-      [_todo, account, _job],
+      [_todo, account, _legacy_job, _acquisition_job, _reason_job],
       like(account.provider, "google%") or
         fragment("? ~ '^slack:[^:]+$'", account.provider)
     )
-    |> distinct([_todo, account, _job], account.id)
-    |> order_by([_todo, account, _job], asc: account.id)
+    |> distinct([_todo, account, _legacy_job, _acquisition_job, _reason_job], account.id)
+    |> order_by([_todo, account, _legacy_job, _acquisition_job, _reason_job], asc: account.id)
     |> limit(^limit)
-    |> select([_todo, account, _job], account)
+    |> select([_todo, account, _legacy_job, _acquisition_job, _reason_job], account)
     |> Repo.all()
   end
 
@@ -615,6 +631,20 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     end
   end
 
+  defp execute_provider(%BackgroundJob{job_type: @todo_account_closure_acquire_job} = job) do
+    with {:ok, account_id} <- payload_integer(job, "account_id"),
+         %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
+         true <- account.user_id == job.user_id,
+         {:ok, result} <- SourceAccountClosure.acquire(account, acquisition_job_id: job.id) do
+      maybe_enqueue_closure_reason(job, account, result)
+    else
+      nil -> {:error, :source_account_not_found}
+      false -> {:error, :source_account_user_mismatch}
+      {:error, _reason} = error -> error
+      {:skip, _reason} = skip -> normalize_work_result(skip)
+    end
+  end
+
   defp execute_provider(%BackgroundJob{} = job),
     do: {:error, {:unknown_provider_partition, job.job_type}}
 
@@ -660,6 +690,19 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     else
       nil -> {:error, :source_discovery_identity_not_found}
       false -> {:error, :source_discovery_identity_mismatch}
+      {:error, _reason} = error -> normalize_work_result(error)
+    end
+  end
+
+  defp execute_model(%BackgroundJob{job_type: @todo_account_closure_reason_job} = job) do
+    with {:ok, account_id} <- payload_integer(job, "account_id"),
+         %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
+         true <- account.user_id == job.user_id,
+         {:ok, result} <- SourceAccountClosure.reason(account, job.payload || %{}) do
+      normalize_work_result(result)
+    else
+      nil -> {:error, :source_account_not_found}
+      false -> {:error, :source_account_user_mismatch}
       {:error, _reason} = error -> normalize_work_result(error)
     end
   end
@@ -731,6 +774,36 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   defp maybe_enqueue_discovery_reason(_job, _account, result),
+    do: normalize_work_result(result)
+
+  defp maybe_enqueue_closure_reason(acquisition_job, account, %{handoff: handoff} = result)
+       when is_map(handoff) do
+    case BackgroundJobs.enqueue(@todo_account_closure_reason_job, %{
+           user_id: account.user_id,
+           queue: @model_queue,
+           dedupe_key: source_closure_reason_dedupe_key(account.id),
+           partition_key: provider_partition(account.user_id, account.provider),
+           rate_limit_key: "model",
+           max_attempts: 3,
+           scheduled_at: database_now!(),
+           payload: handoff
+         }) do
+      {:ok, %BackgroundJob{} = reason_job} ->
+        if get_in(reason_job.payload || %{}, ["acquisition_job_id"]) == acquisition_job.id do
+          {:ok,
+           result
+           |> Map.delete(:handoff)
+           |> Map.put(:reason_job_id, reason_job.id)}
+        else
+          {:error, :source_closure_stale_handoff}
+        end
+
+      {:error, reason} ->
+        {:error, {:source_closure_handoff_failed, reason}}
+    end
+  end
+
+  defp maybe_enqueue_closure_reason(_job, _account, result),
     do: normalize_work_result(result)
 
   defp discovery_identity_valid?(job, account, agent) do
@@ -841,6 +914,12 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp source_discovery_reason_dedupe_key(account_id),
     do: "runtime-partition:source-account-discovery-reason:#{account_id}"
+
+  defp source_closure_acquire_dedupe_key(account_id),
+    do: "runtime-partition:source-account-closure-acquire:#{account_id}"
+
+  defp source_closure_reason_dedupe_key(account_id),
+    do: "runtime-partition:source-account-closure-reason:#{account_id}"
 
   defp hashed_key(prefix, value) when is_binary(prefix) and is_binary(value) do
     digest = :crypto.hash(:sha256, value) |> Base.url_encode64(padding: false)
