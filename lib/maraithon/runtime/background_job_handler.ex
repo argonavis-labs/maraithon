@@ -364,6 +364,8 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
     do: {:error, {:unknown_background_job, job_type}}
 
   defp publish_gmail_sync_completed(user_id, account, job, result) do
+    _ = wake_source_account(account, "gmail_sync_completed")
+
     event =
       Connector.build_event("gmail_sync_completed", "gmail", %{
         user_id: user_id,
@@ -375,6 +377,22 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
     case Connector.publish(gmail_account_topic(user_id, account), event) do
       :ok -> :ok
       {:error, reason} -> {:error, {:gmail_sync_completion_publish_failed, reason}}
+    end
+  end
+
+  defp wake_source_account(account, reason) do
+    case PeriodicJobs.wake_source_account(account) do
+      {:ok, _result} ->
+        :ok
+
+      {:error, wake_reason} ->
+        Logger.warning("Source account wakeup enqueue failed",
+          account_reference: Maraithon.Redaction.fingerprint(account.id),
+          trigger: reason,
+          failure_code: Maraithon.Redaction.error_class(wake_reason)
+        )
+
+        :ok
     end
   end
 

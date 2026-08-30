@@ -43,6 +43,7 @@ defmodule Maraithon.Connectors.Slack do
 
   alias Maraithon.OAuth.Slack, as: SlackOAuth
   alias Maraithon.Connectors.Connector
+  alias Maraithon.Runtime.PeriodicJobs
 
   require Logger
 
@@ -171,7 +172,9 @@ defmodule Maraithon.Connectors.Slack do
     if event_type == "message" do
       case lookup_slack_account(team_id) do
         %{user_id: user_id} = account ->
-          maybe_observe_slack_message(user_id, account, team_id, event)
+          _ = maybe_observe_slack_message(user_id, account, team_id, event)
+          _ = wake_source_account(account, "slack_message")
+          :ok
 
         _ ->
           :ok
@@ -304,6 +307,7 @@ defmodule Maraithon.Connectors.Slack do
     }
 
     normalized = build_slack_event("app_mention", data, params)
+    _ = wake_slack_account(team_id, "slack_app_mention")
 
     Logger.info("Slack app mention",
       team_id: team_id,
@@ -312,6 +316,29 @@ defmodule Maraithon.Connectors.Slack do
     )
 
     {:ok, topic, normalized}
+  end
+
+  defp wake_slack_account(team_id, reason) do
+    case lookup_slack_account(team_id) do
+      nil -> :ok
+      account -> wake_source_account(account, reason)
+    end
+  end
+
+  defp wake_source_account(account, reason) do
+    case PeriodicJobs.wake_source_account(account) do
+      {:ok, _result} ->
+        :ok
+
+      {:error, wake_reason} ->
+        Logger.warning("Slack source account wakeup enqueue failed",
+          account_reference: Maraithon.Redaction.fingerprint(account.id),
+          trigger: reason,
+          failure_code: Maraithon.Redaction.error_class(wake_reason)
+        )
+
+        :ok
+    end
   end
 
   defp handle_reaction(team_id, event, params, event_type) do

@@ -4,6 +4,7 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
   import Plug.Conn
 
   alias Maraithon.Accounts
+  alias Maraithon.Agents
   alias Maraithon.Connectors.{Gmail, GoogleCalendar, Slack, SourceCursors}
   alias Maraithon.Crm.Observation
   alias Maraithon.OAuth
@@ -94,6 +95,14 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
         metadata: %{"team_id" => team_id, "authed_user_id" => sender_id}
       })
 
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{},
+        status: "running"
+      })
+
     params = %{
       "type" => "event_callback",
       "team_id" => team_id,
@@ -110,6 +119,10 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
 
     assert %Observation{direction: "outbound"} =
              Repo.get_by(Observation, user_id: user_id, source: "slack")
+
+    discovery_job = find_job(user_id, "runtime_partition:source_account_discovery")
+    assert discovery_job.payload["agent_id"] == agent.id
+    assert discovery_job.payload["role"] == "discovery"
 
     assert {:ok, 1} =
              Maraithon.Crm.Ingest.sweep_windows_older_than(

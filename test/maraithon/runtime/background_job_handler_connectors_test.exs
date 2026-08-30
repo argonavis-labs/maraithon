@@ -2,11 +2,13 @@ defmodule Maraithon.Runtime.BackgroundJobHandlerConnectorsTest do
   use Maraithon.DataCase, async: false
 
   alias Maraithon.Accounts
+  alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.OAuth
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobHandler
+  alias Maraithon.Runtime.BackgroundJobs
 
   describe "gmail_incremental_sync" do
     test "reads the stored historyId cursor, ingests, and advances it" do
@@ -25,6 +27,14 @@ defmodule Maraithon.Runtime.BackgroundJobHandlerConnectorsTest do
           refresh_token: "test_refresh_token",
           expires_in: 3600,
           scopes: ["gmail.readonly"]
+        })
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          user_id: user_id,
+          behavior: "ai_chief_of_staff",
+          config: %{},
+          status: "running"
         })
 
       account = ConnectedAccounts.get(user_id, "google")
@@ -51,6 +61,13 @@ defmodule Maraithon.Runtime.BackgroundJobHandlerConnectorsTest do
 
       cursor = SourceCursors.get(account.id, "gmail_history_id")
       assert cursor.value == "555"
+
+      discovery_job =
+        BackgroundJobs.list(user_id: user_id, limit: 20)
+        |> Enum.find(&(&1.job_type == "runtime_partition:source_account_discovery"))
+
+      assert discovery_job.payload["account_id"] == account.id
+      assert discovery_job.payload["agent_id"] == agent.id
     end
 
     test "returns an error when no connected account exists for the provider" do
@@ -92,7 +109,10 @@ defmodule Maraithon.Runtime.BackgroundJobHandlerConnectorsTest do
       SourceCursors.put(account, "calendar_sync_token", %{"value" => "old-token"})
 
       Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
-        assert conn.query_string == "syncToken=old-token"
+        query = URI.decode_query(conn.query_string)
+        assert query["syncToken"] == "old-token"
+        assert query["singleEvents"] == "true"
+        assert query["maxResults"] == "100"
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
@@ -149,7 +169,9 @@ defmodule Maraithon.Runtime.BackgroundJobHandlerConnectorsTest do
         payload: %{}
       }
 
-      assert {:error, {:retry_after, 42, {:rate_limited, 42, "slow down"}}} =
+      # Provider bodies are deliberately collapsed before durable retry state
+      # is returned so an upstream response cannot leak into job errors.
+      assert {:error, {:retry_after, 42, {:rate_limited, 42, :provider_limited}}} =
                BackgroundJobHandler.execute(job)
     end
   end

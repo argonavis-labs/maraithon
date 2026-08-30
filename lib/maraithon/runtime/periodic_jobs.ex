@@ -53,6 +53,22 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   def provider_queue, do: @provider_queue
   def model_queue, do: @model_queue
 
+  @doc "Durably wakes the discovery and applicable closure workers for one source account."
+  def wake_source_account(account, opts \\ [])
+
+  def wake_source_account(%ConnectedAccount{status: "connected"} = account, opts)
+      when is_list(opts) do
+    now = Keyword.get(opts, :now, database_now!())
+
+    with {:ok, discovery} <- enqueue_source_account_discovery(account, now),
+         {:ok, closure} <- maybe_enqueue_source_account_closure(account, now) do
+      {:ok, %{discovery: discovery, closure: closure}}
+    end
+  end
+
+  def wake_source_account(%ConnectedAccount{}, _opts), do: {:ok, %{outcome: "disconnected"}}
+  def wake_source_account(_account, _opts), do: {:error, :invalid_source_account}
+
   @doc "Runs one bounded recurring discovery coordinator."
   def schedule("token_refresher"), do: schedule_token_refreshes()
   def schedule("watch_renewer"), do: schedule_watch_renewals()
@@ -268,21 +284,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     account_agents = source_discovery_account_agents(batch_size)
 
     enqueue_many(account_agents, fn {account, agent} ->
-      BackgroundJobs.enqueue(@source_discovery_job, %{
-        user_id: account.user_id,
-        queue: @provider_queue,
-        dedupe_key: source_discovery_dedupe_key(account.id),
-        partition_key: provider_partition(account.user_id, account.provider),
-        rate_limit_key: TokenRefresher.provider_family(account.provider),
-        max_attempts: 5,
-        scheduled_at: now,
-        payload: %{
-          "user_id" => account.user_id,
-          "account_id" => account.id,
-          "agent_id" => agent.id,
-          "role" => "discovery"
-        }
-      })
+      enqueue_source_discovery_job(account, agent, now)
     end)
     |> schedule_summary("source_account_discovery", length(account_agents))
   end
@@ -337,6 +339,89 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     |> Enum.take(limit)
   end
 
+  defp enqueue_source_account_discovery(account, now) do
+    case discovery_agent_for_user(account.user_id) do
+      %Agent{} = agent ->
+        case enqueue_source_discovery_job(account, agent, now) do
+          {:ok, %BackgroundJob{} = job} ->
+            {:ok, %{outcome: "enqueued", job_id: job.id, agent_id: agent.id}}
+
+          {:error, reason} ->
+            {:error, {:source_discovery_enqueue_failed, reason}}
+        end
+
+      nil ->
+        {:ok, %{outcome: "skipped", reason: "no_enabled_chief"}}
+    end
+  end
+
+  defp enqueue_source_discovery_job(account, agent, now) do
+    BackgroundJobs.enqueue(@source_discovery_job, %{
+      user_id: account.user_id,
+      queue: @provider_queue,
+      dedupe_key: source_discovery_dedupe_key(account.id),
+      partition_key: provider_partition(account.user_id, account.provider),
+      rate_limit_key: TokenRefresher.provider_family(account.provider),
+      max_attempts: 5,
+      scheduled_at: now,
+      payload: %{
+        "user_id" => account.user_id,
+        "account_id" => account.id,
+        "agent_id" => agent.id,
+        "role" => "discovery"
+      }
+    })
+  end
+
+  defp discovery_agent_for_user(user_id) do
+    Agent
+    |> where(
+      [agent],
+      agent.user_id == ^user_id and agent.behavior == "ai_chief_of_staff" and
+        agent.install_status == "enabled" and
+        agent.status in ["running", "recovering", "degraded"]
+    )
+    |> order_by([agent], asc: agent.id)
+    |> limit(10)
+    |> Repo.all()
+    |> Enum.find(fn agent -> "followthrough" in Skills.enabled_ids(agent.config || %{}) end)
+  end
+
+  defp maybe_enqueue_source_account_closure(account, now) do
+    if account_has_open_todos?(account.id) do
+      case enqueue_source_account_closure_job(account, now) do
+        {:ok, %BackgroundJob{} = job} -> {:ok, %{outcome: "enqueued", job_id: job.id}}
+        {:error, reason} -> {:error, {:source_closure_enqueue_failed, reason}}
+      end
+    else
+      {:ok, %{outcome: "skipped", reason: "no_open_todos"}}
+    end
+  end
+
+  defp enqueue_source_account_closure_job(account, now) do
+    BackgroundJobs.enqueue(@todo_account_closure_job, %{
+      user_id: account.user_id,
+      queue: @model_queue,
+      dedupe_key: "runtime-partition:todo-account-closure:#{account.id}",
+      partition_key: provider_partition(account.user_id, account.provider),
+      rate_limit_key: "model",
+      max_attempts: 3,
+      scheduled_at: now,
+      payload: %{
+        "user_id" => account.user_id,
+        "account_id" => account.id,
+        "role" => "closure"
+      }
+    })
+  end
+
+  defp account_has_open_todos?(account_id) do
+    Todo
+    |> where([todo], todo.source_account_id == ^account_id)
+    |> where([todo], todo.status in ["open", "snoozed"])
+    |> Repo.exists?()
+  end
+
   defp schedule_nudge_users do
     cursor_key = "durable_nudge_sweep"
     cursor = UserBatch.load_cursor(cursor_key)
@@ -372,20 +457,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
     with {:ok, account_count} <-
            enqueue_many(accounts, fn account ->
-             BackgroundJobs.enqueue(@todo_account_closure_job, %{
-               user_id: account.user_id,
-               queue: @model_queue,
-               dedupe_key: "runtime-partition:todo-account-closure:#{account.id}",
-               partition_key: provider_partition(account.user_id, account.provider),
-               rate_limit_key: "model",
-               max_attempts: 3,
-               scheduled_at: now,
-               payload: %{
-                 "user_id" => account.user_id,
-                 "account_id" => account.id,
-                 "role" => "closure"
-               }
-             })
+             enqueue_source_account_closure_job(account, now)
            end),
          {:ok, legacy_count} <-
            enqueue_many(legacy_users, fn user_id ->

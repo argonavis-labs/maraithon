@@ -215,10 +215,10 @@ Implemented as of 2026-08-30:
 - One-minute closure jobs fan out by account and use the closure cursor, with a zero-model quiet path.
 - One-minute discovery jobs fan out in `runtime_provider_account`, acquire only the discovery delta, and seal non-empty bounded bundles in encrypted durable payloads for `runtime_model_user`.
 - Discovery reasoning uses the existing Follow-through intelligence path, makes at most one todo-triage model call, defers secondary relationship learning, and advances only after the reasoning job settles its writes.
+- Gmail incremental-sync completion and Slack message/mention ingress wake the exact account immediately; active-job dedupe collapses bursts and the one-minute schedule remains anti-entropy.
 
 Still required for cutover:
 
-- enqueue the exact account acquisition job immediately from Gmail/Slack ingress, leaving the one-minute schedule as anti-entropy
 - move closure acquisition into the same provider-lane sealed-handoff pattern
 - prove production parity, then stop ordinary Chief cycles from repeating Gmail/Slack acquisition
 
