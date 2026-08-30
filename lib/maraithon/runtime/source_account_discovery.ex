@@ -73,7 +73,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
            }}
         end
       else
-        fanout_count = length(partitions)
+        fanout_count = length(handoffs)
 
         {:ok,
          %{

@@ -258,6 +258,73 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
              SourceCursors.get(account.id, "gmail_discovery_watermark")
   end
 
+  test "re-splits a structurally oversized handoff and finalizes the post-split graph" do
+    {account, agent} = discovery_identity("durable-resplit")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    first_large_field = String.duplicate("a", 2_600_000)
+    second_large_field = String.duplicate("b", 2_600_000)
+
+    messages =
+      Enum.map(1..2, fn index ->
+        now
+        |> routine_message()
+        |> Map.put("id", "resplit-message-#{index}")
+        |> Map.put("thread_id", "resplit-thread-#{index}")
+        |> Map.put("body", first_large_field)
+        |> Map.put("raw_source", second_large_field)
+      end)
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => messages,
+        "inbox_messages" => [],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    acquisition = fn _user_id, _skills, _configs, _context ->
+      {bundle, complete_telemetry(),
+       [%{account: account, kind: "gmail_discovery_watermark", value: "1700000350"}]}
+    end
+
+    assert {:ok,
+            %{
+              source_items: 2,
+              fanout_count: 2,
+              handoffs: handoffs,
+              finalizer: finalizer
+            }} =
+             SourceAccountDiscovery.acquire(account, agent,
+               acquisition: acquisition,
+               acquisition_job_id: "durable-resplit-acquisition",
+               now: now
+             )
+
+    assert Enum.map(handoffs, & &1["fanout_count"]) == [2, 2]
+    assert Enum.map(handoffs, &length(&1["source_item_refs"])) == [1, 1]
+    assert finalizer["expected_fanouts"] == 2
+
+    child_results =
+      Enum.map(handoffs, fn handoff ->
+        %{
+          fanout_index: handoff["fanout_index"],
+          decision_count: 1,
+          source_items: 1,
+          decision_refs: handoff["source_item_refs"],
+          model_calls: 1
+        }
+      end)
+
+    assert {:ok, %{fanout_count: 2, source_items: 2, decision_count: 2}} =
+             SourceAccountDiscovery.finalize(account, agent, finalizer, child_results)
+
+    assert %{value: "1700000350"} =
+             SourceCursors.get(account.id, "gmail_discovery_watermark")
+  end
+
   test "keeps every message in one Gmail thread in the same fan-out" do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
