@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Agents.Agent
+  alias Maraithon.BoundedJSON
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle, SourceScope}
   alias Maraithon.ChiefOfStaff.Skills.Followthrough
   alias Maraithon.Connectors.SourceCursors
@@ -22,6 +23,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   @handoff_max_bytes 500_000
   @handoff_item_limit 5
   @handoff_binary_chunk_bytes 96_000
+  @handoff_max_restored_binary_bytes 5_000_000
+  @handoff_max_restored_bytes 10_000_000
   @bounded_binary_marker "__maraithon_bounded_binary_v1__"
   @bounded_source_bundle_marker "__maraithon_bounded_source_bundle_v1__"
   @allowed_watermark_kinds ~w(gmail_discovery_watermark slack_discovery_watermark)
@@ -215,7 +218,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   @doc false
   def restore_partition_bundle(bundle) when is_map(bundle) do
-    restore_bounded_value(bundle)
+    with :ok <- validate_restore_budget(bundle) do
+      restore_bounded_value(bundle)
+    end
   end
 
   def restore_partition_bundle(_bundle), do: {:error, :invalid_source_bundle}
@@ -223,6 +228,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp build_handoffs([], _account, _agent, _acquisition_job_id), do: {:ok, []}
 
   defp build_handoffs(partitions, account, agent, acquisition_job_id) when is_list(partitions) do
+    do_build_handoffs(partitions, account, agent, acquisition_job_id)
+  end
+
+  defp do_build_handoffs(partitions, account, agent, acquisition_job_id) do
     fanout_count = length(partitions)
 
     partitions
@@ -241,29 +250,66 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         |> maybe_put_agent_id(agent)
 
       case bound_handoff(handoff) do
-        {:ok, bounded_handoff} -> {:cont, {:ok, [bounded_handoff | handoffs]}}
-        {:error, _reason} = error -> {:halt, error}
+        {:ok, bounded_handoff} ->
+          {:cont, {:ok, [bounded_handoff | handoffs]}}
+
+        {:error, reason} ->
+          {:halt, {:split, fanout_index - 1, partition, reason}}
       end
     end)
     |> case do
-      {:ok, handoffs} -> {:ok, Enum.reverse(handoffs)}
-      {:error, _reason} = error -> error
+      {:ok, handoffs} ->
+        {:ok, Enum.reverse(handoffs)}
+
+      {:split, partition_index, partition, reason} ->
+        with {:ok, split_partitions} <- split_partition_for_handoff(partition) do
+          partitions
+          |> List.replace_at(partition_index, split_partitions)
+          |> List.flatten()
+          |> do_build_handoffs(account, agent, acquisition_job_id)
+        else
+          {:error, _split_reason} -> {:error, reason}
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp split_partition_for_handoff(partition) do
+    records = source_records(partition)
+
+    if length(records) > 1 do
+      split_at = div(length(records), 2)
+      {left, right} = Enum.split(records, split_at)
+
+      with {:ok, left_partitions} <- compact_partition_records(partition, left),
+           {:ok, right_partitions} <- compact_partition_records(partition, right) do
+        {:ok, left_partitions ++ right_partitions}
+      end
+    else
+      {:error, :source_discovery_handoff_payload_too_large}
     end
   end
 
   defp bound_handoff(handoff) do
-    if durable_handoff?(handoff) do
-      {:ok, handoff}
-    else
-      with {:ok, bundle} <- fetch_map(handoff, "source_bundle"),
-           {:ok, sealed_bundle} <- seal_source_bundle(bundle),
-           sealed_handoff <- Map.put(handoff, "source_bundle", sealed_bundle),
-           true <- durable_handoff?(sealed_handoff) do
-        {:ok, sealed_handoff}
+    with {:ok, bundle} <- fetch_map(handoff, "source_bundle"),
+         :ok <- validate_restore_budget(bundle) do
+      if durable_handoff?(handoff) do
+        {:ok, handoff}
       else
-        {:error, _reason} = error -> error
-        _invalid -> {:error, :source_discovery_handoff_payload_too_large}
+        with {:ok, sealed_bundle} <- seal_source_bundle(bundle),
+             sealed_handoff <- Map.put(handoff, "source_bundle", sealed_bundle),
+             true <- durable_handoff?(sealed_handoff) do
+          {:ok, sealed_handoff}
+        else
+          {:error, _reason} = error -> error
+          _invalid -> {:error, :source_discovery_handoff_payload_too_large}
+        end
       end
+    else
+      {:error, _reason} = error -> error
+      _invalid -> {:error, :source_discovery_handoff_payload_too_large}
     end
   end
 
@@ -279,7 +325,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp seal_source_bundle(bundle) when is_map(bundle) do
-    with {:ok, encoded} <- Jason.encode(bundle) do
+    with {:ok, encoded} <- Jason.encode(bundle),
+         true <- byte_size(encoded) <= @handoff_max_bytes do
       compressed = :zlib.gzip(encoded)
       base64 = Base.encode64(compressed)
 
@@ -681,12 +728,13 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
          "codec" => "gzip-base64",
          "sha256" => expected_digest
        })
-       when is_integer(expected_size) and expected_size >= 0 and is_list(chunks) and
+       when is_integer(expected_size) and expected_size >= 0 and
+              expected_size <= @handoff_max_restored_binary_bytes and is_list(chunks) and
               is_binary(expected_digest) do
     with true <-
            Enum.all?(chunks, &(is_binary(&1) and byte_size(&1) <= @handoff_binary_chunk_bytes)),
          {:ok, compressed} <- Base.decode64(Enum.join(chunks)),
-         restored when is_binary(restored) <- :zlib.gunzip(compressed),
+         {:ok, restored} <- bounded_gunzip(compressed, expected_size),
          true <- byte_size(restored) == expected_size,
          true <-
            Base.url_encode64(:crypto.hash(:sha256, restored), padding: false) == expected_digest do
@@ -706,17 +754,18 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
          "codec" => "json-gzip-base64",
          "sha256" => expected_digest
        })
-       when is_integer(expected_size) and expected_size >= 0 and is_list(chunks) and
+       when is_integer(expected_size) and expected_size >= 0 and
+              expected_size <= @handoff_max_bytes and is_list(chunks) and
               is_binary(expected_digest) do
     with true <-
            Enum.all?(chunks, &(is_binary(&1) and byte_size(&1) <= @handoff_binary_chunk_bytes)),
          {:ok, compressed} <- Base.decode64(Enum.join(chunks)),
-         encoded when is_binary(encoded) <- :zlib.gunzip(compressed),
+         {:ok, encoded} <- bounded_gunzip(compressed, expected_size),
          true <- byte_size(encoded) == expected_size,
          true <-
            Base.url_encode64(:crypto.hash(:sha256, encoded), padding: false) == expected_digest,
          {:ok, bundle} when is_map(bundle) <- Jason.decode(encoded) do
-      restore_bounded_value(bundle)
+      restore_partition_bundle(bundle)
     else
       _other -> {:error, :source_discovery_partition_corrupt}
     end
@@ -726,6 +775,114 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   defp restore_bounded_source_bundle(_encoded),
     do: {:error, :source_discovery_partition_corrupt}
+
+  defp validate_restore_budget(value) do
+    bounds = [
+      max_binary_bytes: BackgroundJob.payload_bounds()[:max_binary_bytes],
+      max_depth: 64,
+      max_nodes: 100_000,
+      max_map_entries: BackgroundJob.payload_bounds()[:max_map_entries],
+      max_list_items: BackgroundJob.payload_bounds()[:max_list_items]
+    ]
+
+    with {:ok, encoded} <- Jason.encode(value),
+         true <- byte_size(encoded) <= BackgroundJob.max_payload_bytes(),
+         {:ok, canonical} <- Jason.decode(encoded),
+         true <- BoundedJSON.valid?(canonical, BackgroundJob.max_payload_bytes(), bounds),
+         {:ok, expanded_bytes} <- marker_expanded_bytes(canonical, 0),
+         true <- expanded_bytes <= @handoff_max_restored_bytes do
+      :ok
+    else
+      _invalid -> {:error, :source_discovery_partition_corrupt}
+    end
+  end
+
+  defp marker_expanded_bytes(
+         %{@bounded_binary_marker => %{"byte_size" => expected_size}} = value,
+         expanded_bytes
+       )
+       when map_size(value) == 1 and is_integer(expected_size) and expected_size >= 0 and
+              expected_size <= @handoff_max_restored_binary_bytes do
+    add_expanded_bytes(expanded_bytes, expected_size)
+  end
+
+  defp marker_expanded_bytes(
+         %{@bounded_source_bundle_marker => %{"byte_size" => expected_size}} = value,
+         expanded_bytes
+       )
+       when map_size(value) == 1 and is_integer(expected_size) and expected_size >= 0 and
+              expected_size <= @handoff_max_bytes do
+    add_expanded_bytes(expanded_bytes, expected_size)
+  end
+
+  defp marker_expanded_bytes(value, expanded_bytes) when is_list(value) do
+    Enum.reduce_while(value, {:ok, expanded_bytes}, fn item, {:ok, bytes} ->
+      case marker_expanded_bytes(item, bytes) do
+        {:ok, next_bytes} -> {:cont, {:ok, next_bytes}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp marker_expanded_bytes(value, expanded_bytes) when is_map(value) do
+    Enum.reduce_while(value, {:ok, expanded_bytes}, fn {_key, item}, {:ok, bytes} ->
+      case marker_expanded_bytes(item, bytes) do
+        {:ok, next_bytes} -> {:cont, {:ok, next_bytes}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp marker_expanded_bytes(_value, expanded_bytes), do: {:ok, expanded_bytes}
+
+  defp add_expanded_bytes(expanded_bytes, additional_bytes) do
+    total = expanded_bytes + additional_bytes
+
+    if total <= @handoff_max_restored_bytes,
+      do: {:ok, total},
+      else: {:error, :source_discovery_partition_corrupt}
+  end
+
+  defp bounded_gunzip(compressed, expected_size)
+       when is_binary(compressed) and is_integer(expected_size) and expected_size >= 0 do
+    zstream = :zlib.open()
+
+    try do
+      :ok = :zlib.inflateInit(zstream, 31)
+      do_bounded_gunzip(zstream, compressed, expected_size, 0, [])
+    rescue
+      _error -> {:error, :source_discovery_partition_corrupt}
+    catch
+      _kind, _reason -> {:error, :source_discovery_partition_corrupt}
+    after
+      :zlib.close(zstream)
+    end
+  end
+
+  defp bounded_gunzip(_compressed, _expected_size),
+    do: {:error, :source_discovery_partition_corrupt}
+
+  defp do_bounded_gunzip(zstream, input, expected_size, restored_size, chunks) do
+    case :zlib.safeInflate(zstream, input) do
+      {status, output} when status in [:continue, :finished] ->
+        output_size = IO.iodata_length(output)
+        next_size = restored_size + output_size
+
+        cond do
+          next_size > expected_size ->
+            {:error, :source_discovery_partition_corrupt}
+
+          status == :continue and output_size == 0 and input == <<>> ->
+            {:error, :source_discovery_partition_corrupt}
+
+          status == :finished ->
+            {:ok, chunks |> Enum.reverse([output]) |> IO.iodata_to_binary()}
+
+          true ->
+            do_bounded_gunzip(zstream, <<>>, expected_size, next_size, [output | chunks])
+        end
+    end
+  end
 
   defp partition_source_bundle(bundle, records) do
     gmail_records = Enum.filter(records, &(&1.source == :gmail))

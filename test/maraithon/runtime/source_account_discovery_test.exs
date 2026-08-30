@@ -426,6 +426,23 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
     assert restored_message["payload"] == deep_payload
   end
 
+  test "rejects a compressed partition that expands beyond its authenticated size" do
+    expanded = String.duplicate("amplified source evidence", 10_000)
+    compressed = :zlib.gzip(expanded)
+
+    partition = %{
+      "__maraithon_bounded_binary_v1__" => %{
+        "byte_size" => 1,
+        "chunks" => [Base.encode64(compressed)],
+        "codec" => "gzip-base64",
+        "sha256" => Base.url_encode64(:crypto.hash(:sha256, expanded), padding: false)
+      }
+    }
+
+    assert {:error, :source_discovery_partition_corrupt} =
+             SourceAccountDiscovery.restore_partition_bundle(partition)
+  end
+
   test "rejects unidentified source rows and preserves long message content losslessly" do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     body = String.duplicate("exact-content-", 600)
