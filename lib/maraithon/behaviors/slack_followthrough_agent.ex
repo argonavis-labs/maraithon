@@ -8,7 +8,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
   @behaviour Maraithon.Behaviors.Behavior
 
-  alias Maraithon.ChiefOfStaff.AttentionArbiter
+  alias Maraithon.ChiefOfStaff.{AttentionArbiter, SourceBundle}
   alias Maraithon.Connectors.Slack
   alias Maraithon.Followthrough.ConversationContext
   alias Maraithon.Insights
@@ -177,7 +177,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
               candidates_from_pubsub_payload(payload, state, context.timestamp)
 
             _ ->
-              candidates_from_periodic_scan(state, context.timestamp)
+              candidates_from_periodic_context(state, context)
           end
 
         _ =
@@ -239,6 +239,50 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       end)
     end
   end
+
+  # A scheduled Chief of Staff cycle has already paid for one bounded Slack
+  # acquisition and passes that delta to every skill. Treat that bundle as
+  # authoritative, including an empty or unavailable Slack result, so this
+  # behavior never performs a second workspace-wide scan in the same cycle.
+  # Standalone Slack agents do not receive a bundle and retain their direct
+  # connector fallback.
+  defp candidates_from_periodic_context(state, context) do
+    case context[:source_bundle] do
+      bundle when is_map(bundle) ->
+        candidates_from_source_bundle(bundle, state, context.timestamp)
+
+      _other ->
+        candidates_from_periodic_scan(state, context.timestamp)
+    end
+  end
+
+  defp candidates_from_source_bundle(bundle, state, timestamp) do
+    team_ids = resolve_team_ids(state)
+
+    messages =
+      bundle
+      |> slack_bundle_messages()
+      |> Enum.filter(&slack_message_in_scope?(&1, team_ids))
+
+    explicit_self_ids =
+      team_ids
+      |> Enum.flat_map(&resolve_self_user_ids(state.user_id, &1))
+      |> Enum.uniq()
+
+    scan_message_batch(messages, state, timestamp, explicit_self_ids)
+  end
+
+  defp slack_bundle_messages(bundle) do
+    SourceBundle.slack_messages(bundle) ++ SourceBundle.slack_mentions(bundle)
+  end
+
+  defp slack_message_in_scope?(_message, []), do: true
+
+  defp slack_message_in_scope?(message, team_ids) when is_map(message) do
+    read_string(message, "team_id", nil) in team_ids
+  end
+
+  defp slack_message_in_scope?(_message, _team_ids), do: false
 
   defp candidates_from_pubsub_payload(payload, state, timestamp) when is_map(payload) do
     source = read_string(payload, "source", read_string(payload, "connector", nil))
@@ -549,6 +593,8 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
                 "channel_name" => message.channel_name,
                 "thread_ts" => message.thread_ts,
                 "source_excerpt" => truncate(display_text, @source_excerpt_chars),
+                "is_from_me" => true,
+                "source_direction" => "outbound",
                 "person" => person,
                 "person_slack_user_id" => person_user_id,
                 "signals" => Enum.uniq(promise_matches ++ action_matches ++ planning_matches),
@@ -1189,7 +1235,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
     cond do
       mentions != [] ->
-        display_name_for_mentioned_user(message, hd(mentions)) || "the recipient"
+        display_name_for_mentioned_user(message, hd(mentions)) || hd(mentions)
 
       message.is_dm and present?(message.counterparty_id) ->
         message.counterparty_display_name || "the sender"

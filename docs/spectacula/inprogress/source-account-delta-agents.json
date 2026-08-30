@@ -1,0 +1,82 @@
+{
+  "spec_id": "source-account-delta-agents",
+  "slug": "source-account-delta-agents",
+  "title": "Source-Account Delta Agents",
+  "stage": "inprogress",
+  "spec_path": "../specs/source-account-delta-agents.md",
+  "created_at": "2026-08-30T03:04:00Z",
+  "approved_at": "2026-08-30T03:04:00Z",
+  "started_at": "2026-08-30T03:04:00Z",
+  "updated_at": "2026-08-30T03:11:00Z",
+  "summary": "Implementation is active. Slack follow-through now consumes the assistant-owned delta bundle, avoids a duplicate provider scan, emits durable todos for self-authored promises, and can close those todos from later Slack evidence.",
+  "next_action": "Add explicit account scoping and durable per-account acquisition/discovery/closure fan-out.",
+  "blockers": [],
+  "review_policy": {
+    "final_vetting": "off"
+  },
+  "reference_examples": [
+    "docs/spectacula/specs/chief-of-staff-shared-acquisition-and-attention-arbitration.md",
+    "lib/maraithon/runtime/periodic_jobs.ex",
+    "lib/maraithon/chief_of_staff/acquisition.ex",
+    "lib/maraithon/runtime/todo_completion_sweep.ex"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "skipped",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "pending",
+    "final_vetting": "skipped",
+    "notes": "Plain spectacula invocation sets final_vetting off. mix compile --warnings-as-errors and the full touched Slack follow-through test file pass; broad suites remain intentionally skipped under repository policy."
+  },
+  "resume_context": {
+    "last_completed_step": "Made Slack follow-through consume the shared source delta, proved the no-second-fetch path, and admitted self-authored Slack promises as source-backed todos that later evidence can close.",
+    "pending_steps": [
+      "Intersect configured and live source scope for exact one-account targeting.",
+      "Add role-specific account cursors and account-filtered todo queries.",
+      "Add acquisition, discovery, and closure durable job fan-out.",
+      "Cut ordinary Chief cycles over to persisted account-worker results after production parity."
+    ],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "4. Worker Topology",
+      "5. Cursor Contract",
+      "7. Discovery Agent",
+      "8. Closure Agent",
+      "13. Rollout"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/source-account-delta-agents.md",
+      "lib/maraithon/behaviors/slack_followthrough_agent.ex",
+      "lib/maraithon/chief_of_staff/source_scope.ex",
+      "lib/maraithon/chief_of_staff/acquisition.ex",
+      "lib/maraithon/runtime/periodic_jobs.ex",
+      "lib/maraithon/runtime/todo_completion_sweep.ex"
+    ],
+    "notes": "Use exact durable background assignments as ephemeral OTP agents; do not create a parallel fleet of long-lived Agent rows."
+  },
+  "history": [
+    {
+      "at": "2026-08-30T03:04:00Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "ready",
+      "note": "Captured the user's per-Gmail/per-Slack discovery and closure design against the existing exact OTP runtime."
+    },
+    {
+      "at": "2026-08-30T03:04:00Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "Started the first efficiency slice: bundle-first Slack follow-through."
+    },
+    {
+      "at": "2026-08-30T03:11:00Z",
+      "event": "checkpoint",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Bundle-first Slack follow-through, self-authored todo admission, and source-evidence closure regression coverage pass."
+    }
+  ]
+}

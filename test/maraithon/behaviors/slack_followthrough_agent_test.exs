@@ -4,6 +4,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
   alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.Behaviors.SlackFollowthroughAgent
+  alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.Insights
   alias Maraithon.Todos
 
@@ -32,6 +33,61 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
   end
 
   describe "handle_wakeup/2" do
+    test "uses the shared Slack delta bundle without requiring another connector scan", %{
+      user_id: user_id,
+      context: context
+    } do
+      slack_ts = "#{DateTime.to_unix(context.timestamp, :second)}.000001"
+
+      state =
+        SlackFollowthroughAgent.init(%{
+          "user_id" => user_id,
+          "team_ids" => ["T123"],
+          "min_confidence" => "0.7",
+          "max_insights_per_cycle" => "3"
+        })
+
+      source_bundle =
+        context
+        |> SourceBundle.empty(%{
+          "slack_workspaces" => [%{"team_id" => "T123"}]
+        })
+        |> SourceBundle.put_slack(%{
+          "workspaces" => [
+            %{
+              "team_id" => "T123",
+              "channels" => [
+                %{
+                  "id" => "C456",
+                  "name" => "planning",
+                  "messages" => [
+                    %{
+                      "source" => "slack",
+                      "user_id" => "U_TEAM",
+                      "text" => "<!here> Please send the requested screenshots today",
+                      "ts" => slack_ts
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "mentions" => [],
+          "status" => "ready",
+          "fetched_at" => context.timestamp
+        })
+
+      {:emit, {:insights_recorded, %{count: 1}}, _state} =
+        SlackFollowthroughAgent.handle_wakeup(
+          state,
+          Map.put(context, :source_bundle, source_bundle)
+        )
+
+      [stored] = Insights.list_open_for_user(user_id)
+      assert stored.source == "slack"
+      assert stored.source_id == "slack:T123:C456:#{slack_ts}"
+    end
+
     test "records unresolved slack commitment from pubsub payload", %{
       user_id: user_id,
       context: context
@@ -167,6 +223,9 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
       user_id: user_id,
       context: context
     } do
+      open_ts = "#{DateTime.to_unix(context.timestamp, :second)}.000001"
+      resolved_ts = "#{DateTime.to_unix(context.timestamp, :second) + 60}.000001"
+
       state =
         SlackFollowthroughAgent.init(%{
           "user_id" => user_id,
@@ -186,7 +245,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
               "user_id" => "U_SELF",
               "self_user_id" => "U_SELF",
               "text" => "I will send the notes to <@U_TEAM> today",
-              "ts" => "1762502400.000001"
+              "ts" => open_ts
             }
           ]
         }
@@ -210,7 +269,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
               "user_id" => "U_SELF",
               "self_user_id" => "U_SELF",
               "text" => "I will send the notes to <@U_TEAM> today",
-              "ts" => "1762502400.000001"
+              "ts" => open_ts
             },
             %{
               "source" => "slack",
@@ -220,8 +279,8 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
               "user_id" => "U_SELF",
               "self_user_id" => "U_SELF",
               "text" => "Sent the notes here",
-              "thread_ts" => "1762502400.000001",
-              "ts" => "1762503000.000001"
+              "thread_ts" => open_ts,
+              "ts" => resolved_ts
             }
           ]
         }
