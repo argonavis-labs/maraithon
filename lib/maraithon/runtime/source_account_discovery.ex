@@ -19,6 +19,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   @handoff_max_bytes 500_000
   @handoff_item_limit 5
+  @handoff_binary_chunk_bytes 96_000
+  @bounded_binary_marker "__maraithon_bounded_binary_v1__"
   @allowed_watermark_kinds ~w(gmail_discovery_watermark slack_discovery_watermark)
 
   @doc "Fetches one exact account delta and returns either a settled result or a sealed handoff."
@@ -130,6 +132,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp do_reason(account, agent, payload, opts) do
     with :ok <- validate_ownership(account, agent),
          {:ok, bundle} <- fetch_map(payload, "source_bundle"),
+         {:ok, bundle} <- restore_partition_bundle(bundle),
          {:ok, watermarks} <- fetch_list(payload, "watermarks"),
          {:ok, source_item_refs} <- fetch_list(payload, "source_item_refs", []),
          :ok <- validate_payload_identity(account, agent, payload),
@@ -208,22 +211,60 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   @doc false
   def partition_bundle(bundle) when is_map(bundle) do
     if source_identities_complete?(bundle) do
-      partitions =
-        bundle
-        |> source_records()
-        |> grouped_source_records()
-        |> pack_source_groups(@handoff_item_limit)
-        |> Enum.map(&compact_partition(bundle, &1))
-
-      if Enum.all?(partitions, &is_map/1),
-        do: {:ok, partitions},
-        else: {:error, :source_discovery_partition_too_large}
+      bundle
+      |> source_records()
+      |> grouped_source_records()
+      |> split_source_groups(@handoff_item_limit)
+      |> pack_source_groups(@handoff_item_limit)
+      |> compact_partitions(bundle)
     else
       {:error, :source_discovery_item_identity_missing}
     end
   end
 
   def partition_bundle(_bundle), do: {:error, :invalid_source_bundle}
+
+  @doc false
+  def restore_partition_bundle(bundle) when is_map(bundle) do
+    restore_bounded_value(bundle)
+  end
+
+  def restore_partition_bundle(_bundle), do: {:error, :invalid_source_bundle}
+
+  defp compact_partitions(record_partitions, bundle) do
+    Enum.reduce_while(record_partitions, {:ok, []}, fn records, {:ok, partitions} ->
+      case compact_partition_records(bundle, records) do
+        {:ok, compacted} -> {:cont, {:ok, Enum.reverse(compacted, partitions)}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, partitions} -> {:ok, Enum.reverse(partitions)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp compact_partition_records(bundle, records) when is_list(records) and records != [] do
+    case compact_partition(bundle, records) do
+      partition when is_map(partition) ->
+        {:ok, [partition]}
+
+      nil when length(records) > 1 ->
+        split_at = div(length(records), 2)
+        {left, right} = Enum.split(records, split_at)
+
+        with {:ok, left_partitions} <- compact_partition_records(bundle, left),
+             {:ok, right_partitions} <- compact_partition_records(bundle, right) do
+          {:ok, left_partitions ++ right_partitions}
+        end
+
+      nil ->
+        {:error, :source_discovery_partition_too_large}
+    end
+  end
+
+  defp compact_partition_records(_bundle, _records),
+    do: {:error, :source_discovery_partition_too_large}
 
   @doc false
   def compact_bundle(bundle) when is_map(bundle) do
@@ -486,9 +527,105 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp compact_partition(bundle, records) do
-    partition = partition_source_bundle(bundle, records)
+    partition = bundle |> partition_source_bundle(records) |> bound_large_binaries()
     compact_bundle(partition)
   end
+
+  defp bound_large_binaries(value) when is_binary(value) do
+    if byte_size(value) > @handoff_binary_chunk_bytes do
+      compressed = :zlib.gzip(value)
+      encoded = Base.encode64(compressed)
+
+      %{
+        @bounded_binary_marker => %{
+          "byte_size" => byte_size(value),
+          "chunks" => chunk_binary(encoded),
+          "codec" => "gzip-base64",
+          "sha256" => Base.url_encode64(:crypto.hash(:sha256, value), padding: false)
+        }
+      }
+    else
+      value
+    end
+  end
+
+  defp bound_large_binaries(value) when is_list(value),
+    do: Enum.map(value, &bound_large_binaries/1)
+
+  defp bound_large_binaries(%_{} = value), do: value
+
+  defp bound_large_binaries(value) when is_map(value) do
+    Map.new(value, fn {key, item} -> {key, bound_large_binaries(item)} end)
+  end
+
+  defp bound_large_binaries(value), do: value
+
+  defp chunk_binary(value), do: do_chunk_binary(value, [])
+
+  defp do_chunk_binary(<<>>, chunks), do: Enum.reverse(chunks)
+
+  defp do_chunk_binary(value, chunks) when byte_size(value) <= @handoff_binary_chunk_bytes,
+    do: Enum.reverse([value | chunks])
+
+  defp do_chunk_binary(
+         <<chunk::binary-size(@handoff_binary_chunk_bytes), rest::binary>>,
+         chunks
+       ),
+       do: do_chunk_binary(rest, [chunk | chunks])
+
+  defp restore_bounded_value(%{@bounded_binary_marker => encoded} = value)
+       when map_size(value) == 1 do
+    restore_bounded_binary(encoded)
+  end
+
+  defp restore_bounded_value(value) when is_list(value) do
+    Enum.reduce_while(value, {:ok, []}, fn item, {:ok, restored} ->
+      case restore_bounded_value(item) do
+        {:ok, restored_item} -> {:cont, {:ok, [restored_item | restored]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, restored} -> {:ok, Enum.reverse(restored)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp restore_bounded_value(value) when is_map(value) do
+    Enum.reduce_while(value, {:ok, %{}}, fn {key, item}, {:ok, restored} ->
+      case restore_bounded_value(item) do
+        {:ok, restored_item} -> {:cont, {:ok, Map.put(restored, key, restored_item)}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp restore_bounded_value(value), do: {:ok, value}
+
+  defp restore_bounded_binary(%{
+         "byte_size" => expected_size,
+         "chunks" => chunks,
+         "codec" => "gzip-base64",
+         "sha256" => expected_digest
+       })
+       when is_integer(expected_size) and expected_size >= 0 and is_list(chunks) and
+              is_binary(expected_digest) do
+    with true <-
+           Enum.all?(chunks, &(is_binary(&1) and byte_size(&1) <= @handoff_binary_chunk_bytes)),
+         {:ok, compressed} <- Base.decode64(Enum.join(chunks)),
+         restored when is_binary(restored) <- :zlib.gunzip(compressed),
+         true <- byte_size(restored) == expected_size,
+         true <-
+           Base.url_encode64(:crypto.hash(:sha256, restored), padding: false) == expected_digest do
+      {:ok, restored}
+    else
+      _other -> {:error, :source_discovery_partition_corrupt}
+    end
+  rescue
+    _error -> {:error, :source_discovery_partition_corrupt}
+  end
+
+  defp restore_bounded_binary(_encoded), do: {:error, :source_discovery_partition_corrupt}
 
   defp partition_source_bundle(bundle, records) do
     gmail_records = Enum.filter(records, &(&1.source == :gmail))
@@ -574,6 +711,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp source_group_identity(%{source: :slack, identity: identity, item: item}) do
     {:slack, read_string(item, "team_id"), read_string(item, "channel_id"),
      read_string(item, "thread_ts") || read_string(item, "ts") || identity}
+  end
+
+  defp split_source_groups(groups, limit) do
+    Enum.flat_map(groups, &Enum.chunk_every(&1, limit))
   end
 
   defp pack_source_groups(groups, limit) do

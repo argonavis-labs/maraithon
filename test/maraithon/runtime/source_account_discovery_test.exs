@@ -297,6 +297,77 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
            |> Enum.sort() == ["shared-reply", "shared-root"]
   end
 
+  test "deterministically splits a Gmail thread larger than the fan-out item limit" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    messages =
+      Enum.map(1..12, fn index ->
+        now
+        |> routine_message()
+        |> Map.put("id", "shared-message-#{index}")
+        |> Map.put("thread_id", "shared-thread")
+      end)
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => messages,
+        "inbox_messages" => messages,
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    assert {:ok, partitions} = SourceAccountDiscovery.partition_bundle(bundle)
+    assert Enum.map(partitions, &SourceAccountDiscovery.source_item_count/1) == [5, 5, 2]
+
+    assert partitions
+           |> Enum.flat_map(&SourceAccountDiscovery.source_item_refs/1)
+           |> Enum.uniq()
+           |> length() == 12
+  end
+
+  test "losslessly seals and restores a single source record larger than the handoff limit" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    body = String.duplicate("oversized exact source evidence ", 24_000)
+
+    message =
+      now
+      |> routine_message()
+      |> Map.put("id", "oversized-message")
+      |> Map.put("thread_id", "oversized-thread")
+      |> Map.put("body", body)
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => [message],
+        "inbox_messages" => [message],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    assert byte_size(Jason.encode!(bundle)) > 500_000
+    assert {:ok, [partition]} = SourceAccountDiscovery.partition_bundle(bundle)
+    assert byte_size(Jason.encode!(partition)) <= 500_000
+    assert SourceAccountDiscovery.source_item_count(partition) == 1
+
+    assert SourceAccountDiscovery.source_item_refs(partition) == [
+             "gmail:unknown:oversized-message"
+           ]
+
+    assert {:ok, restored} = SourceAccountDiscovery.restore_partition_bundle(partition)
+    assert [restored_message] = SourceBundle.gmail_messages(restored)
+    assert restored_message["body"] == body
+
+    assert SourceAccountDiscovery.source_item_refs(restored) == [
+             "gmail:unknown:oversized-message"
+           ]
+  end
+
   test "rejects unidentified source rows and preserves long message content losslessly" do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     body = String.duplicate("exact-content-", 600)
