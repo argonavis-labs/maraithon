@@ -105,6 +105,7 @@ defmodule Maraithon.Todos.CompletionSweep do
     todos =
       Todo
       |> where([todo], todo.user_id == ^user_id and todo.status in ^@open_statuses)
+      |> maybe_scope_source_account(opts)
       |> order_by([todo], asc_nulls_first: todo.last_completion_checked_at, asc: todo.id)
       |> limit(^limit)
       |> Repo.all()
@@ -154,6 +155,20 @@ defmodule Maraithon.Todos.CompletionSweep do
   end
 
   def run_for_user(_user_id, _opts), do: empty_user_summary(nil, 0)
+
+  defp maybe_scope_source_account(query, opts) do
+    case Keyword.get(opts, :source_account_id) do
+      account_id when is_integer(account_id) ->
+        where(query, [todo], todo.source_account_id == ^account_id)
+
+      _other ->
+        if Keyword.get(opts, :source_account_unassigned?, false) do
+          where(query, [todo], is_nil(todo.source_account_id))
+        else
+          query
+        end
+    end
+  end
 
   # One user's crash must never abort the sweep for every user after them
   # (mirrors StalenessTriageSweep.run_for_user_safely/2).

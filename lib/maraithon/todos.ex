@@ -2208,6 +2208,7 @@ defmodule Maraithon.Todos do
   defp filtered_todo_query(user_id, opts) do
     source = Keyword.get(opts, :source)
     source_account_id = Keyword.get(opts, :source_account_id)
+    source_account_unassigned? = Keyword.get(opts, :source_account_unassigned?, false)
     kind = Keyword.get(opts, :kind)
     attention_mode = Keyword.get(opts, :attention_mode)
     owner_user_id = Keyword.get(opts, :owner_user_id)
@@ -2232,6 +2233,7 @@ defmodule Maraithon.Todos do
     |> maybe_exclude_unsurfaceable_open_work(exclude_unsurfaceable?)
     |> maybe_filter_source(source)
     |> maybe_filter_source_account_id(source_account_id)
+    |> maybe_filter_source_account_unassigned(source_account_unassigned?)
     |> maybe_filter_kind(kind)
     |> maybe_filter_attention_mode(attention_mode)
     |> maybe_filter_owner_user_id(owner_user_id)
@@ -2321,6 +2323,12 @@ defmodule Maraithon.Todos do
       id -> where(query, [todo], todo.source_account_id == ^id)
     end
   end
+
+  defp maybe_filter_source_account_unassigned(query, true) do
+    where(query, [todo], is_nil(todo.source_account_id))
+  end
+
+  defp maybe_filter_source_account_unassigned(query, _value), do: query
 
   defp maybe_filter_statuses(query, nil), do: query
   defp maybe_filter_statuses(query, []), do: where(query, [todo], false)

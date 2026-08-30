@@ -1408,6 +1408,68 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       if defer?, do: Map.put(base, :defer_watermark_advance, true), else: base
     end
 
+    test "uses and proposes the independent closure watermark", %{
+      user_id: user_id,
+      provider: provider,
+      account: account
+    } do
+      closure_watermark = "1780311600"
+
+      {:ok, _cursor} =
+        Maraithon.Connectors.SourceCursors.put(account, "gmail_closure_watermark", %{
+          "value" => closure_watermark
+        })
+
+      TravelGmailStub.configure(
+        messages: [],
+        messages_by_query_match: [
+          {"after:#{closure_watermark}",
+           [
+             %{
+               message_id: "closure-delta-message",
+               thread_id: "closure-delta-thread",
+               subject: "Closure delta",
+               labels: ["INBOX"],
+               internal_date: ~U[2026-06-01 11:30:00Z],
+               text_body: "The closure delta was handled."
+             }
+           ]}
+        ],
+        contents: %{}
+      )
+
+      source_scope = %{
+        "google_accounts" => [
+          %{
+            "provider" => provider,
+            "account_email" => "watermark@example.com",
+            "services" => ["gmail"]
+          }
+        ]
+      }
+
+      context =
+        user_id
+        |> watermark_build_context(true)
+        |> Map.put(:source_watermark_role, "closure")
+
+      {bundle, _telemetry, proposed_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          %{"followthrough" => %{"source_scope" => source_scope}},
+          context
+        )
+
+      assert Enum.any?(
+               SourceBundle.gmail_messages(bundle),
+               &(&1["message_id"] == "closure-delta-message")
+             )
+
+      assert [%{kind: "gmail_closure_watermark", value: value}] = proposed_watermarks
+      assert is_binary(value)
+    end
+
     test "defers the watermark advance and proposes it instead when the caller asks", %{
       user_id: user_id,
       provider: provider,

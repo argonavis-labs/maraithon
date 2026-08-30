@@ -468,13 +468,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       now_watermark = now |> DateTime.to_unix(:second) |> Integer.to_string()
 
       watermark_mode = watermark_advance_mode(context, plan)
+      watermark_kind = source_watermark_kind(context, "slack")
 
       {workspaces, fetches, proposed_watermarks} =
         Enum.reduce(team_ids, {[], telemetry["fetches"], []}, fn team_id,
                                                                  {workspace_acc, fetch_acc,
                                                                   watermark_acc} ->
           slack_account = ConnectedAccounts.get(user_id, "slack:#{team_id}")
-          team_oldest = slack_poll_oldest(slack_account, oldest, deep_lookback_fetch?(plan))
+
+          team_oldest =
+            slack_poll_oldest(
+              slack_account,
+              oldest,
+              deep_lookback_fetch?(plan),
+              watermark_kind
+            )
 
           case fetch_slack_workspace(user_id, source_scope, team_id, plan, team_oldest) do
             {:ok, workspace, workspace_fetches} ->
@@ -486,7 +494,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 accumulate_watermark(
                   watermark_acc,
                   slack_account,
-                  "slack_watermark",
+                  watermark_kind,
                   now_watermark,
                   watermark_mode
                 )
@@ -561,11 +569,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   # for the "deep lookback silently bypassed" gap) always uses the widened
   # window instead of the cursor, regardless of what's stored, so morning
   # briefings/backfills actually get the deeper context they asked for.
-  defp slack_poll_oldest(_account, fallback_oldest, true), do: fallback_oldest
-  defp slack_poll_oldest(nil, fallback_oldest, _deep_lookback?), do: fallback_oldest
+  defp slack_poll_oldest(_account, fallback_oldest, true, _kind), do: fallback_oldest
+  defp slack_poll_oldest(nil, fallback_oldest, _deep_lookback?, _kind), do: fallback_oldest
 
-  defp slack_poll_oldest(account, fallback_oldest, _deep_lookback?) do
-    case SourceCursors.get(account.id, "slack_watermark") do
+  defp slack_poll_oldest(account, fallback_oldest, _deep_lookback?, kind) do
+    case SourceCursors.get(account.id, kind) do
       %{value: value} when is_binary(value) and value != "" -> value
       _ -> fallback_oldest
     end
@@ -1551,6 +1559,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       watermark_mode = watermark_advance_mode(context, plan)
       deep_lookback? = deep_lookback_fetch?(plan)
+      watermark_kind = source_watermark_kind(context, "gmail")
       provider_count = length(providers)
       provider_concurrency = min(@gmail_provider_fetch_concurrency, provider_count)
       phase_budgets = gmail_phase_budgets(plan)
@@ -1582,7 +1591,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       provider_specs =
         Enum.map(providers, fn provider ->
           account = ConnectedAccounts.get(user_id, provider)
-          query = gmail_poll_query(account, fallback_query, deep_lookback?)
+          query = gmail_poll_query(account, fallback_query, deep_lookback?, watermark_kind)
           quota = Map.fetch!(provider_quotas, provider)
           {provider, account, query, quota}
         end)
@@ -1631,7 +1640,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                 accumulate_watermark(
                   watermark_acc,
                   account,
-                  "gmail_poll_watermark",
+                  watermark_kind,
                   now_watermark,
                   watermark_mode
                 )
@@ -2278,13 +2287,23 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   # fetch remains the fallback for accounts with no cursor yet. A
   # deep-lookback fetch always uses the widened window instead of the cursor
   # (see `slack_poll_oldest/3` for the matching Slack fix).
-  defp gmail_poll_query(_account, fallback_query, true), do: fallback_query
-  defp gmail_poll_query(nil, fallback_query, _deep_lookback?), do: fallback_query
+  defp gmail_poll_query(_account, fallback_query, true, _kind), do: fallback_query
+  defp gmail_poll_query(nil, fallback_query, _deep_lookback?, _kind), do: fallback_query
 
-  defp gmail_poll_query(account, fallback_query, _deep_lookback?) do
-    case SourceCursors.get(account.id, "gmail_poll_watermark") do
+  defp gmail_poll_query(account, fallback_query, _deep_lookback?, kind) do
+    case SourceCursors.get(account.id, kind) do
       %{value: value} when is_binary(value) and value != "" -> "after:#{value}"
       _ -> fallback_query
+    end
+  end
+
+  defp source_watermark_kind(context, source) when source in ["gmail", "slack"] do
+    role = Map.get(context, :source_watermark_role, Map.get(context, "source_watermark_role"))
+
+    case role do
+      role when role in ["discovery", "closure"] -> "#{source}_#{role}_watermark"
+      _other when source == "gmail" -> "gmail_poll_watermark"
+      _other -> "slack_watermark"
     end
   end
 

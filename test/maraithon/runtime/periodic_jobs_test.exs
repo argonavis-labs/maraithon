@@ -4,11 +4,13 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
   import Ecto.Query
 
   alias Maraithon.Accounts
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.PeriodicJobs
   alias Maraithon.TelegramAssistant.ProactiveQueue
+  alias Maraithon.Todos
 
   test "provider coordinator creates a stable account-partitioned refresh row" do
     user_id = "periodic-provider-#{System.unique_integer([:positive])}@example.com"
@@ -126,5 +128,57 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
 
     assert {:ok, %{discovered: 0, enqueued: 0}} =
              PeriodicJobs.schedule("proactive_check_in")
+  end
+
+  test "completion coordinator fans out one durable closure job per source account" do
+    user_id = "periodic-closure-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:closure@example.com", %{
+        metadata: %{"account_email" => "closure@example.com"}
+      })
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Reply from the closure account",
+          "summary" => "A source-account todo remains open.",
+          "next_action" => "Reply in the Gmail thread.",
+          "priority" => 85,
+          "source_account_id" => account.id,
+          "source_account_label" => "closure@example.com",
+          "source_item_id" => "closure-thread",
+          "dedupe_key" => "periodic-account-closure"
+        }
+      ])
+
+    assert {:ok,
+            %{
+              discovered: 1,
+              enqueued: 1,
+              account_partitions: 1,
+              legacy_partitions: 0
+            }} = PeriodicJobs.schedule("todo_completion_sweep")
+
+    job =
+      Repo.one!(
+        from(job in BackgroundJob,
+          where: job.job_type == "runtime_partition:source_account_closure"
+        )
+      )
+
+    assert job.queue == "runtime_model_user"
+    assert job.user_id == user_id
+    assert job.payload["account_id"] == account.id
+    assert job.payload["role"] == "closure"
+    assert job.rate_limit_key == "model"
+    assert String.starts_with?(job.partition_key, "provider-account:")
+    refute String.contains?(job.partition_key, user_id)
+
+    assert {:ok, %{discovered: 0, enqueued: 0}} =
+             PeriodicJobs.schedule("todo_completion_sweep")
   end
 end

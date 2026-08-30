@@ -54,6 +54,15 @@ defmodule Maraithon.Todos.UserBatch do
   def record_cursor(_sweep_key, _after_user_id), do: :error
 
   def open_todo_user_ids(opts \\ []) when is_list(opts) do
+    open_todo_user_ids_from_query(base_query(), opts)
+  end
+
+  def open_todo_user_ids_without_source_account(opts \\ []) when is_list(opts) do
+    query = where(base_query(), [todo], is_nil(todo.source_account_id))
+    open_todo_user_ids_from_query(query, opts)
+  end
+
+  defp open_todo_user_ids_from_query(query, opts) do
     case Keyword.get(opts, :user_ids) do
       user_ids when is_list(user_ids) ->
         user_ids
@@ -64,7 +73,6 @@ defmodule Maraithon.Todos.UserBatch do
 
       _other ->
         cursor = bounded_cursor(Keyword.get(opts, :after_user_id))
-        query = base_query()
 
         first =
           query

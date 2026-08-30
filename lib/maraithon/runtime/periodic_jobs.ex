@@ -25,6 +25,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.TokenRefresher
   alias Maraithon.Runtime.WatchRenewer
   alias Maraithon.TelegramAssistant.ProactiveQueue
+  alias Maraithon.Todos.Todo
   alias Maraithon.Todos.{OutcomeLearning, UserBatch}
 
   @provider_queue "runtime_provider_account"
@@ -39,6 +40,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @telegram_heal_job "runtime_partition:telegram_heal"
   @proactive_job "runtime_partition:proactive_check_in"
   @todo_completion_job "runtime_partition:todo_completion"
+  @todo_account_closure_job "runtime_partition:source_account_closure"
   @nudge_job "runtime_partition:nudge"
   @staleness_job "runtime_partition:staleness_triage"
   @todo_outcome_job "runtime_partition:todo_outcome_learning"
@@ -51,7 +53,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   def schedule("watch_renewer"), do: schedule_watch_renewals()
   def schedule("freshness_sweep"), do: schedule_freshness_checks()
   def schedule("proactive_check_in"), do: schedule_proactive_users()
-  def schedule("todo_completion_sweep"), do: schedule_open_todo_users("todo_completion_sweep")
+  def schedule("todo_completion_sweep"), do: schedule_todo_completion_partitions()
   def schedule("nudge_sweep"), do: schedule_nudge_users()
   def schedule("staleness_triage_sweep"), do: schedule_open_todo_users("staleness_triage_sweep")
   def schedule(name), do: {:error, {:unknown_periodic_schedule, name}}
@@ -279,6 +281,83 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     |> record_cursor_after(cursor_key, users)
   end
 
+  defp schedule_todo_completion_partitions do
+    now = database_now!()
+    batch_size = Config.positive_integer(:todo_completion_account_batch_size, 100)
+    accounts = todo_completion_accounts(batch_size)
+    cursor_key = "durable_todo_completion_legacy_sweep"
+    cursor = UserBatch.load_cursor(cursor_key)
+    legacy_users = UserBatch.open_todo_user_ids_without_source_account(after_user_id: cursor)
+
+    with {:ok, account_count} <-
+           enqueue_many(accounts, fn account ->
+             BackgroundJobs.enqueue(@todo_account_closure_job, %{
+               user_id: account.user_id,
+               queue: @model_queue,
+               dedupe_key: "runtime-partition:todo-account-closure:#{account.id}",
+               partition_key: provider_partition(account.user_id, account.provider),
+               rate_limit_key: "model",
+               max_attempts: 3,
+               scheduled_at: now,
+               payload: %{
+                 "user_id" => account.user_id,
+                 "account_id" => account.id,
+                 "role" => "closure"
+               }
+             })
+           end),
+         {:ok, legacy_count} <-
+           enqueue_many(legacy_users, fn user_id ->
+             BackgroundJobs.enqueue(@todo_completion_job, %{
+               user_id: user_id,
+               queue: @model_queue,
+               dedupe_key: model_dedupe_key("todo_completion_legacy", user_id),
+               partition_key: tenant_partition(user_id),
+               rate_limit_key: "model",
+               max_attempts: 3,
+               scheduled_at: now,
+               payload: %{"user_id" => user_id, "partition_role" => "legacy"}
+             })
+           end) do
+      result =
+        {:ok,
+         %{
+           schedule: "todo_completion_sweep",
+           discovered: length(accounts) + length(legacy_users),
+           enqueued: account_count + legacy_count,
+           account_partitions: account_count,
+           legacy_partitions: legacy_count
+         }}
+
+      record_cursor_after(result, cursor_key, legacy_users)
+    end
+  end
+
+  defp todo_completion_accounts(limit) do
+    Todo
+    |> join(:inner, [todo], account in ConnectedAccount, on: account.id == todo.source_account_id)
+    |> join(:left, [todo, account], job in BackgroundJob,
+      on:
+        job.dedupe_key ==
+          fragment("'runtime-partition:todo-account-closure:' || ?::text", account.id) and
+          job.status in @active_statuses
+    )
+    |> where(
+      [todo, account, job],
+      todo.status in ["open", "snoozed"] and account.status == "connected" and is_nil(job.id)
+    )
+    |> where(
+      [_todo, account, _job],
+      like(account.provider, "google%") or
+        fragment("? ~ '^slack:[^:]+$'", account.provider)
+    )
+    |> distinct([_todo, account, _job], account.id)
+    |> order_by([_todo, account, _job], asc: account.id)
+    |> limit(^limit)
+    |> select([_todo, account, _job], account)
+    |> Repo.all()
+  end
+
   defp enqueue_model_users(schedule, job_type, users, now, extra \\ %{}) do
     case enqueue_many(users, fn user_id ->
            BackgroundJobs.enqueue(job_type, %{
@@ -377,7 +456,26 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp execute_model(%BackgroundJob{job_type: @todo_completion_job} = job) do
     with {:ok, user_id} <- partition_user_id(job) do
-      TodoCompletionSweep.run_for_user(user_id) |> normalize_work_result()
+      opts =
+        if Map.get(job.payload || %{}, "partition_role") == "legacy" do
+          [source_account_unassigned?: true]
+        else
+          []
+        end
+
+      TodoCompletionSweep.run_for_user(user_id, opts) |> normalize_work_result()
+    end
+  end
+
+  defp execute_model(%BackgroundJob{job_type: @todo_account_closure_job} = job) do
+    with {:ok, account_id} <- payload_integer(job, "account_id"),
+         %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
+         true <- account.user_id == job.user_id do
+      TodoCompletionSweep.run_for_account(account) |> normalize_work_result()
+    else
+      nil -> {:error, :source_account_not_found}
+      false -> {:error, :source_account_user_mismatch}
+      {:error, _reason} = error -> error
     end
   end
 

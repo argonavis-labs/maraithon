@@ -149,7 +149,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     # Cheap existence gate first (SPEC 05 R2): evidence acquisition — which
     # fires live Gmail/Slack/etc. calls — must never run for a user with
     # nothing to check, preserving the original zero-open-todos short-circuit.
-    open_todos = open_todo_pool(user_id, now)
+    open_todos = open_todo_pool(user_id, now, opts)
 
     cond do
       open_todos == [] ->
@@ -160,45 +160,69 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         # is independent of which todos are checked (`build_live_source_bundle/4`
         # takes `_todos` and never reads it), so collecting first lets R3
         # partition candidates into evidence-linked vs backstop.
-        case collect_evidence(user_id, open_todos, now, opts) do
-          [] ->
-            {:skip, :no_evidence}
+        evidence = collect_evidence(user_id, open_todos, now, opts)
 
-          evidence ->
-            todos = select_candidates(user_id, open_todos, evidence)
+        if actionable_evidence?(evidence) do
+          todos = select_candidates(user_id, open_todos, evidence)
 
-            # Stamp only on success: a failed evaluation checked nothing, so
-            # advancing the backstop rotation would skip these todos unchecked.
-            case evaluate_fitting(user_id, todos, evidence, now, opts) do
-              {:ok, result, evaluated_todos} ->
-                stamp_completion_checked(user_id, evaluated_todos, now)
-                result
+          # Stamp only on success: a failed evaluation checked nothing, so
+          # advancing the backstop rotation would skip these todos unchecked.
+          case evaluate_fitting(user_id, todos, evidence, now, opts) do
+            {:ok, result, evaluated_todos} ->
+              stamp_completion_checked(user_id, evaluated_todos, now)
+              result
 
-              {:error, _reason} = error ->
-                error
-            end
+            {:error, _reason} = error ->
+              error
+          end
+        else
+          {:skip, :no_evidence}
         end
     end
   end
 
+  defp actionable_evidence?(evidence) when is_list(evidence) do
+    Enum.any?(evidence, &(read_string(&1, "channel", nil) != "source_health"))
+  end
+
+  defp actionable_evidence?(_evidence), do: false
+
   # ── Candidates ────────────────────────────────────────────────────────────
 
-  defp open_todo_pool(user_id, now) do
+  defp open_todo_pool(user_id, now, run_opts) do
     age_cutoff = DateTime.add(now, -@min_todo_age_minutes * 60, :second)
 
+    opts =
+      [
+        statuses: @open_statuses,
+        limit: @max_open_todo_scan,
+        sort_by: "updated",
+        sort_dir: "asc",
+        # Completion checking must see everything open — an unsurfaceable todo
+        # still deserves to be closed when the evidence proves it done.
+        exclude_unsurfaceable?: false
+      ]
+      |> maybe_put_source_account_filter(run_opts)
+
     user_id
-    |> Todos.list_for_user(
-      statuses: @open_statuses,
-      limit: @max_open_todo_scan,
-      sort_by: "updated",
-      sort_dir: "asc",
-      # Completion checking must see everything open — an unsurfaceable todo
-      # still deserves to be closed when the evidence proves it done.
-      exclude_unsurfaceable?: false
-    )
+    |> Todos.list_for_user(opts)
     |> Enum.filter(fn todo ->
       DateTime.compare(todo.inserted_at, age_cutoff) == :lt
     end)
+  end
+
+  defp maybe_put_source_account_filter(opts, run_opts) when is_list(run_opts) do
+    case Keyword.get(run_opts, :source_account_id) do
+      account_id when is_integer(account_id) ->
+        Keyword.put(opts, :source_account_id, account_id)
+
+      _other ->
+        if Keyword.get(run_opts, :source_account_unassigned?, false) do
+          Keyword.put(opts, :source_account_unassigned?, true)
+        else
+          opts
+        end
+    end
   end
 
   # Delta-driven candidate selection with a bounded backstop (SPEC 05 R3):
@@ -321,9 +345,14 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp collect_evidence(user_id, todos, now, opts) do
     cutoff = DateTime.add(now, -@evidence_window_days * 24 * 3600, :second)
 
-    user_id
-    |> observation_evidence(cutoff)
-    |> Enum.concat(outgoing_message_evidence(user_id, cutoff))
+    persisted_evidence =
+      if Keyword.has_key?(opts, :source_account_id) do
+        []
+      else
+        observation_evidence(user_id, cutoff) ++ outgoing_message_evidence(user_id, cutoff)
+      end
+
+    persisted_evidence
     |> Enum.concat(live_source_evidence(user_id, todos, now, opts))
     |> dedupe_evidence()
   end
@@ -471,16 +500,18 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       @source_skill_config
       |> Map.merge(Keyword.get(opts, :source_skill_config, %{}))
 
-    context = %{
-      user_id: user_id,
-      timestamp: now,
-      trigger: %{type: :wakeup, job_type: "todo_completion_sweep"},
-      recent_events: [],
-      event: nil,
-      # An explicit evidence sweep, not a scheduled scan — keep the deep
-      # lookback window (SPEC 04 R2 caps scheduled scans to 48h).
-      acquisition_deep_lookback: true
-    }
+    context =
+      %{
+        user_id: user_id,
+        timestamp: now,
+        trigger: %{type: :wakeup, job_type: "todo_completion_sweep"},
+        recent_events: [],
+        event: nil,
+        # An explicit evidence sweep, not a scheduled scan — keep the deep
+        # lookback window (SPEC 04 R2 caps scheduled scans to 48h).
+        acquisition_deep_lookback: true
+      }
+      |> maybe_put_context_source_scope(Keyword.get(opts, :source_scope))
 
     {bundle, _telemetry, _proposed_watermarks} =
       Acquisition.build(
@@ -492,6 +523,12 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
     bundle
   end
+
+  defp maybe_put_context_source_scope(context, source_scope) when is_map(source_scope) do
+    Map.put(context, :source_scope, source_scope)
+  end
+
+  defp maybe_put_context_source_scope(context, _source_scope), do: context
 
   defp live_source_unavailable_evidence(now, reason) do
     [

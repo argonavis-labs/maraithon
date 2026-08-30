@@ -55,6 +55,37 @@ defmodule Maraithon.Todos.CrossSourceCompletionTest do
     Jason.decode!(captures["json"])
   end
 
+  test "an empty complete account delta makes no model call" do
+    user_id = unique_user!()
+    now = ~U[2099-06-27 14:00:00Z]
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        open_todo_attrs("Keep the quiet account todo open", ~U[2099-06-20 12:00:00Z])
+      ])
+
+    source_bundle =
+      %{timestamp: now, trigger: %{type: :wakeup}}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "status" => "ready",
+        "fetched_at" => now,
+        "messages" => [],
+        "inbox_messages" => [],
+        "sent_messages" => [],
+        "messages_by_provider" => %{}
+      })
+
+    llm_request = fn _params -> flunk("empty deltas must not call the model") end
+
+    assert {:skip, :no_evidence} =
+             CrossSourceCompletion.run_for_user(user_id,
+               now: now,
+               source_bundle: source_bundle,
+               llm_request: llm_request
+             )
+  end
+
   test "closes stale event-creation work when later source evidence shows the event is live" do
     user_id = unique_user!()
     now = ~U[2099-06-27 14:00:00Z]

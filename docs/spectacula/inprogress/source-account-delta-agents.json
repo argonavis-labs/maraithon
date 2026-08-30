@@ -7,9 +7,9 @@
   "created_at": "2026-08-30T03:04:00Z",
   "approved_at": "2026-08-30T03:04:00Z",
   "started_at": "2026-08-30T03:04:00Z",
-  "updated_at": "2026-08-30T03:17:00Z",
-  "summary": "Implementation is active. Slack is bundle-first, execution scopes safely target one live account, new Gmail/Slack todos resolve to their exact connected-account row, and discovery/closure cursors are independent and monotonic.",
-  "next_action": "Add durable per-account closure fan-out, then discovery acquisition/results fan-out.",
+  "updated_at": "2026-08-30T03:22:00Z",
+  "summary": "Implementation is active. The runtime now discovers one exact closure partition per Gmail/Slack account with open work, reads only the role-specific delta, makes zero model calls on quiet cycles, and preserves a separate legacy partition for unassigned todos.",
+  "next_action": "Add sealed per-account discovery acquisition/results fan-out and cut ordinary Chief cycles over after production parity.",
   "blockers": [],
   "review_policy": {
     "final_vetting": "off"
@@ -31,7 +31,7 @@
     "notes": "Plain spectacula invocation sets final_vetting off. mix compile --warnings-as-errors and the full touched Slack follow-through test file pass; broad suites remain intentionally skipped under repository policy."
   },
   "resume_context": {
-    "last_completed_step": "Added exact connected-account lineage at the insight-to-todo boundary and independent monotonic discovery/closure cursor kinds.",
+    "last_completed_step": "Added one-minute durable per-account closure fan-out with exact todo/source scope, role-specific delta cursors, deferred cursor settlement, and a zero-model quiet path.",
     "pending_steps": [
       "Add acquisition, discovery, and closure durable job fan-out.",
       "Cut ordinary Chief cycles over to persisted account-worker results after production parity."
@@ -89,6 +89,13 @@
       "from_stage": "inprogress",
       "to_stage": "inprogress",
       "note": "New sourced todos carry exact connected-account lineage and all four Gmail/Slack role cursors reject rewinds independently."
+    },
+    {
+      "at": "2026-08-30T03:22:00Z",
+      "event": "checkpoint",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Exact account closure jobs run on a one-minute anti-entropy cadence, consume only closure deltas, skip the model on empty bundles, and leave cursors unchanged on unsettled evaluation."
     }
   ]
 }

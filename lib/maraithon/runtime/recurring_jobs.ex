@@ -86,7 +86,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
       configured_interval_spec(
         "todo_completion_sweep",
         :todo_completion_sweep_interval_ms,
-        :timer.minutes(30),
+        :timer.minutes(1),
         :todo_completion_sweep_initial_delay_ms
       ),
       configured_interval_spec(

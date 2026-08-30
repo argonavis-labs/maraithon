@@ -4,6 +4,7 @@ defmodule Maraithon.ChiefOfStaff.SourceScope do
   """
 
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Token
 
@@ -75,6 +76,41 @@ defmodule Maraithon.ChiefOfStaff.SourceScope do
   end
 
   def intersect(_live_scope, _requested_scope), do: resolve(nil)
+
+  @doc "Returns the live provider scope for one connected account row."
+  def for_account(account, service \\ nil)
+
+  def for_account(%ConnectedAccount{user_id: user_id, provider: provider}, service) do
+    requested_services = if is_binary(service), do: [service], else: []
+
+    requested_scope =
+      cond do
+        provider == "google" or String.starts_with?(provider, "google:") ->
+          %{
+            "google_accounts" => [
+              %{"provider" => provider, "services" => requested_services}
+            ]
+          }
+
+        Regex.match?(~r/^slack:[^:]+$/, provider) ->
+          [team_id] = Regex.run(~r/^slack:([^:]+)$/, provider, capture: :all_but_first)
+
+          %{
+            "slack_workspaces" => [
+              %{"team_id" => team_id, "services" => requested_services}
+            ]
+          }
+
+        true ->
+          %{}
+      end
+
+    user_id
+    |> resolve()
+    |> intersect(requested_scope)
+  end
+
+  def for_account(_account, _service), do: resolve(nil)
 
   def google_accounts(scope) do
     scope
