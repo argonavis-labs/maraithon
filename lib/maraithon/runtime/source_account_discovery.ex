@@ -785,16 +785,46 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       max_list_items: BackgroundJob.payload_bounds()[:max_list_items]
     ]
 
-    with {:ok, encoded} <- Jason.encode(value),
-         true <- byte_size(encoded) <= BackgroundJob.max_payload_bytes(),
-         {:ok, canonical} <- Jason.decode(encoded),
-         true <- BoundedJSON.valid?(canonical, BackgroundJob.max_payload_bytes(), bounds),
+    with {:ok, encoded} <- encode_restore_value(value),
+         :ok <- validate_restore_encoded_size(encoded),
+         {:ok, canonical} <- decode_restore_value(encoded),
+         :ok <- validate_restore_structure(canonical, bounds),
          {:ok, expanded_bytes} <- marker_expanded_bytes(canonical, 0),
-         true <- expanded_bytes <= @handoff_max_restored_bytes do
+         :ok <- validate_expanded_size(expanded_bytes) do
       :ok
-    else
-      _invalid -> {:error, :source_discovery_partition_corrupt}
     end
+  end
+
+  defp encode_restore_value(value) do
+    case Jason.encode(value) do
+      {:ok, encoded} -> {:ok, encoded}
+      {:error, _reason} -> {:error, :source_discovery_partition_json_invalid}
+    end
+  end
+
+  defp validate_restore_encoded_size(encoded) do
+    if byte_size(encoded) <= BackgroundJob.max_payload_bytes(),
+      do: :ok,
+      else: {:error, :source_discovery_partition_encoded_too_large}
+  end
+
+  defp decode_restore_value(encoded) do
+    case Jason.decode(encoded) do
+      {:ok, canonical} -> {:ok, canonical}
+      {:error, _reason} -> {:error, :source_discovery_partition_json_invalid}
+    end
+  end
+
+  defp validate_restore_structure(canonical, bounds) do
+    if BoundedJSON.valid?(canonical, BackgroundJob.max_payload_bytes(), bounds),
+      do: :ok,
+      else: {:error, :source_discovery_partition_structure_too_large}
+  end
+
+  defp validate_expanded_size(expanded_bytes) do
+    if expanded_bytes <= @handoff_max_restored_bytes,
+      do: :ok,
+      else: {:error, :source_discovery_partition_expanded_too_large}
   end
 
   defp marker_expanded_bytes(
@@ -840,7 +870,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
     if total <= @handoff_max_restored_bytes,
       do: {:ok, total},
-      else: {:error, :source_discovery_partition_corrupt}
+      else: {:error, :source_discovery_partition_expanded_too_large}
   end
 
   defp bounded_gunzip(compressed, expected_size)
