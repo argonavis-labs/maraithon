@@ -7,6 +7,66 @@ defmodule Maraithon.ChiefOfStaff.SourceScopeTest do
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
 
+  test "intersects an exact requested account scope with live credential capabilities" do
+    live_scope = %{
+      "google_accounts" => [
+        %{
+          "provider" => "google:founder@example.com",
+          "account_email" => "founder@example.com",
+          "services" => ["calendar", "gmail"]
+        },
+        %{
+          "provider" => "google:ops@example.com",
+          "account_email" => "ops@example.com",
+          "services" => ["gmail"]
+        }
+      ],
+      "slack_workspaces" => [
+        %{
+          "team_id" => "T12345",
+          "team_name" => "Agora",
+          "services" => ["channels", "dms"]
+        }
+      ],
+      "telegram_connected" => true
+    }
+
+    requested_scope = %{
+      "google_accounts" => [
+        %{
+          "provider" => "google:founder@example.com",
+          "services" => ["gmail"]
+        },
+        %{
+          "provider" => "google:disconnected@example.com",
+          "services" => ["gmail"]
+        }
+      ],
+      "slack_workspaces" => [
+        %{"team_id" => "T12345", "services" => ["dms"]}
+      ],
+      "telegram_connected" => false
+    }
+
+    assert SourceScope.intersect(live_scope, requested_scope) == %{
+             "google_accounts" => [
+               %{
+                 "provider" => "google:founder@example.com",
+                 "account_email" => "founder@example.com",
+                 "services" => ["gmail"]
+               }
+             ],
+             "slack_workspaces" => [
+               %{
+                 "team_id" => "T12345",
+                 "team_name" => "Agora",
+                 "services" => ["dms"]
+               }
+             ],
+             "telegram_connected" => false
+           }
+  end
+
   test "resolves all connected Google accounts and Slack workspaces for chief of staff" do
     user_id = "chief-scope@example.com"
     _user = Accounts.get_or_create_user_by_email(user_id)

@@ -3,8 +3,10 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
 
   import ExUnit.CaptureLog
 
-  alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle}
+  alias Maraithon.Accounts
+  alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle, SourceScope}
   alias Maraithon.OAuth
+  alias Maraithon.OAuth.Google
   alias Maraithon.TestSupport.{NewsStub, TravelCalendarStub, TravelGmailStub}
 
   setup do
@@ -31,6 +33,101 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     end)
 
     :ok
+  end
+
+  test "execution context can target exactly one live Gmail account" do
+    user_id = "chief-account-scope@example.com"
+    now = ~U[2026-08-30 03:12:00Z]
+    _user = Accounts.get_or_create_user_by_email(user_id)
+
+    selected_provider = "google:selected@example.com"
+    ignored_provider = "google:ignored@example.com"
+
+    for {provider, account_email} <- [
+          {selected_provider, "selected@example.com"},
+          {ignored_provider, "ignored@example.com"}
+        ] do
+      assert {:ok, _token} =
+               OAuth.store_tokens(user_id, provider, %{
+                 access_token: "token-#{account_email}",
+                 scopes: Google.scopes_for(["gmail"]),
+                 metadata: %{"account_email" => account_email}
+               })
+    end
+
+    TravelGmailStub.configure(
+      messages_by_provider: %{
+        selected_provider => [
+          %{
+            message_id: "selected-message",
+            thread_id: "selected-thread",
+            subject: "Selected account message",
+            labels: ["INBOX"],
+            internal_date: DateTime.add(now, -60, :second),
+            text_body: "Please send the selected account update."
+          }
+        ],
+        ignored_provider => [
+          %{
+            message_id: "ignored-message",
+            thread_id: "ignored-thread",
+            subject: "Ignored account message",
+            labels: ["INBOX"],
+            internal_date: DateTime.add(now, -60, :second),
+            text_body: "Please send the ignored account update."
+          }
+        ]
+      }
+    )
+
+    all_accounts_scope = %{
+      "google_accounts" => [
+        %{
+          "provider" => selected_provider,
+          "account_email" => "selected@example.com",
+          "services" => ["gmail"]
+        },
+        %{
+          "provider" => ignored_provider,
+          "account_email" => "ignored@example.com",
+          "services" => ["gmail"]
+        }
+      ]
+    }
+
+    context = %{
+      agent_id: "chief-agent-account-scope",
+      user_id: user_id,
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil,
+      source_scope: %{
+        "google_accounts" => [
+          %{
+            "provider" => selected_provider,
+            "services" => ["gmail"]
+          }
+        ]
+      }
+    }
+
+    {bundle, _telemetry, _watermarks} =
+      Acquisition.build(
+        user_id,
+        ["followthrough"],
+        %{"followthrough" => %{"source_scope" => all_accounts_scope}},
+        context
+      )
+
+    assert SourceScope.google_account_providers(SourceBundle.source_scope(bundle), "gmail") == [
+             selected_provider
+           ]
+
+    message_ids = SourceBundle.gmail_messages(bundle) |> Enum.map(& &1["message_id"])
+    assert "selected-message" in message_ids
+    refute "ignored-message" in message_ids
   end
 
   test "expands Slack parent threads for thread broadcasts in the source bundle" do

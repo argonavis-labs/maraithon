@@ -7,9 +7,9 @@
   "created_at": "2026-08-30T03:04:00Z",
   "approved_at": "2026-08-30T03:04:00Z",
   "started_at": "2026-08-30T03:04:00Z",
-  "updated_at": "2026-08-30T03:11:00Z",
-  "summary": "Implementation is active. Slack follow-through now consumes the assistant-owned delta bundle, avoids a duplicate provider scan, emits durable todos for self-authored promises, and can close those todos from later Slack evidence.",
-  "next_action": "Add explicit account scoping and durable per-account acquisition/discovery/closure fan-out.",
+  "updated_at": "2026-08-30T03:14:00Z",
+  "summary": "Implementation is active. Slack follow-through is bundle-first, self-authored promises become closable todos, and exact execution-context source scopes now intersect with live credentials for safe one-account work.",
+  "next_action": "Add role-specific account cursors and durable per-account acquisition/discovery/closure fan-out.",
   "blockers": [],
   "review_policy": {
     "final_vetting": "off"
@@ -31,9 +31,8 @@
     "notes": "Plain spectacula invocation sets final_vetting off. mix compile --warnings-as-errors and the full touched Slack follow-through test file pass; broad suites remain intentionally skipped under repository policy."
   },
   "resume_context": {
-    "last_completed_step": "Made Slack follow-through consume the shared source delta, proved the no-second-fetch path, and admitted self-authored Slack promises as source-backed todos that later evidence can close.",
+    "last_completed_step": "Added exact one-account execution scoping by intersecting requested scope with current live credential capabilities, with focused Gmail acquisition coverage.",
     "pending_steps": [
-      "Intersect configured and live source scope for exact one-account targeting.",
       "Add role-specific account cursors and account-filtered todo queries.",
       "Add acquisition, discovery, and closure durable job fan-out.",
       "Cut ordinary Chief cycles over to persisted account-worker results after production parity."
@@ -77,6 +76,13 @@
       "from_stage": "inprogress",
       "to_stage": "inprogress",
       "note": "Bundle-first Slack follow-through, self-authored todo admission, and source-evidence closure regression coverage pass."
+    },
+    {
+      "at": "2026-08-30T03:14:00Z",
+      "event": "checkpoint",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Exact requested source scopes now intersect with live accounts and service capabilities; focused SourceScope and acquisition tests pass."
     }
   ]
 }

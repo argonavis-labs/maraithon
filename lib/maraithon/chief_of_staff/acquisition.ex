@@ -133,7 +133,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   # with `context[:advance_watermarks] == true`. See `watermark_advance_mode/2`.
   def build(user_id, skill_ids, skill_configs, context)
       when is_binary(user_id) and is_list(skill_ids) and is_map(skill_configs) and is_map(context) do
-    source_scope = resolve_source_scope(user_id, skill_ids, skill_configs)
+    source_scope = resolve_source_scope(user_id, skill_ids, skill_configs, context)
     bundle = SourceBundle.empty(context, source_scope)
     plan = build_plan(user_id, skill_ids, skill_configs, context)
 
@@ -2684,7 +2684,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp maybe_merge_news_feeds(config, _feeds), do: config
 
-  defp resolve_source_scope(user_id, skill_ids, skill_configs) do
+  defp resolve_source_scope(user_id, skill_ids, skill_configs, context) do
     configured_scope =
       skill_ids
       |> Enum.map(fn skill_id ->
@@ -2695,12 +2695,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> Enum.find(&is_map/1)
 
     live_scope = SourceScope.resolve(user_id)
+    requested_scope = context[:source_scope] || context["source_scope"]
 
-    if SourceScope.google_accounts(live_scope) == [] and
-         SourceScope.slack_workspaces(live_scope) == [] do
-      SourceScope.normalize(configured_scope || %{})
-    else
-      live_scope
+    cond do
+      is_map(requested_scope) ->
+        SourceScope.intersect(live_scope, requested_scope)
+
+      SourceScope.google_accounts(live_scope) == [] and
+          SourceScope.slack_workspaces(live_scope) == [] ->
+        SourceScope.normalize(configured_scope || %{})
+
+      true ->
+        live_scope
     end
   end
 

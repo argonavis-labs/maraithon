@@ -43,6 +43,39 @@ defmodule Maraithon.ChiefOfStaff.SourceScope do
 
   def normalize(_scope), do: resolve(nil)
 
+  @doc """
+  Restricts a live source scope to an explicitly requested subset.
+
+  Live connections remain authoritative: requested accounts that are no
+  longer connected disappear, and a request cannot add services the live
+  credential does not support. Omitting services for a requested account
+  means all of that live account's services.
+  """
+  def intersect(live_scope, requested_scope)
+      when is_map(live_scope) and is_map(requested_scope) do
+    live_scope = normalize(live_scope)
+    requested_scope = normalize(requested_scope)
+
+    %{
+      "google_accounts" =>
+        intersect_accounts(
+          live_scope["google_accounts"],
+          requested_scope["google_accounts"],
+          "provider"
+        ),
+      "slack_workspaces" =>
+        intersect_accounts(
+          live_scope["slack_workspaces"],
+          requested_scope["slack_workspaces"],
+          "team_id"
+        ),
+      "telegram_connected" =>
+        live_scope["telegram_connected"] and requested_scope["telegram_connected"]
+    }
+  end
+
+  def intersect(_live_scope, _requested_scope), do: resolve(nil)
+
   def google_accounts(scope) do
     scope
     |> normalize()
@@ -137,6 +170,38 @@ defmodule Maraithon.ChiefOfStaff.SourceScope do
   end
 
   def subscriptions(_scope, _user_id), do: []
+
+  defp intersect_accounts(live_accounts, requested_accounts, identity_key) do
+    requested_by_identity =
+      requested_accounts
+      |> Enum.map(&{Map.get(&1, identity_key), &1})
+      |> Map.new()
+
+    live_accounts
+    |> Enum.flat_map(fn live_account ->
+      case Map.get(requested_by_identity, Map.get(live_account, identity_key)) do
+        nil ->
+          []
+
+        requested_account ->
+          requested_services = Map.get(requested_account, "services", [])
+          live_services = Map.get(live_account, "services", [])
+
+          services =
+            if requested_services == [] do
+              live_services
+            else
+              Enum.filter(live_services, &(&1 in requested_services))
+            end
+
+          if requested_services != [] and services == [] do
+            []
+          else
+            [Map.put(live_account, "services", services)]
+          end
+      end
+    end)
+  end
 
   defp google_accounts_from_tokens(tokens, accounts) do
     account_by_provider =
