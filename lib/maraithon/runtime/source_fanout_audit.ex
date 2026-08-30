@@ -22,28 +22,46 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
   @closure_reason "runtime_partition:source_account_closure_reason"
   @closure_finalize "runtime_partition:source_account_closure_finalize"
   @active_statuses ~w(pending running)
+  @default_settlement_grace_seconds 600
 
   @doc "Returns a PII-free exact-coverage audit for source cycles since `since`."
   def verify_since(%DateTime{} = since, opts \\ []) do
     now = Keyword.get(opts, :now, DateTime.utc_now()) |> DateTime.truncate(:microsecond)
-    grace_seconds = Keyword.get(opts, :settlement_grace_seconds, 300)
+
+    grace_seconds =
+      Keyword.get(opts, :settlement_grace_seconds, @default_settlement_grace_seconds)
+
     cutoff = DateTime.add(now, -grace_seconds, :second)
 
     jobs = load_jobs(since)
     jobs_by_id = Map.new(jobs, &{&1.id, &1})
     expected_accounts = expected_accounts()
 
-    cycles =
+    acquisition_jobs =
       jobs
       |> Enum.filter(&(&1.job_type in [@discovery_acquire, @closure_acquire]))
-      |> Enum.filter(&(DateTime.compare(&1.inserted_at, cutoff) != :gt))
+
+    cycles =
+      acquisition_jobs
+      |> Enum.filter(&cycle_ready_for_audit?(&1, jobs_by_id, cutoff))
       |> Enum.map(&audit_cycle(&1, jobs_by_id))
 
-    discovery =
-      role_summary(cycles, "discovery", expected_accounts.discovery, jobs, cutoff)
+    current_cycles = latest_cycles_by_account(cycles)
 
-    closure = role_summary(cycles, "closure", expected_accounts.closure, jobs, cutoff)
-    errors = Enum.flat_map(cycles, & &1.errors)
+    discovery =
+      role_summary(
+        cycles,
+        current_cycles,
+        "discovery",
+        expected_accounts.discovery,
+        jobs,
+        cutoff
+      )
+
+    closure =
+      role_summary(cycles, current_cycles, "closure", expected_accounts.closure, jobs, cutoff)
+
+    errors = Enum.flat_map(current_cycles, & &1.errors)
     activity = activity_summary(jobs, cycles, cutoff)
 
     closure_covered? =
@@ -57,11 +75,49 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       since: DateTime.to_iso8601(since),
       until: DateTime.to_iso8601(now),
       settlement_grace_seconds: grace_seconds,
+      in_flight_cycles: Enum.count(acquisition_jobs, &cycle_in_flight?(&1, jobs_by_id)),
       discovery: discovery,
       closure: closure,
       activity: activity,
       error_codes: errors |> Enum.map(&Atom.to_string/1) |> Enum.frequencies()
     }
+  end
+
+  defp cycle_ready_for_audit?(job, jobs_by_id, cutoff) do
+    DateTime.compare(job.inserted_at, cutoff) != :gt and not cycle_in_flight?(job, jobs_by_id)
+  end
+
+  defp cycle_in_flight?(%BackgroundJob{status: status}, _jobs_by_id)
+       when status in @active_statuses,
+       do: true
+
+  defp cycle_in_flight?(%BackgroundJob{status: "completed", result: result}, jobs_by_id) do
+    if map_string(result, "outcome") == "fanout_ready" do
+      result
+      |> referenced_fanout_job_ids()
+      |> Enum.map(&Map.get(jobs_by_id, &1))
+      |> Enum.any?(&match?(%BackgroundJob{status: status} when status in @active_statuses, &1))
+    else
+      false
+    end
+  end
+
+  defp cycle_in_flight?(_job, _jobs_by_id), do: false
+
+  defp referenced_fanout_job_ids(result) do
+    map_string_list(result, "reason_job_ids") ++
+      case map_string(result, "finalizer_job_id") do
+        id when is_binary(id) -> [id]
+        _missing -> []
+      end
+  end
+
+  defp latest_cycles_by_account(cycles) do
+    cycles
+    |> Enum.group_by(&{&1.role, &1.account_id})
+    |> Enum.map(fn {_identity, account_cycles} ->
+      Enum.max_by(account_cycles, &{DateTime.to_unix(&1.inserted_at, :microsecond), &1.id})
+    end)
   end
 
   defp load_jobs(since) do
@@ -117,6 +173,8 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
     outcome = map_string(result, "outcome")
 
     base = %{
+      id: acquisition.id,
+      inserted_at: acquisition.inserted_at,
       role: role,
       account_id: account_id,
       acquisition_reference: String.slice(acquisition.id, 0, 8),
@@ -323,10 +381,15 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
 
   defp finalized_counts_valid?(_finalizer, _source_items, _decisions, _fanouts), do: false
 
-  defp role_summary(cycles, role, expected_accounts, jobs, cutoff) do
+  defp role_summary(cycles, current_cycles, role, expected_accounts, jobs, cutoff) do
     selected = Enum.filter(cycles, &(&1.role == role))
     exact = Enum.filter(selected, & &1.exact?)
-    covered_ids = exact |> Enum.map(& &1.account_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    current = Enum.filter(current_cycles, &(&1.role == role))
+    current_exact = Enum.filter(current, & &1.exact?)
+
+    covered_ids =
+      current_exact |> Enum.map(& &1.account_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
     expected_ids = expected_accounts |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
     source_items = Enum.sum(Enum.map(selected, & &1.source_items))
     todo_count = Enum.sum(Enum.map(selected, & &1.todo_count))
@@ -337,6 +400,8 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
     %{
       cycles: length(selected),
       exact_cycles: length(exact),
+      current_cycles: length(current),
+      current_exact_cycles: length(current_exact),
       empty_delta_cycles: Enum.count(exact, &(&1.outcome == "empty_delta")),
       fanout_cycles: Enum.count(exact, &(&1.outcome == "fanout_ready")),
       failed_cycles: length(selected) - length(exact),
@@ -358,7 +423,7 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       missing_account_ids: expected_ids -- covered_ids,
       providers: provider_counts(expected_accounts),
       failures:
-        selected
+        current
         |> Enum.reject(& &1.exact?)
         |> Enum.map(fn cycle ->
           %{
@@ -381,6 +446,7 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       expected_fanout_rows: length(expected_job_ids),
       visible_fanout_rows: Enum.count(expected_job_ids, &MapSet.member?(visible_ids, &1)),
       every_fanout_visible?: Enum.all?(expected_job_ids, &MapSet.member?(visible_ids, &1)),
+      active_retry_rows: Enum.count(jobs, &(&1.status in @active_statuses)),
       active_recent_rows:
         Enum.count(
           jobs,
