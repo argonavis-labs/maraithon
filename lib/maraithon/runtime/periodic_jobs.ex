@@ -358,11 +358,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         [account, _source_token, _acquisition_job, _reason_job],
         finalizer_job in BackgroundJob,
         on:
-          finalizer_job.dedupe_key ==
-            fragment(
-              "'runtime-partition:source-account-discovery-finalize:' || ?::text",
-              account.id
-            ) and
+          fragment(
+            "? = 'runtime-partition:source-account-discovery-finalize:' || ?::text OR ? LIKE 'runtime-partition:source-account-discovery-finalize:' || ?::text || ':%'",
+            finalizer_job.dedupe_key,
+            account.id,
+            finalizer_job.dedupe_key,
+            account.id
+          ) and
             finalizer_job.status in @active_statuses
       )
       |> where(
@@ -385,7 +387,15 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       )
       |> select(
         [account, _source_token, _acquisition_job, _reason_job, _finalizer_job],
-        account
+        struct(account, [
+          :id,
+          :user_id,
+          :provider,
+          :external_account_id,
+          :status,
+          :scopes,
+          :metadata
+        ])
       )
 
     account_page(query, limit, cursor, :first)
@@ -632,11 +642,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         [todo, account, _legacy_job, _acquisition_job, _reason_job],
         finalizer_job in BackgroundJob,
         on:
-          finalizer_job.dedupe_key ==
-            fragment(
-              "'runtime-partition:source-account-closure-finalize:' || ?::text",
-              account.id
-            ) and
+          fragment(
+            "? = 'runtime-partition:source-account-closure-finalize:' || ?::text OR ? LIKE 'runtime-partition:source-account-closure-finalize:' || ?::text || ':%'",
+            finalizer_job.dedupe_key,
+            account.id,
+            finalizer_job.dedupe_key,
+            account.id
+          ) and
             finalizer_job.status in @active_statuses
       )
       |> where(
@@ -660,7 +672,15 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       )
       |> select(
         [_todo, account, _legacy_job, _acquisition_job, _reason_job, _finalizer_job],
-        account
+        struct(account, [
+          :id,
+          :user_id,
+          :provider,
+          :external_account_id,
+          :status,
+          :scopes,
+          :metadata
+        ])
       )
 
     account_page(query, limit, cursor, :second)
