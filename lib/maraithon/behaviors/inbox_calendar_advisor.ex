@@ -734,7 +734,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     self_refs = gmail_self_refs(state)
     provider = read_string(trigger_message, "google_provider", nil)
 
-    case Gmail.fetch_thread(state.user_id, thread_id, provider: provider) do
+    case Gmail.fetch_thread_content(state.user_id, thread_id, provider: provider) do
       {:ok, messages} when is_list(messages) and messages != [] ->
         ConversationContext.from_gmail(messages, trigger_message,
           self_refs: self_refs,

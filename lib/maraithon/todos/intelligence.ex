@@ -1084,6 +1084,7 @@ defmodule Maraithon.Todos.Intelligence do
 
       {:ok, normalized, summary}
     else
+      {:error, _reason} = error -> error
       _other -> {:error, :todo_intelligence_invalid_decisions}
     end
   end
@@ -1108,9 +1109,23 @@ defmodule Maraithon.Todos.Intelligence do
       Logger.warning("Todo intelligence dropped #{invalid_count} invalid decisions")
     end
 
-    case normalized |> Enum.reverse() |> Enum.uniq_by(& &1.candidate_index) do
-      [] -> {:error, :todo_intelligence_invalid_decisions}
-      salvaged -> {:ok, salvaged}
+    normalized = normalized |> Enum.reverse() |> Enum.uniq_by(& &1.candidate_index)
+
+    case {normalized, Keyword.get(opts, :exact_decisions, false)} do
+      {[], _exact?} ->
+        {:error, :todo_intelligence_invalid_decisions}
+
+      {salvaged, true} ->
+        indexes = salvaged |> Enum.map(& &1.candidate_index) |> Enum.sort()
+
+        if invalid_count == 0 and indexes == Enum.to_list(0..(length(candidates) - 1)) do
+          {:ok, salvaged}
+        else
+          {:error, :todo_intelligence_incomplete_decisions}
+        end
+
+      {salvaged, false} ->
+        {:ok, salvaged}
     end
   end
 
@@ -1555,16 +1570,19 @@ defmodule Maraithon.Todos.Intelligence do
     candidate_metadata = read_map(candidate, "metadata")
 
     todo_attrs =
-      Enum.reduce(~w(source_item_id source_occurred_at), todo_attrs, fn key, acc ->
-        value = fetch_attr(candidate, key)
+      Enum.reduce(
+        ~w(source source_account_id source_account_label source_item_id source_occurred_at),
+        todo_attrs,
+        fn key, acc ->
+          value = fetch_attr(candidate, key)
 
-        if not preservable_metadata_value?(fetch_attr(acc, key)) and
-             preservable_metadata_value?(value) do
-          Map.put(acc, key, normalize_json_value(value))
-        else
-          acc
+          if preservable_metadata_value?(value) do
+            Map.put(acc, key, normalize_json_value(value))
+          else
+            acc
+          end
         end
-      end)
+      )
 
     if candidate_metadata == %{} do
       todo_attrs

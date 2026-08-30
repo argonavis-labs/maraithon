@@ -106,6 +106,7 @@ defmodule Maraithon.Todos.CompletionSweep do
       Todo
       |> where([todo], todo.user_id == ^user_id and todo.status in ^@open_statuses)
       |> maybe_scope_source_account(opts)
+      |> maybe_scope_todo_ids(opts)
       |> order_by([todo], asc_nulls_first: todo.last_completion_checked_at, asc: todo.id)
       |> limit(^limit)
       |> Repo.all()
@@ -167,6 +168,14 @@ defmodule Maraithon.Todos.CompletionSweep do
         else
           query
         end
+    end
+  end
+
+  defp maybe_scope_todo_ids(query, opts) do
+    case Keyword.get(opts, :todo_ids) do
+      ids when is_list(ids) and ids != [] -> where(query, [todo], todo.id in ^ids)
+      [] -> where(query, [todo], false)
+      _other -> query
     end
   end
 
@@ -527,7 +536,7 @@ defmodule Maraithon.Todos.CompletionSweep do
   end
 
   defp fetch_gmail_thread_id(user_id, thread_id, provider) do
-    case Gmail.fetch_thread(user_id, thread_id, provider: provider) do
+    case Gmail.fetch_thread_content(user_id, thread_id, provider: provider) do
       {:ok, messages} when is_list(messages) and messages != [] ->
         {:ok, thread_id, messages}
 

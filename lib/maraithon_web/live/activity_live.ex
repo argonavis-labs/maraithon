@@ -13,7 +13,7 @@ defmodule MaraithonWeb.ActivityLive do
 
   @refresh_interval 5_000
   @run_limit 50
-  @source_run_limit 200
+  @source_run_page_size 200
   @todo_event_limit 50
 
   @impl true
@@ -25,6 +25,7 @@ defmodule MaraithonWeb.ActivityLive do
         timeline: [],
         run_count: 0,
         source_run_count: 0,
+        source_run_limit: @source_run_page_size,
         todo_count: 0,
         refreshed_at: nil,
         timezone_info: LocalTime.default_timezone_info()
@@ -41,6 +42,13 @@ defmodule MaraithonWeb.ActivityLive do
   @impl true
   def handle_event("refresh_now", _params, socket), do: {:noreply, refresh(socket)}
 
+  def handle_event("load_more_source_runs", _params, socket) do
+    socket =
+      update(socket, :source_run_limit, fn limit -> limit + @source_run_page_size end)
+
+    {:noreply, refresh(socket)}
+  end
+
   defp refresh(socket) do
     user_id = socket.assigns.current_user.id
     timezone_info = LocalTime.timezone_info_for_user(user_id)
@@ -48,7 +56,7 @@ defmodule MaraithonWeb.ActivityLive do
 
     source_runs =
       BackgroundJobs.list_latest_source_account_runs_for_user(user_id,
-        limit: @source_run_limit
+        limit: socket.assigns.source_run_limit
       )
 
     todo_events =
@@ -111,6 +119,7 @@ defmodule MaraithonWeb.ActivityLive do
     provider = source_provider_label(account)
     role = source_role(job.job_type)
     stage = source_stage(job.job_type)
+    fanout = source_fanout(job.dedupe_key, job.result)
     occurred_at = job.claimed_at || job.scheduled_at || job.inserted_at
     finished_at = job.completed_at || job.failed_at || job.cancelled_at
 
@@ -122,15 +131,18 @@ defmodule MaraithonWeb.ActivityLive do
       agent_name: "#{provider} #{String.downcase(role)}",
       account: source_account_label(account, provider),
       status: job.status,
-      summary: source_run_summary(job.job_type, job.status),
-      safe_error: source_run_error(job.status),
+      summary: source_run_summary(job.job_type, job.status, fanout),
+      safe_error: source_run_error(job.status, job.last_error),
+      last_error_code: source_error_code(job.last_error),
       duration: duration_label(occurred_at, finished_at),
       lane: source_lane(job.queue),
       role: role,
       stage: stage,
-      ai_policy: source_ai_policy(job.queue),
-      attempts: normalize_count(job.attempts),
-      max_attempts: normalize_count(job.max_attempts),
+      ai_calls: source_ai_calls(job.job_type, job.queue, job.status, job.result),
+      failed_attempts: normalize_count(job.attempts),
+      source_items: source_result_count(job.result, "source_items"),
+      decision_count: source_result_count(job.result, "decision_count"),
+      fanout: fanout,
       occurred_at: occurred_at
     }
   end
@@ -237,7 +249,8 @@ defmodule MaraithonWeb.ActivityLive do
   defp source_role(job_type)
        when job_type in [
               "runtime_partition:source_account_discovery",
-              "runtime_partition:source_account_discovery_reason"
+              "runtime_partition:source_account_discovery_reason",
+              "runtime_partition:source_account_discovery_finalize"
             ],
        do: "Todo discovery"
 
@@ -250,40 +263,137 @@ defmodule MaraithonWeb.ActivityLive do
             ],
        do: "AI review"
 
+  defp source_stage(job_type)
+       when job_type in [
+              "runtime_partition:source_account_discovery_finalize",
+              "runtime_partition:source_account_closure_finalize"
+            ],
+       do: "Coverage finalizer"
+
   defp source_stage(_job_type), do: "Source delta"
 
   defp source_lane("runtime_provider_account"), do: "Provider lane"
   defp source_lane("runtime_model_user"), do: "Model lane"
   defp source_lane(_queue), do: "Runtime lane"
 
-  defp source_ai_policy("runtime_provider_account"), do: "None"
-  defp source_ai_policy("runtime_model_user"), do: "At most 1"
-  defp source_ai_policy(_queue), do: "Bounded"
+  defp source_ai_calls(
+         job_type,
+         _queue,
+         _status,
+         _result
+       )
+       when job_type in [
+              "runtime_partition:source_account_discovery_finalize",
+              "runtime_partition:source_account_closure_finalize"
+            ],
+       do: "0"
 
-  defp source_run_summary(_job_type, "pending"), do: "Waiting for its OTP lane"
-  defp source_run_summary(_job_type, "running"), do: "Checking this account now"
+  defp source_ai_calls(_job_type, "runtime_provider_account", _status, _result), do: "0"
 
-  defp source_run_summary("runtime_partition:source_account_discovery", "completed"),
+  defp source_ai_calls(_job_type, "runtime_model_user", "completed", result),
+    do: Integer.to_string(source_result_count(result, "model_calls"))
+
+  defp source_ai_calls(_job_type, "runtime_model_user", _status, _result),
+    do: "Pending · max 1"
+
+  defp source_ai_calls(_job_type, _queue, _status, _result), do: "Bounded"
+
+  defp source_run_summary(_job_type, "pending", fanout),
+    do: fanout_summary("Waiting for its OTP lane", fanout)
+
+  defp source_run_summary(_job_type, "running", fanout),
+    do: fanout_summary("Checking this account now", fanout)
+
+  defp source_run_summary("runtime_partition:source_account_discovery", "completed", _fanout),
     do: "Checked only messages after this account's discovery cursor"
 
-  defp source_run_summary("runtime_partition:source_account_discovery_reason", "completed"),
-    do: "Reviewed this account's new messages for todo decisions"
+  defp source_run_summary(
+         "runtime_partition:source_account_discovery_reason",
+         "completed",
+         fanout
+       ),
+       do: fanout_summary("Reviewed new messages for todo decisions", fanout)
 
-  defp source_run_summary("runtime_partition:source_account_closure_acquire", "completed"),
-    do: "Checked only later messages for completion evidence"
+  defp source_run_summary(
+         "runtime_partition:source_account_discovery_finalize",
+         "completed",
+         _fanout
+       ),
+       do: "Proved every acquired message received a todo decision"
 
-  defp source_run_summary("runtime_partition:source_account_closure_reason", "completed"),
-    do: "Compared later messages with this account's open todos"
+  defp source_run_summary(
+         "runtime_partition:source_account_closure_acquire",
+         "completed",
+         _fanout
+       ),
+       do: "Checked only later messages for completion evidence"
 
-  defp source_run_summary(_job_type, "failed"), do: "This account worker did not complete"
-  defp source_run_summary(_job_type, "cancelled"), do: "This account worker stopped safely"
-  defp source_run_summary(_job_type, _status), do: "Account worker status updated"
+  defp source_run_summary(
+         "runtime_partition:source_account_closure_reason",
+         "completed",
+         fanout
+       ),
+       do:
+         fanout_summary("Compared the complete later-message delta with this todo batch", fanout)
 
-  defp source_run_error("failed") do
-    RunErrorCopy.runtime_failure(%{source: "background_job", details: "failed"})
+  defp source_run_summary(
+         "runtime_partition:source_account_closure_finalize",
+         "completed",
+         _fanout
+       ),
+       do: "Proved every snapshotted open todo received a completion decision"
+
+  defp source_run_summary(_job_type, "failed", _fanout),
+    do: "This account worker did not complete"
+
+  defp source_run_summary(_job_type, "cancelled", _fanout),
+    do: "This account worker stopped safely"
+
+  defp source_run_summary(_job_type, _status, _fanout), do: "Account worker status updated"
+
+  defp source_fanout(dedupe_key, result) do
+    index = source_result_count(result, "fanout_index")
+    count = source_result_count(result, "fanout_count")
+
+    cond do
+      index > 0 and count > 0 ->
+        %{index: index, count: count}
+
+      is_binary(dedupe_key) ->
+        case Regex.run(~r/:(\d+)-of-(\d+):\d+$/, dedupe_key, capture: :all_but_first) do
+          [index, count] -> %{index: String.to_integer(index), count: String.to_integer(count)}
+          _other -> nil
+        end
+
+      true ->
+        nil
+    end
   end
 
-  defp source_run_error(_status), do: nil
+  defp fanout_summary(summary, %{index: index, count: count}),
+    do: "#{summary} · batch #{index} of #{count}"
+
+  defp fanout_summary(summary, _fanout), do: summary
+
+  defp source_result_count(result, key) when is_map(result) do
+    case Map.get(result, key, 0) do
+      value when is_integer(value) and value >= 0 -> value
+      _other -> 0
+    end
+  end
+
+  defp source_result_count(_result, _key), do: 0
+
+  defp source_run_error("failed", last_error) do
+    RunErrorCopy.runtime_failure(%{source: "background_job", details: last_error || "failed"})
+  end
+
+  defp source_run_error(_status, _last_error), do: nil
+
+  defp source_error_code(last_error) when is_map(last_error),
+    do: Maraithon.Redaction.error_class(last_error)
+
+  defp source_error_code(_last_error), do: nil
 
   defp run_summary("running", _steps), do: "Working now"
   defp run_summary("completed", 0), do: "Finished successfully"
@@ -476,9 +586,17 @@ defmodule MaraithonWeb.ActivityLive do
                     <dt>Lane</dt>
                     <dd class="text-zinc-700">{item.lane}</dd>
                     <dt>AI calls</dt>
-                    <dd id={"#{item.id}-ai-policy"} class="text-zinc-700">{item.ai_policy}</dd>
-                    <dt>Attempts</dt>
-                    <dd class="text-zinc-700">{item.attempts} of {item.max_attempts}</dd>
+                    <dd id={"#{item.id}-ai-policy"} class="text-zinc-700">{item.ai_calls}</dd>
+                    <dt :if={item.source_items > 0}>Source items</dt>
+                    <dd :if={item.source_items > 0} class="text-zinc-700">{item.source_items}</dd>
+                    <dt :if={item.decision_count > 0}>Decisions</dt>
+                    <dd :if={item.decision_count > 0} class="text-zinc-700">{item.decision_count}</dd>
+                    <dt>Failed attempts</dt>
+                    <dd class="text-zinc-700">{item.failed_attempts}</dd>
+                    <dt :if={item.last_error_code}>Last issue</dt>
+                    <dd :if={item.last_error_code} class="font-mono text-zinc-700">
+                      {item.last_error_code}
+                    </dd>
                   </dl>
                 </details>
               </div>
@@ -570,6 +688,12 @@ defmodule MaraithonWeb.ActivityLive do
               </div>
             </li>
           </ol>
+
+          <div :if={@source_run_count >= @source_run_limit} class="border-t border-zinc-950/5 py-4 text-center">
+            <.button variant="outline" phx-click="load_more_source_runs">
+              Load older source fan-outs
+            </.button>
+          </div>
         </.panel>
       </div>
     </Layouts.app>

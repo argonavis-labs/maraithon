@@ -25,8 +25,10 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   @source_account_job_types [
     "runtime_partition:source_account_discovery",
     "runtime_partition:source_account_discovery_reason",
+    "runtime_partition:source_account_discovery_finalize",
     "runtime_partition:source_account_closure_acquire",
-    "runtime_partition:source_account_closure_reason"
+    "runtime_partition:source_account_closure_reason",
+    "runtime_partition:source_account_closure_finalize"
   ]
   @telegram_event_bounds [
     max_binary_bytes: 64_000,
@@ -35,6 +37,9 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     max_map_entries: 1_000,
     max_list_items: 1_000
   ]
+
+  @doc false
+  def source_account_job_types, do: @source_account_job_types
 
   def enqueue(job_type, attrs \\ %{})
 
@@ -275,11 +280,12 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   end
 
   @doc """
-  Lists the latest durable execution header for every source-account worker.
+  Lists every recent durable execution header for source-account workers.
 
-  This deliberately selects no encrypted payload or result columns. The
-  Activity page can therefore expose every Gmail and Slack fan-out without
-  loading message deltas or model handoffs into the web process.
+  This deliberately selects no encrypted source payload. Source worker results
+  contain counts and outcome labels only, so Activity can show actual model and
+  decision counts without loading message deltas or handoffs into the web
+  process.
   """
   def list_latest_source_account_runs_for_user(user_id, opts \\ [])
 
@@ -294,10 +300,8 @@ defmodule Maraithon.Runtime.BackgroundJobs do
         job.user_id == ^user_id and job.job_type in ^@source_account_job_types and
           not is_nil(job.dedupe_key)
       )
-      |> distinct([job], job.dedupe_key)
       |> order_by(
         [job],
-        asc: job.dedupe_key,
         desc: job.inserted_at,
         desc: job.id
       )
@@ -315,6 +319,8 @@ defmodule Maraithon.Runtime.BackgroundJobs do
         completed_at: job.completed_at,
         failed_at: job.failed_at,
         cancelled_at: job.cancelled_at,
+        result: job.result,
+        last_error: job.last_error,
         inserted_at: job.inserted_at
       })
       |> Repo.all()
@@ -650,7 +656,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     where(query, [job], field(job, ^field) == ^value)
   end
 
-  defp clamp_limit(value) when is_integer(value), do: min(max(value, 1), 500)
+  defp clamp_limit(value) when is_integer(value), do: min(max(value, 1), 10_000)
   defp clamp_limit(_value), do: @default_limit
 
   defp normalize_map(attrs) when is_map(attrs), do: stringify_keys(attrs)

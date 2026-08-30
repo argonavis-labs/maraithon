@@ -47,8 +47,6 @@ defmodule Maraithon.Connectors.Gmail do
 
   @default_api_base "https://gmail.googleapis.com/gmail/v1"
   @history_cursor_kind "gmail_history_id"
-  @full_resync_window_query "newer_than:1d"
-  @full_resync_message_limit 50
   @default_message_fetch_concurrency 12
   @max_message_fetch_concurrency 24
   @default_message_fetch_timeout_ms 15_000
@@ -257,8 +255,8 @@ defmodule Maraithon.Connectors.Gmail do
   `startHistoryId` (the *last processed* id, not the notification's own id).
   On success, ingests the messages and advances the cursor to the response's
   max historyId. When the stored id has expired (Gmail 404s) or no cursor
-  exists yet, falls back to a bounded recent-window full fetch and resets the
-  cursor to the mailbox's current history head.
+  exists yet, rebuilds the complete mailbox before resetting the cursor to the
+  mailbox's current history head.
 
   Returns `{:ok, %{count: n, history_id: id, mode: :incremental | :full_resync}}`
   or `{:error, reason}`.
@@ -271,8 +269,8 @@ defmodule Maraithon.Connectors.Gmail do
         cursor = SourceCursors.get(account.id, @history_cursor_kind)
 
         case cursor_history_id(cursor) do
-          nil -> full_resync(user_id, account, token)
-          history_id -> incremental_sync(user_id, account, token, history_id)
+          nil -> full_resync(user_id, account, token, provider)
+          history_id -> incremental_sync(user_id, account, token, history_id, provider)
         end
 
       {:error, reason} ->
@@ -284,36 +282,44 @@ defmodule Maraithon.Connectors.Gmail do
   defp cursor_history_id(%{value: value}) when is_binary(value) and value != "", do: value
   defp cursor_history_id(_cursor), do: nil
 
-  defp incremental_sync(user_id, account, token, history_id) do
+  defp incremental_sync(user_id, account, token, history_id, provider) do
     case fetch_history(token, history_id) do
       {:ok, messages, latest_history_id} ->
-        with :ok <- ingest_messages(user_id, messages),
+        with :ok <- ingest_messages(user_id, messages, account: account, provider: provider),
              {:ok, _cursor} <- persist_history_cursor(account, latest_history_id || history_id) do
           {:ok, %{count: length(messages), history_id: latest_history_id, mode: :incremental}}
         end
 
       {:error, :history_expired} ->
-        full_resync(user_id, account, token)
+        full_resync(user_id, account, token, provider)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp full_resync(user_id, account, token) do
+  defp full_resync(user_id, account, token, provider) do
+    # Once Gmail expires a historyId it no longer tells us where the unread gap
+    # begins. A recent-window rebuild followed by jumping to the current head
+    # can therefore discard arbitrarily old messages. Enumerate the complete
+    # mailbox instead; if pagination cannot finish, fetch_messages/2 returns an
+    # error and the prior cursor is preserved.
     case fetch_messages(token,
-           max_results: @full_resync_message_limit,
            label_ids: [],
-           query: @full_resync_window_query,
+           message_format: :metadata,
            access_token: true,
-           paginate: true
+           paginate: true,
+           include_fetch_metadata: true
          ) do
-      {:ok, messages} ->
-        with :ok <- ingest_messages(user_id, messages),
+      {:ok, messages, %{complete?: true}} ->
+        with :ok <- ingest_messages(user_id, messages, account: account, provider: provider),
              {:ok, history_id} <- current_history_id(token),
              {:ok, _cursor} <- persist_history_cursor(account, history_id) do
           {:ok, %{count: length(messages), history_id: history_id, mode: :full_resync}}
         end
+
+      {:ok, _messages, fetch_metadata} ->
+        {:error, {:incomplete_gmail_resync, fetch_metadata}}
 
       {:error, reason} ->
         {:error, reason}
@@ -1234,14 +1240,19 @@ defmodule Maraithon.Connectors.Gmail do
   @doc """
   Fan a list of parsed Gmail messages into `Crm.Ingest.observe/2` calls.
 
-  Used by the webhook handler and by the backfill seed.
+  Used by the webhook handler and by the backfill seed. Account-aware callers
+  pass `:account` and `:provider` so Gmail's account-local message ids remain
+  collision-safe across multiple connected mailboxes.
   """
-  def ingest_messages(user_id, messages) when is_binary(user_id) and is_list(messages) do
-    user_email = String.downcase(user_id)
+  def ingest_messages(user_id, messages, opts \\ [])
+
+  def ingest_messages(user_id, messages, opts)
+      when is_binary(user_id) and is_list(messages) and is_list(opts) do
+    identity = ingestion_identity(user_id, opts)
 
     failure_count =
       Enum.reduce(messages, 0, fn message, failures ->
-        case to_observation(message, user_id, user_email) do
+        case to_observation(message, user_id, identity) do
           {:ok, changeset} ->
             case Ingest.observe(user_id, changeset) do
               {:ok, _} ->
@@ -1273,7 +1284,10 @@ defmodule Maraithon.Connectors.Gmail do
             end
 
           :skip ->
-            failures + 1
+            # Some Gmail metadata records legitimately omit address headers.
+            # They are still acquired source items for Chief-of-Staff work;
+            # they simply cannot produce a relationship observation.
+            failures
         end
       end)
 
@@ -1297,9 +1311,9 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
-  def ingest_messages(_user_id, _messages), do: :ok
+  def ingest_messages(_user_id, _messages, _opts), do: :ok
 
-  defp to_observation(message, user_id, user_email) when is_map(message) do
+  defp to_observation(message, user_id, identity) when is_map(message) and is_map(identity) do
     case Map.get(message, :message_id) || Map.get(message, "message_id") do
       nil ->
         :skip
@@ -1320,7 +1334,7 @@ defmodule Maraithon.Connectors.Gmail do
         if participants == [] do
           :skip
         else
-          direction = direction_for(participants, user_email)
+          direction = direction_for(participants, identity.account_email)
 
           occurred_at =
             Map.get(message, :internal_date) || Map.get(message, "internal_date") ||
@@ -1330,8 +1344,8 @@ defmodule Maraithon.Connectors.Gmail do
            Observation.new(%{
              "user_id" => user_id,
              "source" => "gmail",
-             "source_account" => user_email,
-             "source_item_id" => to_string(message_id),
+             "source_account" => identity.source_account,
+             "source_item_id" => gmail_observation_id(identity.provider, message_id),
              "occurred_at" => occurred_at,
              "direction" => Atom.to_string(direction),
              "participants" => participants,
@@ -1339,14 +1353,52 @@ defmodule Maraithon.Connectors.Gmail do
              "excerpt" => Map.get(message, :snippet) || Map.get(message, "snippet"),
              "metadata" => %{
                "thread_id" => Map.get(message, :thread_id) || Map.get(message, "thread_id"),
-               "labels" => Map.get(message, :labels) || Map.get(message, "labels") || []
+               "labels" => Map.get(message, :labels) || Map.get(message, "labels") || [],
+               "google_provider" => identity.provider,
+               "connected_account_id" => identity.connected_account_id,
+               "account_email" => identity.account_email
              }
            })}
         end
     end
   end
 
-  defp to_observation(_message, _user_id, _user_email), do: :skip
+  defp to_observation(_message, _user_id, _identity), do: :skip
+
+  defp ingestion_identity(user_id, opts) do
+    account = Keyword.get(opts, :account)
+    provider = Keyword.get(opts, :provider) || account_field(account, :provider) || "google"
+
+    account_email =
+      account_field(account, :external_account_id) ||
+        account_metadata_email(account) || provider_email(provider) || user_id
+
+    %{
+      provider: provider,
+      source_account: account_email,
+      account_email: String.downcase(account_email),
+      connected_account_id: account_field(account, :id)
+    }
+  end
+
+  defp gmail_observation_id(provider, message_id), do: "#{provider}:#{message_id}"
+
+  defp account_field(account, field) when is_map(account),
+    do: Map.get(account, field) || Map.get(account, Atom.to_string(field))
+
+  defp account_field(_account, _field), do: nil
+
+  defp account_metadata_email(account) when is_map(account) do
+    metadata = account_field(account, :metadata) || %{}
+
+    Map.get(metadata, "account_email") || Map.get(metadata, :account_email) ||
+      Map.get(metadata, "email") || Map.get(metadata, :email)
+  end
+
+  defp account_metadata_email(_account), do: nil
+
+  defp provider_email("google:" <> email) when email != "", do: email
+  defp provider_email(_provider), do: nil
 
   defp parse_address_list(nil, _role), do: []
   defp parse_address_list("", _role), do: []

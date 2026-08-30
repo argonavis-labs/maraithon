@@ -3,8 +3,10 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   Runs one source-account closure worker as a durable provider/model handoff.
 
   The provider lane reads only the account's closure delta. Empty deltas move
-  the closure cursor without model work; non-empty deltas are sealed into a
-  bounded encrypted job and evaluated against only that account's open todos.
+  the closure cursor without model work. A non-empty delta is sealed once and
+  handed to small todo batches, so each quick worker sees the complete later
+  evidence while every open todo is evaluated exactly once. A finalizer moves
+  the cursor only after the complete todo manifest is proven.
   """
 
   alias Maraithon.Accounts.ConnectedAccount
@@ -12,41 +14,33 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Runtime.TodoCompletionSweep
 
+  @todo_batch_size 10
   @allowed_watermark_kinds ~w(gmail_closure_watermark slack_closure_watermark)
 
   def acquire(account, opts \\ [])
 
   def acquire(%ConnectedAccount{status: "connected"} = account, opts) when is_list(opts) do
     with {:ok, bundle, proposals} <- TodoCompletionSweep.acquire_account_delta(account, opts),
-         compact when is_map(compact) <- SourceAccountDiscovery.compact_bundle(bundle),
          watermarks <- serialize_watermarks(proposals, account.id),
-         source_items <- SourceAccountDiscovery.source_item_count(compact) do
-      if source_items == 0 do
-        with :ok <- advance_watermarks(account, watermarks) do
-          {:ok,
-           %{
-             outcome: "empty_delta",
-             account_id: account.id,
-             source_items: 0,
-             model_calls: 0,
-             advanced_watermarks: length(watermarks)
-           }}
-        end
-      else
-        {:ok,
-         %{
-           outcome: "handoff_ready",
-           account_id: account.id,
-           source_items: source_items,
-           handoff: %{
-             "account_id" => account.id,
-             "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
-             "source_bundle" => compact,
-             "watermarks" => watermarks
-           }
-         }}
+         :ok <- validate_watermarks(watermarks),
+         {:ok, source_partitions} <- SourceAccountDiscovery.partition_bundle(bundle),
+         source_items <-
+           Enum.sum(Enum.map(source_partitions, &SourceAccountDiscovery.source_item_count/1)),
+         source_refs <- SourceAccountDiscovery.source_item_refs(bundle),
+         true <- length(source_refs) == source_items,
+         todo_ids <- TodoCompletionSweep.open_todo_ids_for_account(account, opts) do
+      cond do
+        source_items == 0 ->
+          settle_without_fanout(account, watermarks, "empty_delta", 0)
+
+        todo_ids == [] ->
+          settle_without_fanout(account, watermarks, "no_open_todos", source_items)
+
+        true ->
+          build_fanout(account, bundle, watermarks, source_refs, todo_ids, opts)
       end
     else
+      false -> {:error, :source_closure_source_identity_mismatch}
       nil -> {:error, :invalid_source_bundle}
       {:error, _reason} = error -> error
       _other -> {:error, :invalid_source_closure_result}
@@ -60,25 +54,121 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   def acquire(%ConnectedAccount{}, _opts), do: {:skip, :account_not_connected}
   def acquire(_account, _opts), do: {:error, :invalid_source_account}
 
+  defp settle_without_fanout(account, watermarks, outcome, source_items) do
+    with :ok <- advance_watermarks(account, watermarks) do
+      {:ok,
+       %{
+         outcome: outcome,
+         account_id: account.id,
+         source_items: source_items,
+         todo_decision_count: 0,
+         model_calls: 0,
+         advanced_watermarks: length(watermarks)
+       }}
+    end
+  end
+
+  defp build_fanout(account, bundle, watermarks, source_refs, todo_ids, opts) do
+    case SourceAccountDiscovery.compact_bundle(bundle) do
+      compact when is_map(compact) ->
+        todo_batches = Enum.chunk_every(todo_ids, @todo_batch_size)
+        fanout_count = length(todo_batches)
+        source_items = length(source_refs)
+        source_refs_digest = SourceAccountDiscovery.refs_digest(source_refs)
+
+        handoffs =
+          todo_batches
+          |> Enum.with_index(1)
+          |> Enum.map(fn {todo_batch, fanout_index} ->
+            %{
+              "account_id" => account.id,
+              "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
+              "fanout_index" => fanout_index,
+              "fanout_count" => fanout_count,
+              "source_items" => source_items,
+              "source_item_refs" => source_refs,
+              "source_refs_digest" => source_refs_digest,
+              "source_bundle" => compact,
+              "todo_ids" => todo_batch,
+              "todo_count" => length(todo_batch),
+              "watermarks" => []
+            }
+          end)
+
+        {:ok,
+         %{
+           outcome: "fanout_ready",
+           account_id: account.id,
+           source_items: source_items,
+           todo_count: length(todo_ids),
+           fanout_count: fanout_count,
+           handoffs: handoffs,
+           finalizer: %{
+             "account_id" => account.id,
+             "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
+             "expected_fanouts" => fanout_count,
+             "expected_source_items" => source_items,
+             "expected_source_refs_digest" => source_refs_digest,
+             "expected_todo_count" => length(todo_ids),
+             "expected_todo_refs_digest" => SourceAccountDiscovery.refs_digest(todo_ids),
+             "watermarks" => watermarks
+           }
+         }}
+
+      nil ->
+        {:error, :source_closure_delta_too_large}
+    end
+  end
+
   def reason(account, payload, opts \\ [])
 
   def reason(%ConnectedAccount{} = account, payload, opts)
       when is_map(payload) and is_list(opts) do
     with true <- read_integer(payload, "account_id") == account.id,
          {:ok, bundle} <- fetch_map(payload, "source_bundle"),
-         {:ok, watermarks} <- fetch_list(payload, "watermarks"),
-         result <-
+         fanout_index when is_integer(fanout_index) and fanout_index > 0 <-
+           read_integer(payload, "fanout_index"),
+         fanout_count when is_integer(fanout_count) and fanout_count >= fanout_index <-
+           read_integer(payload, "fanout_count"),
+         expected_source_items
+         when is_integer(expected_source_items) and expected_source_items > 0 <-
+           read_integer(payload, "source_items"),
+         {:ok, source_item_refs} <- fetch_list(payload, "source_item_refs"),
+         expected_source_refs_digest when is_binary(expected_source_refs_digest) <-
+           read_string(payload, "source_refs_digest"),
+         {:ok, todo_ids} <- fetch_list(payload, "todo_ids"),
+         expected_todo_count when is_integer(expected_todo_count) and expected_todo_count > 0 <-
+           read_integer(payload, "todo_count"),
+         true <- length(todo_ids) == expected_todo_count,
+         true <- length(Enum.uniq(todo_ids)) == expected_todo_count,
+         ^expected_source_items <- SourceAccountDiscovery.source_item_count(bundle),
+         ^source_item_refs <- SourceAccountDiscovery.source_item_refs(bundle),
+         true <-
+           SourceAccountDiscovery.refs_digest(source_item_refs) == expected_source_refs_digest,
+         result when is_map(result) <-
            TodoCompletionSweep.run_for_account(
              account,
-             Keyword.put(opts, :source_bundle, bundle)
+             opts
+             |> Keyword.put(:exact_source_delta, true)
+             |> Keyword.put(:skip_deterministic_completion, true)
+             |> Keyword.put(:source_bundle, bundle)
+             |> Keyword.put(:source_item_refs, source_item_refs)
+             |> Keyword.put(:todo_ids, todo_ids)
            ),
-         true <- settled_result?(result),
-         :ok <- advance_watermarks(account, watermarks) do
+         true <- settled_result?(result) do
       {:ok,
        %{
          outcome: "evaluated",
          account_id: account.id,
-         source_items: SourceAccountDiscovery.source_item_count(bundle),
+         source_items: expected_source_items,
+         source_refs_digest: expected_source_refs_digest,
+         decision_count: expected_todo_count,
+         decision_refs: todo_ids,
+         todo_decision_count: expected_todo_count,
+         todo_decision_refs: todo_ids,
+         model_calls: Map.get(result, :model_calls, 0),
+         fanout_index: fanout_index,
+         fanout_count: fanout_count,
          result: result
        }}
     else
@@ -94,10 +184,127 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
 
   def reason(_account, _payload, _opts), do: {:error, :invalid_source_closure_payload}
 
-  defp settled_result?(%{errors: 0, cross_source: {:error, _reason}}), do: false
-  defp settled_result?(%{errors: 0, cross_source: {:skip, :no_open_todos}}), do: true
-  defp settled_result?(%{errors: 0}), do: true
+  @doc "Advances a closure cursor only after all source partitions prove complete."
+  def finalize(account, payload, child_results)
+
+  def finalize(%ConnectedAccount{} = account, payload, child_results)
+      when is_map(payload) and is_list(child_results) do
+    with true <- read_integer(payload, "account_id") == account.id,
+         {:ok, watermarks} <- fetch_list(payload, "watermarks"),
+         expected_fanouts when is_integer(expected_fanouts) and expected_fanouts > 0 <-
+           read_integer(payload, "expected_fanouts"),
+         expected_source_items
+         when is_integer(expected_source_items) and expected_source_items > 0 <-
+           read_integer(payload, "expected_source_items"),
+         expected_source_refs_digest when is_binary(expected_source_refs_digest) <-
+           read_string(payload, "expected_source_refs_digest"),
+         expected_todo_count when is_integer(expected_todo_count) and expected_todo_count > 0 <-
+           read_integer(payload, "expected_todo_count"),
+         expected_todo_refs_digest when is_binary(expected_todo_refs_digest) <-
+           read_string(payload, "expected_todo_refs_digest"),
+         :ok <-
+           validate_child_results(
+             child_results,
+             expected_fanouts,
+             expected_source_items,
+             expected_source_refs_digest,
+             expected_todo_count,
+             expected_todo_refs_digest
+           ),
+         :ok <- advance_watermarks(account, watermarks) do
+      {:ok,
+       %{
+         outcome: "finalized",
+         account_id: account.id,
+         fanout_count: expected_fanouts,
+         source_items: expected_source_items,
+         todo_count: expected_todo_count,
+         decision_count: expected_todo_count,
+         todo_decision_count: expected_todo_count,
+         model_calls: Enum.sum(Enum.map(child_results, &result_integer(&1, "model_calls"))),
+         advanced_watermarks: length(watermarks)
+       }}
+    else
+      false -> {:error, :source_closure_finalizer_identity_mismatch}
+      {:error, _reason} = error -> error
+      _other -> {:error, :invalid_source_closure_finalizer}
+    end
+  rescue
+    error -> {:error, Maraithon.Redaction.error_class(error)}
+  catch
+    kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
+  end
+
+  def finalize(_account, _payload, _child_results),
+    do: {:error, :invalid_source_closure_finalizer}
+
+  defp settled_result?(%{
+         errors: 0,
+         fetch_errors: 0,
+         coverage_complete?: true,
+         cross_source: cross_source
+       })
+       when is_map(cross_source),
+       do: true
+
   defp settled_result?(_result), do: false
+
+  defp validate_child_results(
+         child_results,
+         expected_fanouts,
+         expected_source_items,
+         expected_source_refs_digest,
+         expected_todo_count,
+         expected_todo_refs_digest
+       ) do
+    indexes = child_results |> Enum.map(&result_integer(&1, "fanout_index")) |> Enum.sort()
+    source_item_counts = Enum.map(child_results, &result_integer(&1, "source_items"))
+    decision_count = Enum.sum(Enum.map(child_results, &result_integer(&1, "decision_count")))
+    decision_refs = Enum.flat_map(child_results, &result_string_list(&1, "decision_refs"))
+    source_digests = Enum.map(child_results, &result_string(&1, "source_refs_digest"))
+
+    todo_decision_count =
+      Enum.sum(Enum.map(child_results, &result_integer(&1, "todo_decision_count")))
+
+    if length(child_results) == expected_fanouts and indexes == Enum.to_list(1..expected_fanouts) and
+         Enum.all?(source_item_counts, &(&1 == expected_source_items)) and
+         Enum.all?(source_digests, &(&1 == expected_source_refs_digest)) and
+         decision_count == expected_todo_count and length(decision_refs) == expected_todo_count and
+         length(Enum.uniq(decision_refs)) == expected_todo_count and
+         SourceAccountDiscovery.refs_digest(decision_refs) == expected_todo_refs_digest and
+         todo_decision_count == expected_todo_count do
+      :ok
+    else
+      {:error, :source_closure_incomplete_decisions}
+    end
+  end
+
+  defp result_integer(result, key) when is_map(result) do
+    case Map.get(result, key, Map.get(result, existing_atom(key), 0)) do
+      value when is_integer(value) and value >= 0 -> value
+      _other -> 0
+    end
+  end
+
+  defp result_integer(_result, _key), do: 0
+
+  defp result_string_list(result, key) when is_map(result) do
+    case Map.get(result, key, Map.get(result, existing_atom(key), [])) do
+      values when is_list(values) -> Enum.filter(values, &(is_binary(&1) and &1 != ""))
+      _other -> []
+    end
+  end
+
+  defp result_string_list(_result, _key), do: []
+
+  defp result_string(result, key) when is_map(result) do
+    case Map.get(result, key, Map.get(result, existing_atom(key))) do
+      value when is_binary(value) and value != "" -> value
+      _other -> nil
+    end
+  end
+
+  defp result_string(_result, _key), do: nil
 
   defp serialize_watermarks(proposals, account_id) when is_list(proposals) do
     proposals
@@ -117,6 +324,13 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   end
 
   defp serialize_watermarks(_proposals, _account_id), do: []
+
+  defp validate_watermarks([%{"account_id" => account_id, "kind" => kind, "value" => value}])
+       when is_integer(account_id) and kind in @allowed_watermark_kinds and is_binary(value) and
+              value != "",
+       do: :ok
+
+  defp validate_watermarks(_watermarks), do: {:error, :source_closure_watermark_invalid}
 
   defp advance_watermarks(account, watermarks) do
     Enum.reduce_while(watermarks, :ok, fn watermark, :ok ->
@@ -170,4 +384,13 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
         nil
     end
   end
+
+  defp existing_atom("fanout_index"), do: :fanout_index
+  defp existing_atom("source_items"), do: :source_items
+  defp existing_atom("decision_count"), do: :decision_count
+  defp existing_atom("decision_refs"), do: :decision_refs
+  defp existing_atom("source_refs_digest"), do: :source_refs_digest
+  defp existing_atom("todo_decision_count"), do: :todo_decision_count
+  defp existing_atom("model_calls"), do: :model_calls
+  defp existing_atom(_key), do: :__missing__
 end

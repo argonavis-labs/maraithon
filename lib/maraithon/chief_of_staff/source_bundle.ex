@@ -472,6 +472,14 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
         |> Map.put_new("team_name", Map.get(workspace, "team_name"))
         |> Map.put_new("channel_id", Map.get(channel, "id"))
         |> Map.put_new("channel_name", Map.get(channel, "name"))
+        |> Map.put_new("conversation_kind", Map.get(channel, "conversation_kind"))
+        |> Map.put_new("is_dm", Map.get(channel, "is_im", false))
+        |> Map.put_new("is_mpim", Map.get(channel, "is_mpim", false))
+        |> Map.put_new("counterparty_id", Map.get(channel, "counterparty_user_id"))
+        |> Map.put_new(
+          "counterparty_display_name",
+          Map.get(channel, "counterparty_display_name")
+        )
       end)
     end)
   end

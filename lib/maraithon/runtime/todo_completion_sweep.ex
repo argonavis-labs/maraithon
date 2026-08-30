@@ -6,10 +6,16 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   execution, retries, and crash recovery. This module has no timer process.
   """
 
+  import Ecto.Query
+
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceScope}
   alias Maraithon.Connectors.SourceCursors
-  alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion, UserBatch}
+  alias Maraithon.Repo
+  alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion, Todo, UserBatch}
+
+  @deterministic_batch_size 20
+  @cross_source_batch_size 10
 
   require Logger
 
@@ -26,8 +32,12 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   def run_for_user(user_id, opts \\ [])
 
   def run_for_user(user_id, opts) when is_binary(user_id) do
-    deterministic = CompletionSweep.run_for_user(user_id, opts)
-    Map.put(deterministic, :cross_source, run_cross_source_user(user_id, opts))
+    if Keyword.get(opts, :exhaustive_completion, false) do
+      run_for_user_exhaustive(user_id, opts)
+    else
+      deterministic = CompletionSweep.run_for_user(user_id, opts)
+      Map.put(deterministic, :cross_source, run_cross_source_user(user_id, opts))
+    end
   rescue
     error ->
       Logger.warning("Todo completion user partition crashed",
@@ -54,6 +64,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         opts
         |> Keyword.put(:source_account_id, account.id)
         |> Keyword.put(:source_scope, source_scope)
+        |> Keyword.put(:exhaustive_completion, true)
         |> maybe_put_source_bundle(source_bundle)
 
       result = run_for_user(account.user_id, account_opts)
@@ -75,6 +86,18 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   end
 
   def acquire_account_delta(_account, _opts), do: {:error, :invalid_account}
+
+  @doc false
+  def open_todo_ids_for_account(account, opts \\ [])
+
+  def open_todo_ids_for_account(%ConnectedAccount{} = account, opts) when is_list(opts) do
+    open_todo_ids(
+      account.user_id,
+      Keyword.put(opts, :source_account_id, account.id)
+    )
+  end
+
+  def open_todo_ids_for_account(_account, _opts), do: []
 
   defp acquire_account_delta(account, source_scope, opts) when is_list(opts) do
     cond do
@@ -131,22 +154,201 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   defp maybe_put_source_bundle(opts, _source_bundle), do: opts
 
   defp maybe_advance_closure_watermarks(result, proposed_watermarks) do
-    if closure_result_settled?(result) do
-      Enum.reduce_while(proposed_watermarks, :ok, fn proposal, :ok ->
-        case SourceCursors.put(proposal.account, proposal.kind, %{"value" => proposal.value}) do
-          {:ok, _cursor} -> {:cont, :ok}
-          {:error, reason} -> {:halt, {:error, {:closure_cursor_advance_failed, reason}}}
-        end
-      end)
-    else
-      :ok
+    cond do
+      closure_result_settled?(result) ->
+        Enum.reduce_while(proposed_watermarks, :ok, fn proposal, :ok ->
+          case SourceCursors.put(proposal.account, proposal.kind, %{"value" => proposal.value}) do
+            {:ok, _cursor} -> {:cont, :ok}
+            {:error, reason} -> {:halt, {:error, {:closure_cursor_advance_failed, reason}}}
+          end
+        end)
+
+      proposed_watermarks == [] ->
+        :ok
+
+      true ->
+        {:error, :source_closure_incomplete}
     end
   end
 
   defp closure_result_settled?(%{errors: 0, cross_source: {:error, _reason}}), do: false
   defp closure_result_settled?(%{errors: 0, cross_source: {:skip, :no_open_todos}}), do: false
-  defp closure_result_settled?(%{errors: 0}), do: true
+  defp closure_result_settled?(%{errors: 0, fetch_errors: 0, coverage_complete?: true}), do: true
   defp closure_result_settled?(_result), do: false
+
+  defp run_for_user_exhaustive(user_id, opts) do
+    initial_ids = open_todo_ids(user_id, opts)
+
+    deterministic =
+      if Keyword.get(opts, :skip_deterministic_completion, false) do
+        %{empty_deterministic(user_id) | checked: length(initial_ids)}
+      else
+        run_deterministic_batches(user_id, initial_ids, opts)
+      end
+
+    remaining_ids = open_todo_ids(user_id, opts)
+    cross_source = run_cross_source_batches(user_id, remaining_ids, opts)
+
+    case cross_source do
+      {:error, _reason} = error ->
+        error
+
+      %{} ->
+        deterministic
+        |> Map.put(:eligible_todos, length(initial_ids))
+        |> Map.put(:cross_source, cross_source)
+        |> Map.put(:model_calls, result_count(cross_source, :model_calls))
+        |> Map.put(
+          :coverage_complete?,
+          deterministic.checked == length(initial_ids) and deterministic.errors == 0 and
+            deterministic.fetch_errors == 0 and
+            cross_source_complete?(cross_source, remaining_ids)
+        )
+    end
+  end
+
+  defp run_deterministic_batches(user_id, todo_ids, opts) do
+    todo_ids
+    |> Enum.chunk_every(@deterministic_batch_size)
+    |> Enum.with_index()
+    |> Enum.reduce(empty_deterministic(user_id), fn {batch, index}, acc ->
+      result =
+        CompletionSweep.run_for_user(
+          user_id,
+          opts
+          |> Keyword.put(:todo_ids, batch)
+          |> Keyword.put(:limit, length(batch))
+          |> Keyword.put(:now, batch_now(opts, index))
+        )
+
+      merge_deterministic(acc, result)
+    end)
+  end
+
+  defp run_cross_source_batches(_user_id, [], _opts) do
+    %{checked: 0, completed: 0, model_calls: 0, expected: 0}
+  end
+
+  defp run_cross_source_batches(user_id, todo_ids, opts) do
+    todo_ids
+    |> Enum.chunk_every(@cross_source_batch_size)
+    |> Enum.with_index()
+    |> Enum.reduce_while(
+      %{checked: 0, completed: 0, model_calls: 0, expected: length(todo_ids)},
+      fn {batch, index}, acc ->
+        result =
+          run_cross_source_user(
+            user_id,
+            opts
+            |> Keyword.put(:todo_ids, batch)
+            |> Keyword.put(:exhaustive_completion, true)
+            |> Keyword.put(:now, batch_now(opts, index + 10_000))
+          )
+
+        case result do
+          %{checked: checked, completed: completed} = summary ->
+            {:cont,
+             %{
+               acc
+               | checked: acc.checked + checked,
+                 completed: acc.completed + completed,
+                 model_calls: acc.model_calls + result_count(summary, :model_calls)
+             }}
+
+          {:skip, :no_open_todos} ->
+            {:cont, acc}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+
+          other ->
+            {:halt, {:error, {:invalid_cross_source_completion_result, inspect(other)}}}
+        end
+      end
+    )
+  end
+
+  defp open_todo_ids(user_id, opts) do
+    Todo
+    |> where([todo], todo.user_id == ^user_id and todo.status in ["open", "snoozed"])
+    |> maybe_scope_todos(opts)
+    |> maybe_scope_todo_ids(opts)
+    |> order_by([todo], asc: todo.id)
+    |> select([todo], todo.id)
+    |> Repo.all()
+  end
+
+  defp maybe_scope_todos(query, opts) do
+    case Keyword.get(opts, :source_account_id) do
+      account_id when is_integer(account_id) ->
+        where(query, [todo], todo.source_account_id == ^account_id)
+
+      _other ->
+        if Keyword.get(opts, :source_account_unassigned?, false) do
+          where(query, [todo], is_nil(todo.source_account_id))
+        else
+          query
+        end
+    end
+  end
+
+  defp maybe_scope_todo_ids(query, opts) do
+    case Keyword.get(opts, :todo_ids) do
+      ids when is_list(ids) and ids != [] -> where(query, [todo], todo.id in ^ids)
+      [] -> where(query, [todo], false)
+      _other -> query
+    end
+  end
+
+  defp empty_deterministic(user_id) do
+    %{
+      user_id: user_id,
+      checked: 0,
+      completed: 0,
+      errors: 0,
+      fetch_errors: 0,
+      completed_by_source: %{},
+      completed_by_reason: %{}
+    }
+  end
+
+  defp merge_deterministic(acc, result) when is_map(result) do
+    acc
+    |> Map.update!(:checked, &(&1 + result_count(result, :checked)))
+    |> Map.update!(:completed, &(&1 + result_count(result, :completed)))
+    |> Map.update!(:errors, &(&1 + result_count(result, :errors)))
+    |> Map.update!(:fetch_errors, &(&1 + result_count(result, :fetch_errors)))
+    |> Map.update!(
+      :completed_by_source,
+      &merge_counts(&1, Map.get(result, :completed_by_source, %{}))
+    )
+    |> Map.update!(
+      :completed_by_reason,
+      &merge_counts(&1, Map.get(result, :completed_by_reason, %{}))
+    )
+  end
+
+  defp merge_counts(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _key, a, b -> a + b end)
+  end
+
+  defp cross_source_complete?(%{checked: checked, expected: expected}, remaining_ids),
+    do: checked == expected and expected == length(remaining_ids)
+
+  defp cross_source_complete?(_result, _remaining_ids), do: false
+
+  defp result_count(result, key) when is_map(result) do
+    case Map.get(result, key) || Map.get(result, Atom.to_string(key)) do
+      value when is_integer(value) and value >= 0 -> value
+      _other -> 0
+    end
+  end
+
+  defp batch_now(opts, offset) do
+    opts
+    |> Keyword.get(:now, DateTime.utc_now())
+    |> DateTime.add(offset, :microsecond)
+  end
 
   defp account_source_scope(%ConnectedAccount{provider: provider} = account) do
     service = if provider == "google" or String.starts_with?(provider, "google:"), do: "gmail"
@@ -175,7 +377,9 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         :source_skill_config,
         :source_account_id,
         :source_account_unassigned?,
-        :source_scope
+        :source_scope,
+        :todo_ids,
+        :exhaustive_completion
       ])
 
     CrossSourceCompletion.run_for_user(user_id, cross_source_opts)

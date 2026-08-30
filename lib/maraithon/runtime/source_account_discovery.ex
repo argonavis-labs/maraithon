@@ -3,9 +3,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   Runs one source-account discovery worker as a durable provider/model handoff.
 
   Provider work fetches only the delta after that account's discovery cursor.
-  Empty deltas advance without a model call. Non-empty deltas are compacted
-  into an encrypted background-job payload, reasoned over once, and advance
-  only after the resulting insight/todo writes have settled. An enabled Chief
+  Empty deltas advance without a model call. Non-empty deltas are partitioned
+  into small encrypted reasoning handoffs, and advance only after every
+  handoff has made a decision for every source item. An enabled Chief
   contributes its Follow-through configuration; accounts without one use the
   same safe defaults without requiring a long-lived Agent row.
   """
@@ -15,45 +15,11 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle, SourceScope}
   alias Maraithon.ChiefOfStaff.Skills.Followthrough
   alias Maraithon.Connectors.SourceCursors
-  alias Maraithon.LLM
+  alias Maraithon.Todos
 
   @handoff_max_bytes 500_000
-  @max_drive_steps 6
+  @handoff_item_limit 5
   @allowed_watermark_kinds ~w(gmail_discovery_watermark slack_discovery_watermark)
-  @compact_profiles [
-    %{
-      gmail_inbox: 28,
-      gmail_sent: 40,
-      gmail_all: 64,
-      slack_messages: 100,
-      slack_mentions: 50,
-      chars: 4_000
-    },
-    %{
-      gmail_inbox: 18,
-      gmail_sent: 24,
-      gmail_all: 40,
-      slack_messages: 60,
-      slack_mentions: 30,
-      chars: 2_000
-    },
-    %{
-      gmail_inbox: 8,
-      gmail_sent: 12,
-      gmail_all: 20,
-      slack_messages: 24,
-      slack_mentions: 12,
-      chars: 1_000
-    },
-    %{
-      gmail_inbox: 4,
-      gmail_sent: 4,
-      gmail_all: 8,
-      slack_messages: 8,
-      slack_mentions: 4,
-      chars: 500
-    }
-  ]
 
   @doc "Fetches one exact account delta and returns either a settled result or a sealed handoff."
   def acquire(account, agent, opts \\ [])
@@ -81,9 +47,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     with :ok <- validate_ownership(account, agent),
          {bundle, telemetry, proposals} <- acquire_bundle(account, agent, opts),
          :ok <- validate_complete_acquisition(account, telemetry),
-         compact_bundle when is_map(compact_bundle) <- compact_bundle(bundle),
          watermarks <- serialize_watermarks(proposals, account.id),
-         source_items <- source_item_count(compact_bundle) do
+         :ok <- validate_watermarks(watermarks),
+         {:ok, partitions} <- partition_bundle(bundle),
+         source_items <- Enum.sum(Enum.map(partitions, &source_item_count/1)) do
       if source_items == 0 do
         with :ok <- advance_watermarks(account, watermarks) do
           {:ok,
@@ -96,16 +63,39 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
            }}
         end
       else
+        fanout_count = length(partitions)
+
+        handoffs =
+          partitions
+          |> Enum.with_index(1)
+          |> Enum.map(fn {partition, fanout_index} ->
+            %{
+              "account_id" => account.id,
+              "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
+              "fanout_index" => fanout_index,
+              "fanout_count" => fanout_count,
+              "source_bundle" => partition,
+              "source_item_refs" => source_item_refs(partition),
+              "watermarks" => []
+            }
+            |> maybe_put_agent_id(agent)
+          end)
+
         {:ok,
          %{
-           outcome: "handoff_ready",
+           outcome: "fanout_ready",
            account_id: account.id,
            source_items: source_items,
-           handoff:
+           fanout_count: fanout_count,
+           handoffs: handoffs,
+           finalizer:
              %{
                "account_id" => account.id,
                "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
-               "source_bundle" => compact_bundle,
+               "expected_fanouts" => fanout_count,
+               "expected_source_items" => source_items,
+               "expected_source_refs_digest" =>
+                 partitions |> Enum.flat_map(&source_item_refs/1) |> refs_digest(),
                "watermarks" => watermarks
              }
              |> maybe_put_agent_id(agent)
@@ -122,7 +112,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
 
-  @doc "Reasons over one sealed account delta and advances its discovery cursor after writes settle."
+  @doc "Reasons over one small sealed account-delta partition."
   def reason(account, agent, payload, opts \\ [])
 
   def reason(%ConnectedAccount{} = account, %Agent{} = agent, payload, opts)
@@ -141,15 +131,24 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     with :ok <- validate_ownership(account, agent),
          {:ok, bundle} <- fetch_map(payload, "source_bundle"),
          {:ok, watermarks} <- fetch_list(payload, "watermarks"),
+         {:ok, source_item_refs} <- fetch_list(payload, "source_item_refs", []),
          :ok <- validate_payload_identity(account, agent, payload),
-         {:ok, outcome} <- run_followthrough(account, agent, bundle, opts),
+         source_items when source_items > 0 <- source_item_count(bundle),
+         ^source_items <- length(source_item_refs),
+         ^source_item_refs <- source_item_refs(bundle),
+         {:ok, outcome} <- run_todo_decisions(account, bundle, opts),
+         ^source_items <- Map.get(outcome, :decision_count),
+         ^source_item_refs <- Map.get(outcome, :decision_refs),
          :ok <- advance_watermarks(account, watermarks) do
       {:ok,
        outcome
        |> Map.put(:account_id, account.id)
-       |> Map.put(:source_items, source_item_count(bundle))
+       |> Map.put(:source_items, source_items)
+       |> Map.put(:fanout_index, read_integer(payload, "fanout_index"))
+       |> Map.put(:fanout_count, read_integer(payload, "fanout_count"))
        |> Map.put(:advanced_watermarks, length(watermarks))}
     else
+      false -> {:error, :source_discovery_partition_identity_mismatch}
       {:error, _reason} = error -> error
       _other -> {:error, :invalid_source_discovery_payload}
     end
@@ -159,34 +158,105 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
   end
 
+  @doc "Advances a discovery cursor only after all child partitions prove exact decisions."
+  def finalize(account, agent, payload, child_results)
+
+  def finalize(%ConnectedAccount{} = account, agent, payload, child_results)
+      when (is_nil(agent) or is_struct(agent, Agent)) and is_map(payload) and
+             is_list(child_results) do
+    with :ok <- validate_ownership(account, agent),
+         :ok <- validate_payload_identity(account, agent, payload),
+         {:ok, watermarks} <- fetch_list(payload, "watermarks"),
+         expected_fanouts when is_integer(expected_fanouts) and expected_fanouts > 0 <-
+           read_integer(payload, "expected_fanouts"),
+         expected_source_items
+         when is_integer(expected_source_items) and expected_source_items > 0 <-
+           read_integer(payload, "expected_source_items"),
+         expected_source_refs_digest when is_binary(expected_source_refs_digest) <-
+           read_string(payload, "expected_source_refs_digest"),
+         :ok <-
+           validate_child_results(
+             child_results,
+             expected_fanouts,
+             expected_source_items,
+             expected_source_refs_digest
+           ),
+         :ok <- advance_watermarks(account, watermarks) do
+      {:ok,
+       %{
+         outcome: "finalized",
+         account_id: account.id,
+         fanout_count: expected_fanouts,
+         source_items: expected_source_items,
+         decision_count: expected_source_items,
+         model_calls: Enum.sum(Enum.map(child_results, &result_integer(&1, "model_calls"))),
+         advanced_watermarks: length(watermarks)
+       }}
+    else
+      {:error, _reason} = error -> error
+      _other -> {:error, :invalid_source_discovery_finalizer}
+    end
+  rescue
+    error -> {:error, Maraithon.Redaction.error_class(error)}
+  catch
+    kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
+  end
+
+  def finalize(_account, _agent, _payload, _child_results),
+    do: {:error, :invalid_source_discovery_finalizer}
+
+  @doc false
+  def partition_bundle(bundle) when is_map(bundle) do
+    if source_identities_complete?(bundle) do
+      partitions =
+        bundle
+        |> source_records()
+        |> grouped_source_records()
+        |> pack_source_groups(@handoff_item_limit)
+        |> Enum.map(&compact_partition(bundle, &1))
+
+      if Enum.all?(partitions, &is_map/1),
+        do: {:ok, partitions},
+        else: {:error, :source_discovery_partition_too_large}
+    else
+      {:error, :source_discovery_item_identity_missing}
+    end
+  end
+
+  def partition_bundle(_bundle), do: {:error, :invalid_source_bundle}
+
   @doc false
   def compact_bundle(bundle) when is_map(bundle) do
-    Enum.find_value(@compact_profiles, fn profile ->
-      compact = build_compact_bundle(bundle, profile)
-      if encoded_bytes(compact) <= @handoff_max_bytes, do: compact
-    end)
+    compact = build_compact_bundle(bundle)
+    if encoded_bytes(compact) <= @handoff_max_bytes, do: compact
   end
 
   def compact_bundle(_bundle), do: nil
 
   @doc false
   def source_item_count(bundle) when is_map(bundle) do
-    gmail_count =
-      (SourceBundle.gmail_messages(bundle) ++
-         SourceBundle.gmail_inbox_messages(bundle) ++
-         SourceBundle.gmail_sent_messages(bundle))
-      |> Enum.uniq()
-      |> length()
-
-    slack_count =
-      (SourceBundle.slack_messages(bundle) ++ SourceBundle.slack_mentions(bundle))
-      |> Enum.uniq()
-      |> length()
-
-    gmail_count + slack_count
+    bundle |> source_records() |> length()
   end
 
   def source_item_count(_bundle), do: 0
+
+  @doc false
+  def source_item_refs(bundle) when is_map(bundle) do
+    Enum.map(source_records(bundle), fn record ->
+      Atom.to_string(record.source) <> ":" <> record.identity
+    end)
+  end
+
+  def source_item_refs(_bundle), do: []
+
+  @doc false
+  def refs_digest(refs) when is_list(refs) do
+    refs
+    |> Enum.sort()
+    |> Jason.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
+  end
 
   defp acquire_bundle(account, agent, opts) do
     acquisition = Keyword.get(opts, :acquisition, &Acquisition.build/4)
@@ -215,114 +285,163 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     )
   end
 
-  defp run_followthrough(account, agent, bundle, opts) do
-    module = Keyword.get(opts, :followthrough_module, Followthrough)
-    llm_complete = Keyword.get(opts, :llm_complete, &LLM.complete/1)
-    source_scope = account_source_scope(account)
+  defp run_todo_decisions(account, bundle, opts) do
     now = Keyword.get(opts, :now, parse_datetime(bundle["fetched_at"]) || DateTime.utc_now())
+    candidates = todo_candidates(account, bundle)
+    source_refs = Enum.map(candidates, & &1["source_ref"])
 
-    context = %{
-      user_id: account.user_id,
-      agent_id: agent_id(agent),
-      timestamp: now,
-      trigger: %{type: :wakeup, job_type: "source_account_discovery_reason"},
-      recent_events: [],
-      source_scope: source_scope,
-      source_bundle: bundle
-    }
+    intelligence_opts =
+      [
+        exact_decisions: true,
+        existing_limit: 80,
+        now: now,
+        semantic_dedupe: false,
+        source: "source_account_discovery"
+      ]
+      |> maybe_put_llm_complete(opts)
 
-    state = module.init(discovery_config(agent, account.user_id, source_scope))
-    drive_outcome(module.handle_wakeup(state, context), module, context, llm_complete, 0, 0)
-  end
-
-  defp drive_outcome(_outcome, _module, _context, _llm_complete, _model_calls, steps)
-       when steps >= @max_drive_steps,
-       do: {:error, :source_discovery_step_limit}
-
-  defp drive_outcome({:idle, _state}, _module, _context, _llm_complete, model_calls, _steps) do
-    {:ok, %{outcome: "idle", model_calls: model_calls}}
-  end
-
-  defp drive_outcome(
-         {:emit, {event_type, payload}, _state},
-         _module,
-         _context,
-         _llm_complete,
-         model_calls,
-         _steps
-       ) do
-    {:ok,
-     %{
-       outcome: "emitted",
-       event_type: to_string(event_type),
-       emitted_count: payload_count(payload),
-       model_calls: model_calls
-     }}
-  end
-
-  defp drive_outcome(
-         {:continue, state},
-         module,
-         context,
-         llm_complete,
-         model_calls,
-         steps
-       ) do
-    drive_outcome(
-      module.handle_wakeup(state, context),
-      module,
-      context,
-      llm_complete,
-      model_calls,
-      steps + 1
-    )
-  end
-
-  defp drive_outcome(
-         {:effect, {:llm_call, params}, state},
-         module,
-         context,
-         llm_complete,
-         model_calls,
-         steps
-       )
-       when is_map(params) do
-    if pending_llm_kind(state) == :insights and model_calls == 0 do
-      with {:ok, response} <- llm_complete.(params) do
-        drive_outcome(
-          module.handle_effect_result({:llm_call, response}, state, context),
-          module,
-          context,
-          llm_complete,
-          model_calls + 1,
-          steps + 1
-        )
-      end
+    with true <- candidates != [] and length(candidates) == length(source_item_refs(bundle)),
+         {:ok, result} <- Todos.ingest_many(account.user_id, candidates, intelligence_opts),
+         decisions when is_list(decisions) <- Map.get(result, :decisions),
+         indexes <- decisions |> Enum.map(&Map.get(&1, :candidate_index)) |> Enum.sort(),
+         true <- indexes == Enum.to_list(0..(length(candidates) - 1)),
+         decision_refs <- Enum.map(decisions, &Enum.at(source_refs, &1.candidate_index)),
+         true <- Enum.sort(decision_refs) == Enum.sort(source_refs) do
+      {:ok,
+       %{
+         outcome: "evaluated",
+         model_calls: 1,
+         todo_count: length(Map.get(result, :todos, [])),
+         skipped_count: Map.get(result, :skipped_count, 0),
+         decision_count: length(decisions),
+         decision_refs: decision_refs
+       }}
     else
-      drive_outcome(
-        module.handle_effect_error(
-          :llm_call,
-          :relationship_learning_deferred_for_source_account_worker,
-          state,
-          context
-        ),
-        module,
-        context,
-        llm_complete,
-        model_calls,
-        steps + 1
-      )
+      {:error, _reason} = error -> error
+      _other -> {:error, :source_discovery_incomplete_decisions}
     end
   end
 
-  defp drive_outcome({:effect, _effect, _state}, _module, _context, _llm, _calls, _steps),
-    do: {:error, :unsupported_source_discovery_effect}
+  defp maybe_put_llm_complete(intelligence_opts, opts) do
+    case Keyword.get(opts, :llm_complete) do
+      fun when is_function(fun, 1) -> Keyword.put(intelligence_opts, :llm_complete, fun)
+      _other -> intelligence_opts
+    end
+  end
 
-  defp drive_outcome(_outcome, _module, _context, _llm, _calls, _steps),
-    do: {:error, :invalid_source_discovery_outcome}
+  defp todo_candidates(account, bundle) do
+    account_label = source_account_label(account)
 
-  defp pending_llm_kind(%{inbox_state: %{pending_llm_kind: kind}}), do: kind
-  defp pending_llm_kind(_state), do: nil
+    bundle
+    |> source_records()
+    |> Enum.map(fn record ->
+      source = Atom.to_string(record.source)
+      source_ref = source <> ":" <> record.identity
+      item = record.item
+
+      %{
+        "source_ref" => source_ref,
+        "source" => source,
+        "kind" => if(source == "gmail", do: "gmail_triage", else: "general"),
+        "title" => candidate_title(record),
+        "summary" => candidate_summary(record),
+        "next_action" => "Decide from the supplied source evidence whether you need to act.",
+        "source_account_id" => account.id,
+        "source_account_label" => account_label,
+        "source_item_id" => source_item_id(record),
+        "source_occurred_at" => source_occurred_at(record),
+        "dedupe_key" => "source-discovery:#{account.id}:#{short_digest(source_ref)}",
+        "metadata" => %{
+          "source_ref" => source_ref,
+          "source_record" => item,
+          "source_roles" => record.roles |> MapSet.to_list() |> Enum.map(&Atom.to_string/1)
+        }
+      }
+    end)
+  end
+
+  defp candidate_title(%{source: :gmail, item: item}),
+    do: read_string(item, "subject") || "New Gmail message"
+
+  defp candidate_title(%{source: :slack, item: item}),
+    do:
+      read_string(item, "channel_name") || read_string(item, "channel_id") || "New Slack message"
+
+  defp candidate_summary(%{source: :gmail, item: item}) do
+    (read_string(item, "body_text") || read_string(item, "text_body") ||
+       read_string(item, "body") || read_string(item, "snippet") || "Gmail message")
+    |> candidate_excerpt()
+  end
+
+  defp candidate_summary(%{source: :slack, item: item}) do
+    (read_string(item, "text_resolved") || read_string(item, "text") || "Slack message")
+    |> candidate_excerpt()
+  end
+
+  defp candidate_excerpt(value), do: String.slice(value, 0, 1_000)
+
+  defp source_item_id(%{source: :gmail, item: item}),
+    do: read_string(item, "message_id") || read_string(item, "id")
+
+  defp source_item_id(%{source: :slack, item: item}) do
+    channel_id = read_string(item, "channel_id")
+    ts = read_string(item, "ts")
+    if channel_id && ts, do: channel_id <> ":" <> ts
+  end
+
+  defp source_occurred_at(%{source: :gmail, item: item}) do
+    item
+    |> Map.get("internal_date", Map.get(item, "date"))
+    |> normalize_source_datetime(:millisecond)
+  end
+
+  defp source_occurred_at(%{source: :slack, item: item}) do
+    item
+    |> Map.get("date", Map.get(item, "ts"))
+    |> normalize_source_datetime(:second)
+  end
+
+  defp normalize_source_datetime(%DateTime{} = value, _unit), do: DateTime.to_iso8601(value)
+
+  defp normalize_source_datetime(value, unit) when is_integer(value) do
+    case DateTime.from_unix(value, unit) do
+      {:ok, datetime} -> DateTime.to_iso8601(datetime)
+      _other -> nil
+    end
+  end
+
+  defp normalize_source_datetime(value, unit) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} ->
+        DateTime.to_iso8601(datetime)
+
+      _other ->
+        case Float.parse(value) do
+          {number, ""} ->
+            normalize_source_datetime(round(number * unit_multiplier(unit)), :microsecond)
+
+          _invalid ->
+            nil
+        end
+    end
+  end
+
+  defp normalize_source_datetime(_value, _unit), do: nil
+
+  defp unit_multiplier(:second), do: 1_000_000
+  defp unit_multiplier(:millisecond), do: 1_000
+
+  defp source_account_label(%ConnectedAccount{metadata: metadata, provider: provider}) do
+    metadata = if is_map(metadata), do: metadata, else: %{}
+
+    read_string(metadata, "account_email") || read_string(metadata, "team_name") || provider
+  end
+
+  defp short_digest(value) do
+    :crypto.hash(:sha256, value)
+    |> Base.url_encode64(padding: false)
+    |> binary_part(0, 24)
+  end
 
   defp discovery_config(agent, user_id, source_scope) do
     agent_config = if is_struct(agent, Agent), do: agent.config || %{}, else: %{}
@@ -345,10 +464,35 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end)
   end
 
-  defp build_compact_bundle(bundle, profile) do
-    gmail_messages = SourceBundle.gmail_messages(bundle) |> Enum.take(profile.gmail_all)
-    gmail_inbox = SourceBundle.gmail_inbox_messages(bundle) |> Enum.take(profile.gmail_inbox)
-    gmail_sent = SourceBundle.gmail_sent_messages(bundle) |> Enum.take(profile.gmail_sent)
+  defp build_compact_bundle(bundle) do
+    %{
+      "trigger" => Map.get(bundle, "trigger"),
+      "fetched_at" => Map.get(bundle, "fetched_at"),
+      "freshness" => SourceBundle.freshness(bundle),
+      "source_scope" => SourceBundle.source_scope(bundle),
+      "gmail" => %{
+        "messages" => SourceBundle.gmail_messages(bundle),
+        "inbox_messages" => SourceBundle.gmail_inbox_messages(bundle),
+        "sent_messages" => SourceBundle.gmail_sent_messages(bundle),
+        "messages_by_provider" => %{}
+      },
+      "calendar" => %{"events" => [], "events_by_provider" => %{}},
+      "slack" => %{
+        "workspaces" => [],
+        "messages" => SourceBundle.slack_messages(bundle),
+        "mentions" => SourceBundle.slack_mentions(bundle)
+      }
+    }
+  end
+
+  defp compact_partition(bundle, records) do
+    partition = partition_source_bundle(bundle, records)
+    compact_bundle(partition)
+  end
+
+  defp partition_source_bundle(bundle, records) do
+    gmail_records = Enum.filter(records, &(&1.source == :gmail))
+    slack_records = Enum.filter(records, &(&1.source == :slack))
 
     %{
       "trigger" => Map.get(bundle, "trigger"),
@@ -356,36 +500,190 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       "freshness" => SourceBundle.freshness(bundle),
       "source_scope" => SourceBundle.source_scope(bundle),
       "gmail" => %{
-        "messages" => gmail_messages,
-        "inbox_messages" => gmail_inbox,
-        "sent_messages" => gmail_sent,
+        "messages" => Enum.map(gmail_records, & &1.item),
+        "inbox_messages" =>
+          gmail_records |> Enum.filter(&MapSet.member?(&1.roles, :inbox)) |> Enum.map(& &1.item),
+        "sent_messages" =>
+          gmail_records |> Enum.filter(&MapSet.member?(&1.roles, :sent)) |> Enum.map(& &1.item),
         "messages_by_provider" => %{}
       },
       "calendar" => %{"events" => [], "events_by_provider" => %{}},
       "slack" => %{
         "workspaces" => [],
-        "messages" => SourceBundle.slack_messages(bundle) |> Enum.take(profile.slack_messages),
-        "mentions" => SourceBundle.slack_mentions(bundle) |> Enum.take(profile.slack_mentions)
+        "messages" => Enum.map(slack_records, & &1.item),
+        "mentions" =>
+          slack_records
+          |> Enum.filter(&MapSet.member?(&1.roles, :mention))
+          |> Enum.map(& &1.item)
       }
     }
-    |> compact_value(profile.chars)
   end
 
-  defp compact_value(%DateTime{} = value, _max_chars), do: DateTime.to_iso8601(value)
-  defp compact_value(%NaiveDateTime{} = value, _max_chars), do: NaiveDateTime.to_iso8601(value)
+  defp source_records(bundle) do
+    gmail_inbox_ids = bundle |> SourceBundle.gmail_inbox_messages() |> identity_set(:gmail)
+    gmail_sent_ids = bundle |> SourceBundle.gmail_sent_messages() |> identity_set(:gmail)
+    slack_mention_ids = bundle |> SourceBundle.slack_mentions() |> identity_set(:slack)
 
-  defp compact_value(value, max_chars) when is_map(value) do
-    Map.new(value, fn {key, nested} -> {to_string(key), compact_value(nested, max_chars)} end)
+    gmail =
+      (SourceBundle.gmail_messages(bundle) ++
+         SourceBundle.gmail_inbox_messages(bundle) ++
+         SourceBundle.gmail_sent_messages(bundle))
+      |> unique_source_items(:gmail)
+      |> Enum.map(fn {identity, item} ->
+        roles =
+          MapSet.new()
+          |> maybe_put_role(:inbox, MapSet.member?(gmail_inbox_ids, identity))
+          |> maybe_put_role(:sent, MapSet.member?(gmail_sent_ids, identity))
+
+        %{source: :gmail, identity: identity, item: item, roles: roles}
+      end)
+
+    slack =
+      (SourceBundle.slack_messages(bundle) ++ SourceBundle.slack_mentions(bundle))
+      |> unique_source_items(:slack)
+      |> Enum.map(fn {identity, item} ->
+        roles =
+          maybe_put_role(MapSet.new(), :mention, MapSet.member?(slack_mention_ids, identity))
+
+        %{source: :slack, identity: identity, item: item, roles: roles}
+      end)
+
+    gmail ++ slack
   end
 
-  defp compact_value(value, max_chars) when is_list(value),
-    do: Enum.map(value, &compact_value(&1, max_chars))
+  defp grouped_source_records(records) do
+    {order, groups} =
+      Enum.reduce(records, {[], %{}}, fn record, {order, groups} ->
+        key = source_group_identity(record)
 
-  defp compact_value(value, max_chars) when is_binary(value),
-    do: String.slice(value, 0, max_chars)
+        if Map.has_key?(groups, key) do
+          {order, Map.update!(groups, key, &(&1 ++ [record]))}
+        else
+          {order ++ [key], Map.put(groups, key, [record])}
+        end
+      end)
 
-  defp compact_value(value, _max_chars) when is_atom(value), do: to_string(value)
-  defp compact_value(value, _max_chars), do: value
+    Enum.map(order, &Map.fetch!(groups, &1))
+  end
+
+  defp source_group_identity(%{source: :gmail, identity: identity, item: item}) do
+    provider = read_string(item, "google_provider") || "unknown"
+    {:gmail, provider, read_string(item, "thread_id") || identity}
+  end
+
+  defp source_group_identity(%{source: :slack, identity: identity, item: item}) do
+    {:slack, read_string(item, "team_id"), read_string(item, "channel_id"),
+     read_string(item, "thread_ts") || read_string(item, "ts") || identity}
+  end
+
+  defp pack_source_groups(groups, limit) do
+    {partitions, current} =
+      Enum.reduce(groups, {[], []}, fn group, {partitions, current} ->
+        cond do
+          current == [] ->
+            {partitions, group}
+
+          length(current) + length(group) <= limit ->
+            {partitions, current ++ group}
+
+          true ->
+            {partitions ++ [current], group}
+        end
+      end)
+
+    if current == [], do: partitions, else: partitions ++ [current]
+  end
+
+  defp source_identities_complete?(bundle) do
+    gmail_items =
+      SourceBundle.gmail_messages(bundle) ++
+        SourceBundle.gmail_inbox_messages(bundle) ++ SourceBundle.gmail_sent_messages(bundle)
+
+    slack_items = SourceBundle.slack_messages(bundle) ++ SourceBundle.slack_mentions(bundle)
+
+    Enum.all?(gmail_items, &(is_map(&1) and not is_nil(source_identity(&1, :gmail)))) and
+      Enum.all?(slack_items, &(is_map(&1) and not is_nil(source_identity(&1, :slack))))
+  end
+
+  defp identity_set(items, source) do
+    items
+    |> unique_source_items(source)
+    |> Enum.map(&elem(&1, 0))
+    |> MapSet.new()
+  end
+
+  defp unique_source_items(items, source) do
+    items
+    |> Enum.filter(&is_map/1)
+    |> Enum.reduce([], fn item, acc ->
+      case source_identity(item, source) do
+        nil -> acc
+        identity -> [{identity, item} | acc]
+      end
+    end)
+    |> Enum.reverse()
+    |> Enum.uniq_by(&elem(&1, 0))
+  end
+
+  defp source_identity(item, :gmail) do
+    provider = read_string(item, "google_provider") || "unknown"
+    id = read_string(item, "message_id") || read_string(item, "id")
+    if id, do: provider <> ":" <> id
+  end
+
+  defp source_identity(item, :slack) do
+    team_id = read_string(item, "team_id")
+    channel_id = read_string(item, "channel_id")
+    ts = read_string(item, "ts")
+    if team_id && channel_id && ts, do: Enum.join([team_id, channel_id, ts], ":")
+  end
+
+  defp maybe_put_role(roles, role, true), do: MapSet.put(roles, role)
+  defp maybe_put_role(roles, _role, false), do: roles
+
+  defp validate_child_results(
+         child_results,
+         expected_fanouts,
+         expected_source_items,
+         expected_source_refs_digest
+       ) do
+    indexes =
+      child_results
+      |> Enum.map(&result_integer(&1, "fanout_index"))
+      |> Enum.sort()
+
+    decision_count = Enum.sum(Enum.map(child_results, &result_integer(&1, "decision_count")))
+    source_items = Enum.sum(Enum.map(child_results, &result_integer(&1, "source_items")))
+    decision_refs = Enum.flat_map(child_results, &result_string_list(&1, "decision_refs"))
+
+    if length(child_results) == expected_fanouts and indexes == Enum.to_list(1..expected_fanouts) and
+         decision_count == expected_source_items and source_items == expected_source_items and
+         length(decision_refs) == expected_source_items and
+         length(Enum.uniq(decision_refs)) == expected_source_items and
+         refs_digest(decision_refs) == expected_source_refs_digest do
+      :ok
+    else
+      {:error, :source_discovery_incomplete_decisions}
+    end
+  end
+
+  defp result_integer(result, key) when is_map(result) do
+    case Map.get(result, key, Map.get(result, existing_atom(key), 0)) do
+      value when is_integer(value) and value >= 0 -> value
+      _other -> 0
+    end
+  end
+
+  defp result_integer(_result, _key), do: 0
+
+  defp result_string_list(result, key) when is_map(result) do
+    case Map.get(result, key, Map.get(result, existing_atom(key), [])) do
+      values when is_list(values) -> Enum.filter(values, &(is_binary(&1) and &1 != ""))
+      _other -> []
+    end
+  end
+
+  defp result_string_list(_result, _key), do: []
 
   defp encoded_bytes(value) do
     case Jason.encode(value) do
@@ -412,6 +710,13 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp serialize_watermarks(_proposals, _account_id), do: []
+
+  defp validate_watermarks([%{"account_id" => account_id, "kind" => kind, "value" => value}])
+       when is_integer(account_id) and kind in @allowed_watermark_kinds and is_binary(value) and
+              value != "",
+       do: :ok
+
+  defp validate_watermarks(_watermarks), do: {:error, :source_discovery_watermark_invalid}
 
   defp advance_watermarks(account, watermarks) when is_list(watermarks) do
     Enum.reduce_while(watermarks, :ok, fn watermark, :ok ->
@@ -482,15 +787,6 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end
   end
 
-  defp payload_count(payload) when is_map(payload) do
-    case Map.get(payload, :count, Map.get(payload, "count", 0)) do
-      value when is_integer(value) and value >= 0 -> value
-      _other -> 0
-    end
-  end
-
-  defp payload_count(_payload), do: 0
-
   defp read_map(map, key) when is_map(map) do
     case Map.get(map, key, Map.get(map, existing_atom(key), %{})) do
       value when is_map(value) -> value
@@ -505,9 +801,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end
   end
 
-  defp fetch_list(map, key) when is_map(map) do
+  defp fetch_list(map, key, default \\ :missing) when is_map(map) do
     case Map.fetch(map, key) do
       {:ok, value} when is_list(value) -> {:ok, value}
+      :error when is_list(default) -> {:ok, default}
       _other -> {:error, {:missing_list_payload, key}}
     end
   end

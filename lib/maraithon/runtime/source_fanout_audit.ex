@@ -1,0 +1,462 @@
+defmodule Maraithon.Runtime.SourceFanoutAudit do
+  @moduledoc """
+  Verifies the durable source-account fan-out graph over a bounded time window.
+
+  The audit is intentionally count- and identity-based. It never returns source
+  payloads, but it does prove that every referenced child exists, covers the
+  exact source-item identity set, and reached the cursor-advancing finalizer.
+  """
+
+  import Ecto.Query
+
+  alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.OAuth.Token
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, SourceAccountDiscovery}
+  alias Maraithon.Todos.Todo
+
+  @discovery_acquire "runtime_partition:source_account_discovery"
+  @discovery_reason "runtime_partition:source_account_discovery_reason"
+  @discovery_finalize "runtime_partition:source_account_discovery_finalize"
+  @closure_acquire "runtime_partition:source_account_closure_acquire"
+  @closure_reason "runtime_partition:source_account_closure_reason"
+  @closure_finalize "runtime_partition:source_account_closure_finalize"
+  @active_statuses ~w(pending running)
+
+  @doc "Returns a PII-free exact-coverage audit for source cycles since `since`."
+  def verify_since(%DateTime{} = since, opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now()) |> DateTime.truncate(:microsecond)
+    grace_seconds = Keyword.get(opts, :settlement_grace_seconds, 300)
+    cutoff = DateTime.add(now, -grace_seconds, :second)
+
+    jobs = load_jobs(since)
+    jobs_by_id = Map.new(jobs, &{&1.id, &1})
+    expected_accounts = expected_accounts()
+
+    cycles =
+      jobs
+      |> Enum.filter(&(&1.job_type in [@discovery_acquire, @closure_acquire]))
+      |> Enum.filter(&(DateTime.compare(&1.inserted_at, cutoff) != :gt))
+      |> Enum.map(&audit_cycle(&1, jobs_by_id))
+
+    discovery =
+      role_summary(cycles, "discovery", expected_accounts.discovery, jobs, cutoff)
+
+    closure = role_summary(cycles, "closure", expected_accounts.closure, jobs, cutoff)
+    errors = Enum.flat_map(cycles, & &1.errors)
+    activity = activity_summary(jobs, cycles, cutoff)
+
+    closure_covered? =
+      closure.expected_account_count == 0 or
+        (closure.cycles > 0 and closure.missing_account_ids == [])
+
+    %{
+      healthy?:
+        errors == [] and discovery.missing_account_ids == [] and discovery.cycles > 0 and
+          closure_covered? and activity.every_fanout_visible?,
+      since: DateTime.to_iso8601(since),
+      until: DateTime.to_iso8601(now),
+      settlement_grace_seconds: grace_seconds,
+      discovery: discovery,
+      closure: closure,
+      activity: activity,
+      error_codes: errors |> Enum.map(&Atom.to_string/1) |> Enum.frequencies()
+    }
+  end
+
+  defp load_jobs(since) do
+    job_types = BackgroundJobs.source_account_job_types()
+
+    BackgroundJob
+    |> where([job], job.job_type in ^job_types and job.inserted_at >= ^since)
+    |> order_by([job], asc: job.inserted_at, asc: job.id)
+    |> Repo.all()
+    |> Enum.map(&BackgroundJob.hydrate_payloads/1)
+  end
+
+  defp expected_accounts do
+    discovery =
+      ConnectedAccount
+      |> join(:inner, [account], token in Token,
+        on: token.user_id == account.user_id and token.provider == account.provider
+      )
+      |> where(
+        [account, _token],
+        account.status == "connected" and
+          (like(account.provider, "google%") or
+             fragment("? ~ '^slack:[^:]+$'", account.provider))
+      )
+      |> distinct([account, _token], account.id)
+      |> select([account, _token], {account.id, account.provider})
+      |> Repo.all()
+
+    closure =
+      Todo
+      |> join(:inner, [todo], account in ConnectedAccount,
+        on: account.id == todo.source_account_id
+      )
+      |> where(
+        [todo, account],
+        todo.status in ["open", "snoozed"] and account.status == "connected" and
+          (like(account.provider, "google%") or
+             fragment("? ~ '^slack:[^:]+$'", account.provider))
+      )
+      |> distinct([_todo, account], account.id)
+      |> select([_todo, account], {account.id, account.provider})
+      |> Repo.all()
+
+    %{discovery: discovery, closure: closure}
+  end
+
+  defp audit_cycle(acquisition, jobs_by_id) do
+    role = if acquisition.job_type == @discovery_acquire, do: "discovery", else: "closure"
+    reason_type = if role == "discovery", do: @discovery_reason, else: @closure_reason
+    finalize_type = if role == "discovery", do: @discovery_finalize, else: @closure_finalize
+    result = acquisition.result || %{}
+    account_id = map_integer(acquisition.payload, "account_id")
+    outcome = map_string(result, "outcome")
+
+    base = %{
+      role: role,
+      account_id: account_id,
+      acquisition_reference: String.slice(acquisition.id, 0, 8),
+      status: acquisition.status,
+      outcome: outcome,
+      source_items: map_integer(result, "source_items"),
+      todo_count: map_integer(result, "todo_count"),
+      decision_count: 0,
+      fanout_count: 0,
+      model_calls: 0,
+      reason_job_ids: [],
+      exact?: false,
+      errors: []
+    }
+
+    cond do
+      acquisition.status != "completed" ->
+        %{base | errors: [:acquisition_not_completed]}
+
+      outcome == "empty_delta" and base.source_items == 0 ->
+        %{base | exact?: true}
+
+      role == "closure" and outcome == "no_open_todos" ->
+        %{base | exact?: true}
+
+      outcome == "fanout_ready" ->
+        audit_fanout_cycle(base, acquisition, jobs_by_id, reason_type, finalize_type)
+
+      true ->
+        %{base | errors: [:invalid_acquisition_result]}
+    end
+  end
+
+  defp audit_fanout_cycle(base, acquisition, jobs_by_id, reason_type, finalize_type) do
+    result = acquisition.result || %{}
+    reason_ids = map_string_list(result, "reason_job_ids")
+    finalizer_id = map_string(result, "finalizer_job_id")
+    expected_fanouts = map_integer(result, "fanout_count")
+    expected_items = map_integer(result, "source_items")
+    reasons = Enum.map(reason_ids, &Map.get(jobs_by_id, &1))
+    finalizer = Map.get(jobs_by_id, finalizer_id)
+
+    child_indexes =
+      reasons
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&map_integer(&1.payload, "fanout_index"))
+      |> Enum.sort()
+
+    child_results =
+      reasons
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&(&1.result || %{}))
+
+    decision_refs = Enum.flat_map(child_results, &map_string_list(&1, "decision_refs"))
+    decision_count = Enum.sum(Enum.map(child_results, &map_integer(&1, "decision_count")))
+    model_calls = Enum.sum(Enum.map(child_results, &map_integer(&1, "model_calls")))
+
+    expected_decisions =
+      if base.role == "closure", do: map_integer(result, "todo_count"), else: expected_items
+
+    errors =
+      []
+      |> require_error(expected_fanouts > 0 and expected_items > 0, :invalid_expected_counts)
+      |> require_error(length(reason_ids) == expected_fanouts, :reason_reference_count_mismatch)
+      |> require_error(Enum.all?(reasons, &match?(%BackgroundJob{}, &1)), :reason_job_missing)
+      |> require_error(
+        Enum.all?(reasons, &(&1 && &1.job_type == reason_type && &1.status == "completed")),
+        :reason_job_not_completed
+      )
+      |> require_error(
+        Enum.all?(
+          reasons,
+          &(&1 && map_string(&1.payload, "acquisition_job_id") == acquisition.id)
+        ),
+        :reason_acquisition_mismatch
+      )
+      |> require_error(child_indexes == Enum.to_list(1..max(expected_fanouts, 1)), :fanout_gap)
+      |> require_coverage(
+        base.role,
+        child_results,
+        finalizer,
+        expected_items,
+        expected_decisions,
+        decision_count,
+        decision_refs
+      )
+      |> require_error(
+        finalizer_valid?(finalizer, finalize_type, acquisition.id),
+        :finalizer_invalid
+      )
+      |> require_error(
+        finalizer_reason_ids(finalizer) == reason_ids,
+        :finalizer_reason_reference_mismatch
+      )
+      |> require_error(
+        decision_digest_valid?(decision_refs, finalizer, base.role),
+        :decision_reference_digest_mismatch
+      )
+      |> require_error(
+        finalized_counts_valid?(
+          finalizer,
+          expected_items,
+          expected_decisions,
+          expected_fanouts
+        ),
+        :finalized_count_mismatch
+      )
+
+    %{
+      base
+      | source_items: expected_items,
+        todo_count: expected_decisions,
+        decision_count: decision_count,
+        fanout_count: expected_fanouts,
+        model_calls: model_calls,
+        reason_job_ids: reason_ids,
+        exact?: errors == [],
+        errors: errors
+    }
+  end
+
+  defp require_coverage(
+         errors,
+         "discovery",
+         child_results,
+         _finalizer,
+         expected_items,
+         expected_decisions,
+         decision_count,
+         decision_refs
+       ) do
+    child_items = Enum.sum(Enum.map(child_results, &map_integer(&1, "source_items")))
+
+    errors
+    |> require_error(child_items == expected_items, :source_item_count_mismatch)
+    |> require_decision_manifest(expected_decisions, decision_count, decision_refs)
+  end
+
+  defp require_coverage(
+         errors,
+         "closure",
+         child_results,
+         finalizer,
+         expected_items,
+         expected_decisions,
+         decision_count,
+         decision_refs
+       ) do
+    expected_source_digest =
+      map_string(finalizer && finalizer.payload, "expected_source_refs_digest")
+
+    child_item_counts = Enum.map(child_results, &map_integer(&1, "source_items"))
+    child_source_digests = Enum.map(child_results, &map_string(&1, "source_refs_digest"))
+
+    errors
+    |> require_error(
+      Enum.all?(child_item_counts, &(&1 == expected_items)),
+      :source_item_count_mismatch
+    )
+    |> require_error(
+      is_binary(expected_source_digest) and
+        Enum.all?(child_source_digests, &(&1 == expected_source_digest)),
+      :source_reference_digest_mismatch
+    )
+    |> require_decision_manifest(expected_decisions, decision_count, decision_refs)
+  end
+
+  defp require_decision_manifest(errors, expected, decision_count, decision_refs) do
+    errors
+    |> require_error(expected > 0, :invalid_expected_decision_count)
+    |> require_error(decision_count == expected, :decision_count_mismatch)
+    |> require_error(length(decision_refs) == expected, :decision_reference_count_mismatch)
+    |> require_error(length(Enum.uniq(decision_refs)) == expected, :duplicate_decision_reference)
+  end
+
+  defp finalizer_valid?(%BackgroundJob{} = job, type, acquisition_id) do
+    job.job_type == type and job.status == "completed" and
+      map_string(job.payload, "acquisition_job_id") == acquisition_id and
+      map_string(job.result, "outcome") == "finalized"
+  end
+
+  defp finalizer_valid?(_job, _type, _acquisition_id), do: false
+
+  defp finalizer_reason_ids(%BackgroundJob{} = job),
+    do: map_string_list(job.payload, "reason_job_ids")
+
+  defp finalizer_reason_ids(_job), do: []
+
+  defp decision_digest_valid?(refs, %BackgroundJob{} = finalizer, role) do
+    key =
+      if role == "closure", do: "expected_todo_refs_digest", else: "expected_source_refs_digest"
+
+    expected = map_string(finalizer.payload, key)
+    is_binary(expected) and SourceAccountDiscovery.refs_digest(refs) == expected
+  end
+
+  defp decision_digest_valid?(_refs, _finalizer, _role), do: false
+
+  defp finalized_counts_valid?(%BackgroundJob{} = finalizer, source_items, decisions, fanouts) do
+    map_integer(finalizer.result, "source_items") == source_items and
+      map_integer(finalizer.result, "decision_count") == decisions and
+      map_integer(finalizer.result, "fanout_count") == fanouts
+  end
+
+  defp finalized_counts_valid?(_finalizer, _source_items, _decisions, _fanouts), do: false
+
+  defp role_summary(cycles, role, expected_accounts, jobs, cutoff) do
+    selected = Enum.filter(cycles, &(&1.role == role))
+    exact = Enum.filter(selected, & &1.exact?)
+    covered_ids = exact |> Enum.map(& &1.account_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    expected_ids = expected_accounts |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+    source_items = Enum.sum(Enum.map(selected, & &1.source_items))
+    todo_count = Enum.sum(Enum.map(selected, & &1.todo_count))
+    decisions = Enum.sum(Enum.map(selected, & &1.decision_count))
+    model_calls = Enum.sum(Enum.map(selected, & &1.model_calls))
+    reason_type = if role == "discovery", do: @discovery_reason, else: @closure_reason
+
+    %{
+      cycles: length(selected),
+      exact_cycles: length(exact),
+      empty_delta_cycles: Enum.count(exact, &(&1.outcome == "empty_delta")),
+      fanout_cycles: Enum.count(exact, &(&1.outcome == "fanout_ready")),
+      failed_cycles: length(selected) - length(exact),
+      cycle_coverage_percent: percent(length(exact), length(selected)),
+      source_items: source_items,
+      todo_count: todo_count,
+      decisions: decisions,
+      item_coverage_percent:
+        percent(decisions, if(role == "closure", do: todo_count, else: source_items)),
+      fanout_workers:
+        Enum.count(
+          jobs,
+          &(&1.job_type == reason_type and DateTime.compare(&1.inserted_at, cutoff) != :gt)
+        ),
+      model_calls: model_calls,
+      source_items_per_model_call: ratio(source_items, model_calls),
+      expected_account_count: length(expected_ids),
+      covered_account_count: length(covered_ids),
+      missing_account_ids: expected_ids -- covered_ids,
+      providers: provider_counts(expected_accounts),
+      failures:
+        selected
+        |> Enum.reject(& &1.exact?)
+        |> Enum.map(fn cycle ->
+          %{
+            account_id: cycle.account_id,
+            acquisition_reference: cycle.acquisition_reference,
+            errors: Enum.map(cycle.errors, &Atom.to_string/1)
+          }
+        end)
+    }
+  end
+
+  defp activity_summary(jobs, _cycles, cutoff) do
+    settled_jobs = Enum.filter(jobs, &(DateTime.compare(&1.inserted_at, cutoff) != :gt))
+    expected_job_ids = Enum.map(jobs, & &1.id)
+    visible_ids = activity_visible_ids(jobs)
+
+    %{
+      rows: length(settled_jobs),
+      rows_by_type: Enum.frequencies_by(settled_jobs, & &1.job_type),
+      expected_fanout_rows: length(expected_job_ids),
+      visible_fanout_rows: Enum.count(expected_job_ids, &MapSet.member?(visible_ids, &1)),
+      every_fanout_visible?: Enum.all?(expected_job_ids, &MapSet.member?(visible_ids, &1)),
+      active_recent_rows:
+        Enum.count(
+          jobs,
+          &(&1.status in @active_statuses and DateTime.compare(&1.inserted_at, cutoff) == :gt)
+        )
+    }
+  end
+
+  defp activity_visible_ids(jobs) do
+    jobs
+    |> Enum.map(& &1.user_id)
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
+    |> Enum.flat_map(fn user_id ->
+      BackgroundJobs.list_latest_source_account_runs_for_user(user_id, limit: 10_000)
+    end)
+    |> MapSet.new(& &1.id)
+  end
+
+  defp provider_counts(accounts) do
+    accounts
+    |> Enum.map(fn {_id, provider} ->
+      if String.starts_with?(provider, "slack:"), do: "slack", else: "gmail"
+    end)
+    |> Enum.frequencies()
+  end
+
+  defp require_error(errors, true, _error), do: errors
+  defp require_error(errors, false, error), do: errors ++ [error]
+
+  defp percent(_part, 0), do: 100.0
+  defp percent(part, total), do: Float.round(part * 100.0 / total, 2)
+  defp ratio(_part, 0), do: nil
+  defp ratio(part, total), do: Float.round(part / total, 2)
+
+  defp map_string(map, key) when is_map(map) do
+    case Map.get(map, key, Map.get(map, key_atom(key))) do
+      value when is_binary(value) and value != "" -> value
+      _other -> nil
+    end
+  end
+
+  defp map_string(_map, _key), do: nil
+
+  defp map_integer(map, key) when is_map(map) do
+    case Map.get(map, key, Map.get(map, key_atom(key), 0)) do
+      value when is_integer(value) and value >= 0 -> value
+      _other -> 0
+    end
+  end
+
+  defp map_integer(_map, _key), do: 0
+
+  defp map_string_list(map, key) when is_map(map) do
+    case Map.get(map, key, Map.get(map, key_atom(key), [])) do
+      values when is_list(values) -> Enum.filter(values, &(is_binary(&1) and &1 != ""))
+      _other -> []
+    end
+  end
+
+  defp map_string_list(_map, _key), do: []
+
+  defp key_atom("account_id"), do: :account_id
+  defp key_atom("acquisition_job_id"), do: :acquisition_job_id
+  defp key_atom("decision_count"), do: :decision_count
+  defp key_atom("decision_refs"), do: :decision_refs
+  defp key_atom("expected_source_refs_digest"), do: :expected_source_refs_digest
+  defp key_atom("expected_todo_refs_digest"), do: :expected_todo_refs_digest
+  defp key_atom("fanout_count"), do: :fanout_count
+  defp key_atom("fanout_index"), do: :fanout_index
+  defp key_atom("finalizer_job_id"), do: :finalizer_job_id
+  defp key_atom("model_calls"), do: :model_calls
+  defp key_atom("outcome"), do: :outcome
+  defp key_atom("reason_job_ids"), do: :reason_job_ids
+  defp key_atom("source_items"), do: :source_items
+  defp key_atom("source_refs_digest"), do: :source_refs_digest
+  defp key_atom("todo_count"), do: :todo_count
+  defp key_atom(_key), do: :__missing__
+end

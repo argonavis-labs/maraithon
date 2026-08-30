@@ -95,7 +95,41 @@ defmodule Maraithon.Runtime.TodoCompletionSweepTest do
         }
       ])
 
-    assert %{checked: 1, cross_source: {:skip, :no_open_todos}} =
+    assert %{
+             checked: 1,
+             coverage_complete?: true,
+             cross_source: %{checked: 1, expected: 1, model_calls: 0}
+           } =
              TodoCompletionSweep.run_for_account(selected_account, live_sources: false)
+  end
+
+  test "an account closure proves every todo beyond the old per-cycle caps was checked" do
+    user_id = "account-closure-exhaustive-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:exhaustive@example.com", %{})
+
+    todos =
+      Enum.map(1..45, fn index ->
+        %{
+          "source" => "manual",
+          "title" => "Exhaustive account todo #{index}",
+          "summary" => "Every account todo must receive a completion decision.",
+          "next_action" => "Keep this todo open.",
+          "source_account_id" => account.id,
+          "dedupe_key" => "account-closure:exhaustive:#{index}"
+        }
+      end)
+
+    assert {:ok, inserted} = Todos.upsert_many(user_id, todos)
+    assert length(inserted) == 45
+
+    assert %{
+             checked: 45,
+             eligible_todos: 45,
+             coverage_complete?: true,
+             cross_source: %{checked: 45, expected: 45, model_calls: 0}
+           } = TodoCompletionSweep.run_for_account(account, live_sources: false)
   end
 end

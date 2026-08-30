@@ -133,10 +133,14 @@ defmodule MaraithonWeb.ActivityLiveTest do
        "source-account-discovery"},
       {"runtime_partition:source_account_discovery_reason", "runtime_model_user",
        "source-account-discovery-reason"},
+      {"runtime_partition:source_account_discovery_finalize", "runtime_model_user",
+       "source-account-discovery-finalize"},
       {"runtime_partition:source_account_closure_acquire", "runtime_provider_account",
        "source-account-closure-acquire"},
       {"runtime_partition:source_account_closure_reason", "runtime_model_user",
-       "source-account-closure-reason"}
+       "source-account-closure-reason"},
+      {"runtime_partition:source_account_closure_finalize", "runtime_model_user",
+       "source-account-closure-finalize"}
     ]
 
     source_jobs =
@@ -175,9 +179,9 @@ defmodule MaraithonWeb.ActivityLiveTest do
 
     headers = BackgroundJobs.list_latest_source_account_runs_for_user(@user_email)
 
-    assert length(headers) == 8
-    assert Enum.all?(headers, &(not Map.has_key?(&1, :payload) and not Map.has_key?(&1, :result)))
-    assert html =~ "8 source fan-outs"
+    assert length(headers) == 12
+    assert Enum.all?(headers, &(not Map.has_key?(&1, :payload) and Map.has_key?(&1, :result)))
+    assert html =~ "12 source fan-outs"
     assert html =~ "Gmail todo discovery"
     assert html =~ "Gmail todo completion"
     assert html =~ "Slack todo discovery"
@@ -189,7 +193,15 @@ defmodule MaraithonWeb.ActivityLiveTest do
     Enum.each(source_jobs, fn job ->
       assert has_element?(view, "#source-run-#{job.id}-summary")
 
-      expected_policy = if job.queue == "runtime_model_user", do: "At most 1", else: "None"
+      expected_policy =
+        if job.queue == "runtime_model_user" and
+             job.job_type not in [
+               "runtime_partition:source_account_discovery_finalize",
+               "runtime_partition:source_account_closure_finalize"
+             ],
+           do: "Pending · max 1",
+           else: "0"
+
       assert has_element?(view, "#source-run-#{job.id}-ai-policy", expected_policy)
     end)
   end

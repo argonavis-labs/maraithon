@@ -3,12 +3,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   Assistant-owned source acquisition for one Chief of Staff cycle.
   """
 
+  import Ecto.Query
+
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.{Skills, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Crm
+  alias Maraithon.Crm.Observation
   alias Maraithon.LocalBrowserHistory
   alias Maraithon.LocalCalendar
   alias Maraithon.LocalFiles
@@ -19,6 +22,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   alias Maraithon.News
   alias Maraithon.OAuth
   alias Maraithon.Redaction
+  alias Maraithon.Repo
   alias Maraithon.Slack.UserDirectory
   alias Maraithon.SourceFreshness
   alias Maraithon.Timezones
@@ -37,6 +41,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @gmail_candidate_detail_timeout_ms 5_000
   @gmail_body_fetch_concurrency 8
   @gmail_body_phase_timeout_ms 8_000
+  @gmail_cursor_overlap_seconds 300
   @default_calendar_limit 250
   @default_calendar_fetch_timeout_ms 15_000
   @default_slack_channel_limit 12
@@ -1063,14 +1068,31 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           end
         end)
 
+      event_messages = slack_event_messages(user_id, team_id, workspace, oldest, plan)
+
+      {event_messages, event_thread_fetches, event_thread_errors} =
+        hydrate_slack_event_threads(
+          token.access_token,
+          team_id,
+          workspace,
+          conversations,
+          event_messages,
+          plan
+        )
+
+      coverage_errors = event_thread_errors ++ coverage_errors
+
       channels =
-        maybe_prepend_slack_search_channel(channels, self_authored_messages)
+        channels
+        |> Enum.reverse()
+        |> merge_slack_event_messages(event_messages)
+        |> maybe_prepend_slack_search_channel(self_authored_messages)
 
       workspace_payload = %{
         "team_id" => team_id,
         "team_name" => Map.get(workspace, "team_name"),
-        "channels" => Enum.reverse(channels),
-        "key_channels" => Enum.reverse(channels),
+        "channels" => channels,
+        "key_channels" => channels,
         "mentions" => mentions,
         "metadata" => %{
           "conversation_count" => length(conversations),
@@ -1079,7 +1101,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         }
       }
 
-      workspace_fetches = self_authored_fetches ++ broadcast_fetches ++ mention_fetches ++ fetches
+      workspace_fetches =
+        [
+          %{
+            "source" => "slack",
+            "team_id" => team_id,
+            "mode" => "durable_event_ingress",
+            "status" => "ok",
+            "count" => length(event_messages)
+          }
+          | event_thread_fetches ++
+              self_authored_fetches ++ broadcast_fetches ++ mention_fetches ++ fetches
+        ]
 
       if plan.exhaustive_account_delta? and coverage_errors != [] do
         {:error, {:slack_workspace_incomplete, length(coverage_errors)}, workspace_fetches}
@@ -1089,6 +1122,201 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     else
       {:error, reason} -> {:error, reason, []}
     end
+  end
+
+  # A fresh reply to an old thread is absent from `conversations.history`:
+  # Slack keeps the root in its original chronological position. The signed
+  # Events API ingress is therefore the anti-entropy source for those replies.
+  # Merge every durable event after this account's watermark with the fully
+  # paginated Web API snapshot before the source bundle is handed to reasoning.
+  defp slack_event_messages(user_id, team_id, workspace, oldest, plan) do
+    source_accounts =
+      [team_id, Map.get(workspace, "external_account_id")]
+      |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      |> Enum.uniq()
+
+    query =
+      Observation
+      |> where(
+        [observation],
+        observation.user_id == ^user_id and observation.source == "slack" and
+          observation.source_account in ^source_accounts
+      )
+      |> maybe_after_slack_observation(oldest)
+      |> order_by([observation], asc: observation.occurred_at, asc: observation.id)
+
+    query =
+      if plan.exhaustive_account_delta?,
+        do: query,
+        else: limit(query, ^plan.slack_message_limit)
+
+    query
+    |> Repo.all()
+    |> Enum.map(&slack_observation_message(&1, team_id, workspace))
+    |> dedupe_slack_messages()
+  end
+
+  defp hydrate_slack_event_threads(
+         access_token,
+         team_id,
+         workspace,
+         conversations,
+         event_messages,
+         plan
+       ) do
+    thread_refs =
+      event_messages
+      |> Enum.flat_map(fn message ->
+        channel_id = normalize_string(message["channel_id"])
+        thread_ts = normalize_string(message["thread_ts"])
+        if channel_id && thread_ts, do: [{channel_id, thread_ts}], else: []
+      end)
+      |> Enum.uniq()
+
+    Enum.reduce(thread_refs, {event_messages, [], []}, fn {channel_id, thread_ts},
+                                                          {message_acc, fetch_acc, error_acc} ->
+      case call_with_timeout(
+             fn -> fetch_slack_thread_replies(access_token, channel_id, thread_ts, plan) end,
+             slack_channel_fetch_timeout_ms(plan)
+           ) do
+        {:ok, response} ->
+          raw_messages = response |> Map.get("messages", []) |> normalize_list()
+          channel = Enum.find(conversations, &(&1["id"] == channel_id)) || %{"id" => channel_id}
+          directory = slack_user_directory(access_token, raw_messages, channel, %{})
+
+          serialized =
+            Enum.map(
+              raw_messages,
+              &serialize_slack_message(&1, channel, team_id, workspace, directory)
+            )
+
+          fetch = %{
+            "source" => "slack",
+            "team_id" => team_id,
+            "channel_id" => channel_id,
+            "thread_ts" => thread_ts,
+            "mode" => "event_thread_replies",
+            "status" => "ok",
+            "count" => length(serialized)
+          }
+
+          {merge_serialized_slack_messages(message_acc, serialized), [fetch | fetch_acc],
+           error_acc}
+
+        {:error, reason} ->
+          fetch = %{
+            "source" => "slack",
+            "team_id" => team_id,
+            "channel_id" => channel_id,
+            "thread_ts" => thread_ts,
+            "mode" => "event_thread_replies",
+            "status" => "error",
+            "reason" => Redaction.error_class(reason)
+          }
+
+          {message_acc, [fetch | fetch_acc],
+           [{:event_thread_replies_failed, channel_id, thread_ts, reason} | error_acc]}
+      end
+    end)
+  end
+
+  defp maybe_after_slack_observation(query, oldest) when is_binary(oldest) do
+    case Float.parse(oldest) do
+      {seconds, _rest} when seconds >= 0 ->
+        inserted_after = DateTime.from_unix!(round(seconds * 1_000_000), :microsecond)
+        where(query, [observation], observation.inserted_at > ^inserted_after)
+
+      _other ->
+        query
+    end
+  end
+
+  defp maybe_after_slack_observation(query, _oldest), do: query
+
+  defp slack_observation_message(%Observation{} = observation, team_id, workspace) do
+    metadata = observation.metadata || %{}
+    channel_id = normalize_string(metadata["channel"])
+    ts = normalize_string(metadata["ts"]) || slack_observation_ts(observation, channel_id)
+
+    %{
+      "team_id" => team_id,
+      "team_name" => Map.get(workspace, "team_name"),
+      "channel_id" => channel_id,
+      "channel_name" => "event ingress",
+      "conversation_kind" => "event",
+      "ts" => ts,
+      "thread_ts" => normalize_string(metadata["thread_ts"]),
+      "user" => slack_observation_user(observation.participants),
+      "text" => observation.excerpt,
+      "text_resolved" => observation.excerpt,
+      "ingress" => "events_api"
+    }
+  end
+
+  defp slack_observation_ts(%Observation{source_item_id: source_item_id}, channel_id)
+       when is_binary(source_item_id) and is_binary(channel_id) do
+    source_item_id
+    |> String.split(":")
+    |> List.last()
+  end
+
+  defp slack_observation_ts(%Observation{occurred_at: %DateTime{} = occurred_at}, _channel_id) do
+    seconds = DateTime.to_unix(occurred_at, :second)
+    microseconds = elem(occurred_at.microsecond, 0)
+    "#{seconds}.#{microseconds |> Integer.to_string() |> String.pad_leading(6, "0")}"
+  end
+
+  defp slack_observation_ts(_observation, _channel_id), do: nil
+
+  defp slack_observation_user(participants) when is_list(participants) do
+    Enum.find_value(participants, fn participant ->
+      get_in(participant, ["identifier", "slack_id"])
+    end)
+  end
+
+  defp slack_observation_user(_participants), do: nil
+
+  defp merge_slack_event_messages(channels, []), do: channels
+
+  defp merge_slack_event_messages(channels, event_messages) do
+    {channels, unmatched} =
+      Enum.reduce(event_messages, {channels, []}, fn message, {channel_acc, unmatched_acc} ->
+        channel_id = message["channel_id"]
+
+        {channel_acc, matched?} =
+          Enum.map_reduce(channel_acc, false, fn channel, matched? ->
+            if channel["id"] == channel_id do
+              messages = merge_serialized_slack_messages(channel["messages"], [message])
+              {Map.put(channel, "messages", messages), true}
+            else
+              {channel, matched?}
+            end
+          end)
+
+        if matched?,
+          do: {channel_acc, unmatched_acc},
+          else: {channel_acc, [message | unmatched_acc]}
+      end)
+
+    case Enum.reverse(unmatched) do
+      [] ->
+        channels
+
+      messages ->
+        [
+          %{
+            "id" => "slack_events:delta",
+            "name" => "Slack event ingress",
+            "conversation_kind" => "event",
+            "messages" => messages
+          }
+          | channels
+        ]
+    end
+  end
+
+  defp merge_serialized_slack_messages(left, right) do
+    dedupe_slack_messages(normalize_list(left) ++ normalize_list(right))
   end
 
   defp fetch_slack_mentions(user_id, team_id, workspace, plan, oldest) do
@@ -2423,8 +2651,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   # Gmail's `newer_than:Nd` window fetch always re-scans the whole lookback
   # window. When a `gmail_poll_watermark` cursor exists for this account,
-  # fetch only messages after the last successful poll instead; the window
-  # fetch remains the fallback for accounts with no cursor yet. A
+  # fetch only messages near the last successful poll instead; a small
+  # overlap closes Gmail's second-granularity/eventual-visibility boundary,
+  # while provider message identities and todo dedupe keys make replays safe.
+  # The window fetch remains the fallback for accounts with no cursor yet. A
   # deep-lookback fetch always uses the widened window instead of the cursor
   # (see `slack_poll_oldest/3` for the matching Slack fix).
   defp gmail_poll_query(_account, fallback_query, true, _kind), do: fallback_query
@@ -2432,8 +2662,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp gmail_poll_query(account, fallback_query, _deep_lookback?, kind) do
     case SourceCursors.get(account.id, kind) do
-      %{value: value} when is_binary(value) and value != "" -> "after:#{value}"
-      _ -> fallback_query
+      %{value: value} when is_binary(value) and value != "" ->
+        "after:#{overlapped_gmail_cursor(value)}"
+
+      _ ->
+        fallback_query
+    end
+  end
+
+  defp overlapped_gmail_cursor(value) do
+    case Integer.parse(value) do
+      {seconds, ""} when seconds >= 0 -> max(seconds - @gmail_cursor_overlap_seconds, 0)
+      _invalid -> value
     end
   end
 
@@ -3915,7 +4155,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp serialize_slack_message(message, channel, team_id, workspace, user_directory)
        when is_map(message) do
-    user_id = message["user"]
+    user_id = message["user"] || message["bot_id"]
     text = message["text"]
 
     %{
@@ -3924,6 +4164,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "channel_id" => channel["id"],
       "channel_name" => channel["name"] || slack_conversation_kind(channel),
       "conversation_kind" => slack_conversation_kind(channel),
+      "is_dm" => channel["is_im"] || false,
+      "is_mpim" => channel["is_mpim"] || false,
       "ts" => message["ts"],
       "thread_ts" => message["thread_ts"],
       "user" => user_id,
@@ -3940,7 +4182,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp serialize_slack_match(match, team_id, workspace, user_directory) when is_map(match) do
-    user_id = match["user"]
+    user_id = match["user"] || match["bot_id"]
     text = match["text"]
     channel = match["channel"]
 

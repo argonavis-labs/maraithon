@@ -1422,6 +1422,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       account: account
     } do
       closure_watermark = "1780311600"
+      overlapped_watermark = "1780311300"
 
       {:ok, _cursor} =
         Maraithon.Connectors.SourceCursors.put(account, "gmail_closure_watermark", %{
@@ -1431,7 +1432,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       TravelGmailStub.configure(
         messages: [],
         messages_by_query_match: [
-          {"after:#{closure_watermark}",
+          {"after:#{overlapped_watermark}",
            [
              %{
                message_id: "closure-delta-message",
@@ -1475,7 +1476,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
              )
 
       assert Keyword.get(TravelGmailStub.last_fetch_opts(), :query) ==
-               "after:#{closure_watermark}"
+               "after:#{overlapped_watermark}"
 
       assert get_in(telemetry, ["sources", "gmail", "commercial_provider_count"]) == 0
 

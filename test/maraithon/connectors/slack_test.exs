@@ -1,9 +1,13 @@
 defmodule Maraithon.Connectors.SlackTest do
-  use ExUnit.Case, async: true
+  use Maraithon.DataCase, async: false
 
   import Plug.Test
 
+  alias Maraithon.Accounts
   alias Maraithon.Connectors.Slack
+  alias Maraithon.Crm.Observation
+  alias Maraithon.OAuth
+  alias Maraithon.Repo
 
   describe "handle_webhook/2" do
     test "handles url_verification challenge" do
@@ -113,7 +117,7 @@ defmodule Maraithon.Connectors.SlackTest do
       assert event.type == "reaction_added"
     end
 
-    test "ignores bot messages" do
+    test "parses bot messages so connected workspaces retain full coverage" do
       params = %{
         "type" => "event_callback",
         "team_id" => "T12345",
@@ -121,13 +125,17 @@ defmodule Maraithon.Connectors.SlackTest do
           "type" => "message",
           "channel" => "C12345",
           "bot_id" => "B12345",
-          "text" => "Bot message"
+          "text" => "Bot message",
+          "ts" => "1234567890.123456"
         }
       }
 
       conn = conn(:post, "/webhooks/slack", params)
 
-      assert {:ignore, "bot message"} = Slack.handle_webhook(conn, params)
+      assert {:ok, "slack:T12345:C12345", event} = Slack.handle_webhook(conn, params)
+      assert event.type == "message"
+      assert event.data.user_id == "B12345"
+      assert event.data.text == "Bot message"
     end
 
     test "handles generic event type with string channel" do
@@ -229,7 +237,8 @@ defmodule Maraithon.Connectors.SlackTest do
           "subtype" => "channel_join",
           "channel" => "C12345",
           "user" => "U12345",
-          "text" => "<@U12345> has joined the channel"
+          "text" => "<@U12345> has joined the channel",
+          "ts" => "1234567890.123456"
         }
       }
 
@@ -352,7 +361,7 @@ defmodule Maraithon.Connectors.SlackTest do
       assert event.type == "reaction_removed"
     end
 
-    test "parses bot_message subtype as bot message" do
+    test "parses bot_message subtype as a durable message event" do
       params = %{
         "type" => "event_callback",
         "team_id" => "T12345",
@@ -360,13 +369,17 @@ defmodule Maraithon.Connectors.SlackTest do
           "type" => "message",
           "subtype" => "bot_message",
           "channel" => "C12345",
-          "text" => "Bot message"
+          "bot_id" => "B12345",
+          "text" => "Bot message",
+          "ts" => "1234567890.123456"
         }
       }
 
       conn = conn(:post, "/webhooks/slack", params)
 
-      assert {:ignore, "bot message"} = Slack.handle_webhook(conn, params)
+      assert {:ok, "slack:T12345:C12345", event} = Slack.handle_webhook(conn, params)
+      assert event.type == "message_bot_message"
+      assert event.data.text == "Bot message"
     end
 
     test "handles generic event type" do
@@ -385,6 +398,118 @@ defmodule Maraithon.Connectors.SlackTest do
 
       assert topic == "slack:T12345:C12345"
       assert event.type == "channel_archive"
+    end
+  end
+
+  describe "durable message fidelity" do
+    test "persists a useful excerpt and compact metadata for a file-only message" do
+      {user_id, team_id} = connect_slack_account("file-only")
+      ts = "1787069900.000001"
+
+      params = %{
+        "type" => "event_callback",
+        "team_id" => team_id,
+        "event" => %{
+          "type" => "message",
+          "subtype" => "file_share",
+          "channel" => "D-FILES",
+          "user" => "U-SENDER",
+          "text" => "",
+          "ts" => ts,
+          "files" => [
+            %{
+              "id" => "F-PLAN",
+              "name" => "launch-plan.pdf",
+              "title" => "Launch plan",
+              "mimetype" => "application/pdf",
+              "size" => 42_000,
+              "preview_plain_text" => "Final launch checklist and named owners"
+            }
+          ]
+        }
+      }
+
+      assert {:ok, _topic, _event} = Slack.handle_webhook(conn(:post, "/"), params)
+
+      assert %Observation{excerpt: excerpt, metadata: metadata} =
+               Repo.get_by(Observation,
+                 user_id: user_id,
+                 source: "slack",
+                 source_item_id: "#{team_id}:D-FILES:#{ts}"
+               )
+
+      assert excerpt =~ "Launch plan"
+      assert excerpt =~ "Final launch checklist"
+      assert metadata["file_count"] == 1
+
+      assert [file] = metadata["files"]
+      assert file["id"] == "F-PLAN"
+      assert file["name"] == "launch-plan.pdf"
+      assert file["preview"] == "Final launch checklist and named owners"
+    end
+
+    test "persists blocks-only text instead of counting an empty Slack item" do
+      {user_id, team_id} = connect_slack_account("blocks-only")
+      ts = "1787069901.000002"
+
+      params = %{
+        "type" => "event_callback",
+        "team_id" => team_id,
+        "event" => %{
+          "type" => "message",
+          "channel" => "C-BLOCKS",
+          "user" => "U-SENDER",
+          "text" => "",
+          "ts" => ts,
+          "blocks" => [
+            %{
+              "type" => "section",
+              "block_id" => "approval",
+              "text" => %{
+                "type" => "mrkdwn",
+                "text" => "*Approve the launch plan* by Friday"
+              }
+            }
+          ]
+        }
+      }
+
+      assert {:ok, _topic, _event} = Slack.handle_webhook(conn(:post, "/"), params)
+
+      assert %Observation{excerpt: excerpt, metadata: metadata} =
+               Repo.get_by(Observation,
+                 user_id: user_id,
+                 source: "slack",
+                 source_item_id: "#{team_id}:C-BLOCKS:#{ts}"
+               )
+
+      assert excerpt == "*Approve the launch plan* by Friday"
+      assert metadata["block_count"] == 1
+
+      assert [%{"type" => "section", "block_id" => "approval", "text" => block_text}] =
+               metadata["blocks"]
+
+      assert block_text == "*Approve the launch plan* by Friday"
+    end
+
+    test "fails closed when a nominally content-bearing block has no durable content" do
+      {_user_id, team_id} = connect_slack_account("empty-block")
+
+      params = %{
+        "type" => "event_callback",
+        "team_id" => team_id,
+        "event" => %{
+          "type" => "message",
+          "channel" => "C-EMPTY",
+          "user" => "U-SENDER",
+          "text" => "",
+          "ts" => "1787069902.000003",
+          "blocks" => [%{"type" => "divider"}]
+        }
+      }
+
+      assert {:error, {:slack_message_persistence_failed, :missing_slack_message_durable_content}} =
+               Slack.handle_webhook(conn(:post, "/"), params)
     end
   end
 
@@ -433,5 +558,20 @@ defmodule Maraithon.Connectors.SlackTest do
 
       assert {:error, :invalid_signature} = Slack.verify_signature(conn, "{}")
     end
+  end
+
+  defp connect_slack_account(suffix) do
+    unique = System.unique_integer([:positive])
+    user_id = "slack-fidelity-#{suffix}-#{unique}@example.com"
+    team_id = "T-FIDELITY-#{unique}"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+        access_token: "slack-token",
+        metadata: %{"team_id" => team_id, "authed_user_id" => "U-SELF"}
+      })
+
+    {user_id, team_id}
   end
 end

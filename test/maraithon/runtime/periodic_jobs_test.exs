@@ -9,6 +9,7 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
   alias Maraithon.OAuth
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.PeriodicJobs
   alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Todos
@@ -209,6 +210,101 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     refute Map.has_key?(job.payload, "agent_id")
   end
 
+  test "discovery coordinator waits for an orphan reason only while it has attempts left" do
+    user_id = "periodic-orphan-discovery-#{System.unique_integer([:positive])}@example.com"
+    provider = "google:#{user_id}"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, provider, %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, provider, %{
+        access_token: "orphan-discovery-access",
+        refresh_token: "orphan-discovery-refresh",
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, reason_job} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery_reason", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key:
+          "runtime-partition:source-account-discovery-reason:orphan:1-of-1:#{account.id}",
+        max_attempts: 1,
+        payload: %{"account_id" => account.id, "acquisition_job_id" => "orphan"}
+      })
+
+    assert {:ok, %{discovered: 0, enqueued: 0}} =
+             PeriodicJobs.schedule("source_account_discovery")
+
+    reason_job
+    |> Ecto.Changeset.change(attempts: reason_job.max_attempts)
+    |> Repo.update!()
+
+    assert {:ok, %{discovered: 1, enqueued: 1}} =
+             PeriodicJobs.schedule("source_account_discovery")
+  end
+
+  test "discovery coordinator rotates beyond a bounded account batch" do
+    previous_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      Keyword.put(previous_runtime, :source_account_discovery_batch_size, 1)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, Maraithon.Runtime, previous_runtime) end)
+
+    Repo.delete_all(
+      from(cursor in "runtime_sweep_cursors",
+        where: field(cursor, :sweep_key) == "durable_source_account_discovery"
+      )
+    )
+
+    accounts =
+      Enum.map(1..2, fn index ->
+        user_id =
+          "periodic-rotating-discovery-#{index}-#{System.unique_integer([:positive])}@example.com"
+
+        provider = "google:#{user_id}"
+        {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+        {:ok, account} =
+          ConnectedAccounts.upsert_manual(user_id, provider, %{
+            metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+          })
+
+        {:ok, _token} =
+          OAuth.store_tokens(user_id, provider, %{
+            access_token: "rotating-discovery-access",
+            refresh_token: "rotating-discovery-refresh",
+            metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+          })
+
+        account
+      end)
+      |> Enum.sort_by(& &1.id)
+
+    assert {:ok, %{discovered: 1, enqueued: 1}} =
+             PeriodicJobs.schedule("source_account_discovery")
+
+    assert {:ok, %{discovered: 1, enqueued: 1}} =
+             PeriodicJobs.schedule("source_account_discovery")
+
+    enqueued_account_ids =
+      BackgroundJob
+      |> where([job], job.job_type == "runtime_partition:source_account_discovery")
+      |> Repo.all()
+      |> Enum.map(& &1.payload["account_id"])
+      |> Enum.sort()
+
+    assert enqueued_account_ids == Enum.map(accounts, & &1.id)
+  end
+
   test "discovery coordinator respects an explicitly stopped Chief" do
     user_id = "periodic-paused-discovery-#{System.unique_integer([:positive])}@example.com"
     provider = "google:#{user_id}"
@@ -288,5 +384,55 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
 
     assert {:ok, %{discovered: 0, enqueued: 0}} =
              PeriodicJobs.schedule("todo_completion_sweep")
+  end
+
+  test "completion coordinator waits for an orphan reason only while it has attempts left" do
+    user_id = "periodic-orphan-closure-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:orphan-closure@example.com", %{
+        metadata: %{"account_email" => "orphan-closure@example.com"}
+      })
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Wait for an orphaned closure reason",
+          "summary" => "An active source-account reason already owns this account.",
+          "next_action" => "Wait for the existing reason job.",
+          "priority" => 80,
+          "source_account_id" => account.id,
+          "source_account_label" => "orphan-closure@example.com",
+          "source_item_id" => "orphan-closure-thread",
+          "dedupe_key" => "periodic-orphan-account-closure"
+        }
+      ])
+
+    {:ok, reason_job} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_closure_reason", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key: "runtime-partition:source-account-closure-reason:orphan:1-of-1:#{account.id}",
+        max_attempts: 1,
+        payload: %{"account_id" => account.id, "acquisition_job_id" => "orphan"}
+      })
+
+    assert {:ok, %{discovered: 0, enqueued: 0}} =
+             PeriodicJobs.schedule("todo_completion_sweep")
+
+    reason_job
+    |> Ecto.Changeset.change(attempts: reason_job.max_attempts)
+    |> Repo.update!()
+
+    assert {:ok,
+            %{
+              discovered: 1,
+              enqueued: 1,
+              account_partitions: 1,
+              legacy_partitions: 0
+            }} = PeriodicJobs.schedule("todo_completion_sweep")
   end
 end

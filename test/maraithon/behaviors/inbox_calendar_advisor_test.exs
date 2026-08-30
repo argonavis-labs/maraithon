@@ -169,7 +169,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         "GET",
         "/gmail/v1/users/me/threads/ab12cd12",
         fn conn ->
-          assert conn.query_string == "format=metadata"
+          assert conn.query_string == "format=full"
 
           body = %{
             "messages" => [
@@ -396,7 +396,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       teammate_reply_at = DateTime.add(thread_started_at, 30, :minute)
 
       Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/ab12cd11", fn conn ->
-        assert conn.query_string == "format=metadata"
+        assert conn.query_string == "format=full"
 
         body = %{
           "messages" => [
@@ -491,7 +491,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       follow_up_at = DateTime.add(first_touch_at, 1, :day)
 
       Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/ab12cd01", fn conn ->
-        assert conn.query_string == "format=metadata"
+        assert conn.query_string == "format=full"
 
         body = %{
           "messages" => [

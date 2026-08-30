@@ -131,6 +131,50 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
              )
   end
 
+  test "Slack webhook durably fans one workspace event out to every connected user" do
+    team_id = "T#{System.unique_integer([:positive])}"
+    sender_id = "U#{System.unique_integer([:positive])}"
+    user_ids = [unique_email("slack-shared-a"), unique_email("slack-shared-b")]
+
+    Enum.each(user_ids, fn user_id ->
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+          access_token: "slack-token",
+          metadata: %{"team_id" => team_id, "authed_user_id" => "SELF-#{user_id}"}
+        })
+    end)
+
+    params = %{
+      "type" => "event_callback",
+      "team_id" => team_id,
+      "event" => %{
+        "type" => "message",
+        "channel" => "D123",
+        "user" => sender_id,
+        "text" => "A fresh reply on an old thread",
+        "ts" => "1787069801.000002",
+        "thread_ts" => "1700000000.000001"
+      }
+    }
+
+    assert {:ok, topic, _event} = Slack.handle_webhook(Plug.Test.conn(:post, "/"), params)
+    assert topic == "slack:#{team_id}:dm:#{sender_id}"
+
+    Enum.each(user_ids, fn user_id ->
+      assert %Observation{metadata: metadata, excerpt: "A fresh reply on an old thread"} =
+               Repo.get_by(Observation,
+                 user_id: user_id,
+                 source: "slack",
+                 source_item_id: "#{team_id}:D123:1787069801.000002"
+               )
+
+      assert metadata["thread_ts"] == "1700000000.000001"
+      assert find_job(user_id, "runtime_partition:source_account_discovery")
+    end)
+  end
+
   defp find_job(user_id, job_type) do
     user_id
     |> then(&BackgroundJobs.list(user_id: &1, limit: 50))

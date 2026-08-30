@@ -256,7 +256,7 @@ defmodule Maraithon.Connectors.GmailTest do
     setup do
       # Create an OAuth token for testing
       {:ok, token} =
-        Maraithon.OAuth.store_tokens("gmail_test_user", "google", %{
+        store_tokens("gmail-test-user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -272,7 +272,7 @@ defmodule Maraithon.Connectors.GmailTest do
 
     test "attempts to stop watch with valid token" do
       # Will fail on actual API call but tests the token retrieval path
-      result = Gmail.stop_watch("gmail_test_user")
+      result = Gmail.stop_watch("gmail-test-user@example.com")
       assert match?({:error, _}, result)
     end
   end
@@ -280,7 +280,7 @@ defmodule Maraithon.Connectors.GmailTest do
   describe "sync_mail_changes/2 with token" do
     setup do
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("sync_test_user", "google", %{
+        store_tokens("sync-test-user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -296,7 +296,7 @@ defmodule Maraithon.Connectors.GmailTest do
 
     test "attempts to fetch history with valid token" do
       # Will fail on actual API call but tests the token retrieval path
-      result = Gmail.sync_mail_changes("sync_test_user", "12345")
+      result = Gmail.sync_mail_changes("sync-test-user@example.com", "12345")
       assert match?({:error, _}, result)
     end
   end
@@ -304,7 +304,7 @@ defmodule Maraithon.Connectors.GmailTest do
   describe "fetch_recent_emails/2 with token" do
     setup do
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("email_test_user", "google", %{
+        store_tokens("email-test-user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -319,7 +319,7 @@ defmodule Maraithon.Connectors.GmailTest do
     end
 
     test "attempts to fetch emails with valid token" do
-      result = Gmail.fetch_recent_emails("email_test_user", 5)
+      result = Gmail.fetch_recent_emails("email-test-user@example.com", 5)
       assert match?({:error, _}, result)
     end
   end
@@ -330,7 +330,7 @@ defmodule Maraithon.Connectors.GmailTest do
 
       # Create token for user that will be used in webhook
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("user@test.com", "google", %{
+        store_tokens("user@test.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -412,7 +412,7 @@ defmodule Maraithon.Connectors.GmailTest do
       )
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("fetch_emails_user", "google", %{
+        store_tokens("fetch-emails-user@example.com", "google", %{
           access_token: "ya29.test_access_token",
           refresh_token: "1//test_refresh_token",
           expires_in: 3600,
@@ -473,7 +473,7 @@ defmodule Maraithon.Connectors.GmailTest do
         )
       end)
 
-      {:ok, emails} = Gmail.fetch_recent_emails("fetch_emails_user", 2)
+      {:ok, emails} = Gmail.fetch_recent_emails("fetch-emails-user@example.com", 2)
 
       assert length(emails) == 2
       assert hd(emails).message_id == "a1"
@@ -496,7 +496,7 @@ defmodule Maraithon.Connectors.GmailTest do
       user_id = "fetch-precondition-#{System.unique_integer([:positive])}@example.com"
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens(user_id, "google", %{
+        store_tokens(user_id, "google", %{
           access_token: "precondition-access-token",
           refresh_token: "precondition-refresh-token",
           expires_in: 3_600,
@@ -626,7 +626,7 @@ defmodule Maraithon.Connectors.GmailTest do
       user_id = "fetch-mail-disabled-#{System.unique_integer([:positive])}@example.com"
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens(user_id, "google", %{
+        store_tokens(user_id, "google", %{
           access_token: "mail-disabled-access-token",
           refresh_token: "mail-disabled-refresh-token",
           expires_in: 3_600,
@@ -682,7 +682,7 @@ defmodule Maraithon.Connectors.GmailTest do
       user_id = "fetch-metadata-#{System.unique_integer([:positive])}@example.com"
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens(user_id, "google", %{
+        store_tokens(user_id, "google", %{
           access_token: "metadata-access-token",
           refresh_token: "metadata-refresh-token",
           expires_in: 3_600,
@@ -754,7 +754,7 @@ defmodule Maraithon.Connectors.GmailTest do
       )
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("fetch_no_emails_user", "google", %{
+        store_tokens("fetch-no-emails-user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -767,7 +767,7 @@ defmodule Maraithon.Connectors.GmailTest do
         |> Plug.Conn.resp(200, Jason.encode!(%{"resultSizeEstimate" => 0}))
       end)
 
-      {:ok, emails} = Gmail.fetch_recent_emails("fetch_no_emails_user")
+      {:ok, emails} = Gmail.fetch_recent_emails("fetch-no-emails-user@example.com")
 
       assert emails == []
     end
@@ -782,7 +782,7 @@ defmodule Maraithon.Connectors.GmailTest do
       )
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("sync_bypass_user", "google", %{
+        store_tokens("sync-bypass-user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -834,7 +834,7 @@ defmodule Maraithon.Connectors.GmailTest do
         )
       end)
 
-      {:ok, messages} = Gmail.sync_mail_changes("sync_bypass_user", "12345")
+      {:ok, messages} = Gmail.sync_mail_changes("sync-bypass-user@example.com", "12345")
 
       assert length(messages) == 1
       assert hd(messages).message_id == "c3"
@@ -849,7 +849,7 @@ defmodule Maraithon.Connectors.GmailTest do
       )
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("sync_empty_user", "google", %{
+        store_tokens("sync-empty-user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -862,7 +862,7 @@ defmodule Maraithon.Connectors.GmailTest do
         |> Plug.Conn.resp(200, Jason.encode!(%{"historyId" => "12346"}))
       end)
 
-      {:ok, messages} = Gmail.sync_mail_changes("sync_empty_user", "12345")
+      {:ok, messages} = Gmail.sync_mail_changes("sync-empty-user@example.com", "12345")
 
       assert messages == []
     end
@@ -875,7 +875,7 @@ defmodule Maraithon.Connectors.GmailTest do
       )
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("sync_expired_user", "google", %{
+        store_tokens("sync-expired-user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -888,7 +888,7 @@ defmodule Maraithon.Connectors.GmailTest do
         |> Plug.Conn.resp(404, Jason.encode!(%{"error" => %{"code" => 404}}))
       end)
 
-      result = Gmail.sync_mail_changes("sync_expired_user", "12345")
+      result = Gmail.sync_mail_changes("sync-expired-user@example.com", "12345")
 
       assert {:error, :history_expired} = result
     end
@@ -906,7 +906,7 @@ defmodule Maraithon.Connectors.GmailTest do
         Maraithon.Accounts.get_or_create_user_by_email("gmail_cursor_user@example.com")
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("gmail_cursor_user@example.com", "google", %{
+        store_tokens("gmail_cursor_user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -934,7 +934,7 @@ defmodule Maraithon.Connectors.GmailTest do
       assert cursor.value == "1050"
     end
 
-    test "falls back to a bounded full resync and resets the cursor on history_expired" do
+    test "rebuilds the complete mailbox before resetting an expired history cursor" do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, :gmail,
@@ -945,7 +945,7 @@ defmodule Maraithon.Connectors.GmailTest do
         Maraithon.Accounts.get_or_create_user_by_email("gmail_expired_user@example.com")
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("gmail_expired_user@example.com", "google", %{
+        store_tokens("gmail_expired_user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -963,9 +963,43 @@ defmodule Maraithon.Connectors.GmailTest do
       end)
 
       Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        params = URI.decode_query(conn.query_string)
+        refute Map.has_key?(params, "q")
+        assert params["maxResults"] == "500"
+
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{"resultSizeEstimate" => 0}))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "messages" => [%{"id" => "deadbeef", "threadId" => "thread-old"}],
+            "resultSizeEstimate" => 1
+          })
+        )
+      end)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/deadbeef", fn conn ->
+        assert URI.decode_query(conn.query_string)["format"] == "metadata"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => "deadbeef",
+            "threadId" => "thread-old",
+            "internalDate" => "1704067200000",
+            "labelIds" => ["INBOX"],
+            "snippet" => "An old message outside the former one-day window",
+            "payload" => %{
+              "headers" => [
+                %{"name" => "From", "value" => "sender@example.com"},
+                %{"name" => "To", "value" => "gmail_expired_user@example.com"},
+                %{"name" => "Subject", "value" => "Old but unread by the cursor"}
+              ]
+            }
+          })
+        )
       end)
 
       Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/profile", fn conn ->
@@ -977,10 +1011,79 @@ defmodule Maraithon.Connectors.GmailTest do
       {:ok, result} = Gmail.sync_history("gmail_expired_user@example.com", account)
 
       assert result.mode == :full_resync
+      assert result.count == 1
       assert result.history_id == "9999"
 
       cursor = Maraithon.Connectors.SourceCursors.get(account.id, "gmail_history_id")
       assert cursor.value == "9999"
+
+      assert %Maraithon.Crm.Observation{
+               source_account: "gmail_expired_user@example.com",
+               source_item_id: "google:deadbeef"
+             } =
+               Maraithon.Repo.get_by(Maraithon.Crm.Observation,
+                 user_id: "gmail_expired_user@example.com",
+                 source: "gmail",
+                 source_item_id: "google:deadbeef"
+               )
+    end
+
+    test "preserves the expired cursor when complete mailbox pagination is partial" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      user_id = "gmail_partial_resync@example.com"
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        store_tokens(user_id, "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
+
+      account = Maraithon.ConnectedAccounts.get(user_id, "google")
+      Maraithon.Connectors.SourceCursors.put(account, "gmail_history_id", %{"value" => "1"})
+
+      parent = self()
+
+      Bypass.expect(bypass, fn conn ->
+        params = URI.decode_query(conn.query_string)
+        send(parent, {conn.request_path, params})
+
+        case {conn.request_path, params["pageToken"]} do
+          {"/gmail/v1/users/me/history", _page_token} ->
+            Plug.Conn.resp(conn, 404, Jason.encode!(%{"error" => %{"code" => 404}}))
+
+          {"/gmail/v1/users/me/messages", nil} ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.resp(
+              200,
+              Jason.encode!(%{"messages" => [], "nextPageToken" => "more"})
+            )
+
+          {"/gmail/v1/users/me/messages", "more"} ->
+            Plug.Conn.resp(conn, 403, "incomplete")
+
+          _unexpected ->
+            Plug.Conn.resp(conn, 500, "unexpected request")
+        end
+      end)
+
+      assert {:error, {:http_status, 403, "incomplete"}} = Gmail.sync_history(user_id, account)
+
+      assert_receive {"/gmail/v1/users/me/history", _params}
+      assert_receive {"/gmail/v1/users/me/messages", first_page_params}
+      refute Map.has_key?(first_page_params, "pageToken")
+      assert_receive {"/gmail/v1/users/me/messages", %{"pageToken" => "more"}}
+
+      cursor = Maraithon.Connectors.SourceCursors.get(account.id, "gmail_history_id")
+      assert cursor.value == "1"
     end
 
     test "follows nextPageToken across multiple history pages before advancing the cursor" do
@@ -994,7 +1097,7 @@ defmodule Maraithon.Connectors.GmailTest do
         Maraithon.Accounts.get_or_create_user_by_email("gmail_paged_user@example.com")
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("gmail_paged_user@example.com", "google", %{
+        store_tokens("gmail_paged_user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -1097,7 +1200,7 @@ defmodule Maraithon.Connectors.GmailTest do
         Maraithon.Accounts.get_or_create_user_by_email("gmail_empty_page_user@example.com")
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("gmail_empty_page_user@example.com", "google", %{
+        store_tokens("gmail_empty_page_user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -1218,7 +1321,7 @@ defmodule Maraithon.Connectors.GmailTest do
         Maraithon.Accounts.get_or_create_user_by_email("gmail_capped_user@example.com")
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("gmail_capped_user@example.com", "google", %{
+        store_tokens("gmail_capped_user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -1267,6 +1370,81 @@ defmodule Maraithon.Connectors.GmailTest do
     end
   end
 
+  describe "ingest_messages/3 account identity" do
+    test "keeps identical Gmail message ids distinct across connected accounts" do
+      user_id = "gmail_multi_account@example.com"
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, work_account} =
+        Maraithon.ConnectedAccounts.upsert_manual(user_id, "google:work@example.com", %{
+          external_account_id: "work@example.com"
+        })
+
+      {:ok, personal_account} =
+        Maraithon.ConnectedAccounts.upsert_manual(user_id, "google:personal@example.com", %{
+          external_account_id: "personal@example.com"
+        })
+
+      base_message = %{
+        message_id: "abc123",
+        thread_id: "def456",
+        internal_date: ~U[2026-08-30 12:00:00Z],
+        labels: ["INBOX"],
+        from: "sender@example.com",
+        subject: "Same account-local Gmail id",
+        snippet: "Two mailboxes may issue the same Gmail message id."
+      }
+
+      assert :ok =
+               Gmail.ingest_messages(
+                 user_id,
+                 [Map.put(base_message, :to, "work@example.com")],
+                 account: work_account,
+                 provider: work_account.provider
+               )
+
+      assert :ok =
+               Gmail.ingest_messages(
+                 user_id,
+                 [Map.put(base_message, :to, "personal@example.com")],
+                 account: personal_account,
+                 provider: personal_account.provider
+               )
+
+      assert %Maraithon.Crm.Observation{
+               source_account: "work@example.com",
+               source_item_id: "google:work@example.com:abc123",
+               metadata: %{
+                 "google_provider" => "google:work@example.com",
+                 "connected_account_id" => work_account_id
+               }
+             } =
+               Maraithon.Repo.get_by(Maraithon.Crm.Observation,
+                 user_id: user_id,
+                 source: "gmail",
+                 source_item_id: "google:work@example.com:abc123"
+               )
+
+      assert work_account_id == work_account.id
+
+      assert %Maraithon.Crm.Observation{
+               source_account: "personal@example.com",
+               source_item_id: "google:personal@example.com:abc123",
+               metadata: %{
+                 "google_provider" => "google:personal@example.com",
+                 "connected_account_id" => personal_account_id
+               }
+             } =
+               Maraithon.Repo.get_by(Maraithon.Crm.Observation,
+                 user_id: user_id,
+                 source: "gmail",
+                 source_item_id: "google:personal@example.com:abc123"
+               )
+
+      assert personal_account_id == personal_account.id
+    end
+  end
+
   describe "stop_watch/1 with Bypass" do
     test "successfully stops watch" do
       bypass = Bypass.open()
@@ -1276,7 +1454,7 @@ defmodule Maraithon.Connectors.GmailTest do
       )
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("stop_bypass_user", "google", %{
+        store_tokens("stop-bypass-user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -1289,7 +1467,7 @@ defmodule Maraithon.Connectors.GmailTest do
         |> Plug.Conn.resp(200, "{}")
       end)
 
-      assert :ok = Gmail.stop_watch("stop_bypass_user")
+      assert :ok = Gmail.stop_watch("stop-bypass-user@example.com")
     end
 
     test "returns ok on 404 (not watching)" do
@@ -1300,7 +1478,7 @@ defmodule Maraithon.Connectors.GmailTest do
       )
 
       {:ok, _token} =
-        Maraithon.OAuth.store_tokens("stop_404_user", "google", %{
+        store_tokens("stop-404-user@example.com", "google", %{
           access_token: "test_access_token",
           refresh_token: "test_refresh_token",
           expires_in: 3600,
@@ -1313,8 +1491,13 @@ defmodule Maraithon.Connectors.GmailTest do
         |> Plug.Conn.resp(404, Jason.encode!(%{"error" => %{"code" => 404}}))
       end)
 
-      assert :ok = Gmail.stop_watch("stop_404_user")
+      assert :ok = Gmail.stop_watch("stop-404-user@example.com")
     end
+  end
+
+  defp store_tokens(user_id, provider, attrs) do
+    {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email(user_id)
+    Maraithon.OAuth.store_tokens(user_id, provider, attrs)
   end
 
   defp failed_precondition_body do

@@ -47,6 +47,10 @@ defmodule Maraithon.Connectors.Slack do
 
   require Logger
 
+  @slack_excerpt_max_chars 8_000
+  @slack_metadata_item_limit 20
+  @slack_metadata_text_max_chars 1_000
+
   # ===========================================================================
   # Webhook Handling
   # ===========================================================================
@@ -125,59 +129,69 @@ defmodule Maraithon.Connectors.Slack do
   end
 
   defp handle_message_event(team_id, event, params) do
-    # Skip bot messages to avoid loops
-    if event["bot_id"] || event["subtype"] == "bot_message" do
-      {:ignore, "bot message"}
-    else
-      channel = event["channel"]
-      topic = build_topic(team_id, channel, event["user"])
+    channel = event["channel"]
+    sender_id = event["user"] || event["bot_id"]
+    topic = build_topic(team_id, channel, sender_id)
 
-      # Determine event type based on subtype
-      event_type =
-        case event["subtype"] do
-          "message_changed" -> "message_changed"
-          "message_deleted" -> "message_deleted"
-          nil -> "message"
-          subtype -> "message_#{subtype}"
-        end
+    # Determine event type based on subtype
+    event_type =
+      case event["subtype"] do
+        "message_changed" -> "message_changed"
+        "message_deleted" -> "message_deleted"
+        nil -> "message"
+        subtype -> "message_#{subtype}"
+      end
 
-      data = %{
-        team_id: team_id,
-        channel_id: channel,
-        user_id: event["user"],
-        self_user_id: authorized_user_id(params),
-        text: event["text"],
-        ts: event["ts"],
-        thread_ts: event["thread_ts"],
-        blocks: event["blocks"],
-        files: parse_files(event["files"]),
-        edited: event["edited"]
-      }
+    data = %{
+      team_id: team_id,
+      channel_id: channel,
+      user_id: sender_id,
+      self_user_id: authorized_user_id(params),
+      text: event["text"],
+      ts: event["ts"],
+      thread_ts: event["thread_ts"],
+      blocks: event["blocks"],
+      files: parse_files(event["files"]),
+      edited: event["edited"]
+    }
 
-      normalized = build_slack_event(event_type, data, params)
+    normalized = build_slack_event(event_type, data, params)
 
-      _ = ingest_slack_message(team_id, event, event_type)
+    case ingest_slack_message(team_id, Map.put(event, "user", sender_id), event_type) do
+      :ok ->
+        Logger.info("Slack message received",
+          team_id: team_id,
+          channel: channel,
+          user: sender_id
+        )
 
-      Logger.info("Slack message received",
-        team_id: team_id,
-        channel: channel,
-        user: event["user"]
-      )
+        {:ok, topic, normalized}
 
-      {:ok, topic, normalized}
+      {:error, reason} ->
+        {:error, {:slack_message_persistence_failed, reason}}
     end
   end
 
   defp ingest_slack_message(team_id, event, event_type) when is_binary(team_id) do
-    if event_type == "message" do
-      case lookup_slack_account(team_id) do
-        %{user_id: user_id} = account ->
-          _ = maybe_observe_slack_message(user_id, account, team_id, event)
-          _ = wake_source_account(account, "slack_message")
-          :ok
-
-        _ ->
-          :ok
+    if content_bearing_slack_message?(event_type, event) do
+      with :ok <- validate_slack_message_identity(event),
+           {:ok, durable_content} <- durable_slack_content(event),
+           {:ok, accounts} <- lookup_slack_accounts(team_id) do
+        Enum.reduce_while(accounts, :ok, fn %{user_id: user_id} = account, :ok ->
+          with :ok <-
+                 maybe_observe_slack_message(
+                   user_id,
+                   account,
+                   team_id,
+                   event,
+                   durable_content
+                 ),
+               :ok <- wake_source_account(account, "slack_message") do
+            {:cont, :ok}
+          else
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
       end
     else
       :ok
@@ -186,30 +200,87 @@ defmodule Maraithon.Connectors.Slack do
 
   defp ingest_slack_message(_team_id, _event, _event_type), do: :ok
 
-  defp lookup_slack_account(team_id) do
-    Maraithon.ConnectedAccounts.get_connected_by_provider("slack:#{team_id}") ||
-      Maraithon.ConnectedAccounts.get_connected_by_external_account("slack", team_id)
-  rescue
-    exception ->
-      Logger.debug("CRM ingest skipped Slack lookup: #{Exception.message(exception)}")
-      nil
-  catch
-    kind, reason ->
-      Logger.debug("CRM ingest skipped Slack lookup: #{kind} #{inspect(reason)}")
-      nil
+  defp content_bearing_slack_message?(event_type, event) do
+    event_type not in ["message_changed", "message_deleted"] and
+      (event_type == "app_mention" or String.starts_with?(event_type, "message")) and
+      ((is_binary(event["text"]) and event["text"] != "") or
+         (is_list(event["files"]) and event["files"] != []) or
+         (is_list(event["blocks"]) and event["blocks"] != []))
   end
 
-  defp maybe_observe_slack_message(user_id, account, team_id, event) do
+  defp validate_slack_message_identity(event) do
+    cond do
+      not is_binary(event["user"]) or event["user"] == "" ->
+        {:error, :missing_slack_message_sender}
+
+      not is_binary(event["channel"]) or event["channel"] == "" ->
+        {:error, :missing_slack_message_channel}
+
+      not is_binary(event["ts"]) or event["ts"] == "" ->
+        {:error, :missing_slack_message_timestamp}
+
+      not valid_slack_timestamp?(event["ts"]) ->
+        {:error, :invalid_slack_message_timestamp}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_slack_timestamp?(ts) when is_binary(ts) do
+    case Float.parse(ts) do
+      {seconds, ""} when seconds >= 0 -> true
+      _other -> false
+    end
+  end
+
+  defp valid_slack_timestamp?(_ts), do: false
+
+  defp lookup_slack_accounts(team_id) do
+    accounts = Maraithon.ConnectedAccounts.list_connected_provider("slack:#{team_id}")
+
+    accounts =
+      case accounts do
+        [] ->
+          case Maraithon.ConnectedAccounts.get_connected_by_external_account("slack", team_id) do
+            nil -> []
+            account -> [account]
+          end
+
+        connected ->
+          connected
+      end
+
+    {:ok, accounts}
+  rescue
+    exception ->
+      Logger.warning("Slack account lookup failed",
+        team_id: team_id,
+        failure_code: Maraithon.Redaction.error_class(exception)
+      )
+
+      {:error, :slack_account_lookup_failed}
+  catch
+    kind, reason ->
+      Logger.warning("Slack account lookup failed",
+        team_id: team_id,
+        failure_code: Maraithon.Redaction.error_class({kind, reason})
+      )
+
+      {:error, :slack_account_lookup_failed}
+  end
+
+  defp maybe_observe_slack_message(user_id, account, team_id, event, durable_content) do
     source_account = account.external_account_id || team_id
     sender_id = event["user"]
     ts = event["ts"]
 
     cond do
       not is_binary(sender_id) or sender_id == "" ->
-        :ok
+        {:error, :missing_slack_message_sender}
 
       not is_binary(ts) or ts == "" ->
-        :ok
+        {:error, :missing_slack_message_timestamp}
 
       true ->
         occurred_at = parse_slack_ts(ts)
@@ -225,16 +296,21 @@ defmodule Maraithon.Connectors.Slack do
             "user_id" => user_id,
             "source" => "slack",
             "source_account" => source_account,
-            "source_item_id" => "#{event["channel"]}:#{ts}",
+            "source_item_id" => "#{team_id}:#{event["channel"]}:#{ts}",
             "occurred_at" => occurred_at,
             "direction" => slack_message_direction(account, sender_id),
             "participants" => [participant],
             "subject" => nil,
-            "excerpt" => clip_text(event["text"]),
+            "excerpt" => durable_content.excerpt,
             "metadata" => %{
               "team_id" => team_id,
               "channel" => event["channel"],
-              "thread_ts" => event["thread_ts"]
+              "ts" => ts,
+              "thread_ts" => event["thread_ts"],
+              "files" => durable_content.files,
+              "file_count" => durable_content.file_count,
+              "blocks" => durable_content.blocks,
+              "block_count" => durable_content.block_count
             }
           })
 
@@ -254,9 +330,161 @@ defmodule Maraithon.Connectors.Slack do
               ts: ts,
               reason: inspect(reason)
             )
+
+            {:error, reason}
         end
     end
   end
+
+  defp durable_slack_content(event) when is_map(event) do
+    files = compact_slack_files(event["files"])
+    blocks = compact_slack_blocks(event["blocks"])
+
+    excerpt =
+      [normalize_content_text(event["text"])] ++
+        Enum.map(files, &slack_file_excerpt/1) ++ Enum.map(blocks, &Map.get(&1, "text"))
+
+    excerpt =
+      excerpt
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.join("\n")
+      |> clip_text()
+      |> normalize_content_text()
+
+    if is_binary(excerpt) do
+      {:ok,
+       %{
+         excerpt: excerpt,
+         files: files,
+         file_count: count_slack_items(event["files"]),
+         blocks: blocks,
+         block_count: count_slack_items(event["blocks"])
+       }}
+    else
+      {:error, :missing_slack_message_durable_content}
+    end
+  end
+
+  defp durable_slack_content(_event), do: {:error, :missing_slack_message_durable_content}
+
+  defp compact_slack_files(files) when is_list(files) do
+    files
+    |> Enum.take(@slack_metadata_item_limit)
+    |> Enum.map(&compact_slack_file/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp compact_slack_files(_files), do: []
+
+  defp compact_slack_file(file) when is_map(file) do
+    preview =
+      normalize_content_text(
+        file["preview_plain_text"] || file["preview"] ||
+          get_in(file, ["initial_comment", "comment"])
+      )
+
+    compact =
+      %{
+        "id" => normalize_content_text(file["id"]),
+        "name" => normalize_content_text(file["name"]),
+        "title" => normalize_content_text(file["title"]),
+        "mimetype" => normalize_content_text(file["mimetype"]),
+        "filetype" => normalize_content_text(file["filetype"]),
+        "mode" => normalize_content_text(file["mode"]),
+        "size" => normalize_non_negative_integer(file["size"]),
+        "preview" => clip_metadata_text(preview)
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+
+    if map_size(compact) == 0, do: nil, else: compact
+  end
+
+  defp compact_slack_file(_file), do: nil
+
+  defp compact_slack_blocks(blocks) when is_list(blocks) do
+    blocks
+    |> Enum.take(@slack_metadata_item_limit)
+    |> Enum.map(&compact_slack_block/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp compact_slack_blocks(_blocks), do: []
+
+  defp compact_slack_block(block) when is_map(block) do
+    text =
+      block
+      |> slack_block_texts()
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.join(" ")
+      |> clip_metadata_text()
+      |> normalize_content_text()
+
+    if is_binary(text) do
+      %{
+        "type" => normalize_content_text(block["type"]),
+        "block_id" => normalize_content_text(block["block_id"]),
+        "text" => text
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+    end
+  end
+
+  defp compact_slack_block(_block), do: nil
+
+  defp slack_block_texts(value) when is_binary(value), do: [normalize_content_text(value)]
+
+  defp slack_block_texts(value) when is_list(value),
+    do: Enum.flat_map(value, &slack_block_texts/1)
+
+  defp slack_block_texts(value) when is_map(value) do
+    ["text", "alt_text", "title", "fields", "elements"]
+    |> Enum.flat_map(fn key -> slack_block_texts(Map.get(value, key)) end)
+  end
+
+  defp slack_block_texts(_value), do: []
+
+  defp slack_file_excerpt(file) when is_map(file) do
+    label = file["title"] || file["name"] || file["id"]
+    type = file["mimetype"] || file["filetype"]
+
+    heading =
+      ["Slack file", label, type && "(#{type})"]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(": ")
+
+    [heading, file["preview"]]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" — ")
+    |> normalize_content_text()
+  end
+
+  defp slack_file_excerpt(_file), do: nil
+
+  defp count_slack_items(items) when is_list(items), do: length(items)
+  defp count_slack_items(_items), do: 0
+
+  defp normalize_non_negative_integer(value) when is_integer(value) and value >= 0, do: value
+  defp normalize_non_negative_integer(_value), do: nil
+
+  defp clip_metadata_text(nil), do: nil
+
+  defp clip_metadata_text(text) when is_binary(text),
+    do: String.slice(text, 0, @slack_metadata_text_max_chars)
+
+  defp clip_metadata_text(_text), do: nil
+
+  defp normalize_content_text(text) when is_binary(text) do
+    case String.trim(text) do
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp normalize_content_text(_text), do: nil
 
   defp slack_message_direction(account, sender_id) do
     metadata = account.metadata || %{}
@@ -272,12 +500,12 @@ defmodule Maraithon.Connectors.Slack do
 
   defp parse_slack_ts(ts) when is_binary(ts) do
     case Float.parse(ts) do
-      {seconds, _} ->
+      {seconds, ""} when seconds >= 0 ->
         microseconds = round(seconds * 1_000_000)
         DateTime.from_unix!(microseconds, :microsecond)
 
-      :error ->
-        DateTime.utc_now()
+      _other ->
+        raise ArgumentError, "invalid Slack timestamp"
     end
   end
 
@@ -288,7 +516,7 @@ defmodule Maraithon.Connectors.Slack do
   defp clip_text(text) when is_binary(text) do
     text
     |> String.trim()
-    |> String.slice(0, 2_000)
+    |> String.slice(0, @slack_excerpt_max_chars)
   end
 
   defp clip_text(_), do: nil
@@ -307,21 +535,17 @@ defmodule Maraithon.Connectors.Slack do
     }
 
     normalized = build_slack_event("app_mention", data, params)
-    _ = wake_slack_account(team_id, "slack_app_mention")
 
-    Logger.info("Slack app mention",
-      team_id: team_id,
-      channel: channel,
-      user: event["user"]
-    )
+    with :ok <- ingest_slack_message(team_id, event, "app_mention") do
+      Logger.info("Slack app mention",
+        team_id: team_id,
+        channel: channel,
+        user: event["user"]
+      )
 
-    {:ok, topic, normalized}
-  end
-
-  defp wake_slack_account(team_id, reason) do
-    case lookup_slack_account(team_id) do
-      nil -> :ok
-      account -> wake_source_account(account, reason)
+      {:ok, topic, normalized}
+    else
+      {:error, reason} -> {:error, {:slack_message_persistence_failed, reason}}
     end
   end
 
