@@ -96,11 +96,12 @@ defmodule Maraithon.Connectors.SlackTest do
       params = %{
         "type" => "event_callback",
         "team_id" => "T12345",
+        "event_id" => "Ev-reaction-added",
         "event" => %{
           "type" => "reaction_added",
-          "channel" => "C12345",
           "user" => "U12345",
           "reaction" => "thumbsup",
+          "event_ts" => "1234567891.123456",
           "item" => %{
             "type" => "message",
             "channel" => "C12345",
@@ -254,11 +255,17 @@ defmodule Maraithon.Connectors.SlackTest do
       params = %{
         "type" => "event_callback",
         "team_id" => "T12345",
+        "event_id" => "Ev-message-changed",
         "event" => %{
           "type" => "message",
           "subtype" => "message_changed",
           "channel" => "C12345",
-          "edited" => %{"user" => "U12345", "ts" => "1234567890.123456"}
+          "event_ts" => "1234567891.123456",
+          "message" => %{
+            "user" => "U12345",
+            "text" => "Edited message",
+            "ts" => "1234567890.123456"
+          }
         }
       }
 
@@ -273,10 +280,14 @@ defmodule Maraithon.Connectors.SlackTest do
       params = %{
         "type" => "event_callback",
         "team_id" => "T12345",
+        "event_id" => "Ev-message-deleted",
         "event" => %{
           "type" => "message",
           "subtype" => "message_deleted",
-          "channel" => "C12345"
+          "channel" => "C12345",
+          "event_ts" => "1234567892.123456",
+          "deleted_ts" => "1234567890.123456",
+          "previous_message" => %{"user" => "U12345", "ts" => "1234567890.123456"}
         }
       }
 
@@ -340,11 +351,12 @@ defmodule Maraithon.Connectors.SlackTest do
       params = %{
         "type" => "event_callback",
         "team_id" => "T12345",
+        "event_id" => "Ev-reaction-removed",
         "event" => %{
           "type" => "reaction_removed",
-          "channel" => "C12345",
           "user" => "U12345",
           "reaction" => "thumbsup",
+          "event_ts" => "1234567891.123457",
           "item" => %{
             "type" => "message",
             "channel" => "C12345",
@@ -359,6 +371,28 @@ defmodule Maraithon.Connectors.SlackTest do
 
       assert topic == "slack:T12345:C12345"
       assert event.type == "reaction_removed"
+    end
+
+    test "fails closed when a message mutation lacks its event timestamp" do
+      params = %{
+        "type" => "event_callback",
+        "team_id" => "T12345",
+        "event_id" => "Ev-malformed-edit",
+        "event" => %{
+          "type" => "message",
+          "subtype" => "message_changed",
+          "channel" => "C12345",
+          "message" => %{
+            "user" => "U12345",
+            "text" => "Edited without an event timestamp",
+            "ts" => "1234567890.123456"
+          }
+        }
+      }
+
+      assert {:error,
+              {:slack_message_persistence_failed, :invalid_slack_mutation_event_timestamp}} =
+               Slack.handle_webhook(conn(:post, "/webhooks/slack", params), params)
     end
 
     test "parses bot_message subtype as a durable message event" do

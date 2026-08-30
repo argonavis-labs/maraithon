@@ -238,7 +238,7 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
     assert find_job(authorized_user_id, "runtime_partition:source_account_discovery")
   end
 
-  test "Slack webhook fails closed when a workspace has multiple installations" do
+  test "Slack webhook routes a multi-install workspace event only to matching authorizations" do
     team_id = "T#{System.unique_integer([:positive])}"
     first_user_id = unique_email("slack-full-auth-first")
     second_user_id = unique_email("slack-full-auth-second")
@@ -251,7 +251,11 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
         {:ok, _token} =
           OAuth.store_tokens(user_id, "slack:#{team_id}", %{
             access_token: "slack-token",
-            metadata: %{"team_id" => team_id, "authed_user_id" => slack_user_id}
+            metadata: %{
+              "team_id" => team_id,
+              "authed_user_id" => slack_user_id,
+              "bot_user_id" => "B-SHARED"
+            }
           })
       end
     )
@@ -265,22 +269,120 @@ defmodule Maraithon.Connectors.IngestionIdentityTest do
         "type" => "message",
         "channel" => "C-SHARED",
         "user" => "U-SENDER",
-        "text" => "Visible to both connected installations",
+        "text" => "Visible only to the authorized installation",
         "ts" => "1787069802.000004"
       }
     }
 
-    assert {:error,
-            {:slack_message_persistence_failed, :slack_event_authorization_expansion_required}} =
-             Slack.handle_webhook(Plug.Test.conn(:post, "/"), params)
+    assert {:ok, _topic, _event} = Slack.handle_webhook(Plug.Test.conn(:post, "/"), params)
 
-    for user_id <- [first_user_id, second_user_id] do
-      refute Repo.get_by(Observation,
+    assert Repo.get_by(Observation,
+             user_id: first_user_id,
+             source: "slack",
+             source_item_id: "#{team_id}:C-SHARED:1787069802.000004"
+           )
+
+    refute Repo.get_by(Observation,
+             user_id: second_user_id,
+             source: "slack",
+             source_item_id: "#{team_id}:C-SHARED:1787069802.000004"
+           )
+  end
+
+  test "Slack webhook accepts the installed bot authorization identity" do
+    team_id = "T#{System.unique_integer([:positive])}"
+    user_id = unique_email("slack-bot-authorization")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+        access_token: "slack-token",
+        metadata: %{
+          "team_id" => team_id,
+          "authed_user_id" => "U-INSTALLER",
+          "bot_user_id" => "B-INSTALLED"
+        }
+      })
+
+    params = %{
+      "type" => "event_callback",
+      "team_id" => team_id,
+      "event_id" => "Ev-bot-authorization",
+      "authorizations" => [%{"user_id" => "B-INSTALLED", "is_bot" => true}],
+      "event" => %{
+        "type" => "app_mention",
+        "channel" => "C-BOT-AUTH",
+        "user" => "U-SENDER",
+        "text" => "<@B-INSTALLED> capture this request",
+        "ts" => "1787069802.000005"
+      }
+    }
+
+    assert {:ok, _topic, _event} = Slack.handle_webhook(Plug.Test.conn(:post, "/"), params)
+
+    assert %Observation{metadata: %{"provider_event_id" => "Ev-bot-authorization"}} =
+             Repo.get_by(Observation,
                user_id: user_id,
                source: "slack",
-               source_item_id: "#{team_id}:C-SHARED:1787069802.000004"
+               source_item_id: "#{team_id}:C-BOT-AUTH:1787069802.000005"
              )
+  end
+
+  test "Slack mutation identity separates same-timestamp events and deduplicates retries" do
+    team_id = "T#{System.unique_integer([:positive])}"
+    user_id = unique_email("slack-mutation-identity")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+        access_token: "slack-token",
+        metadata: %{"team_id" => team_id, "authed_user_id" => "U-INSTALLER"}
+      })
+
+    build_params = fn event_id, text ->
+      %{
+        "type" => "event_callback",
+        "team_id" => team_id,
+        "event_id" => event_id,
+        "authorizations" => [%{"user_id" => "U-INSTALLER", "is_bot" => false}],
+        "event" => %{
+          "type" => "message",
+          "subtype" => "message_changed",
+          "channel" => "C-MUTATION",
+          "event_ts" => "1787069804.000006",
+          "message" => %{
+            "user" => "U-SENDER",
+            "text" => text,
+            "ts" => "1787069700.000001"
+          }
+        }
+      }
     end
+
+    first = build_params.("Ev-edit-first", "First edit")
+    second = build_params.("Ev-edit-second", "Second edit")
+
+    assert {:ok, _topic, _event} = Slack.handle_webhook(Plug.Test.conn(:post, "/"), first)
+    assert {:ok, _topic, _event} = Slack.handle_webhook(Plug.Test.conn(:post, "/"), first)
+    assert {:ok, _topic, _event} = Slack.handle_webhook(Plug.Test.conn(:post, "/"), second)
+
+    observations =
+      Repo.all(
+        from(observation in Observation,
+          where: observation.user_id == ^user_id and observation.source == "slack"
+        )
+      )
+
+    assert length(observations) == 2
+    assert Enum.uniq(Enum.map(observations, & &1.source_item_id)) |> length() == 2
+
+    assert Enum.sort(Enum.map(observations, & &1.metadata["provider_event_id"])) ==
+             ["Ev-edit-first", "Ev-edit-second"]
+
+    refute Enum.any?(
+             observations,
+             &(&1.source_item_id == "#{team_id}:C-MUTATION:1787069804.000006")
+           )
   end
 
   test "Slack webhook rejects an explicit authorization mismatch for one installation" do

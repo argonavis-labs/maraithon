@@ -54,6 +54,7 @@ defmodule Maraithon.Connectors.Slack do
   @slack_excerpt_max_chars 8_000
   @slack_metadata_item_limit 20
   @slack_metadata_text_max_chars 1_000
+  @slack_mutation_event_types ~w(message_changed message_deleted reaction_added reaction_removed)
 
   # ===========================================================================
   # Webhook Handling
@@ -184,9 +185,6 @@ defmodule Maraithon.Connectors.Slack do
         :ok ->
           persist_slack_message(team_id, event)
 
-        {:error, _reason} when event_type in ["message_changed", "message_deleted"] ->
-          :ok
-
         {:error, _reason} = error ->
           error
       end
@@ -243,6 +241,12 @@ defmodule Maraithon.Connectors.Slack do
       not is_binary(event["channel"]) or event["channel"] == "" ->
         {:error, :missing_slack_message_channel}
 
+      slack_mutation_event?(event) and not valid_slack_timestamp?(event["target_ts"]) ->
+        {:error, :invalid_slack_mutation_target_timestamp}
+
+      slack_mutation_event?(event) and not valid_slack_timestamp?(event["event_ts"]) ->
+        {:error, :invalid_slack_mutation_event_timestamp}
+
       not is_binary(event["ts"]) or event["ts"] == "" ->
         {:error, :missing_slack_message_timestamp}
 
@@ -262,6 +266,11 @@ defmodule Maraithon.Connectors.Slack do
   end
 
   defp valid_slack_timestamp?(_ts), do: false
+
+  defp slack_mutation_event?(%{"event_type" => event_type}),
+    do: event_type in @slack_mutation_event_types
+
+  defp slack_mutation_event?(_event), do: false
 
   defp lookup_slack_accounts(team_id, authorized_user_ids, _event_context) do
     authorized_user_ids =
@@ -284,22 +293,28 @@ defmodule Maraithon.Connectors.Slack do
           connected
       end
 
-    case accounts do
-      [] ->
+    cond do
+      accounts == [] ->
         {:ok, []}
 
-      [account] ->
-        account_user_id = slack_account_user_id(account)
+      MapSet.size(authorized_user_ids) == 0 and length(accounts) == 1 ->
+        {:ok, accounts}
 
-        if MapSet.size(authorized_user_ids) == 0 or
-             (is_binary(account_user_id) and MapSet.member?(authorized_user_ids, account_user_id)) do
-          {:ok, [account]}
-        else
-          {:error, :slack_event_account_authorization_mismatch}
-        end
-
-      _multiple_accounts ->
+      MapSet.size(authorized_user_ids) == 0 ->
         {:error, :slack_event_authorization_expansion_required}
+
+      true ->
+        matched_accounts =
+          Enum.filter(accounts, fn account ->
+            account
+            |> slack_account_authorization_ids()
+            |> MapSet.disjoint?(authorized_user_ids)
+            |> Kernel.not()
+          end)
+
+        if matched_accounts == [],
+          do: {:error, :slack_event_account_authorization_mismatch},
+          else: {:ok, matched_accounts}
     end
   rescue
     exception ->
@@ -319,11 +334,16 @@ defmodule Maraithon.Connectors.Slack do
       {:error, :slack_account_lookup_failed}
   end
 
-  defp slack_account_user_id(account) do
+  defp slack_account_authorization_ids(account) do
     metadata = account.metadata || %{}
 
-    metadata["authed_user_id"] || metadata[:authed_user_id] ||
-      metadata["slack_user_id"] || metadata[:slack_user_id]
+    [
+      metadata["authed_user_id"] || metadata[:authed_user_id],
+      metadata["slack_user_id"] || metadata[:slack_user_id],
+      metadata["bot_user_id"] || metadata[:bot_user_id]
+    ]
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> MapSet.new()
   end
 
   defp maybe_observe_slack_message(user_id, account, team_id, event, durable_content) do
@@ -352,7 +372,7 @@ defmodule Maraithon.Connectors.Slack do
             "user_id" => user_id,
             "source" => "slack",
             "source_account" => source_account,
-            "source_item_id" => "#{team_id}:#{event["channel"]}:#{ts}",
+            "source_item_id" => slack_observation_source_item_id(team_id, event),
             "occurred_at" => occurred_at,
             "direction" => slack_message_direction(account, sender_id),
             "participants" => [participant],
@@ -410,6 +430,21 @@ defmodule Maraithon.Connectors.Slack do
     |> case do
       {:ok, result} -> result
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp slack_observation_source_item_id(team_id, event) do
+    base = "#{team_id}:#{event["channel"]}:#{event["ts"]}"
+
+    if slack_mutation_event?(event) do
+      provider_identity = event["provider_event_id"] || event["event_ts"]
+
+      mutation_identity =
+        Maraithon.Redaction.fingerprint("#{event["event_type"]}:#{provider_identity}")
+
+      "#{base}:mutation:#{mutation_identity}"
+    else
+      base
     end
   end
 
@@ -682,7 +717,8 @@ defmodule Maraithon.Connectors.Slack do
         "channel" => channel,
         "user" => event["user"],
         "text" => "Slack #{event_type}: :#{event["reaction"]}: on message",
-        "ts" => event["event_ts"] || get_in(event, ["item", "ts"]),
+        "ts" => event["event_ts"],
+        "event_ts" => event["event_ts"],
         "target_ts" => get_in(event, ["item", "ts"]),
         "event_type" => event_type,
         "provider_event_id" => params["event_id"],
@@ -710,7 +746,8 @@ defmodule Maraithon.Connectors.Slack do
         message["user"] || event["user"] || message["bot_id"] ||
           get_in(event, ["edited", "user"]) || "slack-system",
       "text" => message["text"] || "Slack message edited",
-      "ts" => event["event_ts"] || target_ts,
+      "ts" => event["event_ts"],
+      "event_ts" => event["event_ts"],
       "thread_ts" => message["thread_ts"] || target_ts,
       "target_ts" => target_ts,
       "blocks" => message["blocks"],
@@ -730,7 +767,8 @@ defmodule Maraithon.Connectors.Slack do
       "channel" => event["channel"] || previous["channel"],
       "user" => previous["user"] || event["user"] || previous["bot_id"] || "slack-system",
       "text" => "Slack message deleted",
-      "ts" => event["event_ts"] || target_ts,
+      "ts" => event["event_ts"],
+      "event_ts" => event["event_ts"],
       "thread_ts" => previous["thread_ts"],
       "target_ts" => target_ts,
       "event_type" => event_type,
