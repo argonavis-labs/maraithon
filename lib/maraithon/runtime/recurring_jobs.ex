@@ -84,6 +84,12 @@ defmodule Maraithon.Runtime.RecurringJobs do
         :proactive_check_in_initial_delay_ms
       ),
       configured_interval_spec(
+        "source_account_discovery",
+        :source_account_discovery_interval_ms,
+        :timer.minutes(1),
+        :source_account_discovery_initial_delay_ms
+      ),
+      configured_interval_spec(
         "todo_completion_sweep",
         :todo_completion_sweep_interval_ms,
         :timer.minutes(1),

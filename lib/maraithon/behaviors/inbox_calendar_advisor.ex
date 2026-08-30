@@ -616,8 +616,15 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp extract_calendar_batch(_), do: []
 
   defp fetch_recent_inbox_messages(state) do
-    case SourceBundle.gmail_inbox_messages(state.source_bundle) do
-      [] ->
+    case state.source_bundle do
+      bundle when is_map(bundle) ->
+        bundle
+        |> SourceBundle.gmail_inbox_messages()
+        |> filter_messages_within_followup_window(state)
+        |> SourceBundle.prioritize_gmail_actionable()
+        |> Enum.take(state.email_scan_limit)
+
+      _missing_bundle ->
         google_accounts_for_service(state, "gmail")
         |> Enum.flat_map(fn account ->
           provider = account_provider(account)
@@ -639,12 +646,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               []
           end
         end)
-
-      messages ->
-        messages
-        |> filter_messages_within_followup_window(state)
-        |> SourceBundle.prioritize_gmail_actionable()
-        |> Enum.take(state.email_scan_limit)
     end
   end
 
@@ -652,8 +653,15 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     sent_limit = max(state.email_scan_limit * 2, 12)
     query = "in:sent newer_than:#{@sent_query_lookback_days}d"
 
-    case SourceBundle.gmail_sent_messages(state.source_bundle) do
-      [] ->
+    case state.source_bundle do
+      bundle when is_map(bundle) ->
+        bundle
+        |> SourceBundle.gmail_sent_messages()
+        |> filter_messages_within_followup_window(state)
+        |> SourceBundle.prioritize_gmail_actionable()
+        |> Enum.take(sent_limit)
+
+      _missing_bundle ->
         google_accounts_for_service(state, "gmail")
         |> Enum.flat_map(fn account ->
           provider = account_provider(account)
@@ -676,12 +684,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               []
           end
         end)
-
-      messages ->
-        messages
-        |> filter_messages_within_followup_window(state)
-        |> SourceBundle.prioritize_gmail_actionable()
-        |> Enum.take(sent_limit)
     end
   end
 
@@ -699,8 +701,13 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp filter_messages_within_followup_window(messages, _state), do: messages
 
   defp fetch_recent_calendar_events(state) do
-    case SourceBundle.calendar_events(state.source_bundle) do
-      [] ->
+    case state.source_bundle do
+      bundle when is_map(bundle) ->
+        bundle
+        |> SourceBundle.calendar_events()
+        |> Enum.take(state.event_scan_limit)
+
+      _missing_bundle ->
         google_accounts_for_service(state, "calendar")
         |> Enum.flat_map(fn account ->
           provider = account_provider(account)
@@ -720,9 +727,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               []
           end
         end)
-
-      events ->
-        Enum.take(events, state.event_scan_limit)
     end
   end
 

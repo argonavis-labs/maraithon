@@ -4,6 +4,7 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
   import Ecto.Query
 
   alias Maraithon.Accounts
+  alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.Repo
@@ -128,6 +129,53 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
 
     assert {:ok, %{discovered: 0, enqueued: 0}} =
              PeriodicJobs.schedule("proactive_check_in")
+  end
+
+  test "discovery coordinator fans out one provider job per Gmail account" do
+    user_id = "periodic-discovery-#{System.unique_integer([:positive])}@example.com"
+    provider = "google:#{user_id}"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, provider, %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, provider, %{
+        access_token: "discovery-access",
+        refresh_token: "discovery-refresh",
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{},
+        status: "running"
+      })
+
+    assert {:ok, %{discovered: 1, enqueued: 1}} =
+             PeriodicJobs.schedule("source_account_discovery")
+
+    job =
+      Repo.one!(
+        from(job in BackgroundJob,
+          where: job.job_type == "runtime_partition:source_account_discovery"
+        )
+      )
+
+    assert job.queue == "runtime_provider_account"
+    assert job.user_id == user_id
+    assert job.payload["agent_id"] == agent.id
+    assert job.payload["role"] == "discovery"
+    assert job.rate_limit_key == "google"
+    assert String.starts_with?(job.partition_key, "provider-account:")
+    refute String.contains?(job.partition_key, user_id)
+
+    assert {:ok, %{discovered: 0, enqueued: 0}} =
+             PeriodicJobs.schedule("source_account_discovery")
   end
 
   test "completion coordinator fans out one durable closure job per source account" do

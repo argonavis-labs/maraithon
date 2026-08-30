@@ -205,6 +205,23 @@ Activity shows logical account-worker runs using account labels, but never messa
 7. Switch ordinary Chief cycles to persisted-results mode; retain deep reconciliation as a safety net.
 8. Remove legacy broad fetches only after cursor lag, todo parity, and auto-close precision remain healthy in production.
 
+### 13.1 Current implementation checkpoint
+
+Implemented as of 2026-08-30:
+
+- Gmail and Slack consumers treat a supplied source bundle, including an empty bundle, as authoritative and do not fetch the provider twice.
+- Live source scope can be intersected down to one connected Gmail account or one canonical Slack workspace.
+- New todos resolve exact `source_account_id` lineage and discovery/closure cursors are independent and monotonic.
+- One-minute closure jobs fan out by account and use the closure cursor, with a zero-model quiet path.
+- One-minute discovery jobs fan out in `runtime_provider_account`, acquire only the discovery delta, and seal non-empty bounded bundles in encrypted durable payloads for `runtime_model_user`.
+- Discovery reasoning uses the existing Follow-through intelligence path, makes at most one todo-triage model call, defers secondary relationship learning, and advances only after the reasoning job settles its writes.
+
+Still required for cutover:
+
+- enqueue the exact account acquisition job immediately from Gmail/Slack ingress, leaving the one-minute schedule as anti-entropy
+- move closure acquisition into the same provider-lane sealed-handoff pattern
+- prove production parity, then stop ordinary Chief cycles from repeating Gmail/Slack acquisition
+
 ## 14. Verification
 
 - A user with two Gmail accounts and one Slack workspace produces three independent acquisition assignments and three independent discovery/closure identities.
@@ -224,4 +241,3 @@ Activity shows logical account-worker runs using account labels, but never messa
 - Cursors advance only with durable accepted outcomes.
 - The Chief of Staff ranks and briefs from persisted results instead of repeating provider acquisition.
 - Production telemetry proves bounded latency, low duplicate work, and conservative close precision.
-

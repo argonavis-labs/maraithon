@@ -7,9 +7,9 @@
   "created_at": "2026-08-30T03:04:00Z",
   "approved_at": "2026-08-30T03:04:00Z",
   "started_at": "2026-08-30T03:04:00Z",
-  "updated_at": "2026-08-30T03:22:00Z",
-  "summary": "Implementation is active. The runtime now discovers one exact closure partition per Gmail/Slack account with open work, reads only the role-specific delta, makes zero model calls on quiet cycles, and preserves a separate legacy partition for unassigned todos.",
-  "next_action": "Add sealed per-account discovery acquisition/results fan-out and cut ordinary Chief cycles over after production parity.",
+  "updated_at": "2026-08-30T03:33:28Z",
+  "summary": "Implementation is active. One-minute discovery workers now fan out per live Gmail/Slack account, acquire only role-specific deltas in the provider lane, seal bounded non-empty bundles into encrypted model jobs, make at most one high-intelligence todo call, and advance only after reasoning settles. Paired account closure workers remain active with zero-model quiet cycles.",
+  "next_action": "Wake the exact account worker directly from Gmail/Slack ingress, then move closure acquisition to the same sealed provider-to-model handoff before Chief cutover.",
   "blockers": [],
   "review_policy": {
     "final_vetting": "off"
@@ -28,12 +28,13 @@
     "tests": "passed",
     "spec_review": "pending",
     "final_vetting": "skipped",
-    "notes": "Plain spectacula invocation sets final_vetting off. mix compile --warnings-as-errors and the full touched Slack follow-through test file pass; broad suites remain intentionally skipped under repository policy."
+    "notes": "Plain spectacula invocation sets final_vetting off. Development and test compilation with warnings-as-errors pass; the focused source-account/periodic runtime tests pass 7/7 and the touched Gmail advisor file passes 22/22. Broad suites remain intentionally skipped under repository policy."
   },
   "resume_context": {
-    "last_completed_step": "Added one-minute durable per-account closure fan-out with exact todo/source scope, role-specific delta cursors, deferred cursor settlement, and a zero-model quiet path.",
+    "last_completed_step": "Added one-minute provider-lane discovery fan-out with encrypted bounded handoff to per-account model jobs, authoritative empty bundles, zero-call quiet cycles, and at most one high-intelligence todo-triage call.",
     "pending_steps": [
-      "Add acquisition, discovery, and closure durable job fan-out.",
+      "Enqueue exact discovery workers immediately from Gmail and Slack ingress.",
+      "Move closure acquisition into the provider lane with a sealed model handoff.",
       "Cut ordinary Chief cycles over to persisted account-worker results after production parity."
     ],
     "open_questions": [],
@@ -49,7 +50,9 @@
       "lib/maraithon/behaviors/slack_followthrough_agent.ex",
       "lib/maraithon/chief_of_staff/source_scope.ex",
       "lib/maraithon/chief_of_staff/acquisition.ex",
+      "lib/maraithon/behaviors/inbox_calendar_advisor.ex",
       "lib/maraithon/runtime/periodic_jobs.ex",
+      "lib/maraithon/runtime/source_account_discovery.ex",
       "lib/maraithon/runtime/todo_completion_sweep.ex"
     ],
     "notes": "Use exact durable background assignments as ephemeral OTP agents; do not create a parallel fleet of long-lived Agent rows."
@@ -96,6 +99,13 @@
       "from_stage": "inprogress",
       "to_stage": "inprogress",
       "note": "Exact account closure jobs run on a one-minute anti-entropy cadence, consume only closure deltas, skip the model on empty bundles, and leave cursors unchanged on unsettled evaluation."
+    },
+    {
+      "at": "2026-08-30T03:33:28Z",
+      "event": "checkpoint",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Per-account discovery now runs as a provider-lane delta acquisition with an encrypted bounded model handoff; supplied Gmail bundles are authoritative, quiet cycles use zero model calls, and reasoning is capped at one high-intelligence todo call."
     }
   ]
 }
