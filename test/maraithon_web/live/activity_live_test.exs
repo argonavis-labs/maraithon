@@ -5,6 +5,8 @@ defmodule MaraithonWeb.ActivityLiveTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Agents
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Todos
 
   @user_email "activity-live@example.com"
@@ -111,5 +113,97 @@ defmodule MaraithonWeb.ActivityLiveTest do
     refute html =~ "secret token stacktrace"
     refute html =~ "Other user&#39;s private todo"
     refute html =~ "Other user's private todo"
+  end
+
+  test "shows every latest Gmail and Slack fan-out without loading private handoffs", %{
+    conn: conn
+  } do
+    {:ok, gmail_account} =
+      ConnectedAccounts.upsert_manual(@user_email, "google:founder@example.com", %{
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    {:ok, slack_account} =
+      ConnectedAccounts.upsert_manual(@user_email, "slack:T123", %{
+        metadata: %{"team_name" => "Maraithon HQ"}
+      })
+
+    fan_out_specs = [
+      {"runtime_partition:source_account_discovery", "runtime_provider_account",
+       "source-account-discovery"},
+      {"runtime_partition:source_account_discovery_reason", "runtime_model_user",
+       "source-account-discovery-reason"},
+      {"runtime_partition:source_account_closure_acquire", "runtime_provider_account",
+       "source-account-closure-acquire"},
+      {"runtime_partition:source_account_closure_reason", "runtime_model_user",
+       "source-account-closure-reason"}
+    ]
+
+    source_jobs =
+      for account <- [gmail_account, slack_account],
+          {job_type, queue, dedupe_prefix} <- fan_out_specs do
+        {:ok, job} =
+          enqueue_source_run(
+            @user_email,
+            account.id,
+            job_type,
+            queue,
+            dedupe_prefix
+          )
+
+        job
+      end
+
+    other_email = "other-source-activity@example.com"
+    {:ok, _other_user} = Accounts.get_or_create_user_by_email(other_email)
+
+    {:ok, other_account} =
+      ConnectedAccounts.upsert_manual(other_email, "google:private@example.com", %{
+        metadata: %{"account_email" => "private@example.com"}
+      })
+
+    {:ok, _other_run} =
+      enqueue_source_run(
+        other_email,
+        other_account.id,
+        "runtime_partition:source_account_discovery",
+        "runtime_provider_account",
+        "source-account-discovery"
+      )
+
+    {:ok, view, html} = live(conn, "/activity")
+
+    headers = BackgroundJobs.list_latest_source_account_runs_for_user(@user_email)
+
+    assert length(headers) == 8
+    assert Enum.all?(headers, &(not Map.has_key?(&1, :payload) and not Map.has_key?(&1, :result)))
+    assert html =~ "8 source fan-outs"
+    assert html =~ "Gmail todo discovery"
+    assert html =~ "Gmail todo completion"
+    assert html =~ "Slack todo discovery"
+    assert html =~ "Slack todo completion"
+    assert html =~ "founder@example.com"
+    assert html =~ "Maraithon HQ"
+    refute html =~ "private@example.com"
+
+    Enum.each(source_jobs, fn job ->
+      assert has_element?(view, "#source-run-#{job.id}-summary")
+
+      expected_policy = if job.queue == "runtime_model_user", do: "At most 1", else: "None"
+      assert has_element?(view, "#source-run-#{job.id}-ai-policy", expected_policy)
+    end)
+  end
+
+  defp enqueue_source_run(user_id, account_id, job_type, queue, dedupe_prefix) do
+    BackgroundJobs.enqueue(job_type, %{
+      user_id: user_id,
+      queue: queue,
+      dedupe_key: "runtime-partition:#{dedupe_prefix}:#{account_id}",
+      partition_key: "activity-test:#{account_id}",
+      rate_limit_key: if(queue == "runtime_model_user", do: "model", else: "provider"),
+      max_attempts: 3,
+      scheduled_at: DateTime.utc_now(),
+      payload: %{"account_id" => account_id}
+    })
   end
 end

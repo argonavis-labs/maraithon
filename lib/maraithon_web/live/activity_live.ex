@@ -7,11 +7,13 @@ defmodule MaraithonWeb.ActivityLive do
 
   alias Maraithon.Agents
   alias Maraithon.RunErrorCopy
+  alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Todos
   alias MaraithonWeb.LocalTime
 
   @refresh_interval 5_000
   @run_limit 50
+  @source_run_limit 200
   @todo_event_limit 50
 
   @impl true
@@ -22,6 +24,7 @@ defmodule MaraithonWeb.ActivityLive do
         current_path: "/activity",
         timeline: [],
         run_count: 0,
+        source_run_count: 0,
         todo_count: 0,
         refreshed_at: nil,
         timezone_info: LocalTime.default_timezone_info()
@@ -43,6 +46,11 @@ defmodule MaraithonWeb.ActivityLive do
     timezone_info = LocalTime.timezone_info_for_user(user_id)
     runs = Agents.list_recent_runs_for_user(user_id, limit: @run_limit)
 
+    source_runs =
+      BackgroundJobs.list_latest_source_account_runs_for_user(user_id,
+        limit: @source_run_limit
+      )
+
     todo_events =
       Todos.list_activity_for_user(user_id,
         event_type: "created",
@@ -56,6 +64,7 @@ defmodule MaraithonWeb.ActivityLive do
 
     timeline =
       Enum.map(runs, &run_item/1) ++
+        Enum.map(source_runs, &source_run_item/1) ++
         Enum.map(todo_events, &todo_item(&1, linked_todo_ids))
 
     timeline =
@@ -68,6 +77,7 @@ defmodule MaraithonWeb.ActivityLive do
     assign(socket,
       timeline: timeline,
       run_count: length(runs),
+      source_run_count: length(source_runs),
       todo_count: length(todo_events),
       refreshed_at: DateTime.utc_now(),
       timezone_info: timezone_info
@@ -93,6 +103,35 @@ defmodule MaraithonWeb.ActivityLive do
       steps: steps,
       last_action: steps |> List.last() |> then(&(&1 && &1.label)),
       occurred_at: run.started_at
+    }
+  end
+
+  defp source_run_item(job) do
+    account = Map.get(job, :account)
+    provider = source_provider_label(account)
+    role = source_role(job.job_type)
+    stage = source_stage(job.job_type)
+    occurred_at = job.claimed_at || job.scheduled_at || job.inserted_at
+    finished_at = job.completed_at || job.failed_at || job.cancelled_at
+
+    %{
+      kind: :source_run,
+      id: "source-run-#{job.id}",
+      sort_id: job.id,
+      reference: String.slice(job.id, 0, 8),
+      agent_name: "#{provider} #{String.downcase(role)}",
+      account: source_account_label(account, provider),
+      status: job.status,
+      summary: source_run_summary(job.job_type, job.status),
+      safe_error: source_run_error(job.status),
+      duration: duration_label(occurred_at, finished_at),
+      lane: source_lane(job.queue),
+      role: role,
+      stage: stage,
+      ai_policy: source_ai_policy(job.queue),
+      attempts: normalize_count(job.attempts),
+      max_attempts: normalize_count(job.max_attempts),
+      occurred_at: occurred_at
     }
   end
 
@@ -150,6 +189,102 @@ defmodule MaraithonWeb.ActivityLive do
   defp agent_name(%{behavior: "prompt_agent"}), do: "Custom assistant"
   defp agent_name(_run), do: "Maraithon agent"
 
+  defp source_provider_label(%{provider: provider}) when is_binary(provider) do
+    cond do
+      provider == "google" or String.starts_with?(provider, "google:") -> "Gmail"
+      provider == "slack" or String.starts_with?(provider, "slack:") -> "Slack"
+      true -> "Connected source"
+    end
+  end
+
+  defp source_provider_label(_account), do: "Connected source"
+
+  defp source_account_label(%{metadata: metadata} = account, provider) do
+    metadata = if is_map(metadata), do: metadata, else: %{}
+
+    [
+      Map.get(metadata, "account_email"),
+      Map.get(metadata, "email"),
+      Map.get(metadata, "team_name"),
+      Map.get(metadata, "workspace_name"),
+      Map.get(account, :external_account_id),
+      source_provider_suffix(Map.get(account, :provider))
+    ]
+    |> Enum.find_value(&normalized_label/1)
+    |> presence(provider)
+  end
+
+  defp source_account_label(_account, provider), do: provider
+
+  defp source_provider_suffix(provider) when is_binary(provider) do
+    case String.split(provider, ":", parts: 2) do
+      [_root, suffix] -> suffix
+      _other -> nil
+    end
+  end
+
+  defp source_provider_suffix(_provider), do: nil
+
+  defp normalized_label(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      label -> label
+    end
+  end
+
+  defp normalized_label(_value), do: nil
+
+  defp source_role(job_type)
+       when job_type in [
+              "runtime_partition:source_account_discovery",
+              "runtime_partition:source_account_discovery_reason"
+            ],
+       do: "Todo discovery"
+
+  defp source_role(_job_type), do: "Todo completion"
+
+  defp source_stage(job_type)
+       when job_type in [
+              "runtime_partition:source_account_discovery_reason",
+              "runtime_partition:source_account_closure_reason"
+            ],
+       do: "AI review"
+
+  defp source_stage(_job_type), do: "Source delta"
+
+  defp source_lane("runtime_provider_account"), do: "Provider lane"
+  defp source_lane("runtime_model_user"), do: "Model lane"
+  defp source_lane(_queue), do: "Runtime lane"
+
+  defp source_ai_policy("runtime_provider_account"), do: "None"
+  defp source_ai_policy("runtime_model_user"), do: "At most 1"
+  defp source_ai_policy(_queue), do: "Bounded"
+
+  defp source_run_summary(_job_type, "pending"), do: "Waiting for its OTP lane"
+  defp source_run_summary(_job_type, "running"), do: "Checking this account now"
+
+  defp source_run_summary("runtime_partition:source_account_discovery", "completed"),
+    do: "Checked only messages after this account's discovery cursor"
+
+  defp source_run_summary("runtime_partition:source_account_discovery_reason", "completed"),
+    do: "Reviewed this account's new messages for todo decisions"
+
+  defp source_run_summary("runtime_partition:source_account_closure_acquire", "completed"),
+    do: "Checked only later messages for completion evidence"
+
+  defp source_run_summary("runtime_partition:source_account_closure_reason", "completed"),
+    do: "Compared later messages with this account's open todos"
+
+  defp source_run_summary(_job_type, "failed"), do: "This account worker did not complete"
+  defp source_run_summary(_job_type, "cancelled"), do: "This account worker stopped safely"
+  defp source_run_summary(_job_type, _status), do: "Account worker status updated"
+
+  defp source_run_error("failed") do
+    RunErrorCopy.runtime_failure(%{source: "background_job", details: "failed"})
+  end
+
+  defp source_run_error(_status), do: nil
+
   defp run_summary("running", _steps), do: "Working now"
   defp run_summary("completed", 0), do: "Finished successfully"
   defp run_summary("completed", 1), do: "Finished after 1 step"
@@ -206,18 +341,21 @@ defmodule MaraithonWeb.ActivityLive do
   defp duration_label(_started_at, _completed_at), do: "unknown"
 
   defp status_label("running"), do: "Running"
+  defp status_label("pending"), do: "Queued"
   defp status_label("completed"), do: "Completed"
   defp status_label("failed"), do: "Failed"
   defp status_label("cancelled"), do: "Cancelled"
   defp status_label(_status), do: "Unknown"
 
   defp status_color("running"), do: "blue"
+  defp status_color("pending"), do: "zinc"
   defp status_color("completed"), do: "emerald"
   defp status_color("failed"), do: "red"
   defp status_color("cancelled"), do: "zinc"
   defp status_color(_status), do: "zinc"
 
   defp status_dot_class("running"), do: "bg-blue-500"
+  defp status_dot_class("pending"), do: "bg-zinc-400"
   defp status_dot_class("completed"), do: "bg-emerald-500"
   defp status_dot_class("failed"), do: "bg-red-500"
   defp status_dot_class("cancelled"), do: "bg-zinc-400"
@@ -243,7 +381,7 @@ defmodule MaraithonWeb.ActivityLive do
       <div class="mx-auto max-w-4xl space-y-6">
         <.page_header
           title="Activity"
-          subtitle="The latest OTP agent runs and the todos Maraithon creates while working."
+          subtitle="The latest OTP agent runs, per-account source fan-outs, and todo creations."
         >
           <:actions>
             <.badge color="emerald">
@@ -260,7 +398,7 @@ defmodule MaraithonWeb.ActivityLive do
               <div>
                 <h2 class="text-sm/6 font-semibold text-zinc-950">Latest activity</h2>
                 <p class="text-sm/6 text-zinc-500">
-                  {@run_count} agent {if @run_count == 1, do: "run", else: "runs"} and {@todo_count} recent todo {if @todo_count == 1, do: "creation", else: "creations"}
+                  {@run_count} agent {if @run_count == 1, do: "run", else: "runs"}, {@source_run_count} source {if @source_run_count == 1, do: "fan-out", else: "fan-outs"}, and {@todo_count} recent todo {if @todo_count == 1, do: "creation", else: "creations"}
                 </p>
               </div>
               <p :if={@refreshed_at} class="text-xs/5 text-zinc-400">
@@ -296,6 +434,54 @@ defmodule MaraithonWeb.ActivityLive do
                 aria-hidden="true"
               >
               </span>
+
+              <div :if={item.kind == :source_run} data-testid="source-account-fan-out">
+                <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <h3 class="text-sm/6 font-semibold text-zinc-950">{item.agent_name}</h3>
+                      <.badge color={status_color(item.status)}>{status_label(item.status)}</.badge>
+                    </div>
+                    <p id={"#{item.id}-summary"} class="mt-1 text-sm/6 text-zinc-700">
+                      {item.summary}
+                    </p>
+                  </div>
+                  <time class="shrink-0 text-xs/5 text-zinc-400">
+                    {format_time(item.occurred_at, @timezone_info)}
+                  </time>
+                </div>
+
+                <p class="mt-1 text-xs/5 text-zinc-500">
+                  {item.account} · {item.lane} · {item.duration}
+                </p>
+
+                <p
+                  :if={item.safe_error}
+                  class="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm/6 text-red-700"
+                >
+                  {item.safe_error}
+                </p>
+
+                <details class="mt-3 text-xs/5 text-zinc-500">
+                  <summary class="cursor-pointer select-none font-medium text-zinc-600 hover:text-zinc-950">
+                    Fan-out details
+                  </summary>
+                  <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md bg-zinc-50 px-3 py-2">
+                    <dt>Reference</dt>
+                    <dd class="font-mono text-zinc-700">{item.reference}</dd>
+                    <dt>Worker</dt>
+                    <dd class="text-zinc-700">{item.role}</dd>
+                    <dt>Stage</dt>
+                    <dd class="text-zinc-700">{item.stage}</dd>
+                    <dt>Lane</dt>
+                    <dd class="text-zinc-700">{item.lane}</dd>
+                    <dt>AI calls</dt>
+                    <dd id={"#{item.id}-ai-policy"} class="text-zinc-700">{item.ai_policy}</dd>
+                    <dt>Attempts</dt>
+                    <dd class="text-zinc-700">{item.attempts} of {item.max_attempts}</dd>
+                  </dl>
+                </details>
+              </div>
 
               <div :if={item.kind == :run}>
                 <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">

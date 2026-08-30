@@ -9,6 +9,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
 
   import Ecto.Query
 
+  alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.{BoundedJSON, DurablePayload, Redaction, Repo}
   alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Runtime.BackgroundJob
@@ -21,6 +22,12 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   @max_telegram_update_id 9_223_372_036_854_775_807
   @telegram_event_max_bytes 600_000
   @default_telegram_ingress_ordering_grace_ms 1_000
+  @source_account_job_types [
+    "runtime_partition:source_account_discovery",
+    "runtime_partition:source_account_discovery_reason",
+    "runtime_partition:source_account_closure_acquire",
+    "runtime_partition:source_account_closure_reason"
+  ]
   @telegram_event_bounds [
     max_binary_bytes: 64_000,
     max_depth: 16,
@@ -267,6 +274,66 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     |> Enum.map(&BackgroundJob.hydrate_payloads/1)
   end
 
+  @doc """
+  Lists the latest durable execution header for every source-account worker.
+
+  This deliberately selects no encrypted payload or result columns. The
+  Activity page can therefore expose every Gmail and Slack fan-out without
+  loading message deltas or model handoffs into the web process.
+  """
+  def list_latest_source_account_runs_for_user(user_id, opts \\ [])
+
+  def list_latest_source_account_runs_for_user(user_id, opts)
+      when is_binary(user_id) and is_list(opts) do
+    limit = opts |> Keyword.get(:limit, 200) |> clamp_limit()
+
+    jobs =
+      BackgroundJob
+      |> where(
+        [job],
+        job.user_id == ^user_id and job.job_type in ^@source_account_job_types and
+          not is_nil(job.dedupe_key)
+      )
+      |> distinct([job], job.dedupe_key)
+      |> order_by(
+        [job],
+        asc: job.dedupe_key,
+        desc: job.inserted_at,
+        desc: job.id
+      )
+      |> limit(^limit)
+      |> select([job], %{
+        id: job.id,
+        job_type: job.job_type,
+        status: job.status,
+        queue: job.queue,
+        dedupe_key: job.dedupe_key,
+        attempts: job.attempts,
+        max_attempts: job.max_attempts,
+        scheduled_at: job.scheduled_at,
+        claimed_at: job.claimed_at,
+        completed_at: job.completed_at,
+        failed_at: job.failed_at,
+        cancelled_at: job.cancelled_at,
+        inserted_at: job.inserted_at
+      })
+      |> Repo.all()
+
+    accounts_by_id = source_accounts_by_id(user_id, jobs)
+
+    jobs
+    |> Enum.map(fn job ->
+      account_id = source_account_id(job.dedupe_key)
+
+      job
+      |> Map.put(:account_id, account_id)
+      |> Map.put(:account, Map.get(accounts_by_id, account_id))
+    end)
+    |> Enum.sort_by(&source_run_occurred_at/1, {:desc, DateTime})
+  end
+
+  def list_latest_source_account_runs_for_user(_user_id, _opts), do: []
+
   def count_by_status(opts \\ []) do
     user_id = Keyword.get(opts, :user_id)
 
@@ -276,6 +343,40 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     |> select([job], {job.status, count(job.id)})
     |> Repo.all()
     |> Map.new()
+  end
+
+  defp source_accounts_by_id(_user_id, []), do: %{}
+
+  defp source_accounts_by_id(user_id, jobs) do
+    account_ids =
+      jobs
+      |> Enum.map(&source_account_id(&1.dedupe_key))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    ConnectedAccount
+    |> where([account], account.user_id == ^user_id and account.id in ^account_ids)
+    |> select([account], %{
+      id: account.id,
+      provider: account.provider,
+      external_account_id: account.external_account_id,
+      metadata: account.metadata
+    })
+    |> Repo.all()
+    |> Map.new(&{&1.id, &1})
+  end
+
+  defp source_account_id(dedupe_key) when is_binary(dedupe_key) do
+    dedupe_key
+    |> String.split(":")
+    |> List.last()
+    |> parse_integer(nil)
+  end
+
+  defp source_account_id(_dedupe_key), do: nil
+
+  defp source_run_occurred_at(job) do
+    job.claimed_at || job.scheduled_at || job.inserted_at || ~U[1970-01-01 00:00:00Z]
   end
 
   def cancel(id) when is_binary(id) do
