@@ -17,6 +17,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   alias Maraithon.ChiefOfStaff.Skills.Followthrough
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.DurablePayload
+  alias Maraithon.PromptBudget
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Todos
 
@@ -25,6 +26,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   @handoff_binary_chunk_bytes 96_000
   @handoff_max_restored_binary_bytes 5_000_000
   @handoff_max_restored_bytes 10_000_000
+  @candidate_source_record_max_bytes 2_000
   @bounded_binary_marker "__maraithon_bounded_binary_v1__"
   @bounded_source_bundle_marker "__maraithon_bounded_source_bundle_v1__"
   @allowed_watermark_kinds ~w(gmail_discovery_watermark slack_discovery_watermark)
@@ -493,13 +495,12 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     |> Enum.map(fn record ->
       source = Atom.to_string(record.source)
       source_ref = source <> ":" <> record.identity
-      item = record.item
 
       %{
         "source_ref" => source_ref,
         "source" => source,
         "kind" => if(source == "gmail", do: "gmail_triage", else: "general"),
-        "title" => candidate_title(record),
+        "title" => record |> candidate_title() |> PromptBudget.truncate_utf8(500),
         "summary" => candidate_summary(record),
         "next_action" => "Decide from the supplied source evidence whether you need to act.",
         "source_account_id" => account.id,
@@ -509,11 +510,112 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         "dedupe_key" => "source-discovery:#{account.id}:#{short_digest(source_ref)}",
         "metadata" => %{
           "source_ref" => source_ref,
-          "source_record" => item,
+          "source_record" => candidate_source_record(record),
           "source_roles" => record.roles |> MapSet.to_list() |> Enum.map(&Atom.to_string/1)
         }
       }
     end)
+  end
+
+  defp candidate_source_record(%{source: :gmail, item: item}) do
+    body =
+      read_string(item, "body_text") || read_string(item, "text_body") ||
+        read_string(item, "body") || read_string(item, "html_body")
+
+    evidence =
+      item
+      |> candidate_fields(
+        ~w(id message_id thread_id google_provider subject from to cc snippet labels label_ids internal_date date body_available body_status)
+      )
+      |> put_candidate_size("body", body)
+
+    PromptBudget.project_fields(
+      evidence,
+      [
+        {"id", 256},
+        {"message_id", 256},
+        {"thread_id", 256},
+        {"google_provider", 300},
+        {"subject", 500},
+        {"from", 500},
+        {"to", 600},
+        {"cc", 400},
+        {"labels", 300},
+        {"label_ids", 300},
+        {"internal_date", 80},
+        {"date", 80},
+        {"body_available", 8},
+        {"body_status", 80},
+        {"body_bytes", 32},
+        {"body_truncated", 8},
+        {"snippet", 800}
+      ],
+      @candidate_source_record_max_bytes,
+      string_bytes: 800,
+      list_items: 12,
+      map_entries: 32,
+      max_depth: 4,
+      key_bytes: 255
+    ) || %{}
+  end
+
+  defp candidate_source_record(%{source: :slack, item: item}) do
+    text = read_string(item, "text_resolved") || read_string(item, "text")
+
+    evidence =
+      item
+      |> candidate_fields(
+        ~w(team_id channel_id channel_name conversation_kind is_dm is_mpim ts thread_ts user user_display_name user_name counterparty_id counterparty_display_name bot_id subtype permalink date)
+      )
+      |> put_candidate_size("text", text)
+
+    PromptBudget.project_fields(
+      evidence,
+      [
+        {"team_id", 256},
+        {"channel_id", 256},
+        {"channel_name", 300},
+        {"conversation_kind", 80},
+        {"is_dm", 8},
+        {"is_mpim", 8},
+        {"ts", 128},
+        {"thread_ts", 128},
+        {"user", 256},
+        {"user_display_name", 300},
+        {"user_name", 300},
+        {"counterparty_id", 256},
+        {"counterparty_display_name", 300},
+        {"bot_id", 256},
+        {"subtype", 80},
+        {"text_bytes", 32},
+        {"text_truncated", 8},
+        {"permalink", 500},
+        {"date", 80}
+      ],
+      @candidate_source_record_max_bytes,
+      string_bytes: 1_000,
+      list_items: 12,
+      map_entries: 32,
+      max_depth: 4,
+      key_bytes: 255
+    ) || %{}
+  end
+
+  defp candidate_fields(item, keys) do
+    Enum.reduce(keys, %{}, fn key, fields ->
+      case Map.get(item, key, Map.get(item, existing_atom(key))) do
+        nil -> fields
+        value -> Map.put(fields, key, value)
+      end
+    end)
+  end
+
+  defp put_candidate_size(fields, _prefix, nil), do: fields
+
+  defp put_candidate_size(fields, prefix, value) do
+    fields
+    |> Map.put(prefix <> "_bytes", byte_size(value))
+    |> Map.put(prefix <> "_truncated", byte_size(value) > 1_000)
   end
 
   defp candidate_title(%{source: :gmail, item: item}),
@@ -534,7 +636,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     |> candidate_excerpt()
   end
 
-  defp candidate_excerpt(value), do: String.slice(value, 0, 1_000)
+  defp candidate_excerpt(value), do: PromptBudget.truncate_utf8(value, 1_000)
 
   defp source_item_id(%{source: :gmail, item: item}),
     do: read_string(item, "message_id") || read_string(item, "id")

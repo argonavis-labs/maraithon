@@ -437,6 +437,189 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
            ]
   end
 
+  test "reasons over a losslessly restored oversized Gmail record within the model budget" do
+    {account, agent} = discovery_identity("oversized-reason")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    body = String.duplicate("oversized exact source evidence ", 24_000)
+
+    message =
+      now
+      |> routine_message()
+      |> Map.put("id", "oversized-reason-message")
+      |> Map.put("message_id", "oversized-reason-message")
+      |> Map.put("thread_id", "oversized-reason-thread")
+      |> Map.put("google_provider", account.provider)
+      |> Map.put("subject", "Quarterly review " <> String.duplicate("important context ", 20_000))
+      |> Map.put("body", body)
+      |> Map.put("body_available", true)
+      |> Map.put("body_status", "available")
+      |> Map.put("provider_payload", %{"raw" => String.duplicate("provider-envelope", 40_000)})
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => [message],
+        "inbox_messages" => [message],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    acquisition = fn _user_id, _skills, _configs, _context ->
+      {bundle, complete_telemetry(),
+       [%{account: account, kind: "gmail_discovery_watermark", value: "1700000375"}]}
+    end
+
+    assert {:ok, %{handoffs: [handoff], finalizer: finalizer}} =
+             SourceAccountDiscovery.acquire(account, agent,
+               acquisition: acquisition,
+               acquisition_job_id: "oversized-reason-acquisition",
+               now: now
+             )
+
+    refute SourceCursors.get(account.id, "gmail_discovery_watermark")
+
+    assert {:ok, restored} =
+             SourceAccountDiscovery.restore_partition_bundle(handoff["source_bundle"])
+
+    assert [restored_message] = SourceBundle.gmail_messages(restored)
+    assert restored_message["body"] == body
+    caller = self()
+
+    assert {:ok, %{decision_count: 1, model_calls: 1} = child_result} =
+             SourceAccountDiscovery.reason(account, agent, handoff,
+               now: now,
+               llm_complete: fn prompt ->
+                 send(caller, {:gmail_prompt, prompt})
+                 skip_decisions(1)
+               end
+             )
+
+    assert_received {:gmail_prompt, prompt}
+    assert byte_size(prompt) < 100_000
+    assert [candidate] = prompt_candidates(prompt)
+    assert byte_size(candidate["title"]) <= 500
+    assert candidate["summary"] =~ "oversized exact source evidence"
+    gmail_source_record = get_in(candidate, ["metadata", "source_record"])
+
+    assert gmail_source_record["labels"] == ["INBOX"],
+           "projected Gmail evidence: #{inspect(gmail_source_record)}"
+
+    assert gmail_source_record["message_id"] == "oversized-reason-message"
+    assert gmail_source_record["google_provider"] == account.provider
+    assert gmail_source_record["body_available"]
+    assert gmail_source_record["body_status"] == "available"
+    assert gmail_source_record |> Jason.encode!() |> byte_size() <= 2_000
+    assert get_in(candidate, ["metadata", "source_record", "body_truncated"])
+    refute prompt =~ String.duplicate("provider-envelope", 10)
+
+    refute SourceCursors.get(account.id, "gmail_discovery_watermark")
+
+    assert {:ok, %{advanced_watermarks: 1}} =
+             SourceAccountDiscovery.finalize(account, agent, finalizer, [child_result])
+
+    assert %{value: "1700000375"} =
+             SourceCursors.get(account.id, "gmail_discovery_watermark")
+  end
+
+  test "preserves bounded Slack author and conversation evidence for reasoning" do
+    {account, agent, team_id} = slack_discovery_identity("bounded-reason")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    text = "Please review the incident response today. " <> String.duplicate("context ", 80_000)
+    message_ts = "1700000400.000100"
+
+    message = %{
+      "ts" => message_ts,
+      "thread_ts" => message_ts,
+      "date" => DateTime.to_iso8601(now),
+      "user" => "U-owner",
+      "user_display_name" => "Kent Owner",
+      "bot_id" => "B-helper",
+      "subtype" => "bot_message",
+      "text" => text,
+      "text_resolved" => text,
+      "permalink" => "https://example.slack.com/archives/D-request/p1700000400000100",
+      "provider_payload" => %{"raw" => String.duplicate("slack-envelope", 40_000)}
+    }
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_slack(%{
+        "workspaces" => [
+          %{
+            "team_id" => team_id,
+            "team_name" => "Example Workspace",
+            "channels" => [
+              %{
+                "id" => "D-request",
+                "name" => nil,
+                "conversation_kind" => "im",
+                "is_im" => true,
+                "counterparty_user_id" => "U-requester",
+                "counterparty_display_name" => "Alex Requester",
+                "messages" => [message]
+              }
+            ]
+          }
+        ],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    acquisition = fn _user_id, _skills, _configs, _context ->
+      {bundle, complete_telemetry("slack"),
+       [%{account: account, kind: "slack_discovery_watermark", value: message_ts}]}
+    end
+
+    assert {:ok, %{handoffs: [handoff], finalizer: finalizer}} =
+             SourceAccountDiscovery.acquire(account, agent,
+               acquisition: acquisition,
+               acquisition_job_id: "slack-bounded-reason-acquisition",
+               now: now
+             )
+
+    refute SourceCursors.get(account.id, "slack_discovery_watermark")
+    caller = self()
+
+    assert {:ok, %{decision_count: 1} = child_result} =
+             SourceAccountDiscovery.reason(account, agent, handoff,
+               now: now,
+               llm_complete: fn prompt ->
+                 send(caller, {:slack_prompt, prompt})
+                 skip_decisions(1)
+               end
+             )
+
+    assert_received {:slack_prompt, prompt}
+    assert byte_size(prompt) < 100_000
+    assert [candidate] = prompt_candidates(prompt)
+    source_record = get_in(candidate, ["metadata", "source_record"])
+    assert candidate["summary"] =~ "Please review the incident response today"
+
+    assert source_record["user_display_name"] == "Kent Owner",
+           "projected Slack evidence: #{inspect(source_record)}"
+
+    assert source_record["counterparty_id"] == "U-requester"
+    assert source_record["counterparty_display_name"] == "Alex Requester"
+    assert source_record["subtype"] == "bot_message"
+    assert source_record["bot_id"] == "B-helper"
+    assert source_record["conversation_kind"] == "im"
+    assert source_record["is_dm"]
+    assert source_record["text_truncated"]
+    assert source_record |> Jason.encode!() |> byte_size() <= 2_000
+    refute prompt =~ String.duplicate("slack-envelope", 10)
+
+    refute SourceCursors.get(account.id, "slack_discovery_watermark")
+
+    assert {:ok, %{advanced_watermarks: 1}} =
+             SourceAccountDiscovery.finalize(account, agent, finalizer, [child_result])
+
+    assert %{value: ^message_ts} =
+             SourceCursors.get(account.id, "slack_discovery_watermark")
+  end
+
   test "losslessly seals a structurally deep bundle at the durable handoff boundary" do
     {account, agent} = discovery_identity("deep-handoff")
     now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -566,10 +749,33 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
     {account, agent}
   end
 
-  defp complete_telemetry do
+  defp slack_discovery_identity(suffix) do
+    unique = System.unique_integer([:positive])
+    user_id = "source-account-discovery-slack-#{suffix}-#{unique}@example.com"
+    team_id = "T-#{unique}"
+
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "slack:#{team_id}", %{
+        metadata: %{"team_id" => team_id, "team_name" => "Example Workspace"}
+      })
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{},
+        status: "running"
+      })
+
+    {account, agent, team_id}
+  end
+
+  defp complete_telemetry(source \\ "gmail") do
     %{
       "sources" => %{
-        "gmail" => %{
+        source => %{
           "status" => "ready",
           "failed_providers" => [],
           "partial_providers" => []
@@ -587,7 +793,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
       "body" => "A routine informational update with no request.",
       "from" => "newsletter@example.com",
       "to" => ["owner@example.com"],
-      "label_ids" => ["INBOX"],
+      "labels" => ["INBOX"],
       "internal_date" => DateTime.to_unix(now, :millisecond)
     }
   end
@@ -606,5 +812,12 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
      %{
        content: Jason.encode!(%{"summary" => "No durable work", "decisions" => decisions})
      }}
+  end
+
+  defp prompt_candidates(prompt) do
+    [_instructions, candidates_json] =
+      String.split(prompt, "CANDIDATE_TODOS_JSON:\n", parts: 2)
+
+    candidates_json |> String.trim() |> Jason.decode!()
   end
 end

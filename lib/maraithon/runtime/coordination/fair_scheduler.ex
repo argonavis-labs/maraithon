@@ -231,6 +231,22 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
           assignment =
             unwrap!(TaskClaims.reserve(session, partition, identity, ttl_ms: task_ttl_ms))
 
+          # Claim the partition's write lock before the background-job privacy
+          # trigger takes its User lock. Agent fencing uses the same
+          # partition-before-User order; reversing these two locks deadlocks.
+          [[sequence]] =
+            SQL.query!(
+              Repo,
+              """
+              UPDATE public.runtime_partitions
+              SET fair_sequence = fair_sequence + 1,
+                  updated_at = timezone('UTC', clock_timestamp())
+              WHERE partition_id = $1 AND ownership_epoch = $2
+              RETURNING fair_sequence
+              """,
+              [candidate.partition_id, candidate.ownership_epoch]
+            ).rows
+
           set_effect_writer_protocol!()
           set_task_action!(assignment.id)
 
@@ -274,19 +290,6 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
             )
 
           if result.num_rows != 1, do: Repo.rollback(:fair_claim_conflict)
-
-          [[sequence]] =
-            SQL.query!(
-              Repo,
-              """
-              UPDATE public.runtime_partitions
-              SET fair_sequence = fair_sequence + 1,
-                  updated_at = timezone('UTC', clock_timestamp())
-              WHERE partition_id = $1 AND ownership_epoch = $2
-              RETURNING fair_sequence
-              """,
-              [candidate.partition_id, candidate.ownership_epoch]
-            ).rows
 
           SQL.query!(
             Repo,
