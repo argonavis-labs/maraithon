@@ -52,7 +52,6 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_slack_search_timeout_ms 6_000
   @slack_thread_fetch_limit 6
   @slack_thread_reply_limit 40
-  @slack_thread_context_item_limit 20
   @slack_user_directory_limit 80
   @slack_user_directory_timeout_ms 1_500
   @slack_conversations_page_limit 1_000
@@ -1363,10 +1362,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end)
   end
 
-  # Thread replies are provider context, not delta candidates. Keep the root
-  # plus the most recent messages that existed at this event's frontier. This
-  # prevents a later reply from influencing an earlier decision and keeps one
-  # noisy thread from making the provider/model handoff unbounded.
+  # Thread replies are provider context, not delta candidates. Keep every
+  # message that existed at this event's frontier. The discovery worker owns
+  # prompt-size admission and fails closed if the lossless evidence cannot fit;
+  # silently dropping an older reply can turn an actionable thread into a
+  # false skip.
   defp bounded_slack_thread_context(message, thread_ts, thread_messages) do
     message_ts = normalize_string(message["ts"])
     frontier = slack_ts_sort_value(message)
@@ -1381,12 +1381,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
     root = Enum.find(eligible, &(normalize_string(&1["ts"]) == thread_ts))
 
-    recent =
-      eligible
-      |> Enum.reject(&(normalize_string(&1["ts"]) == thread_ts))
-      |> Enum.take(-max(@slack_thread_context_item_limit - 1, 0))
+    replies = Enum.reject(eligible, &(normalize_string(&1["ts"]) == thread_ts))
 
-    [root | recent]
+    [root | replies]
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq_by(&normalize_string(&1["ts"]))
   end

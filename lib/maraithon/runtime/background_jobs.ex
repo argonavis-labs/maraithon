@@ -329,7 +329,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
 
     jobs
     |> Enum.map(fn job ->
-      account_id = source_account_id(job.dedupe_key)
+      account_id = source_account_id(job.job_type, job.dedupe_key)
 
       job
       |> Map.put(:account_id, account_id)
@@ -356,7 +356,7 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   defp source_accounts_by_id(user_id, jobs) do
     account_ids =
       jobs
-      |> Enum.map(&source_account_id(&1.dedupe_key))
+      |> Enum.map(&source_account_id(&1.job_type, &1.dedupe_key))
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
 
@@ -372,14 +372,28 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     |> Map.new(&{&1.id, &1})
   end
 
-  defp source_account_id(dedupe_key) when is_binary(dedupe_key) do
-    dedupe_key
-    |> String.split(":")
-    |> List.last()
-    |> parse_integer(nil)
+  defp source_account_id(job_type, dedupe_key)
+       when is_binary(job_type) and is_binary(dedupe_key) do
+    segments = String.split(dedupe_key, ":")
+
+    segment =
+      case job_type do
+        type
+        when type in [
+               "runtime_partition:source_account_discovery_finalize",
+               "runtime_partition:source_account_closure_acquire",
+               "runtime_partition:source_account_closure_finalize"
+             ] ->
+          Enum.at(segments, -2)
+
+        _other ->
+          List.last(segments)
+      end
+
+    parse_integer(segment, nil)
   end
 
-  defp source_account_id(_dedupe_key), do: nil
+  defp source_account_id(_job_type, _dedupe_key), do: nil
 
   defp source_run_occurred_at(job) do
     job.claimed_at || job.scheduled_at || job.inserted_at || ~U[1970-01-01 00:00:00Z]

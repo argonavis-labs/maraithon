@@ -222,10 +222,34 @@ defmodule MaraithonWeb.ActivityLiveTest do
   end
 
   defp enqueue_source_run(user_id, account_id, job_type, queue, dedupe_prefix) do
+    acquisition_job_id = Ecto.UUID.generate()
+
+    dedupe_key =
+      case job_type do
+        "runtime_partition:source_account_discovery_finalize" ->
+          "runtime-partition:#{dedupe_prefix}:#{account_id}:#{acquisition_job_id}"
+
+        "runtime_partition:source_account_closure_acquire" ->
+          "runtime-partition:#{dedupe_prefix}:#{account_id}:#{acquisition_job_id}"
+
+        "runtime_partition:source_account_closure_finalize" ->
+          "runtime-partition:#{dedupe_prefix}:#{account_id}:#{acquisition_job_id}"
+
+        type
+        when type in [
+               "runtime_partition:source_account_discovery_reason",
+               "runtime_partition:source_account_closure_reason"
+             ] ->
+          "runtime-partition:#{dedupe_prefix}:#{acquisition_job_id}:1-of-1:#{account_id}"
+
+        _other ->
+          "runtime-partition:#{dedupe_prefix}:#{account_id}"
+      end
+
     BackgroundJobs.enqueue(job_type, %{
       user_id: user_id,
       queue: queue,
-      dedupe_key: "runtime-partition:#{dedupe_prefix}:#{account_id}",
+      dedupe_key: dedupe_key,
       partition_key: "activity-test:#{account_id}",
       rate_limit_key: if(queue == "runtime_model_user", do: "model", else: "provider"),
       max_attempts: 3,

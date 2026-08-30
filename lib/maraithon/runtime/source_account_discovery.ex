@@ -30,10 +30,11 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   @handoff_max_encoded_source_bundle_bytes 2_000_000
   @handoff_max_restored_binary_bytes 5_000_000
   @handoff_max_restored_bytes 10_000_000
-  @candidate_source_record_max_bytes 5_000
-  @candidate_summary_max_bytes 2_400
-  @candidate_current_text_max_bytes 1_800
-  @candidate_context_text_max_bytes 400
+  @candidate_source_record_max_bytes 80_000
+  @candidate_partition_max_bytes 88_000
+  @candidate_summary_max_bytes 4_000
+  @candidate_current_text_max_bytes 3_000
+  @candidate_context_text_max_bytes 600
   @bounded_binary_marker "__maraithon_bounded_binary_v1__"
   @bounded_source_bundle_marker "__maraithon_bounded_source_bundle_v1__"
   @allowed_watermark_kinds ~w(gmail_discovery_watermark slack_discovery_watermark)
@@ -489,6 +490,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       |> maybe_put_llm_complete(opts)
 
     with true <- candidates != [] and length(candidates) == length(source_item_refs(bundle)),
+         true <- Enum.all?(candidates, &candidate_evidence_complete?/1),
          {:ok, result} <- Todos.ingest_many(account.user_id, candidates, intelligence_opts),
          decisions when is_list(decisions) <- Map.get(result, :decisions),
          indexes <- decisions |> Enum.map(&Map.get(&1, :candidate_index)) |> Enum.sort(),
@@ -569,41 +571,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         ~w(id message_id thread_id google_provider subject from to cc snippet labels label_ids internal_date date body_available body_status thread_context_complete thread_context_frontier)
       )
       |> put_candidate_size("body", body)
-      |> Map.put("body_excerpt", head_tail_excerpt(body, 2_000))
+      |> Map.put("body", body)
       |> Map.put("thread_context", thread_context)
 
-    PromptBudget.project_fields(
-      evidence,
-      [
-        {"id", 256},
-        {"message_id", 256},
-        {"thread_id", 256},
-        {"google_provider", 300},
-        {"subject", 500},
-        {"from", 500},
-        {"to", 600},
-        {"cc", 400},
-        {"labels", 300},
-        {"label_ids", 300},
-        {"internal_date", 80},
-        {"date", 80},
-        {"body_available", 8},
-        {"body_status", 80},
-        {"body_bytes", 32},
-        {"body_truncated", 8},
-        {"body_excerpt", 2_200},
-        {"snippet", 800},
-        {"thread_context_complete", 8},
-        {"thread_context_frontier", 32},
-        {"thread_context", 1_000}
-      ],
-      @candidate_source_record_max_bytes,
-      string_bytes: 2_200,
-      list_items: 12,
-      map_entries: 32,
-      max_depth: 4,
-      key_bytes: 255
-    ) || %{}
+    lossless_candidate_record(evidence)
   end
 
   defp candidate_source_record(%{source: :slack, item: item}) do
@@ -626,46 +597,30 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         ~w(team_id channel_id channel_name conversation_kind is_dm is_mpim ts thread_ts target_ts provider_event_id user user_display_name user_name counterparty_id counterparty_display_name bot_id subtype permalink date thread_context_complete thread_context_frontier)
       )
       |> put_candidate_size("text", text)
-      |> Map.put("text_excerpt", head_tail_excerpt(text, 2_000))
+      |> Map.put("text", text)
       |> Map.put("thread_context", thread_context)
 
-    PromptBudget.project_fields(
-      evidence,
-      [
-        {"team_id", 256},
-        {"channel_id", 256},
-        {"channel_name", 300},
-        {"conversation_kind", 80},
-        {"is_dm", 8},
-        {"is_mpim", 8},
-        {"ts", 128},
-        {"thread_ts", 128},
-        {"target_ts", 128},
-        {"provider_event_id", 256},
-        {"user", 256},
-        {"user_display_name", 300},
-        {"user_name", 300},
-        {"counterparty_id", 256},
-        {"counterparty_display_name", 300},
-        {"bot_id", 256},
-        {"subtype", 80},
-        {"text_bytes", 32},
-        {"text_truncated", 8},
-        {"text_excerpt", 2_200},
-        {"permalink", 500},
-        {"date", 80},
-        {"thread_context_complete", 8},
-        {"thread_context_frontier", 128},
-        {"thread_context", 1_600}
-      ],
-      @candidate_source_record_max_bytes,
-      string_bytes: 2_200,
-      list_items: 12,
-      map_entries: 32,
-      max_depth: 4,
-      key_bytes: 255
-    ) || %{}
+    lossless_candidate_record(evidence)
   end
+
+  defp lossless_candidate_record(evidence) when is_map(evidence) do
+    complete = Map.put(evidence, "evidence_complete", true)
+
+    if encoded_bytes(complete) <= @candidate_source_record_max_bytes do
+      complete
+    else
+      evidence
+      |> Map.take(~w(id message_id thread_id google_provider team_id channel_id ts thread_ts))
+      |> Map.put("evidence_complete", false)
+      |> Map.put("evidence_bytes", encoded_bytes(evidence))
+    end
+  end
+
+  defp candidate_evidence_complete?(candidate) when is_map(candidate) do
+    get_in(candidate, ["metadata", "source_record", "evidence_complete"]) == true
+  end
+
+  defp candidate_evidence_complete?(_candidate), do: false
 
   defp gmail_thread_context(item) do
     item
@@ -704,7 +659,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp put_candidate_size(fields, prefix, value) do
     fields
     |> Map.put(prefix <> "_bytes", byte_size(value))
-    |> Map.put(prefix <> "_truncated", byte_size(value) > 1_000)
+    |> Map.put(prefix <> "_truncated", false)
   end
 
   defp candidate_title(%{source: :gmail, item: item}),
@@ -1282,21 +1237,30 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp pack_source_groups(groups, limit) do
-    {partitions, current} =
-      Enum.reduce(groups, {[], []}, fn group, {partitions, current} ->
+    {partitions, current, _current_bytes} =
+      Enum.reduce(groups, {[], [], 0}, fn group, {partitions, current, current_bytes} ->
+        group_bytes = source_group_candidate_bytes(group)
+
         cond do
           current == [] ->
-            {partitions, group}
+            {partitions, group, group_bytes}
 
-          length(current) + length(group) <= limit ->
-            {partitions, current ++ group}
+          length(current) + length(group) <= limit and
+              current_bytes + group_bytes <= @candidate_partition_max_bytes ->
+            {partitions, current ++ group, current_bytes + group_bytes}
 
           true ->
-            {partitions ++ [current], group}
+            {partitions ++ [current], group, group_bytes}
         end
       end)
 
     if current == [], do: partitions, else: partitions ++ [current]
+  end
+
+  defp source_group_candidate_bytes(group) do
+    Enum.reduce(group, 0, fn record, bytes ->
+      bytes + encoded_bytes(candidate_source_record(record)) + 2_000
+    end)
   end
 
   defp source_identities_complete?(bundle) do

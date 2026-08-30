@@ -32,7 +32,8 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
            Enum.sum(Enum.map(source_partitions, &SourceAccountDiscovery.source_item_count/1)),
          source_refs <- SourceAccountDiscovery.source_item_refs(bundle),
          true <- length(source_refs) == source_items,
-         todo_ids <- TodoCompletionSweep.open_todo_ids_for_account(account, opts) do
+         todo_snapshots <- TodoCompletionSweep.open_todo_snapshots_for_account(account, opts),
+         todo_ids <- Enum.map(todo_snapshots, &Map.fetch!(&1, "id")) do
       cond do
         source_items == 0 ->
           settle_without_fanout(account, watermarks, "empty_delta", 0, opts)
@@ -41,7 +42,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
           settle_without_fanout(account, watermarks, "no_open_todos", source_items, opts)
 
         true ->
-          build_fanout(account, bundle, watermarks, source_refs, todo_ids, opts)
+          build_fanout(account, bundle, watermarks, source_refs, todo_snapshots, opts)
       end
     else
       false -> {:error, :source_closure_source_identity_mismatch}
@@ -74,12 +75,13 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     end
   end
 
-  defp build_fanout(account, bundle, watermarks, source_refs, todo_ids, opts) do
+  defp build_fanout(account, bundle, watermarks, source_refs, todo_snapshots, opts) do
     case SourceAccountDiscovery.compact_bundle(bundle) do
       compact when is_map(compact) ->
-        todo_batches = Enum.chunk_every(todo_ids, @todo_batch_size)
+        todo_batches = Enum.chunk_every(todo_snapshots, @todo_batch_size)
         fanout_count = length(todo_batches)
         source_items = length(source_refs)
+        todo_ids = Enum.map(todo_snapshots, &Map.fetch!(&1, "id"))
         source_refs_digest = SourceAccountDiscovery.refs_digest(source_refs)
 
         with {:ok, handoffs} <-
@@ -132,7 +134,9 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     todo_batches
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, [], compact}, fn
-      {todo_batch, fanout_index}, {:ok, handoffs, prepared_bundle} ->
+      {todo_snapshot_batch, fanout_index}, {:ok, handoffs, prepared_bundle} ->
+        todo_batch = Enum.map(todo_snapshot_batch, &Map.fetch!(&1, "id"))
+
         handoff = %{
           "account_id" => account.id,
           "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
@@ -143,6 +147,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
           "source_refs_digest" => source_refs_digest,
           "source_bundle" => prepared_bundle,
           "todo_ids" => todo_batch,
+          "todo_snapshots" => todo_snapshot_batch,
           "todo_count" => length(todo_batch),
           "watermarks" => []
         }
@@ -180,10 +185,12 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          expected_source_refs_digest when is_binary(expected_source_refs_digest) <-
            read_string(payload, "source_refs_digest"),
          {:ok, todo_ids} <- fetch_list(payload, "todo_ids"),
+         {:ok, todo_snapshots} <- fetch_list(payload, "todo_snapshots"),
          expected_todo_count when is_integer(expected_todo_count) and expected_todo_count > 0 <-
            read_integer(payload, "todo_count"),
          true <- length(todo_ids) == expected_todo_count,
          true <- length(Enum.uniq(todo_ids)) == expected_todo_count,
+         true <- Enum.map(todo_snapshots, &read_string(&1, "id")) == todo_ids,
          ^expected_source_items <- SourceAccountDiscovery.source_item_count(bundle),
          ^source_item_refs <- SourceAccountDiscovery.source_item_refs(bundle),
          true <-
@@ -430,8 +437,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
       Todo
       |> where(
         [todo],
-        todo.user_id == ^account.user_id and todo.source_account_id == ^account.id and
-          todo.id in ^todo_ids
+        todo.user_id == ^account.user_id and todo.id in ^todo_ids
       )
       |> select([todo], count(todo.id))
       |> Repo.one()

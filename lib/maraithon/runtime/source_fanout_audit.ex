@@ -163,19 +163,25 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       |> select([account, _token], {account.id, account.provider})
       |> Repo.all()
 
-    closure =
+    open_todo_user_ids =
       Todo
-      |> join(:inner, [todo], account in ConnectedAccount,
-        on: account.id == todo.source_account_id
+      |> where([todo], todo.status in ["open", "snoozed"])
+      |> distinct([todo], todo.user_id)
+      |> select([todo], todo.user_id)
+
+    closure =
+      ConnectedAccount
+      |> join(:inner, [account], token in Token,
+        on: token.user_id == account.user_id and token.provider == account.provider
       )
       |> where(
-        [todo, account],
-        todo.status in ["open", "snoozed"] and account.status == "connected" and
+        [account, _token],
+        account.user_id in subquery(open_todo_user_ids) and account.status == "connected" and
           (like(account.provider, "google%") or
              fragment("? ~ '^slack:[^:]+$'", account.provider))
       )
-      |> distinct([_todo, account], account.id)
-      |> select([_todo, account], {account.id, account.provider})
+      |> distinct([account, _token], account.id)
+      |> select([account, _token], {account.id, account.provider})
       |> Repo.all()
 
     %{discovery: discovery, closure: closure}
@@ -363,6 +369,10 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       :source_reference_digest_mismatch
     )
     |> require_decision_manifest(expected_decisions, decision_count, decision_refs)
+    |> require_error(
+      closure_action_manifest_valid?(child_results, decision_refs),
+      :todo_decision_action_manifest_invalid
+    )
   end
 
   defp require_decision_manifest(errors, expected, decision_count, decision_refs) do
@@ -525,6 +535,17 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
 
         action in ["create", "update", "skip"] and
           if(action == "skip", do: is_nil(persisted_todo_id), else: is_binary(persisted_todo_id))
+      end)
+  end
+
+  defp closure_action_manifest_valid?(child_results, decision_refs) do
+    manifests = Enum.flat_map(child_results, &map_list(&1, "todo_decision_manifest"))
+    manifest_refs = Enum.map(manifests, &map_string(&1, "todo_ref"))
+
+    length(manifests) == length(decision_refs) and
+      Enum.sort(manifest_refs) == Enum.sort(decision_refs) and
+      Enum.all?(manifests, fn manifest ->
+        map_string(manifest, "action") in ["evaluated", "superseded"]
       end)
   end
 

@@ -478,7 +478,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   defp maybe_enqueue_source_account_closure(account, now, discovery_job_id) do
-    open_todos? = account_has_open_todos?(account.id)
+    open_todos? = user_has_open_todos?(account.user_id)
 
     cond do
       not open_todos? ->
@@ -515,9 +515,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     })
   end
 
-  defp account_has_open_todos?(account_id) do
+  defp user_has_open_todos?(user_id) do
     Todo
-    |> where([todo], todo.source_account_id == ^account_id)
+    |> where([todo], todo.user_id == ^user_id)
     |> where([todo], todo.status in ["open", "snoozed"])
     |> Repo.exists?()
   end

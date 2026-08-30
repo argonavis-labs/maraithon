@@ -547,7 +547,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
              SourceCursors.get(account.id, "gmail_discovery_watermark")
   end
 
-  test "reasons over a losslessly restored oversized Gmail record within the model budget" do
+  test "fails closed without advancing Gmail when complete evidence exceeds the model budget" do
     {account, agent} = discovery_identity("oversized-reason")
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -599,48 +599,20 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
 
     assert [restored_message] = SourceBundle.gmail_messages(restored)
     assert restored_message["body"] == body
-    caller = self()
 
-    assert {:ok, %{decision_count: 1, model_calls: 1} = child_result} =
+    assert {:error, :source_discovery_incomplete_decisions} =
              SourceAccountDiscovery.reason(account, agent, handoff,
                now: now,
-               llm_complete: fn prompt ->
-                 send(caller, {:gmail_prompt, prompt})
-                 skip_decisions(1)
+               llm_complete: fn _prompt ->
+                 flunk("incomplete evidence must not reach the model")
                end
              )
 
-    assert_received {:gmail_prompt, prompt}
-    assert byte_size(prompt) < 100_000
-    assert [candidate] = prompt_candidates(prompt)
-    assert byte_size(candidate["title"]) <= 500
-    assert candidate["summary"] =~ "oversized exact source evidence"
-    gmail_source_record = get_in(candidate, ["metadata", "source_record"])
-
-    assert gmail_source_record["labels"] == ["INBOX"],
-           "projected Gmail evidence: #{inspect(gmail_source_record)}"
-
-    assert gmail_source_record["message_id"] == "oversized-reason-message"
-    assert gmail_source_record["google_provider"] == account.provider
-    assert gmail_source_record["body_available"]
-    assert gmail_source_record["body_status"] == "available"
-    assert gmail_source_record["body_bytes"] == byte_size(body)
-    assert gmail_source_record["body_excerpt"] =~ "TAIL ACTION"
-    assert candidate["summary"] =~ "TAIL ACTION"
-    assert gmail_source_record |> Jason.encode!() |> byte_size() <= 5_000
-    assert get_in(candidate, ["metadata", "source_record", "body_truncated"])
-    refute prompt =~ String.duplicate("provider-envelope", 10)
-
     refute SourceCursors.get(account.id, "gmail_discovery_watermark")
-
-    assert {:ok, %{advanced_watermarks: 1}} =
-             SourceAccountDiscovery.finalize(account, agent, finalizer, [child_result])
-
-    assert %{value: "1700000375"} =
-             SourceCursors.get(account.id, "gmail_discovery_watermark")
+    assert finalizer["expected_source_items"] == 1
   end
 
-  test "preserves bounded Slack author and conversation evidence for reasoning" do
+  test "fails closed without advancing Slack when complete evidence exceeds the model budget" do
     {account, agent, team_id} = slack_discovery_identity("bounded-reason")
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -703,45 +675,17 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
              )
 
     refute SourceCursors.get(account.id, "slack_discovery_watermark")
-    caller = self()
 
-    assert {:ok, %{decision_count: 1} = child_result} =
+    assert {:error, :source_discovery_incomplete_decisions} =
              SourceAccountDiscovery.reason(account, agent, handoff,
                now: now,
-               llm_complete: fn prompt ->
-                 send(caller, {:slack_prompt, prompt})
-                 skip_decisions(1)
+               llm_complete: fn _prompt ->
+                 flunk("incomplete evidence must not reach the model")
                end
              )
 
-    assert_received {:slack_prompt, prompt}
-    assert byte_size(prompt) < 100_000
-    assert [candidate] = prompt_candidates(prompt)
-    source_record = get_in(candidate, ["metadata", "source_record"])
-    assert candidate["summary"] =~ "Please review the incident response today"
-
-    assert source_record["user_display_name"] == "Kent Owner",
-           "projected Slack evidence: #{inspect(source_record)}"
-
-    assert source_record["counterparty_id"] == "U-requester"
-    assert source_record["counterparty_display_name"] == "Alex Requester"
-    assert source_record["subtype"] == "bot_message"
-    assert source_record["bot_id"] == "B-helper"
-    assert source_record["conversation_kind"] == "im"
-    assert source_record["is_dm"]
-    assert source_record["text_truncated"]
-    assert source_record["text_excerpt"] =~ "TAIL ACTION"
-    assert candidate["summary"] =~ "TAIL ACTION"
-    assert source_record |> Jason.encode!() |> byte_size() <= 5_000
-    refute prompt =~ String.duplicate("slack-envelope", 10)
-
     refute SourceCursors.get(account.id, "slack_discovery_watermark")
-
-    assert {:ok, %{advanced_watermarks: 1}} =
-             SourceAccountDiscovery.finalize(account, agent, finalizer, [child_result])
-
-    assert %{value: ^message_ts} =
-             SourceCursors.get(account.id, "slack_discovery_watermark")
+    assert finalizer["expected_source_items"] == 1
   end
 
   test "losslessly seals a structurally deep bundle at the durable handoff boundary" do

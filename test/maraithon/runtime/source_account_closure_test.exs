@@ -238,6 +238,63 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
     assert length(handoffs) < old_source_partition_work
   end
 
+  test "account evidence evaluates open todos created by another source account" do
+    evidence_account = closure_account("cross-source-evidence")
+
+    {:ok, other_account} =
+      ConnectedAccounts.upsert_manual(
+        evidence_account.user_id,
+        "slack:T-CROSS-SOURCE-#{System.unique_integer([:positive])}",
+        %{metadata: %{"team_name" => "Other evidence source"}}
+      )
+
+    {:ok, [todo]} =
+      Todos.upsert_many(evidence_account.user_id, [
+        %{
+          "source" => "slack",
+          "kind" => "general",
+          "title" => "Work surfaced by another account",
+          "summary" => "Later Gmail evidence may settle this Slack-sourced work.",
+          "next_action" => "Finish the cross-source follow-up.",
+          "source_account_id" => other_account.id,
+          "source_item_id" => "cross-source-thread",
+          "dedupe_key" => "source-account-closure:cross-source-evidence"
+        }
+      ])
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    message = %{
+      "id" => "gmail-cross-source-evidence",
+      "thread_id" => "gmail-cross-source-thread",
+      "subject" => "Cross-source evidence",
+      "body" => "Evidence that must be considered against every open todo.",
+      "from" => "sender@example.com",
+      "to" => [evidence_account.user_id],
+      "label_ids" => ["INBOX"],
+      "internal_date" => DateTime.to_unix(now, :millisecond)
+    }
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => [message],
+        "inbox_messages" => [message],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    assert {:ok, %{todo_count: 1, handoffs: [handoff]}} =
+             SourceAccountClosure.acquire(evidence_account,
+               source_bundle: bundle,
+               proposed_watermarks: [closure_watermark(evidence_account, "1700000425")]
+             )
+
+    assert handoff["todo_ids"] == [todo.id]
+  end
+
   test "records a todo closed after acquisition as superseded instead of evaluated" do
     account = closure_account("superseded")
     now = DateTime.utc_now() |> DateTime.truncate(:second)

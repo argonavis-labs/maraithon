@@ -62,7 +62,6 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
            acquire_account_delta(account, source_scope, opts) do
       account_opts =
         opts
-        |> Keyword.put(:source_account_id, account.id)
         |> Keyword.put(:source_scope, source_scope)
         |> Keyword.put(:exhaustive_completion, true)
         |> maybe_put_source_bundle(source_bundle)
@@ -91,13 +90,35 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   def open_todo_ids_for_account(account, opts \\ [])
 
   def open_todo_ids_for_account(%ConnectedAccount{} = account, opts) when is_list(opts) do
-    open_todo_ids(
-      account.user_id,
-      Keyword.put(opts, :source_account_id, account.id)
-    )
+    # Evidence belongs to this account, but the work it settles may have been
+    # created from another account or source. Snapshot every open todo for the
+    # user so a Slack acknowledgement can close Gmail work (and vice versa).
+    open_todo_ids(account.user_id, Keyword.delete(opts, :source_account_id))
   end
 
   def open_todo_ids_for_account(_account, _opts), do: []
+
+  @doc false
+  def open_todo_snapshots_for_account(account, opts \\ [])
+
+  def open_todo_snapshots_for_account(%ConnectedAccount{} = account, opts)
+      when is_list(opts) do
+    Todo
+    |> where([todo], todo.user_id == ^account.user_id and todo.status in ["open", "snoozed"])
+    |> maybe_scope_todo_ids(Keyword.delete(opts, :source_account_id))
+    |> order_by([todo], asc: todo.id)
+    |> select([todo], %{
+      "id" => todo.id,
+      "status" => todo.status,
+      "updated_at" => todo.updated_at
+    })
+    |> Repo.all()
+    |> Enum.map(fn snapshot ->
+      Map.update!(snapshot, "updated_at", &DateTime.to_iso8601/1)
+    end)
+  end
+
+  def open_todo_snapshots_for_account(_account, _opts), do: []
 
   @doc false
   def resolve_todo_decision_manifest(account, todo_ids, evaluated_refs)
@@ -114,7 +135,6 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
     rows =
       Todo
       |> where([todo], todo.user_id == ^account.user_id)
-      |> where([todo], todo.source_account_id == ^account.id)
       |> where([todo], todo.id in ^todo_ids)
       |> select([todo], {todo.id, todo.status})
       |> Repo.all()
