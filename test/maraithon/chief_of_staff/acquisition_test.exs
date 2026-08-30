@@ -134,6 +134,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     now = ~U[2026-06-18 15:00:00Z]
     bypass = Bypass.open()
 
+    _user = Accounts.get_or_create_user_by_email("chief-slack-thread@example.com")
+
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
 
     assert {:ok, _token} =
@@ -297,6 +299,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
   test "limits Slack history scans after priority sorting" do
     now = ~U[2026-06-18 15:00:00Z]
     bypass = Bypass.open()
+
+    _user = Accounts.get_or_create_user_by_email("chief-slack-limit@example.com")
 
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
 
@@ -532,6 +536,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
   test "adds self-authored Slack search matches when private channel history is not enumerable" do
     now = ~U[2026-06-18 21:24:00Z]
     bypass = Bypass.open()
+
+    _user = Accounts.get_or_create_user_by_email("chief-slack-search@example.com")
 
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
 
@@ -793,6 +799,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
                &(&1["provider"] == provider and &1["targeted_search_count"] >= 1)
              )
            end)
+
+    assert get_in(telemetry, ["sources", "gmail", "commercial_provider_count"]) == 2
   end
 
   test "builds one shared gmail and calendar bundle for overlapping skills" do
@@ -1453,7 +1461,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         |> watermark_build_context(true)
         |> Map.put(:source_watermark_role, "closure")
 
-      {bundle, _telemetry, proposed_watermarks} =
+      {bundle, telemetry, proposed_watermarks} =
         Acquisition.build(
           user_id,
           ["followthrough"],
@@ -1465,6 +1473,11 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
                SourceBundle.gmail_messages(bundle),
                &(&1["message_id"] == "closure-delta-message")
              )
+
+      assert Keyword.get(TravelGmailStub.last_fetch_opts(), :query) ==
+               "after:#{closure_watermark}"
+
+      assert get_in(telemetry, ["sources", "gmail", "commercial_provider_count"]) == 0
 
       assert [%{kind: "gmail_closure_watermark", value: value}] = proposed_watermarks
       assert is_binary(value)

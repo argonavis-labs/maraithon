@@ -1596,6 +1596,17 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           {provider, account, query, quota}
         end)
 
+      # Targeted commercial searches are useful on the first bounded lookback
+      # because they can rescue older actionable mail from the newest-N cap.
+      # Once an account has a cursor, the base `after:<cursor>` query already
+      # contains every new message. Re-running lookback-only targeted searches
+      # here would reintroduce old mail into an otherwise exact delta and send
+      # the same batch through the model on every poll.
+      commercial_providers =
+        provider_specs
+        |> Enum.filter(fn {_provider, _account, query, _quota} -> query == fallback_query end)
+        |> Enum.map(&elem(&1, 0))
+
       provider_results =
         Task.async_stream(
           provider_specs,
@@ -1712,7 +1723,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           provider_statuses,
           user_id,
           source_scope,
-          providers,
+          commercial_providers,
           provider_quotas,
           detail_concurrency,
           detail_timeout,
@@ -1832,6 +1843,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           "candidate_limit" => plan.gmail_message_limit,
           "per_provider_candidate_limit" => per_provider_candidate_limit,
           "provider_candidate_limits" => provider_candidate_limits,
+          "commercial_provider_count" => length(commercial_providers),
           "message_count" => length(messages),
           "full_body_count" => count_full_body_messages(messages),
           "body_missing_count" => count_body_missing_messages(messages),
