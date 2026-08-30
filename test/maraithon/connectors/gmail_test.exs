@@ -934,6 +934,65 @@ defmodule Maraithon.Connectors.GmailTest do
       assert cursor.value == "1050"
     end
 
+    test "advances past a history message deleted before detail hydration" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      user_id = "gmail-history-delete-race@example.com"
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        store_tokens(user_id, "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
+
+      account = Maraithon.ConnectedAccounts.get(user_id, "google")
+      Maraithon.Connectors.SourceCursors.put(account, "gmail_history_id", %{"value" => "1000"})
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/history", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "historyId" => "1050",
+            "history" => [
+              %{
+                "messagesAdded" => [
+                  %{"message" => %{"id" => "deadbeef"}},
+                  %{"message" => %{"id" => "cafebabe"}}
+                ]
+              }
+            ]
+          })
+        )
+      end)
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/deadbeef", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(404, Jason.encode!(%{"error" => %{"code" => 404}}))
+      end)
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/cafebabe", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(gmail_message("cafebabe", user_id)))
+      end)
+
+      assert {:ok, %{count: 1, history_id: "1050", mode: :incremental}} =
+               Gmail.sync_history(user_id, account)
+
+      assert %{value: "1050"} =
+               Maraithon.Connectors.SourceCursors.get(account.id, "gmail_history_id")
+    end
+
     test "rebuilds the complete mailbox before resetting an expired history cursor" do
       bypass = Bypass.open()
 
@@ -1026,6 +1085,72 @@ defmodule Maraithon.Connectors.GmailTest do
                  source: "gmail",
                  source_item_id: "google:deadbeef"
                )
+    end
+
+    test "completes a full resync when a listed message is deleted before hydration" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      user_id = "gmail-full-delete-race@example.com"
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        store_tokens(user_id, "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
+
+      account = Maraithon.ConnectedAccounts.get(user_id, "google")
+      Maraithon.Connectors.SourceCursors.put(account, "gmail_history_id", %{"value" => "1"})
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/history", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(404, Jason.encode!(%{"error" => %{"code" => 404}}))
+      end)
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "messages" => [
+              %{"id" => "deadbeef"},
+              %{"id" => "cafebabe"}
+            ]
+          })
+        )
+      end)
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/deadbeef", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(404, Jason.encode!(%{"error" => %{"code" => 404}}))
+      end)
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/cafebabe", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(gmail_message("cafebabe", user_id)))
+      end)
+
+      Bypass.stub(bypass, "GET", "/gmail/v1/users/me/profile", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"historyId" => "2000"}))
+      end)
+
+      assert {:ok, %{count: 1, history_id: "2000", mode: :full_resync}} =
+               Gmail.sync_history(user_id, account)
+
+      assert %{value: "2000"} =
+               Maraithon.Connectors.SourceCursors.get(account.id, "gmail_history_id")
     end
 
     test "preserves the expired cursor when complete mailbox pagination is partial" do
@@ -1498,6 +1623,25 @@ defmodule Maraithon.Connectors.GmailTest do
   defp store_tokens(user_id, provider, attrs) do
     {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email(user_id)
     Maraithon.OAuth.store_tokens(user_id, provider, attrs)
+  end
+
+  defp gmail_message(id, user_id) do
+    %{
+      "id" => id,
+      "threadId" => "thread-#{id}",
+      "internalDate" => "1704067200000",
+      "labelIds" => ["INBOX"],
+      "snippet" => "Live message",
+      "payload" => %{
+        "mimeType" => "text/plain",
+        "headers" => [
+          %{"name" => "From", "value" => "sender@example.com"},
+          %{"name" => "To", "value" => user_id},
+          %{"name" => "Subject", "value" => "Live message"}
+        ],
+        "body" => %{"data" => Base.url_encode64("Live body", padding: false)}
+      }
+    }
   end
 
   defp failed_precondition_body do

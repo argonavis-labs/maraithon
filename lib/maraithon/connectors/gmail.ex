@@ -493,6 +493,9 @@ defmodule Maraithon.Connectors.Gmail do
       {:ok, {:ok, message}}, {detailed, failures} ->
         {[message | detailed], failures}
 
+      {:ok, {:error, :not_found}}, {detailed, failures} ->
+        {detailed, failures}
+
       _error, {detailed, failures} ->
         {detailed, failures + 1}
     end)
@@ -963,6 +966,9 @@ defmodule Maraithon.Connectors.Gmail do
           |> Enum.reduce({[], 0}, fn
             {:ok, {:ok, message}}, {messages, failures} ->
               {[message | messages], failures}
+
+            {:ok, {:error, :not_found}}, {messages, failures} ->
+              {messages, failures}
 
             _failure, {messages, failures} ->
               {messages, failures + 1}
