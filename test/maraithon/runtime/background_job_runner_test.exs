@@ -214,6 +214,41 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     assert stored.payload == %{}
   end
 
+  test "discard errors fail immediately without exhausting the retry budget", %{
+    user_id: user_id
+  } do
+    assert {:ok, job} =
+             BackgroundJobs.enqueue("discard_probe", %{
+               user_id: user_id,
+               queue: "test",
+               max_attempts: 5
+             })
+
+    pid =
+      start_supervised!(
+        {BackgroundJobRunner,
+         [
+           name: :background_job_runner_discard_test,
+           handler: Maraithon.TestSupport.DiscardBackgroundJobTestHandler,
+           poll_interval_ms: 60_000,
+           batch_size: 1
+         ]}
+      )
+
+    job_id = job.id
+
+    assert {:ok, [{^job_id, {:error, {:discard, :permanent_background_failure}}}]} =
+             BackgroundJobRunner.drain_once(pid)
+
+    stored = Repo.get!(BackgroundJob, job.id)
+    assert stored.status == "failed"
+    assert stored.attempts == 1
+    assert stored.max_attempts == 5
+    assert stored.last_error == "permanent_background_failure"
+    assert stored.claimed_by == nil
+    assert stored.claim_token == nil
+  end
+
   test "two runners execute each bot's active Telegram head in update-id order" do
     register_claim_observer!()
 

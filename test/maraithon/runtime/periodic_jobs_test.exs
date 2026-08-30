@@ -248,6 +248,91 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
              PeriodicJobs.schedule("source_account_discovery")
   end
 
+  test "discovery finalizer discards a graph whose reason worker failed" do
+    user_id = "periodic-failed-discovery-#{System.unique_integer([:positive])}@example.com"
+    provider = "google:#{user_id}"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, provider, %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, reason_job} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery_reason", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key:
+          "runtime-partition:source-account-discovery-reason:failed:1-of-1:#{account.id}",
+        max_attempts: 1,
+        payload: %{"account_id" => account.id, "acquisition_job_id" => "failed"}
+      })
+
+    reason_job
+    |> Ecto.Changeset.change(
+      status: "failed",
+      attempts: 1,
+      failed_at: DateTime.utc_now()
+    )
+    |> Repo.update!()
+
+    finalizer = %BackgroundJob{
+      user_id: user_id,
+      queue: "runtime_model_user",
+      job_type: "runtime_partition:source_account_discovery_finalize",
+      payload: %{
+        "account_id" => account.id,
+        "acquisition_job_id" => "failed",
+        "reason_job_ids" => [reason_job.id]
+      }
+    }
+
+    assert {:error, {:discard, :source_discovery_child_failed}} =
+             PeriodicJobs.execute(finalizer)
+  end
+
+  test "closure finalizer discards a graph whose reason worker failed" do
+    user_id = "periodic-failed-closure-#{System.unique_integer([:positive])}@example.com"
+    provider = "google:#{user_id}"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, provider, %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, reason_job} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_closure_reason", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key: "runtime-partition:source-account-closure-reason:#{account.id}",
+        max_attempts: 1,
+        payload: %{"account_id" => account.id, "acquisition_job_id" => "failed"}
+      })
+
+    reason_job
+    |> Ecto.Changeset.change(
+      status: "failed",
+      attempts: 1,
+      failed_at: DateTime.utc_now()
+    )
+    |> Repo.update!()
+
+    finalizer = %BackgroundJob{
+      user_id: user_id,
+      queue: "runtime_model_user",
+      job_type: "runtime_partition:source_account_closure_finalize",
+      payload: %{
+        "account_id" => account.id,
+        "acquisition_job_id" => "failed",
+        "reason_job_ids" => [reason_job.id]
+      }
+    }
+
+    assert {:error, {:discard, :source_closure_child_failed}} =
+             PeriodicJobs.execute(finalizer)
+  end
+
   test "discovery coordinator rotates beyond a bounded account batch" do
     previous_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
 

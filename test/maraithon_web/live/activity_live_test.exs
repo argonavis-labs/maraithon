@@ -158,6 +158,20 @@ defmodule MaraithonWeb.ActivityLiveTest do
         job
       end
 
+    failed_finalizer =
+      Enum.find(source_jobs, fn job ->
+        job.job_type == "runtime_partition:source_account_discovery_finalize"
+      end)
+
+    failed_finalizer
+    |> Ecto.Changeset.change(
+      status: "failed",
+      attempts: 1,
+      failed_at: DateTime.utc_now(),
+      last_error: "source_discovery_child_failed"
+    )
+    |> Maraithon.Repo.update!()
+
     other_email = "other-source-activity@example.com"
     {:ok, _other_user} = Accounts.get_or_create_user_by_email(other_email)
 
@@ -188,6 +202,7 @@ defmodule MaraithonWeb.ActivityLiveTest do
     assert html =~ "Slack todo completion"
     assert html =~ "founder@example.com"
     assert html =~ "Maraithon HQ"
+    assert html =~ "source_discovery_child_failed"
     refute html =~ "private@example.com"
 
     Enum.each(source_jobs, fn job ->

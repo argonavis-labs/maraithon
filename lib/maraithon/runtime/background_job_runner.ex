@@ -20,6 +20,11 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
   runner atomically moves the exactly claimed row back to `pending` at a
   database-clock deadline instead of completing it and arming a process timer.
 
+  Handlers may return `{:error, {:discard, reason}}` when retrying cannot
+  change the outcome. The runner records one terminal failed attempt
+  immediately so a dead durable graph cannot block later work until its full
+  retry budget expires.
+
   Fair selection is opt-in for dedicated, homogeneous queues. The generic
   runner intentionally remains non-fair and carries strict Telegram ingress
   ordering; migration 140004 will supply its cross-queue tenant policy.
@@ -1103,6 +1108,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
   defp coordinated_outcome(_job, {:ok, _}), do: "completed"
 
+  defp coordinated_outcome(_job, {:error, {:discard, _reason}}), do: "failed"
+
   defp coordinated_outcome(job, {:error, {:retry_after, seconds, _}})
        when is_integer(seconds) and seconds >= 0 do
     if retry_after_count(job) + 1 > @max_retry_after_reschedules and
@@ -1149,6 +1156,9 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
 
         {:ok, data} ->
           mark_completed(job, data)
+
+        {:error, {:discard, reason}} ->
+          mark_failed(job, reason, job.attempts + 1)
 
         {:error, {:retry_after, seconds, reason}} when is_integer(seconds) and seconds >= 0 ->
           # Provider-signaled backoff (e.g. HTTP 429 + Retry-After): reschedule

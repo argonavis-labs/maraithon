@@ -875,6 +875,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         {:error,
          {:retry_after, @source_finalizer_retry_seconds, :source_discovery_children_pending}}
 
+      {:error, :source_discovery_child_failed} ->
+        {:error, {:discard, :source_discovery_child_failed}}
+
       {:error, _reason} = error ->
         normalize_work_result(error)
     end
@@ -912,6 +915,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       {:pending, _count} ->
         {:error,
          {:retry_after, @source_finalizer_retry_seconds, :source_closure_children_pending}}
+
+      {:error, :source_discovery_child_failed} ->
+        {:error, {:discard, :source_closure_child_failed}}
 
       {:error, _reason} = error ->
         normalize_work_result(error)

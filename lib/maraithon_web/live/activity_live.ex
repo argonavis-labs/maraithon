@@ -5,6 +5,8 @@ defmodule MaraithonWeb.ActivityLive do
 
   use MaraithonWeb, :live_view
 
+  @source_error_codes ~w(source_discovery_child_failed source_closure_child_failed)
+
   alias Maraithon.Agents
   alias Maraithon.RunErrorCopy
   alias Maraithon.Runtime.BackgroundJobs
@@ -392,6 +394,9 @@ defmodule MaraithonWeb.ActivityLive do
 
   defp source_error_code(last_error) when is_map(last_error),
     do: Maraithon.Redaction.error_class(last_error)
+
+  defp source_error_code(last_error) when last_error in @source_error_codes,
+    do: last_error
 
   defp source_error_code(_last_error), do: nil
 
