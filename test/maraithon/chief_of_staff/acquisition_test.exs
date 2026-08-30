@@ -5,6 +5,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle, SourceScope}
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Crm.Observation
   alias Maraithon.LogBuffer
   alias Maraithon.OAuth
@@ -299,8 +301,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert get_in(telemetry, ["sources", "slack", "message_count"]) == 4
   end
 
-  test "exact Slack acquisition skips unreadable channel history and retains durable event threads" do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+  test "exact Slack acquisition skips channel history and retains durable event threads" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(10, :second)
     user_id = "chief-slack-access-boundary@example.com"
     team_id = "T-ACCESS-BOUNDARY"
     bypass = Bypass.open()
@@ -357,7 +359,34 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
              })
              |> Repo.insert()
 
+    deferred_at = %{DateTime.add(now, 1, :second) | microsecond: {0, 6}}
+    deferred_ts = slack_test_ts(deferred_at)
+
+    assert {:ok, _observation} =
+             Observation.new(%{
+               user_id: user_id,
+               source: "slack",
+               source_account: team_id,
+               source_item_id: "#{team_id}:C-READABLE:#{deferred_ts}",
+               occurred_at: deferred_at,
+               direction: "inbound",
+               participants: [
+                 %{"role" => "from", "identifier" => %{"slack_id" => "U-SENDER"}}
+               ],
+               excerpt: "A concurrently arriving event for the next sealed delta",
+               metadata: %{
+                 "team_id" => team_id,
+                 "channel" => "C-READABLE",
+                 "ts" => deferred_ts
+               }
+             })
+             |> Ecto.Changeset.put_change(:inserted_at, deferred_at)
+             |> Ecto.Changeset.put_change(:updated_at, deferred_at)
+             |> Repo.insert()
+
     Bypass.stub(bypass, "GET", "/api/conversations.list", fn conn ->
+      send(test_pid, :slack_conversations_listed)
+
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
@@ -411,7 +440,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       )
     end)
 
-    {bundle, telemetry, _watermarks} =
+    {bundle, telemetry, proposed_watermarks} =
       Acquisition.build(
         user_id,
         ["followthrough"],
@@ -421,15 +450,21 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
 
     assert Acquisition.source_complete?(telemetry, "slack")
 
-    assert_received {:slack_history_channel, "C-READABLE"}
-    assert_received {:slack_history_channel, "D-READABLE"}
-    assert_received {:slack_history_channel, "G-READABLE"}
-    refute_received {:slack_history_channel, "C-OUTSIDE"}
+    assert_received :slack_conversations_listed
+    refute_received {:slack_history_channel, _channel_id}
     refute_received :unexpected_slack_thread_fetch
+
+    assert [%{kind: "slack_discovery_watermark", value: frontier}] = proposed_watermarks
+    assert frontier == now |> DateTime.to_unix() |> to_string()
 
     assert Enum.any?(
              SourceBundle.slack_messages(bundle),
              &(&1["text"] == "A fresh reply from an inaccessible historical thread")
+           )
+
+    refute Enum.any?(
+             SourceBundle.slack_messages(bundle),
+             &(&1["text"] == "A concurrently arriving event for the next sealed delta")
            )
 
     assert [workspace] = SourceBundle.slack_workspaces(bundle)
@@ -440,10 +475,39 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
              fetch["mode"] == "event_thread_replies" and fetch["status"] == "terminal" and
                fetch["reason"] == "access_boundary" and fetch["channel_id"] == "C-OUTSIDE"
            end)
+
+    assert Enum.any?(telemetry["fetches"], fn fetch ->
+             fetch["mode"] == "durable_event_delta" and fetch["status"] == "ok" and
+               fetch["history_request_count"] == 0
+           end)
+
+    account = ConnectedAccounts.get(user_id, "slack:#{team_id}")
+
+    assert {:ok, _cursor} =
+             SourceCursors.put(account, "slack_discovery_watermark", %{value: frontier})
+
+    next_now = DateTime.add(now, 2, :second)
+
+    {next_bundle, next_telemetry, next_watermarks} =
+      Acquisition.build(
+        user_id,
+        ["followthrough"],
+        slack_exact_skill_configs(team_id),
+        slack_exact_build_context(user_id, team_id, next_now)
+      )
+
+    assert Acquisition.source_complete?(next_telemetry, "slack")
+
+    assert Enum.map(SourceBundle.slack_messages(next_bundle), & &1["text"]) == [
+             "A concurrently arriving event for the next sealed delta"
+           ]
+
+    assert [%{kind: "slack_discovery_watermark", value: next_frontier}] = next_watermarks
+    assert next_frontier == next_now |> DateTime.to_unix() |> to_string()
   end
 
-  test "exact Slack acquisition remains fail-closed and logs structured scope failures" do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+  test "exact Slack acquisition remains fail-closed when fresh event thread hydration fails" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(10, :second)
     user_id = "chief-slack-scope-failure@example.com"
     team_id = "T-SCOPE-FAILURE"
     bypass = Bypass.open()
@@ -458,6 +522,30 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
                scopes: ["channels:read", "channels:history"],
                metadata: %{"team_id" => team_id}
              })
+
+    event_ts = slack_test_ts(DateTime.add(now, -10, :second))
+    thread_ts = slack_test_ts(DateTime.add(now, -120, :second))
+
+    assert {:ok, _observation} =
+             Observation.new(%{
+               user_id: user_id,
+               source: "slack",
+               source_account: team_id,
+               source_item_id: "#{team_id}:C-READABLE:#{event_ts}",
+               occurred_at: DateTime.add(now, -10, :second),
+               direction: "inbound",
+               participants: [
+                 %{"role" => "from", "identifier" => %{"slack_id" => "U-SENDER"}}
+               ],
+               excerpt: "A fresh reply whose thread must be hydrated",
+               metadata: %{
+                 "team_id" => team_id,
+                 "channel" => "C-READABLE",
+                 "ts" => event_ts,
+                 "thread_ts" => thread_ts
+               }
+             })
+             |> Repo.insert()
 
     assert {:ok, _token} =
              OAuth.store_tokens(user_id, "slack:#{team_id}:user:U-SELF", %{
@@ -478,6 +566,14 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     end)
 
     Bypass.stub(bypass, "GET", "/api/conversations.history", fn conn ->
+      send(self(), :unexpected_slack_history_fetch)
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(500, Jason.encode!(%{"ok" => false, "error" => "unexpected"}))
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.replies", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => false, "error" => "missing_scope"}))
@@ -519,7 +615,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       end)
 
     assert entry.metadata["failure_codes"] =~
-             "conversation_history_failed:slack_missing_scope"
+             "event_thread_replies_failed:slack_missing_scope"
   end
 
   test "limits Slack history scans after priority sorting" do
@@ -2129,6 +2225,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       },
       exhaustive_account_delta: true,
       account_delta_source: "slack",
+      source_watermark_role: "discovery",
       defer_watermark_advance: true
     }
   end

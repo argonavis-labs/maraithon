@@ -526,7 +526,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               watermark_kind
             )
 
-          case fetch_slack_workspace(user_id, source_scope, team_id, plan, team_oldest) do
+          case fetch_slack_workspace(
+                 user_id,
+                 source_scope,
+                 team_id,
+                 plan,
+                 team_oldest,
+                 now_watermark
+               ) do
             {:ok, workspace, workspace_fetches} ->
               # R4: mirrors the gmail/calendar branches - confirms recovery
               # for a Slack workspace previously flagged stale/reauth.
@@ -976,7 +983,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
-  defp fetch_slack_workspace(user_id, source_scope, team_id, plan, oldest) do
+  defp fetch_slack_workspace(user_id, source_scope, team_id, plan, oldest, newest) do
     with {:ok, token} <-
            SlackHelpers.resolve_access_token(user_id, team_id, token_preference: "auto"),
          {:ok, conversations} <-
@@ -994,100 +1001,129 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         readable_conversations
         |> maybe_take_slack_conversations(plan)
 
-      {direct_mentions, mention_fetches} =
-        fetch_slack_mentions(user_id, team_id, workspace, plan, oldest)
+      {mentions, mention_fetches, broadcast_fetches, self_authored_messages,
+       self_authored_fetches} =
+        if slack_durable_event_delta?(plan) do
+          {[], [], [], [], []}
+        else
+          {direct_mentions, mention_fetches} =
+            fetch_slack_mentions(user_id, team_id, workspace, plan, oldest)
 
-      {broadcast_mentions, broadcast_fetches} =
-        fetch_slack_broadcast_mentions(user_id, team_id, workspace, plan, oldest)
+          {broadcast_mentions, broadcast_fetches} =
+            fetch_slack_broadcast_mentions(user_id, team_id, workspace, plan, oldest)
 
-      mentions = dedupe_slack_messages(direct_mentions ++ broadcast_mentions)
+          {self_authored_messages, self_authored_fetches} =
+            fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest)
 
-      {self_authored_messages, self_authored_fetches} =
-        fetch_slack_self_authored_messages(user_id, team_id, workspace, plan, oldest)
+          {dedupe_slack_messages(direct_mentions ++ broadcast_mentions), mention_fetches,
+           broadcast_fetches, self_authored_messages, self_authored_fetches}
+        end
 
       {channels, fetches, _user_directory, coverage_errors} =
-        Enum.reduce(conversations, {[], [], %{}, []}, fn channel,
-                                                         {channel_acc, fetch_acc, directory_acc,
-                                                          error_acc} ->
-          channel_id = channel["id"]
+        if slack_durable_event_delta?(plan) do
+          channels =
+            conversations
+            |> Enum.map(fn channel ->
+              channel
+              |> serialize_slack_channel()
+              |> Map.put("messages", [])
+            end)
+            |> Enum.reverse()
 
-          case call_with_timeout(
-                 fn ->
-                   fetch_slack_conversation_history(
-                     token.access_token,
-                     channel_id,
-                     oldest,
-                     plan
-                   )
-                 end,
-                 slack_channel_fetch_timeout_ms(plan)
-               ) do
-            {:ok, history} ->
-              raw_messages =
-                history
-                |> Map.get("messages", [])
-                |> normalize_list()
+          fetch = %{
+            "source" => "slack",
+            "team_id" => team_id,
+            "mode" => "durable_event_delta",
+            "status" => "ok",
+            "conversation_count" => length(conversations),
+            "history_request_count" => 0
+          }
 
-              {raw_messages, thread_fetches, thread_errors} =
-                expand_slack_threads(token.access_token, channel_id, raw_messages, plan)
+          {channels, [fetch], %{}, []}
+        else
+          Enum.reduce(conversations, {[], [], %{}, []}, fn channel,
+                                                           {channel_acc, fetch_acc, directory_acc,
+                                                            error_acc} ->
+            channel_id = channel["id"]
 
-              user_directory =
-                slack_user_directory(token.access_token, raw_messages, channel, directory_acc)
+            case call_with_timeout(
+                   fn ->
+                     fetch_slack_conversation_history(
+                       token.access_token,
+                       channel_id,
+                       oldest,
+                       plan
+                     )
+                   end,
+                   slack_channel_fetch_timeout_ms(plan)
+                 ) do
+              {:ok, history} ->
+                raw_messages =
+                  history
+                  |> Map.get("messages", [])
+                  |> normalize_list()
 
-              messages =
-                raw_messages
-                |> Enum.map(
-                  &serialize_slack_message(&1, channel, team_id, workspace, user_directory)
-                )
+                {raw_messages, thread_fetches, thread_errors} =
+                  expand_slack_threads(token.access_token, channel_id, raw_messages, plan)
 
-              channel_payload =
-                channel
-                |> serialize_slack_channel()
-                |> put_slack_channel_user_fields(channel, user_directory)
-                |> Map.put("messages", messages)
+                user_directory =
+                  slack_user_directory(token.access_token, raw_messages, channel, directory_acc)
 
-              {
-                [channel_payload | channel_acc],
-                [
-                  %{
-                    "source" => "slack",
-                    "team_id" => team_id,
-                    "channel_id" => channel_id,
-                    "conversation_kind" => slack_conversation_kind(channel),
-                    "mode" => "connector",
-                    "status" => "ok",
-                    "count" => length(messages),
-                    "thread_fetch_count" => count_ok_slack_thread_fetches(thread_fetches),
-                    "thread_reply_count" => count_slack_thread_replies(thread_fetches)
-                  }
-                  | thread_fetches ++ fetch_acc
-                ],
-                user_directory,
-                thread_errors ++ error_acc
-              }
+                messages =
+                  raw_messages
+                  |> Enum.map(
+                    &serialize_slack_message(&1, channel, team_id, workspace, user_directory)
+                  )
 
-            {:error, reason} ->
-              {
-                channel_acc,
-                [
-                  %{
-                    "source" => "slack",
-                    "team_id" => team_id,
-                    "channel_id" => channel_id,
-                    "conversation_kind" => slack_conversation_kind(channel),
-                    "mode" => "connector",
-                    "status" => "error",
-                    "reason" => Redaction.error_class(reason)
-                  }
-                  | fetch_acc
-                ],
-                directory_acc,
-                [{:conversation_history_failed, channel_id, reason} | error_acc]
-              }
-          end
-        end)
+                channel_payload =
+                  channel
+                  |> serialize_slack_channel()
+                  |> put_slack_channel_user_fields(channel, user_directory)
+                  |> Map.put("messages", messages)
 
-      event_messages = slack_event_messages(user_id, team_id, workspace, oldest, plan)
+                {
+                  [channel_payload | channel_acc],
+                  [
+                    %{
+                      "source" => "slack",
+                      "team_id" => team_id,
+                      "channel_id" => channel_id,
+                      "conversation_kind" => slack_conversation_kind(channel),
+                      "mode" => "connector",
+                      "status" => "ok",
+                      "count" => length(messages),
+                      "thread_fetch_count" => count_ok_slack_thread_fetches(thread_fetches),
+                      "thread_reply_count" => count_slack_thread_replies(thread_fetches)
+                    }
+                    | thread_fetches ++ fetch_acc
+                  ],
+                  user_directory,
+                  thread_errors ++ error_acc
+                }
+
+              {:error, reason} ->
+                {
+                  channel_acc,
+                  [
+                    %{
+                      "source" => "slack",
+                      "team_id" => team_id,
+                      "channel_id" => channel_id,
+                      "conversation_kind" => slack_conversation_kind(channel),
+                      "mode" => "connector",
+                      "status" => "error",
+                      "reason" => Redaction.error_class(reason)
+                    }
+                    | fetch_acc
+                  ],
+                  directory_acc,
+                  [{:conversation_history_failed, channel_id, reason} | error_acc]
+                }
+            end
+          end)
+        end
+
+      event_messages = slack_event_messages(user_id, team_id, workspace, oldest, newest, plan)
 
       {event_messages, event_thread_fetches, event_thread_errors} =
         hydrate_slack_event_threads(
@@ -1146,10 +1182,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   # A fresh reply to an old thread is absent from `conversations.history`:
   # Slack keeps the root in its original chronological position. The signed
-  # Events API ingress is therefore the anti-entropy source for those replies.
-  # Merge every durable event after this account's watermark with the fully
-  # paginated Web API snapshot before the source bundle is handed to reasoning.
-  defp slack_event_messages(user_id, team_id, workspace, oldest, plan) do
+  # Events API ingress is therefore authoritative for exact account deltas;
+  # provider-backed non-exhaustive snapshots merge the same durable events.
+  defp slack_event_messages(user_id, team_id, workspace, oldest, newest, plan) do
     source_accounts =
       [team_id, Map.get(workspace, "external_account_id")]
       |> Enum.filter(&(is_binary(&1) and &1 != ""))
@@ -1163,6 +1198,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           observation.source_account in ^source_accounts
       )
       |> maybe_after_slack_observation(oldest)
+      |> maybe_before_slack_observation(newest)
       |> order_by([observation], asc: observation.occurred_at, asc: observation.id)
 
     query =
@@ -1276,6 +1312,19 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp maybe_after_slack_observation(query, _oldest), do: query
+
+  defp maybe_before_slack_observation(query, newest) when is_binary(newest) do
+    case Float.parse(newest) do
+      {seconds, _rest} when seconds >= 0 ->
+        inserted_before = DateTime.from_unix!(round(seconds * 1_000_000), :microsecond)
+        where(query, [observation], observation.inserted_at <= ^inserted_before)
+
+      _other ->
+        query
+    end
+  end
+
+  defp maybe_before_slack_observation(query, _newest), do: query
 
   defp slack_observation_message(%Observation{} = observation, team_id, workspace) do
     metadata = observation.metadata || %{}
@@ -4391,6 +4440,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp maybe_take_slack_conversations(conversations, plan),
     do: Enum.take(conversations, max(plan.slack_channel_limit, 0))
+
+  defp slack_durable_event_delta?(%{
+         exhaustive_account_delta?: true,
+         deep_lookback?: false
+       }),
+       do: true
+
+  defp slack_durable_event_delta?(_plan), do: false
 
   defp fetch_slack_conversation_history(
          access_token,
