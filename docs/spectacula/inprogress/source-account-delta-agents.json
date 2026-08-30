@@ -7,9 +7,9 @@
   "created_at": "2026-08-30T03:04:00Z",
   "approved_at": "2026-08-30T03:04:00Z",
   "started_at": "2026-08-30T03:04:00Z",
-  "updated_at": "2026-08-30T04:18:32Z",
-  "summary": "Implementation is active. Exact Gmail/Slack account assignments use sealed provider-to-model delta handoffs, wake immediately from source ingress, and cost zero model calls on empty deltas. Discovery inherits an enabled Chief's configuration when present and safely uses default Follow-through intelligence when no Chief row exists.",
-  "next_action": "Deploy the bootstrap-independent discovery workers, prove account jobs and cursors advance in production, then cut ordinary Chief acquisition over to persisted results.",
+  "updated_at": "2026-08-30T04:37:51Z",
+  "summary": "Implementation is active. Exact Gmail/Slack account assignments use sealed provider-to-model delta handoffs, wake immediately from source ingress, and cost zero model calls on empty deltas. Production proves all three token-backed accounts are independently advancing. Ordinary Chief cycles now coordinate persisted results without repeating Gmail/Slack acquisition, while bounded deep reconciliation remains available.",
+  "next_action": "Deploy the persisted-results Chief cutover, then confirm account cursors, assignments, and exact runtime health remain clean in production.",
   "blockers": [],
   "review_policy": {
     "final_vetting": "off"
@@ -28,13 +28,13 @@
     "tests": "passed",
     "spec_review": "pending",
     "final_vetting": "skipped",
-    "notes": "Plain spectacula invocation sets final_vetting off. Development and test compilation with warnings-as-errors pass; source-account discovery, closure, completion, and periodic tests pass, including the sealed no-Chief discovery handoff. Gmail advisor passes 22/22, Gmail ingress handler passes 4/4, and exact Gmail/Slack ingress wake tests pass. Production exact-runtime diagnosis is clean at 64 ready partitions with no draining, blocked, unassigned, or unsettled task assignments. Two stale connector expectations encountered during verification were deliberately updated to assert the production query contract and redacted rate-limit error. Broad suites remain intentionally skipped under repository policy."
+    "notes": "Plain spectacula invocation sets final_vetting off. Development and test compilation with warnings-as-errors pass; source-account discovery, closure, completion, and periodic tests pass, including the sealed no-Chief discovery handoff. Gmail advisor passes 22/22, Gmail ingress handler passes 4/4, exact Gmail/Slack ingress wake tests pass, and the touched AI Chief suite passes 26/26 with persisted-results and explicit deep-reconciliation coverage. Production exact-runtime diagnosis is clean at 64 ready partitions with no draining, blocked, unassigned, or unsettled task assignments. Production account telemetry shows two fresh Gmail discovery cursors, one fresh Slack discovery cursor, seven retry-free provider acquisitions, five completed model handoffs, and one normally running handoff at snapshot time. Broad suites remain intentionally skipped under repository policy."
   },
   "resume_context": {
-    "last_completed_step": "Removed the account discovery scheduler's dependency on a preinstalled Chief row while preserving enabled Chief configuration and explicit pause semantics.",
+    "last_completed_step": "Cut ordinary Chief cycles over to persisted account-worker results while retaining the four-hour and explicit deep-reconciliation paths.",
     "pending_steps": [
-      "Deploy and prove account jobs and cursors advance across the three production token-backed accounts.",
-      "Cut ordinary Chief cycles over to persisted account-worker results after production parity."
+      "Deploy the persisted-results Chief cutover.",
+      "Confirm account jobs, cursors, and exact runtime health remain clean after deployment."
     ],
     "open_questions": [],
     "last_reviewed_sections": [
@@ -52,6 +52,7 @@
       "lib/maraithon/behaviors/inbox_calendar_advisor.ex",
       "lib/maraithon/connectors/slack.ex",
       "lib/maraithon/runtime/background_job_handler.ex",
+      "lib/maraithon/behaviors/ai_chief_of_staff.ex",
       "lib/maraithon/runtime/periodic_jobs.ex",
       "lib/maraithon/runtime/source_account_closure.ex",
       "lib/maraithon/runtime/source_account_discovery.ex",
@@ -129,6 +130,13 @@
       "from_stage": "inprogress",
       "to_stage": "inprogress",
       "note": "Production audit found three token-backed source accounts but no Chief rows, preventing discovery fan-out. Discovery now uses safe default Follow-through intelligence when no Chief exists, still inherits enabled Chief configuration, and respects explicitly unavailable Chief installations. Focused scheduler, sealed-handoff, Gmail ingress, and Slack ingress tests pass."
+    },
+    {
+      "at": "2026-08-30T04:37:51Z",
+      "event": "checkpoint",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Production proves all three token-backed accounts independently advance through fresh Gmail/Slack discovery cursors and retry-free provider/model handoffs. Ordinary Chief cycles now consume persisted results without repeating Gmail/Slack acquisition; bounded scheduled and explicit deep reconciliation remain available."
     }
   ]
 }

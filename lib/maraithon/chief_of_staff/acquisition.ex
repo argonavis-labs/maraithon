@@ -2450,6 +2450,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     news_config = news_config(skill_ids, skill_configs)
     weather_config = weather_config(skill_ids, skill_configs)
     morning_brief? = morning_brief_trigger?(user_id, skill_ids, skill_configs, context)
+    account_message_sources? = not truthy?(Map.get(context, :skip_account_message_sources))
 
     # R2 (SPEC 04): scheduled scans cap the no-cursor fallback window to 48h
     # regardless of what any individual skill's own `lookback_hours` config
@@ -2476,12 +2477,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
     %{
       gmail:
-        service_required?(requirements, "google", "gmail") and
+        account_message_sources? and
+          service_required?(requirements, "google", "gmail") and
           event_allows_source?(event_source, "gmail"),
       calendar:
         service_required?(requirements, "google", "calendar") and
           event_allows_source?(event_source, "google_calendar"),
-      slack: true,
+      slack: account_message_sources?,
+      account_message_sources: account_message_sources?,
       news: morning_brief? and news_enabled?(news_config),
       news_config: news_config,
       weather: morning_brief? and weather_enabled?(weather_config),

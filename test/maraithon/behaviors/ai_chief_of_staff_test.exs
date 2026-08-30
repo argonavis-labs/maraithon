@@ -610,6 +610,125 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
     assert is_map(payload["assistant_fetch_telemetry"])
   end
 
+  test "ordinary cycles brief from persisted results without rerunning account follow-through", %{
+    context: context
+  } do
+    Skills.put_process_override(
+      skill_modules: %{
+        "followthrough" => ChiefOfStaffTestSkill,
+        "briefing" => ChiefOfStaffTestSkill
+      },
+      default_enabled_ids: ["followthrough", "briefing"]
+    )
+
+    state =
+      AIChiefOfStaff.init(%{
+        "user_id" => context.user_id,
+        "skill_configs" => %{
+          "followthrough" => %{
+            "wakeup_mode" => "emit",
+            "wakeup_emit_type" => "insights_recorded",
+            "wakeup_payload" => %{
+              "count" => 1,
+              "user_id" => context.user_id,
+              "categories" => ["duplicate_account_scan"]
+            }
+          },
+          "briefing" => %{
+            "wakeup_mode" => "emit",
+            "wakeup_emit_type" => "briefs_recorded",
+            "wakeup_payload" => %{
+              "count" => 1,
+              "user_id" => context.user_id,
+              "cadences" => ["persisted_results"]
+            },
+            "include_context_keys" => ["assistant_fetch_telemetry"]
+          }
+        }
+      })
+
+    state = %{state | last_deep_scan_at: DateTime.add(context.timestamp, -1, :hour)}
+
+    assert {:effect, {:llm_call, _params}, waiting_state} =
+             AIChiefOfStaff.handle_wakeup(state, context)
+
+    assert get_in(waiting_state.assistant_fetch_telemetry, [
+             "plan",
+             :account_message_sources
+           ]) == false
+
+    refute "gmail" in Map.keys(waiting_state.assistant_fetch_telemetry["sources"])
+    refute "slack" in Map.keys(waiting_state.assistant_fetch_telemetry["sources"])
+
+    assert {:emit, {:briefs_recorded, payload}, next_state} =
+             AIChiefOfStaff.handle_effect_result(
+               {:llm_call, %{"content" => "Persisted results briefed."}},
+               waiting_state,
+               context
+             )
+
+    assert payload["cadences"] == ["persisted_results"]
+    assert next_state.last_deep_scan_at == state.last_deep_scan_at
+  end
+
+  test "an explicit deep reconciliation still runs account follow-through", %{context: context} do
+    Skills.put_process_override(
+      skill_modules: %{
+        "followthrough" => ChiefOfStaffTestSkill,
+        "briefing" => ChiefOfStaffTestSkill
+      },
+      default_enabled_ids: ["followthrough", "briefing"]
+    )
+
+    state =
+      AIChiefOfStaff.init(%{
+        "user_id" => context.user_id,
+        "skill_configs" => %{
+          "followthrough" => %{
+            "wakeup_mode" => "emit",
+            "wakeup_emit_type" => "insights_recorded",
+            "wakeup_payload" => %{
+              "count" => 1,
+              "user_id" => context.user_id,
+              "categories" => ["deep_reconciliation"]
+            },
+            "include_context_keys" => ["assistant_fetch_telemetry"]
+          },
+          "briefing" => %{
+            "wakeup_mode" => "emit",
+            "wakeup_emit_type" => "briefs_recorded",
+            "wakeup_payload" => %{
+              "count" => 1,
+              "user_id" => context.user_id,
+              "cadences" => ["persisted_results"]
+            },
+            "include_context_keys" => ["assistant_fetch_telemetry"]
+          }
+        }
+      })
+
+    state = %{state | last_deep_scan_at: DateTime.add(context.timestamp, -1, :hour)}
+    reconciliation_context = Map.put(context, :acquisition_deep_lookback, true)
+
+    assert {:effect, {:llm_call, _params}, waiting_state} =
+             AIChiefOfStaff.handle_wakeup(state, reconciliation_context)
+
+    assert get_in(waiting_state.assistant_fetch_telemetry, [
+             "plan",
+             :account_message_sources
+           ]) == true
+
+    assert {:emit, {:insights_recorded, payload}, next_state} =
+             AIChiefOfStaff.handle_effect_result(
+               {:llm_call, %{"content" => "Deep reconciliation complete."}},
+               waiting_state,
+               reconciliation_context
+             )
+
+    assert payload["categories"] == ["deep_reconciliation"]
+    assert next_state.last_deep_scan_at == context.timestamp
+  end
+
   describe "cross-cycle memo (SPEC 04 R3)" do
     test "persists a model-written memo in behavior_state and injects it into the next cycle's skill context",
          %{context: context} do

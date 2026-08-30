@@ -20,11 +20,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   # cadence *faster*, never forced back up to the old hourly loop.
   @default_wakeup_interval_ms :timer.minutes(10)
   @min_wakeup_interval_ms :timer.minutes(5)
-  # Periodic deep re-scan cadence: incremental (cursor-delta) acquisition runs
-  # every wakeup, but a full deep-lookback pass — the one that re-reads the
-  # multi-day window rather than just the delta — recurs on this interval in
-  # addition to the daily briefing/commitment-review cycles. A good chief of
-  # staff re-checks the whole desk a few times a day, not once at dawn.
+  # Gmail and Slack deltas are owned by the per-account source workers. The
+  # Chief normally coordinates their persisted todos and only re-reads those
+  # providers on this bounded deep-reconciliation cadence. This keeps the
+  # ten-minute attention loop cheap without removing the parity safety pass.
   @default_deep_scan_interval_hours 4
 
   @impl true
@@ -817,13 +816,18 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   # `finalize_cycle/1` (R4) and gets a capped no-cursor fallback lookback
   # (see Acquisition's `deep_lookback?`/`defer_watermark_advance`).
   defp ensure_cycle(%{cycle_skill_ids: nil} = state, context) do
-    cycle_skill_ids = selected_skill_ids(state, context)
     now = context[:timestamp] || DateTime.utc_now()
+    reconcile_account_sources? = account_source_reconciliation?(state, context, now)
+
+    cycle_context =
+      Map.put(context, :skip_account_message_sources, not reconcile_account_sources?)
+
+    cycle_skill_ids = selected_skill_ids(state, cycle_context)
 
     acquisition_context =
-      context
+      cycle_context
       |> Map.put(:defer_watermark_advance, true)
-      |> maybe_request_deep_scan(state, now)
+      |> maybe_request_deep_scan(reconcile_account_sources?)
 
     {source_bundle, assistant_fetch_telemetry, proposed_watermarks} =
       acquisition_module().build(
@@ -847,32 +851,35 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   defp ensure_cycle(state, _context), do: state
 
-  # Recurring deep pass: request a full deep-lookback acquisition when the
-  # last one is older than the configured interval. Acquisition also runs
-  # deep on its own for the briefing/commitment-review cycles; whichever
-  # trigger fired, note_deep_scan/3 records it from the returned plan so the
-  # periodic timer resets on every deep pass, not just the requested ones.
-  defp maybe_request_deep_scan(acquisition_context, state, now) do
+  # Recurring deep pass: scheduled cycles reacquire Gmail/Slack only when the
+  # safety interval is due. Explicit callers can request the same path with
+  # `:acquisition_deep_lookback`; reactive source ingress stays worker-owned.
+  defp account_source_reconciliation?(state, context, now) do
+    Map.get(context, :acquisition_deep_lookback) == true or
+      (scheduled_trigger?(context) and deep_scan_due?(state, now))
+  end
+
+  defp deep_scan_due?(state, now) do
     interval_ms =
       Map.get(state, :deep_scan_interval_ms) || :timer.hours(@default_deep_scan_interval_hours)
 
-    due? =
-      case Map.get(state, :last_deep_scan_at) do
-        %DateTime{} = last -> DateTime.diff(now, last, :millisecond) >= interval_ms
-        _never -> true
-      end
-
-    if due? do
-      Map.put(acquisition_context, :acquisition_deep_lookback, true)
-    else
-      acquisition_context
+    case Map.get(state, :last_deep_scan_at) do
+      %DateTime{} = last -> DateTime.diff(now, last, :millisecond) >= interval_ms
+      _never -> true
     end
   end
+
+  defp maybe_request_deep_scan(acquisition_context, true) do
+    Map.put(acquisition_context, :acquisition_deep_lookback, true)
+  end
+
+  defp maybe_request_deep_scan(acquisition_context, false), do: acquisition_context
 
   defp note_deep_scan(state, telemetry, now) do
     plan = (is_map(telemetry) && Map.get(telemetry, "plan")) || %{}
 
-    if Map.get(plan, :deep_lookback?) == true do
+    if Map.get(plan, :deep_lookback?) == true and
+         Map.get(plan, :account_message_sources) == true do
       now
     else
       Map.get(state, :last_deep_scan_at)
@@ -885,7 +892,14 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     |> Enum.filter(fn skill_id ->
       Skills.interested_in?(skill_id, state.skill_configs, context)
     end)
+    |> maybe_drop_worker_owned_skills(context)
   end
+
+  defp maybe_drop_worker_owned_skills(skill_ids, %{skip_account_message_sources: true}) do
+    Enum.reject(skill_ids, &(&1 == "followthrough"))
+  end
+
+  defp maybe_drop_worker_owned_skills(skill_ids, _context), do: skill_ids
 
   # Snapshots restored from older releases can reference skill ids the current
   # registry no longer knows; Skills.get!/1 (and Skills.interested_in?/3, which
