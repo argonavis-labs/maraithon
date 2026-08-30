@@ -14,6 +14,21 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
   alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Todos
 
+  test "closure fan-out workers use distinct opaque partitions" do
+    keys =
+      Enum.map(1..3, fn fanout_index ->
+        PeriodicJobs.source_closure_reason_partition_key(
+          "worker@example.com",
+          "acquisition-id",
+          fanout_index
+        )
+      end)
+
+    assert length(Enum.uniq(keys)) == 3
+    assert Enum.all?(keys, &String.starts_with?(&1, "source-closure-reason:"))
+    refute Enum.any?(keys, &String.contains?(&1, "worker@example.com"))
+  end
+
   test "provider coordinator creates a stable account-partitioned refresh row" do
     user_id = "periodic-provider-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

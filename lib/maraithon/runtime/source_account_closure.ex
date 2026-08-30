@@ -76,47 +76,83 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
         source_items = length(source_refs)
         source_refs_digest = SourceAccountDiscovery.refs_digest(source_refs)
 
-        handoffs =
-          todo_batches
-          |> Enum.with_index(1)
-          |> Enum.map(fn {todo_batch, fanout_index} ->
-            %{
-              "account_id" => account.id,
-              "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
-              "fanout_index" => fanout_index,
-              "fanout_count" => fanout_count,
-              "source_items" => source_items,
-              "source_item_refs" => source_refs,
-              "source_refs_digest" => source_refs_digest,
-              "source_bundle" => compact,
-              "todo_ids" => todo_batch,
-              "todo_count" => length(todo_batch),
-              "watermarks" => []
-            }
-          end)
-
-        {:ok,
-         %{
-           outcome: "fanout_ready",
-           account_id: account.id,
-           source_items: source_items,
-           todo_count: length(todo_ids),
-           fanout_count: fanout_count,
-           handoffs: handoffs,
-           finalizer: %{
-             "account_id" => account.id,
-             "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
-             "expected_fanouts" => fanout_count,
-             "expected_source_items" => source_items,
-             "expected_source_refs_digest" => source_refs_digest,
-             "expected_todo_count" => length(todo_ids),
-             "expected_todo_refs_digest" => SourceAccountDiscovery.refs_digest(todo_ids),
-             "watermarks" => watermarks
-           }
-         }}
+        with {:ok, handoffs} <-
+               build_bounded_handoffs(
+                 todo_batches,
+                 account,
+                 compact,
+                 source_refs,
+                 source_refs_digest,
+                 fanout_count,
+                 opts
+               ) do
+          {:ok,
+           %{
+             outcome: "fanout_ready",
+             account_id: account.id,
+             source_items: source_items,
+             todo_count: length(todo_ids),
+             fanout_count: fanout_count,
+             handoffs: handoffs,
+             finalizer: %{
+               "account_id" => account.id,
+               "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
+               "expected_fanouts" => fanout_count,
+               "expected_source_items" => source_items,
+               "expected_source_refs_digest" => source_refs_digest,
+               "expected_todo_count" => length(todo_ids),
+               "expected_todo_refs_digest" => SourceAccountDiscovery.refs_digest(todo_ids),
+               "watermarks" => watermarks
+             }
+           }}
+        end
 
       nil ->
         {:error, :source_closure_delta_too_large}
+    end
+  end
+
+  defp build_bounded_handoffs(
+         todo_batches,
+         account,
+         compact,
+         source_refs,
+         source_refs_digest,
+         fanout_count,
+         opts
+       ) do
+    source_items = length(source_refs)
+
+    todo_batches
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, [], compact}, fn
+      {todo_batch, fanout_index}, {:ok, handoffs, prepared_bundle} ->
+        handoff = %{
+          "account_id" => account.id,
+          "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
+          "fanout_index" => fanout_index,
+          "fanout_count" => fanout_count,
+          "source_items" => source_items,
+          "source_item_refs" => source_refs,
+          "source_refs_digest" => source_refs_digest,
+          "source_bundle" => prepared_bundle,
+          "todo_ids" => todo_batch,
+          "todo_count" => length(todo_batch),
+          "watermarks" => []
+        }
+
+        case SourceAccountDiscovery.bound_handoff(handoff) do
+          {:ok, bounded_handoff} ->
+            {:cont,
+             {:ok, [bounded_handoff | handoffs], Map.fetch!(bounded_handoff, "source_bundle")}}
+
+          {:error, _reason} ->
+            {:halt, {:error, :source_closure_handoff_payload_too_large}}
+        end
+    end)
+    |> case do
+      {:ok, handoffs, _prepared_bundle} -> {:ok, Enum.reverse(handoffs)}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -126,6 +162,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
       when is_map(payload) and is_list(opts) do
     with true <- read_integer(payload, "account_id") == account.id,
          {:ok, bundle} <- fetch_map(payload, "source_bundle"),
+         {:ok, bundle} <- SourceAccountDiscovery.restore_partition_bundle(bundle),
          fanout_index when is_integer(fanout_index) and fanout_index > 0 <-
            read_integer(payload, "fanout_index"),
          fanout_count when is_integer(fanout_count) and fanout_count >= fanout_index <-

@@ -5,7 +5,10 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.SourceCursors
+  alias Maraithon.DurablePayload
+  alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.SourceAccountClosure
+  alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Todos
 
   test "empty closure delta advances without a model handoff" do
@@ -221,6 +224,82 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
     old_source_partition_work = ceil(12 / 5) * ceil(21 / 10)
     assert length(handoffs) == 3
     assert length(handoffs) < old_source_partition_work
+  end
+
+  test "losslessly seals a completion delta larger than the durable job payload" do
+    account = closure_account("aggregate-oversized")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(account.user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Review oversized exact evidence",
+          "summary" => "This remains open until the later evidence is evaluated.",
+          "next_action" => "Review the complete thread.",
+          "source_account_id" => account.id,
+          "source_item_id" => "aggregate-oversized-thread",
+          "dedupe_key" => "source-account-closure:aggregate-oversized"
+        }
+      ])
+
+    aggregate_fields =
+      Map.new(1..8, fn index ->
+        {"provider_field_#{index}", String.duplicate("exact completion field #{index} ", 3_000)}
+      end)
+
+    body = String.duplicate("oversized exact completion evidence ", 6_000)
+
+    message =
+      aggregate_fields
+      |> Map.merge(%{
+        "id" => "aggregate-oversized-message",
+        "thread_id" => "aggregate-oversized-thread",
+        "subject" => "Oversized completion evidence",
+        "body" => body,
+        "from" => "sender@example.com",
+        "to" => [account.user_id],
+        "label_ids" => ["INBOX"],
+        "internal_date" => DateTime.to_unix(now, :millisecond)
+      })
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => [message],
+        "inbox_messages" => [message],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    compact = SourceAccountDiscovery.compact_bundle(bundle)
+    assert byte_size(Jason.encode!(compact)) > BackgroundJob.max_payload_bytes()
+
+    assert {:ok, %{handoffs: [handoff]}} =
+             SourceAccountClosure.acquire(account,
+               source_bundle: bundle,
+               proposed_watermarks: [closure_watermark(account, "1700000500")],
+               acquisition_job_id: "aggregate-oversized-closure"
+             )
+
+    assert %{"__maraithon_bounded_source_bundle_v1__" => _sealed} =
+             handoff["source_bundle"]
+
+    assert {:ok, _canonical} =
+             DurablePayload.prepare_map(
+               handoff,
+               BackgroundJob.max_payload_bytes(),
+               BackgroundJob.payload_bounds()
+             )
+
+    assert {:ok, restored} =
+             SourceAccountDiscovery.restore_partition_bundle(handoff["source_bundle"])
+
+    assert [restored_message] = SourceBundle.gmail_messages(restored)
+    assert restored_message == message
   end
 
   defp closure_account(suffix) do

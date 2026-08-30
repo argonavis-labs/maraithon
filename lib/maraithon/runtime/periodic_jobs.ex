@@ -1164,7 +1164,12 @@ defmodule Maraithon.Runtime.PeriodicJobs do
             Map.get(handoff, "fanout_count"),
             account.id
           ),
-        partition_key: provider_partition(account.user_id, account.provider),
+        partition_key:
+          source_closure_reason_partition_key(
+            account.user_id,
+            acquisition_job.id,
+            fanout_index
+          ),
         rate_limit_key: "model",
         max_attempts: 3,
         scheduled_at: database_now!(),
@@ -1372,6 +1377,16 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp source_closure_finalize_dedupe_key(account_id),
     do: "runtime-partition:source-account-closure-finalize:#{account_id}"
+
+  @doc false
+  def source_closure_reason_partition_key(user_id, acquisition_job_id, fanout_index)
+      when is_binary(user_id) and is_binary(acquisition_job_id) and is_integer(fanout_index) and
+             fanout_index > 0 do
+    hashed_key(
+      "source-closure-reason",
+      "#{user_id}:#{acquisition_job_id}:#{fanout_index}"
+    )
+  end
 
   defp hashed_key(prefix, value) when is_binary(prefix) and is_binary(value) do
     digest = :crypto.hash(:sha256, value) |> Base.url_encode64(padding: false)

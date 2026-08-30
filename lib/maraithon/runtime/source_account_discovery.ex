@@ -302,18 +302,23 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end
   end
 
-  defp bound_handoff(handoff) do
-    with {:ok, bundle} <- fetch_map(handoff, "source_bundle") do
-      if validate_restore_budget(bundle) == :ok and durable_handoff?(handoff) do
-        {:ok, handoff}
+  @doc false
+  def bound_handoff(handoff) when is_map(handoff) do
+    bounded_handoff = bound_large_binaries(handoff)
+
+    with {:ok, bundle} <- fetch_map(bounded_handoff, "source_bundle") do
+      if validate_restore_budget(bundle) == :ok and durable_handoff?(bounded_handoff) do
+        {:ok, bounded_handoff}
       else
-        seal_handoff(handoff, bundle)
+        seal_handoff(bounded_handoff, bundle)
       end
     else
       {:error, _reason} = error -> error
       _invalid -> {:error, :source_discovery_handoff_payload_too_large}
     end
   end
+
+  def bound_handoff(_handoff), do: {:error, :source_discovery_handoff_payload_too_large}
 
   defp seal_handoff(handoff, bundle) do
     with :ok <- validate_restore_budget(bundle, @handoff_max_encoded_source_bundle_bytes),
