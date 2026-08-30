@@ -2,14 +2,14 @@
   "spec_id": "source-account-delta-agents",
   "slug": "source-account-delta-agents",
   "title": "Source-Account Delta Agents",
-  "stage": "inprogress",
-  "spec_path": "../specs/source-account-delta-agents.md",
+  "stage": "done",
+  "spec_path": "source-account-delta-agents.md",
   "created_at": "2026-08-30T03:04:00Z",
   "approved_at": "2026-08-30T03:04:00Z",
   "started_at": "2026-08-30T03:04:00Z",
-  "updated_at": "2026-08-30T04:37:51Z",
-  "summary": "Implementation is active. Exact Gmail/Slack account assignments use sealed provider-to-model delta handoffs, wake immediately from source ingress, and cost zero model calls on empty deltas. Production proves all three token-backed accounts are independently advancing. Ordinary Chief cycles now coordinate persisted results without repeating Gmail/Slack acquisition, while bounded deep reconciliation remains available.",
-  "next_action": "Deploy the persisted-results Chief cutover, then confirm account cursors, assignments, and exact runtime health remain clean in production.",
+  "updated_at": "2026-08-30T05:02:21Z",
+  "summary": "Implemented and deployed exact per-account Gmail/Slack discovery and closure workers with independent cursors, sealed provider-to-model handoffs, zero-model quiet paths, ingress wakeups, and persisted-results Chief cycles. Production proves all three token-backed accounts independently advance while the exact OTP runtime remains healthy.",
+  "next_action": "Monitor cursor lag and auto-close precision; use a follow-up spec for any additional provider families.",
   "blockers": [],
   "review_policy": {
     "final_vetting": "off"
@@ -26,16 +26,13 @@
     "typecheck": "passed",
     "build": "passed",
     "tests": "passed",
-    "spec_review": "pending",
+    "spec_review": "passed",
     "final_vetting": "skipped",
-    "notes": "Plain spectacula invocation sets final_vetting off. Development and test compilation with warnings-as-errors pass; source-account discovery, closure, completion, and periodic tests pass, including the sealed no-Chief discovery handoff. Gmail advisor passes 22/22, Gmail ingress handler passes 4/4, exact Gmail/Slack ingress wake tests pass, and the touched AI Chief suite passes 26/26 with persisted-results and explicit deep-reconciliation coverage. Production exact-runtime diagnosis is clean at 64 ready partitions with no draining, blocked, unassigned, or unsettled task assignments. Production account telemetry shows two fresh Gmail discovery cursors, one fresh Slack discovery cursor, seven retry-free provider acquisitions, five completed model handoffs, and one normally running handoff at snapshot time. Broad suites remain intentionally skipped under repository policy."
+    "notes": "Plain spectacula invocation sets final_vetting off. Development and test compilation with warnings-as-errors pass; source-account discovery, closure, completion, and periodic tests pass, including the sealed no-Chief discovery handoff. Gmail advisor passes 22/22, Gmail ingress handler passes 4/4, exact Gmail/Slack ingress wake tests pass, and the touched AI Chief suite passes 26/26 with persisted-results and explicit deep-reconciliation coverage. Production exact-runtime diagnosis is clean at 64 ready partitions with no preparing, draining, blocked, unassigned, or termination-requested work. Final account telemetry shows two fresh Gmail discovery cursors, one fresh Slack discovery cursor, 32 retry-free/error-free provider acquisitions, and 16 completed model handoffs. One fail-closed provider_outcome_ambiguous handoff during deployment was superseded by a later completed run for the same account. Broad suites remain intentionally skipped under repository policy."
   },
   "resume_context": {
-    "last_completed_step": "Cut ordinary Chief cycles over to persisted account-worker results while retaining the four-hour and explicit deep-reconciliation paths.",
-    "pending_steps": [
-      "Deploy the persisted-results Chief cutover.",
-      "Confirm account jobs, cursors, and exact runtime health remain clean after deployment."
-    ],
+    "last_completed_step": "Deployed the persisted-results Chief cutover and proved all three source accounts plus exact runtime coordination healthy in production.",
+    "pending_steps": [],
     "open_questions": [],
     "last_reviewed_sections": [
       "4. Worker Topology",
@@ -45,7 +42,7 @@
       "13. Rollout"
     ],
     "artifacts": [
-      "docs/spectacula/specs/source-account-delta-agents.md",
+      "docs/spectacula/done/source-account-delta-agents.md",
       "lib/maraithon/behaviors/slack_followthrough_agent.ex",
       "lib/maraithon/chief_of_staff/source_scope.ex",
       "lib/maraithon/chief_of_staff/acquisition.ex",
@@ -137,6 +134,13 @@
       "from_stage": "inprogress",
       "to_stage": "inprogress",
       "note": "Production proves all three token-backed accounts independently advance through fresh Gmail/Slack discovery cursors and retry-free provider/model handoffs. Ordinary Chief cycles now consume persisted results without repeating Gmail/Slack acquisition; bounded scheduled and explicit deep reconciliation remain available."
+    },
+    {
+      "at": "2026-08-30T05:02:21Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Deployed commit 6fbc82a9 as Cloud Run revision maraithon-00099-g2c. Final production audit found fresh cursors for both Gmail accounts and Slack, 32 retry-free provider acquisitions, 16 completed model handoffs, and 64 ready exact-runtime partitions with no draining, blocked, unassigned, or termination-requested work."
     }
   ]
 }

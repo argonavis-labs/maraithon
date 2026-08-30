@@ -219,12 +219,14 @@ Implemented as of 2026-08-30:
 - Closure acquisition now runs in `runtime_provider_account`; empty deltas advance with zero model calls, while non-empty bounded deltas are sealed for account-scoped completion reasoning in `runtime_model_user`.
 - Closure cursors advance only after the model-side completion pass settles. The previous direct model job remains executable during revision drain, but no new work is scheduled through it.
 - Account discovery inherits an enabled Chief's Follow-through configuration when present. If a user has no Chief row, the cheap account assignment still runs with safe default Follow-through intelligence; an explicitly paused or unavailable Chief remains respected.
-- Production has independently scheduled all three token-backed accounts: two Gmail discovery cursors and one Slack discovery cursor were fresh at audit time, seven provider acquisitions completed without retries or failure classes, five model handoffs completed, and one was normally running at the snapshot boundary.
+- Production has independently scheduled all three token-backed accounts. The final cutover audit found both Gmail discovery cursors and the Slack discovery cursor fresh, 32 provider acquisitions completed with zero retries or errors, and 16 model handoffs completed. One fail-closed `provider_outcome_ambiguous` handoff during deployment was superseded by a completed run for the same account.
 - Ordinary Chief cycles now exclude the worker-owned Follow-through skill and disable Gmail/Slack acquisition while continuing persisted todo review, briefing, calendar, and local-source work. The configured four-hour scheduled deep reconciliation and explicit `acquisition_deep_lookback` path still reacquire those providers as a parity safety net.
 
-Still required for cutover:
+Production cutover proof:
 
-- deploy the persisted-results Chief cutover and confirm account jobs, cursors, and exact runtime health remain clean
+- Revision `maraithon-00099-g2c` serves 100% of traffic from commit `6fbc82a9`.
+- Exact coordination reports 64 ready partitions, one current node and leader, no preparing/draining/blocked/unassigned partitions, and no termination requests.
+- The one-minute discovery recurring row is advancing; completion remains on its configured anti-entropy cadence.
 
 ## 14. Verification
 
