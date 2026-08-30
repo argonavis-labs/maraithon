@@ -437,6 +437,83 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
            ]
   end
 
+  test "losslessly seals aggregate Gmail evidence larger than the durable payload" do
+    {account, agent} = discovery_identity("aggregate-oversized")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    aggregate_fields =
+      Map.new(1..8, fn index ->
+        {"provider_field_#{index}", String.duplicate("exact field #{index} ", 5_000)}
+      end)
+
+    message =
+      now
+      |> routine_message()
+      |> Map.put("id", "aggregate-oversized-message")
+      |> Map.put("thread_id", "aggregate-oversized-thread")
+      |> Map.merge(aggregate_fields)
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => [message],
+        "inbox_messages" => [message],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    acquisition = fn _user_id, _skills, _configs, _context ->
+      {bundle, complete_telemetry(),
+       [%{account: account, kind: "gmail_discovery_watermark", value: "1700000360"}]}
+    end
+
+    assert {:ok, [partition]} = SourceAccountDiscovery.partition_bundle(bundle)
+    assert byte_size(Jason.encode!(partition)) > BackgroundJob.max_payload_bytes()
+
+    assert {:ok, %{handoffs: [handoff], finalizer: finalizer}} =
+             SourceAccountDiscovery.acquire(account, agent,
+               acquisition: acquisition,
+               acquisition_job_id: "aggregate-oversized-acquisition",
+               now: now
+             )
+
+    assert %{"__maraithon_bounded_source_bundle_v1__" => _sealed} =
+             handoff["source_bundle"]
+
+    assert {:ok, _canonical} =
+             DurablePayload.prepare_map(
+               handoff,
+               BackgroundJob.max_payload_bytes(),
+               BackgroundJob.payload_bounds()
+             )
+
+    assert {:ok, restored} =
+             SourceAccountDiscovery.restore_partition_bundle(handoff["source_bundle"])
+
+    assert [restored_message] = SourceBundle.gmail_messages(restored)
+    assert restored_message == message
+
+    assert SourceAccountDiscovery.source_item_refs(restored) == [
+             "gmail:unknown:aggregate-oversized-message"
+           ]
+
+    assert {:ok, %{decision_count: 1} = child_result} =
+             SourceAccountDiscovery.reason(account, agent, handoff,
+               now: now,
+               llm_complete: fn _prompt -> skip_decisions(1) end
+             )
+
+    refute SourceCursors.get(account.id, "gmail_discovery_watermark")
+
+    assert {:ok, %{advanced_watermarks: 1}} =
+             SourceAccountDiscovery.finalize(account, agent, finalizer, [child_result])
+
+    assert %{value: "1700000360"} =
+             SourceCursors.get(account.id, "gmail_discovery_watermark")
+  end
+
   test "reasons over a losslessly restored oversized Gmail record within the model budget" do
     {account, agent} = discovery_identity("oversized-reason")
     now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -688,6 +765,36 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
         "sha256" => Base.url_encode64(:crypto.hash(:sha256, expanded), padding: false)
       }
     }
+
+    assert {:error, :source_discovery_partition_corrupt} =
+             SourceAccountDiscovery.restore_partition_bundle(partition)
+  end
+
+  test "rejects nested whole-bundle markers instead of resetting the restore budget" do
+    inner_encoded = Jason.encode!(%{})
+
+    nested_marker = %{
+      "__maraithon_bounded_source_bundle_v1__" => %{
+        "byte_size" => byte_size(inner_encoded),
+        "chunks" => [Base.encode64(:zlib.gzip(inner_encoded))],
+        "codec" => "json-gzip-base64",
+        "sha256" => Base.url_encode64(:crypto.hash(:sha256, inner_encoded), padding: false)
+      }
+    }
+
+    outer_encoded = Jason.encode!(%{"nested" => nested_marker})
+
+    partition = %{
+      "__maraithon_bounded_source_bundle_v1__" => %{
+        "byte_size" => byte_size(outer_encoded),
+        "chunks" => [Base.encode64(:zlib.gzip(outer_encoded))],
+        "codec" => "json-gzip-base64",
+        "sha256" => Base.url_encode64(:crypto.hash(:sha256, outer_encoded), padding: false)
+      }
+    }
+
+    assert {:error, :source_discovery_partition_corrupt} =
+             SourceAccountDiscovery.restore_partition_bundle(%{"nested" => nested_marker})
 
     assert {:error, :source_discovery_partition_corrupt} =
              SourceAccountDiscovery.restore_partition_bundle(partition)

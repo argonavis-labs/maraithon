@@ -21,9 +21,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Todos
 
-  @handoff_max_bytes 500_000
   @handoff_item_limit 5
   @handoff_binary_chunk_bytes 96_000
+  @handoff_max_encoded_source_bundle_bytes 2_000_000
   @handoff_max_restored_binary_bytes 5_000_000
   @handoff_max_restored_bytes 10_000_000
   @candidate_source_record_max_bytes 2_000
@@ -219,8 +219,16 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   def partition_bundle(_bundle), do: {:error, :invalid_source_bundle}
 
   @doc false
-  def restore_partition_bundle(bundle) when is_map(bundle) do
+  def restore_partition_bundle(%{@bounded_source_bundle_marker => _encoded} = bundle)
+      when map_size(bundle) == 1 do
     with :ok <- validate_restore_budget(bundle) do
+      restore_bounded_value(bundle)
+    end
+  end
+
+  def restore_partition_bundle(bundle) when is_map(bundle) do
+    with :ok <- validate_restore_budget(bundle),
+         :ok <- reject_nested_source_bundle_markers(bundle) do
       restore_bounded_value(bundle)
     end
   end
@@ -295,20 +303,25 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp bound_handoff(handoff) do
-    with {:ok, bundle} <- fetch_map(handoff, "source_bundle"),
-         :ok <- validate_restore_budget(bundle) do
-      if durable_handoff?(handoff) do
+    with {:ok, bundle} <- fetch_map(handoff, "source_bundle") do
+      if validate_restore_budget(bundle) == :ok and durable_handoff?(handoff) do
         {:ok, handoff}
       else
-        with {:ok, sealed_bundle} <- seal_source_bundle(bundle),
-             sealed_handoff <- Map.put(handoff, "source_bundle", sealed_bundle),
-             true <- durable_handoff?(sealed_handoff) do
-          {:ok, sealed_handoff}
-        else
-          {:error, _reason} = error -> error
-          _invalid -> {:error, :source_discovery_handoff_payload_too_large}
-        end
+        seal_handoff(handoff, bundle)
       end
+    else
+      {:error, _reason} = error -> error
+      _invalid -> {:error, :source_discovery_handoff_payload_too_large}
+    end
+  end
+
+  defp seal_handoff(handoff, bundle) do
+    with :ok <- validate_restore_budget(bundle, @handoff_max_encoded_source_bundle_bytes),
+         {:ok, sealed_bundle} <- seal_source_bundle(bundle),
+         sealed_handoff <- Map.put(handoff, "source_bundle", sealed_bundle),
+         :ok <- validate_restore_budget(sealed_bundle),
+         true <- durable_handoff?(sealed_handoff) do
+      {:ok, sealed_handoff}
     else
       {:error, _reason} = error -> error
       _invalid -> {:error, :source_discovery_handoff_payload_too_large}
@@ -328,7 +341,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   defp seal_source_bundle(bundle) when is_map(bundle) do
     with {:ok, encoded} <- Jason.encode(bundle),
-         true <- byte_size(encoded) <= @handoff_max_bytes do
+         true <- byte_size(encoded) <= @handoff_max_encoded_source_bundle_bytes do
       compressed = :zlib.gzip(encoded)
       base64 = Base.encode64(compressed)
 
@@ -386,7 +399,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   @doc false
   def compact_bundle(bundle) when is_map(bundle) do
     compact = build_compact_bundle(bundle)
-    if encoded_bytes(compact) <= @handoff_max_bytes, do: compact
+    if encoded_bytes(compact) <= @handoff_max_encoded_source_bundle_bytes, do: compact
   end
 
   def compact_bundle(_bundle), do: nil
@@ -857,7 +870,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
          "sha256" => expected_digest
        })
        when is_integer(expected_size) and expected_size >= 0 and
-              expected_size <= @handoff_max_bytes and is_list(chunks) and
+              expected_size <= @handoff_max_encoded_source_bundle_bytes and is_list(chunks) and
               is_binary(expected_digest) do
     with true <-
            Enum.all?(chunks, &(is_binary(&1) and byte_size(&1) <= @handoff_binary_chunk_bytes)),
@@ -866,8 +879,10 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
          true <- byte_size(encoded) == expected_size,
          true <-
            Base.url_encode64(:crypto.hash(:sha256, encoded), padding: false) == expected_digest,
-         {:ok, bundle} when is_map(bundle) <- Jason.decode(encoded) do
-      restore_partition_bundle(bundle)
+         {:ok, bundle} when is_map(bundle) <- Jason.decode(encoded),
+         :ok <- validate_restore_budget(bundle, @handoff_max_encoded_source_bundle_bytes),
+         :ok <- reject_nested_source_bundle_markers(bundle) do
+      restore_bounded_value(bundle)
     else
       _other -> {:error, :source_discovery_partition_corrupt}
     end
@@ -878,7 +893,31 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp restore_bounded_source_bundle(_encoded),
     do: {:error, :source_discovery_partition_corrupt}
 
-  defp validate_restore_budget(value) do
+  defp reject_nested_source_bundle_markers(%{@bounded_source_bundle_marker => _encoded} = value)
+       when map_size(value) == 1,
+       do: {:error, :source_discovery_partition_corrupt}
+
+  defp reject_nested_source_bundle_markers(value) when is_list(value) do
+    Enum.reduce_while(value, :ok, fn item, :ok ->
+      case reject_nested_source_bundle_markers(item) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp reject_nested_source_bundle_markers(value) when is_map(value) do
+    Enum.reduce_while(value, :ok, fn {_key, item}, :ok ->
+      case reject_nested_source_bundle_markers(item) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp reject_nested_source_bundle_markers(_value), do: :ok
+
+  defp validate_restore_budget(value, encoded_limit \\ BackgroundJob.max_payload_bytes()) do
     bounds = [
       max_binary_bytes: BackgroundJob.payload_bounds()[:max_binary_bytes],
       max_depth: 64,
@@ -888,11 +927,11 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     ]
 
     with {:ok, encoded} <- encode_restore_value(value),
-         :ok <- validate_restore_encoded_size(encoded),
+         :ok <- validate_restore_encoded_size(encoded, encoded_limit),
          {:ok, canonical} <- decode_restore_value(encoded),
-         :ok <- validate_restore_structure(canonical, bounds),
+         :ok <- validate_restore_structure(canonical, encoded_limit, bounds),
          {:ok, expanded_bytes} <- marker_expanded_bytes(canonical, 0),
-         :ok <- validate_expanded_size(expanded_bytes) do
+         :ok <- validate_expanded_size(byte_size(encoded) + expanded_bytes) do
       :ok
     end
   end
@@ -904,8 +943,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end
   end
 
-  defp validate_restore_encoded_size(encoded) do
-    if byte_size(encoded) <= BackgroundJob.max_payload_bytes(),
+  defp validate_restore_encoded_size(encoded, encoded_limit) do
+    if byte_size(encoded) <= encoded_limit,
       do: :ok,
       else: {:error, :source_discovery_partition_encoded_too_large}
   end
@@ -917,8 +956,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end
   end
 
-  defp validate_restore_structure(canonical, bounds) do
-    if BoundedJSON.valid?(canonical, BackgroundJob.max_payload_bytes(), bounds),
+  defp validate_restore_structure(canonical, encoded_limit, bounds) do
+    if BoundedJSON.valid?(canonical, encoded_limit, bounds),
       do: :ok,
       else: {:error, :source_discovery_partition_structure_too_large}
   end
@@ -943,7 +982,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
          expanded_bytes
        )
        when map_size(value) == 1 and is_integer(expected_size) and expected_size >= 0 and
-              expected_size <= @handoff_max_bytes do
+              expected_size <= @handoff_max_encoded_source_bundle_bytes do
     add_expanded_bytes(expanded_bytes, expected_size)
   end
 
@@ -1218,7 +1257,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp encoded_bytes(value) do
     case Jason.encode(value) do
       {:ok, json} -> byte_size(json)
-      {:error, _reason} -> @handoff_max_bytes + 1
+      {:error, _reason} -> @handoff_max_encoded_source_bundle_bytes + 1
     end
   end
 
