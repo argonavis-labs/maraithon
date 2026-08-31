@@ -64,6 +64,9 @@ defmodule Maraithon.Release do
     {:ok, _apps} = Application.ensure_all_started(:req)
     {:ok, vault} = Maraithon.Vault.start_link([])
 
+    {:ok, tool_call_supervisor} =
+      Task.Supervisor.start_link(name: Maraithon.Runtime.ToolCallSupervisor)
+
     try do
       for repo <- repos() do
         {:ok, result, _apps} =
@@ -87,6 +90,7 @@ defmodule Maraithon.Release do
         IO.puts("GMAIL_SOURCE_REPLAY_AUDIT=" <> Jason.encode!(result))
       end
     after
+      Supervisor.stop(tool_call_supervisor)
       GenServer.stop(vault)
     end
   end

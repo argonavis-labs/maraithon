@@ -71,6 +71,7 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
 
   def error_code(reason) when is_atom(reason), do: Atom.to_string(reason)
   def error_code({code, _detail}) when is_atom(code), do: Atom.to_string(code)
+  def error_code({reason, _context}), do: error_code(reason)
   def error_code(_reason), do: "gmail_source_replay_audit_failed"
 
   defp gmail_accounts(user_id, expected_account_count) do
