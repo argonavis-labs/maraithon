@@ -30,14 +30,13 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCache do
     ttl_ms = ttl_ms()
     now = System.monotonic_time(:millisecond)
 
-    case ttl_ms > 0 and lookup(key, now) do
-      {:ok, value} ->
-        value
-
-      _miss_or_disabled ->
-        value = verify.()
-        if ttl_ms > 0 and success?.(value), do: store(key, value, now + ttl_ms)
-        value
+    if ttl_ms == 0 do
+      verify.()
+    else
+      case lookup(key, now) do
+        {:ok, value} -> value
+        :miss -> refresh_once(key, verify, success?, ttl_ms)
+      end
     end
   end
 
@@ -57,6 +56,47 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCache do
       {value, expires_at} when expires_at > now -> {:ok, value}
       _missing_or_expired -> :miss
     end
+  end
+
+  # A cache expiry is observed by every hot runtime poll at nearly the same
+  # instant. Serialize the miss per node and recheck inside the lock so exactly
+  # one caller performs the managed-PostgreSQL catalog proof. Each BEAM node
+  # has its own persistent-term cache, so the lock is deliberately node-local.
+  defp refresh_once(key, verify, success?, ttl_ms) do
+    lock_id = {{__MODULE__, key}, self()}
+
+    case :global.trans(
+           lock_id,
+           fn ->
+             now = System.monotonic_time(:millisecond)
+
+             case lookup(key, now) do
+               {:ok, value} -> value
+               :miss -> verify_and_store(key, verify, success?, ttl_ms, now)
+             end
+           end,
+           [node()]
+         ) do
+      :aborted ->
+        # Failing open would bypass the proof. Re-verifying directly preserves
+        # the previous safe behavior if the local lock service is unavailable.
+        verify_and_store(
+          key,
+          verify,
+          success?,
+          ttl_ms,
+          System.monotonic_time(:millisecond)
+        )
+
+      value ->
+        value
+    end
+  end
+
+  defp verify_and_store(key, verify, success?, ttl_ms, now) do
+    value = verify.()
+    if success?.(value), do: store(key, value, now + ttl_ms)
+    value
   end
 
   defp store(key, value, expires_at) do

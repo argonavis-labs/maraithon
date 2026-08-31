@@ -61,6 +61,31 @@ defmodule Maraithon.Runtime.Coordination.StorageVerificationCacheTest do
     assert_received {:verified, :ok}
   end
 
+  test "serializes a concurrent expiry into one verification" do
+    put_ttl(60_000)
+    key = {__MODULE__, :concurrent}
+    counter = :atomics.new(1, signed: false)
+
+    verify = fn ->
+      :atomics.add_get(counter, 1, 1)
+      Enum.each(1..1_000, fn _ -> :erlang.yield() end)
+      :ok
+    end
+
+    results =
+      1..32
+      |> Task.async_stream(
+        fn _ -> Cache.fetch(key, verify, &(&1 == :ok)) end,
+        max_concurrency: 32,
+        ordered: false,
+        timeout: :infinity
+      )
+      |> Enum.to_list()
+
+    assert Enum.all?(results, &(&1 == {:ok, :ok}))
+    assert :atomics.get(counter, 1) == 1
+  end
+
   test "keys are independent and an invalid setting falls back to the default window" do
     put_ttl(:bogus)
     assert Cache.ttl_ms() == :timer.minutes(5)
