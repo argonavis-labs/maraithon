@@ -139,9 +139,91 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     assert {:ok,
             %{
               outcome: "deferred_active_child",
+              planned_fanouts: 0,
               fanout_count: 0,
               enqueued_fanouts: 0,
               readable_conversations: nil
+            }} = PeriodicJobs.execute(planner)
+
+    assert 1 ==
+             Repo.aggregate(
+               from(job in BackgroundJob,
+                 where:
+                   job.user_id == ^user_id and
+                     job.job_type == "runtime_partition:slack_conversation_reconcile" and
+                     job.status in ["pending", "running"]
+               ),
+               :count
+             )
+  end
+
+  test "Slack planner enforces one workspace child at the enqueue boundary" do
+    bypass = Bypass.open()
+    previous_slack = Application.get_env(:maraithon, :slack, [])
+    previous_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      Keyword.put(previous_runtime, :slack_reconciliation_batch_size, 2)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :slack, previous_slack)
+      Application.put_env(:maraithon, Maraithon.Runtime, previous_runtime)
+    end)
+
+    user_id = "periodic-slack-one-child-#{System.unique_integer([:positive])}@example.com"
+    team_id = "T-ONE-CHILD"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+               access_token: "xoxb-bot-token",
+               scopes: ["channels:read"],
+               metadata: %{"team_id" => team_id}
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}:user:U-SELF", %{
+               access_token: "xoxp-user-token",
+               scopes: ["channels:read", "channels:history"],
+               metadata: %{"team_id" => team_id}
+             })
+
+    account = ConnectedAccounts.get(user_id, "slack:#{team_id}")
+
+    Bypass.expect_once(bypass, "GET", "/api/conversations.list", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "channels" => [
+            %{"id" => "C-FIRST", "is_member" => true},
+            %{"id" => "C-SECOND", "is_member" => true}
+          ]
+        })
+      )
+    end)
+
+    planner = %BackgroundJob{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      queue: "runtime_provider_account",
+      job_type: "runtime_partition:slack_reconciliation_plan",
+      payload: %{"account_id" => account.id, "role" => "discovery"}
+    }
+
+    assert {:ok,
+            %{
+              outcome: "fanout_ready",
+              planned_fanouts: 2,
+              fanout_count: 1,
+              enqueued_fanouts: 1
             }} = PeriodicJobs.execute(planner)
 
     assert 1 ==

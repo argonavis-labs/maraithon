@@ -1078,14 +1078,14 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
          true <- account.user_id == job.user_id,
          {:ok, plan} <- SlackConversationReconciler.plan(account),
-         fanout_count = length(plan.due),
-         {:ok, enqueued} <- enqueue_slack_reconciliation_children(account, plan.due, job) do
+         planned_fanouts = length(plan.due),
+         {:ok, dispatch} <- enqueue_slack_reconciliation_children(account, plan.due, job) do
       outcome =
         cond do
-          Map.get(plan, :deferred_reason) == "workspace_child_active" ->
+          dispatch.deferred? ->
             "deferred_active_child"
 
-          fanout_count == 0 ->
+          dispatch.enqueued == 0 ->
             "up_to_date"
 
           true ->
@@ -1097,8 +1097,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          outcome: outcome,
          account_id: account.id,
          readable_conversations: plan.readable_conversations,
-         fanout_count: fanout_count,
-         enqueued_fanouts: enqueued,
+         planned_fanouts: planned_fanouts,
+         fanout_count: dispatch.enqueued,
+         enqueued_fanouts: dispatch.enqueued,
          source_items: 0,
          model_calls: 0
        }}
@@ -1161,14 +1162,20 @@ defmodule Maraithon.Runtime.PeriodicJobs do
        when is_list(conversations) do
     with_source_account_fence(account, fn locked_account ->
       if SlackConversationReconciler.active_child?(locked_account) do
-        {:ok, 0}
+        {:ok, %{enqueued: 0, deferred?: true}}
       else
-        do_enqueue_slack_reconciliation_children(locked_account, conversations, planner_job)
+        conversations
+        |> Enum.take(1)
+        |> do_enqueue_slack_reconciliation_children(locked_account, planner_job)
+        |> case do
+          {:ok, count} -> {:ok, %{enqueued: count, deferred?: false}}
+          {:error, _reason} = error -> error
+        end
       end
     end)
   end
 
-  defp do_enqueue_slack_reconciliation_children(account, conversations, planner_job) do
+  defp do_enqueue_slack_reconciliation_children(conversations, account, planner_job) do
     fanout_count = length(conversations)
     fanout_started_at = database_now!()
 
