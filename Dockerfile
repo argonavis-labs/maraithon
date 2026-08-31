@@ -16,17 +16,29 @@ RUN apt-get update -y && apt-get install -y build-essential git \
 
 # Set build ENV
 ENV MIX_ENV="prod"
+ENV HEX_HTTP_TIMEOUT="120"
 
 # Install hex + rebar
-RUN mix local.hex --force && \
-    mix local.rebar --force
+RUN set -eu; \
+    attempt=1; \
+    until mix local.hex --force && mix local.rebar --force; do \
+      if [ "$attempt" -ge 3 ]; then exit 1; fi; \
+      attempt=$((attempt + 1)); \
+      sleep 5; \
+    done
 
 # Create app directory
 WORKDIR /app
 
 # Install mix dependencies
 COPY mix.exs mix.lock ./
-RUN mix deps.get --only $MIX_ENV
+RUN set -eu; \
+    attempt=1; \
+    until mix deps.get --only "$MIX_ENV"; do \
+      if [ "$attempt" -ge 3 ]; then exit 1; fi; \
+      attempt=$((attempt + 1)); \
+      sleep 5; \
+    done
 RUN mkdir config
 
 # Copy compile-time config files
