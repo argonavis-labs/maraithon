@@ -1665,7 +1665,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp normalize_work_result({:skip, reason}), do: {:ok, %{outcome: "skipped", reason: reason}}
 
   defp normalize_work_result({:error, reason}) do
-    case retry_after_seconds(reason, 0) do
+    case retry_after_seconds_for(reason) do
       {:ok, seconds} -> {:error, {:retry_after, seconds, reason}}
       :none -> {:error, reason}
     end
@@ -2110,6 +2110,11 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp agent_id(%Agent{id: id}), do: id
   defp agent_id(nil), do: nil
 
+  @doc false
+  # Exposed for the focused worker-contract test. This is intentionally the
+  # same conversion used by every durable periodic worker below.
+  def retry_after_seconds_for(reason), do: retry_after_seconds(reason, 0)
+
   # Provider clients wrap HTTP failures (for example
   # `{:token_refresh_failed, {:rate_limited, ...}}`). Walk only a small tuple
   # depth so Retry-After still reaches the durable lane cooldown without
@@ -2125,6 +2130,21 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp retry_after_seconds({:rate_limited, _detail}, _depth),
     do: {:ok, @default_retry_after_seconds}
+
+  # `:llm_busy` is local capacity backpressure from the bounded model gate,
+  # not a failed reasoning attempt. Source account graphs can now make
+  # independent account progress concurrently, so wait durably for a model
+  # slot rather than spending the graph's normal retry budget. The scheduler
+  # stores seconds, and a ten-second floor avoids repeatedly contending for a
+  # slot while another bounded model call is still in flight.
+  defp retry_after_seconds({:llm_busy, retry_after_ms}, _depth)
+       when is_integer(retry_after_ms) and retry_after_ms >= 0,
+       do: {:ok, max(div(retry_after_ms + 999, 1_000), @source_finalizer_retry_seconds)}
+
+  defp retry_after_seconds({:llm_busy, _detail}, _depth),
+    do: {:ok, @source_finalizer_retry_seconds}
+
+  defp retry_after_seconds(:llm_busy, _depth), do: {:ok, @source_finalizer_retry_seconds}
 
   defp retry_after_seconds({:http_status, 429, _detail}, _depth),
     do: {:ok, @default_retry_after_seconds}

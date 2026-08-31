@@ -847,6 +847,15 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
              PeriodicJobs.execute(job)
   end
 
+  test "model capacity backpressure reaches the durable cooldown contract" do
+    assert {:ok, 10} = PeriodicJobs.retry_after_seconds_for({:llm_busy, 1})
+    assert {:ok, 10} = PeriodicJobs.retry_after_seconds_for(:llm_busy)
+    assert {:ok, 12} = PeriodicJobs.retry_after_seconds_for({:llm_busy, 12_000})
+
+    assert {:ok, 10} =
+             PeriodicJobs.retry_after_seconds_for({:source_discovery_failed, {:llm_busy, 1}})
+  end
+
   test "model coordinator creates one opaque durable tenant partition" do
     user_id = "periodic-model-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
