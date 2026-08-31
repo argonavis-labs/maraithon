@@ -589,9 +589,15 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
         account: %ConnectedAccount{id: ^account_id},
         kind: kind,
         value: value
-      }
+      } = proposal
       when kind in @allowed_watermark_kinds and is_binary(value) ->
-        [%{"account_id" => account_id, "kind" => kind, "value" => value}]
+        watermark = %{"account_id" => account_id, "kind" => kind, "value" => value}
+
+        if Map.has_key?(proposal, :expected_lower_value) do
+          [Map.put(watermark, "expected_lower_value", proposal.expected_lower_value)]
+        else
+          [watermark]
+        end
 
       _other ->
         []

@@ -83,6 +83,75 @@ defmodule Maraithon.Runtime.SourceWatermarkCommitTest do
     refute SourceCursors.get(account.id, "gmail_discovery_watermark")
   end
 
+  test "supersedes a stale legacy finalizer without sealing a backward cycle" do
+    account = connected_account("stale-legacy")
+    {:ok, _cursor} = SourceCursors.put(account, "gmail_discovery_watermark", %{value: "200"})
+    job = source_job(account, "runtime_partition:source_account_discovery", "stale-legacy")
+
+    handler_result =
+      {:ok,
+       %{
+         account_id: account.id,
+         outcome: "empty_delta",
+         deferred_watermarks: [
+           %{
+             "account_id" => account.id,
+             "kind" => "gmail_discovery_watermark",
+             "value" => "100"
+           }
+         ]
+       }}
+
+    assert {:ok, sanitized} =
+             Repo.transaction(fn ->
+               assert {:ok, {:ok, result}} =
+                        SourceWatermarkCommit.commit_and_sanitize(job, handler_result)
+
+               result
+             end)
+
+    assert sanitized.outcome == "superseded"
+    assert sanitized.advanced_watermarks == 0
+    assert sanitized.superseded_watermarks == 1
+    assert %{value: "200"} = SourceCursors.get(account.id, "gmail_discovery_watermark")
+    refute Repo.get_by(SourceCycle, acquisition_job_id: job.id)
+  end
+
+  test "seals only when the acquisition lower cursor still matches" do
+    account = connected_account("expected-lower")
+    {:ok, _cursor} = SourceCursors.put(account, "gmail_discovery_watermark", %{value: "100"})
+    job = source_job(account, "runtime_partition:source_account_discovery", "expected-lower")
+
+    handler_result =
+      {:ok,
+       %{
+         account_id: account.id,
+         outcome: "empty_delta",
+         deferred_watermarks: [
+           %{
+             "account_id" => account.id,
+             "kind" => "gmail_discovery_watermark",
+             "expected_lower_value" => "100",
+             "value" => "200"
+           }
+         ]
+       }}
+
+    assert {:ok, sanitized} =
+             Repo.transaction(fn ->
+               assert {:ok, {:ok, result}} =
+                        SourceWatermarkCommit.commit_and_sanitize(job, handler_result)
+
+               result
+             end)
+
+    assert sanitized.advanced_watermarks == 1
+    assert %{value: "200"} = SourceCursors.get(account.id, "gmail_discovery_watermark")
+
+    assert %SourceCycle{lower_cursor: "100", upper_cursor: "200"} =
+             Repo.get_by(SourceCycle, acquisition_job_id: job.id)
+  end
+
   defp connected_account(suffix) do
     user_id = "source-watermark-#{suffix}-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -99,7 +168,7 @@ defmodule Maraithon.Runtime.SourceWatermarkCommitTest do
     {:ok, job} =
       BackgroundJobs.enqueue(job_type, %{
         user_id: account.user_id,
-        queue: "runtime_model_user",
+        queue: "runtime_provider_account",
         dedupe_key: "source-watermark-proof:#{suffix}:#{account.id}",
         scheduled_at: DateTime.utc_now(),
         payload: %{"account_id" => account.id}

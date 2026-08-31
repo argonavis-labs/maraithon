@@ -519,7 +519,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                                                                   watermark_acc} ->
           slack_account = ConnectedAccounts.get(user_id, "slack:#{team_id}")
 
-          team_oldest =
+          {team_oldest, expected_lower_value} =
             slack_poll_oldest(
               slack_account,
               oldest,
@@ -546,7 +546,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                   slack_account,
                   watermark_kind,
                   now_watermark,
-                  watermark_mode
+                  watermark_mode,
+                  expected_lower_value
                 )
 
               {[workspace | workspace_acc], workspace_fetches ++ fetch_acc, watermark_acc}
@@ -620,13 +621,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   # for the "deep lookback silently bypassed" gap) always uses the widened
   # window instead of the cursor, regardless of what's stored, so morning
   # briefings/backfills actually get the deeper context they asked for.
-  defp slack_poll_oldest(_account, fallback_oldest, true, _kind), do: fallback_oldest
-  defp slack_poll_oldest(nil, fallback_oldest, _deep_lookback?, _kind), do: fallback_oldest
+  defp slack_poll_oldest(_account, fallback_oldest, true, _kind),
+    do: {fallback_oldest, nil}
+
+  defp slack_poll_oldest(nil, fallback_oldest, _deep_lookback?, _kind),
+    do: {fallback_oldest, nil}
 
   defp slack_poll_oldest(account, fallback_oldest, _deep_lookback?, kind) do
     case SourceCursors.get(account.id, kind) do
-      %{value: value} when is_binary(value) and value != "" -> value
-      _ -> fallback_oldest
+      %{value: value} when is_binary(value) and value != "" -> {value, value}
+      _ -> {fallback_oldest, nil}
     end
   end
 
@@ -663,9 +667,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp deep_lookback_fetch?(%{deep_lookback?: true}), do: true
   defp deep_lookback_fetch?(_plan), do: false
 
-  defp accumulate_watermark(acc, nil, _kind, _value, _mode), do: acc
+  defp accumulate_watermark(acc, nil, _kind, _value, _mode, _expected_lower), do: acc
 
-  defp accumulate_watermark(acc, %ConnectedAccount{} = account, kind, value, :defer) do
+  defp accumulate_watermark(
+         acc,
+         %ConnectedAccount{} = account,
+         kind,
+         value,
+         :defer,
+         expected_lower
+       ) do
     [
       %{
         account: %ConnectedAccount{
@@ -674,13 +685,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           provider: account.provider
         },
         kind: kind,
-        value: value
+        value: value,
+        expected_lower_value: expected_lower
       }
       | acc
     ]
   end
 
-  defp accumulate_watermark(acc, %ConnectedAccount{} = account, kind, value, :advance) do
+  defp accumulate_watermark(
+         acc,
+         %ConnectedAccount{} = account,
+         kind,
+         value,
+         :advance,
+         _expected_lower
+       ) do
     case SourceCursors.put(account, kind, %{"value" => value}) do
       {:ok, _cursor} ->
         :ok
@@ -696,7 +715,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     acc
   end
 
-  defp accumulate_watermark(acc, %ConnectedAccount{}, _kind, _value, :none), do: acc
+  defp accumulate_watermark(
+         acc,
+         %ConnectedAccount{},
+         _kind,
+         _value,
+         :none,
+         _expected_lower
+       ),
+       do: acc
 
   defp companion_source_fetchers(user_id, plan, context) when is_binary(user_id) do
     now = context[:timestamp] || DateTime.utc_now()
@@ -2177,7 +2204,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         provider_specs
         |> Enum.zip(provider_results)
         |> Enum.reduce({%{}, %{}, []}, fn
-          {{provider, account, _window, _quota}, {:ok, {:ok, messages, fetch_metadata}}},
+          {{provider, account, window, _quota}, {:ok, {:ok, messages, fetch_metadata}}},
           {message_acc, status_acc, watermark_acc} ->
             outcome = gmail_candidate_fetch_outcome(fetch_metadata)
 
@@ -2197,7 +2224,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                   account,
                   watermark_kind,
                   now_watermark,
-                  watermark_mode
+                  watermark_mode,
+                  window.cursor
                 )
               else
                 watermark_acc
@@ -3090,10 +3118,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   # both sides, then hydrated messages are filtered locally to the exact
   # `[cursor - safety_overlap, now)` interval.
   defp gmail_poll_window(_account, fallback_query, true, _kind, now),
-    do: %{query: fallback_query, lower: nil, upper: watermark_integer(now)}
+    do: %{query: fallback_query, lower: nil, upper: watermark_integer(now), cursor: nil}
 
   defp gmail_poll_window(nil, fallback_query, _deep_lookback?, _kind, now),
-    do: %{query: fallback_query, lower: nil, upper: watermark_integer(now)}
+    do: %{query: fallback_query, lower: nil, upper: watermark_integer(now), cursor: nil}
 
   defp gmail_poll_window(account, fallback_query, _deep_lookback?, kind, now) do
     upper = watermark_integer(now)
@@ -3109,15 +3137,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             %{
               query: "after:#{query_lower} before:#{query_upper}",
               lower: lower,
-              upper: upper
+              upper: upper,
+              cursor: value
             }
 
           nil ->
-            %{query: fallback_query, lower: nil, upper: upper}
+            %{query: fallback_query, lower: nil, upper: upper, cursor: nil}
         end
 
       _ ->
-        %{query: fallback_query, lower: nil, upper: upper}
+        %{query: fallback_query, lower: nil, upper: upper, cursor: nil}
     end
   end
 

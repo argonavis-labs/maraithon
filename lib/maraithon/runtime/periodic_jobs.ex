@@ -15,6 +15,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.ChiefOfStaff.Skills
   alias Maraithon.Connectors.SourceCursor
   alias Maraithon.OAuth.Token
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobs
@@ -421,6 +422,16 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   defp enqueue_source_discovery_job(account, agent, now) do
+    with_source_account_fence(account, fn locked_account ->
+      case active_source_cycle_acquisition(locked_account, "discovery") do
+        {:ok, nil} -> do_enqueue_source_discovery_job(locked_account, agent, now)
+        {:ok, %BackgroundJob{} = acquisition} -> {:ok, acquisition}
+        {:error, _reason} = error -> error
+      end
+    end)
+  end
+
+  defp do_enqueue_source_discovery_job(account, agent, now) do
     BackgroundJobs.enqueue(@source_discovery_job, %{
       user_id: account.user_id,
       queue: @provider_queue,
@@ -501,21 +512,138 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp enqueue_source_account_closure_job(account, now, opts) do
     discovery_job_id = Keyword.fetch!(opts, :discovery_job_id)
 
-    BackgroundJobs.enqueue(@todo_account_closure_acquire_job, %{
-      user_id: account.user_id,
-      queue: @provider_queue,
-      dedupe_key: source_closure_acquire_dedupe_key(account.id, discovery_job_id),
-      partition_key: provider_partition(account.user_id, account.provider),
-      rate_limit_key: TokenRefresher.provider_family(account.provider),
-      max_attempts: 5,
-      scheduled_at: now,
-      payload: %{
-        "user_id" => account.user_id,
-        "account_id" => account.id,
-        "role" => "closure",
-        "discovery_job_id" => discovery_job_id
-      }
-    })
+    with_source_account_fence(account, fn locked_account ->
+      case active_source_cycle_acquisition(locked_account, "closure") do
+        {:ok, nil} ->
+          BackgroundJobs.enqueue(@todo_account_closure_acquire_job, %{
+            user_id: locked_account.user_id,
+            queue: @provider_queue,
+            dedupe_key: source_closure_acquire_dedupe_key(locked_account.id, discovery_job_id),
+            partition_key: provider_partition(locked_account.user_id, locked_account.provider),
+            rate_limit_key: TokenRefresher.provider_family(locked_account.provider),
+            max_attempts: 5,
+            scheduled_at: now,
+            payload: %{
+              "user_id" => locked_account.user_id,
+              "account_id" => locked_account.id,
+              "role" => "closure",
+              "discovery_job_id" => discovery_job_id
+            }
+          })
+
+        {:ok, %BackgroundJob{} = acquisition} ->
+          {:ok, acquisition}
+
+        {:error, _reason} = error ->
+          error
+      end
+    end)
+  end
+
+  defp with_source_account_fence(%ConnectedAccount{} = account, fun)
+       when is_function(fun, 1) do
+    fenced = fn ->
+      _user = WriteFence.lock_user_writable!(account.user_id)
+
+      locked_account =
+        ConnectedAccount
+        |> where(
+          [candidate],
+          candidate.id == ^account.id and candidate.user_id == ^account.user_id
+        )
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      case locked_account do
+        %ConnectedAccount{} = locked ->
+          case fun.(locked) do
+            {:ok, result} -> result
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        nil ->
+          Repo.rollback(:source_account_not_found)
+      end
+    end
+
+    if Repo.in_transaction?() do
+      {:ok, fenced.()}
+    else
+      case Repo.transaction(fenced) do
+        {:ok, result} -> {:ok, result}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp active_source_cycle_acquisition(%ConnectedAccount{} = account, role)
+       when role in ["discovery", "closure"] do
+    case active_source_cycle_job(account, role) do
+      nil ->
+        {:ok, nil}
+
+      %BackgroundJob{job_type: type} = job
+      when type in [
+             @source_discovery_job,
+             @todo_account_closure_acquire_job,
+             @todo_account_closure_job
+           ] ->
+        {:ok, BackgroundJob.hydrate_payloads(job)}
+
+      %BackgroundJob{} = downstream ->
+        downstream = BackgroundJob.hydrate_payloads(downstream)
+
+        with acquisition_id when is_binary(acquisition_id) <-
+               Map.get(downstream.payload || %{}, "acquisition_job_id"),
+             %BackgroundJob{} = acquisition <- Repo.get(BackgroundJob, acquisition_id) do
+          {:ok, BackgroundJob.hydrate_payloads(acquisition)}
+        else
+          _missing -> {:error, :source_cycle_acquisition_missing}
+        end
+    end
+  end
+
+  defp active_source_cycle_job(%ConnectedAccount{} = account, "discovery") do
+    acquisition_key = source_discovery_dedupe_key(account.id)
+    reason_pattern = "runtime-partition:source-account-discovery-reason:%:#{account.id}"
+    finalizer_pattern = "runtime-partition:source-account-discovery-finalize:#{account.id}:%"
+
+    BackgroundJob
+    |> where([job], job.user_id == ^account.user_id and job.status in @active_statuses)
+    |> where(
+      [job],
+      (job.job_type == @source_discovery_job and job.dedupe_key == ^acquisition_key) or
+        (job.job_type == @source_discovery_reason_job and
+           like(job.dedupe_key, ^reason_pattern) and job.attempts < job.max_attempts) or
+        (job.job_type == @source_discovery_finalize_job and
+           like(job.dedupe_key, ^finalizer_pattern))
+    )
+    |> order_by([job], asc: job.inserted_at, asc: job.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp active_source_cycle_job(%ConnectedAccount{} = account, "closure") do
+    legacy_key = "runtime-partition:todo-account-closure:#{account.id}"
+    acquisition_pattern = "runtime-partition:source-account-closure-acquire:#{account.id}:%"
+    reason_pattern = "runtime-partition:source-account-closure-reason:%:#{account.id}"
+    finalizer_pattern = "runtime-partition:source-account-closure-finalize:#{account.id}:%"
+
+    BackgroundJob
+    |> where([job], job.user_id == ^account.user_id and job.status in @active_statuses)
+    |> where(
+      [job],
+      (job.job_type == @todo_account_closure_job and job.dedupe_key == ^legacy_key) or
+        (job.job_type == @todo_account_closure_acquire_job and
+           like(job.dedupe_key, ^acquisition_pattern)) or
+        (job.job_type == @todo_account_closure_reason_job and
+           like(job.dedupe_key, ^reason_pattern) and job.attempts < job.max_attempts) or
+        (job.job_type == @todo_account_closure_finalize_job and
+           like(job.dedupe_key, ^finalizer_pattern))
+    )
+    |> order_by([job], asc: job.inserted_at, asc: job.id)
+    |> limit(1)
+    |> Repo.one()
   end
 
   defp user_has_open_todos?(user_id) do

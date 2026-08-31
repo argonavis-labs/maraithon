@@ -140,6 +140,93 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
              PeriodicJobs.execute(closure_job)
   end
 
+  test "source account wake reuses acquisitions while either fan-out graph is active" do
+    user_id = "periodic-active-graph-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:#{user_id}", %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Keep one source graph per account and role",
+          "summary" => "An active graph still owns this cursor interval.",
+          "next_action" => "Wait for its finalizer.",
+          "dedupe_key" => "periodic-active-source-graph"
+        }
+      ])
+
+    assert {:ok,
+            %{
+              discovery: %{job_id: discovery_job_id},
+              closure: %{job_id: closure_job_id}
+            }} = PeriodicJobs.wake_source_account(account, now: DateTime.utc_now())
+
+    Enum.each([discovery_job_id, closure_job_id], fn job_id ->
+      BackgroundJob
+      |> Repo.get!(job_id)
+      |> Ecto.Changeset.change(status: "completed", completed_at: DateTime.utc_now())
+      |> Repo.update!()
+    end)
+
+    {:ok, _discovery_reason} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery_reason", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key:
+          "runtime-partition:source-account-discovery-reason:#{discovery_job_id}:1-of-1:#{account.id}",
+        payload: %{
+          "account_id" => account.id,
+          "acquisition_job_id" => discovery_job_id,
+          "fanout_index" => 1,
+          "fanout_count" => 1
+        }
+      })
+
+    {:ok, _closure_reason} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_closure_reason", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key:
+          "runtime-partition:source-account-closure-reason:#{closure_job_id}:source-1-of-1:todo-1-of-1:1-of-1:#{account.id}",
+        payload: %{
+          "account_id" => account.id,
+          "acquisition_job_id" => closure_job_id,
+          "fanout_index" => 1,
+          "fanout_count" => 1
+        }
+      })
+
+    assert {:ok,
+            %{
+              discovery: %{job_id: ^discovery_job_id},
+              closure: %{job_id: ^closure_job_id}
+            }} = PeriodicJobs.wake_source_account(account, now: DateTime.utc_now())
+
+    assert Repo.aggregate(
+             from(job in BackgroundJob,
+               where:
+                 job.user_id == ^user_id and
+                   job.job_type == "runtime_partition:source_account_discovery"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(job in BackgroundJob,
+               where:
+                 job.user_id == ^user_id and
+                   job.job_type == "runtime_partition:source_account_closure_acquire"
+             ),
+             :count
+           ) == 1
+  end
+
   test "provider coordinator creates a stable account-partitioned refresh row" do
     user_id = "periodic-provider-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

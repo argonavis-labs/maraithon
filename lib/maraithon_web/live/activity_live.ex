@@ -134,7 +134,7 @@ defmodule MaraithonWeb.ActivityLive do
       agent_name: "#{provider} #{String.downcase(role)}",
       account: source_account_label(account, provider),
       status: job.status,
-      summary: source_run_summary(job.job_type, job.status, fanout),
+      summary: source_run_summary(job.job_type, job.status, fanout, job.result),
       safe_error: source_run_error(job.status, job.last_error),
       last_error_code: source_error_code(job.last_error),
       duration: duration_label(occurred_at, finished_at),
@@ -302,58 +302,76 @@ defmodule MaraithonWeb.ActivityLive do
 
   defp source_ai_calls(_job_type, _queue, _status, _result), do: "Bounded"
 
-  defp source_run_summary(_job_type, "pending", fanout),
+  defp source_run_summary(job_type, "completed", fanout, result) when is_map(result) do
+    case source_result_string(result, "outcome") do
+      "superseded" ->
+        "Skipped a stale cycle already covered by a newer cursor"
+
+      outcome ->
+        source_run_completed_summary(job_type, fanout, outcome)
+    end
+  end
+
+  defp source_run_summary(_job_type, "pending", fanout, _result),
     do: fanout_summary("Waiting for its OTP lane", fanout)
 
-  defp source_run_summary(_job_type, "running", fanout),
+  defp source_run_summary(_job_type, "running", fanout, _result),
     do: fanout_summary("Checking this account now", fanout)
 
-  defp source_run_summary("runtime_partition:source_account_discovery", "completed", _fanout),
-    do: "Checked only messages after this account's discovery cursor"
+  defp source_run_summary(_job_type, "failed", _fanout, _result),
+    do: "This account worker did not complete"
 
-  defp source_run_summary(
+  defp source_run_summary(_job_type, "cancelled", _fanout, _result),
+    do: "This account worker stopped safely"
+
+  defp source_run_summary(_job_type, _status, _fanout, _result),
+    do: "Account worker status updated"
+
+  defp source_run_completed_summary(
+         "runtime_partition:source_account_discovery",
+         _fanout,
+         _outcome
+       ),
+       do: "Checked only messages after this account's discovery cursor"
+
+  defp source_run_completed_summary(
          "runtime_partition:source_account_discovery_reason",
-         "completed",
-         fanout
+         fanout,
+         _outcome
        ),
        do: fanout_summary("Reviewed new messages for todo decisions", fanout)
 
-  defp source_run_summary(
+  defp source_run_completed_summary(
          "runtime_partition:source_account_discovery_finalize",
-         "completed",
-         _fanout
+         _fanout,
+         _outcome
        ),
        do: "Proved every acquired message received a todo decision"
 
-  defp source_run_summary(
+  defp source_run_completed_summary(
          "runtime_partition:source_account_closure_acquire",
-         "completed",
-         _fanout
+         _fanout,
+         _outcome
        ),
        do: "Checked only later messages for completion evidence"
 
-  defp source_run_summary(
+  defp source_run_completed_summary(
          "runtime_partition:source_account_closure_reason",
-         "completed",
-         fanout
+         fanout,
+         _outcome
        ),
        do:
          fanout_summary("Compared a bounded later-message partition with this todo batch", fanout)
 
-  defp source_run_summary(
+  defp source_run_completed_summary(
          "runtime_partition:source_account_closure_finalize",
-         "completed",
-         _fanout
+         _fanout,
+         _outcome
        ),
        do: "Proved every snapshotted open todo received a completion decision"
 
-  defp source_run_summary(_job_type, "failed", _fanout),
-    do: "This account worker did not complete"
-
-  defp source_run_summary(_job_type, "cancelled", _fanout),
-    do: "This account worker stopped safely"
-
-  defp source_run_summary(_job_type, _status, _fanout), do: "Account worker status updated"
+  defp source_run_completed_summary(_job_type, _fanout, _outcome),
+    do: "Account worker completed"
 
   defp source_fanout(dedupe_key, result) do
     index = source_result_count(result, "fanout_index")
@@ -430,6 +448,15 @@ defmodule MaraithonWeb.ActivityLive do
   end
 
   defp source_result_count(_result, _key), do: 0
+
+  defp source_result_string(result, key) when is_map(result) do
+    case Map.get(result, key, Map.get(result, String.to_existing_atom(key))) do
+      value when is_binary(value) -> value
+      _other -> nil
+    end
+  end
+
+  defp source_result_string(_result, _key), do: nil
 
   defp source_run_error("failed", last_error) do
     RunErrorCopy.runtime_failure(%{source: "background_job", details: last_error || "failed"})

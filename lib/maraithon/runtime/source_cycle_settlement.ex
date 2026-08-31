@@ -25,11 +25,13 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
   @closure_finalize "runtime_partition:source_account_closure_finalize"
 
   @doc false
-  def seal(%BackgroundJob{} = current_job, result, account, [watermark])
-      when is_map(result) and is_map(watermark) do
+  def seal(current_job, result, account, watermarks, opts \\ [])
+
+  def seal(%BackgroundJob{} = current_job, result, account, [watermark], opts)
+      when is_map(result) and is_map(watermark) and is_list(opts) do
     with {:ok, graph} <- job_graph(current_job),
          :ok <- validate_graph_owner(graph, account.user_id),
-         {:ok, identity} <- cycle_identity(graph, account, watermark),
+         {:ok, identity} <- cycle_identity(graph, account, watermark, opts),
          {:ok, source_items} <- source_items(graph, result),
          {:ok, snapshots} <- todo_snapshots(graph),
          {:ok, cycle} <-
@@ -40,7 +42,7 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
     end
   end
 
-  def seal(%BackgroundJob{}, _result, _account, _watermarks),
+  def seal(%BackgroundJob{}, _result, _account, _watermarks, _opts),
     do: {:error, :invalid_source_cycle_settlement}
 
   defp job_graph(%BackgroundJob{job_type: type} = current)
@@ -107,10 +109,17 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
       else: {:error, :source_cycle_owner_mismatch}
   end
 
-  defp cycle_identity(graph, account, watermark) do
+  defp cycle_identity(graph, account, watermark, opts) do
     kind = read_string(watermark, "kind")
     upper = read_string(watermark, "value")
-    lower = SourceCursors.get(account.id, kind)
+    lower = Keyword.get(opts, :lower_cursor, :load)
+
+    lower =
+      case lower do
+        :load -> SourceCursors.get(account.id, kind) |> then(&(&1 && &1.value))
+        value when is_nil(value) or is_binary(value) -> value
+        _invalid -> :invalid
+      end
 
     boundary =
       cond do
@@ -119,7 +128,7 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
         true -> nil
       end
 
-    if is_binary(kind) and is_binary(upper) and is_binary(boundary) do
+    if is_binary(kind) and is_binary(upper) and is_binary(boundary) and lower != :invalid do
       {:ok,
        %{
          user_id: account.user_id,
@@ -127,7 +136,7 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
          provider: account.provider,
          role: graph.role,
          cursor_kind: kind,
-         lower_cursor: lower && lower.value,
+         lower_cursor: lower,
          upper_cursor: upper,
          boundary: boundary,
          acquisition_job_id: graph.acquisition.id,
