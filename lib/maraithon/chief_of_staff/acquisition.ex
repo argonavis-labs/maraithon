@@ -1205,7 +1205,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       delta_messages = dedupe_slack_messages(event_messages ++ provider_delta_messages)
 
-      {delta_messages, event_thread_fetches, event_thread_errors} =
+      {delta_messages, event_thread_fetches, _event_thread_errors} =
         hydrate_slack_event_threads(
           token.access_token,
           team_id,
@@ -1215,7 +1215,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           plan
         )
 
-      coverage_errors = event_thread_errors ++ coverage_errors
+      # Durable events and the provider delta are the source items. Thread
+      # hydration only enriches those items with conversational context, and
+      # the independent per-conversation reconciliation lane preserves the
+      # underlying thread messages under provider back-pressure. Do not hold the account cursor
+      # behind repeated conversations.replies retries after every source item
+      # in the delta has already been acquired.
 
       channels =
         channels

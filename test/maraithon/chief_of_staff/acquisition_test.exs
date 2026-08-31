@@ -767,7 +767,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert frontier == now |> DateTime.to_unix() |> to_string()
   end
 
-  test "exact Slack acquisition remains fail-closed when fresh event thread hydration fails" do
+  test "exact Slack acquisition advances its delta when optional thread context is unavailable" do
     now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(10, :second)
     user_id = "chief-slack-scope-failure@example.com"
     team_id = "T-SCOPE-FAILURE"
@@ -849,7 +849,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       )
     end)
 
-    {_bundle, telemetry, proposed_watermarks} =
+    {bundle, telemetry, proposed_watermarks} =
       Acquisition.build(
         user_id,
         ["followthrough"],
@@ -857,26 +857,28 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         slack_exact_build_context(user_id, team_id, now)
       )
 
-    refute Acquisition.source_complete?(telemetry, "slack")
-    assert proposed_watermarks == []
-    assert get_in(telemetry, ["sources", "slack", "status"]) == "partial"
+    assert Acquisition.source_complete?(telemetry, "slack")
+    assert get_in(telemetry, ["sources", "slack", "status"]) == "ready"
+    assert [%{kind: "slack_discovery_watermark", value: frontier}] = proposed_watermarks
+    assert frontier == now |> DateTime.to_unix() |> to_string()
+
+    assert Enum.any?(SourceBundle.slack_messages(bundle), fn message ->
+             message["text"] == "A fresh reply whose thread must be hydrated"
+           end)
 
     assert Enum.any?(telemetry["fetches"], fn fetch ->
-             fetch["mode"] == "connector" and fetch["status"] == "error" and
-               fetch["reason"] == "slack_workspace_incomplete"
+             fetch["mode"] == "event_thread_replies" and fetch["status"] == "error" and
+               fetch["reason"] == "slack_error"
            end)
 
     :ok = Logger.flush()
     _ = :sys.get_state(LogBuffer)
 
-    [entry | _rest] =
-      LogBuffer.recent_matching(5, fn entry ->
-        entry.message == "ChiefOfStaff acquisition failed to fetch Slack" and
-          entry.metadata["failure_code"] == "slack_workspace_incomplete"
-      end)
-
-    assert entry.metadata["failure_codes"] =~
-             "event_thread_replies_failed:slack_missing_scope"
+    assert [] ==
+             LogBuffer.recent_matching(5, fn entry ->
+               entry.message == "ChiefOfStaff acquisition failed to fetch Slack" and
+                 entry.metadata["failure_code"] == "slack_workspace_incomplete"
+             end)
   end
 
   test "limits Slack history scans after priority sorting" do
