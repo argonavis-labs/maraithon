@@ -50,11 +50,53 @@ defmodule Maraithon.Release do
     end
   end
 
+  def replay_authorized_gmail_source_window do
+    target = System.get_env("GMAIL_REPLAY_USER", "")
+    lower = parse_integer_env("GMAIL_REPLAY_LOWER")
+    upper = parse_integer_env("GMAIL_REPLAY_UPPER")
+
+    if target != "kent@runner.now" do
+      raise "GMAIL_REPLAY_USER is not the authorized replay account"
+    end
+
+    load_app()
+    {:ok, _apps} = Application.ensure_all_started(:req)
+    {:ok, vault} = Maraithon.Vault.start_link([])
+
+    try do
+      for repo <- repos() do
+        {:ok, result, _apps} =
+          Ecto.Migrator.with_repo(repo, fn _repo ->
+            case Maraithon.Runtime.GmailSourceReplayAudit.run(target, lower, upper) do
+              {:ok, report} ->
+                report
+
+              {:error, reason} ->
+                code = Maraithon.Runtime.GmailSourceReplayAudit.error_code(reason)
+                IO.puts("GMAIL_SOURCE_REPLAY_AUDIT_ERROR=" <> code)
+                raise "Gmail source replay audit failed"
+            end
+          end)
+
+        IO.puts("GMAIL_SOURCE_REPLAY_AUDIT=" <> Jason.encode!(result))
+      end
+    after
+      GenServer.stop(vault)
+    end
+  end
+
   defp repos do
     Application.fetch_env!(@app, :ecto_repos)
   end
 
   defp load_app do
     Application.load(@app)
+  end
+
+  defp parse_integer_env(name) do
+    case name |> System.get_env("") |> Integer.parse() do
+      {value, ""} when value >= 0 -> value
+      _invalid -> raise "#{name} must be a nonnegative integer"
+    end
   end
 end

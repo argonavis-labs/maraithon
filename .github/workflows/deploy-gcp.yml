@@ -16,6 +16,15 @@ on:
           - validate-todo
           - diagnose-runtime
           - reset-rebuild-kent
+          - replay-gmail
+      gmail_replay_lower:
+        description: Gmail replay lower Unix second (inclusive)
+        required: false
+        type: string
+      gmail_replay_upper:
+        description: Gmail replay upper Unix second (exclusive)
+        required: false
+        type: string
 
 concurrency:
   group: production-deploy
@@ -79,3 +88,14 @@ jobs:
           MARAITHON_GCP_SERVICE: maraithon
           MARAITHON_OPERATOR_USER: kent@runner.now
           MARAITHON_RESET_CONFIRMATION: RESET_AND_REBUILD_KENT
+
+      - name: Replay and audit Kent's Gmail source window
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-gmail'
+        run: scripts/monorepo/replay-gmail-production
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
+          MARAITHON_GMAIL_REPLAY_USER: kent@runner.now
+          MARAITHON_GMAIL_REPLAY_LOWER: ${{ inputs.gmail_replay_lower }}
+          MARAITHON_GMAIL_REPLAY_UPPER: ${{ inputs.gmail_replay_upper }}
