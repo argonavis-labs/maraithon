@@ -202,6 +202,48 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     stop_agent_process(agent.id)
   end
 
+  test "Gmail and Calendar can enable the Chief without Telegram delivery", %{conn: conn} do
+    user_id = "self-serve-no-telegram-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _google} =
+      OAuth.store_tokens(user_id, "google:operator@example.com", %{
+        access_token: "google-access",
+        refresh_token: "google-refresh",
+        scopes: Google.scopes_for(["gmail", "calendar"]),
+        metadata: %{"account_email" => "operator@example.com"}
+      })
+
+    {:ok, project} = Projects.create_project(user_id, %{"name" => "Source-only Chief"})
+    conn = log_in_test_user(conn, user_id)
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    refute has_element?(view, "#chief-of-staff-install a", "Connect Telegram")
+    assert has_element?(view, "#chief-of-staff-install button", "Install Chief of Staff")
+
+    result =
+      view
+      |> form("#chief-of-staff-install-form",
+        project_id: project.id,
+        binding_consent: %{acknowledged: "true"}
+      )
+      |> render_submit()
+
+    assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} = result
+
+    agent = Agents.get_agent!(redirect_id |> String.split("&") |> List.first())
+    binding = Maraithon.AgentIsolation.get_binding(agent.id)
+
+    assert agent.install_status == "enabled"
+    assert agent.status == "running"
+    assert agent.delivery_policy == %{"telegram" => "disabled"}
+    assert binding.connector_scope == %{"google" => %{"services" => ["calendar", "gmail"]}}
+    assert binding.routing_bindings == %{}
+    refute "telegram.send" in binding.tool_policy["allowed_tools"]
+
+    stop_agent_process(agent.id)
+  end
+
   test "installing before connectors are ready records setup_required and schedules no brief",
        %{conn: conn} do
     user_id = "self-serve-setup-#{System.unique_integer([:positive])}@example.com"
@@ -211,7 +253,6 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
 
     {:ok, view, _html} = live(conn, "/dashboard")
     assert has_element?(view, "#chief-of-staff-install", "Sources needed")
-    assert has_element?(view, "#chief-of-staff-install a", "Connect Telegram")
     assert has_element?(view, "#chief-of-staff-install a", "Connect Gmail")
     assert has_element?(view, "#chief-of-staff-install button", "Save for later")
 

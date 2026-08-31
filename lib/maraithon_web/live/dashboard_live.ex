@@ -376,7 +376,8 @@ defmodule MaraithonWeb.DashboardLive do
         install_opts =
           [
             project_id: project_id,
-            delivery_policy: %{"telegram" => "enabled"},
+            delivery_policy:
+              chief_of_staff_delivery_policy(socket.assigns.chief_of_staff_readiness),
             config: schedule_config
           ]
           |> maybe_put_binding_consent(binding_consent)
@@ -2649,7 +2650,7 @@ defmodule MaraithonWeb.DashboardLive do
     readiness =
       user_id
       |> Connections.connector_readiness(required_connectors, return_to: "/dashboard")
-      |> include_chief_of_staff_telegram_readiness(user_id)
+      |> include_connected_chief_of_staff_telegram_readiness(user_id)
       |> include_connected_chief_of_staff_optional_readiness(
         user_id,
         AgentMarketplace.optional_connectors_for("ai_chief_of_staff")
@@ -2664,36 +2665,33 @@ defmodule MaraithonWeb.DashboardLive do
     )
   end
 
-  defp include_chief_of_staff_telegram_readiness(readiness, user_id)
+  # Delivery is optional. A disconnected Telegram account must not prevent a
+  # consented Chief from reading the sources it actually has (Gmail, Calendar,
+  # and any connected Slack workspace). When Telegram is connected it remains
+  # part of the same explicit consent envelope and enables brief delivery.
+  defp include_connected_chief_of_staff_telegram_readiness(readiness, user_id)
        when is_list(readiness) and is_binary(user_id) do
-    if Enum.any?(readiness, &(&1.provider == "telegram")) do
-      readiness
-    else
-      account = ConnectedAccounts.get(user_id, "telegram")
+    case ConnectedAccounts.get(user_id, "telegram") do
+      %{status: "connected"} ->
+        readiness ++
+          [
+            %{
+              provider: "telegram",
+              service: "delivery",
+              label: "Telegram",
+              status: :connected,
+              connected?: true,
+              connect_path: "/connectors/telegram?return_to=%2Fdashboard",
+              details: "Delivers Chief of Staff briefs and follow-through."
+            }
+          ]
 
-      status =
-        case account do
-          %{status: "connected"} -> :connected
-          %{status: "error"} -> :needs_refresh
-          _account -> :disconnected
-        end
-
-      readiness ++
-        [
-          %{
-            provider: "telegram",
-            service: "delivery",
-            label: "Telegram",
-            status: status,
-            connected?: status == :connected,
-            connect_path: "/connectors/telegram?return_to=%2Fdashboard",
-            details: "Needed to deliver Chief of Staff briefs and follow-through."
-          }
-        ]
+      _disconnected_or_unhealthy ->
+        readiness
     end
   end
 
-  defp include_chief_of_staff_telegram_readiness(readiness, _user_id), do: readiness
+  defp include_connected_chief_of_staff_telegram_readiness(readiness, _user_id), do: readiness
 
   # Slack enriches the Chief when it is connected, but it must not turn an
   # otherwise-ready Gmail/Calendar installation into a setup-required state.
@@ -3203,7 +3201,6 @@ defmodule MaraithonWeb.DashboardLive do
         |> Map.new(fn {provider, services} ->
           {provider, %{"services" => services |> Enum.uniq() |> Enum.sort()}}
         end)
-        |> Map.put("telegram", %{"services" => ["delivery"]})
 
       credential_refs =
         Map.new(connector_scope, fn {provider, _scope} ->
@@ -3217,11 +3214,8 @@ defmodule MaraithonWeb.DashboardLive do
         "credential_refs" => credential_refs,
         "connector_scope" => connector_scope,
         "memory_scope" => %{"project_id" => project_id},
-        "tool_policy" => %{
-          "allowed_tools" => version.tool_allowlist || [],
-          "allowed_mcp_servers" => version.mcp_allowlist || []
-        },
-        "routing_bindings" => %{"telegram" => "project:#{project_id}"},
+        "tool_policy" => chief_of_staff_tool_policy(version, readiness),
+        "routing_bindings" => chief_of_staff_routing_bindings(project_id, readiness),
         "metadata" => %{
           "source" => "dashboard_explicit_consent",
           "agent_package_version_id" => version.id
@@ -3237,6 +3231,42 @@ defmodule MaraithonWeb.DashboardLive do
     do: Keyword.put(opts, :binding_consent, consent)
 
   defp maybe_put_binding_consent(opts, _consent), do: opts
+
+  defp chief_of_staff_delivery_policy(readiness) when is_list(readiness) do
+    if chief_of_staff_telegram_connected?(readiness),
+      do: %{"telegram" => "enabled"},
+      else: %{"telegram" => "disabled"}
+  end
+
+  defp chief_of_staff_delivery_policy(_readiness), do: %{"telegram" => "disabled"}
+
+  defp chief_of_staff_tool_policy(version, readiness) do
+    allowed_tools = version.tool_allowlist || []
+
+    allowed_tools =
+      if chief_of_staff_telegram_connected?(readiness),
+        do: allowed_tools,
+        else: List.delete(allowed_tools, "telegram.send")
+
+    %{
+      "allowed_tools" => allowed_tools,
+      "allowed_mcp_servers" => version.mcp_allowlist || []
+    }
+  end
+
+  defp chief_of_staff_routing_bindings(project_id, readiness) do
+    if chief_of_staff_telegram_connected?(readiness),
+      do: %{"telegram" => "project:#{project_id}"},
+      else: %{}
+  end
+
+  defp chief_of_staff_telegram_connected?(readiness) when is_list(readiness) do
+    Enum.any?(readiness, fn item ->
+      item.provider == "telegram" and item.service == "delivery" and item.connected?
+    end)
+  end
+
+  defp chief_of_staff_telegram_connected?(_readiness), do: false
 
   defp same_connector_service?(left, right) do
     left.provider == right.provider and left.service == right.service
