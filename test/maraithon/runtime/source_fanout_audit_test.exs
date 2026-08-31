@@ -7,7 +7,13 @@ defmodule Maraithon.Runtime.SourceFanoutAuditTest do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.Repo
-  alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, SourceFanoutAudit}
+
+  alias Maraithon.Runtime.{
+    BackgroundJob,
+    BackgroundJobs,
+    SourceAccountDiscovery,
+    SourceFanoutAudit
+  }
 
   @discovery_acquire "runtime_partition:source_account_discovery"
 
@@ -112,6 +118,131 @@ defmodule Maraithon.Runtime.SourceFanoutAuditTest do
     assert account_id == account.id
   end
 
+  test "audits every coordinate in a bounded closure matrix" do
+    account = discovery_account("closure-matrix")
+
+    {:ok, [todo]} =
+      Maraithon.Todos.upsert_many(account.user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Audit matrix coverage",
+          "summary" => "Every source partition must see this todo batch.",
+          "next_action" => "Verify the exact fan-out.",
+          "source_account_id" => account.id,
+          "source_item_id" => "audit-matrix-todo",
+          "dedupe_key" => "source-fanout-audit:closure-matrix"
+        }
+      ])
+
+    discovery =
+      insert_acquisition(account, "completed", DateTime.utc_now(), %{
+        "outcome" => "empty_delta",
+        "source_items" => 0,
+        "model_calls" => 0,
+        "advanced_watermarks" => 1
+      })
+
+    {:ok, acquisition} =
+      enqueue_source_job(account, "runtime_partition:source_account_closure_acquire", %{
+        "account_id" => account.id
+      })
+
+    source_refs = ["gmail:matrix-one", "gmail:matrix-two"]
+    source_digest = SourceAccountDiscovery.refs_digest(source_refs)
+    todo_digest = SourceAccountDiscovery.refs_digest([todo.id])
+
+    reasons =
+      source_refs
+      |> Enum.with_index(1)
+      |> Enum.map(fn {source_ref, index} ->
+        {:ok, reason} =
+          enqueue_source_job(
+            account,
+            "runtime_partition:source_account_closure_reason",
+            %{
+              "account_id" => account.id,
+              "acquisition_job_id" => acquisition.id,
+              "fanout_index" => index,
+              "fanout_count" => 2
+            },
+            %{
+              "fanout_index" => index,
+              "fanout_count" => 2,
+              "source_partition_index" => index,
+              "source_partition_count" => 2,
+              "todo_batch_index" => 1,
+              "todo_batch_count" => 1,
+              "source_items" => 1,
+              "source_item_refs" => [source_ref],
+              "source_refs_digest" => SourceAccountDiscovery.refs_digest([source_ref]),
+              "decision_count" => 1,
+              "decision_refs" => [todo.id],
+              "todo_decision_manifest" => [
+                %{"todo_ref" => todo.id, "action" => "evaluated"}
+              ],
+              "model_calls" => 1
+            }
+          )
+
+        reason
+      end)
+
+    reason_ids = Enum.map(reasons, & &1.id)
+
+    {:ok, finalizer} =
+      enqueue_source_job(
+        account,
+        "runtime_partition:source_account_closure_finalize",
+        %{
+          "account_id" => account.id,
+          "acquisition_job_id" => acquisition.id,
+          "reason_job_ids" => reason_ids,
+          "expected_source_partitions" => 2,
+          "expected_todo_batches" => 1,
+          "expected_source_refs_digest" => source_digest,
+          "expected_todo_refs_digest" => todo_digest
+        },
+        %{
+          "outcome" => "finalized",
+          "source_items" => 2,
+          "decision_count" => 1,
+          "fanout_count" => 2,
+          "advanced_watermarks" => 1
+        }
+      )
+
+    acquisition
+    |> BackgroundJob.changeset(%{
+      result: %{
+        "outcome" => "fanout_ready",
+        "source_items" => 2,
+        "todo_count" => 1,
+        "fanout_count" => 2,
+        "reason_job_ids" => reason_ids,
+        "finalizer_job_id" => finalizer.id
+      }
+    })
+    |> Repo.update!()
+
+    now = DateTime.add(DateTime.utc_now(), 1, :second)
+
+    audit =
+      SourceFanoutAudit.verify_since(DateTime.add(discovery.inserted_at, -1, :second),
+        now: now,
+        settlement_grace_seconds: 0
+      )
+
+    assert audit.healthy?
+    assert audit.closure.exact_cycles == 1
+    assert audit.closure.source_items == 2
+    assert audit.closure.todo_count == 1
+    assert audit.closure.decisions == 1
+    assert audit.closure.fanout_workers == 2
+    assert audit.activity.every_fanout_visible?
+    assert audit.activity.visible_fanout_rows == 5
+  end
+
   defp discovery_account(suffix) do
     user_id =
       "source-fanout-audit-#{suffix}-#{System.unique_integer([:positive])}@example.com"
@@ -155,5 +286,18 @@ defmodule Maraithon.Runtime.SourceFanoutAuditTest do
     |> Repo.update_all(set: [inserted_at: inserted_at, updated_at: inserted_at])
 
     job
+  end
+
+  defp enqueue_source_job(account, job_type, payload, result \\ %{}) do
+    BackgroundJobs.enqueue(job_type, %{
+      user_id: account.user_id,
+      status: "completed",
+      completed_at: DateTime.utc_now(),
+      max_attempts: 5,
+      scheduled_at: DateTime.utc_now(),
+      dedupe_key: "source-fanout-audit:#{job_type}:#{System.unique_integer([:positive])}",
+      payload: payload,
+      result: result
+    })
   end
 end

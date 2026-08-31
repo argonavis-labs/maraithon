@@ -97,21 +97,22 @@ defmodule Maraithon.Runtime.SourceCycleSettlementTest do
 
   test "seals completion evidence against the exact pre-evaluation todo snapshot" do
     account = connected_account("closure")
-    bundle = gmail_bundle(account, "message-closure")
+    first_bundle = gmail_bundle(account, "message-closure-1")
+    second_bundle = gmail_bundle(account, "message-closure-2")
     todo = todo(account, "closure todo")
     snapshot_updated_at = todo.updated_at
 
     acquisition =
       enqueue(account, "runtime_partition:source_account_closure_acquire", "closure-acquire", %{})
 
-    reason =
+    first_reason =
       enqueue(
         account,
         "runtime_partition:source_account_closure_reason",
-        "closure-reason",
+        "closure-reason-1",
         %{
           "acquisition_job_id" => acquisition.id,
-          "source_bundle" => bundle,
+          "source_bundle" => first_bundle,
           "todo_snapshots" => [
             %{
               "id" => todo.id,
@@ -128,6 +129,30 @@ defmodule Maraithon.Runtime.SourceCycleSettlementTest do
         "completed"
       )
 
+    second_reason =
+      enqueue(
+        account,
+        "runtime_partition:source_account_closure_reason",
+        "closure-reason-2",
+        %{
+          "acquisition_job_id" => acquisition.id,
+          "source_bundle" => second_bundle,
+          "todo_snapshots" => [
+            %{
+              "id" => todo.id,
+              "status" => "open",
+              "updated_at" => DateTime.to_iso8601(snapshot_updated_at)
+            }
+          ]
+        },
+        %{
+          "todo_decision_manifest" => [
+            %{"todo_ref" => todo.id, "action" => "superseded"}
+          ]
+        },
+        "completed"
+      )
+
     {:ok, _done} = todo |> Todo.changeset(%{status: "done"}) |> Repo.update()
 
     finalizer =
@@ -137,11 +162,11 @@ defmodule Maraithon.Runtime.SourceCycleSettlementTest do
         "closure-finalize",
         %{
           "acquisition_job_id" => acquisition.id,
-          "reason_job_ids" => [reason.id]
+          "reason_job_ids" => [first_reason.id, second_reason.id]
         }
       )
 
-    assert {:ok, %{source_items: 1, todo_snapshots: 1, todo_closures: 1, expected_jobs: 3}} =
+    assert {:ok, %{source_items: 2, todo_snapshots: 1, todo_closures: 1, expected_jobs: 4}} =
              Repo.transaction(fn ->
                SourceCycleSettlement.seal(
                  finalizer,
@@ -155,6 +180,7 @@ defmodule Maraithon.Runtime.SourceCycleSettlementTest do
     cycle = Repo.get_by!(SourceCycle, acquisition_job_id: acquisition.id)
     receipt = Repo.get_by!(TodoClosureReceipt, cycle_id: cycle.id, todo_id: todo.id)
     assert receipt.outcome == "completed"
+    assert receipt.reason_job_id == first_reason.id
     assert byte_size(receipt.evidence_digest) == 32
   end
 

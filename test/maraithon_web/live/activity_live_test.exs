@@ -203,6 +203,8 @@ defmodule MaraithonWeb.ActivityLiveTest do
     assert html =~ "founder@example.com"
     assert html =~ "Maraithon HQ"
     assert html =~ "source_discovery_child_failed"
+    assert html =~ "Source partition"
+    assert html =~ "Todo batch"
     refute html =~ "private@example.com"
 
     Enum.each(source_jobs, fn job ->
@@ -235,15 +237,27 @@ defmodule MaraithonWeb.ActivityLiveTest do
         "runtime_partition:source_account_closure_finalize" ->
           "runtime-partition:#{dedupe_prefix}:#{account_id}:#{acquisition_job_id}"
 
-        type
-        when type in [
-               "runtime_partition:source_account_discovery_reason",
-               "runtime_partition:source_account_closure_reason"
-             ] ->
+        "runtime_partition:source_account_discovery_reason" ->
           "runtime-partition:#{dedupe_prefix}:#{acquisition_job_id}:1-of-1:#{account_id}"
+
+        "runtime_partition:source_account_closure_reason" ->
+          "runtime-partition:#{dedupe_prefix}:#{acquisition_job_id}:source-1-of-1:todo-1-of-1:1-of-1:#{account_id}"
 
         _other ->
           "runtime-partition:#{dedupe_prefix}:#{account_id}"
+      end
+
+    payload =
+      if job_type == "runtime_partition:source_account_closure_reason" do
+        %{
+          "account_id" => account_id,
+          "source_partition_index" => 1,
+          "source_partition_count" => 1,
+          "todo_batch_index" => 1,
+          "todo_batch_count" => 1
+        }
+      else
+        %{"account_id" => account_id}
       end
 
     BackgroundJobs.enqueue(job_type, %{
@@ -254,7 +268,7 @@ defmodule MaraithonWeb.ActivityLiveTest do
       rate_limit_key: if(queue == "runtime_model_user", do: "model", else: "provider"),
       max_attempts: 3,
       scheduled_at: DateTime.utc_now(),
-      payload: %{"account_id" => account_id}
+      payload: payload
     })
   end
 end

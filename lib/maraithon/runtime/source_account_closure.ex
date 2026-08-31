@@ -4,9 +4,9 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
 
   The provider lane reads only the account's closure delta. Empty deltas move
   the closure cursor without model work. A non-empty delta is sealed once and
-  handed to small todo batches, so each quick worker sees the complete later
-  evidence while every open todo is evaluated exactly once. A finalizer moves
-  the cursor only after the complete todo manifest is proven.
+  handed to a bounded source-partition × todo-batch matrix. The workers stay
+  small while every todo sees every source partition exactly once. A finalizer
+  moves the cursor only after the complete matrix is proven.
   """
 
   import Ecto.Query
@@ -51,7 +51,14 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
           )
 
         true ->
-          build_fanout(account, bundle, watermarks, source_refs, todo_snapshots, opts)
+          build_fanout(
+            account,
+            source_partitions,
+            watermarks,
+            source_refs,
+            todo_snapshots,
+            opts
+          )
       end
     else
       false -> {:error, :source_closure_source_identity_mismatch}
@@ -86,96 +93,151 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     end
   end
 
-  defp build_fanout(account, bundle, watermarks, source_refs, todo_snapshots, opts) do
-    case SourceAccountDiscovery.compact_bundle(bundle) do
-      compact when is_map(compact) ->
-        todo_batches = Enum.chunk_every(todo_snapshots, @todo_batch_size)
-        fanout_count = length(todo_batches)
-        source_items = length(source_refs)
-        todo_ids = Enum.map(todo_snapshots, &Map.fetch!(&1, "id"))
-        source_refs_digest = SourceAccountDiscovery.refs_digest(source_refs)
+  defp build_fanout(account, source_partitions, watermarks, source_refs, todo_snapshots, opts) do
+    todo_batches = Enum.chunk_every(todo_snapshots, @todo_batch_size)
+    packed_partitions = pack_source_partitions(source_partitions)
 
+    case build_bounded_handoffs(todo_batches, packed_partitions, account, opts) do
+      {:ok, handoffs} ->
+        fanout_result(
+          account,
+          handoffs,
+          packed_partitions,
+          todo_batches,
+          watermarks,
+          source_refs,
+          todo_snapshots,
+          opts
+        )
+
+      {:error, _reason} when length(packed_partitions) < length(source_partitions) ->
         with {:ok, handoffs} <-
-               build_bounded_handoffs(
-                 todo_batches,
-                 account,
-                 compact,
-                 source_refs,
-                 source_refs_digest,
-                 fanout_count,
-                 opts
-               ) do
-          {:ok,
-           %{
-             outcome: "fanout_ready",
-             account_id: account.id,
-             source_items: source_items,
-             todo_count: length(todo_ids),
-             fanout_count: fanout_count,
-             handoffs: handoffs,
-             finalizer: %{
-               "account_id" => account.id,
-               "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
-               "expected_fanouts" => fanout_count,
-               "expected_source_items" => source_items,
-               "expected_source_refs_digest" => source_refs_digest,
-               "expected_todo_count" => length(todo_ids),
-               "expected_todo_refs_digest" => SourceAccountDiscovery.refs_digest(todo_ids),
-               "watermarks" => watermarks
-             }
-           }}
+               build_bounded_handoffs(todo_batches, source_partitions, account, opts) do
+          fanout_result(
+            account,
+            handoffs,
+            source_partitions,
+            todo_batches,
+            watermarks,
+            source_refs,
+            todo_snapshots,
+            opts
+          )
         end
 
-      nil ->
-        {:error, :source_closure_delta_too_large}
+      {:error, _reason} = error ->
+        error
     end
   end
 
-  defp build_bounded_handoffs(
-         todo_batches,
+  defp fanout_result(
          account,
-         compact,
+         handoffs,
+         source_partitions,
+         todo_batches,
+         watermarks,
          source_refs,
-         source_refs_digest,
-         fanout_count,
+         todo_snapshots,
          opts
        ) do
-    source_items = length(source_refs)
+    todo_ids = Enum.map(todo_snapshots, &Map.fetch!(&1, "id"))
+    fanout_count = length(handoffs)
+
+    {:ok,
+     %{
+       outcome: "fanout_ready",
+       account_id: account.id,
+       source_items: length(source_refs),
+       source_partition_count: length(source_partitions),
+       todo_count: length(todo_ids),
+       todo_batch_count: length(todo_batches),
+       fanout_count: fanout_count,
+       handoffs: handoffs,
+       finalizer: %{
+         "account_id" => account.id,
+         "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
+         "expected_fanouts" => fanout_count,
+         "expected_source_items" => length(source_refs),
+         "expected_source_partitions" => length(source_partitions),
+         "expected_source_refs_digest" => SourceAccountDiscovery.refs_digest(source_refs),
+         "expected_todo_count" => length(todo_ids),
+         "expected_todo_batches" => length(todo_batches),
+         "expected_todo_refs_digest" => SourceAccountDiscovery.refs_digest(todo_ids),
+         "watermarks" => watermarks
+       }
+     }}
+  end
+
+  defp build_bounded_handoffs(todo_batches, source_partitions, account, opts) do
+    fanout_count = length(todo_batches) * length(source_partitions)
+    source_partition_count = length(source_partitions)
+    todo_batch_count = length(todo_batches)
 
     todo_batches
     |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, [], compact}, fn
-      {todo_snapshot_batch, fanout_index}, {:ok, handoffs, prepared_bundle} ->
-        todo_batch = Enum.map(todo_snapshot_batch, &Map.fetch!(&1, "id"))
+    |> Enum.flat_map(fn {todo_snapshot_batch, todo_batch_index} ->
+      Enum.map(Enum.with_index(source_partitions, 1), fn {source_bundle, source_partition_index} ->
+        {todo_snapshot_batch, todo_batch_index, source_bundle, source_partition_index}
+      end)
+    end)
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, []}, fn
+      {{todo_snapshot_batch, todo_batch_index, source_bundle, source_partition_index},
+       fanout_index},
+      {:ok, handoffs} ->
+        todo_ids = Enum.map(todo_snapshot_batch, &Map.fetch!(&1, "id"))
+        source_refs = SourceAccountDiscovery.source_item_refs(source_bundle)
 
         handoff = %{
           "account_id" => account.id,
           "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
           "fanout_index" => fanout_index,
           "fanout_count" => fanout_count,
-          "source_items" => source_items,
+          "source_partition_index" => source_partition_index,
+          "source_partition_count" => source_partition_count,
+          "todo_batch_index" => todo_batch_index,
+          "todo_batch_count" => todo_batch_count,
+          "source_items" => length(source_refs),
           "source_item_refs" => source_refs,
-          "source_refs_digest" => source_refs_digest,
-          "source_bundle" => prepared_bundle,
-          "todo_ids" => todo_batch,
+          "source_refs_digest" => SourceAccountDiscovery.refs_digest(source_refs),
+          "source_bundle" => source_bundle,
+          "todo_ids" => todo_ids,
           "todo_snapshots" => todo_snapshot_batch,
-          "todo_count" => length(todo_batch),
+          "todo_count" => length(todo_ids),
           "watermarks" => []
         }
 
         case SourceAccountDiscovery.bound_handoff(handoff) do
           {:ok, bounded_handoff} ->
-            {:cont,
-             {:ok, [bounded_handoff | handoffs], Map.fetch!(bounded_handoff, "source_bundle")}}
+            {:cont, {:ok, [bounded_handoff | handoffs]}}
 
           {:error, _reason} ->
             {:halt, {:error, :source_closure_handoff_payload_too_large}}
         end
     end)
     |> case do
-      {:ok, handoffs, _prepared_bundle} -> {:ok, Enum.reverse(handoffs)}
+      {:ok, handoffs} -> {:ok, Enum.reverse(handoffs)}
       {:error, _reason} = error -> error
     end
+  end
+
+  defp pack_source_partitions([]), do: []
+
+  defp pack_source_partitions([first | rest]) do
+    {packed, _current, current_bundle} =
+      Enum.reduce(rest, {[], [first], first}, fn partition, {packed, current, current_bundle} ->
+        candidate = current ++ [partition]
+
+        case SourceAccountDiscovery.merge_partitions(candidate) do
+          %{} = merged ->
+            {packed, candidate, merged}
+
+          nil ->
+            {[current_bundle | packed], [partition], partition}
+        end
+      end)
+
+    Enum.reverse([current_bundle | packed])
   end
 
   def reason(account, payload, opts \\ [])
@@ -189,6 +251,20 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
            read_integer(payload, "fanout_index"),
          fanout_count when is_integer(fanout_count) and fanout_count >= fanout_index <-
            read_integer(payload, "fanout_count"),
+         source_partition_index
+         when is_integer(source_partition_index) and
+                source_partition_index > 0 <-
+           read_integer(payload, "source_partition_index"),
+         source_partition_count
+         when is_integer(source_partition_count) and
+                source_partition_count >= source_partition_index <-
+           read_integer(payload, "source_partition_count"),
+         todo_batch_index when is_integer(todo_batch_index) and todo_batch_index > 0 <-
+           read_integer(payload, "todo_batch_index"),
+         todo_batch_count
+         when is_integer(todo_batch_count) and
+                todo_batch_count >= todo_batch_index <-
+           read_integer(payload, "todo_batch_count"),
          expected_source_items
          when is_integer(expected_source_items) and expected_source_items > 0 <-
            read_integer(payload, "source_items"),
@@ -228,9 +304,11 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          outcome: "evaluated",
          account_id: account.id,
          source_items: expected_source_items,
+         source_item_refs: source_item_refs,
          source_refs_digest: expected_source_refs_digest,
          decision_count: expected_todo_count,
          decision_refs: todo_manifest.decision_refs,
+         todo_ids: todo_ids,
          todo_decision_count: expected_todo_count,
          todo_decision_refs: todo_manifest.decision_refs,
          evaluated_todo_decision_count: length(todo_manifest.evaluated_refs),
@@ -243,6 +321,10 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          model_calls: Map.get(result, :model_calls, 0),
          fanout_index: fanout_index,
          fanout_count: fanout_count,
+         source_partition_index: source_partition_index,
+         source_partition_count: source_partition_count,
+         todo_batch_index: todo_batch_index,
+         todo_batch_count: todo_batch_count,
          result: result
        }}
     else
@@ -270,10 +352,16 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          expected_source_items
          when is_integer(expected_source_items) and expected_source_items > 0 <-
            read_integer(payload, "expected_source_items"),
+         expected_source_partitions
+         when is_integer(expected_source_partitions) and expected_source_partitions > 0 <-
+           read_integer(payload, "expected_source_partitions"),
          expected_source_refs_digest when is_binary(expected_source_refs_digest) <-
            read_string(payload, "expected_source_refs_digest"),
          expected_todo_count when is_integer(expected_todo_count) and expected_todo_count > 0 <-
            read_integer(payload, "expected_todo_count"),
+         expected_todo_batches
+         when is_integer(expected_todo_batches) and expected_todo_batches > 0 <-
+           read_integer(payload, "expected_todo_batches"),
          expected_todo_refs_digest when is_binary(expected_todo_refs_digest) <-
            read_string(payload, "expected_todo_refs_digest"),
          :ok <-
@@ -282,8 +370,10 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
              child_results,
              expected_fanouts,
              expected_source_items,
+             expected_source_partitions,
              expected_source_refs_digest,
              expected_todo_count,
+             expected_todo_batches,
              expected_todo_refs_digest
            ),
          {:ok, watermark_result} <- settle_watermarks(account, watermarks, opts) do
@@ -331,40 +421,76 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          child_results,
          expected_fanouts,
          expected_source_items,
+         expected_source_partitions,
          expected_source_refs_digest,
          expected_todo_count,
+         expected_todo_batches,
          expected_todo_refs_digest
        ) do
     indexes = child_results |> Enum.map(&result_integer(&1, "fanout_index")) |> Enum.sort()
-    source_item_counts = Enum.map(child_results, &result_integer(&1, "source_items"))
-    decision_count = Enum.sum(Enum.map(child_results, &result_integer(&1, "decision_count")))
-    decision_refs = Enum.flat_map(child_results, &result_string_list(&1, "decision_refs"))
-    source_digests = Enum.map(child_results, &result_string(&1, "source_refs_digest"))
-    decision_manifests = Enum.flat_map(child_results, &result_list(&1, "todo_decision_manifest"))
 
-    evaluated_refs =
-      Enum.flat_map(child_results, &result_string_list(&1, "evaluated_todo_decision_refs"))
+    coordinates =
+      Enum.map(child_results, fn result ->
+        {result_integer(result, "todo_batch_index"),
+         result_integer(result, "source_partition_index")}
+      end)
 
-    superseded_refs =
-      Enum.flat_map(child_results, &result_string_list(&1, "superseded_todo_decision_refs"))
+    expected_coordinates =
+      for todo_batch <- 1..expected_todo_batches,
+          source_partition <- 1..expected_source_partitions,
+          do: {todo_batch, source_partition}
 
-    todo_decision_count =
-      Enum.sum(Enum.map(child_results, &result_integer(&1, "todo_decision_count")))
+    children_valid? =
+      Enum.all?(child_results, fn result ->
+        decision_refs = result_string_list(result, "decision_refs")
 
-    if length(child_results) == expected_fanouts and indexes == Enum.to_list(1..expected_fanouts) and
-         Enum.all?(source_item_counts, &(&1 == expected_source_items)) and
-         Enum.all?(source_digests, &(&1 == expected_source_refs_digest)) and
-         decision_count == expected_todo_count and length(decision_refs) == expected_todo_count and
-         length(Enum.uniq(decision_refs)) == expected_todo_count and
-         SourceAccountDiscovery.refs_digest(decision_refs) == expected_todo_refs_digest and
-         todo_decision_count == expected_todo_count and
-         valid_closure_decision_manifest?(
-           account,
-           decision_manifests,
-           decision_refs,
-           evaluated_refs,
-           superseded_refs
-         ) do
+        result_integer(result, "fanout_count") == expected_fanouts and
+          result_integer(result, "source_partition_count") == expected_source_partitions and
+          result_integer(result, "todo_batch_count") == expected_todo_batches and
+          result_integer(result, "decision_count") == length(decision_refs) and
+          result_integer(result, "todo_decision_count") == length(decision_refs) and
+          valid_closure_decision_manifest?(
+            account,
+            result_list(result, "todo_decision_manifest"),
+            decision_refs,
+            result_string_list(result, "evaluated_todo_decision_refs"),
+            result_string_list(result, "superseded_todo_decision_refs")
+          )
+      end)
+
+    source_coverage? =
+      Enum.all?(1..expected_todo_batches, fn todo_batch_index ->
+        batch_results =
+          Enum.filter(
+            child_results,
+            &(result_integer(&1, "todo_batch_index") == todo_batch_index)
+          )
+
+        refs = Enum.flat_map(batch_results, &result_string_list(&1, "source_item_refs"))
+
+        length(refs) == expected_source_items and length(Enum.uniq(refs)) == expected_source_items and
+          SourceAccountDiscovery.refs_digest(refs) == expected_source_refs_digest
+      end)
+
+    todo_coverage? =
+      Enum.all?(1..expected_source_partitions, fn source_partition_index ->
+        partition_results =
+          Enum.filter(
+            child_results,
+            &(result_integer(&1, "source_partition_index") == source_partition_index)
+          )
+
+        refs = Enum.flat_map(partition_results, &result_string_list(&1, "decision_refs"))
+
+        length(refs) == expected_todo_count and length(Enum.uniq(refs)) == expected_todo_count and
+          SourceAccountDiscovery.refs_digest(refs) == expected_todo_refs_digest
+      end)
+
+    if expected_fanouts == expected_source_partitions * expected_todo_batches and
+         length(child_results) == expected_fanouts and
+         indexes == Enum.to_list(1..expected_fanouts) and
+         Enum.sort(coordinates) == Enum.sort(expected_coordinates) and children_valid? and
+         source_coverage? and todo_coverage? do
       :ok
     else
       {:error, :source_closure_incomplete_decisions}
@@ -547,7 +673,13 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   end
 
   defp existing_atom("fanout_index"), do: :fanout_index
+  defp existing_atom("fanout_count"), do: :fanout_count
+  defp existing_atom("source_partition_index"), do: :source_partition_index
+  defp existing_atom("source_partition_count"), do: :source_partition_count
+  defp existing_atom("todo_batch_index"), do: :todo_batch_index
+  defp existing_atom("todo_batch_count"), do: :todo_batch_count
   defp existing_atom("source_items"), do: :source_items
+  defp existing_atom("source_item_refs"), do: :source_item_refs
   defp existing_atom("decision_count"), do: :decision_count
   defp existing_atom("decision_refs"), do: :decision_refs
   defp existing_atom("source_refs_digest"), do: :source_refs_digest

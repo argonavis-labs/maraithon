@@ -238,6 +238,112 @@ defmodule Maraithon.Runtime.SourceAccountClosureTest do
     assert length(handoffs) < old_source_partition_work
   end
 
+  test "large closure deltas become an exact bounded source by todo matrix" do
+    account = closure_account("large-matrix")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(account.user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Close from a large exact delta",
+          "summary" => "Every bounded source partition must be checked before settlement.",
+          "next_action" => "Finish the large-delta follow-up.",
+          "source_account_id" => account.id,
+          "source_item_id" => "large-matrix-todo",
+          "dedupe_key" => "source-account-closure:large-matrix"
+        }
+      ])
+
+    messages =
+      Enum.map(1..30, fn index ->
+        body =
+          Enum.map_join(1..900, fn chunk ->
+            :crypto.hash(:sha512, "#{index}:#{chunk}") |> Base.encode64()
+          end)
+
+        %{
+          "id" => "large-message-#{index}",
+          "thread_id" => "large-thread-#{index}",
+          "subject" => "Large evidence #{index}",
+          "body" => body,
+          "from" => "sender@example.com",
+          "to" => [account.user_id],
+          "label_ids" => ["INBOX"],
+          "internal_date" => DateTime.to_unix(now, :millisecond)
+        }
+      end)
+
+    bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty()
+      |> SourceBundle.put_gmail(%{
+        "messages" => messages,
+        "inbox_messages" => messages,
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    assert is_nil(SourceAccountDiscovery.compact_bundle(bundle))
+
+    assert {:ok,
+            %{
+              source_items: 30,
+              todo_count: 1,
+              source_partition_count: source_partition_count,
+              todo_batch_count: 1,
+              fanout_count: fanout_count,
+              handoffs: handoffs,
+              finalizer: finalizer
+            }} =
+             SourceAccountClosure.acquire(account,
+               source_bundle: bundle,
+               proposed_watermarks: [closure_watermark(account, "1700000410")]
+             )
+
+    assert source_partition_count > 1
+    assert fanout_count == source_partition_count
+    assert length(handoffs) == fanout_count
+    assert Enum.map(handoffs, & &1["fanout_index"]) == Enum.to_list(1..fanout_count)
+    assert Enum.map(handoffs, & &1["source_partition_index"]) == Enum.to_list(1..fanout_count)
+    assert Enum.sum(Enum.map(handoffs, & &1["source_items"])) == 30
+
+    child_results =
+      Enum.map(handoffs, fn handoff ->
+        %{
+          fanout_index: handoff["fanout_index"],
+          fanout_count: handoff["fanout_count"],
+          source_partition_index: handoff["source_partition_index"],
+          source_partition_count: handoff["source_partition_count"],
+          todo_batch_index: handoff["todo_batch_index"],
+          todo_batch_count: handoff["todo_batch_count"],
+          source_items: handoff["source_items"],
+          source_item_refs: handoff["source_item_refs"],
+          source_refs_digest: handoff["source_refs_digest"],
+          decision_count: 1,
+          decision_refs: [todo.id],
+          todo_decision_count: 1,
+          todo_decision_manifest: [%{todo_ref: todo.id, action: "evaluated"}],
+          evaluated_todo_decision_refs: [todo.id],
+          superseded_todo_decision_refs: [],
+          model_calls: 1
+        }
+      end)
+
+    assert {:ok,
+            %{
+              source_items: 30,
+              decision_count: 1,
+              fanout_count: ^fanout_count,
+              model_calls: ^fanout_count
+            }} = SourceAccountClosure.finalize(account, finalizer, child_results)
+
+    assert %{value: "1700000410"} =
+             SourceCursors.get(account.id, "gmail_closure_watermark")
+  end
+
   test "account evidence evaluates open todos created by another source account" do
     evidence_account = closure_account("cross-source-evidence")
 

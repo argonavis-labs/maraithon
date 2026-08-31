@@ -181,9 +181,19 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
       |> Enum.flat_map(&read_list(&1.payload || %{}, "todo_snapshots"))
       |> Enum.map(&normalize_snapshot/1)
 
-    if Enum.all?(snapshots, &is_map/1) and
-         length(snapshots) == length(Enum.uniq_by(snapshots, & &1.todo_id)) do
-      {:ok, snapshots}
+    if Enum.all?(snapshots, &is_map/1) do
+      unique_snapshots = Enum.uniq_by(snapshots, & &1.todo_id)
+
+      if Enum.all?(unique_snapshots, fn snapshot ->
+           Enum.all?(
+             Enum.filter(snapshots, &(&1.todo_id == snapshot.todo_id)),
+             &(&1 == snapshot)
+           )
+         end) do
+        {:ok, unique_snapshots}
+      else
+        {:error, :invalid_source_cycle_todo_snapshot}
+      end
     else
       {:error, :invalid_source_cycle_todo_snapshot}
     end
@@ -219,17 +229,22 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
     evidence_digest = joined_digest(Enum.map(items, & &1.source_revision_digest))
 
     receipts =
-      Enum.flat_map(graph.reasons, fn reason ->
+      graph.reasons
+      |> Enum.flat_map(fn reason ->
         reason.result
         |> read_list("todo_decision_manifest")
-        |> Enum.map(
-          &todo_closure_receipt(
-            &1,
-            reason.id,
-            snapshot_by_id,
-            cycle.user_id,
-            evidence_digest
-          )
+        |> Enum.map(&{&1, reason.id})
+      end)
+      |> Enum.group_by(fn {entry, _reason_job_id} -> read_string(entry, "todo_ref") end)
+      |> Enum.map(fn {_todo_id, entries} ->
+        {entry, reason_job_id} = closure_receipt_entry(entries)
+
+        todo_closure_receipt(
+          entry,
+          reason_job_id,
+          snapshot_by_id,
+          cycle.user_id,
+          evidence_digest
         )
       end)
 
@@ -240,6 +255,14 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
     else
       _invalid -> {:error, :invalid_source_cycle_closure_receipt}
     end
+  end
+
+  defp closure_receipt_entry(entries) do
+    entries
+    |> Enum.sort_by(fn {entry, reason_job_id} ->
+      {if(read_string(entry, "action") == "evaluated", do: 0, else: 1), reason_job_id}
+    end)
+    |> hd()
   end
 
   defp source_decision_receipt(entry, reason_job_id, item_by_ref, user_id) do

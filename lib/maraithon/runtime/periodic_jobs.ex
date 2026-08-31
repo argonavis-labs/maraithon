@@ -1274,6 +1274,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
             acquisition_job.id,
             fanout_index,
             Map.get(handoff, "fanout_count"),
+            Map.get(handoff, "source_partition_index"),
+            Map.get(handoff, "source_partition_count"),
+            Map.get(handoff, "todo_batch_index"),
+            Map.get(handoff, "todo_batch_count"),
             account.id
           ),
         partition_key:
@@ -1604,10 +1608,14 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          acquisition_job_id,
          fanout_index,
          fanout_count,
+         source_partition_index,
+         source_partition_count,
+         todo_batch_index,
+         todo_batch_count,
          account_id
        ),
        do:
-         "runtime-partition:source-account-closure-reason:#{acquisition_job_id}:#{fanout_index}-of-#{fanout_count}:#{account_id}"
+         "runtime-partition:source-account-closure-reason:#{acquisition_job_id}:source-#{source_partition_index}-of-#{source_partition_count}:todo-#{todo_batch_index}-of-#{todo_batch_count}:#{fanout_index}-of-#{fanout_count}:#{account_id}"
 
   defp source_closure_finalize_dedupe_key(account_id, acquisition_job_id),
     do: "runtime-partition:source-account-closure-finalize:#{account_id}:#{acquisition_job_id}"

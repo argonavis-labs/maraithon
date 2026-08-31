@@ -122,6 +122,7 @@ defmodule MaraithonWeb.ActivityLive do
     role = source_role(job.job_type)
     stage = source_stage(job.job_type)
     fanout = source_fanout(job.dedupe_key, job.result)
+    matrix = source_matrix(job.dedupe_key, job.result)
     occurred_at = job.claimed_at || job.scheduled_at || job.inserted_at
     finished_at = job.completed_at || job.failed_at || job.cancelled_at
 
@@ -145,6 +146,7 @@ defmodule MaraithonWeb.ActivityLive do
       source_items: source_result_count(job.result, "source_items"),
       decision_count: source_result_count(job.result, "decision_count"),
       fanout: fanout,
+      matrix: matrix,
       occurred_at: occurred_at
     }
   end
@@ -336,7 +338,7 @@ defmodule MaraithonWeb.ActivityLive do
          fanout
        ),
        do:
-         fanout_summary("Compared the complete later-message delta with this todo batch", fanout)
+         fanout_summary("Compared a bounded later-message partition with this todo batch", fanout)
 
   defp source_run_summary(
          "runtime_partition:source_account_closure_finalize",
@@ -376,6 +378,49 @@ defmodule MaraithonWeb.ActivityLive do
     do: "#{summary} · batch #{index} of #{count}"
 
   defp fanout_summary(summary, _fanout), do: summary
+
+  defp source_matrix(dedupe_key, result) do
+    source_index = source_result_count(result, "source_partition_index")
+    source_count = source_result_count(result, "source_partition_count")
+    todo_index = source_result_count(result, "todo_batch_index")
+    todo_count = source_result_count(result, "todo_batch_count")
+
+    cond do
+      source_index > 0 and source_count >= source_index and todo_index > 0 and
+          todo_count >= todo_index ->
+        matrix(source_index, source_count, todo_index, todo_count)
+
+      is_binary(dedupe_key) ->
+        case Regex.run(
+               ~r/:source-(\d+)-of-(\d+):todo-(\d+)-of-(\d+):\d+-of-\d+:\d+$/,
+               dedupe_key,
+               capture: :all_but_first
+             ) do
+          [source_index, source_count, todo_index, todo_count] ->
+            matrix(
+              String.to_integer(source_index),
+              String.to_integer(source_count),
+              String.to_integer(todo_index),
+              String.to_integer(todo_count)
+            )
+
+          _other ->
+            nil
+        end
+
+      true ->
+        nil
+    end
+  end
+
+  defp matrix(source_index, source_count, todo_index, todo_count) do
+    %{
+      source_index: source_index,
+      source_count: source_count,
+      todo_index: todo_index,
+      todo_count: todo_count
+    }
+  end
 
   defp source_result_count(result, key) when is_map(result) do
     case Map.get(result, key, 0) do
@@ -596,6 +641,14 @@ defmodule MaraithonWeb.ActivityLive do
                     <dd :if={item.source_items > 0} class="text-zinc-700">{item.source_items}</dd>
                     <dt :if={item.decision_count > 0}>Decisions</dt>
                     <dd :if={item.decision_count > 0} class="text-zinc-700">{item.decision_count}</dd>
+                    <dt :if={item.matrix}>Source partition</dt>
+                    <dd :if={item.matrix} class="text-zinc-700">
+                      {item.matrix.source_index} of {item.matrix.source_count}
+                    </dd>
+                    <dt :if={item.matrix}>Todo batch</dt>
+                    <dd :if={item.matrix} class="text-zinc-700">
+                      {item.matrix.todo_index} of {item.matrix.todo_count}
+                    </dd>
                     <dt>Failed attempts</dt>
                     <dd class="text-zinc-700">{item.failed_attempts}</dd>
                     <dt :if={item.last_error_code}>Last issue</dt>

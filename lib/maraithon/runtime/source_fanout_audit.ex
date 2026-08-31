@@ -253,8 +253,16 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
       |> Enum.reject(&is_nil/1)
       |> Enum.map(&(&1.result || %{}))
 
-    decision_refs = Enum.flat_map(child_results, &map_string_list(&1, "decision_refs"))
-    decision_count = Enum.sum(Enum.map(child_results, &map_integer(&1, "decision_count")))
+    raw_decision_refs = Enum.flat_map(child_results, &map_string_list(&1, "decision_refs"))
+
+    {decision_refs, decision_count} =
+      if base.role == "closure" do
+        unique_refs = Enum.uniq(raw_decision_refs)
+        {unique_refs, length(unique_refs)}
+      else
+        {raw_decision_refs, Enum.sum(Enum.map(child_results, &map_integer(&1, "decision_count")))}
+      end
+
     model_calls = Enum.sum(Enum.map(child_results, &map_integer(&1, "model_calls")))
 
     expected_decisions =
@@ -355,17 +363,57 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
     expected_source_digest =
       map_string(finalizer && finalizer.payload, "expected_source_refs_digest")
 
-    child_item_counts = Enum.map(child_results, &map_integer(&1, "source_items"))
-    child_source_digests = Enum.map(child_results, &map_string(&1, "source_refs_digest"))
+    source_partition_count =
+      map_integer(finalizer && finalizer.payload, "expected_source_partitions")
+
+    todo_batch_count = map_integer(finalizer && finalizer.payload, "expected_todo_batches")
+
+    coordinates =
+      Enum.map(child_results, fn result ->
+        {map_integer(result, "todo_batch_index"), map_integer(result, "source_partition_index")}
+      end)
+
+    expected_coordinates =
+      for todo_batch <- 1..max(todo_batch_count, 1),
+          source_partition <- 1..max(source_partition_count, 1),
+          do: {todo_batch, source_partition}
+
+    source_coverage? =
+      source_partition_count > 0 and todo_batch_count > 0 and
+        Enum.all?(1..todo_batch_count, fn todo_batch_index ->
+          refs =
+            child_results
+            |> Enum.filter(&(map_integer(&1, "todo_batch_index") == todo_batch_index))
+            |> Enum.sort_by(&map_integer(&1, "source_partition_index"))
+            |> Enum.flat_map(&map_string_list(&1, "source_item_refs"))
+
+          length(refs) == expected_items and length(Enum.uniq(refs)) == expected_items and
+            SourceAccountDiscovery.refs_digest(refs) == expected_source_digest
+        end)
+
+    todo_coverage? =
+      source_partition_count > 0 and todo_batch_count > 0 and
+        Enum.all?(1..source_partition_count, fn source_partition_index ->
+          refs =
+            child_results
+            |> Enum.filter(&(map_integer(&1, "source_partition_index") == source_partition_index))
+            |> Enum.sort_by(&map_integer(&1, "todo_batch_index"))
+            |> Enum.flat_map(&map_string_list(&1, "decision_refs"))
+
+          length(refs) == expected_decisions and
+            length(Enum.uniq(refs)) == expected_decisions
+        end)
 
     errors
     |> require_error(
-      Enum.all?(child_item_counts, &(&1 == expected_items)),
-      :source_item_count_mismatch
+      length(child_results) == source_partition_count * todo_batch_count and
+        Enum.sort(coordinates) == Enum.sort(expected_coordinates),
+      :fanout_matrix_mismatch
     )
+    |> require_error(source_coverage?, :source_item_count_mismatch)
+    |> require_error(todo_coverage?, :todo_decision_coverage_mismatch)
     |> require_error(
-      is_binary(expected_source_digest) and
-        Enum.all?(child_source_digests, &(&1 == expected_source_digest)),
+      is_binary(expected_source_digest),
       :source_reference_digest_mismatch
     )
     |> require_decision_manifest(expected_decisions, decision_count, decision_refs)
@@ -542,11 +590,17 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
     manifests = Enum.flat_map(child_results, &map_list(&1, "todo_decision_manifest"))
     manifest_refs = Enum.map(manifests, &map_string(&1, "todo_ref"))
 
-    length(manifests) == length(decision_refs) and
-      Enum.sort(manifest_refs) == Enum.sort(decision_refs) and
-      Enum.all?(manifests, fn manifest ->
-        map_string(manifest, "action") in ["evaluated", "superseded"]
-      end)
+    Enum.all?(child_results, fn result ->
+      result_refs = map_string_list(result, "decision_refs")
+      result_manifests = map_list(result, "todo_decision_manifest")
+      result_manifest_refs = Enum.map(result_manifests, &map_string(&1, "todo_ref"))
+
+      length(result_manifests) == length(result_refs) and
+        Enum.sort(result_manifest_refs) == Enum.sort(result_refs) and
+        Enum.all?(result_manifests, fn manifest ->
+          map_string(manifest, "action") in ["evaluated", "superseded"]
+        end)
+    end) and Enum.sort(Enum.uniq(manifest_refs)) == Enum.sort(decision_refs)
   end
 
   defp require_error(errors, true, _error), do: errors
@@ -611,7 +665,14 @@ defmodule Maraithon.Runtime.SourceFanoutAudit do
   defp key_atom("outcome"), do: :outcome
   defp key_atom("reason_job_ids"), do: :reason_job_ids
   defp key_atom("source_items"), do: :source_items
+  defp key_atom("source_item_refs"), do: :source_item_refs
+  defp key_atom("source_partition_count"), do: :source_partition_count
+  defp key_atom("source_partition_index"), do: :source_partition_index
   defp key_atom("source_refs_digest"), do: :source_refs_digest
+  defp key_atom("todo_batch_count"), do: :todo_batch_count
+  defp key_atom("todo_batch_index"), do: :todo_batch_index
+  defp key_atom("todo_decision_manifest"), do: :todo_decision_manifest
+  defp key_atom("todo_ref"), do: :todo_ref
   defp key_atom("todo_count"), do: :todo_count
   defp key_atom(_key), do: :__missing__
 end

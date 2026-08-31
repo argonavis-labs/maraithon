@@ -426,6 +426,18 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   def compact_bundle(_bundle), do: nil
 
   @doc false
+  def merge_partitions([first | _rest] = partitions) when is_map(first) do
+    records = Enum.flat_map(partitions, &source_records/1)
+
+    if records != [] and
+         length(records) == length(Enum.uniq_by(records, &{&1.source, &1.identity})) do
+      compact_partition(first, records)
+    end
+  end
+
+  def merge_partitions(_partitions), do: nil
+
+  @doc false
   def source_item_count(bundle) when is_map(bundle) do
     bundle |> source_records() |> length()
   end
