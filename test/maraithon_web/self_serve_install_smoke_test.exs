@@ -202,7 +202,9 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     stop_agent_process(agent.id)
   end
 
-  test "Gmail and Calendar can enable the Chief without Telegram delivery", %{conn: conn} do
+  test "Gmail, Calendar, and connected Slack can enable the Chief without Telegram delivery", %{
+    conn: conn
+  } do
     user_id = "self-serve-no-telegram-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
@@ -212,6 +214,22 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
         refresh_token: "google-refresh",
         scopes: Google.scopes_for(["gmail", "calendar"]),
         metadata: %{"account_email" => "operator@example.com"}
+      })
+
+    {:ok, _slack_bot} =
+      OAuth.store_tokens(user_id, "slack:TSOURCEONLY", %{
+        access_token: "slack-bot-access",
+        refresh_token: "slack-bot-refresh",
+        scopes: Slack.default_scopes(),
+        metadata: %{"team_id" => "TSOURCEONLY", "team_name" => "Source-only Workspace"}
+      })
+
+    {:ok, _slack_user} =
+      OAuth.store_tokens(user_id, "slack:TSOURCEONLY:user:USOURCEONLY", %{
+        access_token: "slack-user-access",
+        refresh_token: "slack-user-refresh",
+        scopes: Slack.default_user_scopes(),
+        metadata: %{"team_id" => "TSOURCEONLY", "team_name" => "Source-only Workspace"}
       })
 
     {:ok, project} = Projects.create_project(user_id, %{"name" => "Source-only Chief"})
@@ -237,7 +255,12 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     assert agent.install_status == "enabled"
     assert agent.status == "running"
     assert agent.delivery_policy == %{"telegram" => "disabled"}
-    assert binding.connector_scope == %{"google" => %{"services" => ["calendar", "gmail"]}}
+
+    assert binding.connector_scope == %{
+             "google" => %{"services" => ["calendar", "gmail"]},
+             "slack" => %{"services" => ["channels", "dms"]}
+           }
+
     assert binding.routing_bindings == %{}
     refute "telegram.send" in binding.tool_policy["allowed_tools"]
 
