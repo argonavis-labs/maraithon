@@ -32,11 +32,14 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   @handoff_max_encoded_source_bundle_bytes 2_000_000
   @handoff_max_restored_binary_bytes 5_000_000
   @handoff_max_restored_bytes 10_000_000
-  @candidate_source_record_max_bytes 80_000
-  @candidate_partition_max_bytes 88_000
-  @candidate_summary_max_bytes 4_000
-  @candidate_current_text_max_bytes 3_000
-  @candidate_context_text_max_bytes 600
+  @candidate_source_record_max_bytes 104_000
+  # Leave room beneath Todos.Intelligence's 120 KB escaped-request ceiling for
+  # its fixed instructions and the candidate fields surrounding source evidence.
+  @candidate_partition_max_bytes 96_000
+  @candidate_prompt_overhead_bytes 8_000
+  @candidate_summary_max_bytes 1_000
+  @candidate_current_text_max_bytes 800
+  @candidate_context_text_max_bytes 200
   @bounded_binary_marker "__maraithon_bounded_binary_v1__"
   @bounded_source_bundle_marker "__maraithon_bounded_source_bundle_v1__"
   @allowed_watermark_kinds ~w(gmail_discovery_watermark slack_discovery_watermark)
@@ -751,7 +754,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       end)
       |> Enum.reject(&is_nil/1)
       |> Enum.join("\n")
-      |> head_tail_excerpt(600)
+      |> head_tail_excerpt(@candidate_context_text_max_bytes)
 
     [head_tail_excerpt(current, @candidate_current_text_max_bytes), context]
     |> Enum.reject(&(&1 == ""))
@@ -774,7 +777,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       end)
       |> Enum.reject(&is_nil/1)
       |> Enum.join("\n")
-      |> head_tail_excerpt(600)
+      |> head_tail_excerpt(@candidate_context_text_max_bytes)
 
     [head_tail_excerpt(current, @candidate_current_text_max_bytes), context]
     |> Enum.reject(&(&1 == ""))
@@ -1334,33 +1337,60 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp split_source_groups(groups, limit) do
-    Enum.flat_map(groups, &Enum.chunk_every(&1, limit))
+    Enum.flat_map(groups, &split_source_group(&1, limit))
   end
 
-  defp pack_source_groups(groups, limit) do
-    {partitions, current, _current_bytes} =
-      Enum.reduce(groups, {[], [], 0}, fn group, {partitions, current, current_bytes} ->
-        group_bytes = source_group_candidate_bytes(group)
+  defp split_source_group(group, limit) do
+    {partitions, current, _current_count, _current_bytes} =
+      Enum.reduce(group, {[], [], 0, 0}, fn record,
+                                            {partitions, current, current_count, current_bytes} ->
+        record_bytes = source_group_candidate_bytes([record])
 
-        cond do
-          current == [] ->
-            {partitions, group, group_bytes}
-
-          length(current) + length(group) <= limit and
-              current_bytes + group_bytes <= @candidate_partition_max_bytes ->
-            {partitions, current ++ group, current_bytes + group_bytes}
-
-          true ->
-            {partitions ++ [current], group, group_bytes}
+        if current != [] and
+             (current_count >= limit or
+                current_bytes + record_bytes > @candidate_partition_max_bytes) do
+          {[Enum.reverse(current) | partitions], [record], 1, record_bytes}
+        else
+          {partitions, [record | current], current_count + 1, current_bytes + record_bytes}
         end
       end)
 
-    if current == [], do: partitions, else: partitions ++ [current]
+    case current do
+      [] -> Enum.reverse(partitions)
+      current -> Enum.reverse([Enum.reverse(current) | partitions])
+    end
+  end
+
+  defp pack_source_groups(groups, limit) do
+    {partitions, current, _current_count, _current_bytes} =
+      Enum.reduce(groups, {[], [], 0, 0}, fn group,
+                                             {partitions, current, current_count, current_bytes} ->
+        group_bytes = source_group_candidate_bytes(group)
+        group_count = length(group)
+
+        cond do
+          current == [] ->
+            {partitions, Enum.reverse(group), group_count, group_bytes}
+
+          current_count + group_count <= limit and
+              current_bytes + group_bytes <= @candidate_partition_max_bytes ->
+            {partitions, Enum.reverse(group, current), current_count + group_count,
+             current_bytes + group_bytes}
+
+          true ->
+            {[Enum.reverse(current) | partitions], Enum.reverse(group), group_count, group_bytes}
+        end
+      end)
+
+    case current do
+      [] -> Enum.reverse(partitions)
+      current -> Enum.reverse([Enum.reverse(current) | partitions])
+    end
   end
 
   defp source_group_candidate_bytes(group) do
     Enum.reduce(group, 0, fn record, bytes ->
-      bytes + encoded_bytes(candidate_source_record(record)) + 2_000
+      bytes + encoded_bytes(candidate_source_record(record)) + @candidate_prompt_overhead_bytes
     end)
   end
 
