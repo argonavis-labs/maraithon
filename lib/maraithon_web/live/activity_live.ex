@@ -254,7 +254,9 @@ defmodule MaraithonWeb.ActivityLive do
        when job_type in [
               "runtime_partition:source_account_discovery",
               "runtime_partition:source_account_discovery_reason",
-              "runtime_partition:source_account_discovery_finalize"
+              "runtime_partition:source_account_discovery_finalize",
+              "runtime_partition:slack_reconciliation_plan",
+              "runtime_partition:slack_conversation_reconcile"
             ],
        do: "Todo discovery"
 
@@ -266,6 +268,12 @@ defmodule MaraithonWeb.ActivityLive do
               "runtime_partition:source_account_closure_reason"
             ],
        do: "AI review"
+
+  defp source_stage("runtime_partition:slack_reconciliation_plan"),
+    do: "Reconciliation planner"
+
+  defp source_stage("runtime_partition:slack_conversation_reconcile"),
+    do: "Conversation anti-entropy"
 
   defp source_stage(job_type)
        when job_type in [
@@ -347,6 +355,20 @@ defmodule MaraithonWeb.ActivityLive do
          _outcome
        ),
        do: "Proved every acquired message received a todo decision"
+
+  defp source_run_completed_summary(
+         "runtime_partition:slack_reconciliation_plan",
+         fanout,
+         _outcome
+       ),
+       do: fanout_summary("Fanned readable Slack conversations into provider checks", fanout)
+
+  defp source_run_completed_summary(
+         "runtime_partition:slack_conversation_reconcile",
+         fanout,
+         _outcome
+       ),
+       do: fanout_summary("Reconciled one Slack conversation without an AI call", fanout)
 
   defp source_run_completed_summary(
          "runtime_partition:source_account_closure_acquire",

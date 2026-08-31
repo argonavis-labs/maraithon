@@ -195,6 +195,47 @@ defmodule Maraithon.Connectors.Slack do
 
   defp ingest_slack_message(_team_id, _event, _event_type), do: :ok
 
+  @doc false
+  def ingest_reconciled_message(
+        %ConnectedAccount{} = account,
+        team_id,
+        channel_id,
+        message
+      )
+      when is_binary(team_id) and is_binary(channel_id) and is_map(message) do
+    original_ts = message["ts"]
+    edited_ts = get_in(message, ["edited", "ts"])
+
+    event =
+      message
+      |> Map.put("channel", channel_id)
+      |> Map.put("user", message["user"] || message["bot_id"])
+      |> Map.put("event_type", if(is_binary(edited_ts), do: "message_changed", else: "message"))
+      |> maybe_put_reconciled_edit(original_ts, edited_ts)
+
+    if content_bearing_slack_message?(event["event_type"], event) do
+      with :ok <- validate_slack_message_identity(event),
+           {:ok, durable_content} <- durable_slack_content(event) do
+        maybe_observe_slack_message(account.user_id, account, team_id, event, durable_content)
+      end
+    else
+      :ok
+    end
+  end
+
+  def ingest_reconciled_message(_account, _team_id, _channel_id, _message),
+    do: {:error, :invalid_slack_reconciled_message}
+
+  defp maybe_put_reconciled_edit(event, original_ts, edited_ts)
+       when is_binary(original_ts) and is_binary(edited_ts) do
+    event
+    |> Map.put("ts", edited_ts)
+    |> Map.put("event_ts", edited_ts)
+    |> Map.put("target_ts", original_ts)
+  end
+
+  defp maybe_put_reconciled_edit(event, _original_ts, _edited_ts), do: event
+
   defp persist_slack_message(team_id, event) do
     with {:ok, durable_content} <- durable_slack_content(event),
          {:ok, accounts} <-
@@ -913,6 +954,7 @@ defmodule Maraithon.Connectors.Slack do
       %{}
       |> Map.put(:query, query_text)
       |> maybe_put_query(:count, opts[:count])
+      |> maybe_put_query(:cursor, opts[:cursor])
       |> maybe_put_query(:page, opts[:page])
       |> maybe_put_query(:sort, opts[:sort])
       |> maybe_put_query(:sort_dir, opts[:sort_dir])

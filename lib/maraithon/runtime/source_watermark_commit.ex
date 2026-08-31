@@ -11,6 +11,8 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.SourceCycleSettlement
 
+  @slack_conversation_reconcile_job "runtime_partition:slack_conversation_reconcile"
+
   @job_watermark_kinds %{
     "runtime_partition:source_account_discovery" =>
       ~w(gmail_discovery_watermark slack_discovery_watermark),
@@ -23,6 +25,39 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
   }
 
   @doc false
+  def commit_and_sanitize(
+        %BackgroundJob{job_type: @slack_conversation_reconcile_job} = job,
+        {:ok, result}
+      )
+      when is_map(result) do
+    case deferred_watermarks(result) do
+      nil ->
+        {:ok, {:ok, result}}
+
+      [watermark] = watermarks ->
+        with account_id when is_integer(account_id) and account_id > 0 <-
+               read_integer(result, "account_id"),
+             :ok <- validate_slack_conversation_watermark(watermark, account_id),
+             {:ok, account, current_value} <-
+               lock_source_scope(job.user_id, account_id, watermark),
+             {:ok, disposition} <- settlement_disposition(watermark, current_value) do
+          settle_slack_conversation_disposition(
+            disposition,
+            result,
+            account,
+            watermarks
+          )
+        else
+          nil -> {:error, :source_watermark_account_not_found}
+          {:error, _reason} = error -> error
+          _invalid -> {:error, :invalid_deferred_source_watermark}
+        end
+
+      _invalid ->
+        {:error, :invalid_deferred_source_watermark}
+    end
+  end
+
   def commit_and_sanitize(%BackgroundJob{} = job, {:ok, result}) when is_map(result) do
     case deferred_watermarks(result) do
       nil ->
@@ -75,6 +110,23 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
   end
 
   defp validate_watermarks(_watermarks, _account_id, _allowed_kinds),
+    do: {:error, :invalid_deferred_source_watermark}
+
+  defp validate_slack_conversation_watermark(watermark, account_id)
+       when is_map(watermark) do
+    with ^account_id <- read_integer(watermark, "account_id"),
+         "slack_conversation:" <> digest = kind when digest != "" <-
+           read_string(watermark, "kind"),
+         true <- byte_size(kind) <= 80,
+         value when is_binary(value) and value != "" <- read_string(watermark, "value"),
+         :ok <- validate_expected_lower(watermark) do
+      :ok
+    else
+      _invalid -> {:error, :invalid_deferred_source_watermark}
+    end
+  end
+
+  defp validate_slack_conversation_watermark(_watermark, _account_id),
     do: {:error, :invalid_deferred_source_watermark}
 
   defp validate_expected_lower(watermark) do
@@ -167,6 +219,26 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
   end
 
   defp settle_disposition({:superseded, _current_value}, _job, result, _account, watermarks) do
+    {:ok, {:ok, sanitize_superseded_result(result, length(watermarks))}}
+  end
+
+  defp settle_slack_conversation_disposition(
+         {:seal, _lower_cursor},
+         result,
+         account,
+         watermarks
+       ) do
+    with :ok <- commit_watermarks(account, watermarks) do
+      {:ok, {:ok, sanitize_result(result, length(watermarks))}}
+    end
+  end
+
+  defp settle_slack_conversation_disposition(
+         {:superseded, _current_value},
+         result,
+         _account,
+         watermarks
+       ) do
     {:ok, {:ok, sanitize_superseded_result(result, length(watermarks))}}
   end
 

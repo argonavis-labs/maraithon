@@ -565,12 +565,206 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
 
     assert Acquisition.source_complete?(next_telemetry, "slack")
 
-    assert Enum.map(SourceBundle.slack_messages(next_bundle), & &1["text"]) == [
-             "A concurrently arriving event for the next sealed delta"
-           ]
+    assert MapSet.new(Enum.map(SourceBundle.slack_messages(next_bundle), & &1["text"])) ==
+             MapSet.new([
+               "The current readable thread reply",
+               "A concurrently arriving event for the next sealed delta"
+             ])
 
     assert [%{kind: "slack_discovery_watermark", value: next_frontier}] = next_watermarks
     assert next_frontier == next_now |> DateTime.to_unix() |> to_string()
+  end
+
+  test "exact Slack acquisition paginates provider search to repair missed events" do
+    now = ~U[2026-08-31 12:00:00Z]
+    user_id = "chief-slack-search-repair@example.com"
+    team_id = "T-SEARCH-REPAIR"
+    bypass = Bypass.open()
+    test_pid = self()
+
+    _user = Accounts.get_or_create_user_by_email(user_id)
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+               access_token: "xoxb-bot-token",
+               scopes: ["channels:read", "channels:history"],
+               metadata: %{"team_id" => team_id}
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}:user:U-SELF", %{
+               access_token: "xoxp-user-token",
+               scopes: [
+                 "channels:read",
+                 "channels:history",
+                 "im:read",
+                 "im:history",
+                 "search:read"
+               ]
+             })
+
+    root_ts = slack_test_ts(DateTime.add(now, -120, :second))
+    channel_ts = slack_test_ts(DateTime.add(now, -30, :second))
+    dm_ts = slack_test_ts(DateTime.add(now, -20, :second))
+    reply_ts = slack_test_ts(DateTime.add(now, -10, :second))
+    future_ts = slack_test_ts(DateTime.add(now, 1, :second))
+
+    Bypass.stub(bypass, "GET", "/api/conversations.list", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "channels" => [
+            %{"id" => "C-READABLE", "name" => "team", "is_member" => true},
+            %{"id" => "D-READABLE", "is_im" => true, "user" => "U-DM"}
+          ]
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.history", fn conn ->
+      send(test_pid, :unexpected_slack_history_fetch)
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(500, Jason.encode!(%{"ok" => false, "error" => "unexpected"}))
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/search.messages", fn conn ->
+      params = Plug.Conn.Query.decode(conn.query_string)
+      send(test_pid, {:slack_provider_search_page, params})
+
+      matches =
+        case params["page"] do
+          "1" ->
+            [
+              %{
+                "channel" => %{"id" => "C-READABLE", "name" => "team"},
+                "ts" => channel_ts,
+                "user" => "U-CHANNEL",
+                "text" => "Provider channel message"
+              },
+              %{
+                "channel" => %{"id" => "D-READABLE", "name" => "U-DM"},
+                "type" => "im",
+                "ts" => dm_ts,
+                "user" => "U-DM",
+                "text" => "Provider direct message"
+              }
+            ]
+
+          "2" ->
+            [
+              %{
+                "channel" => %{"id" => "C-READABLE", "name" => "team"},
+                "ts" => reply_ts,
+                "thread_ts" => root_ts,
+                "user" => "U-REPLY",
+                "text" => "Provider thread reply"
+              },
+              %{
+                "channel" => %{"id" => "C-READABLE", "name" => "team"},
+                "ts" => future_ts,
+                "user" => "U-FUTURE",
+                "text" => "Future provider message"
+              }
+            ]
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => %{
+            "total" => 4,
+            "matches" => matches,
+            "pagination" => %{"page_count" => 2}
+          }
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.replies", fn conn ->
+      params = Plug.Conn.Query.decode(conn.query_string)
+      assert params["channel"] == "C-READABLE"
+      assert params["ts"] == root_ts
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => [
+            %{"ts" => root_ts, "user" => "U-ROOT", "text" => "Historical thread root"},
+            %{
+              "ts" => reply_ts,
+              "thread_ts" => root_ts,
+              "user" => "U-REPLY",
+              "text" => "Provider thread reply"
+            }
+          ]
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/users.info", fn conn ->
+      user = conn.query_string |> Plug.Conn.Query.decode() |> Map.fetch!("user")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"ok" => true, "user" => %{"id" => user, "profile" => %{}}})
+      )
+    end)
+
+    {bundle, telemetry, proposed_watermarks} =
+      Acquisition.build(
+        user_id,
+        ["followthrough"],
+        slack_exact_skill_configs(team_id),
+        slack_exact_build_context(user_id, team_id, now)
+      )
+
+    assert Acquisition.source_complete?(telemetry, "slack")
+    refute_received :unexpected_slack_history_fetch
+
+    assert_received {:slack_provider_search_page, first_page}
+    assert first_page["page"] == "1"
+    assert first_page["count"] == "100"
+    assert first_page["query"] == "after:2026-08-28 before:2026-09-01"
+
+    assert_received {:slack_provider_search_page, second_page}
+    assert second_page["page"] == "2"
+
+    messages = SourceBundle.slack_messages(bundle)
+
+    assert MapSet.new(Enum.map(messages, & &1["text"])) ==
+             MapSet.new([
+               "Provider channel message",
+               "Provider direct message",
+               "Provider thread reply"
+             ])
+
+    reply = Enum.find(messages, &(&1["text"] == "Provider thread reply"))
+    assert reply["thread_context_complete"]
+    assert Enum.map(reply["thread_context"], & &1["text"]) == ["Historical thread root"]
+
+    assert Enum.any?(telemetry["fetches"], fn fetch ->
+             fetch["mode"] == "provider_search_delta" and fetch["status"] == "ok" and
+               fetch["count"] == 3 and fetch["provider_match_count"] == 4 and
+               fetch["page_count"] == 2
+           end)
+
+    assert [%{kind: "slack_discovery_watermark", value: frontier}] = proposed_watermarks
+    assert frontier == now |> DateTime.to_unix() |> to_string()
   end
 
   test "exact Slack acquisition remains fail-closed when fresh event thread hydration fails" do
@@ -2339,7 +2533,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       assert is_map(unchanged_account.metadata["last_error"])
     end
 
-    test "advances the live watermark after an intact truncated window", %{
+    test "does not advance the live watermark after an intact truncated window", %{
       user_id: user_id,
       provider: provider,
       account: account
@@ -2397,15 +2591,10 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         end)
 
       assert_receive {:bounded_fetch_result, {_bundle, telemetry, proposed_watermarks}}
-      refute log =~ "Gmail candidate fetch was incomplete"
+      assert log =~ "Gmail candidate fetch was incomplete"
 
       refute Maraithon.Connectors.SourceCursors.get(account.id, "gmail_poll_watermark")
-
-      assert [%{account: proposed_account, kind: "gmail_poll_watermark", value: value}] =
-               proposed_watermarks
-
-      assert proposed_account.id == account.id
-      assert is_binary(value)
+      assert proposed_watermarks == []
       assert get_in(telemetry, ["sources", "gmail", "status"]) == "partial"
       assert get_in(telemetry, ["sources", "gmail", "partial_providers"]) == [provider]
       assert get_in(telemetry, ["sources", "gmail", "failed_providers"]) == []
@@ -2414,10 +2603,9 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       assert [%{"status" => "partial", "detail_failure_count" => 0, "truncated" => true}] =
                Enum.filter(telemetry["fetches"], &(&1["provider"] == provider))
 
-      healed_account = Maraithon.Repo.get!(Maraithon.Accounts.ConnectedAccount, account.id)
-      assert healed_account.status == "connected"
-      assert is_binary(healed_account.metadata["last_successful_sync_at"])
-      refute Map.has_key?(healed_account.metadata, "last_error")
+      unchanged_account = Maraithon.Repo.get!(Maraithon.Accounts.ConnectedAccount, account.id)
+      assert unchanged_account.status == "error"
+      assert is_map(unchanged_account.metadata["last_error"])
     end
 
     # Regression test for the "non-agent callers advance the agent's poll

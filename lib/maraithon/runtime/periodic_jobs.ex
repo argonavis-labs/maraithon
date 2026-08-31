@@ -26,6 +26,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.StalenessTriageSweep
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Runtime.SourceAccountClosure
+  alias Maraithon.Runtime.SlackConversationReconciler
   alias Maraithon.Runtime.TodoCompletionSweep
   alias Maraithon.Runtime.TokenRefresher
   alias Maraithon.Runtime.WatchRenewer
@@ -49,6 +50,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @source_discovery_job "runtime_partition:source_account_discovery"
   @source_discovery_reason_job "runtime_partition:source_account_discovery_reason"
   @source_discovery_finalize_job "runtime_partition:source_account_discovery_finalize"
+  @slack_reconciliation_plan_job "runtime_partition:slack_reconciliation_plan"
+  @slack_conversation_reconcile_job "runtime_partition:slack_conversation_reconcile"
   @todo_completion_job "runtime_partition:todo_completion"
   @todo_account_closure_acquire_job "runtime_partition:source_account_closure_acquire"
   @todo_account_closure_job "runtime_partition:source_account_closure"
@@ -422,14 +425,44 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   defp enqueue_source_discovery_job(account, agent, now) do
-    with_source_account_fence(account, fn locked_account ->
-      case active_source_cycle_acquisition(locked_account, "discovery") do
-        {:ok, nil} -> do_enqueue_source_discovery_job(locked_account, agent, now)
-        {:ok, %BackgroundJob{} = acquisition} -> {:ok, acquisition}
-        {:error, _reason} = error -> error
-      end
-    end)
+    with {:ok, discovery_job} <-
+           with_source_account_fence(account, fn locked_account ->
+             case active_source_cycle_acquisition(locked_account, "discovery") do
+               {:ok, nil} -> do_enqueue_source_discovery_job(locked_account, agent, now)
+               {:ok, %BackgroundJob{} = acquisition} -> {:ok, acquisition}
+               {:error, _reason} = error -> error
+             end
+           end),
+         {:ok, _reconciliation_job} <- maybe_enqueue_slack_reconciliation_plan(account, now) do
+      {:ok, discovery_job}
+    end
   end
+
+  defp maybe_enqueue_slack_reconciliation_plan(
+         %ConnectedAccount{provider: "slack:" <> provider_suffix} = account,
+         now
+       ) do
+    if provider_suffix != "" and not String.contains?(provider_suffix, ":user:") do
+      BackgroundJobs.enqueue(@slack_reconciliation_plan_job, %{
+        user_id: account.user_id,
+        queue: @provider_queue,
+        dedupe_key: "runtime-partition:slack-reconciliation-plan:#{account.id}",
+        partition_key: provider_partition(account.user_id, account.provider),
+        rate_limit_key: TokenRefresher.provider_family(account.provider),
+        max_attempts: 5,
+        scheduled_at: now,
+        payload: %{
+          "user_id" => account.user_id,
+          "account_id" => account.id,
+          "role" => "discovery"
+        }
+      })
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp maybe_enqueue_slack_reconciliation_plan(%ConnectedAccount{}, _now), do: {:ok, nil}
 
   defp do_enqueue_source_discovery_job(account, agent, now) do
     BackgroundJobs.enqueue(@source_discovery_job, %{
@@ -1005,6 +1038,58 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     end
   end
 
+  defp execute_provider(%BackgroundJob{job_type: @slack_reconciliation_plan_job} = job) do
+    with {:ok, account_id} <- payload_integer(job, "account_id"),
+         %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
+         true <- account.user_id == job.user_id,
+         {:ok, plan} <- SlackConversationReconciler.plan(account),
+         fanout_count = length(plan.due),
+         {:ok, enqueued} <- enqueue_slack_reconciliation_children(account, plan.due, job) do
+      {:ok,
+       %{
+         outcome: if(fanout_count == 0, do: "up_to_date", else: "fanout_ready"),
+         account_id: account.id,
+         readable_conversations: plan.readable_conversations,
+         fanout_count: fanout_count,
+         enqueued_fanouts: enqueued,
+         source_items: 0,
+         model_calls: 0
+       }}
+    else
+      nil -> {:error, :slack_reconciliation_account_not_found}
+      false -> {:error, :slack_reconciliation_user_mismatch}
+      {:error, _reason} = error -> error
+      {:skip, _reason} = skip -> normalize_work_result(skip)
+    end
+  end
+
+  defp execute_provider(%BackgroundJob{job_type: @slack_conversation_reconcile_job} = job) do
+    with {:ok, account_id} <- payload_integer(job, "account_id"),
+         {:ok, channel_id} <- payload_string(job, "channel_id"),
+         {:ok, conversation_kind} <- payload_string(job, "conversation_kind"),
+         %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
+         true <- account.user_id == job.user_id,
+         {:ok, result} <-
+           SlackConversationReconciler.run_conversation(
+             account,
+             channel_id,
+             conversation_kind,
+             now: database_now!()
+           ) do
+      result =
+        result
+        |> Map.put(:fanout_index, payload_integer_value(job, "fanout_index", 0))
+        |> Map.put(:fanout_count, payload_integer_value(job, "fanout_count", 0))
+
+      normalize_work_result(result)
+    else
+      nil -> {:error, :slack_reconciliation_account_not_found}
+      false -> {:error, :slack_reconciliation_user_mismatch}
+      {:error, _reason} = error -> error
+      {:skip, _reason} = skip -> normalize_work_result(skip)
+    end
+  end
+
   defp execute_provider(%BackgroundJob{job_type: @todo_account_closure_acquire_job} = job) do
     case source_discovery_dependency_status(job) do
       :ready ->
@@ -1024,6 +1109,39 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp execute_provider(%BackgroundJob{} = job),
     do: {:error, {:unknown_provider_partition, job.job_type}}
+
+  defp enqueue_slack_reconciliation_children(account, conversations, planner_job)
+       when is_list(conversations) do
+    fanout_count = length(conversations)
+
+    conversations
+    |> Enum.with_index(1)
+    |> enqueue_many(fn {conversation, fanout_index} ->
+      BackgroundJobs.enqueue(@slack_conversation_reconcile_job, %{
+        user_id: account.user_id,
+        queue: @provider_queue,
+        dedupe_key: conversation.dedupe_key,
+        partition_key:
+          hashed_key(
+            "provider-conversation",
+            "#{account.user_id}:#{account.provider}:#{conversation.channel_id}"
+          ),
+        rate_limit_key: TokenRefresher.provider_family(account.provider),
+        max_attempts: 5,
+        scheduled_at: database_now!(),
+        payload: %{
+          "user_id" => account.user_id,
+          "account_id" => account.id,
+          "channel_id" => conversation.channel_id,
+          "conversation_kind" => conversation.conversation_kind,
+          "fanout_index" => fanout_index,
+          "fanout_count" => fanout_count,
+          "planner_job_id" => planner_job.id,
+          "role" => "discovery"
+        }
+      })
+    end)
+  end
 
   defp execute_source_account_closure_acquire(job) do
     with {:ok, account_id} <- payload_integer(job, "account_id"),

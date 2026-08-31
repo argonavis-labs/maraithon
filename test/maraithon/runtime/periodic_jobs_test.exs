@@ -29,6 +29,48 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     refute Enum.any?(keys, &String.contains?(&1, "worker@example.com"))
   end
 
+  test "waking a Slack workspace also enqueues one stable reconciliation planner" do
+    user_id = "periodic-slack-reconciliation-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "slack:T-RECONCILIATION", %{
+        external_account_id: "T-RECONCILIATION",
+        metadata: %{"team_id" => "T-RECONCILIATION"}
+      })
+
+    assert {:ok, %{discovery: %{outcome: "enqueued"}}} =
+             PeriodicJobs.wake_source_account(account, now: DateTime.utc_now())
+
+    planner =
+      Repo.one!(
+        from(job in BackgroundJob,
+          where:
+            job.user_id == ^user_id and
+              job.job_type == "runtime_partition:slack_reconciliation_plan"
+        )
+      )
+
+    assert planner.queue == "runtime_provider_account"
+    assert planner.payload["account_id"] == account.id
+    assert planner.payload["role"] == "discovery"
+    assert planner.rate_limit_key == "slack"
+    refute String.contains?(planner.partition_key, user_id)
+
+    assert {:ok, %{discovery: %{job_id: _job_id}}} =
+             PeriodicJobs.wake_source_account(account, now: DateTime.utc_now())
+
+    assert 1 ==
+             Repo.aggregate(
+               from(job in BackgroundJob,
+                 where:
+                   job.user_id == ^user_id and
+                     job.job_type == "runtime_partition:slack_reconciliation_plan"
+               ),
+               :count
+             )
+  end
+
   test "source account wake makes the Activity-visible closure acquisition wait for discovery" do
     user_id = "periodic-wake-dependency-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

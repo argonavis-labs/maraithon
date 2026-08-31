@@ -135,6 +135,10 @@ defmodule MaraithonWeb.ActivityLiveTest do
        "source-account-discovery-reason"},
       {"runtime_partition:source_account_discovery_finalize", "runtime_model_user",
        "source-account-discovery-finalize"},
+      {"runtime_partition:slack_reconciliation_plan", "runtime_provider_account",
+       "slack-reconciliation-plan"},
+      {"runtime_partition:slack_conversation_reconcile", "runtime_provider_account",
+       "slack-conversation-reconcile"},
       {"runtime_partition:source_account_closure_acquire", "runtime_provider_account",
        "source-account-closure-acquire"},
       {"runtime_partition:source_account_closure_reason", "runtime_model_user",
@@ -193,9 +197,9 @@ defmodule MaraithonWeb.ActivityLiveTest do
 
     headers = BackgroundJobs.list_latest_source_account_runs_for_user(@user_email)
 
-    assert length(headers) == 12
+    assert length(headers) == 16
     assert Enum.all?(headers, &(not Map.has_key?(&1, :payload) and Map.has_key?(&1, :result)))
-    assert html =~ "12 source fan-outs"
+    assert html =~ "16 source fan-outs"
     assert html =~ "Gmail todo discovery"
     assert html =~ "Gmail todo completion"
     assert html =~ "Slack todo discovery"
@@ -205,6 +209,8 @@ defmodule MaraithonWeb.ActivityLiveTest do
     assert html =~ "source_discovery_child_failed"
     assert html =~ "Source partition"
     assert html =~ "Todo batch"
+    assert html =~ "Reconciliation planner"
+    assert html =~ "Conversation anti-entropy"
     refute html =~ "private@example.com"
 
     Enum.each(source_jobs, fn job ->

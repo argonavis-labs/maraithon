@@ -26,6 +26,8 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     "runtime_partition:source_account_discovery",
     "runtime_partition:source_account_discovery_reason",
     "runtime_partition:source_account_discovery_finalize",
+    "runtime_partition:slack_reconciliation_plan",
+    "runtime_partition:slack_conversation_reconcile",
     "runtime_partition:source_account_closure_acquire",
     "runtime_partition:source_account_closure_reason",
     "runtime_partition:source_account_closure_finalize"

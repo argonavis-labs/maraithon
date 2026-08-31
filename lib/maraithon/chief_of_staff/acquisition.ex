@@ -50,6 +50,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_slack_fetch_timeout_ms 45_000
   @default_slack_channel_fetch_timeout_ms 6_000
   @default_slack_search_timeout_ms 6_000
+  @default_slack_poll_safety_overlap_seconds 60 * 60
   @slack_thread_fetch_limit 6
   @slack_thread_reply_limit 40
   @slack_user_directory_limit 80
@@ -58,6 +59,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @slack_history_page_limit 200
   @slack_replies_page_limit 200
   @max_slack_pagination_pages 2_000
+  @slack_search_page_limit 100
+  @max_slack_search_pages 100
   @slack_self_authored_search_result_limit 50
   @slack_broadcast_search_result_limit 100
   @slack_broadcast_mentions [
@@ -629,8 +632,39 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp slack_poll_oldest(account, fallback_oldest, _deep_lookback?, kind) do
     case SourceCursors.get(account.id, kind) do
-      %{value: value} when is_binary(value) and value != "" -> {value, value}
-      _ -> {fallback_oldest, nil}
+      %{value: value} when is_binary(value) and value != "" ->
+        {slack_replay_oldest(value), value}
+
+      _ ->
+        {fallback_oldest, nil}
+    end
+  end
+
+  defp slack_replay_oldest(value) do
+    case Float.parse(value) do
+      {seconds, ""} when seconds >= 0 ->
+        seconds
+        |> floor()
+        |> Kernel.-(configured_slack_poll_safety_overlap_seconds())
+        |> max(0)
+        |> Integer.to_string()
+
+      _invalid ->
+        value
+    end
+  end
+
+  defp configured_slack_poll_safety_overlap_seconds do
+    :maraithon
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(
+      :slack_poll_safety_overlap_seconds,
+      @default_slack_poll_safety_overlap_seconds
+    )
+    |> parse_integer()
+    |> case do
+      value when is_integer(value) and value > 0 -> value
+      _invalid -> @default_slack_poll_safety_overlap_seconds
     end
   end
 
@@ -1155,13 +1189,29 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       event_messages = slack_event_messages(user_id, team_id, workspace, oldest, newest, plan)
 
-      {event_messages, event_thread_fetches, event_thread_errors} =
+      {provider_delta_messages, provider_delta_fetches, _provider_delta_errors} =
+        if slack_durable_event_delta?(plan) do
+          fetch_slack_search_delta(
+            token.access_token,
+            team_id,
+            workspace,
+            readable_conversations,
+            oldest,
+            newest
+          )
+        else
+          {[], [], []}
+        end
+
+      delta_messages = dedupe_slack_messages(event_messages ++ provider_delta_messages)
+
+      {delta_messages, event_thread_fetches, event_thread_errors} =
         hydrate_slack_event_threads(
           token.access_token,
           team_id,
           workspace,
           readable_conversations,
-          event_messages,
+          delta_messages,
           plan
         )
 
@@ -1170,7 +1220,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       channels =
         channels
         |> Enum.reverse()
-        |> merge_slack_event_messages(event_messages)
+        |> merge_slack_event_messages(delta_messages)
         |> maybe_prepend_slack_search_channel(self_authored_messages)
 
       workspace_payload = %{
@@ -1195,7 +1245,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             "status" => "ok",
             "count" => length(event_messages)
           }
-          | event_thread_fetches ++
+          | provider_delta_fetches ++
+              event_thread_fetches ++
               self_authored_fetches ++ broadcast_fetches ++ mention_fetches ++ fetches
         ]
 
@@ -1262,6 +1313,179 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     observations
     |> Enum.map(&slack_observation_message(&1, team_id, workspace))
     |> dedupe_slack_messages()
+  end
+
+  # Events API delivery is the low-latency path, but a connected Slack app can
+  # be misconfigured or briefly unable to deliver callbacks. One paginated
+  # user-token search per workspace is a cheap opportunistic repair lane for
+  # roots and replies that Slack search exposes. It is not the authoritative
+  # denominator: the per-conversation reconciliation workers own that job.
+  # Search is filtered back to the exact cursor window and readable scope. Any
+  # pagination Slack does expose must still be consumed completely.
+  defp fetch_slack_search_delta(
+         access_token,
+         team_id,
+         workspace,
+         readable_conversations,
+         oldest,
+         newest
+       ) do
+    query = slack_search_window_query(oldest, newest)
+
+    case fetch_all_slack_search_matches(access_token, query, 1, [], 0) do
+      {:ok, raw_matches, page_count, total_count} ->
+        readable_channel_ids =
+          readable_conversations
+          |> Enum.map(&normalize_string(&1["id"]))
+          |> Enum.reject(&is_nil/1)
+          |> MapSet.new()
+
+        {readable_matches, outside_scope_matches} =
+          Enum.split_with(raw_matches, fn match ->
+            channel_id = slack_match_channel_id(match["channel"])
+            is_binary(channel_id) and MapSet.member?(readable_channel_ids, channel_id)
+          end)
+
+        messages =
+          readable_matches
+          |> Enum.filter(&slack_search_match_in_window?(&1, oldest, newest))
+          |> Enum.map(&serialize_slack_match(&1, team_id, workspace, %{}))
+          |> dedupe_slack_messages()
+
+        fetches = [
+          %{
+            "source" => "slack",
+            "team_id" => team_id,
+            "mode" => "provider_search_delta",
+            "status" => "ok",
+            "count" => length(messages),
+            "provider_match_count" => total_count,
+            "page_count" => page_count,
+            "outside_scope_count" => length(outside_scope_matches)
+          }
+        ]
+
+        {messages, fetches, []}
+
+      {:error, reason} ->
+        fetch = %{
+          "source" => "slack",
+          "team_id" => team_id,
+          "mode" => "provider_search_delta",
+          "status" => "error",
+          "reason" => Redaction.error_class(reason)
+        }
+
+        {[], [fetch], [{:provider_search_failed, team_id, reason}]}
+    end
+  end
+
+  defp fetch_all_slack_search_matches(access_token, query, page, acc, page_count)
+       when page_count < @max_slack_search_pages do
+    case slack_module().search_messages(access_token, query,
+           count: @slack_search_page_limit,
+           page: page,
+           sort: "timestamp",
+           sort_dir: "asc"
+         ) do
+      {:ok, response} ->
+        matches =
+          response
+          |> get_in(["messages", "matches"])
+          |> normalize_list()
+
+        accumulated = acc ++ matches
+        next_page_count = page_count + 1
+        total_count = slack_search_total_count(response, length(accumulated))
+        provider_page_count = slack_search_page_count(response, total_count)
+
+        cond do
+          provider_page_count > @max_slack_search_pages ->
+            {:error, :slack_search_pagination_limit}
+
+          page < provider_page_count ->
+            fetch_all_slack_search_matches(
+              access_token,
+              query,
+              page + 1,
+              accumulated,
+              next_page_count
+            )
+
+          length(accumulated) < total_count ->
+            {:error, :slack_search_pagination_incomplete}
+
+          true ->
+            {:ok, dedupe_raw_slack_search_matches(accumulated), next_page_count, total_count}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_all_slack_search_matches(_access_token, _query, _page, _acc, _page_count),
+    do: {:error, :slack_search_pagination_limit}
+
+  defp slack_search_total_count(response, default) do
+    response
+    |> get_in(["messages", "total"])
+    |> nonnegative_integer(default)
+  end
+
+  defp slack_search_page_count(response, total_count) do
+    response
+    |> get_in(["messages", "pagination", "page_count"])
+    |> nonnegative_integer(
+      response
+      |> get_in(["messages", "paging", "pages"])
+      |> nonnegative_integer(ceil_div(total_count, @slack_search_page_limit))
+    )
+  end
+
+  defp nonnegative_integer(value, _default) when is_integer(value) and value >= 0, do: value
+
+  defp nonnegative_integer(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer >= 0 -> integer
+      _invalid -> default
+    end
+  end
+
+  defp nonnegative_integer(_value, default), do: default
+
+  defp dedupe_raw_slack_search_matches(matches) do
+    Enum.uniq_by(matches, fn match ->
+      {slack_match_channel_id(match["channel"]), normalize_string(match["ts"])}
+    end)
+  end
+
+  defp slack_search_window_query(oldest, newest) do
+    after_date = slack_search_boundary_date(oldest, -1)
+    before_date = slack_search_boundary_date(newest, 1)
+    "after:#{after_date} before:#{before_date}"
+  end
+
+  defp slack_search_boundary_date(timestamp, day_offset) do
+    with {seconds, _rest} <- Float.parse(to_string(timestamp)),
+         {:ok, datetime} <- DateTime.from_unix(round(seconds * 1_000_000), :microsecond) do
+      datetime
+      |> DateTime.to_date()
+      |> Date.add(day_offset)
+      |> Date.to_iso8601()
+    else
+      _invalid -> Date.utc_today() |> Date.add(day_offset) |> Date.to_iso8601()
+    end
+  end
+
+  defp slack_search_match_in_window?(match, oldest, newest) do
+    with {lower, _rest} <- Float.parse(to_string(oldest)),
+         {upper, _rest} <- Float.parse(to_string(newest)),
+         ts when ts > 0 <- slack_ts_sort_value(match) do
+      ts > lower and ts <= upper
+    else
+      _invalid -> false
+    end
   end
 
   defp hydrate_slack_event_threads(
@@ -2208,17 +2432,17 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           {message_acc, status_acc, watermark_acc} ->
             outcome = gmail_candidate_fetch_outcome(fetch_metadata)
 
-            if outcome in [:complete, :bounded] do
+            if outcome == :complete do
               SourceFreshness.mark_success(user_id, provider)
             end
 
             log_gmail_candidate_fetch(outcome, user_id, provider, fetch_metadata)
 
-            # A complete result or an intact newest-N window is safe to advance.
-            # Detail failures and malformed completeness metadata remain partial
-            # and retry from the prior watermark on the next cycle.
+            # Only a completely enumerated result may advance. A newest-N
+            # window with a next page is useful evidence, but advancing over it
+            # would permanently skip the unenumerated messages.
             watermark_acc =
-              if outcome in [:complete, :bounded] do
+              if outcome == :complete do
                 accumulate_watermark(
                   watermark_acc,
                   account,
@@ -2979,22 +3203,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
        }),
        do: :complete
 
-  defp gmail_candidate_fetch_outcome(%{truncated?: true, detail_failure_count: 0}),
-    do: :bounded
-
   defp gmail_candidate_fetch_outcome(_fetch_metadata), do: :partial
 
   defp log_gmail_candidate_fetch(:complete, _user_id, _provider, _fetch_metadata), do: :ok
-
-  defp log_gmail_candidate_fetch(:bounded, user_id, provider, fetch_metadata) do
-    Logger.debug(
-      "ChiefOfStaff Gmail candidate fetch reached its configured quota",
-      user_fingerprint: Redaction.fingerprint(user_id),
-      provider_reference: Redaction.fingerprint(provider),
-      listed_count: fetch_metadata.listed_count,
-      requested_count: fetch_metadata.requested_count
-    )
-  end
 
   defp log_gmail_candidate_fetch(:partial, user_id, provider, fetch_metadata) do
     Logger.warning(
