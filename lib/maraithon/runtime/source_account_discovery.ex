@@ -587,7 +587,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       {:ok,
        %{
          outcome: "evaluated",
-         model_calls: 1,
+         model_calls: Map.get(result, :model_calls, 1),
          todo_count: length(Map.get(result, :todos, [])),
          skipped_count: Map.get(result, :skipped_count, 0),
          decision_count: length(decisions),

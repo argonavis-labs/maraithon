@@ -571,6 +571,71 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert [] = Todos.list_for_user(user_id, limit: 10)
   end
 
+  test "ingest_many exact mode repairs one incomplete decision response" do
+    user_id = unique_user_email("todo-intelligence-exact-repair")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    counter = start_supervised!({Agent, fn -> 0 end})
+
+    candidates = [
+      %{
+        "source" => "gmail",
+        "title" => "Reply to Ada",
+        "summary" => "Ada asked for a decision.",
+        "next_action" => "Reply to Ada.",
+        "dedupe_key" => "gmail:exact-repair-ada"
+      },
+      %{
+        "source" => "gmail",
+        "title" => "Reply to Grace",
+        "summary" => "Grace asked for a decision.",
+        "next_action" => "Reply to Grace.",
+        "dedupe_key" => "gmail:exact-repair-grace"
+      }
+    ]
+
+    llm_complete = fn prompt ->
+      attempt = Agent.get_and_update(counter, &{&1 + 1, &1 + 1})
+
+      if attempt == 2 do
+        assert prompt =~ "EXACT_DECISION_REPAIR_V1"
+        assert prompt =~ "exactly 2 decisions"
+      end
+
+      decisions =
+        candidates
+        |> Enum.with_index()
+        |> Enum.take(attempt)
+        |> Enum.map(fn {_candidate, index} ->
+          %{
+            "candidate_index" => index,
+            "action" => "skip",
+            "reasoning" => "No durable work is required."
+          }
+        end)
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Exact decisions repaired.",
+             "decisions" => decisions
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               exact_decisions: true,
+               semantic_dedupe: false
+             )
+
+    assert result.model_calls == 2
+    assert result.skipped_count == 2
+    assert Agent.get(counter, & &1) == 2
+    assert [] = Todos.list_for_user(user_id, limit: 10)
+  end
+
   test "ingest_many exposes negative todo relevance memories to model decisions" do
     user_id = unique_user_email("todo-intelligence-memory")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

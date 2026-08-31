@@ -105,12 +105,16 @@ defmodule Maraithon.Todos.Intelligence do
            {:ok, prompt, admitted_existing} <-
              build_prompt(user_id, candidates, existing, opts, shared_seed),
            llm_complete when is_function(llm_complete, 1) <- llm_complete(opts),
-           {:ok, response} <- llm_complete.(prompt),
-           {:ok, decoded} <- decode_response(response),
-           {:ok, decisions, summary} <-
-             normalize_response(decoded, candidates, admitted_existing, opts),
+           {:ok, decisions, summary, usage, model_calls} <-
+             complete_decisions(
+               llm_complete,
+               prompt,
+               candidates,
+               admitted_existing,
+               opts
+             ),
            {:ok, result} <- apply_decisions(user_id, decisions, summary) do
-        {:ok, Map.put(result, :usage, response_usage(response))}
+        {:ok, result |> Map.put(:usage, usage) |> Map.put(:model_calls, model_calls)}
       else
         {:error, reason} -> {:error, reason}
         _other -> {:error, :todo_intelligence_failed}
@@ -994,6 +998,73 @@ defmodule Maraithon.Todos.Intelligence do
 
   defp llm_complete(opts) do
     Keyword.get(opts, :llm_complete) || configured_llm_complete(opts)
+  end
+
+  defp complete_decisions(llm_complete, prompt, candidates, existing, opts) do
+    do_complete_decisions(
+      llm_complete,
+      prompt,
+      candidates,
+      existing,
+      opts,
+      1,
+      exact_decision_attempt_limit(opts)
+    )
+  end
+
+  defp do_complete_decisions(
+         llm_complete,
+         prompt,
+         candidates,
+         existing,
+         opts,
+         attempt,
+         attempt_limit
+       ) do
+    with {:ok, response} <- llm_complete.(prompt),
+         {:ok, decoded} <- decode_response(response),
+         {:ok, decisions, summary} <- normalize_response(decoded, candidates, existing, opts) do
+      {:ok, decisions, summary, response_usage(response), attempt}
+    else
+      {:error, reason} = error ->
+        if exact_decision_repairable?(reason, opts) and attempt < attempt_limit do
+          do_complete_decisions(
+            llm_complete,
+            exact_decision_repair_prompt(prompt, length(candidates), attempt),
+            candidates,
+            existing,
+            opts,
+            attempt + 1,
+            attempt_limit
+          )
+        else
+          error
+        end
+    end
+  end
+
+  defp exact_decision_attempt_limit(opts) do
+    case Keyword.get(opts, :exact_decision_attempts, 2) do
+      attempts when is_integer(attempts) and attempts in 1..3 -> attempts
+      _invalid -> 2
+    end
+  end
+
+  defp exact_decision_repairable?(:todo_intelligence_incomplete_decisions, opts),
+    do: Keyword.get(opts, :exact_decisions, false)
+
+  defp exact_decision_repairable?(_reason, _opts), do: false
+
+  defp exact_decision_repair_prompt(prompt, candidate_count, attempt) do
+    prompt <>
+      """
+
+      EXACT_DECISION_REPAIR_V1
+      Your previous response violated the exact-decision contract on attempt #{attempt}.
+      Return a fresh JSON object with exactly #{candidate_count} decisions. Include every
+      candidate_index from 0 through #{candidate_count - 1} exactly once, including explicit
+      skip decisions. Do not omit, duplicate, merge, or reorder candidate indexes.
+      """
   end
 
   defp configured_llm_complete(opts) do
