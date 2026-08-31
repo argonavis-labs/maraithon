@@ -1226,7 +1226,7 @@ defmodule Maraithon.Runtime.Agent do
     now = DateTime.utc_now()
 
     settlement =
-      AgentDirectives.settle_with(
+      AgentDirectives.settle_ready_with(
         data.agent_id,
         data.current_directive_id,
         data.owner_token,
@@ -2459,7 +2459,7 @@ defmodule Maraithon.Runtime.Agent do
       |> maybe_put_error(payload)
 
     settlement =
-      AgentDirectives.settle_with(
+      AgentDirectives.settle_ready_with(
         data.agent_id,
         directive_id,
         data.owner_token,
@@ -2699,7 +2699,7 @@ defmodule Maraithon.Runtime.Agent do
     error_summary = Maraithon.Redaction.error_summary(reason)
 
     settlement =
-      AgentDirectives.settle_with(
+      AgentDirectives.settle_ready_with(
         data.agent_id,
         directive_id,
         data.owner_token,

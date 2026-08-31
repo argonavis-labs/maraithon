@@ -6,6 +6,8 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, TaskClaims, TaskSupervisor}
 
+  require Logger
+
   @microunits 1_000_000
   @pending_physical_key {__MODULE__, :pending_physical_reservation}
 
@@ -94,9 +96,34 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
     Process.delete(@pending_physical_key)
 
     result =
-      Repo.transaction(fn ->
-        reserve_locked(session, partitions, task_ttl_ms, queues, exclude_queues)
-      end)
+      try do
+        Repo.transaction(fn ->
+          reserve_locked(session, partitions, task_ttl_ms, queues, exclude_queues)
+        end)
+      rescue
+        error in Postgrex.Error ->
+          # PostgreSQL may pick this transaction as the victim when a fair
+          # claim races an Agent checkpoint that holds the same tenant's User
+          # fence. The database transaction is already rolled back, but the
+          # exact physical reservation lives outside PostgreSQL and must be
+          # released before the claim can be retried.
+          release_pending_physical!()
+
+          if retryable_claim_conflict?(error) do
+            Logger.warning("Fair Scheduler database conflict retried",
+              database_code: database_error_code(error),
+              attempts_remaining: attempts - 1
+            )
+
+            {:error, :fair_claim_conflict}
+          else
+            reraise error, __STACKTRACE__
+          end
+
+        error ->
+          release_pending_physical!()
+          reraise error, __STACKTRACE__
+      end
 
     case result do
       {:ok, value} ->
@@ -347,14 +374,7 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
           {load_job!(result), assignment, identity}
         catch
           kind, reason ->
-            case safe_release_physical(identity) do
-              :ok ->
-                Process.delete(@pending_physical_key)
-
-              {:error, _release_failed} ->
-                handoff_commit_unknown_reservation!(identity)
-                Process.delete(@pending_physical_key)
-            end
+            release_pending_physical!()
 
             :erlang.raise(kind, reason, __STACKTRACE__)
         end
@@ -374,6 +394,27 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   catch
     :exit, _reason -> {:error, :task_release_failed}
   end
+
+  defp release_pending_physical! do
+    case Process.delete(@pending_physical_key) do
+      nil ->
+        :ok
+
+      identity ->
+        case safe_release_physical(identity) do
+          :ok -> :ok
+          {:error, _release_failed} -> handoff_commit_unknown_reservation!(identity)
+        end
+    end
+  end
+
+  defp retryable_claim_conflict?(%Postgrex.Error{postgres: %{code: code}}),
+    do: code in [:deadlock_detected, :serialization_failure, "40P01", "40001"]
+
+  defp retryable_claim_conflict?(_error), do: false
+
+  defp database_error_code(%Postgrex.Error{postgres: %{code: code}}), do: to_string(code)
+  defp database_error_code(_error), do: "unknown"
 
   defp handoff_commit_unknown_reservation!(identity) do
     case TaskSupervisor.terminate_exact(identity) do

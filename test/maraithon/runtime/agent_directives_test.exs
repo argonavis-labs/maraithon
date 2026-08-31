@@ -607,6 +607,24 @@ defmodule Maraithon.Runtime.AgentDirectivesTest do
     assert {:ok, claimed} = AgentDirectives.claim_next(agent.id, user_id, lease.owner_token)
     assert {:ok, _draining} = AgentLeases.begin_draining(agent.id, lease.owner_token)
 
+    caller = self()
+
+    assert {:error, :runtime_not_ready} =
+             AgentDirectives.settle_ready_with(
+               agent.id,
+               claimed.id,
+               lease.owner_token,
+               claimed.claim_token,
+               "completed",
+               nil,
+               fn _directive, _now ->
+                 send(caller, :ready_settlement_callback_ran)
+                 {:ok, :unsafe_new_recovery_boundary}
+               end
+             )
+
+    refute_receive :ready_settlement_callback_ran
+
     assert {:error, :runtime_not_ready} =
              AgentDirectives.with_live_claim(
                agent.id,

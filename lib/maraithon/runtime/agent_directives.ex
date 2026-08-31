@@ -274,10 +274,13 @@ defmodule Maraithon.Runtime.AgentDirectives do
   def admit_effect_locked(_directive, _run_id, _now), do: {:error, :invalid_directive}
 
   @doc """
-  Atomically settles a claim and caller-owned terminal writes.
+  Atomically settles a claim and caller-owned terminal-only writes.
 
   The callback runs at most once, only while the exact processing claim is
   locked. Immutable terminal proof makes retries return without rerunning it.
+  Callbacks that require live-ready authority, especially those creating a new
+  Snapshot recovery boundary, must use `settle_ready_with/7` so they preserve
+  canonical lock ordering.
   """
   def settle_with(
         agent_id,
@@ -289,6 +292,79 @@ defmodule Maraithon.Runtime.AgentDirectives do
         fun
       )
       when terminal_status in @settlement_statuses and is_function(fun, 2) do
+    settle_with_fence(
+      agent_id,
+      directive_id,
+      owner_generation,
+      claim_token,
+      terminal_status,
+      error_code,
+      fun,
+      :settlement
+    )
+  end
+
+  def settle_with(
+        _agent_id,
+        _directive_id,
+        _owner_generation,
+        _claim_token,
+        _terminal_status,
+        _error_code,
+        _fun
+      ),
+      do: {:error, :invalid_directive}
+
+  @doc """
+  Settles a live claim while retaining ready authority for callback writes.
+
+  Use this when the terminal callback requires live-ready authority or creates
+  a new Snapshot recovery boundary. Taking the partition fence before the User
+  privacy fence preserves the runtime's canonical lock order.
+  """
+  def settle_ready_with(
+        agent_id,
+        directive_id,
+        owner_generation,
+        claim_token,
+        terminal_status,
+        error_code,
+        fun
+      )
+      when terminal_status in @settlement_statuses and is_function(fun, 2) do
+    settle_with_fence(
+      agent_id,
+      directive_id,
+      owner_generation,
+      claim_token,
+      terminal_status,
+      error_code,
+      fun,
+      :ready
+    )
+  end
+
+  def settle_ready_with(
+        _agent_id,
+        _directive_id,
+        _owner_generation,
+        _claim_token,
+        _terminal_status,
+        _error_code,
+        _fun
+      ),
+      do: {:error, :invalid_directive}
+
+  defp settle_with_fence(
+         agent_id,
+         directive_id,
+         owner_generation,
+         claim_token,
+         terminal_status,
+         error_code,
+         fun,
+         fence_mode
+       ) do
     with {:ok, ids} <- exact_ids(agent_id, directive_id, owner_generation, claim_token),
          {:ok, error_code} <- settlement_error_code(terminal_status, error_code) do
       case get_terminal_proof(ids, terminal_status) do
@@ -298,7 +374,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
         nil ->
           Repo.transaction(fn ->
             ProtocolCutover.require_current_mutation!()
-            AgentLeases.fence_settlement!(ids.agent_id, ids.owner_generation)
+            fence_settlement_mode!(ids.agent_id, ids.owner_generation, fence_mode)
             directive = lock_directive!(ids)
             now = DatabaseClock.now!()
 
@@ -319,16 +395,11 @@ defmodule Maraithon.Runtime.AgentDirectives do
     end
   end
 
-  def settle_with(
-        _agent_id,
-        _directive_id,
-        _owner_generation,
-        _claim_token,
-        _terminal_status,
-        _error_code,
-        _fun
-      ),
-      do: {:error, :invalid_directive}
+  defp fence_settlement_mode!(agent_id, owner_generation, :ready),
+    do: AgentLeases.fence_ready!(agent_id, owner_generation)
+
+  defp fence_settlement_mode!(agent_id, owner_generation, :settlement),
+    do: AgentLeases.fence_settlement!(agent_id, owner_generation)
 
   def cancel(agent_id, directive_id, owner_generation, claim_token) do
     case settle_with(
