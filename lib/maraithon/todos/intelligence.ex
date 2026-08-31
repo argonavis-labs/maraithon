@@ -1050,8 +1050,13 @@ defmodule Maraithon.Todos.Intelligence do
     end
   end
 
-  defp exact_decision_repairable?(:todo_intelligence_incomplete_decisions, opts),
-    do: Keyword.get(opts, :exact_decisions, false)
+  defp exact_decision_repairable?(reason, opts)
+       when reason in [
+              :todo_intelligence_incomplete_decisions,
+              :todo_intelligence_invalid_decisions,
+              :todo_intelligence_invalid_json
+            ],
+       do: Keyword.get(opts, :exact_decisions, false)
 
   defp exact_decision_repairable?(_reason, _opts), do: false
 

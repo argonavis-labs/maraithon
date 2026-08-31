@@ -636,6 +636,108 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert [] = Todos.list_for_user(user_id, limit: 10)
   end
 
+  test "ingest_many exact mode repairs one invalid JSON response" do
+    user_id = unique_user_email("todo-intelligence-exact-json-repair")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    counter = start_supervised!({Agent, fn -> 0 end})
+
+    candidate = %{
+      "source" => "gmail",
+      "title" => "Reply to Ada",
+      "summary" => "Ada asked for a decision.",
+      "next_action" => "Reply to Ada.",
+      "dedupe_key" => "gmail:exact-json-repair"
+    }
+
+    llm_complete = fn prompt ->
+      attempt = Agent.get_and_update(counter, &{&1 + 1, &1 + 1})
+
+      if attempt == 1 do
+        {:ok, %{content: "not json"}}
+      else
+        assert prompt =~ "EXACT_DECISION_REPAIR_V1"
+
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "summary" => "Invalid JSON repaired.",
+               "decisions" => [
+                 %{
+                   "candidate_index" => 0,
+                   "action" => "skip",
+                   "reasoning" => "No durable work is required."
+                 }
+               ]
+             })
+         }}
+      end
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, [candidate],
+               llm_complete: llm_complete,
+               exact_decisions: true,
+               semantic_dedupe: false
+             )
+
+    assert result.model_calls == 2
+    assert result.skipped_count == 1
+    assert Agent.get(counter, & &1) == 2
+    assert [] = Todos.list_for_user(user_id, limit: 10)
+  end
+
+  test "ingest_many exact mode repairs one invalid decision response" do
+    user_id = unique_user_email("todo-intelligence-exact-decision-repair")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    counter = start_supervised!({Agent, fn -> 0 end})
+
+    candidate = %{
+      "source" => "slack",
+      "title" => "Review the launch note",
+      "summary" => "The launch channel asked for a review.",
+      "next_action" => "Review the launch note.",
+      "dedupe_key" => "slack:exact-decision-repair"
+    }
+
+    llm_complete = fn prompt ->
+      attempt = Agent.get_and_update(counter, &{&1 + 1, &1 + 1})
+
+      action = if attempt == 1, do: "unsupported", else: "skip"
+
+      if attempt == 2 do
+        assert prompt =~ "EXACT_DECISION_REPAIR_V1"
+      end
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Invalid decision repaired.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => action,
+                 "reasoning" => "No durable work is required."
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, [candidate],
+               llm_complete: llm_complete,
+               exact_decisions: true,
+               semantic_dedupe: false
+             )
+
+    assert result.model_calls == 2
+    assert result.skipped_count == 1
+    assert Agent.get(counter, & &1) == 2
+    assert [] = Todos.list_for_user(user_id, limit: 10)
+  end
+
   test "ingest_many exposes negative todo relevance memories to model decisions" do
     user_id = unique_user_email("todo-intelligence-memory")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
