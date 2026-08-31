@@ -1226,6 +1226,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       {provider_delta_messages, provider_delta_fetches, provider_delta_errors} =
         if slack_durable_event_delta?(plan) or slack_source_replay?(plan) do
           fetch_slack_search_delta(
+            user_id,
             token.access_token,
             team_id,
             workspace,
@@ -1377,6 +1378,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   # Search is filtered back to the exact cursor window and readable scope. Any
   # pagination Slack does expose must still be consumed completely.
   defp fetch_slack_search_delta(
+         user_id,
          access_token,
          team_id,
          workspace,
@@ -1407,6 +1409,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           |> Enum.map(&serialize_slack_match(&1, team_id, workspace, %{}))
           |> dedupe_slack_messages()
 
+        {messages, restored_thread_metadata_count} =
+          restore_slack_search_thread_metadata(user_id, team_id, messages)
+
         fetches = [
           %{
             "source" => "slack",
@@ -1416,7 +1421,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             "count" => length(messages),
             "provider_match_count" => total_count,
             "page_count" => page_count,
-            "outside_scope_count" => length(outside_scope_matches)
+            "outside_scope_count" => length(outside_scope_matches),
+            "restored_thread_metadata_count" => restored_thread_metadata_count
           }
         ]
 
@@ -1434,6 +1440,64 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         {[], [fetch], [{:provider_search_failed, team_id, reason}]}
     end
   end
+
+  # Legacy Slack search results do not reliably include `thread_ts`. Events
+  # API ingress and bounded conversation reconciliation both persist the exact
+  # provider message identity with authoritative thread metadata, so recovery
+  # search can restore that field with one indexed local read. This keeps
+  # search a source-recovery lane and avoids an extra conversations.replies
+  # request for every result.
+  defp restore_slack_search_thread_metadata(user_id, team_id, messages)
+       when is_binary(user_id) and is_binary(team_id) and is_list(messages) do
+    missing_source_item_ids =
+      messages
+      |> Enum.filter(&is_nil(normalize_string(&1["thread_ts"])))
+      |> Enum.map(&slack_search_observation_source_item_id(team_id, &1))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    if missing_source_item_ids == [] do
+      {messages, 0}
+    else
+      thread_ts_by_source_item =
+        Observation
+        |> where(
+          [observation],
+          observation.user_id == ^user_id and observation.source == "slack" and
+            observation.source_item_id in ^missing_source_item_ids
+        )
+        |> select([observation], {observation.source_item_id, observation.metadata})
+        |> Repo.all()
+        |> Enum.reduce(%{}, fn {source_item_id, metadata}, acc ->
+          case normalize_string((metadata || %{})["thread_ts"]) do
+            nil -> acc
+            thread_ts -> Map.put(acc, source_item_id, thread_ts)
+          end
+        end)
+
+      Enum.map_reduce(messages, 0, fn message, restored_count ->
+        source_item_id = slack_search_observation_source_item_id(team_id, message)
+
+        case {normalize_string(message["thread_ts"]), thread_ts_by_source_item[source_item_id]} do
+          {nil, thread_ts} when is_binary(thread_ts) ->
+            {Map.put(message, "thread_ts", thread_ts), restored_count + 1}
+
+          _other ->
+            {message, restored_count}
+        end
+      end)
+    end
+  end
+
+  defp slack_search_observation_source_item_id(
+         team_id,
+         %{"channel_id" => channel_id, "ts" => ts}
+       )
+       when is_binary(team_id) and is_binary(channel_id) and is_binary(ts) do
+    "#{team_id}:#{channel_id}:#{ts}"
+  end
+
+  defp slack_search_observation_source_item_id(_team_id, _message), do: nil
 
   defp fetch_all_slack_search_matches(access_token, query, page, acc, page_count)
        when page_count < @max_slack_search_pages do

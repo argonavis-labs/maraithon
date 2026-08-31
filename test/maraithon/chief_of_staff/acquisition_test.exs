@@ -800,6 +800,27 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     future_ts = slack_test_ts(upper)
     test_pid = self()
 
+    assert {:ok, _observation} =
+             Observation.new(%{
+               user_id: user_id,
+               source: "slack",
+               source_account: team_id,
+               source_item_id: "#{team_id}:C-REPLAY:#{old_thread_reply_ts}",
+               occurred_at: DateTime.add(lower, 30, :minute),
+               direction: "inbound",
+               participants: [
+                 %{"role" => "from", "identifier" => %{"slack_id" => "U-NEW"}}
+               ],
+               excerpt: "Fresh reply beneath an old root",
+               metadata: %{
+                 "team_id" => team_id,
+                 "channel" => "C-REPLAY",
+                 "ts" => old_thread_reply_ts,
+                 "thread_ts" => old_thread_ts
+               }
+             })
+             |> Repo.insert()
+
     Bypass.stub(bypass, "GET", "/api/conversations.list", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
@@ -925,7 +946,6 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
               %{
                 "channel" => %{"id" => "C-REPLAY", "name" => "team"},
                 "ts" => old_thread_reply_ts,
-                "thread_ts" => old_thread_ts,
                 "user" => "U-NEW",
                 "text" => "Fresh reply beneath an old root"
               },
@@ -985,6 +1005,11 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       )
 
     assert replay_reply["thread_ts"] == old_thread_ts
+
+    assert Enum.any?(telemetry["fetches"], fn fetch ->
+             fetch["mode"] == "provider_search_delta" and
+               fetch["restored_thread_metadata_count"] == 1
+           end)
 
     assert [
              %{
