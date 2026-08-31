@@ -555,10 +555,10 @@ config :maraithon, Maraithon.Runtime,
   # call on the node, so interactive chat queued behind chief-of-staff and
   # briefing work and burned llm_busy retries. The shared 429 cooldown in
   # LLMRateLimiter still guards against provider retry storms.
-  llm_max_concurrency: String.to_integer(System.get_env("LLM_MAX_CONCURRENCY", "2")),
+  llm_max_concurrency: String.to_integer(System.get_env("LLM_MAX_CONCURRENCY", "3")),
   llm_chat_max_concurrency: String.to_integer(System.get_env("LLM_CHAT_MAX_CONCURRENCY", "4")),
   llm_reasoning_max_concurrency:
-    String.to_integer(System.get_env("LLM_REASONING_MAX_CONCURRENCY", "2")),
+    String.to_integer(System.get_env("LLM_REASONING_MAX_CONCURRENCY", "3")),
   # Independent source accounts may acquire and reason concurrently. The
   # exact fairness table keeps this bounded per user, and each account still
   # has its own ordered acquisition partition.
