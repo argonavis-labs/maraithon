@@ -22,7 +22,11 @@ defmodule Maraithon.Runtime.SlackConversationReconciler do
   @history_page_limit 200
   @reply_page_limit 200
   @max_pages 2_000
-  @default_batch_size 4
+  # The discovery coordinator runs every minute in production. Ten keeps one
+  # complete 90-conversation workspace rotation under ten minutes without a
+  # burst: children still use independent provider partitions and the shared
+  # Slack rate-limit lane supplies back-pressure.
+  @default_batch_size 10
   @default_initial_lookback_seconds 48 * 60 * 60
   @default_overlap_seconds 60 * 60
 
