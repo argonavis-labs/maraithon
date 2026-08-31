@@ -442,6 +442,135 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert [] = Todos.list_for_user(user_id, limit: 10)
   end
 
+  test "ingest_many accepts exactly one whole-response JSON fence" do
+    user_id = unique_user_email("todo-intelligence-json-fence")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    response =
+      Jason.encode!(%{
+        "summary" => "Skipped one non-actionable candidate.",
+        "decisions" => [
+          %{
+            "candidate_index" => 0,
+            "action" => "skip",
+            "reasoning" => "No durable work is needed."
+          }
+        ]
+      })
+
+    llm_complete = fn _prompt -> {:ok, %{content: "```json\n#{response}\n```"}} end
+
+    assert {:ok, %{skipped_count: 1, todos: []}} =
+             Todos.ingest_many(
+               user_id,
+               [
+                 %{
+                   "source" => "gmail",
+                   "title" => "FYI status note",
+                   "summary" => "A status note without a request.",
+                   "next_action" => "No action needed.",
+                   "dedupe_key" => "gmail:fenced-response"
+                 }
+               ],
+               llm_complete: llm_complete
+             )
+  end
+
+  test "ingest_many rejects JSON surrounded by prose" do
+    user_id = unique_user_email("todo-intelligence-json-prose")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    response =
+      Jason.encode!(%{
+        "summary" => "Skipped one candidate.",
+        "decisions" => [
+          %{
+            "candidate_index" => 0,
+            "action" => "skip",
+            "reasoning" => "No durable work is needed."
+          }
+        ]
+      })
+
+    llm_complete = fn _prompt -> {:ok, %{content: "Here is the result:\n#{response}"}} end
+
+    assert {:error, :todo_intelligence_invalid_json} =
+             Todos.ingest_many(
+               user_id,
+               [
+                 %{
+                   "source" => "gmail",
+                   "title" => "FYI status note",
+                   "summary" => "A status note without a request.",
+                   "next_action" => "No action needed.",
+                   "dedupe_key" => "gmail:prose-response"
+                 }
+               ],
+               llm_complete: llm_complete
+             )
+
+    assert [] = Todos.list_for_user(user_id, limit: 10)
+  end
+
+  test "ingest_many exact mode rejects conflicting duplicate candidate decisions" do
+    user_id = unique_user_email("todo-intelligence-duplicate-decisions")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "gmail",
+        "title" => "Reply to Ada",
+        "summary" => "Ada asked for a decision.",
+        "next_action" => "Reply to Ada.",
+        "dedupe_key" => "gmail:duplicate-decision-ada"
+      },
+      %{
+        "source" => "gmail",
+        "title" => "Reply to Grace",
+        "summary" => "Grace asked for a decision.",
+        "next_action" => "Reply to Grace.",
+        "dedupe_key" => "gmail:duplicate-decision-grace"
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Returned conflicting duplicate decisions.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "skip",
+                 "reasoning" => "First decision skips Ada."
+               },
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "reasoning" => "Conflicting decision creates Ada's todo.",
+                 "todo" => Map.put(Enum.at(candidates, 0), "priority", 80)
+               },
+               %{
+                 "candidate_index" => 1,
+                 "action" => "skip",
+                 "reasoning" => "Grace needs no durable work."
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:error, :todo_intelligence_incomplete_decisions} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               exact_decisions: true,
+               semantic_dedupe: false
+             )
+
+    assert [] = Todos.list_for_user(user_id, limit: 10)
+  end
+
   test "ingest_many exposes negative todo relevance memories to model decisions" do
     user_id = unique_user_email("todo-intelligence-memory")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

@@ -29,6 +29,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Runtime.SourceAccountClosure
   alias Maraithon.Runtime.SlackConversationReconciler
+  alias Maraithon.Runtime.SourceAccountAdmission
   alias Maraithon.Runtime.TodoCompletionSweep
   alias Maraithon.Runtime.TokenRefresher
   alias Maraithon.Runtime.WatchRenewer
@@ -86,14 +87,26 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     now = Keyword.get(opts, :now, database_now!())
 
     enqueue_source_graph(fn ->
-      with {:ok, discovery} <- enqueue_source_account_discovery(account, now),
-           {:ok, closure} <-
-             maybe_enqueue_source_account_closure(
-               account,
-               now,
-               Map.get(discovery, :job_id)
-             ) do
-        {:ok, %{discovery: discovery, closure: closure}}
+      case enqueue_source_account_discovery(account, now) do
+        {:ok, %{reason: "source_account_reserved"} = discovery} ->
+          {:ok,
+           %{
+             discovery: discovery,
+             closure: %{outcome: "skipped", reason: "source_account_reserved"}
+           }}
+
+        {:ok, discovery} ->
+          with {:ok, closure} <-
+                 maybe_enqueue_source_account_closure(
+                   account,
+                   now,
+                   Map.get(discovery, :job_id)
+                 ) do
+            {:ok, %{discovery: discovery, closure: closure}}
+          end
+
+        {:error, _reason} = error ->
+          error
       end
     end)
     |> case do
@@ -354,7 +367,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
     result =
       enqueue_many(account_identities, fn {account, agent} ->
-        enqueue_source_discovery_job(account, agent, now)
+        case enqueue_source_discovery_job(account, agent, now) do
+          {:error, :source_account_reserved} -> {:skip, :source_account_reserved}
+          result -> result
+        end
       end)
       |> schedule_summary("source_account_discovery", length(account_identities))
 
@@ -459,6 +475,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
           {:ok, %BackgroundJob{} = job} ->
             {:ok, %{outcome: "enqueued", job_id: job.id, agent_id: agent_id(agent)}}
 
+          {:error, :source_account_reserved} ->
+            {:ok, %{outcome: "skipped", reason: "source_account_reserved"}}
+
           {:error, reason} ->
             {:error, {:source_discovery_enqueue_failed, reason}}
         end
@@ -553,9 +572,44 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   defp enqueue_gmail_source_replay_locked(account, agent, replay, now) do
-    with {:ok, nil} <- active_source_cycle_acquisition(account, "discovery"),
-         {:ok, nil} <- active_source_cycle_acquisition(account, "closure"),
-         {:ok, cursor_state} <- prepare_gmail_source_replay_cursors(account, replay) do
+    case GmailSourceReplay.verify(account.id, replay.lower, replay.upper) do
+      {:ok, verification} ->
+        {:ok,
+         %{
+           outcome: "already_completed",
+           source_replay_reference: replay.reference,
+           verification: verification
+         }}
+
+      {:error, _incomplete} ->
+        enqueue_incomplete_gmail_source_replay(account, agent, replay, now)
+    end
+  end
+
+  defp enqueue_incomplete_gmail_source_replay(account, agent, replay, now) do
+    with {:ok, discovery_job} <- active_source_cycle_acquisition(account, "discovery"),
+         {:ok, closure_job} <- active_source_cycle_acquisition(account, "closure") do
+      case matching_active_gmail_replay(account, replay, discovery_job, closure_job) do
+        {:ok, discovery_job, closure_job} ->
+          {:ok,
+           %{
+             outcome: "already_active",
+             source_replay_reference: replay.reference,
+             discovery_job_id: discovery_job.id,
+             closure_job_id: closure_job.id
+           }}
+
+        :none when is_nil(discovery_job) and is_nil(closure_job) ->
+          enqueue_idle_gmail_source_replay(account, agent, replay, now)
+
+        :none ->
+          {:error, :source_account_cycle_active}
+      end
+    end
+  end
+
+  defp enqueue_idle_gmail_source_replay(account, agent, replay, now) do
+    with {:ok, cursor_state} <- prepare_gmail_source_replay_cursors(account, replay) do
       case cursor_state do
         {:already_completed, verification} ->
           {:ok,
@@ -603,10 +657,46 @@ defmodule Maraithon.Runtime.PeriodicJobs do
              }}
           end
       end
-    else
-      {:ok, %BackgroundJob{}} -> {:error, :source_account_cycle_active}
-      {:error, _reason} = error -> error
     end
+  end
+
+  defp matching_active_gmail_replay(account, replay, discovery_job, closure_job) do
+    with %BackgroundJob{} = closure_job <- closure_job,
+         discovery_job_id when is_binary(discovery_job_id) <-
+           Map.get(closure_job.payload || %{}, "discovery_job_id"),
+         %BackgroundJob{} = discovery_job <-
+           matching_discovery_acquisition(discovery_job, discovery_job_id),
+         true <- matching_replay_acquisition?(discovery_job, account, replay, "discovery"),
+         true <- matching_replay_acquisition?(closure_job, account, replay, "closure") do
+      {:ok, discovery_job, closure_job}
+    else
+      _not_matching -> :none
+    end
+  end
+
+  defp matching_discovery_acquisition(%BackgroundJob{id: id} = discovery_job, id),
+    do: discovery_job
+
+  defp matching_discovery_acquisition(nil, discovery_job_id) do
+    case Repo.get(BackgroundJob, discovery_job_id) do
+      %BackgroundJob{} = discovery_job -> BackgroundJob.hydrate_payloads(discovery_job)
+      nil -> nil
+    end
+  end
+
+  defp matching_discovery_acquisition(_different_active_discovery_job, _discovery_job_id),
+    do: nil
+
+  defp matching_replay_acquisition?(job, account, replay, role) do
+    expected_type =
+      if role == "discovery", do: @source_discovery_job, else: @todo_account_closure_acquire_job
+
+    job.job_type == expected_type and job.user_id == account.user_id and
+      Map.get(job.payload || %{}, "account_id") == account.id and
+      match?(
+        {:ok, %{reference: reference}} when reference == replay.reference,
+        GmailSourceReplay.from_payload(account, job.payload || %{}, role)
+      )
   end
 
   defp prepare_gmail_source_replay_cursors(account, replay) do
@@ -811,9 +901,17 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     end
 
     if Repo.in_transaction?() do
-      {:ok, fenced.()}
+      case SourceAccountAdmission.try_transaction_lock(account.id) do
+        :ok -> {:ok, fenced.()}
+        {:error, _reason} = error -> error
+      end
     else
-      case Repo.transaction(fenced) do
+      case Repo.transaction(fn ->
+             case SourceAccountAdmission.try_transaction_lock(account.id) do
+               :ok -> fenced.()
+               {:error, reason} -> Repo.rollback(reason)
+             end
+           end) do
         {:ok, result} -> {:ok, result}
         {:error, reason} -> {:error, reason}
       end
@@ -978,6 +1076,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
           %BackgroundJob{} = job -> {:ok, job}
           nil -> {:error, :source_account_cycle_closure_missing}
         end
+
+      {:ok, %{discovery: %{reason: "source_account_reserved"}}} ->
+        {:skip, :source_account_reserved}
 
       {:ok, result} ->
         {:error, {:source_account_cycle_incomplete, result}}
@@ -2094,6 +2195,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     Enum.reduce_while(items, {:ok, 0}, fn item, {:ok, count} ->
       case enqueue_fun.(item) do
         {:ok, %BackgroundJob{}} -> {:cont, {:ok, count + 1}}
+        {:skip, _reason} -> {:cont, {:ok, count}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)

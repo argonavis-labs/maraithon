@@ -10,14 +10,15 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.PeriodicJobs
+  alias Maraithon.Runtime.SourceAccountAdmission
   alias Maraithon.Runtime.SourceCycle
   alias Maraithon.Runtime.SourceCycleItem
 
   @provider_manifest_limit 501
   @replay_item_limit 250
   @legacy_provider_ref_limit 100_000
-  @enqueue_timeout_ms 120_000
-  @completion_timeout_ms 660_000
+  @run_timeout_ms 720_000
+  @deadline_cleanup_reserve_ms 15_000
   @poll_interval_ms 2_000
 
   @discovery_job "runtime_partition:source_account_discovery"
@@ -30,13 +31,50 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
   def run(user_id, lower, upper, expected_account_count)
       when is_binary(user_id) and is_integer(lower) and is_integer(upper) and
              is_integer(expected_account_count) and expected_account_count > 0 do
-    with {:ok, accounts} <- gmail_accounts(user_id, expected_account_count),
-         {:ok, before_manifests} <- provider_manifests(accounts, lower, upper),
-         {:ok, replays} <- build_replays(accounts, lower, upper),
-         {:ok, enqueue_results} <- enqueue_replays(replays, lower, upper),
+    deadline = System.monotonic_time(:millisecond) + @run_timeout_ms
+
+    with {:ok, accounts} <- gmail_accounts(user_id, expected_account_count) do
+      SourceAccountAdmission.with_reservations(
+        Enum.map(accounts, & &1.id),
+        deadline,
+        fn -> run_reserved(accounts, lower, upper, deadline) end
+      )
+    end
+  rescue
+    error in [Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, {:database_error, database_error_code(error)}}
+
+    error ->
+      {:error, {:audit_exception, error.__struct__}}
+  catch
+    kind, _reason -> {:error, {:audit_exit, kind}}
+  end
+
+  def run(_user_id, _lower, _upper, _expected_account_count),
+    do: {:error, :invalid_gmail_source_replay_audit}
+
+  defp run_reserved(accounts, lower, upper, deadline) do
+    with {:ok, replays} <- build_replays(accounts, lower, upper),
+         {:ok, before_manifests} <-
+           bounded_provider_manifests(
+             accounts,
+             lower,
+             upper,
+             deadline,
+             :gmail_source_replay_before_manifest_timeout
+           ),
+         :ok <- before_deadline(deadline, :gmail_source_replay_enqueue_timeout),
+         {:ok, enqueue_results} <- enqueue_replays(replays, lower, upper, deadline),
          {:ok, local_verifications} <-
-           await_replays(replays, enqueue_results, lower, upper),
-         {:ok, after_manifests} <- provider_manifests(accounts, lower, upper),
+           await_replays(replays, enqueue_results, lower, upper, deadline),
+         {:ok, after_manifests} <-
+           bounded_provider_manifests(
+             accounts,
+             lower,
+             upper,
+             deadline,
+             :gmail_source_replay_after_manifest_timeout
+           ),
          {:ok, account_reports} <-
            verify_accounts(
              replays,
@@ -57,18 +95,7 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
          accounts: account_reports
        }}
     end
-  rescue
-    error in [Postgrex.Error, DBConnection.ConnectionError] ->
-      {:error, {:database_error, database_error_code(error)}}
-
-    error ->
-      {:error, {:audit_exception, error.__struct__}}
-  catch
-    kind, _reason -> {:error, {:audit_exit, kind}}
   end
-
-  def run(_user_id, _lower, _upper, _expected_account_count),
-    do: {:error, :invalid_gmail_source_replay_audit}
 
   def error_code(reason) when is_atom(reason), do: Atom.to_string(reason)
   def error_code({code, _detail}) when is_atom(code), do: Atom.to_string(code)
@@ -124,6 +151,32 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
         {:error, reason} -> {:halt, {:error, {reason, account.id}}}
       end
     end)
+  end
+
+  defp bounded_provider_manifests(accounts, lower, upper, deadline, timeout_error) do
+    timeout =
+      deadline - System.monotonic_time(:millisecond) - @deadline_cleanup_reserve_ms
+
+    if timeout > 0 do
+      task =
+        Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
+          provider_manifests(accounts, lower, upper)
+        end)
+
+      case Task.yield(task, timeout) do
+        {:ok, result} ->
+          result
+
+        {:exit, _reason} ->
+          {:error, :gmail_provider_manifest_task_failed}
+
+        nil ->
+          _ = Task.shutdown(task, :brutal_kill)
+          {:error, timeout_error}
+      end
+    else
+      {:error, timeout_error}
+    end
   end
 
   defp provider_manifest(account, lower, upper) do
@@ -188,8 +241,11 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
     end
   end
 
-  defp enqueue_replays(replays, lower, upper) do
-    deadline = System.monotonic_time(:millisecond) + @enqueue_timeout_ms
+  defp before_deadline(deadline, error) do
+    if System.monotonic_time(:millisecond) < deadline, do: :ok, else: {:error, error}
+  end
+
+  defp enqueue_replays(replays, lower, upper, deadline) do
     do_enqueue_replays(replays, %{}, lower, upper, deadline)
   end
 
@@ -242,8 +298,7 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
     end
   end
 
-  defp await_replays(replays, enqueue_results, lower, upper) do
-    deadline = System.monotonic_time(:millisecond) + @completion_timeout_ms
+  defp await_replays(replays, enqueue_results, lower, upper, deadline) do
     do_await_replays(replays, enqueue_results, lower, upper, deadline)
   end
 
@@ -401,10 +456,18 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
   end
 
   defp replay_activity(user_id, replay, verification) do
+    discovery_cycle = Repo.get!(SourceCycle, verification.discovery_cycle_id)
+    closure_cycle = Repo.get!(SourceCycle, verification.closure_cycle_id)
+
+    expected_job_ids =
+      (cycle_job_ids(discovery_cycle) ++ cycle_job_ids(closure_cycle))
+      |> MapSet.new()
+
     jobs =
-      user_id
-      |> BackgroundJobs.list_latest_source_account_runs_for_user(limit: 10_000)
-      |> Enum.filter(&(replay_reference(&1.result) == replay.reference))
+      BackgroundJobs.list_source_account_runs_by_ids(
+        user_id,
+        MapSet.to_list(expected_job_ids)
+      )
 
     expected =
       verification.discovery_counts.expected_jobs + verification.closure_counts.expected_jobs
@@ -426,19 +489,15 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
     actual_types = jobs |> Enum.map(& &1.job_type) |> MapSet.new()
     actual_job_ids = jobs |> Enum.map(& &1.id) |> MapSet.new()
 
-    discovery_cycle = Repo.get!(SourceCycle, verification.discovery_cycle_id)
-    closure_cycle = Repo.get!(SourceCycle, verification.closure_cycle_id)
-
-    expected_job_ids =
-      (cycle_job_ids(discovery_cycle) ++ cycle_job_ids(closure_cycle))
-      |> MapSet.new()
-
     cond do
       length(jobs) != expected ->
         {:error, :gmail_source_replay_activity_count_mismatch}
 
       not MapSet.equal?(expected_job_ids, actual_job_ids) ->
         {:error, :gmail_source_replay_activity_job_manifest_mismatch}
+
+      Enum.any?(jobs, &(replay_reference(&1.result) != replay.reference)) ->
+        {:error, :gmail_source_replay_activity_reference_mismatch}
 
       not MapSet.subset?(expected_types, actual_types) ->
         {:error, :gmail_source_replay_activity_stage_missing}

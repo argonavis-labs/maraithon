@@ -342,6 +342,27 @@ defmodule Maraithon.Runtime.BackgroundJobs do
 
   def list_latest_source_account_runs_for_user(_user_id, _opts), do: []
 
+  @doc false
+  def list_source_account_runs_by_ids(user_id, job_ids)
+      when is_binary(user_id) and is_list(job_ids) and job_ids != [] do
+    BackgroundJob
+    |> where(
+      [job],
+      job.user_id == ^user_id and job.id in ^job_ids and
+        job.job_type in ^@source_account_job_types
+    )
+    |> select([job], %{
+      id: job.id,
+      job_type: job.job_type,
+      status: job.status,
+      attempts: job.attempts,
+      result: job.result
+    })
+    |> Repo.all()
+  end
+
+  def list_source_account_runs_by_ids(_user_id, _job_ids), do: []
+
   def count_by_status(opts \\ []) do
     user_id = Keyword.get(opts, :user_id)
 

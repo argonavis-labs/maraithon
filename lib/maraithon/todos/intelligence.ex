@@ -1012,6 +1012,7 @@ defmodule Maraithon.Todos.Intelligence do
       "messages" => [%{"role" => "user", "content" => prompt}],
       "max_tokens" =>
         Keyword.get(opts, :max_tokens, Keyword.get(config, :max_tokens, @default_max_tokens)),
+      "response_format" => %{"type" => "json_object"},
       "temperature" => 0.1,
       "reasoning_effort" =>
         Keyword.get(
@@ -1056,10 +1057,37 @@ defmodule Maraithon.Todos.Intelligence do
       end
 
     with content when is_binary(content) and content != "" <- content,
-         {:ok, %{} = decoded} <- Jason.decode(content) do
+         {:ok, %{} = decoded} <- decode_json_object(content) do
       {:ok, decoded}
     else
       _other -> {:error, :todo_intelligence_invalid_json}
+    end
+  end
+
+  defp decode_json_object(content) when is_binary(content) do
+    trimmed = String.trim(content)
+
+    [trimmed, whole_response_json_fence(trimmed)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.reduce_while({:error, :todo_intelligence_invalid_json}, fn candidate, _error ->
+      case Jason.decode(candidate) do
+        {:ok, %{} = decoded} -> {:halt, {:ok, decoded}}
+        _invalid -> {:cont, {:error, :todo_intelligence_invalid_json}}
+      end
+    end)
+  end
+
+  defp decode_json_object(_content), do: {:error, :todo_intelligence_invalid_json}
+
+  defp whole_response_json_fence(content) when is_binary(content) do
+    case Regex.run(
+           ~r/\A```(?:json)?[ \t]*\r?\n(.*?)\r?\n```[ \t]*\z/is,
+           content,
+           capture: :all_but_first
+         ) do
+      [json] -> String.trim(json)
+      _not_one_whole_fence -> nil
     end
   end
 
@@ -1118,7 +1146,9 @@ defmodule Maraithon.Todos.Intelligence do
       {salvaged, true} ->
         indexes = salvaged |> Enum.map(& &1.candidate_index) |> Enum.sort()
 
-        if invalid_count == 0 and indexes == Enum.to_list(0..(length(candidates) - 1)) do
+        if invalid_count == 0 and length(decisions) == length(candidates) and
+             length(salvaged) == length(decisions) and
+             indexes == Enum.to_list(0..(length(candidates) - 1)) do
           {:ok, salvaged}
         else
           {:error, :todo_intelligence_incomplete_decisions}

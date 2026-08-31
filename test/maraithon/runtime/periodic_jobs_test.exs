@@ -13,6 +13,7 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.PeriodicJobs
+  alias Maraithon.Runtime.SourceAccountAdmission
   alias Maraithon.Runtime.SourceCycleProofs
   alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Todos
@@ -111,6 +112,70 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     assert persisted_closure.result["source_replay_upper"] == upper
   end
 
+  test "Gmail source replay adopts its exact active graph without duplicate jobs" do
+    user_id = "periodic-gmail-replay-active-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:#{user_id}", %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    lower = DateTime.utc_now() |> DateTime.add(-24, :hour) |> DateTime.to_unix(:second)
+    upper = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.to_unix(:second)
+
+    assert {:ok,
+            %{
+              outcome: "enqueued",
+              discovery_job_id: discovery_job_id,
+              closure_job_id: closure_job_id
+            }} =
+             SourceAccountAdmission.with_reservations([account.id], fn ->
+               PeriodicJobs.enqueue_gmail_source_replay(account.id, lower, upper)
+             end)
+
+    assert {:ok,
+            %{
+              outcome: "already_active",
+              discovery_job_id: ^discovery_job_id,
+              closure_job_id: ^closure_job_id
+            }} = PeriodicJobs.enqueue_gmail_source_replay(account.id, lower, upper)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    BackgroundJob
+    |> where([job], job.id == ^discovery_job_id)
+    |> Repo.update_all(set: [status: "completed", completed_at: now, updated_at: now])
+
+    assert {:ok,
+            %{
+              outcome: "already_active",
+              discovery_job_id: ^discovery_job_id,
+              closure_job_id: ^closure_job_id
+            }} = PeriodicJobs.enqueue_gmail_source_replay(account.id, lower, upper)
+
+    assert {:ok, %{discovery: %{job_id: ordinary_discovery_job_id}}} =
+             PeriodicJobs.wake_source_account(account)
+
+    refute ordinary_discovery_job_id == discovery_job_id
+
+    assert {:error, :source_account_cycle_active} =
+             PeriodicJobs.enqueue_gmail_source_replay(account.id, lower, upper)
+
+    assert 3 ==
+             Repo.aggregate(
+               from(job in BackgroundJob,
+                 where:
+                   job.user_id == ^user_id and
+                     job.job_type in [
+                       "runtime_partition:source_account_discovery",
+                       "runtime_partition:source_account_closure_acquire"
+                     ]
+               ),
+               :count
+             )
+  end
+
   test "Gmail source replay resumes closure from a verified completed discovery" do
     user_id = "periodic-gmail-replay-resume-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -180,6 +245,54 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
 
     refute resumed_closure_job_id == first_closure_job_id
     assert Repo.get!(BackgroundJob, resumed_closure_job_id).status == "pending"
+  end
+
+  test "a reserved account skips its wake without blocking another account" do
+    accounts =
+      Enum.map(1..2, fn index ->
+        user_id =
+          "periodic-reserved-wake-#{index}-#{System.unique_integer([:positive])}@example.com"
+
+        {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+        {:ok, account} =
+          ConnectedAccounts.upsert_manual(user_id, "google:#{user_id}", %{
+            metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+          })
+
+        account
+      end)
+      |> Enum.sort_by(& &1.id)
+
+    [reserved_account, available_account] = accounts
+    parent = self()
+
+    holder =
+      Task.async(fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          SourceAccountAdmission.with_reservations([reserved_account.id], fn ->
+            send(parent, :wake_account_reserved)
+
+            receive do
+              :release_wake_account -> :released
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :wake_account_reserved
+
+    assert {:ok,
+            %{
+              discovery: %{outcome: "skipped", reason: "source_account_reserved"},
+              closure: %{outcome: "skipped", reason: "source_account_reserved"}
+            }} = PeriodicJobs.wake_source_account(reserved_account)
+
+    assert {:ok, %{discovery: %{outcome: "enqueued"}}} =
+             PeriodicJobs.wake_source_account(available_account)
+
+    send(holder.pid, :release_wake_account)
+    assert :released = Task.await(holder)
   end
 
   test "waking a Slack workspace also enqueues one stable reconciliation planner" do

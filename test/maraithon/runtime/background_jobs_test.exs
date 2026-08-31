@@ -88,6 +88,37 @@ defmodule Maraithon.Runtime.BackgroundJobsTest do
            ]
   end
 
+  test "source-account activity headers can be loaded by their exact sealed IDs", %{
+    user_id: user_id
+  } do
+    {:ok, first} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery", %{
+        user_id: user_id,
+        dedupe_key: "activity-exact:first:1",
+        result: %{"source_replay_reference" => "exact-reference"}
+      })
+
+    {:ok, distractor} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery", %{
+        user_id: user_id,
+        dedupe_key: "activity-exact:distractor:1"
+      })
+
+    {:ok, last} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_closure_acquire", %{
+        user_id: user_id,
+        dedupe_key: "activity-exact:last:1",
+        result: %{"source_replay_reference" => "exact-reference"}
+      })
+
+    headers = BackgroundJobs.list_source_account_runs_by_ids(user_id, [first.id, last.id])
+
+    assert headers |> Enum.map(& &1.id) |> MapSet.new() == MapSet.new([first.id, last.id])
+    refute Enum.any?(headers, &(&1.id == distractor.id))
+    assert Enum.all?(headers, &(&1.result["source_replay_reference"] == "exact-reference"))
+    assert [] == BackgroundJobs.list_source_account_runs_by_ids("another@example.com", [first.id])
+  end
+
   test "generic enqueue cannot bypass the dedicated Telegram receipt boundary" do
     attrs = %{
       telegram_bot_id: "123456",
