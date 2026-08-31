@@ -559,6 +559,11 @@ config :maraithon, Maraithon.Runtime,
   llm_chat_max_concurrency: String.to_integer(System.get_env("LLM_CHAT_MAX_CONCURRENCY", "4")),
   llm_reasoning_max_concurrency:
     String.to_integer(System.get_env("LLM_REASONING_MAX_CONCURRENCY", "2")),
+  # Independent source accounts may acquire and reason concurrently. The
+  # exact fairness table keeps this bounded per user, and each account still
+  # has its own ordered acquisition partition.
+  source_fanout_tenant_max_concurrency:
+    String.to_integer(System.get_env("SOURCE_FANOUT_TENANT_MAX_CONCURRENCY", "3")),
   # Timing
   heartbeat_interval_ms: heartbeat_interval_ms,
   checkpoint_interval_ms: checkpoint_interval_ms,

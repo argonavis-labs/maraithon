@@ -271,6 +271,37 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert reserved_generic.id == generic.id
   end
 
+  test "exact fair admission runs independent source accounts together but keeps one account ordered" do
+    %{node: node, partitions: partitions} = active_authority!(["tenant-a"])
+    insert_user!("tenant-a")
+
+    first = insert_job!("tenant-a", "source-account-one-first", partition_key: "source:one")
+
+    assert {:ok, {reserved_first, _assignment, _identity}} =
+             FairScheduler.reserve_next(node, partitions)
+
+    assert reserved_first.id == first.id
+
+    assert {:ok, _result} =
+             FairScheduler.configure_tenant("user:tenant-a",
+               max_concurrency: 3,
+               rate_per_minute: 60,
+               burst: 10
+             )
+
+    same_account =
+      insert_job!("tenant-a", "source-account-one-second", partition_key: "source:one")
+
+    other_account = insert_job!("tenant-a", "source-account-two", partition_key: "source:two")
+
+    assert {:ok, {reserved_other, _assignment, _identity}} =
+             FairScheduler.reserve_next(node, partitions)
+
+    assert reserved_other.id == other_account.id
+    assert {:ok, nil} = FairScheduler.reserve_next(node, partitions)
+    assert Repo.get!(BackgroundJob, same_account.id).status == "pending"
+  end
+
   test "commit-unknown background reservation clears only after locked absence" do
     %{node: _node, partitions: _partitions} = active_authority!(["tenant-a"])
     insert_user!("tenant-a")
@@ -1648,6 +1679,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
       job_type: "test",
       payload: %{"dedupe" => dedupe},
       dedupe_key: Ecto.UUID.generate(),
+      partition_key: Keyword.get(opts, :partition_key),
       scheduled_at: DateTime.utc_now()
     })
     |> Repo.insert!()

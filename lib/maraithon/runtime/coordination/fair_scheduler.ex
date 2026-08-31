@@ -4,7 +4,14 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   alias Ecto.Adapters.SQL
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
-  alias Maraithon.Runtime.Coordination.{Authority, NodeIncarnation, TaskClaims, TaskSupervisor}
+
+  alias Maraithon.Runtime.Coordination.{
+    Authority,
+    NodeIncarnation,
+    Partitioning,
+    TaskClaims,
+    TaskSupervisor
+  }
 
   require Logger
 
@@ -86,6 +93,43 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
       {:error, :invalid_tenant_quota}
     end
   end
+
+  @doc """
+  Raises a tenant's durable fair-admission ceiling without lowering an
+  operator-set ceiling. Source-account graphs use this before enqueueing so
+  independently ordered accounts can progress together while work for one
+  account remains partitioned.
+  """
+  def ensure_min_tenant_concurrency(tenant_key, minimum)
+      when is_binary(tenant_key) and minimum in 1..64 do
+    partition_id = Partitioning.partition_for(tenant_key)
+
+    case SQL.query(
+           Repo,
+           """
+           INSERT INTO public.runtime_tenant_fairness
+             (tenant_key, partition_id, max_concurrency, rate_per_minute, burst,
+              available_microunits, refilled_at, last_served_sequence, served_count,
+              inserted_at, updated_at)
+           VALUES ($1, $2, $3, 60, 10, 10000000,
+                   timezone('UTC', clock_timestamp()), 0, 0,
+                   timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp()))
+           ON CONFLICT (tenant_key) DO UPDATE
+           SET partition_id = EXCLUDED.partition_id,
+               max_concurrency = GREATEST(
+                 public.runtime_tenant_fairness.max_concurrency,
+                 EXCLUDED.max_concurrency
+               ),
+               updated_at = timezone('UTC', clock_timestamp())
+           """,
+           [tenant_key, partition_id, minimum]
+         ) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def ensure_min_tenant_concurrency(_tenant_key, _minimum), do: {:error, :invalid_tenant_quota}
 
   defp do_reserve(_session, [], _ttl, _attempts, _queues, _exclude_queues), do: {:ok, nil}
 
@@ -220,6 +264,18 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
               WHERE existing.work_kind = 'background_job' AND existing.work_id = job.id
                 AND existing.state IN ('reserved', 'running', 'termination_requested', 'termination_proven')
             )
+            AND (job.partition_key IS NULL OR NOT EXISTS (
+              SELECT 1
+              FROM public.runtime_task_assignments AS active_assignment
+              JOIN public.background_jobs AS active_job
+                ON active_job.id = active_assignment.work_id
+              WHERE active_assignment.work_kind = 'background_job'
+                AND active_assignment.state IN (
+                  'reserved', 'running', 'termination_requested', 'termination_proven'
+                )
+                AND active_job.queue = job.queue
+                AND active_job.partition_key = job.partition_key
+            ))
             AND COALESCE(active.active_count, 0) < tenant.max_concurrency
             AND LEAST(tenant.burst::bigint * #{@microunits},
                   tenant.available_microunits + GREATEST(

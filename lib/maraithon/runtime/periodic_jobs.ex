@@ -21,6 +21,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.Config
+  alias Maraithon.Runtime.Coordination.FairScheduler
   alias Maraithon.Runtime.FreshnessSweep
   alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.NudgeSweep
@@ -86,31 +87,33 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       when is_list(opts) do
     now = Keyword.get(opts, :now, database_now!())
 
-    enqueue_source_graph(fn ->
-      case enqueue_source_account_discovery(account, now) do
-        {:ok, %{reason: "source_account_reserved"} = discovery} ->
-          {:ok,
-           %{
-             discovery: discovery,
-             closure: %{outcome: "skipped", reason: "source_account_reserved"}
-           }}
+    with :ok <- ensure_source_fanout_parallelism(account),
+         {:ok, result} <-
+           enqueue_source_graph(fn ->
+             case enqueue_source_account_discovery(account, now) do
+               {:ok, %{reason: "source_account_reserved"} = discovery} ->
+                 {:ok,
+                  %{
+                    discovery: discovery,
+                    closure: %{outcome: "skipped", reason: "source_account_reserved"}
+                  }}
 
-        {:ok, discovery} ->
-          with {:ok, closure} <-
-                 maybe_enqueue_source_account_closure(
-                   account,
-                   now,
-                   Map.get(discovery, :job_id)
-                 ) do
-            {:ok, %{discovery: discovery, closure: closure}}
-          end
+               {:ok, discovery} ->
+                 with {:ok, closure} <-
+                        maybe_enqueue_source_account_closure(
+                          account,
+                          now,
+                          Map.get(discovery, :job_id)
+                        ) do
+                   {:ok, %{discovery: discovery, closure: closure}}
+                 end
 
-        {:error, _reason} = error ->
-          error
-      end
-    end)
-    |> case do
-      {:ok, result} -> {:ok, result}
+               {:error, _reason} = error ->
+                 error
+             end
+           end) do
+      {:ok, result}
+    else
       {:error, reason} -> {:error, reason}
     end
   end
@@ -130,6 +133,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          now <- database_now!(),
          {:ok, replay} <- GmailSourceReplay.build(account, lower, upper, now),
          {:ok, agent} <- discovery_identity_for_user(account.user_id),
+         :ok <- ensure_source_fanout_parallelism(account),
          {:ok, result} <-
            enqueue_source_graph(fn ->
              with_source_account_fence(account, fn locked_account ->
@@ -555,8 +559,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       user_id: account.user_id,
       queue: @provider_queue,
       dedupe_key: source_discovery_dedupe_key(account.id),
-      partition_key: provider_partition(account.user_id, account.provider),
-      rate_limit_key: TokenRefresher.provider_family(account.provider),
+      partition_key: source_account_partition(account),
+      rate_limit_key: source_account_rate_limit_key(account),
       max_attempts: 5,
       scheduled_at: now,
       result: replay_activity_result(extra_payload),
@@ -768,8 +772,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       user_id: account.user_id,
       queue: @provider_queue,
       dedupe_key: source_closure_acquire_dedupe_key(account.id, discovery_job_id),
-      partition_key: provider_partition(account.user_id, account.provider),
-      rate_limit_key: TokenRefresher.provider_family(account.provider),
+      partition_key: source_account_partition(account),
+      rate_limit_key: source_account_rate_limit_key(account),
       max_attempts: 5,
       scheduled_at: now,
       result: replay_activity_result(replay_payload),
@@ -853,8 +857,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
             user_id: locked_account.user_id,
             queue: @provider_queue,
             dedupe_key: source_closure_acquire_dedupe_key(locked_account.id, discovery_job_id),
-            partition_key: provider_partition(locked_account.user_id, locked_account.provider),
-            rate_limit_key: TokenRefresher.provider_family(locked_account.provider),
+            partition_key: source_account_partition(locked_account),
+            rate_limit_key: source_account_rate_limit_key(locked_account),
             max_attempts: 5,
             scheduled_at: now,
             payload: %{
@@ -1686,7 +1690,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
                     queue: @model_queue,
                     dedupe_key:
                       source_discovery_finalize_dedupe_key(account.id, acquisition_job.id),
-                    partition_key: provider_partition(account.user_id, account.provider),
+                    partition_key: source_account_partition(account),
                     rate_limit_key: "model",
                     max_attempts: 25,
                     scheduled_at:
@@ -1828,7 +1832,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
                     queue: @model_queue,
                     dedupe_key:
                       source_closure_finalize_dedupe_key(account.id, acquisition_job.id),
-                    partition_key: provider_partition(account.user_id, account.provider),
+                    partition_key: source_account_partition(account),
                     rate_limit_key: "model",
                     max_attempts: 25,
                     scheduled_at:
@@ -2209,7 +2213,22 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp provider_partition(user_id, provider),
     do: hashed_key("provider-account", "#{user_id}:#{provider}")
 
+  defp source_account_partition(%ConnectedAccount{} = account),
+    do: hashed_key("source-account", "#{account.user_id}:#{account.provider}:#{account.id}")
+
+  defp source_account_rate_limit_key(%ConnectedAccount{} = account),
+    do: hashed_key("source-account-rate", "#{account.user_id}:#{account.provider}:#{account.id}")
+
   defp tenant_partition(user_id), do: hashed_key("tenant", user_id)
+
+  defp ensure_source_fanout_parallelism(%ConnectedAccount{} = account) do
+    minimum = Config.positive_integer(:source_fanout_tenant_max_concurrency, 3)
+
+    case FairScheduler.ensure_min_tenant_concurrency("user:" <> account.user_id, minimum) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:source_fanout_admission_failed, reason}}
+    end
+  end
 
   defp model_dedupe_key(schedule, user_id),
     do: hashed_key("runtime-model:#{schedule}", user_id)

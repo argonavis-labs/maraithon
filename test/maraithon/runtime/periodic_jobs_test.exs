@@ -112,6 +112,55 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     assert persisted_closure.result["source_replay_upper"] == upper
   end
 
+  test "independent Gmail accounts receive parallel-safe provider lanes" do
+    user_id = "periodic-gmail-parallel-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    accounts =
+      Enum.map(["personal", "work"], fn label ->
+        {:ok, account} =
+          ConnectedAccounts.upsert_manual(user_id, "google:#{label}-#{user_id}", %{
+            metadata: %{"account_email" => "#{label}-#{user_id}", "services" => ["gmail"]}
+          })
+
+        account
+      end)
+
+    lower = DateTime.utc_now() |> DateTime.add(-24, :hour) |> DateTime.to_unix(:second)
+    upper = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.to_unix(:second)
+
+    jobs =
+      Enum.map(accounts, fn account ->
+        assert {:ok,
+                %{
+                  outcome: "enqueued",
+                  discovery_job_id: discovery_job_id,
+                  closure_job_id: closure_job_id
+                }} = PeriodicJobs.enqueue_gmail_source_replay(account.id, lower, upper)
+
+        {Repo.get!(BackgroundJob, discovery_job_id), Repo.get!(BackgroundJob, closure_job_id)}
+      end)
+
+    [{first_discovery, first_closure}, {second_discovery, second_closure}] = jobs
+
+    assert first_discovery.partition_key == first_closure.partition_key
+    assert second_discovery.partition_key == second_closure.partition_key
+    assert first_discovery.rate_limit_key == first_closure.rate_limit_key
+    assert second_discovery.rate_limit_key == second_closure.rate_limit_key
+
+    refute first_discovery.partition_key == second_discovery.partition_key
+    refute first_discovery.rate_limit_key == second_discovery.rate_limit_key
+
+    assert String.starts_with?(first_discovery.partition_key, "source-account:")
+    assert String.starts_with?(first_discovery.rate_limit_key, "source-account-rate:")
+
+    assert [[3]] =
+             Repo.query!(
+               "SELECT max_concurrency FROM runtime_tenant_fairness WHERE tenant_key = $1",
+               ["user:" <> user_id]
+             ).rows
+  end
+
   test "Gmail source replay adopts its exact active graph without duplicate jobs" do
     user_id = "periodic-gmail-replay-active-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -893,8 +942,8 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     assert job.user_id == user_id
     assert job.payload["agent_id"] == agent.id
     assert job.payload["role"] == "discovery"
-    assert job.rate_limit_key == "google"
-    assert String.starts_with?(job.partition_key, "provider-account:")
+    assert String.starts_with?(job.rate_limit_key, "source-account-rate:")
+    assert String.starts_with?(job.partition_key, "source-account:")
     refute String.contains?(job.partition_key, user_id)
 
     assert {:ok, %{discovered: 0, enqueued: 0}} =
@@ -1221,8 +1270,8 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     assert job.payload["account_id"] == account.id
     assert job.payload["role"] == "closure"
     assert job.payload["discovery_job_id"] == discovery_job.id
-    assert job.rate_limit_key == "google"
-    assert String.starts_with?(job.partition_key, "provider-account:")
+    assert String.starts_with?(job.rate_limit_key, "source-account-rate:")
+    assert String.starts_with?(job.partition_key, "source-account:")
     refute String.contains?(job.partition_key, user_id)
 
     assert {:ok, %{discovered: 0, enqueued: 0}} =
