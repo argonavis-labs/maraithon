@@ -25,9 +25,14 @@ defmodule Maraithon.Runtime.SourceAccountAdmission do
     account_ids = account_ids |> Enum.uniq() |> Enum.sort()
 
     if account_ids != [] and Enum.all?(account_ids, &(is_integer(&1) and &1 > 0)) do
-      Repo.checkout(fn ->
-        reserve_until(account_ids, deadline, fun)
-      end)
+      checkout_timeout = max(deadline - System.monotonic_time(:millisecond), 1)
+
+      Repo.checkout(
+        fn ->
+          reserve_until(account_ids, deadline, fun)
+        end,
+        timeout: checkout_timeout
+      )
     else
       {:error, :invalid_source_account_reservations}
     end
