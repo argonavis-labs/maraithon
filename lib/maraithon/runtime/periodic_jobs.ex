@@ -40,6 +40,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @default_retry_after_seconds 30
   @source_finalizer_retry_seconds 10
   @source_dependency_retry_ms 10_000
+  @slack_reconciliation_fanout_spacing_seconds 6
 
   @token_job "runtime_partition:token_refresh"
   @watch_job "runtime_partition:watch_renewal"
@@ -63,6 +64,16 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   def provider_queue, do: @provider_queue
   def model_queue, do: @model_queue
+
+  @doc false
+  def slack_reconciliation_fanout_scheduled_at(%DateTime{} = started_at, fanout_index)
+      when is_integer(fanout_index) and fanout_index > 0 do
+    DateTime.add(
+      started_at,
+      (fanout_index - 1) * @slack_reconciliation_fanout_spacing_seconds,
+      :second
+    )
+  end
 
   @doc "Durably wakes the discovery and applicable closure workers for one source account."
   def wake_source_account(account, opts \\ [])
@@ -1113,6 +1124,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp enqueue_slack_reconciliation_children(account, conversations, planner_job)
        when is_list(conversations) do
     fanout_count = length(conversations)
+    fanout_started_at = database_now!()
 
     conversations
     |> Enum.with_index(1)
@@ -1128,7 +1140,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
           ),
         rate_limit_key: TokenRefresher.provider_family(account.provider),
         max_attempts: 5,
-        scheduled_at: database_now!(),
+        scheduled_at: slack_reconciliation_fanout_scheduled_at(fanout_started_at, fanout_index),
         payload: %{
           "user_id" => account.user_id,
           "account_id" => account.id,

@@ -29,6 +29,20 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     refute Enum.any?(keys, &String.contains?(&1, "worker@example.com"))
   end
 
+  test "Slack reconciliation fan-outs are evenly spread across one minute" do
+    started_at = ~U[2026-08-31 12:00:00Z]
+
+    scheduled_at =
+      Enum.map(1..10, &PeriodicJobs.slack_reconciliation_fanout_scheduled_at(started_at, &1))
+
+    assert hd(scheduled_at) == started_at
+    assert List.last(scheduled_at) == DateTime.add(started_at, 54, :second)
+
+    assert scheduled_at
+           |> Enum.chunk_every(2, 1, :discard)
+           |> Enum.all?(fn [left, right] -> DateTime.diff(right, left, :second) == 6 end)
+  end
+
   test "waking a Slack workspace also enqueues one stable reconciliation planner" do
     user_id = "periodic-slack-reconciliation-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
