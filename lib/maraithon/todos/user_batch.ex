@@ -3,6 +3,8 @@ defmodule Maraithon.Todos.UserBatch do
 
   import Ecto.Query
 
+  alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.OAuth.Token
   alias Maraithon.Repo
   alias Maraithon.Todos.Todo
 
@@ -59,6 +61,28 @@ defmodule Maraithon.Todos.UserBatch do
 
   def open_todo_user_ids_without_source_account(opts \\ []) when is_list(opts) do
     query = where(base_query(), [todo], is_nil(todo.source_account_id))
+    open_todo_user_ids_from_query(query, opts)
+  end
+
+  def open_todo_user_ids_without_connected_source_account(opts \\ []) when is_list(opts) do
+    connected_source_user_ids =
+      ConnectedAccount
+      |> join(:inner, [account], token in Token,
+        on: token.user_id == account.user_id and token.provider == account.provider
+      )
+      |> where(
+        [account, _token],
+        account.status == "connected" and
+          (like(account.provider, "google%") or
+             fragment("? ~ '^slack:[^:]+$'", account.provider))
+      )
+      |> distinct([account, _token], account.user_id)
+      |> select([account, _token], account.user_id)
+
+    query =
+      base_query()
+      |> where([todo], todo.user_id not in subquery(connected_source_user_ids))
+
     open_todo_user_ids_from_query(query, opts)
   end
 

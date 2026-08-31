@@ -555,7 +555,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     accounts = todo_completion_accounts(batch_size, account_cursor)
     cursor_key = "durable_todo_completion_legacy_sweep"
     cursor = UserBatch.load_cursor(cursor_key)
-    legacy_users = UserBatch.open_todo_user_ids_without_source_account(after_user_id: cursor)
+
+    legacy_users =
+      UserBatch.open_todo_user_ids_without_connected_source_account(after_user_id: cursor)
 
     with {:ok, account_count} <-
            enqueue_many(accounts, fn account ->
@@ -607,18 +609,24 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   defp todo_completion_accounts(limit, cursor) do
-    query =
+    open_todo_user_ids =
       Todo
-      |> join(:inner, [todo], account in ConnectedAccount,
-        on: account.id == todo.source_account_id
+      |> where([todo], todo.status in ["open", "snoozed"])
+      |> distinct([todo], todo.user_id)
+      |> select([todo], todo.user_id)
+
+    query =
+      ConnectedAccount
+      |> join(:inner, [account], source_token in Token,
+        on: source_token.user_id == account.user_id and source_token.provider == account.provider
       )
-      |> join(:left, [todo, account], legacy_job in BackgroundJob,
+      |> join(:left, [account, _source_token], legacy_job in BackgroundJob,
         on:
           legacy_job.dedupe_key ==
             fragment("'runtime-partition:todo-account-closure:' || ?::text", account.id) and
             legacy_job.status in @active_statuses
       )
-      |> join(:left, [todo, account, _legacy_job], acquisition_job in BackgroundJob,
+      |> join(:left, [account, _source_token, _legacy_job], acquisition_job in BackgroundJob,
         on:
           fragment(
             "? LIKE 'runtime-partition:source-account-closure-acquire:' || ?::text || '%'",
@@ -627,7 +635,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
           ) and
             acquisition_job.status in @active_statuses
       )
-      |> join(:left, [todo, account, _legacy_job, _acquisition_job], reason_job in BackgroundJob,
+      |> join(
+        :left,
+        [account, _source_token, _legacy_job, _acquisition_job],
+        reason_job in BackgroundJob,
         on:
           fragment(
             "? LIKE 'runtime-partition:source-account-closure-reason:%:' || ?::text",
@@ -639,7 +650,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       )
       |> join(
         :left,
-        [todo, account, _legacy_job, _acquisition_job, _reason_job],
+        [account, _source_token, _legacy_job, _acquisition_job, _reason_job],
         finalizer_job in BackgroundJob,
         on:
           fragment(
@@ -652,26 +663,26 @@ defmodule Maraithon.Runtime.PeriodicJobs do
             finalizer_job.status in @active_statuses
       )
       |> where(
-        [todo, account, legacy_job, acquisition_job, reason_job, finalizer_job],
-        todo.status in ["open", "snoozed"] and account.status == "connected" and
+        [account, _source_token, legacy_job, acquisition_job, reason_job, finalizer_job],
+        account.user_id in subquery(open_todo_user_ids) and account.status == "connected" and
           is_nil(legacy_job.id) and is_nil(acquisition_job.id) and is_nil(reason_job.id) and
           is_nil(finalizer_job.id)
       )
       |> where(
-        [_todo, account, _legacy_job, _acquisition_job, _reason_job, _finalizer_job],
+        [account, _source_token, _legacy_job, _acquisition_job, _reason_job, _finalizer_job],
         like(account.provider, "google%") or
           fragment("? ~ '^slack:[^:]+$'", account.provider)
       )
       |> distinct(
-        [_todo, account, _legacy_job, _acquisition_job, _reason_job, _finalizer_job],
+        [account, _source_token, _legacy_job, _acquisition_job, _reason_job, _finalizer_job],
         account.id
       )
       |> order_by(
-        [_todo, account, _legacy_job, _acquisition_job, _reason_job, _finalizer_job],
+        [account, _source_token, _legacy_job, _acquisition_job, _reason_job, _finalizer_job],
         asc: account.id
       )
       |> select(
-        [_todo, account, _legacy_job, _acquisition_job, _reason_job, _finalizer_job],
+        [account, _source_token, _legacy_job, _acquisition_job, _reason_job, _finalizer_job],
         struct(account, [
           :id,
           :user_id,
@@ -683,7 +694,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         ])
       )
 
-    account_page(query, limit, cursor, :second)
+    account_page(query, limit, cursor, :first)
   end
 
   defp enqueue_model_users(schedule, job_type, users, now, extra \\ %{}) do

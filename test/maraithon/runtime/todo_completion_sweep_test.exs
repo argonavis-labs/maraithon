@@ -65,7 +65,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweepTest do
            } = summary
   end
 
-  test "an account closure partition checks only todos linked to that account" do
+  test "an account closure partition checks every open todo for cross-source evidence" do
     user_id = "account-closure-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
@@ -96,9 +96,9 @@ defmodule Maraithon.Runtime.TodoCompletionSweepTest do
       ])
 
     assert %{
-             checked: 1,
+             checked: 2,
              coverage_complete?: true,
-             cross_source: %{checked: 1, expected: 1, model_calls: 0}
+             cross_source: %{checked: 2, expected: 2, model_calls: 0}
            } =
              TodoCompletionSweep.run_for_account(selected_account, live_sources: false)
   end

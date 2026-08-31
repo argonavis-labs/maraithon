@@ -325,7 +325,7 @@ proactive_check_in_interval_ms =
   String.to_integer(System.get_env("PROACTIVE_CHECK_IN_INTERVAL_MS", "600000"))
 
 todo_completion_sweep_interval_ms =
-  String.to_integer(System.get_env("TODO_COMPLETION_SWEEP_INTERVAL_MS", "1800000"))
+  String.to_integer(System.get_env("TODO_COMPLETION_SWEEP_INTERVAL_MS", "60000"))
 
 optional_boolean_env = fn name ->
   case System.get_env(name) do

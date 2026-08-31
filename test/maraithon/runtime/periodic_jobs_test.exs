@@ -289,7 +289,9 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     job =
       Repo.one!(
         from(job in BackgroundJob,
-          where: job.job_type == "runtime_partition:source_account_discovery"
+          where:
+            job.user_id == ^user_id and
+              job.job_type == "runtime_partition:source_account_discovery"
         )
       )
 
@@ -328,7 +330,9 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     job =
       Repo.one!(
         from(job in BackgroundJob,
-          where: job.job_type == "runtime_partition:source_account_discovery"
+          where:
+            job.user_id == ^user_id and
+              job.job_type == "runtime_partition:source_account_discovery"
         )
       )
 
@@ -506,9 +510,14 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     assert {:ok, %{discovered: 1, enqueued: 1}} =
              PeriodicJobs.schedule("source_account_discovery")
 
+    user_ids = Enum.map(accounts, & &1.user_id)
+
     enqueued_account_ids =
       BackgroundJob
-      |> where([job], job.job_type == "runtime_partition:source_account_discovery")
+      |> where(
+        [job],
+        job.user_id in ^user_ids and job.job_type == "runtime_partition:source_account_discovery"
+      )
       |> Repo.all()
       |> Enum.map(& &1.payload["account_id"])
       |> Enum.sort()
@@ -554,6 +563,11 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
         metadata: %{"account_email" => "closure@example.com"}
       })
 
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:closure@example.com", %{
+        access_token: "closure-access"
+      })
+
     {:ok, [_todo]} =
       Todos.upsert_many(user_id, [
         %{
@@ -581,14 +595,18 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     job =
       Repo.one!(
         from(job in BackgroundJob,
-          where: job.job_type == "runtime_partition:source_account_closure_acquire"
+          where:
+            job.user_id == ^user_id and
+              job.job_type == "runtime_partition:source_account_closure_acquire"
         )
       )
 
     discovery_job =
       Repo.one!(
         from(job in BackgroundJob,
-          where: job.job_type == "runtime_partition:source_account_discovery"
+          where:
+            job.user_id == ^user_id and
+              job.job_type == "runtime_partition:source_account_discovery"
         )
       )
 
@@ -612,6 +630,11 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     {:ok, account} =
       ConnectedAccounts.upsert_manual(user_id, "google:orphan-closure@example.com", %{
         metadata: %{"account_email" => "orphan-closure@example.com"}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:orphan-closure@example.com", %{
+        access_token: "orphan-closure-access"
       })
 
     {:ok, [_todo]} =
@@ -653,5 +676,67 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
               account_partitions: 1,
               legacy_partitions: 0
             }} = PeriodicJobs.schedule("todo_completion_sweep")
+  end
+
+  test "completion coordinator covers every token-backed source account for an open-todo user" do
+    user_id = "periodic-cross-source-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    providers = ["google:first@example.com", "google:second@example.com", "slack:T-CROSS"]
+
+    accounts =
+      Enum.map(providers, fn provider ->
+        {:ok, account} = ConnectedAccounts.upsert_manual(user_id, provider, %{})
+        {:ok, _token} = OAuth.store_tokens(user_id, provider, %{access_token: "source-access"})
+        account
+      end)
+
+    {:ok, _tokenless} =
+      ConnectedAccounts.upsert_manual(user_id, "google:tokenless@example.com", %{})
+
+    {:ok, disconnected} =
+      ConnectedAccounts.upsert_manual(user_id, "slack:T-DISCONNECTED", %{})
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, disconnected.provider, %{access_token: "disconnected-access"})
+
+    disconnected
+    |> Ecto.Changeset.change(status: "disconnected")
+    |> Repo.update!()
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "manual",
+          "title" => "Cross-source completion evidence",
+          "summary" => "Any connected source may contain completion evidence.",
+          "next_action" => "Check every connected source account.",
+          "dedupe_key" => "periodic-cross-source-coverage"
+        }
+      ])
+
+    assert {:ok,
+            %{
+              discovered: 3,
+              enqueued: 3,
+              account_partitions: 3,
+              legacy_partitions: 0
+            }} = PeriodicJobs.schedule("todo_completion_sweep")
+
+    expected_account_ids = accounts |> Enum.map(& &1.id) |> Enum.sort()
+
+    covered_account_ids =
+      BackgroundJob
+      |> where(
+        [job],
+        job.user_id == ^user_id and
+          job.job_type == "runtime_partition:source_account_closure_acquire"
+      )
+      |> Repo.all()
+      |> Enum.map(&BackgroundJob.hydrate_payloads/1)
+      |> Enum.map(& &1.payload["account_id"])
+      |> Enum.sort()
+
+    assert expected_account_ids == covered_account_ids
   end
 end
