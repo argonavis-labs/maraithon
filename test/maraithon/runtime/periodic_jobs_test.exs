@@ -263,7 +263,7 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     provider = "google:#{user_id}"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
-    {:ok, _account} =
+    {:ok, account} =
       ConnectedAccounts.upsert_manual(user_id, provider, %{
         metadata: %{"account_email" => user_id, "services" => ["gmail"]}
       })
@@ -282,6 +282,18 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
         config: %{},
         status: "running"
       })
+
+    {:ok, completed_finalizer} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery_finalize", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key: "runtime-partition:source-account-discovery-finalize:#{account.id}",
+        payload: %{"account_id" => account.id}
+      })
+
+    completed_finalizer
+    |> Ecto.Changeset.change(status: "completed", completed_at: DateTime.utc_now())
+    |> Repo.update!()
 
     assert {:ok, %{discovered: 1, enqueued: 1}} =
              PeriodicJobs.schedule("source_account_discovery")
@@ -567,6 +579,18 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
       OAuth.store_tokens(user_id, "google:closure@example.com", %{
         access_token: "closure-access"
       })
+
+    {:ok, completed_finalizer} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_closure_finalize", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key: "runtime-partition:source-account-closure-finalize:#{account.id}",
+        payload: %{"account_id" => account.id}
+      })
+
+    completed_finalizer
+    |> Ecto.Changeset.change(status: "completed", completed_at: DateTime.utc_now())
+    |> Repo.update!()
 
     {:ok, [_todo]} =
       Todos.upsert_many(user_id, [

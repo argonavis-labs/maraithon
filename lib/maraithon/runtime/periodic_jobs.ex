@@ -358,14 +358,17 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         [account, _source_token, _acquisition_job, _reason_job],
         finalizer_job in BackgroundJob,
         on:
-          fragment(
-            "? = 'runtime-partition:source-account-discovery-finalize:' || ?::text OR ? LIKE 'runtime-partition:source-account-discovery-finalize:' || ?::text || ':%'",
-            finalizer_job.dedupe_key,
-            account.id,
-            finalizer_job.dedupe_key,
-            account.id
-          ) and
-            finalizer_job.status in @active_statuses
+          finalizer_job.status in @active_statuses and
+            (finalizer_job.dedupe_key ==
+               fragment(
+                 "'runtime-partition:source-account-discovery-finalize:' || ?::text",
+                 account.id
+               ) or
+               fragment(
+                 "? LIKE 'runtime-partition:source-account-discovery-finalize:' || ?::text || ':%'",
+                 finalizer_job.dedupe_key,
+                 account.id
+               ))
       )
       |> where(
         [account, _source_token, acquisition_job, reason_job, finalizer_job],
@@ -653,14 +656,17 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         [account, _source_token, _legacy_job, _acquisition_job, _reason_job],
         finalizer_job in BackgroundJob,
         on:
-          fragment(
-            "? = 'runtime-partition:source-account-closure-finalize:' || ?::text OR ? LIKE 'runtime-partition:source-account-closure-finalize:' || ?::text || ':%'",
-            finalizer_job.dedupe_key,
-            account.id,
-            finalizer_job.dedupe_key,
-            account.id
-          ) and
-            finalizer_job.status in @active_statuses
+          finalizer_job.status in @active_statuses and
+            (finalizer_job.dedupe_key ==
+               fragment(
+                 "'runtime-partition:source-account-closure-finalize:' || ?::text",
+                 account.id
+               ) or
+               fragment(
+                 "? LIKE 'runtime-partition:source-account-closure-finalize:' || ?::text || ':%'",
+                 finalizer_job.dedupe_key,
+                 account.id
+               ))
       )
       |> where(
         [account, _source_token, legacy_job, acquisition_job, reason_job, finalizer_job],
