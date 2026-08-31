@@ -767,7 +767,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert frontier == now |> DateTime.to_unix() |> to_string()
   end
 
-  test "historical Slack replay exhaustively reads channels, DMs, group DMs, and old-thread replies" do
+  test "historical Slack replay uses the paginated workspace source stream for channels, DMs, group DMs, and old-thread replies" do
     upper = ~U[2026-08-31 12:00:00Z]
     lower = DateTime.add(upper, -1, :hour)
     user_id = "chief-slack-historical-replay@example.com"
@@ -798,6 +798,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     old_thread_ts = slack_test_ts(DateTime.add(lower, -7, :day))
     old_thread_reply_ts = slack_test_ts(DateTime.add(lower, 30, :minute))
     future_ts = slack_test_ts(upper)
+    test_pid = self()
 
     Bypass.stub(bypass, "GET", "/api/conversations.list", fn conn ->
       conn
@@ -816,6 +817,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     end)
 
     Bypass.stub(bypass, "GET", "/api/conversations.history", fn conn ->
+      send(test_pid, :unexpected_historical_history_request)
       channel_id = conn.query_string |> Plug.Conn.Query.decode() |> Map.fetch!("channel")
 
       messages =
@@ -848,6 +850,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     end)
 
     Bypass.stub(bypass, "GET", "/api/conversations.replies", fn conn ->
+      send(test_pid, :unexpected_historical_replies_request)
       thread_ts = conn.query_string |> Plug.Conn.Query.decode() |> Map.fetch!("ts")
 
       messages =
@@ -892,14 +895,45 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         Jason.encode!(%{
           "ok" => true,
           "messages" => %{
-            "total" => 1,
+            "total" => 6,
             "matches" => [
+              %{
+                "channel" => %{"id" => "C-REPLAY", "name" => "team"},
+                "ts" => channel_root_ts,
+                "user" => "U-CHANNEL",
+                "text" => "Channel root at the inclusive lower boundary"
+              },
+              %{
+                "channel" => %{"id" => "C-REPLAY", "name" => "team"},
+                "ts" => channel_reply_ts,
+                "thread_ts" => channel_root_ts,
+                "user" => "U-REPLY",
+                "text" => "Channel thread reply"
+              },
+              %{
+                "channel" => %{"id" => "D-REPLAY", "name" => "direct"},
+                "ts" => direct_message_ts,
+                "user" => "U-DM",
+                "text" => "Direct message"
+              },
+              %{
+                "channel" => %{"id" => "G-REPLAY", "name" => "group"},
+                "ts" => group_message_ts,
+                "user" => "U-GROUP",
+                "text" => "Group direct message"
+              },
               %{
                 "channel" => %{"id" => "C-REPLAY", "name" => "team"},
                 "ts" => old_thread_reply_ts,
                 "thread_ts" => old_thread_ts,
                 "user" => "U-NEW",
                 "text" => "Fresh reply beneath an old root"
+              },
+              %{
+                "channel" => %{"id" => "C-REPLAY", "name" => "team"},
+                "ts" => future_ts,
+                "user" => "U-FUTURE",
+                "text" => "Future channel message must not enter the replay"
               }
             ]
           }
@@ -930,6 +964,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       Acquisition.build(user_id, ["followthrough"], slack_exact_skill_configs(team_id), context)
 
     assert Acquisition.source_complete?(telemetry, "slack")
+    refute_received :unexpected_historical_history_request
+    refute_received :unexpected_historical_replies_request
 
     assert MapSet.new(Enum.map(SourceBundle.slack_messages(bundle), & &1["text"])) ==
              MapSet.new([
@@ -948,8 +984,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
         &(&1["text"] == "Fresh reply beneath an old root")
       )
 
-    assert replay_reply["thread_context_complete"]
-    assert Enum.map(replay_reply["thread_context"], & &1["text"]) == ["Historical root context"]
+    assert replay_reply["thread_ts"] == old_thread_ts
 
     assert [
              %{
