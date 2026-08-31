@@ -245,6 +245,32 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert second.tenant_key == "user:tenant-b"
   end
 
+  test "exact fair admission isolates generic, provider, and model lanes" do
+    %{node: node, partitions: partitions} = active_authority!(["tenant-a"])
+    insert_user!("tenant-a")
+
+    generic = insert_job!("tenant-a", "generic", queue: "relationships")
+    provider = insert_job!("tenant-a", "provider", queue: "runtime_provider_account")
+    model = insert_job!("tenant-a", "model", queue: "runtime_model_user")
+
+    assert {:ok, {reserved_model, _assignment, _identity}} =
+             FairScheduler.reserve_next(node, partitions, queues: ["runtime_model_user"])
+
+    assert reserved_model.id == model.id
+
+    assert {:ok, {reserved_provider, _assignment, _identity}} =
+             FairScheduler.reserve_next(node, partitions, queues: ["runtime_provider_account"])
+
+    assert reserved_provider.id == provider.id
+
+    assert {:ok, {reserved_generic, _assignment, _identity}} =
+             FairScheduler.reserve_next(node, partitions,
+               exclude_queues: ["runtime_provider_account", "runtime_model_user"]
+             )
+
+    assert reserved_generic.id == generic.id
+  end
+
   test "commit-unknown background reservation clears only after locked absence" do
     %{node: _node, partitions: _partitions} = active_authority!(["tenant-a"])
     insert_user!("tenant-a")
@@ -1614,11 +1640,11 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     end
   end
 
-  defp insert_job!(user_id, dedupe) do
+  defp insert_job!(user_id, dedupe, opts \\ []) do
     %BackgroundJob{}
     |> BackgroundJob.changeset(%{
       user_id: user_id,
-      queue: "test",
+      queue: Keyword.get(opts, :queue, "test"),
       job_type: "test",
       payload: %{"dedupe" => dedupe},
       dedupe_key: Ecto.UUID.generate(),

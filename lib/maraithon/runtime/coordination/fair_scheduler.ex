@@ -13,7 +13,17 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
       when is_list(partitions) do
     max_attempts = Keyword.get(opts, :conflict_attempts, 8) |> min(32) |> max(1)
     task_ttl_ms = Keyword.get(opts, :task_ttl_ms, 30_000)
-    do_reserve(session, partitions, task_ttl_ms, max_attempts)
+    queues = queue_names(Keyword.get(opts, :queues, []))
+    exclude_queues = queue_names(Keyword.get(opts, :exclude_queues, []))
+
+    do_reserve(
+      session,
+      partitions,
+      task_ttl_ms,
+      max_attempts,
+      queues,
+      exclude_queues
+    )
   end
 
   def activate_job(%BackgroundJob{} = job, assignment) do
@@ -75,12 +85,18 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
     end
   end
 
-  defp do_reserve(_session, [], _ttl, _attempts), do: {:ok, nil}
-  defp do_reserve(_session, _partitions, _ttl, 0), do: {:error, :fair_claim_conflict_limit}
+  defp do_reserve(_session, [], _ttl, _attempts, _queues, _exclude_queues), do: {:ok, nil}
 
-  defp do_reserve(session, partitions, task_ttl_ms, attempts) do
+  defp do_reserve(_session, _partitions, _ttl, 0, _queues, _exclude_queues),
+    do: {:error, :fair_claim_conflict_limit}
+
+  defp do_reserve(session, partitions, task_ttl_ms, attempts, queues, exclude_queues) do
     Process.delete(@pending_physical_key)
-    result = Repo.transaction(fn -> reserve_locked(session, partitions, task_ttl_ms) end)
+
+    result =
+      Repo.transaction(fn ->
+        reserve_locked(session, partitions, task_ttl_ms, queues, exclude_queues)
+      end)
 
     case result do
       {:ok, value} ->
@@ -89,7 +105,15 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
 
       {:error, :fair_claim_conflict} ->
         Process.delete(@pending_physical_key)
-        do_reserve(session, partitions, task_ttl_ms, attempts - 1)
+
+        do_reserve(
+          session,
+          partitions,
+          task_ttl_ms,
+          attempts - 1,
+          queues,
+          exclude_queues
+        )
 
       {:error, :fair_scheduler_busy} ->
         Process.delete(@pending_physical_key)
@@ -105,21 +129,24 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
     end
   end
 
-  defp reserve_locked(session, partitions, task_ttl_ms) do
+  defp reserve_locked(session, partitions, task_ttl_ms, queues, exclude_queues) do
     lock_session_reservations!(session)
     Authority.fence_partitions!(session, Enum.sort_by(partitions, & &1.partition_id), :ready)
 
     partition_ids = Enum.map(partitions, & &1.partition_id)
     partition_epochs = Enum.map(partitions, & &1.ownership_epoch)
-    ensure_tenants!(session, partition_ids, partition_epochs)
+    ensure_tenants!(session, partition_ids, partition_epochs, queues, exclude_queues)
 
-    case candidate(session, partition_ids, partition_epochs) do
+    case candidate(session, partition_ids, partition_epochs, queues, exclude_queues) do
       nil -> nil
       candidate -> reserve_candidate!(session, candidate, task_ttl_ms)
     end
   end
 
-  defp candidate(session, ids, epochs) do
+  defp candidate(session, ids, epochs, queues, exclude_queues) do
+    include_queues? = queues != []
+    exclude_queues? = exclude_queues != []
+
     result =
       SQL.query!(
         Repo,
@@ -132,6 +159,8 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
           JOIN public.background_jobs AS job ON job.id = assignment.work_id
           WHERE assignment.work_kind = 'background_job'
             AND assignment.state IN ('reserved', 'running', 'termination_requested', 'termination_proven')
+            AND ($5::boolean = false OR job.queue = ANY($6::text[]))
+            AND ($7::boolean = false OR NOT (job.queue = ANY($8::text[])))
           GROUP BY job.tenant_key
         ), candidates AS MATERIALIZED (
           SELECT job.id, job.tenant_key, job.partition_id, owned.partition_epoch,
@@ -157,6 +186,8 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
           WHERE job.status = 'pending'
             AND job.scheduled_at <= timezone('UTC', clock_timestamp())
             AND job.claim_token IS NULL
+            AND ($5::boolean = false OR job.queue = ANY($6::text[]))
+            AND ($7::boolean = false OR NOT (job.queue = ANY($8::text[])))
             AND NOT EXISTS (
               SELECT 1 FROM public.runtime_task_assignments AS existing
               WHERE existing.work_kind = 'background_job' AND existing.work_id = job.id
@@ -188,7 +219,16 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
         JOIN public.background_jobs AS job ON job.id = candidate.id
         FOR UPDATE OF tenant, job SKIP LOCKED
         """,
-        [ids, epochs, Ecto.UUID.dump!(session.id), Ecto.UUID.dump!(session.activation_epoch)]
+        [
+          ids,
+          epochs,
+          Ecto.UUID.dump!(session.id),
+          Ecto.UUID.dump!(session.activation_epoch),
+          include_queues?,
+          queues,
+          exclude_queues?,
+          exclude_queues
+        ]
       )
 
     case result.rows do
@@ -370,7 +410,10 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
     end
   end
 
-  defp ensure_tenants!(session, ids, epochs) do
+  defp ensure_tenants!(session, ids, epochs, queues, exclude_queues) do
+    include_queues? = queues != []
+    exclude_queues? = exclude_queues != []
+
     SQL.query!(
       Repo,
       """
@@ -394,11 +437,31 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
        AND partition.state = 'ready'
        AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
       WHERE job.status = 'pending'
+        AND ($5::boolean = false OR job.queue = ANY($6::text[]))
+        AND ($7::boolean = false OR NOT (job.queue = ANY($8::text[])))
       ON CONFLICT (tenant_key) DO NOTHING
       """,
-      [ids, epochs, Ecto.UUID.dump!(session.id), Ecto.UUID.dump!(session.activation_epoch)]
+      [
+        ids,
+        epochs,
+        Ecto.UUID.dump!(session.id),
+        Ecto.UUID.dump!(session.activation_epoch),
+        include_queues?,
+        queues,
+        exclude_queues?,
+        exclude_queues
+      ]
     )
   end
+
+  defp queue_names(values) when is_list(values) do
+    values
+    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+    |> Enum.map(&String.trim/1)
+    |> Enum.uniq()
+  end
+
+  defp queue_names(_values), do: []
 
   defp load_job!(%{columns: columns, rows: [row]}) do
     BackgroundJob

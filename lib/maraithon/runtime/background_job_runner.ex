@@ -358,7 +358,13 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     with {:ok, session} <- Scope.current(),
          partitions <- Authority.owned_partitions(session, ["ready"]),
          {:ok, reservations} <-
-           coordinated_reservations(session, partitions, limit, state.claim_timeout_ms) do
+           coordinated_reservations(
+             session,
+             partitions,
+             limit,
+             state.claim_timeout_ms,
+             state
+           ) do
       if reservations == [] do
         {:reply, {:ok, []}, state}
       else
@@ -432,7 +438,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
           session,
           partitions,
           min(state.batch_size, available_slots),
-          state.claim_timeout_ms
+          state.claim_timeout_ms,
+          state
         )
       else
         false -> {:ok, []}
@@ -456,9 +463,13 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     end
   end
 
-  defp coordinated_reservations(session, partitions, limit, ttl_ms) do
+  defp coordinated_reservations(session, partitions, limit, ttl_ms, state) do
     Enum.reduce_while(1..limit, {:ok, []}, fn _, {:ok, acc} ->
-      case FairScheduler.reserve_next(session, partitions, task_ttl_ms: ttl_ms) do
+      case FairScheduler.reserve_next(session, partitions,
+             task_ttl_ms: ttl_ms,
+             queues: state.queues,
+             exclude_queues: state.exclude_queues
+           ) do
         {:ok, nil} -> {:halt, {:ok, Enum.reverse(acc)}}
         {:ok, reservation} -> {:cont, {:ok, [reservation | acc]}}
         error -> {:halt, error}
