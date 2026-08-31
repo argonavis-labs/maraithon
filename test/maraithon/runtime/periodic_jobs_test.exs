@@ -53,8 +53,10 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
         metadata: %{"team_id" => "T-RECONCILIATION"}
       })
 
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
     assert {:ok, %{discovery: %{outcome: "enqueued"}}} =
-             PeriodicJobs.wake_source_account(account, now: DateTime.utc_now())
+             PeriodicJobs.wake_source_account(account, now: now)
 
     planner =
       Repo.one!(
@@ -71,10 +73,27 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     assert planner.rate_limit_key == "slack"
     refute String.contains?(planner.partition_key, user_id)
 
+    planner
+    |> Ecto.Changeset.change(status: "completed", completed_at: now)
+    |> Repo.update!()
+
     assert {:ok, %{discovery: %{job_id: _job_id}}} =
-             PeriodicJobs.wake_source_account(account, now: DateTime.utc_now())
+             PeriodicJobs.wake_source_account(account, now: DateTime.add(now, 30, :second))
 
     assert 1 ==
+             Repo.aggregate(
+               from(job in BackgroundJob,
+                 where:
+                   job.user_id == ^user_id and
+                     job.job_type == "runtime_partition:slack_reconciliation_plan"
+               ),
+               :count
+             )
+
+    assert {:ok, %{discovery: %{job_id: _job_id}}} =
+             PeriodicJobs.wake_source_account(account, now: DateTime.add(now, 56, :second))
+
+    assert 2 ==
              Repo.aggregate(
                from(job in BackgroundJob,
                  where:

@@ -41,6 +41,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @source_finalizer_retry_seconds 10
   @source_dependency_retry_ms 10_000
   @slack_reconciliation_fanout_spacing_seconds 6
+  @slack_reconciliation_plan_cooldown_seconds 55
 
   @token_job "runtime_partition:token_refresh"
   @watch_job "runtime_partition:watch_renewal"
@@ -436,17 +437,18 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   defp enqueue_source_discovery_job(account, agent, now) do
-    with {:ok, discovery_job} <-
-           with_source_account_fence(account, fn locked_account ->
-             case active_source_cycle_acquisition(locked_account, "discovery") do
-               {:ok, nil} -> do_enqueue_source_discovery_job(locked_account, agent, now)
-               {:ok, %BackgroundJob{} = acquisition} -> {:ok, acquisition}
-               {:error, _reason} = error -> error
-             end
-           end),
-         {:ok, _reconciliation_job} <- maybe_enqueue_slack_reconciliation_plan(account, now) do
-      {:ok, discovery_job}
-    end
+    with_source_account_fence(account, fn locked_account ->
+      with {:ok, discovery_job} <-
+             (case active_source_cycle_acquisition(locked_account, "discovery") do
+                {:ok, nil} -> do_enqueue_source_discovery_job(locked_account, agent, now)
+                {:ok, %BackgroundJob{} = acquisition} -> {:ok, acquisition}
+                {:error, _reason} = error -> error
+              end),
+           {:ok, _reconciliation_job} <-
+             maybe_enqueue_slack_reconciliation_plan(locked_account, now) do
+        {:ok, discovery_job}
+      end
+    end)
   end
 
   defp maybe_enqueue_slack_reconciliation_plan(
@@ -454,26 +456,48 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          now
        ) do
     if provider_suffix != "" and not String.contains?(provider_suffix, ":user:") do
-      BackgroundJobs.enqueue(@slack_reconciliation_plan_job, %{
-        user_id: account.user_id,
-        queue: @provider_queue,
-        dedupe_key: "runtime-partition:slack-reconciliation-plan:#{account.id}",
-        partition_key: provider_partition(account.user_id, account.provider),
-        rate_limit_key: TokenRefresher.provider_family(account.provider),
-        max_attempts: 5,
-        scheduled_at: now,
-        payload: %{
-          "user_id" => account.user_id,
-          "account_id" => account.id,
-          "role" => "discovery"
-        }
-      })
+      dedupe_key = "runtime-partition:slack-reconciliation-plan:#{account.id}"
+
+      case recent_slack_reconciliation_plan(dedupe_key, now) do
+        %BackgroundJob{} = recent ->
+          {:ok, recent}
+
+        nil ->
+          BackgroundJobs.enqueue(@slack_reconciliation_plan_job, %{
+            user_id: account.user_id,
+            queue: @provider_queue,
+            dedupe_key: dedupe_key,
+            partition_key: provider_partition(account.user_id, account.provider),
+            rate_limit_key: TokenRefresher.provider_family(account.provider),
+            max_attempts: 5,
+            scheduled_at: now,
+            payload: %{
+              "user_id" => account.user_id,
+              "account_id" => account.id,
+              "role" => "discovery"
+            }
+          })
+      end
     else
       {:ok, nil}
     end
   end
 
   defp maybe_enqueue_slack_reconciliation_plan(%ConnectedAccount{}, _now), do: {:ok, nil}
+
+  defp recent_slack_reconciliation_plan(dedupe_key, now) do
+    cutoff = DateTime.add(now, -@slack_reconciliation_plan_cooldown_seconds, :second)
+
+    BackgroundJob
+    |> where(
+      [job],
+      job.job_type == ^@slack_reconciliation_plan_job and job.dedupe_key == ^dedupe_key and
+        job.inserted_at >= ^cutoff
+    )
+    |> order_by([job], desc: job.inserted_at, desc: job.id)
+    |> limit(1)
+    |> Repo.one()
+  end
 
   defp do_enqueue_source_discovery_job(account, agent, now) do
     BackgroundJobs.enqueue(@source_discovery_job, %{
