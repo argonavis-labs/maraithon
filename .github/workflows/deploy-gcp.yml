@@ -17,12 +17,21 @@ on:
           - diagnose-runtime
           - reset-rebuild-kent
           - replay-gmail
+          - replay-slack
       gmail_replay_lower:
         description: Gmail replay lower Unix second (inclusive)
         required: false
         type: string
       gmail_replay_upper:
         description: Gmail replay upper Unix second (exclusive)
+        required: false
+        type: string
+      slack_replay_lower:
+        description: Slack replay lower Unix second (inclusive)
+        required: false
+        type: string
+      slack_replay_upper:
+        description: Slack replay upper Unix second (exclusive)
         required: false
         type: string
 
@@ -100,3 +109,14 @@ jobs:
           MARAITHON_GMAIL_REPLAY_EXPECTED_ACCOUNT_COUNT: "2"
           MARAITHON_GMAIL_REPLAY_LOWER: ${{ inputs.gmail_replay_lower }}
           MARAITHON_GMAIL_REPLAY_UPPER: ${{ inputs.gmail_replay_upper }}
+
+      - name: Replay and audit Kent's Slack source window
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-slack'
+        run: scripts/monorepo/replay-slack-production
+        env:
+          MARAITHON_GCP_PROJECT: maraithon
+          MARAITHON_GCP_REGION: us-central1
+          MARAITHON_GCP_SERVICE: maraithon
+          MARAITHON_SLACK_REPLAY_USER: kent@runner.now
+          MARAITHON_SLACK_REPLAY_LOWER: ${{ inputs.slack_replay_lower }}
+          MARAITHON_SLACK_REPLAY_UPPER: ${{ inputs.slack_replay_upper }}

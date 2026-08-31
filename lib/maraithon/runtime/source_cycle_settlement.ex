@@ -15,6 +15,7 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Runtime.SourceCycleProofs
+  alias Maraithon.Runtime.SlackSourceReplay
   alias Maraithon.Todos.Todo
 
   @discovery_acquire "runtime_partition:source_account_discovery"
@@ -124,6 +125,7 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
     boundary =
       cond do
         String.starts_with?(kind || "", "gmail_") -> "lower_inclusive_upper_exclusive"
+        SlackSourceReplay.watermark_kind?(kind, graph.role) -> "lower_inclusive_upper_exclusive"
         String.starts_with?(kind || "", "slack_") -> "lower_exclusive_upper_inclusive"
         true -> nil
       end

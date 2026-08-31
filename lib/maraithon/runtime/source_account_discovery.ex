@@ -23,6 +23,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.GmailSourceReplay
+  alias Maraithon.Runtime.SlackSourceReplay
   alias Maraithon.Runtime.SourceCycleProofs
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
@@ -1768,7 +1769,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp allowed_watermark_kind?(kind) do
-    kind in @allowed_watermark_kinds or GmailSourceReplay.watermark_kind?(kind, "discovery")
+    kind in @allowed_watermark_kinds or GmailSourceReplay.watermark_kind?(kind, "discovery") or
+      SlackSourceReplay.watermark_kind?(kind, "discovery")
   end
 
   defp maybe_filter_settled_source_items(bundle, account, role, opts)
@@ -1781,14 +1783,18 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp validate_replay_opts(account, opts, role) do
-    GmailSourceReplay.validate_runtime_replay(account, Keyword.get(opts, :source_replay), role)
+    source_replay_module(account).validate_runtime_replay(
+      account,
+      Keyword.get(opts, :source_replay),
+      role
+    )
   end
 
   defp put_replay_context(context, opts, role) when is_map(context) and is_list(opts) do
     case Keyword.get(opts, :source_replay) do
       %{lower: lower, upper: upper, kind: kind}
       when is_integer(lower) and is_integer(upper) and is_binary(kind) ->
-        if GmailSourceReplay.watermark_kind?(kind, role) do
+        if replay_watermark_kind?(kind, role) do
           context
           |> Map.put(:source_replay_window, %{lower: lower, upper: upper})
           |> Map.put(:source_watermark_kind_override, kind)
@@ -1800,6 +1806,15 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         context
     end
   end
+
+  defp replay_watermark_kind?(kind, role) do
+    GmailSourceReplay.watermark_kind?(kind, role) or SlackSourceReplay.watermark_kind?(kind, role)
+  end
+
+  defp source_replay_module(%ConnectedAccount{provider: "slack:" <> _team_id}),
+    do: SlackSourceReplay
+
+  defp source_replay_module(_account), do: GmailSourceReplay
 
   defp put_replay_metadata(value, source) when is_map(value) do
     replay =
@@ -1818,6 +1833,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         |> Map.put(:source_replay_lower, lower)
         |> Map.put(:source_replay_upper, upper)
         |> maybe_put_replay_kind(replay)
+        |> maybe_put_replay_provider(replay)
 
       %{
         "source_replay_reference" => reference,
@@ -1831,6 +1847,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         |> Map.put(:source_replay_lower, lower)
         |> Map.put(:source_replay_upper, upper)
         |> maybe_put_replay_kind(replay)
+        |> maybe_put_replay_provider(replay)
 
       _other ->
         value
@@ -1844,6 +1861,21 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     do: Map.put(value, :source_replay_kind, kind)
 
   defp maybe_put_replay_kind(value, _replay), do: value
+
+  defp maybe_put_replay_provider(value, %{kind: kind}) when is_binary(kind) do
+    if SlackSourceReplay.watermark_kind?(kind, "discovery") or
+         SlackSourceReplay.watermark_kind?(kind, "closure") do
+      Map.put(value, :source_replay_provider, "slack")
+    else
+      Map.put(value, :source_replay_provider, "gmail")
+    end
+  end
+
+  defp maybe_put_replay_provider(value, %{"source_replay_provider" => provider})
+       when provider in ["gmail", "slack"],
+       do: Map.put(value, :source_replay_provider, provider)
+
+  defp maybe_put_replay_provider(value, _replay), do: value
 
   defp settle_watermarks(account, watermarks, opts)
        when is_list(watermarks) and is_list(opts) do

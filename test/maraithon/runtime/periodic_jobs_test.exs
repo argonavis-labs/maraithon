@@ -13,6 +13,7 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.PeriodicJobs
+  alias Maraithon.Runtime.SlackSourceReplay
   alias Maraithon.Runtime.SourceAccountAdmission
   alias Maraithon.Runtime.SourceCycleProofs
   alias Maraithon.TelegramAssistant.ProactiveQueue
@@ -110,6 +111,46 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     assert persisted_closure.result["source_replay_reference"] == reference
     assert persisted_closure.result["source_replay_lower"] == lower
     assert persisted_closure.result["source_replay_upper"] == upper
+  end
+
+  test "Slack source replay enqueues independently fenced discovery and closure activity" do
+    user_id = "periodic-slack-replay-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "slack:T-REPLAY", %{
+        metadata: %{"team_id" => "T-REPLAY", "services" => ["channels"]}
+      })
+
+    lower = DateTime.utc_now() |> DateTime.add(-24, :hour) |> DateTime.to_unix(:second)
+    upper = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.to_unix(:second)
+
+    assert {:ok,
+            %{
+              outcome: "enqueued",
+              source_replay_reference: reference,
+              discovery_job_id: discovery_job_id,
+              closure_job_id: closure_job_id
+            }} = PeriodicJobs.enqueue_slack_source_replay(account.id, lower, upper)
+
+    assert {:ok, replay} = SlackSourceReplay.build(account, lower, upper)
+    discovery = Repo.get!(BackgroundJob, discovery_job_id)
+    closure = Repo.get!(BackgroundJob, closure_job_id)
+
+    for job <- [discovery, closure] do
+      assert job.payload["source_replay_mode"] == "historical"
+      assert job.payload["source_replay_provider"] == "slack"
+      assert job.payload["source_replay_reference"] == reference
+      assert job.result["source_replay_provider"] == "slack"
+    end
+
+    assert discovery.payload["role"] == "discovery"
+    assert closure.payload["role"] == "closure"
+    assert closure.payload["discovery_job_id"] == discovery.id
+    assert SourceCursors.get(account.id, replay.discovery_kind).value == Integer.to_string(lower)
+    assert SourceCursors.get(account.id, replay.closure_kind).value == Integer.to_string(lower)
+    refute SourceCursors.get(account.id, "slack_discovery_watermark")
+    refute SourceCursors.get(account.id, "slack_closure_watermark")
   end
 
   test "independent Gmail accounts receive parallel-safe provider lanes" do

@@ -767,6 +767,203 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert frontier == now |> DateTime.to_unix() |> to_string()
   end
 
+  test "historical Slack replay exhaustively reads channels, DMs, group DMs, and old-thread replies" do
+    upper = ~U[2026-08-31 12:00:00Z]
+    lower = DateTime.add(upper, -1, :hour)
+    user_id = "chief-slack-historical-replay@example.com"
+    team_id = "T-HISTORICAL-REPLAY"
+    bypass = Bypass.open()
+
+    _user = Accounts.get_or_create_user_by_email(user_id)
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}", %{
+               access_token: "xoxb-bot-token",
+               scopes: ["channels:read", "channels:history"],
+               metadata: %{"team_id" => team_id}
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "slack:#{team_id}:user:U-SELF", %{
+               access_token: "xoxp-user-token",
+               scopes: ["channels:read", "channels:history", "im:history", "search:read"]
+             })
+
+    channel_root_ts = slack_test_ts(lower)
+    channel_reply_ts = slack_test_ts(DateTime.add(lower, 15, :minute))
+    direct_message_ts = slack_test_ts(DateTime.add(lower, 20, :minute))
+    group_message_ts = slack_test_ts(DateTime.add(lower, 25, :minute))
+    old_thread_ts = slack_test_ts(DateTime.add(lower, -7, :day))
+    old_thread_reply_ts = slack_test_ts(DateTime.add(lower, 30, :minute))
+    future_ts = slack_test_ts(upper)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.list", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "channels" => [
+            %{"id" => "C-REPLAY", "name" => "team", "is_member" => true},
+            %{"id" => "D-REPLAY", "is_im" => true, "user" => "U-DM"},
+            %{"id" => "G-REPLAY", "is_mpim" => true, "name" => "group"}
+          ]
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.history", fn conn ->
+      channel_id = conn.query_string |> Plug.Conn.Query.decode() |> Map.fetch!("channel")
+
+      messages =
+        case channel_id do
+          "C-REPLAY" ->
+            [
+              %{
+                "ts" => channel_root_ts,
+                "user" => "U-CHANNEL",
+                "text" => "Channel root at the inclusive lower boundary",
+                "reply_count" => 1
+              },
+              %{
+                "ts" => future_ts,
+                "user" => "U-FUTURE",
+                "text" => "Future channel message must not enter the replay"
+              }
+            ]
+
+          "D-REPLAY" ->
+            [%{"ts" => direct_message_ts, "user" => "U-DM", "text" => "Direct message"}]
+
+          "G-REPLAY" ->
+            [%{"ts" => group_message_ts, "user" => "U-GROUP", "text" => "Group direct message"}]
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "messages" => messages}))
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/conversations.replies", fn conn ->
+      thread_ts = conn.query_string |> Plug.Conn.Query.decode() |> Map.fetch!("ts")
+
+      messages =
+        case thread_ts do
+          ^channel_root_ts ->
+            [
+              %{
+                "ts" => channel_root_ts,
+                "user" => "U-CHANNEL",
+                "text" => "Channel root at the inclusive lower boundary"
+              },
+              %{
+                "ts" => channel_reply_ts,
+                "thread_ts" => channel_root_ts,
+                "user" => "U-REPLY",
+                "text" => "Channel thread reply"
+              }
+            ]
+
+          ^old_thread_ts ->
+            [
+              %{"ts" => old_thread_ts, "user" => "U-OLD", "text" => "Historical root context"},
+              %{
+                "ts" => old_thread_reply_ts,
+                "thread_ts" => old_thread_ts,
+                "user" => "U-NEW",
+                "text" => "Fresh reply beneath an old root"
+              }
+            ]
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "messages" => messages}))
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/search.messages", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => %{
+            "total" => 1,
+            "matches" => [
+              %{
+                "channel" => %{"id" => "C-REPLAY", "name" => "team"},
+                "ts" => old_thread_reply_ts,
+                "thread_ts" => old_thread_ts,
+                "user" => "U-NEW",
+                "text" => "Fresh reply beneath an old root"
+              }
+            ]
+          }
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/api/users.info", fn conn ->
+      user = conn.query_string |> Plug.Conn.Query.decode() |> Map.fetch!("user")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"ok" => true, "user" => %{"id" => user, "profile" => %{}}})
+      )
+    end)
+
+    context =
+      slack_exact_build_context(user_id, team_id, upper)
+      |> Map.put(:source_replay_window, %{
+        lower: DateTime.to_unix(lower),
+        upper: DateTime.to_unix(upper)
+      })
+      |> Map.put(:source_watermark_kind_override, "slack_discovery_replay:test")
+
+    {bundle, telemetry, proposed_watermarks} =
+      Acquisition.build(user_id, ["followthrough"], slack_exact_skill_configs(team_id), context)
+
+    assert Acquisition.source_complete?(telemetry, "slack")
+
+    assert MapSet.new(Enum.map(SourceBundle.slack_messages(bundle), & &1["text"])) ==
+             MapSet.new([
+               "Channel root at the inclusive lower boundary",
+               "Channel thread reply",
+               "Direct message",
+               "Group direct message",
+               "Fresh reply beneath an old root"
+             ])
+
+    refute Enum.any?(SourceBundle.slack_messages(bundle), &(&1["text"] =~ "Future channel"))
+
+    replay_reply =
+      Enum.find(
+        SourceBundle.slack_messages(bundle),
+        &(&1["text"] == "Fresh reply beneath an old root")
+      )
+
+    assert replay_reply["thread_context_complete"]
+    assert Enum.map(replay_reply["thread_context"], & &1["text"]) == ["Historical root context"]
+
+    assert [
+             %{
+               kind: "slack_discovery_replay:test",
+               expected_lower_value: lower_value,
+               value: upper_value
+             }
+           ] =
+             proposed_watermarks
+
+    assert lower_value == Integer.to_string(DateTime.to_unix(lower))
+    assert upper_value == Integer.to_string(DateTime.to_unix(upper))
+  end
+
   test "exact Slack acquisition advances its delta when optional thread context is unavailable" do
     now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(10, :second)
     user_id = "chief-slack-scope-failure@example.com"

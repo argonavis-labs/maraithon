@@ -95,6 +95,45 @@ defmodule Maraithon.Release do
     end
   end
 
+  def replay_authorized_slack_source_window do
+    target = System.get_env("SLACK_REPLAY_USER", "")
+    lower = parse_integer_env("SLACK_REPLAY_LOWER")
+    upper = parse_integer_env("SLACK_REPLAY_UPPER")
+
+    if target != "kent@runner.now" do
+      raise "SLACK_REPLAY_USER is not the authorized replay account"
+    end
+
+    load_app()
+    {:ok, _apps} = Application.ensure_all_started(:req)
+    {:ok, vault} = Maraithon.Vault.start_link([])
+
+    {:ok, tool_call_supervisor} =
+      Task.Supervisor.start_link(name: Maraithon.Runtime.ToolCallSupervisor)
+
+    try do
+      for repo <- repos() do
+        {:ok, result, _apps} =
+          Ecto.Migrator.with_repo(repo, fn _repo ->
+            case Maraithon.Runtime.SlackSourceReplayAudit.run(target, lower, upper) do
+              {:ok, report} ->
+                report
+
+              {:error, reason} ->
+                code = Maraithon.Runtime.SlackSourceReplayAudit.error_code(reason)
+                IO.puts("SLACK_SOURCE_REPLAY_AUDIT_ERROR=" <> code)
+                raise "Slack source replay audit failed"
+            end
+          end)
+
+        IO.puts("SLACK_SOURCE_REPLAY_AUDIT=" <> Jason.encode!(result))
+      end
+    after
+      Supervisor.stop(tool_call_supervisor)
+      GenServer.stop(vault)
+    end
+  end
+
   defp repos do
     Application.fetch_env!(@app, :ecto_repos)
   end

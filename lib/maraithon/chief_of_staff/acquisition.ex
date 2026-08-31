@@ -505,13 +505,20 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     else
       now = context[:timestamp] || DateTime.utc_now()
 
-      oldest =
-        now
-        |> DateTime.add(-plan.lookback_hours, :hour)
-        |> DateTime.to_unix(:second)
-        |> Integer.to_string()
+      {oldest, now_watermark} =
+        case {plan.source_replay_window, slack_source_replay?(plan)} do
+          {%{lower: lower, upper: upper}, true} ->
+            {Integer.to_string(lower), Integer.to_string(upper)}
 
-      now_watermark = now |> DateTime.to_unix(:second) |> Integer.to_string()
+          _other ->
+            oldest =
+              now
+              |> DateTime.add(-plan.lookback_hours, :hour)
+              |> DateTime.to_unix(:second)
+              |> Integer.to_string()
+
+            {oldest, now |> DateTime.to_unix(:second) |> Integer.to_string()}
+        end
 
       watermark_mode = watermark_advance_mode(context, plan)
       watermark_kind = source_watermark_kind(context, "slack")
@@ -523,12 +530,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           slack_account = ConnectedAccounts.get(user_id, "slack:#{team_id}")
 
           {team_oldest, expected_lower_value} =
-            slack_poll_oldest(
-              slack_account,
-              oldest,
-              deep_lookback_fetch?(plan),
-              watermark_kind
-            )
+            if slack_source_replay?(plan) do
+              {oldest, oldest}
+            else
+              slack_poll_oldest(
+                slack_account,
+                oldest,
+                deep_lookback_fetch?(plan),
+                watermark_kind
+              )
+            end
 
           case fetch_slack_workspace(
                  user_id,
@@ -1067,7 +1078,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       {mentions, mention_fetches, broadcast_fetches, self_authored_messages,
        self_authored_fetches} =
-        if slack_durable_event_delta?(plan) do
+        if slack_durable_event_delta?(plan) or slack_source_replay?(plan) do
           {[], [], [], [], []}
         else
           {direct_mentions, mention_fetches} =
@@ -1138,6 +1149,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                   |> Enum.map(
                     &serialize_slack_message(&1, channel, team_id, workspace, user_directory)
                   )
+                  |> maybe_filter_slack_replay_messages(plan)
 
                 channel_payload =
                   channel
@@ -1187,17 +1199,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           end)
         end
 
-      event_messages = slack_event_messages(user_id, team_id, workspace, oldest, newest, plan)
+      event_messages =
+        if slack_source_replay?(plan),
+          do: [],
+          else: slack_event_messages(user_id, team_id, workspace, oldest, newest, plan)
 
-      {provider_delta_messages, provider_delta_fetches, _provider_delta_errors} =
-        if slack_durable_event_delta?(plan) do
+      {provider_delta_messages, provider_delta_fetches, provider_delta_errors} =
+        if slack_durable_event_delta?(plan) or slack_source_replay?(plan) do
           fetch_slack_search_delta(
             token.access_token,
             team_id,
             workspace,
             readable_conversations,
             oldest,
-            newest
+            newest,
+            plan
           )
         else
           {[], [], []}
@@ -1205,7 +1221,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
       delta_messages = dedupe_slack_messages(event_messages ++ provider_delta_messages)
 
-      {delta_messages, event_thread_fetches, _event_thread_errors} =
+      {delta_messages, event_thread_fetches, event_thread_errors} =
         hydrate_slack_event_threads(
           token.access_token,
           team_id,
@@ -1215,12 +1231,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           plan
         )
 
-      # Durable events and the provider delta are the source items. Thread
-      # hydration only enriches those items with conversational context, and
-      # the independent per-conversation reconciliation lane preserves the
-      # underlying thread messages under provider back-pressure. Do not hold the account cursor
-      # behind repeated conversations.replies retries after every source item
-      # in the delta has already been acquired.
+      # In the low-latency path, durable events and the provider search delta
+      # are the source items. In a historical replay, provider history and
+      # provider search are the source items instead. Thread hydration only
+      # enriches those items with conversational context; replay failures are
+      # deliberately fail-closed below.
+
+      coverage_errors =
+        if slack_source_replay?(plan) do
+          provider_delta_errors ++ event_thread_errors ++ coverage_errors
+        else
+          coverage_errors
+        end
 
       channels =
         channels
@@ -1333,7 +1355,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          workspace,
          readable_conversations,
          oldest,
-         newest
+         newest,
+         plan
        ) do
     query = slack_search_window_query(oldest, newest)
 
@@ -1353,7 +1376,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
         messages =
           readable_matches
-          |> Enum.filter(&slack_search_match_in_window?(&1, oldest, newest))
+          |> Enum.filter(&slack_search_match_in_window?(&1, oldest, newest, plan))
           |> Enum.map(&serialize_slack_match(&1, team_id, workspace, %{}))
           |> dedupe_slack_messages()
 
@@ -1483,11 +1506,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
-  defp slack_search_match_in_window?(match, oldest, newest) do
+  defp slack_search_match_in_window?(match, oldest, newest, plan) do
     with {lower, _rest} <- Float.parse(to_string(oldest)),
          {upper, _rest} <- Float.parse(to_string(newest)),
          ts when ts > 0 <- slack_ts_sort_value(match) do
-      ts > lower and ts <= upper
+      if slack_source_replay?(plan),
+        do: ts >= lower and ts < upper,
+        else: ts > lower and ts <= upper
     else
       _invalid -> false
     end
@@ -3511,7 +3536,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     role = Map.get(context, :source_watermark_role, Map.get(context, "source_watermark_role"))
 
     case {source, override, role} do
-      {"gmail", override, role}
+      {_source, override, role}
       when is_binary(override) and role in ["discovery", "closure"] ->
         override
 
@@ -5216,13 +5241,48 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp maybe_take_slack_conversations(conversations, plan),
     do: Enum.take(conversations, max(plan.slack_channel_limit, 0))
 
-  defp slack_durable_event_delta?(%{
-         exhaustive_account_delta?: true,
-         deep_lookback?: false
-       }),
-       do: true
+  defp slack_durable_event_delta?(
+         %{
+           exhaustive_account_delta?: true,
+           deep_lookback?: false
+         } = plan
+       ),
+       do: not slack_source_replay?(plan)
 
   defp slack_durable_event_delta?(_plan), do: false
+
+  # Historical source replays are a correctness proof, not a low-latency
+  # polling path. They enumerate every readable conversation and rely only on
+  # provider history, replies, and paginated search (which catches a new reply
+  # beneath an old root). Persisted Events API observations are deliberately
+  # excluded so a delayed local write cannot manufacture coverage.
+  defp slack_source_replay?(%{
+         account_delta_source: "slack",
+         source_replay_window: %{lower: lower, upper: upper}
+       })
+       when is_integer(lower) and is_integer(upper) and lower >= 0 and upper > lower,
+       do: true
+
+  defp slack_source_replay?(_plan), do: false
+
+  defp maybe_filter_slack_replay_messages(messages, plan) when is_list(messages) do
+    case plan.source_replay_window do
+      %{lower: lower, upper: upper} when is_integer(lower) and is_integer(upper) ->
+        if slack_source_replay?(plan) do
+          Enum.filter(messages, fn message ->
+            ts = slack_ts_sort_value(message)
+            ts >= lower and ts < upper
+          end)
+        else
+          messages
+        end
+
+      _other ->
+        messages
+    end
+  end
+
+  defp maybe_filter_slack_replay_messages(messages, _plan), do: messages
 
   defp fetch_slack_conversation_history(
          access_token,

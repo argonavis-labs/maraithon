@@ -316,7 +316,11 @@ defmodule MaraithonWeb.ActivityLive do
 
   defp source_run_summary(job_type, "completed", fanout, result) when is_map(result) do
     if source_result_string(result, "source_replay_mode") == "historical" do
-      source_replay_completed_summary(job_type, fanout)
+      source_replay_completed_summary(
+        job_type,
+        fanout,
+        source_result_string(result, "source_replay_provider")
+      )
     else
       case source_result_string(result, "outcome") do
         "superseded" ->
@@ -420,41 +424,61 @@ defmodule MaraithonWeb.ActivityLive do
 
   defp source_replay_completed_summary(
          "runtime_partition:source_account_discovery",
-         _fanout
+         _fanout,
+         "slack"
+       ),
+       do: "Replayed one bounded historical Slack window"
+
+  defp source_replay_completed_summary(
+         "runtime_partition:source_account_discovery",
+         _fanout,
+         _provider
        ),
        do: "Replayed one bounded historical Gmail window"
 
   defp source_replay_completed_summary(
          "runtime_partition:source_account_discovery_reason",
-         fanout
+         fanout,
+         _provider
        ),
        do: fanout_summary("Reviewed replayed messages for todo decisions", fanout)
 
   defp source_replay_completed_summary(
          "runtime_partition:source_account_discovery_finalize",
-         _fanout
+         _fanout,
+         _provider
        ),
        do: "Proved every replayed message received a todo decision"
 
   defp source_replay_completed_summary(
          "runtime_partition:source_account_closure_acquire",
-         _fanout
+         _fanout,
+         "slack"
+       ),
+       do: "Replayed the same Slack window for completion evidence"
+
+  defp source_replay_completed_summary(
+         "runtime_partition:source_account_closure_acquire",
+         _fanout,
+         _provider
        ),
        do: "Replayed the same Gmail window for completion evidence"
 
   defp source_replay_completed_summary(
          "runtime_partition:source_account_closure_reason",
-         fanout
+         fanout,
+         _provider
        ),
        do: fanout_summary("Checked open todos against replayed evidence", fanout)
 
   defp source_replay_completed_summary(
          "runtime_partition:source_account_closure_finalize",
-         _fanout
+         _fanout,
+         _provider
        ),
        do: "Proved every replayed completion decision"
 
-  defp source_replay_completed_summary(job_type, fanout),
+  defp source_replay_completed_summary(job_type, fanout, _provider),
     do: source_run_completed_summary(job_type, fanout, nil)
 
   defp source_fanout(dedupe_key, result) do

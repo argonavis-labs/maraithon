@@ -15,6 +15,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Repo
   alias Maraithon.Runtime.GmailSourceReplay
+  alias Maraithon.Runtime.SlackSourceReplay
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Runtime.TodoCompletionSweep
   alias Maraithon.Todos.Todo
@@ -660,7 +661,8 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   end
 
   defp allowed_watermark_kind?(kind) do
-    kind in @allowed_watermark_kinds or GmailSourceReplay.watermark_kind?(kind, "closure")
+    kind in @allowed_watermark_kinds or GmailSourceReplay.watermark_kind?(kind, "closure") or
+      SlackSourceReplay.watermark_kind?(kind, "closure")
   end
 
   defp maybe_filter_settled_source_items(bundle, account, opts) when is_list(opts) do
@@ -672,12 +674,17 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   end
 
   defp validate_replay_opts(account, opts) do
-    GmailSourceReplay.validate_runtime_replay(
+    source_replay_module(account).validate_runtime_replay(
       account,
       Keyword.get(opts, :source_replay),
       "closure"
     )
   end
+
+  defp source_replay_module(%ConnectedAccount{provider: "slack:" <> _team_id}),
+    do: SlackSourceReplay
+
+  defp source_replay_module(_account), do: GmailSourceReplay
 
   defp put_replay_metadata(value, source) when is_map(value) do
     replay =
@@ -696,6 +703,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
         |> Map.put(:source_replay_lower, lower)
         |> Map.put(:source_replay_upper, upper)
         |> maybe_put_replay_kind(replay)
+        |> maybe_put_replay_provider(replay)
 
       %{
         "source_replay_reference" => reference,
@@ -709,6 +717,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
         |> Map.put(:source_replay_lower, lower)
         |> Map.put(:source_replay_upper, upper)
         |> maybe_put_replay_kind(replay)
+        |> maybe_put_replay_provider(replay)
 
       _other ->
         value
@@ -722,6 +731,21 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     do: Map.put(value, :source_replay_kind, kind)
 
   defp maybe_put_replay_kind(value, _replay), do: value
+
+  defp maybe_put_replay_provider(value, %{kind: kind}) when is_binary(kind) do
+    if SlackSourceReplay.watermark_kind?(kind, "discovery") or
+         SlackSourceReplay.watermark_kind?(kind, "closure") do
+      Map.put(value, :source_replay_provider, "slack")
+    else
+      Map.put(value, :source_replay_provider, "gmail")
+    end
+  end
+
+  defp maybe_put_replay_provider(value, %{"source_replay_provider" => provider})
+       when provider in ["gmail", "slack"],
+       do: Map.put(value, :source_replay_provider, provider)
+
+  defp maybe_put_replay_provider(value, _replay), do: value
 
   defp settle_watermarks(account, watermarks, opts)
        when is_list(watermarks) and is_list(opts) do

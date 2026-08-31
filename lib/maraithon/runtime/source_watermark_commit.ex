@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.GmailSourceReplay
+  alias Maraithon.Runtime.SlackSourceReplay
   alias Maraithon.Runtime.SourceCycleSettlement
 
   @slack_conversation_reconcile_job "runtime_partition:slack_conversation_reconcile"
@@ -119,7 +120,11 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
       (GmailSourceReplay.watermark_kind?(kind, "discovery") and
          "gmail_discovery_watermark" in allowed_kinds) or
       (GmailSourceReplay.watermark_kind?(kind, "closure") and
-         "gmail_closure_watermark" in allowed_kinds)
+         "gmail_closure_watermark" in allowed_kinds) or
+      (SlackSourceReplay.watermark_kind?(kind, "discovery") and
+         "slack_discovery_watermark" in allowed_kinds) or
+      (SlackSourceReplay.watermark_kind?(kind, "closure") and
+         "slack_closure_watermark" in allowed_kinds)
   end
 
   defp validate_source_contract(%BackgroundJob{} = job, account, watermark) do
@@ -138,22 +143,22 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
          true <- acquisition.user_id == account.user_id,
          true <- read_integer(acquisition.payload || %{}, "account_id") == account.id,
          {:ok, replay} <-
-           GmailSourceReplay.from_payload(account, acquisition.payload || %{}, role),
+           source_replay_module(account).from_payload(account, acquisition.payload || %{}, role),
          :ok <- validate_mode_watermark(account, watermark, replay, role) do
       :ok
     else
-      _invalid -> {:error, :invalid_gmail_source_replay_settlement}
+      _invalid -> {:error, invalid_source_replay_settlement(account)}
     end
   end
 
-  defp validate_mode_watermark(_account, watermark, replay, _role) when is_map(replay) do
+  defp validate_mode_watermark(account, watermark, replay, _role) when is_map(replay) do
     if read_string(watermark, "kind") == replay.kind and
          read_string(watermark, "value") == Integer.to_string(replay.upper) and
          has_key?(watermark, "expected_lower_value") and
          read_string(watermark, "expected_lower_value") == Integer.to_string(replay.lower) do
       :ok
     else
-      {:error, :invalid_gmail_source_replay_settlement}
+      {:error, invalid_source_replay_settlement(account)}
     end
   end
 
@@ -207,6 +212,16 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
       end
     end
   end
+
+  defp source_replay_module(%ConnectedAccount{provider: "slack:" <> _team_id}),
+    do: SlackSourceReplay
+
+  defp source_replay_module(_account), do: GmailSourceReplay
+
+  defp invalid_source_replay_settlement(%ConnectedAccount{provider: "slack:" <> _team_id}),
+    do: :invalid_slack_source_replay_settlement
+
+  defp invalid_source_replay_settlement(_account), do: :invalid_gmail_source_replay_settlement
 
   defp validate_slack_conversation_watermark(watermark, account_id)
        when is_map(watermark) do

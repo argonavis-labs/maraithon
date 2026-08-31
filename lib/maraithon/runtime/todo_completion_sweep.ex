@@ -13,6 +13,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Repo
   alias Maraithon.Runtime.GmailSourceReplay
+  alias Maraithon.Runtime.SlackSourceReplay
   alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion, Todo, UserBatch}
 
   @deterministic_batch_size 20
@@ -83,7 +84,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
   def acquire_account_delta(%ConnectedAccount{} = account, opts) when is_list(opts) do
     with {:ok, _replay} <-
-           GmailSourceReplay.validate_runtime_replay(
+           source_replay_module(account).validate_runtime_replay(
              account,
              Keyword.get(opts, :source_replay),
              "closure"
@@ -93,6 +94,11 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   end
 
   def acquire_account_delta(_account, _opts), do: {:error, :invalid_account}
+
+  defp source_replay_module(%ConnectedAccount{provider: "slack:" <> _team_id}),
+    do: SlackSourceReplay
+
+  defp source_replay_module(_account), do: GmailSourceReplay
 
   @doc false
   def open_todo_ids_for_account(account, opts \\ [])
