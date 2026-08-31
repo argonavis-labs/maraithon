@@ -1069,6 +1069,7 @@ defmodule Maraithon.Connectors.Gmail do
       to: get_header(headers, "To"),
       subject: get_header(headers, "Subject"),
       internet_message_id: get_header(headers, "Message-ID"),
+      in_reply_to: get_header(headers, "In-Reply-To"),
       references: get_header(headers, "References"),
       date: get_header(headers, "Date"),
       internal_date: parse_internal_date(message["internalDate"])

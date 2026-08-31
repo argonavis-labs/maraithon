@@ -97,5 +97,6 @@ jobs:
           MARAITHON_GCP_REGION: us-central1
           MARAITHON_GCP_SERVICE: maraithon
           MARAITHON_GMAIL_REPLAY_USER: kent@runner.now
+          MARAITHON_GMAIL_REPLAY_EXPECTED_ACCOUNT_COUNT: "2"
           MARAITHON_GMAIL_REPLAY_LOWER: ${{ inputs.gmail_replay_lower }}
           MARAITHON_GMAIL_REPLAY_UPPER: ${{ inputs.gmail_replay_upper }}

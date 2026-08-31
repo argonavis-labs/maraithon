@@ -5,7 +5,6 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
 
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ChiefOfStaff.SourceScope
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJobs
@@ -28,9 +27,10 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
   @closure_reason_job "runtime_partition:source_account_closure_reason"
   @closure_finalize_job "runtime_partition:source_account_closure_finalize"
 
-  def run(user_id, lower, upper)
-      when is_binary(user_id) and is_integer(lower) and is_integer(upper) do
-    with {:ok, accounts} <- gmail_accounts(user_id),
+  def run(user_id, lower, upper, expected_account_count)
+      when is_binary(user_id) and is_integer(lower) and is_integer(upper) and
+             is_integer(expected_account_count) and expected_account_count > 0 do
+    with {:ok, accounts} <- gmail_accounts(user_id, expected_account_count),
          {:ok, before_manifests} <- provider_manifests(accounts, lower, upper),
          {:ok, replays} <- build_replays(accounts, lower, upper),
          {:ok, enqueue_results} <- enqueue_replays(replays, lower, upper),
@@ -45,13 +45,12 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
            ) do
       {:ok,
        %{
-         user_id: user_id,
          lower: lower,
          upper: upper,
          account_count: length(accounts),
-         provider_enumeration_limit_before: @legacy_provider_ref_limit,
-         provider_enumeration_limit_after: @replay_item_limit,
-         provider_enumeration_reduction_factor:
+         configured_provider_reference_ceiling_before: @legacy_provider_ref_limit,
+         configured_provider_reference_ceiling_after: @replay_item_limit,
+         configured_provider_ceiling_reduction_factor:
            div(@legacy_provider_ref_limit, @replay_item_limit),
          enqueue_outcomes: Enum.frequencies(Enum.map(enqueue_results, & &1.outcome)),
          accounts: account_reports
@@ -67,26 +66,42 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
     kind, _reason -> {:error, {:audit_exit, kind}}
   end
 
-  def run(_user_id, _lower, _upper), do: {:error, :invalid_gmail_source_replay_audit}
+  def run(_user_id, _lower, _upper, _expected_account_count),
+    do: {:error, :invalid_gmail_source_replay_audit}
 
   def error_code(reason) when is_atom(reason), do: Atom.to_string(reason)
   def error_code({code, _detail}) when is_atom(code), do: Atom.to_string(code)
   def error_code(_reason), do: "gmail_source_replay_audit_failed"
 
-  defp gmail_accounts(user_id) do
-    providers =
+  defp gmail_accounts(user_id, expected_account_count) do
+    accounts =
+      ConnectedAccount
+      |> where(
+        [account],
+        account.user_id == ^user_id and account.status == "connected" and
+          (account.provider == "google" or like(account.provider, "google:%"))
+      )
+      |> Repo.all()
+      |> Enum.sort_by(& &1.id)
+
+    scoped_provider_ids =
       user_id
       |> SourceScope.resolve()
       |> SourceScope.google_account_providers("gmail")
+      |> MapSet.new()
 
-    accounts =
-      providers
-      |> Enum.map(&ConnectedAccounts.get(user_id, &1))
-      |> Enum.filter(&match?(%ConnectedAccount{status: "connected"}, &1))
-      |> Enum.uniq_by(& &1.id)
-      |> Enum.sort_by(& &1.id)
+    direct_provider_ids = accounts |> Enum.map(& &1.provider) |> MapSet.new()
 
-    if accounts == [], do: {:error, :gmail_accounts_not_found}, else: {:ok, accounts}
+    cond do
+      length(accounts) != expected_account_count ->
+        {:error, :gmail_account_denominator_mismatch}
+
+      not MapSet.equal?(direct_provider_ids, scoped_provider_ids) ->
+        {:error, :gmail_source_scope_account_mismatch}
+
+      true ->
+        {:ok, accounts}
+    end
   end
 
   defp build_replays(accounts, lower, upper) do
@@ -300,11 +315,12 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
 
       actual_closure_jobs = closure_cycle.reason_job_count
 
-      if actual_closure_jobs <= legacy_closure_jobs do
+      if closure_fanout_improved?(legacy_closure_jobs, actual_closure_jobs) do
         {:ok,
          %{
            account_id: account.id,
-           provider: account.provider,
+           provider_family: "gmail",
+           account_fingerprint: account_fingerprint(account.provider),
            source_replay_reference: replay.reference,
            provider_items: after_manifest.count,
            inbox_messages: after_manifest.inbox,
@@ -323,6 +339,7 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
            model_calls: activity.model_calls,
            legacy_closure_fanout_jobs: legacy_closure_jobs,
            actual_closure_fanout_jobs: actual_closure_jobs,
+           closure_fanout_strictly_improved: true,
            closure_fanout_reduction_percent:
              reduction_percent(legacy_closure_jobs, actual_closure_jobs)
          }}
@@ -368,10 +385,21 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
       |> MapSet.new()
 
     actual_types = jobs |> Enum.map(& &1.job_type) |> MapSet.new()
+    actual_job_ids = jobs |> Enum.map(& &1.id) |> MapSet.new()
+
+    discovery_cycle = Repo.get!(SourceCycle, verification.discovery_cycle_id)
+    closure_cycle = Repo.get!(SourceCycle, verification.closure_cycle_id)
+
+    expected_job_ids =
+      (cycle_job_ids(discovery_cycle) ++ cycle_job_ids(closure_cycle))
+      |> MapSet.new()
 
     cond do
       length(jobs) != expected ->
         {:error, :gmail_source_replay_activity_count_mismatch}
+
+      not MapSet.equal?(expected_job_ids, actual_job_ids) ->
+        {:error, :gmail_source_replay_activity_job_manifest_mismatch}
 
       not MapSet.subset?(expected_types, actual_types) ->
         {:error, :gmail_source_replay_activity_stage_missing}
@@ -395,6 +423,10 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
     do: types ++ [reason_type, finalize_type]
 
   defp maybe_add_fanout_types(types, false, _reason_type, _finalize_type), do: types
+
+  defp cycle_job_ids(cycle) do
+    [cycle.acquisition_job_id] ++ cycle.reason_job_ids ++ List.wrap(cycle.finalizer_job_id)
+  end
 
   defp replay_reference(result) when is_map(result) do
     Map.get(result, "source_replay_reference", Map.get(result, :source_replay_reference))
@@ -440,10 +472,21 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
   end
 
   defp reply?(message) do
-    case Map.get(message, :references, Map.get(message, "references")) do
-      value when is_binary(value) -> String.trim(value) != ""
-      _other -> false
-    end
+    present_header?(Map.get(message, :references, Map.get(message, "references"))) or
+      present_header?(Map.get(message, :in_reply_to, Map.get(message, "in_reply_to")))
+  end
+
+  defp present_header?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_header?(_value), do: false
+
+  defp closure_fanout_improved?(legacy_count, actual_count),
+    do: legacy_count > 0 and actual_count < legacy_count
+
+  defp account_fingerprint(provider) do
+    provider
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+    |> String.slice(0, 12)
   end
 
   defp ceil_div(0, _divisor), do: 0

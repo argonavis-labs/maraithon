@@ -54,6 +54,7 @@ defmodule Maraithon.Release do
     target = System.get_env("GMAIL_REPLAY_USER", "")
     lower = parse_integer_env("GMAIL_REPLAY_LOWER")
     upper = parse_integer_env("GMAIL_REPLAY_UPPER")
+    expected_account_count = parse_integer_env("GMAIL_REPLAY_EXPECTED_ACCOUNT_COUNT")
 
     if target != "kent@runner.now" do
       raise "GMAIL_REPLAY_USER is not the authorized replay account"
@@ -67,7 +68,12 @@ defmodule Maraithon.Release do
       for repo <- repos() do
         {:ok, result, _apps} =
           Ecto.Migrator.with_repo(repo, fn _repo ->
-            case Maraithon.Runtime.GmailSourceReplayAudit.run(target, lower, upper) do
+            case Maraithon.Runtime.GmailSourceReplayAudit.run(
+                   target,
+                   lower,
+                   upper,
+                   expected_account_count
+                 ) do
               {:ok, report} ->
                 report
 

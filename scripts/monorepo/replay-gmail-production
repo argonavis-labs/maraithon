@@ -10,6 +10,7 @@ service="${MARAITHON_GCP_SERVICE:-maraithon}"
 target="${MARAITHON_GMAIL_REPLAY_USER:-}"
 lower="${MARAITHON_GMAIL_REPLAY_LOWER:-}"
 upper="${MARAITHON_GMAIL_REPLAY_UPPER:-}"
+expected_account_count="${MARAITHON_GMAIL_REPLAY_EXPECTED_ACCOUNT_COUNT:-}"
 job="${service}-todo-validation"
 
 require_command gcloud
@@ -29,13 +30,18 @@ if [[ ! "${lower}" =~ ^[0-9]+$ || ! "${upper}" =~ ^[0-9]+$ || "${upper}" -le "${
   exit 64
 fi
 
+if [[ ! "${expected_account_count}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Gmail replay expected account count must be a positive integer" >&2
+  exit 64
+fi
+
 audit_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 if ! gcloud run jobs execute "${job}" \
   --project "${project}" \
   --region "${region}" \
   --args="^@^eval@Maraithon.Release.replay_authorized_gmail_source_window" \
-  --update-env-vars "POOL_SIZE=2,GMAIL_REPLAY_USER=${target},GMAIL_REPLAY_LOWER=${lower},GMAIL_REPLAY_UPPER=${upper}" \
+  --update-env-vars "POOL_SIZE=2,GMAIL_REPLAY_USER=${target},GMAIL_REPLAY_LOWER=${lower},GMAIL_REPLAY_UPPER=${upper},GMAIL_REPLAY_EXPECTED_ACCOUNT_COUNT=${expected_account_count}" \
   --wait \
   --quiet; then
   audit_error=""
