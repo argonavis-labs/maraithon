@@ -13,6 +13,20 @@ defmodule Maraithon.Runtime.GmailSourceReplayTest do
              "database_error_connection_error"
   end
 
+  test "treats zero-work closure fan-out as neutral while requiring real reductions" do
+    assert {:ok, %{applicable: false, strictly_improved: false, reduction_percent: nil}} =
+             GmailSourceReplayAudit.closure_fanout_efficiency(0, 0)
+
+    assert {:ok, %{applicable: true, strictly_improved: true, reduction_percent: 80.0}} =
+             GmailSourceReplayAudit.closure_fanout_efficiency(10, 2)
+
+    assert {:error, :gmail_source_replay_not_more_efficient} =
+             GmailSourceReplayAudit.closure_fanout_efficiency(1, 1)
+
+    assert {:error, :gmail_source_replay_not_more_efficient} =
+             GmailSourceReplayAudit.closure_fanout_efficiency(0, 1)
+  end
+
   test "derives bounded role-specific cursor chains and verifies its payload" do
     account = %ConnectedAccount{
       id: 42,

@@ -108,6 +108,30 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
   def error_code({reason, _context}), do: error_code(reason)
   def error_code(_reason), do: "gmail_source_replay_audit_failed"
 
+  @doc false
+  def closure_fanout_efficiency(0, 0) do
+    {:ok,
+     %{
+       applicable: false,
+       strictly_improved: false,
+       reduction_percent: nil
+     }}
+  end
+
+  def closure_fanout_efficiency(legacy_count, actual_count)
+      when is_integer(legacy_count) and legacy_count > 0 and is_integer(actual_count) and
+             actual_count >= 0 and actual_count < legacy_count do
+    {:ok,
+     %{
+       applicable: true,
+       strictly_improved: true,
+       reduction_percent: reduction_percent(legacy_count, actual_count)
+     }}
+  end
+
+  def closure_fanout_efficiency(_legacy_count, _actual_count),
+    do: {:error, :gmail_source_replay_not_more_efficient}
+
   defp gmail_accounts(user_id, expected_account_count) do
     accounts =
       ConnectedAccount
@@ -383,17 +407,31 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
   defp dedupe_key_contains_job_id?(_dedupe_key, _job_id), do: false
 
   defp verify_accounts(replays, before_manifests, after_manifests, local_verifications) do
-    replays
-    |> Enum.reduce_while({:ok, []}, fn %{account: account, replay: replay}, {:ok, reports} ->
-      before_manifest = Map.fetch!(before_manifests, account.id)
-      after_manifest = Map.fetch!(after_manifests, account.id)
-      verification = Map.fetch!(local_verifications, account.id)
+    with {:ok, reports} <-
+           Enum.reduce_while(
+             replays,
+             {:ok, []},
+             fn %{account: account, replay: replay}, {:ok, reports} ->
+               before_manifest = Map.fetch!(before_manifests, account.id)
+               after_manifest = Map.fetch!(after_manifests, account.id)
+               verification = Map.fetch!(local_verifications, account.id)
 
-      case verify_account(account, replay, before_manifest, after_manifest, verification) do
-        {:ok, report} -> {:cont, {:ok, reports ++ [report]}}
-        {:error, reason} -> {:halt, {:error, {reason, account.id}}}
-      end
-    end)
+               case verify_account(
+                      account,
+                      replay,
+                      before_manifest,
+                      after_manifest,
+                      verification
+                    ) do
+                 {:ok, report} -> {:cont, {:ok, reports ++ [report]}}
+                 {:error, reason} -> {:halt, {:error, {reason, account.id}}}
+               end
+             end
+           ) do
+      if Enum.any?(reports, & &1.closure_fanout_strictly_improved),
+        do: {:ok, reports},
+        else: {:error, :gmail_source_replay_not_more_efficient}
+    end
   end
 
   defp verify_account(account, replay, before_manifest, after_manifest, verification) do
@@ -415,36 +453,38 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
 
       actual_closure_jobs = closure_cycle.reason_job_count
 
-      if closure_fanout_improved?(legacy_closure_jobs, actual_closure_jobs) do
-        {:ok,
-         %{
-           account_id: account.id,
-           provider_family: "gmail",
-           account_fingerprint: account_fingerprint(account.provider),
-           source_replay_reference: replay.reference,
-           provider_items: after_manifest.count,
-           inbox_messages: after_manifest.inbox,
-           sent_messages: after_manifest.sent,
-           reply_messages: after_manifest.replies,
-           provider_fetch_pages: after_manifest.fetch_pages,
-           provider_detail_failures: after_manifest.detail_failures,
-           provider_manifest_equal: true,
-           discovery_decisions: verification.discovery_counts.source_decisions,
-           completion_snapshots: verification.closure_counts.todo_snapshots,
-           completion_receipts: verification.closure_counts.todo_closures,
-           activity_expected: activity.expected,
-           activity_visible: activity.visible,
-           activity_job_types: activity.job_types,
-           activity_failed_attempts: activity.failed_attempts,
-           model_calls: activity.model_calls,
-           legacy_closure_fanout_jobs: legacy_closure_jobs,
-           actual_closure_fanout_jobs: actual_closure_jobs,
-           closure_fanout_strictly_improved: true,
-           closure_fanout_reduction_percent:
-             reduction_percent(legacy_closure_jobs, actual_closure_jobs)
-         }}
-      else
-        {:error, :gmail_source_replay_not_more_efficient}
+      case closure_fanout_efficiency(legacy_closure_jobs, actual_closure_jobs) do
+        {:ok, efficiency} ->
+          {:ok,
+           %{
+             account_id: account.id,
+             provider_family: "gmail",
+             account_fingerprint: account_fingerprint(account.provider),
+             source_replay_reference: replay.reference,
+             provider_items: after_manifest.count,
+             inbox_messages: after_manifest.inbox,
+             sent_messages: after_manifest.sent,
+             reply_messages: after_manifest.replies,
+             provider_fetch_pages: after_manifest.fetch_pages,
+             provider_detail_failures: after_manifest.detail_failures,
+             provider_manifest_equal: true,
+             discovery_decisions: verification.discovery_counts.source_decisions,
+             completion_snapshots: verification.closure_counts.todo_snapshots,
+             completion_receipts: verification.closure_counts.todo_closures,
+             activity_expected: activity.expected,
+             activity_visible: activity.visible,
+             activity_job_types: activity.job_types,
+             activity_failed_attempts: activity.failed_attempts,
+             model_calls: activity.model_calls,
+             legacy_closure_fanout_jobs: legacy_closure_jobs,
+             actual_closure_fanout_jobs: actual_closure_jobs,
+             closure_fanout_applicable: efficiency.applicable,
+             closure_fanout_strictly_improved: efficiency.strictly_improved,
+             closure_fanout_reduction_percent: efficiency.reduction_percent
+           }}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -582,9 +622,6 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
 
   defp present_header?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_header?(_value), do: false
-
-  defp closure_fanout_improved?(legacy_count, actual_count),
-    do: legacy_count > 0 and actual_count < legacy_count
 
   defp account_fingerprint(provider) do
     provider
