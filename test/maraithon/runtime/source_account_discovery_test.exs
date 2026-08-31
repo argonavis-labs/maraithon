@@ -466,38 +466,27 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
            |> length() == 12
   end
 
-  test "isolates a large Gmail message without dropping its complete evidence" do
+  test "compacts a large Gmail message for the model without dropping its source evidence" do
     {account, agent} = discovery_identity("large-complete-reason")
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    body =
-      String.duplicate("x", 91_895) <>
-        " TAIL ACTION: reply to Alex."
+    body = String.duplicate("\"", 45_000) <> " TAIL ACTION: reply to Alex."
 
-    messages =
-      [
-        now
-        |> routine_message()
-        |> Map.put("id", "large-complete-message")
-        |> Map.put("message_id", "large-complete-message")
-        |> Map.put("thread_id", "large-complete-thread")
-        |> Map.put("google_provider", account.provider)
-        |> Map.put("subject", "Quarterly review " <> String.duplicate("context ", 160))
-        |> Map.put("snippet", String.duplicate("summary ", 180))
-        |> Map.put("from", String.duplicate("sender", 80) <> "@example.com")
-        |> Map.put("to", Enum.map(1..10, &"recipient-#{&1}@example.com"))
-        |> Map.put("cc", Enum.map(1..10, &"observer-#{&1}@example.com"))
-        |> Map.put("body", body)
-        |> Map.put("body_text", body)
-      ] ++
-        Enum.map(1..4, fn index ->
-          now
-          |> routine_message()
-          |> Map.put("id", "small-complete-message-#{index}")
-          |> Map.put("message_id", "small-complete-message-#{index}")
-          |> Map.put("thread_id", "small-complete-thread-#{index}")
-          |> Map.put("google_provider", account.provider)
-        end)
+    messages = [
+      now
+      |> routine_message()
+      |> Map.put("id", "large-complete-message")
+      |> Map.put("message_id", "large-complete-message")
+      |> Map.put("thread_id", "large-complete-thread")
+      |> Map.put("google_provider", account.provider)
+      |> Map.put("subject", "Quarterly review " <> String.duplicate("context ", 160))
+      |> Map.put("snippet", String.duplicate("summary ", 180))
+      |> Map.put("from", String.duplicate("sender", 80) <> "@example.com")
+      |> Map.put("to", Enum.map(1..10, &"recipient-#{&1}@example.com"))
+      |> Map.put("cc", Enum.map(1..10, &"observer-#{&1}@example.com"))
+      |> Map.put("body", body)
+      |> Map.put("body_text", body)
+    ]
 
     bundle =
       %{trigger: %{type: :wakeup}, timestamp: now}
@@ -522,21 +511,26 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
                now: now
              )
 
-    assert Enum.map(handoffs, &length(&1["source_item_refs"])) == [1, 4]
+    assert Enum.map(handoffs, &length(&1["source_item_refs"])) == [1]
 
-    [large_handoff | _rest] = handoffs
+    [large_handoff] = handoffs
 
     assert {:ok, %{decision_count: 1}} =
              SourceAccountDiscovery.reason(account, agent, large_handoff,
                now: now,
                llm_complete: fn prompt ->
-                 [candidate] = prompt_candidates(prompt)
+                 candidates = prompt_candidates(prompt)
+                 assert length(candidates) == 1
+                 [candidate | _rest] = candidates
                  source_record = get_in(candidate, ["metadata", "source_record"])
 
-                 assert byte_size(Jason.encode!(source_record)) in 96_000..104_000
+                 assert source_record["evidence_complete"]
+                 assert source_record["source_record_prompt_compacted"]
+                 assert source_record["source_record_bytes"] > 90_000
+                 assert byte_size(Jason.encode!(Jason.encode!(source_record))) <= 64_000
                  assert byte_size(prompt) < 120_000
                  assert prompt =~ "TAIL ACTION: reply to Alex."
-                 skip_decisions(1)
+                 skip_decisions(length(candidates))
                end
              )
   end

@@ -33,6 +33,14 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   @handoff_max_restored_binary_bytes 5_000_000
   @handoff_max_restored_bytes 10_000_000
   @candidate_source_record_max_bytes 104_000
+  # A source record is serialized once into the prompt and once again into the
+  # provider request. Keeping the model-facing projection well below the
+  # request ceiling leaves room for JSON escaping, the decision contract, and
+  # the required candidate envelope.
+  @candidate_source_record_prompt_max_bytes 64_000
+  @candidate_prompt_excerpt_max_bytes 32_000
+  @candidate_prompt_context_max_items 3
+  @candidate_prompt_context_string_max_bytes 600
   # Leave room beneath Todos.Intelligence's 120 KB escaped-request ceiling for
   # its fixed instructions and the candidate fields surrounding source evidence.
   @candidate_partition_max_bytes 96_000
@@ -676,14 +684,126 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp lossless_candidate_record(evidence) when is_map(evidence) do
     complete = Map.put(evidence, "evidence_complete", true)
 
-    if encoded_bytes(complete) <= @candidate_source_record_max_bytes do
-      complete
-    else
-      evidence
-      |> Map.take(~w(id message_id thread_id google_provider team_id channel_id ts thread_ts))
-      |> Map.put("evidence_complete", false)
-      |> Map.put("evidence_bytes", encoded_bytes(evidence))
+    cond do
+      encoded_bytes(complete) > @candidate_source_record_max_bytes ->
+        evidence
+        |> Map.take(~w(id message_id thread_id google_provider team_id channel_id ts thread_ts))
+        |> Map.put("evidence_complete", false)
+        |> Map.put("evidence_bytes", encoded_bytes(evidence))
+
+      prompt_encoded_bytes(complete) <= @candidate_source_record_prompt_max_bytes ->
+        complete
+
+      true ->
+        # The full record remains in the encrypted handoff. This is only the
+        # bounded view sent to the model; preserve the beginning and end of
+        # long source text because email requests frequently put the explicit
+        # action at the end of the message.
+        prompt_compacted_candidate_record(evidence)
     end
+  end
+
+  defp prompt_compacted_candidate_record(evidence) do
+    text_key = if Map.has_key?(evidence, "body"), do: "body", else: "text"
+    text = Map.get(evidence, text_key)
+
+    base =
+      evidence
+      |> Map.drop([text_key, "thread_context"])
+      |> PromptBudget.compact(
+        string_bytes: @candidate_prompt_context_string_max_bytes,
+        list_items: 10,
+        map_entries: 32,
+        max_depth: 3,
+        key_bytes: 128
+      )
+      |> Map.put("evidence_complete", true)
+      |> Map.put("source_record_bytes", encoded_bytes(evidence))
+      |> Map.put("source_record_prompt_compacted", true)
+
+    [
+      {@candidate_prompt_excerpt_max_bytes, @candidate_prompt_context_max_items,
+       @candidate_prompt_context_string_max_bytes},
+      {16_000, 2, 300},
+      {8_000, 1, 160},
+      {2_000, 0, 0}
+    ]
+    |> Enum.find_value(fn {text_max_bytes, context_items, context_string_bytes} ->
+      candidate =
+        base
+        |> Map.put(text_key, prompt_text_excerpt(text, text_max_bytes))
+        |> Map.put(
+          "thread_context",
+          compact_prompt_thread_context(
+            Map.get(evidence, "thread_context", []),
+            context_items,
+            context_string_bytes
+          )
+        )
+
+      if prompt_encoded_bytes(candidate) <= @candidate_source_record_prompt_max_bytes,
+        do: candidate
+    end) ||
+      base
+      |> Map.take(
+        ~w(id message_id thread_id google_provider team_id channel_id ts thread_ts evidence_complete source_record_bytes source_record_prompt_compacted)
+      )
+      |> Map.put(text_key, prompt_text_excerpt(text, 0))
+      |> Map.put("thread_context", [])
+  end
+
+  defp compact_prompt_thread_context(context, max_items, max_string_bytes)
+       when is_list(context) and is_integer(max_items) and max_items >= 0 and
+              is_integer(max_string_bytes) and max_string_bytes >= 0 do
+    context
+    |> Enum.filter(&is_map/1)
+    |> Enum.take(max_items)
+    |> Enum.map(fn item ->
+      PromptBudget.compact(item,
+        string_bytes: max(max_string_bytes, 1),
+        list_items: 10,
+        map_entries: 16,
+        max_depth: 2,
+        key_bytes: 128
+      )
+    end)
+  end
+
+  defp compact_prompt_thread_context(_context, _max_items, _max_string_bytes), do: []
+
+  defp prompt_text_excerpt(nil, _max_bytes), do: nil
+
+  defp prompt_text_excerpt(value, max_bytes)
+       when is_binary(value) and is_integer(max_bytes) and max_bytes >= 0 do
+    sanitized = PromptBudget.truncate_utf8(value, byte_size(value))
+
+    if byte_size(sanitized) <= max_bytes do
+      sanitized
+    else
+      marker = "\n…[middle omitted from model prompt; sealed source retained]…\n"
+      available = max(max_bytes - byte_size(marker), 0)
+      head_bytes = div(available * 2, 3)
+      tail_bytes = available - head_bytes
+
+      head = PromptBudget.truncate_utf8(sanitized, head_bytes)
+
+      tail =
+        sanitized
+        |> String.reverse()
+        |> PromptBudget.truncate_utf8(tail_bytes)
+        |> String.reverse()
+
+      head <> marker <> tail
+    end
+  end
+
+  defp prompt_text_excerpt(_value, _max_bytes), do: nil
+
+  defp prompt_encoded_bytes(value) do
+    value
+    |> Jason.encode!()
+    |> Jason.encode!()
+    |> byte_size()
   end
 
   defp candidate_evidence_complete?(candidate) when is_map(candidate) do
@@ -1390,7 +1510,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   defp source_group_candidate_bytes(group) do
     Enum.reduce(group, 0, fn record, bytes ->
-      bytes + encoded_bytes(candidate_source_record(record)) + @candidate_prompt_overhead_bytes
+      bytes + prompt_encoded_bytes(candidate_source_record(record)) +
+        @candidate_prompt_overhead_bytes
     end)
   end
 
