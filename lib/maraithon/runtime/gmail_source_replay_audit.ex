@@ -97,6 +97,12 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
     end
   end
 
+  def error_code({:database_error, code}) when is_atom(code),
+    do: "database_error_" <> Atom.to_string(code)
+
+  def error_code({:database_error, code}) when is_binary(code),
+    do: "database_error_" <> code
+
   def error_code(reason) when is_atom(reason), do: Atom.to_string(reason)
   def error_code({code, _detail}) when is_atom(code), do: Atom.to_string(code)
   def error_code({reason, _context}), do: error_code(reason)

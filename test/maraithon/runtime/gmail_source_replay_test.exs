@@ -3,6 +3,15 @@ defmodule Maraithon.Runtime.GmailSourceReplayTest do
 
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Runtime.GmailSourceReplay
+  alias Maraithon.Runtime.GmailSourceReplayAudit
+
+  test "keeps a replay database failure category in the operational error code" do
+    assert GmailSourceReplayAudit.error_code({:database_error, :lock_not_available}) ==
+             "database_error_lock_not_available"
+
+    assert GmailSourceReplayAudit.error_code({:database_error, "connection_error"}) ==
+             "database_error_connection_error"
+  end
 
   test "derives bounded role-specific cursor chains and verifies its payload" do
     account = %ConnectedAccount{
