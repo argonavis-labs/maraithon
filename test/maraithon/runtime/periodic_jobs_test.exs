@@ -174,7 +174,7 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
       |> Repo.update!()
     end)
 
-    {:ok, _discovery_reason} =
+    {:ok, discovery_reason} =
       BackgroundJobs.enqueue("runtime_partition:source_account_discovery_reason", %{
         user_id: user_id,
         queue: "runtime_model_user",
@@ -188,7 +188,7 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
         }
       })
 
-    {:ok, _closure_reason} =
+    {:ok, closure_reason} =
       BackgroundJobs.enqueue("runtime_partition:source_account_closure_reason", %{
         user_id: user_id,
         queue: "runtime_model_user",
@@ -199,6 +199,40 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
           "acquisition_job_id" => closure_job_id,
           "fanout_index" => 1,
           "fanout_count" => 1
+        }
+      })
+
+    assert {:ok,
+            %{
+              discovery: %{job_id: ^discovery_job_id},
+              closure: %{job_id: ^closure_job_id}
+            }} = PeriodicJobs.wake_source_account(account, now: DateTime.utc_now())
+
+    Enum.each([discovery_reason, closure_reason], fn reason_job ->
+      reason_job
+      |> Ecto.Changeset.change(status: "completed", completed_at: DateTime.utc_now())
+      |> Repo.update!()
+    end)
+
+    {:ok, _legacy_discovery_finalizer} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery_finalize", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key: "runtime-partition:source-account-discovery-finalize:#{account.id}",
+        payload: %{
+          "account_id" => account.id,
+          "acquisition_job_id" => discovery_job_id
+        }
+      })
+
+    {:ok, _legacy_closure_finalizer} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_closure_finalize", %{
+        user_id: user_id,
+        queue: "runtime_model_user",
+        dedupe_key: "runtime-partition:source-account-closure-finalize:#{account.id}",
+        payload: %{
+          "account_id" => account.id,
+          "acquisition_job_id" => closure_job_id
         }
       })
 

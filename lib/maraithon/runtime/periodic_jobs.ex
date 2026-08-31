@@ -606,6 +606,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp active_source_cycle_job(%ConnectedAccount{} = account, "discovery") do
     acquisition_key = source_discovery_dedupe_key(account.id)
     reason_pattern = "runtime-partition:source-account-discovery-reason:%:#{account.id}"
+    legacy_finalizer_key = "runtime-partition:source-account-discovery-finalize:#{account.id}"
     finalizer_pattern = "runtime-partition:source-account-discovery-finalize:#{account.id}:%"
 
     BackgroundJob
@@ -616,7 +617,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         (job.job_type == @source_discovery_reason_job and
            like(job.dedupe_key, ^reason_pattern) and job.attempts < job.max_attempts) or
         (job.job_type == @source_discovery_finalize_job and
-           like(job.dedupe_key, ^finalizer_pattern))
+           (job.dedupe_key == ^legacy_finalizer_key or
+              like(job.dedupe_key, ^finalizer_pattern)))
     )
     |> order_by([job], asc: job.inserted_at, asc: job.id)
     |> limit(1)
@@ -627,6 +629,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     legacy_key = "runtime-partition:todo-account-closure:#{account.id}"
     acquisition_pattern = "runtime-partition:source-account-closure-acquire:#{account.id}:%"
     reason_pattern = "runtime-partition:source-account-closure-reason:%:#{account.id}"
+    legacy_finalizer_key = "runtime-partition:source-account-closure-finalize:#{account.id}"
     finalizer_pattern = "runtime-partition:source-account-closure-finalize:#{account.id}:%"
 
     BackgroundJob
@@ -639,7 +642,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         (job.job_type == @todo_account_closure_reason_job and
            like(job.dedupe_key, ^reason_pattern) and job.attempts < job.max_attempts) or
         (job.job_type == @todo_account_closure_finalize_job and
-           like(job.dedupe_key, ^finalizer_pattern))
+           (job.dedupe_key == ^legacy_finalizer_key or
+              like(job.dedupe_key, ^finalizer_pattern)))
     )
     |> order_by([job], asc: job.inserted_at, asc: job.id)
     |> limit(1)
