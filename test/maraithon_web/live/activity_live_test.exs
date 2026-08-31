@@ -229,7 +229,77 @@ defmodule MaraithonWeb.ActivityLiveTest do
     end)
   end
 
-  defp enqueue_source_run(user_id, account_id, job_type, queue, dedupe_prefix) do
+  test "correlates every historical Gmail replay stage without loading private payloads", %{
+    conn: conn
+  } do
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(@user_email, "google:replay@example.com", %{
+        metadata: %{"account_email" => "replay@example.com"}
+      })
+
+    reference = "3c7ce0a8bd4f1bf590ad93032da477d0"
+    lower = 1_788_062_400
+    upper = 1_788_148_800
+
+    replay_result = %{
+      "source_replay_mode" => "historical",
+      "source_replay_reference" => reference,
+      "source_replay_lower" => lower,
+      "source_replay_upper" => upper
+    }
+
+    replay_specs = [
+      {"runtime_partition:source_account_discovery", "runtime_provider_account",
+       "replay-discovery"},
+      {"runtime_partition:source_account_discovery_reason", "runtime_model_user",
+       "replay-discovery-reason"},
+      {"runtime_partition:source_account_discovery_finalize", "runtime_model_user",
+       "replay-discovery-finalize"},
+      {"runtime_partition:source_account_closure_acquire", "runtime_provider_account",
+       "replay-closure"},
+      {"runtime_partition:source_account_closure_reason", "runtime_model_user",
+       "replay-closure-reason"},
+      {"runtime_partition:source_account_closure_finalize", "runtime_model_user",
+       "replay-closure-finalize"}
+    ]
+
+    replay_jobs =
+      Enum.map(replay_specs, fn {job_type, queue, dedupe_prefix} ->
+        {:ok, job} =
+          enqueue_source_run(
+            @user_email,
+            account.id,
+            job_type,
+            queue,
+            dedupe_prefix,
+            result: replay_result
+          )
+
+        job
+      end)
+
+    {:ok, view, html} = live(conn, "/activity")
+
+    assert html =~ "6 source fan-outs"
+    assert html =~ "Historical replay"
+    assert html =~ "#{lower} ≤ t &lt; #{upper}"
+
+    Enum.each(replay_jobs, fn job ->
+      assert has_element?(view, "#source-run-#{job.id}-summary", "Historical replay")
+
+      assert has_element?(
+               view,
+               "#source-run-#{job.id}-replay-reference",
+               String.slice(reference, 0, 8)
+             )
+    end)
+
+    headers = BackgroundJobs.list_latest_source_account_runs_for_user(@user_email)
+
+    assert Enum.all?(headers, &(not Map.has_key?(&1, :payload) and Map.has_key?(&1, :result)))
+  end
+
+  defp enqueue_source_run(user_id, account_id, job_type, queue, dedupe_prefix, opts \\ []) do
     acquisition_job_id = Ecto.UUID.generate()
 
     dedupe_key =
@@ -274,6 +344,7 @@ defmodule MaraithonWeb.ActivityLiveTest do
       rate_limit_key: if(queue == "runtime_model_user", do: "model", else: "provider"),
       max_attempts: 3,
       scheduled_at: DateTime.utc_now(),
+      result: Keyword.get(opts, :result, %{}),
       payload: payload
     })
   end

@@ -398,7 +398,7 @@ defmodule Maraithon.Runtime.SourceCycleProofs do
     todo_digest = todo_manifest_digest(snapshots)
 
     with {:ok, cycle_key} <-
-           Canonical.identity("source-cycle-v1", [
+           Canonical.identity("source-cycle-v2", [
              identity.user_id,
              identity.connected_account_id,
              identity.provider,
@@ -418,7 +418,7 @@ defmodule Maraithon.Runtime.SourceCycleProofs do
         |> Map.drop([:captured_at])
         |> Map.merge(%{
           cycle_key: cycle_key,
-          proof_version: 1,
+          proof_version: 2,
           reason_job_count: length(identity.reason_job_ids),
           job_manifest_digest: job_digest,
           source_item_count: length(items),

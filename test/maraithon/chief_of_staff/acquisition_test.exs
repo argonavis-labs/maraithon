@@ -2030,6 +2030,111 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       }
     end
 
+    test "uses an exact replay window and proposes only its synthetic cursor", %{
+      user_id: user_id,
+      provider: provider,
+      account: account
+    } do
+      lower = ~U[2026-05-30 04:00:00Z]
+      upper = ~U[2026-05-31 04:00:00Z]
+      lower_cursor = DateTime.to_unix(lower, :second)
+      upper_cursor = DateTime.to_unix(upper, :second)
+      replay_kind = "gmail_discovery_replay:" <> String.duplicate("a", 43)
+
+      assert {:ok, _token} =
+               OAuth.store_tokens(user_id, provider, %{
+                 access_token: "replay-token",
+                 scopes: Google.scopes_for(["gmail"]),
+                 metadata: %{"account_email" => "watermark@example.com"}
+               })
+
+      {:ok, _cursor} =
+        SourceCursors.put(account, replay_kind, %{"value" => Integer.to_string(lower_cursor)})
+
+      TravelGmailStub.configure(
+        messages: [
+          gmail_window_message("replay-lower", lower),
+          gmail_window_message("replay-inside", DateTime.add(upper, -1, :second)),
+          gmail_window_message("replay-before", DateTime.add(lower, -1, :second)),
+          gmail_window_message("replay-upper", upper)
+        ],
+        contents: %{}
+      )
+
+      source_scope = %{
+        "google_accounts" => [
+          %{
+            "provider" => provider,
+            "account_email" => "watermark@example.com",
+            "services" => ["gmail"]
+          }
+        ]
+      }
+
+      context =
+        user_id
+        |> watermark_build_context(true)
+        |> Map.merge(%{
+          source_scope: source_scope,
+          source_watermark_role: "discovery",
+          source_watermark_kind_override: replay_kind,
+          source_replay_window: %{lower: lower_cursor, upper: upper_cursor},
+          exhaustive_account_delta: true,
+          account_delta_source: "gmail"
+        })
+
+      {bundle, telemetry, proposed_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          %{"followthrough" => %{"source_scope" => source_scope}},
+          context
+        )
+
+      assert Acquisition.source_complete?(telemetry, "gmail")
+
+      assert Keyword.get(TravelGmailStub.last_fetch_opts(), :query) ==
+               "after:#{lower_cursor - 1} before:#{upper_cursor + 1}"
+
+      assert bundle
+             |> SourceBundle.gmail_messages()
+             |> Enum.map(& &1["message_id"])
+             |> Enum.sort() == ["replay-inside", "replay-lower"]
+
+      assert [
+               %{
+                 kind: ^replay_kind,
+                 value: value,
+                 expected_lower_value: expected_lower
+               }
+             ] = proposed_watermarks
+
+      assert value == Integer.to_string(upper_cursor)
+      assert expected_lower == Integer.to_string(lower_cursor)
+
+      refute SourceCursors.get(account.id, "gmail_discovery_watermark")
+      assert %{value: cursor_value} = SourceCursors.get(account.id, replay_kind)
+      assert cursor_value == Integer.to_string(lower_cursor)
+
+      TravelGmailStub.configure(
+        messages: [%{gmail_window_message("missing-frontier", lower) | internal_date: nil}],
+        contents: %{}
+      )
+
+      {failed_bundle, failed_telemetry, failed_watermarks} =
+        Acquisition.build(
+          user_id,
+          ["followthrough"],
+          %{"followthrough" => %{"source_scope" => source_scope}},
+          context
+        )
+
+      refute Acquisition.source_complete?(failed_telemetry, "gmail")
+      assert SourceBundle.gmail_messages(failed_bundle) == []
+      assert failed_watermarks == []
+      assert Keyword.get(TravelGmailStub.last_fetch_opts(), :max_total_results) == 250
+    end
+
     test "uses and proposes the independent closure watermark", %{
       user_id: user_id,
       provider: provider,

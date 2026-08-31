@@ -18,7 +18,7 @@ defmodule Maraithon.Runtime.SourceCycle do
 
   schema "source_cycles" do
     field :cycle_key, :binary
-    field :proof_version, :integer, default: 1
+    field :proof_version, :integer, default: 2
     field :user_id, :string
     field :connected_account_id, :id
     field :provider, :string
@@ -96,7 +96,7 @@ defmodule Maraithon.Runtime.SourceCycle do
     ])
     |> validate_inclusion(:role, @roles)
     |> validate_inclusion(:boundary, @boundaries)
-    |> validate_number(:proof_version, equal_to: 1)
+    |> validate_inclusion(:proof_version, [1, 2])
     |> validate_number(:connected_account_id, greater_than: 0)
     |> validate_number(:reason_job_count,
       greater_than_or_equal_to: 0,

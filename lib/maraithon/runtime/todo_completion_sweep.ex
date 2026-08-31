@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceScope}
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Repo
+  alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion, Todo, UserBatch}
 
   @deterministic_batch_size 20
@@ -81,7 +82,14 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   def acquire_account_delta(account, opts \\ [])
 
   def acquire_account_delta(%ConnectedAccount{} = account, opts) when is_list(opts) do
-    acquire_account_delta(account, account_source_scope(account), opts)
+    with {:ok, _replay} <-
+           GmailSourceReplay.validate_runtime_replay(
+             account,
+             Keyword.get(opts, :source_replay),
+             "closure"
+           ) do
+      acquire_account_delta(account, account_source_scope(account), opts)
+    end
   end
 
   def acquire_account_delta(_account, _opts), do: {:error, :invalid_account}
@@ -186,18 +194,20 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   defp do_acquire_account_delta(account, source_scope, opts) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
 
-    context = %{
-      user_id: account.user_id,
-      timestamp: now,
-      trigger: %{type: :pubsub_event, job_type: "source_account_closure"},
-      event: %{topic: account_event_topic(account), payload: %{}},
-      recent_events: [],
-      source_scope: source_scope,
-      source_watermark_role: "closure",
-      defer_watermark_advance: true,
-      exhaustive_account_delta: true,
-      account_delta_source: account_delta_source(account)
-    }
+    context =
+      %{
+        user_id: account.user_id,
+        timestamp: now,
+        trigger: %{type: :pubsub_event, job_type: "source_account_closure"},
+        event: %{topic: account_event_topic(account), payload: %{}},
+        recent_events: [],
+        source_scope: source_scope,
+        source_watermark_role: "closure",
+        defer_watermark_advance: true,
+        exhaustive_account_delta: true,
+        account_delta_source: account_delta_source(account)
+      }
+      |> put_replay_context(opts)
 
     {bundle, telemetry, proposed_watermarks} =
       Acquisition.build(
@@ -216,6 +226,19 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
     error -> {:error, Maraithon.Redaction.error_class(error)}
   catch
     kind, reason -> {:error, {kind, Maraithon.Redaction.error_class(reason)}}
+  end
+
+  defp put_replay_context(context, opts) when is_map(context) and is_list(opts) do
+    case Keyword.get(opts, :source_replay) do
+      %{lower: lower, upper: upper, kind: kind}
+      when is_integer(lower) and is_integer(upper) and is_binary(kind) ->
+        context
+        |> Map.put(:source_replay_window, %{lower: lower, upper: upper})
+        |> Map.put(:source_watermark_kind_override, kind)
+
+      _other ->
+        context
+    end
   end
 
   defp maybe_put_source_bundle(opts, source_bundle) when is_map(source_bundle) do
@@ -470,6 +493,8 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         :source_account_id,
         :source_account_unassigned?,
         :source_scope,
+        :exact_source_delta,
+        :source_item_refs,
         :todo_ids,
         :exhaustive_completion
       ])

@@ -6,11 +6,14 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
   alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Connectors.SourceCursors
   alias Maraithon.OAuth
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobs
+  alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.PeriodicJobs
+  alias Maraithon.Runtime.SourceCycleProofs
   alias Maraithon.TelegramAssistant.ProactiveQueue
   alias Maraithon.Todos
 
@@ -41,6 +44,124 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
     assert scheduled_at
            |> Enum.chunk_every(2, 1, :discard)
            |> Enum.all?(fn [left, right] -> DateTime.diff(right, left, :second) == 6 end)
+  end
+
+  test "Gmail source replay enqueues fenced discovery and closure without moving live cursors" do
+    user_id = "periodic-gmail-replay-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:#{user_id}", %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    lower = DateTime.utc_now() |> DateTime.add(-24, :hour) |> DateTime.to_unix(:second)
+    upper = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.to_unix(:second)
+
+    assert {:ok,
+            %{
+              outcome: "enqueued",
+              source_replay_reference: reference,
+              discovery_job_id: discovery_job_id,
+              closure_job_id: closure_job_id
+            }} = PeriodicJobs.enqueue_gmail_source_replay(account.id, lower, upper)
+
+    discovery = Repo.get!(BackgroundJob, discovery_job_id)
+    closure = Repo.get!(BackgroundJob, closure_job_id)
+
+    assert discovery.job_type == "runtime_partition:source_account_discovery"
+    assert closure.job_type == "runtime_partition:source_account_closure_acquire"
+    assert closure.payload["discovery_job_id"] == discovery.id
+
+    for job <- [discovery, closure] do
+      assert job.payload["source_replay_mode"] == "historical"
+      assert job.payload["source_replay_lower"] == lower
+      assert job.payload["source_replay_upper"] == upper
+      assert job.payload["source_replay_reference"] == reference
+    end
+
+    refute Maraithon.Connectors.SourceCursors.get(account.id, "gmail_discovery_watermark")
+    refute Maraithon.Connectors.SourceCursors.get(account.id, "gmail_closure_watermark")
+
+    replay_cursors =
+      Maraithon.Connectors.SourceCursor
+      |> where([cursor], cursor.connected_account_id == ^account.id)
+      |> where([cursor], like(cursor.kind, "gmail_%_replay:%"))
+      |> Repo.all()
+
+    assert length(replay_cursors) == 2
+    assert Enum.all?(replay_cursors, &(&1.value == Integer.to_string(lower)))
+  end
+
+  test "Gmail source replay resumes closure from a verified completed discovery" do
+    user_id = "periodic-gmail-replay-resume-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "google:#{user_id}", %{
+        metadata: %{"account_email" => user_id, "services" => ["gmail"]}
+      })
+
+    lower = DateTime.utc_now() |> DateTime.add(-24, :hour) |> DateTime.to_unix(:second)
+    upper = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.to_unix(:second)
+
+    assert {:ok,
+            %{
+              discovery_job_id: discovery_job_id,
+              closure_job_id: first_closure_job_id
+            }} = PeriodicJobs.enqueue_gmail_source_replay(account.id, lower, upper)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    BackgroundJob
+    |> where([job], job.id == ^discovery_job_id)
+    |> Repo.update_all(set: [status: "completed", completed_at: now, updated_at: now])
+
+    BackgroundJob
+    |> where([job], job.id == ^first_closure_job_id)
+    |> Repo.update_all(set: [status: "failed", failed_at: now, updated_at: now])
+
+    assert {:ok, replay} = GmailSourceReplay.build(account, lower, upper, now)
+
+    assert %{job_type: "runtime_partition:source_account_discovery", user_id: ^user_id} =
+             Repo.get!(BackgroundJob, discovery_job_id)
+
+    assert {:ok, cycle} =
+             SourceCycleProofs.create_cycle(
+               %{
+                 user_id: account.user_id,
+                 connected_account_id: account.id,
+                 provider: account.provider,
+                 role: "discovery",
+                 cursor_kind: replay.discovery_kind,
+                 lower_cursor: Integer.to_string(lower),
+                 upper_cursor: Integer.to_string(upper),
+                 boundary: "lower_inclusive_upper_exclusive",
+                 acquisition_job_id: discovery_job_id,
+                 reason_job_ids: [],
+                 finalizer_job_id: nil,
+                 captured_at: now
+               },
+               [],
+               []
+             )
+
+    assert cycle.proof_version == 2
+
+    assert {:ok, _cursor} =
+             SourceCursors.put(account, replay.discovery_kind, %{
+               "value" => Integer.to_string(upper)
+             })
+
+    assert {:ok,
+            %{
+              outcome: "closure_resumed",
+              discovery_job_id: ^discovery_job_id,
+              closure_job_id: resumed_closure_job_id
+            }} = PeriodicJobs.enqueue_gmail_source_replay(account.id, lower, upper)
+
+    refute resumed_closure_job_id == first_closure_job_id
+    assert Repo.get!(BackgroundJob, resumed_closure_job_id).status == "pending"
   end
 
   test "waking a Slack workspace also enqueues one stable reconciliation planner" do

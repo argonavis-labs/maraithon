@@ -14,20 +14,23 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Repo
+  alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Runtime.TodoCompletionSweep
   alias Maraithon.Todos.Todo
 
   @todo_batch_size 10
+  @max_replay_fanouts 500
   @allowed_watermark_kinds ~w(gmail_closure_watermark slack_closure_watermark)
 
   def acquire(account, opts \\ [])
 
   def acquire(%ConnectedAccount{status: "connected"} = account, opts) when is_list(opts) do
-    with {:ok, bundle, proposals} <- TodoCompletionSweep.acquire_account_delta(account, opts),
+    with {:ok, _replay} <- validate_replay_opts(account, opts),
+         {:ok, bundle, proposals} <- TodoCompletionSweep.acquire_account_delta(account, opts),
          watermarks <- serialize_watermarks(proposals, account.id),
          :ok <- validate_watermarks(watermarks),
-         bundle <- SourceAccountDiscovery.filter_settled_source_items(bundle, account, "closure"),
+         bundle <- maybe_filter_settled_source_items(bundle, account, opts),
          {:ok, source_partitions} <- SourceAccountDiscovery.partition_bundle(bundle),
          source_items <-
            Enum.sum(Enum.map(source_partitions, &SourceAccountDiscovery.source_item_count/1)),
@@ -89,7 +92,8 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
            model_calls: 0
          },
          watermark_result
-       )}
+       )
+       |> put_replay_metadata(opts)}
     end
   end
 
@@ -153,19 +157,22 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
        todo_batch_count: length(todo_batches),
        fanout_count: fanout_count,
        handoffs: handoffs,
-       finalizer: %{
-         "account_id" => account.id,
-         "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
-         "expected_fanouts" => fanout_count,
-         "expected_source_items" => length(source_refs),
-         "expected_source_partitions" => length(source_partitions),
-         "expected_source_refs_digest" => SourceAccountDiscovery.refs_digest(source_refs),
-         "expected_todo_count" => length(todo_ids),
-         "expected_todo_batches" => length(todo_batches),
-         "expected_todo_refs_digest" => SourceAccountDiscovery.refs_digest(todo_ids),
-         "watermarks" => watermarks
-       }
-     }}
+       finalizer:
+         %{
+           "account_id" => account.id,
+           "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
+           "expected_fanouts" => fanout_count,
+           "expected_source_items" => length(source_refs),
+           "expected_source_partitions" => length(source_partitions),
+           "expected_source_refs_digest" => SourceAccountDiscovery.refs_digest(source_refs),
+           "expected_todo_count" => length(todo_ids),
+           "expected_todo_batches" => length(todo_batches),
+           "expected_todo_refs_digest" => SourceAccountDiscovery.refs_digest(todo_ids),
+           "watermarks" => watermarks
+         }
+         |> put_replay_metadata(opts)
+     }
+     |> put_replay_metadata(opts)}
   end
 
   defp build_bounded_handoffs(todo_batches, source_partitions, account, opts) do
@@ -173,52 +180,63 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     source_partition_count = length(source_partitions)
     todo_batch_count = length(todo_batches)
 
-    todo_batches
-    |> Enum.with_index(1)
-    |> Enum.flat_map(fn {todo_snapshot_batch, todo_batch_index} ->
-      Enum.map(Enum.with_index(source_partitions, 1), fn {source_bundle, source_partition_index} ->
-        {todo_snapshot_batch, todo_batch_index, source_bundle, source_partition_index}
+    with :ok <- validate_replay_fanout_count(fanout_count, opts) do
+      todo_batches
+      |> Enum.with_index(1)
+      |> Enum.flat_map(fn {todo_snapshot_batch, todo_batch_index} ->
+        Enum.map(Enum.with_index(source_partitions, 1), fn
+          {source_bundle, source_partition_index} ->
+            {todo_snapshot_batch, todo_batch_index, source_bundle, source_partition_index}
+        end)
       end)
-    end)
-    |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, []}, fn
-      {{todo_snapshot_batch, todo_batch_index, source_bundle, source_partition_index},
-       fanout_index},
-      {:ok, handoffs} ->
-        todo_ids = Enum.map(todo_snapshot_batch, &Map.fetch!(&1, "id"))
-        source_refs = SourceAccountDiscovery.source_item_refs(source_bundle)
+      |> Enum.with_index(1)
+      |> Enum.reduce_while({:ok, []}, fn
+        {{todo_snapshot_batch, todo_batch_index, source_bundle, source_partition_index},
+         fanout_index},
+        {:ok, handoffs} ->
+          todo_ids = Enum.map(todo_snapshot_batch, &Map.fetch!(&1, "id"))
+          source_refs = SourceAccountDiscovery.source_item_refs(source_bundle)
 
-        handoff = %{
-          "account_id" => account.id,
-          "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
-          "fanout_index" => fanout_index,
-          "fanout_count" => fanout_count,
-          "source_partition_index" => source_partition_index,
-          "source_partition_count" => source_partition_count,
-          "todo_batch_index" => todo_batch_index,
-          "todo_batch_count" => todo_batch_count,
-          "source_items" => length(source_refs),
-          "source_item_refs" => source_refs,
-          "source_refs_digest" => SourceAccountDiscovery.refs_digest(source_refs),
-          "source_bundle" => source_bundle,
-          "todo_ids" => todo_ids,
-          "todo_snapshots" => todo_snapshot_batch,
-          "todo_count" => length(todo_ids),
-          "watermarks" => []
-        }
+          handoff =
+            %{
+              "account_id" => account.id,
+              "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
+              "fanout_index" => fanout_index,
+              "fanout_count" => fanout_count,
+              "source_partition_index" => source_partition_index,
+              "source_partition_count" => source_partition_count,
+              "todo_batch_index" => todo_batch_index,
+              "todo_batch_count" => todo_batch_count,
+              "source_items" => length(source_refs),
+              "source_item_refs" => source_refs,
+              "source_refs_digest" => SourceAccountDiscovery.refs_digest(source_refs),
+              "source_bundle" => source_bundle,
+              "todo_ids" => todo_ids,
+              "todo_snapshots" => todo_snapshot_batch,
+              "todo_count" => length(todo_ids),
+              "watermarks" => []
+            }
+            |> put_replay_metadata(opts)
 
-        case SourceAccountDiscovery.bound_handoff(handoff) do
-          {:ok, bounded_handoff} ->
-            {:cont, {:ok, [bounded_handoff | handoffs]}}
+          case SourceAccountDiscovery.bound_handoff(handoff) do
+            {:ok, bounded_handoff} ->
+              {:cont, {:ok, [bounded_handoff | handoffs]}}
 
-          {:error, _reason} ->
-            {:halt, {:error, :source_closure_handoff_payload_too_large}}
-        end
-    end)
-    |> case do
-      {:ok, handoffs} -> {:ok, Enum.reverse(handoffs)}
-      {:error, _reason} = error -> error
+            {:error, _reason} ->
+              {:halt, {:error, :source_closure_handoff_payload_too_large}}
+          end
+      end)
+      |> case do
+        {:ok, handoffs} -> {:ok, Enum.reverse(handoffs)}
+        {:error, _reason} = error -> error
+      end
     end
+  end
+
+  defp validate_replay_fanout_count(fanout_count, opts) do
+    if is_map(Keyword.get(opts, :source_replay)) and fanout_count > @max_replay_fanouts,
+      do: {:error, :gmail_source_replay_fanout_limit},
+      else: :ok
   end
 
   defp pack_source_partitions([]), do: []
@@ -326,7 +344,8 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          todo_batch_index: todo_batch_index,
          todo_batch_count: todo_batch_count,
          result: result
-       }}
+       }
+       |> put_replay_metadata(payload)}
     else
       false -> {:error, :source_closure_unsettled_or_identity_mismatch}
       {:error, _reason} = error -> error
@@ -390,7 +409,8 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
            model_calls: Enum.sum(Enum.map(child_results, &result_integer(&1, "model_calls")))
          },
          watermark_result
-       )}
+       )
+       |> put_replay_metadata(payload)}
     else
       false -> {:error, :source_closure_finalizer_identity_mismatch}
       {:error, _reason} = error -> error
@@ -590,13 +610,17 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
         kind: kind,
         value: value
       } = proposal
-      when kind in @allowed_watermark_kinds and is_binary(value) ->
-        watermark = %{"account_id" => account_id, "kind" => kind, "value" => value}
+      when is_binary(kind) and is_binary(value) ->
+        if allowed_watermark_kind?(kind) do
+          watermark = %{"account_id" => account_id, "kind" => kind, "value" => value}
 
-        if Map.has_key?(proposal, :expected_lower_value) do
-          [Map.put(watermark, "expected_lower_value", proposal.expected_lower_value)]
+          if Map.has_key?(proposal, :expected_lower_value) do
+            [Map.put(watermark, "expected_lower_value", proposal.expected_lower_value)]
+          else
+            [watermark]
+          end
         else
-          [watermark]
+          []
         end
 
       _other ->
@@ -607,17 +631,22 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
 
   defp serialize_watermarks(_proposals, _account_id), do: []
 
-  defp validate_watermarks([%{"account_id" => account_id, "kind" => kind, "value" => value}])
-       when is_integer(account_id) and kind in @allowed_watermark_kinds and is_binary(value) and
-              value != "",
-       do: :ok
+  defp validate_watermarks([
+         %{"account_id" => account_id, "kind" => kind, "value" => value}
+       ])
+       when is_integer(account_id) and is_binary(kind) and is_binary(value) and value != "" do
+    if allowed_watermark_kind?(kind),
+      do: :ok,
+      else: {:error, :source_closure_watermark_invalid}
+  end
 
   defp validate_watermarks(_watermarks), do: {:error, :source_closure_watermark_invalid}
 
   defp advance_watermarks(account, watermarks) do
     Enum.reduce_while(watermarks, :ok, fn watermark, :ok ->
       with true <- read_integer(watermark, "account_id") == account.id,
-           kind when kind in @allowed_watermark_kinds <- read_string(watermark, "kind"),
+           kind when is_binary(kind) <- read_string(watermark, "kind"),
+           true <- allowed_watermark_kind?(kind),
            value when is_binary(value) <- read_string(watermark, "value"),
            {:ok, _cursor} <- SourceCursors.put(account, kind, %{"value" => value}) do
         {:cont, :ok}
@@ -629,6 +658,70 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
       end
     end)
   end
+
+  defp allowed_watermark_kind?(kind) do
+    kind in @allowed_watermark_kinds or GmailSourceReplay.watermark_kind?(kind, "closure")
+  end
+
+  defp maybe_filter_settled_source_items(bundle, account, opts) when is_list(opts) do
+    if is_map(Keyword.get(opts, :source_replay)) do
+      bundle
+    else
+      SourceAccountDiscovery.filter_settled_source_items(bundle, account, "closure")
+    end
+  end
+
+  defp validate_replay_opts(account, opts) do
+    GmailSourceReplay.validate_runtime_replay(
+      account,
+      Keyword.get(opts, :source_replay),
+      "closure"
+    )
+  end
+
+  defp put_replay_metadata(value, source) when is_map(value) do
+    replay =
+      cond do
+        is_list(source) -> Keyword.get(source, :source_replay)
+        is_map(source) and Map.get(source, "source_replay_mode") == "historical" -> source
+        true -> nil
+      end
+
+    case replay do
+      %{reference: reference, lower: lower, upper: upper} = replay
+      when is_binary(reference) and is_integer(lower) and is_integer(upper) ->
+        value
+        |> Map.put(:source_replay_mode, "historical")
+        |> Map.put(:source_replay_reference, reference)
+        |> Map.put(:source_replay_lower, lower)
+        |> Map.put(:source_replay_upper, upper)
+        |> maybe_put_replay_kind(replay)
+
+      %{
+        "source_replay_reference" => reference,
+        "source_replay_lower" => lower,
+        "source_replay_upper" => upper
+      } = replay
+      when is_binary(reference) and is_integer(lower) and is_integer(upper) ->
+        value
+        |> Map.put(:source_replay_mode, "historical")
+        |> Map.put(:source_replay_reference, reference)
+        |> Map.put(:source_replay_lower, lower)
+        |> Map.put(:source_replay_upper, upper)
+        |> maybe_put_replay_kind(replay)
+
+      _other ->
+        value
+    end
+  end
+
+  defp maybe_put_replay_kind(value, %{kind: kind}) when is_binary(kind),
+    do: Map.put(value, :source_replay_kind, kind)
+
+  defp maybe_put_replay_kind(value, %{"source_replay_kind" => kind}) when is_binary(kind),
+    do: Map.put(value, :source_replay_kind, kind)
+
+  defp maybe_put_replay_kind(value, _replay), do: value
 
   defp settle_watermarks(account, watermarks, opts)
        when is_list(watermarks) and is_list(opts) do

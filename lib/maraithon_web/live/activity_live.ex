@@ -123,6 +123,7 @@ defmodule MaraithonWeb.ActivityLive do
     stage = source_stage(job.job_type)
     fanout = source_fanout(job.dedupe_key, job.result)
     matrix = source_matrix(job.dedupe_key, job.result)
+    replay_reference = source_result_string(job.result, "source_replay_reference")
     occurred_at = job.claimed_at || job.scheduled_at || job.inserted_at
     finished_at = job.completed_at || job.failed_at || job.cancelled_at
 
@@ -147,6 +148,9 @@ defmodule MaraithonWeb.ActivityLive do
       decision_count: source_result_count(job.result, "decision_count"),
       fanout: fanout,
       matrix: matrix,
+      replay_reference: replay_reference && String.slice(replay_reference, 0, 8),
+      replay_lower: source_result_count(job.result, "source_replay_lower"),
+      replay_upper: source_result_count(job.result, "source_replay_upper"),
       occurred_at: occurred_at
     }
   end
@@ -311,23 +315,42 @@ defmodule MaraithonWeb.ActivityLive do
   defp source_ai_calls(_job_type, _queue, _status, _result), do: "Bounded"
 
   defp source_run_summary(job_type, "completed", fanout, result) when is_map(result) do
-    case source_result_string(result, "outcome") do
-      "superseded" ->
-        "Skipped a stale cycle already covered by a newer cursor"
+    if source_result_string(result, "source_replay_mode") == "historical" do
+      source_replay_completed_summary(job_type, fanout)
+    else
+      case source_result_string(result, "outcome") do
+        "superseded" ->
+          "Skipped a stale cycle already covered by a newer cursor"
 
-      outcome ->
-        source_run_completed_summary(job_type, fanout, outcome)
+        outcome ->
+          source_run_completed_summary(job_type, fanout, outcome)
+      end
     end
   end
 
-  defp source_run_summary(_job_type, "pending", fanout, _result),
-    do: fanout_summary("Waiting for its OTP lane", fanout)
+  defp source_run_summary(_job_type, "pending", fanout, result) do
+    summary =
+      if source_result_string(result, "source_replay_mode") == "historical",
+        do: "Historical replay is waiting for its OTP lane",
+        else: "Waiting for its OTP lane"
 
-  defp source_run_summary(_job_type, "running", fanout, _result),
-    do: fanout_summary("Checking this account now", fanout)
+    fanout_summary(summary, fanout)
+  end
 
-  defp source_run_summary(_job_type, "failed", _fanout, _result),
-    do: "This account worker did not complete"
+  defp source_run_summary(_job_type, "running", fanout, result) do
+    summary =
+      if source_result_string(result, "source_replay_mode") == "historical",
+        do: "Historical replay is checking this account now",
+        else: "Checking this account now"
+
+    fanout_summary(summary, fanout)
+  end
+
+  defp source_run_summary(_job_type, "failed", _fanout, result) do
+    if source_result_string(result, "source_replay_mode") == "historical",
+      do: "Historical replay did not complete",
+      else: "This account worker did not complete"
+  end
 
   defp source_run_summary(_job_type, "cancelled", _fanout, _result),
     do: "This account worker stopped safely"
@@ -394,6 +417,45 @@ defmodule MaraithonWeb.ActivityLive do
 
   defp source_run_completed_summary(_job_type, _fanout, _outcome),
     do: "Account worker completed"
+
+  defp source_replay_completed_summary(
+         "runtime_partition:source_account_discovery",
+         _fanout
+       ),
+       do: "Replayed one bounded historical Gmail window"
+
+  defp source_replay_completed_summary(
+         "runtime_partition:source_account_discovery_reason",
+         fanout
+       ),
+       do: fanout_summary("Reviewed replayed messages for todo decisions", fanout)
+
+  defp source_replay_completed_summary(
+         "runtime_partition:source_account_discovery_finalize",
+         _fanout
+       ),
+       do: "Proved every replayed message received a todo decision"
+
+  defp source_replay_completed_summary(
+         "runtime_partition:source_account_closure_acquire",
+         _fanout
+       ),
+       do: "Replayed the same Gmail window for completion evidence"
+
+  defp source_replay_completed_summary(
+         "runtime_partition:source_account_closure_reason",
+         fanout
+       ),
+       do: fanout_summary("Checked open todos against replayed evidence", fanout)
+
+  defp source_replay_completed_summary(
+         "runtime_partition:source_account_closure_finalize",
+         _fanout
+       ),
+       do: "Proved every replayed completion decision"
+
+  defp source_replay_completed_summary(job_type, fanout),
+    do: source_run_completed_summary(job_type, fanout, nil)
 
   defp source_fanout(dedupe_key, result) do
     index = source_result_count(result, "fanout_index")
@@ -678,6 +740,23 @@ defmodule MaraithonWeb.ActivityLive do
                   <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md bg-zinc-50 px-3 py-2">
                     <dt>Reference</dt>
                     <dd class="font-mono text-zinc-700">{item.reference}</dd>
+                    <dt :if={item.replay_reference}>Replay</dt>
+                    <dd
+                      :if={item.replay_reference}
+                      id={"#{item.id}-replay-reference"}
+                      class="font-mono text-zinc-700"
+                    >
+                      {item.replay_reference}
+                    </dd>
+                    <dt :if={item.replay_lower > 0 and item.replay_upper > item.replay_lower}>
+                      Window
+                    </dt>
+                    <dd
+                      :if={item.replay_lower > 0 and item.replay_upper > item.replay_lower}
+                      class="font-mono text-zinc-700"
+                    >
+                      {item.replay_lower} ≤ t &lt; {item.replay_upper}
+                    </dd>
                     <dt>Worker</dt>
                     <dd class="text-zinc-700">{item.role}</dd>
                     <dt>Stage</dt>

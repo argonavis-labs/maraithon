@@ -22,6 +22,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   alias Maraithon.PromptBudget
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.SourceCycleProofs
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
@@ -64,15 +65,16 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   defp do_acquire(account, agent, opts) do
     with :ok <- validate_ownership(account, agent),
+         {:ok, _replay} <- validate_replay_opts(account, opts, "discovery"),
          {bundle, telemetry, proposals} <- acquire_bundle(account, agent, opts),
          :ok <- validate_complete_acquisition(account, telemetry),
-         bundle <- filter_settled_source_items(bundle, account, "discovery"),
+         bundle <- maybe_filter_settled_source_items(bundle, account, "discovery", opts),
          watermarks <- serialize_watermarks(proposals, account.id),
          :ok <- validate_watermarks(watermarks),
          {:ok, partitions} <- partition_bundle(bundle),
          source_items <- Enum.sum(Enum.map(partitions, &source_item_count/1)),
          {:ok, handoffs} <-
-           build_handoffs(partitions, account, agent, Keyword.get(opts, :acquisition_job_id)) do
+           build_handoffs(partitions, account, agent, opts) do
       if source_items == 0 do
         with {:ok, watermark_result} <- settle_watermarks(account, watermarks, opts) do
           {:ok,
@@ -85,7 +87,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
                model_calls: 0
              },
              watermark_result
-           )}
+           )
+           |> put_replay_metadata(opts)}
         end
       else
         fanout_count = length(handoffs)
@@ -108,7 +111,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
                "watermarks" => watermarks
              }
              |> maybe_put_agent_id(agent)
-         }}
+             |> put_replay_metadata(opts)
+         }
+         |> put_replay_metadata(opts)}
       end
     else
       nil -> {:error, :invalid_source_bundle}
@@ -156,7 +161,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
        |> Map.put(:source_items, source_items)
        |> Map.put(:fanout_index, read_integer(payload, "fanout_index"))
        |> Map.put(:fanout_count, read_integer(payload, "fanout_count"))
-       |> Map.put(:advanced_watermarks, length(watermarks))}
+       |> Map.put(:advanced_watermarks, length(watermarks))
+       |> put_replay_metadata(payload)}
     else
       false -> {:error, :source_discovery_partition_identity_mismatch}
       {:error, _reason} = error -> error
@@ -204,7 +210,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
            model_calls: Enum.sum(Enum.map(child_results, &result_integer(&1, "model_calls")))
          },
          watermark_result
-       )}
+       )
+       |> put_replay_metadata(payload)}
     else
       {:error, _reason} = error -> error
       _other -> {:error, :invalid_source_discovery_finalizer}
@@ -251,13 +258,14 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   def restore_partition_bundle(_bundle), do: {:error, :invalid_source_bundle}
 
-  defp build_handoffs([], _account, _agent, _acquisition_job_id), do: {:ok, []}
+  defp build_handoffs([], _account, _agent, _opts), do: {:ok, []}
 
-  defp build_handoffs(partitions, account, agent, acquisition_job_id) when is_list(partitions) do
-    do_build_handoffs(partitions, account, agent, acquisition_job_id)
+  defp build_handoffs(partitions, account, agent, opts)
+       when is_list(partitions) and is_list(opts) do
+    do_build_handoffs(partitions, account, agent, opts)
   end
 
-  defp do_build_handoffs(partitions, account, agent, acquisition_job_id) do
+  defp do_build_handoffs(partitions, account, agent, opts) do
     fanout_count = length(partitions)
 
     partitions
@@ -266,7 +274,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       handoff =
         %{
           "account_id" => account.id,
-          "acquisition_job_id" => acquisition_job_id,
+          "acquisition_job_id" => Keyword.get(opts, :acquisition_job_id),
           "fanout_index" => fanout_index,
           "fanout_count" => fanout_count,
           "source_bundle" => partition,
@@ -274,6 +282,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
           "watermarks" => []
         }
         |> maybe_put_agent_id(agent)
+        |> put_replay_metadata(opts)
 
       case bound_handoff(handoff) do
         {:ok, bounded_handoff} ->
@@ -292,7 +301,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
           partitions
           |> List.replace_at(partition_index, split_partitions)
           |> List.flatten()
-          |> do_build_handoffs(account, agent, acquisition_job_id)
+          |> do_build_handoffs(account, agent, opts)
         else
           {:error, _split_reason} -> {:error, reason}
         end
@@ -461,7 +470,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       %{
         source_ref: source_ref,
         source_ref_digest: SourceCycleProofs.reference_digest(source_ref),
-        source_identity_digest: :crypto.hash(:sha256, source_ref),
+        source_identity_digest: :crypto.hash(:sha256, record.identity),
         source_revision_digest:
           :crypto.hash(:sha256, :erlang.term_to_binary(record.item, [:deterministic])),
         provider_occurred_at: provider_occurred_at(record)
@@ -508,19 +517,21 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     source_scope = account_source_scope(account)
 
-    context = %{
-      user_id: account.user_id,
-      agent_id: agent_id(agent),
-      timestamp: now,
-      trigger: %{type: :pubsub_event, job_type: "source_account_discovery"},
-      event: %{topic: account_event_topic(account), payload: %{}},
-      recent_events: [],
-      source_scope: source_scope,
-      source_watermark_role: "discovery",
-      defer_watermark_advance: true,
-      exhaustive_account_delta: true,
-      account_delta_source: account_delta_source(account)
-    }
+    context =
+      %{
+        user_id: account.user_id,
+        agent_id: agent_id(agent),
+        timestamp: now,
+        trigger: %{type: :pubsub_event, job_type: "source_account_discovery"},
+        event: %{topic: account_event_topic(account), payload: %{}},
+        recent_events: [],
+        source_scope: source_scope,
+        source_watermark_role: "discovery",
+        defer_watermark_advance: true,
+        exhaustive_account_delta: true,
+        account_delta_source: account_delta_source(account)
+      }
+      |> put_replay_context(opts, "discovery")
 
     acquisition.(
       account.user_id,
@@ -1291,28 +1302,28 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp provider_occurred_at(%{source: :gmail, item: item}) do
     item
     |> read_string("internal_date")
-    |> parse_provider_datetime()
+    |> parse_provider_datetime(:millisecond)
   end
 
   defp provider_occurred_at(%{source: :slack, item: item}) do
     item
     |> read_string("ts")
-    |> parse_provider_datetime()
+    |> parse_provider_datetime(:second)
   end
 
   defp provider_occurred_at(_record), do: nil
 
-  defp parse_provider_datetime(nil), do: nil
+  defp parse_provider_datetime(nil, _unit), do: nil
 
-  defp parse_provider_datetime(value) when is_binary(value) do
+  defp parse_provider_datetime(value, unit) when is_binary(value) do
     case DateTime.from_iso8601(value) do
       {:ok, datetime, _offset} ->
         datetime
 
       _invalid ->
         case Float.parse(value) do
-          {seconds, ""} when seconds >= 0 ->
-            DateTime.from_unix!(round(seconds * 1_000_000), :microsecond)
+          {number, ""} when number >= 0 ->
+            DateTime.from_unix!(round(number * unit_multiplier(unit)), :microsecond)
 
           _invalid ->
             nil
@@ -1556,13 +1567,17 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         kind: kind,
         value: value
       } = proposal
-      when kind in @allowed_watermark_kinds and is_binary(value) ->
-        watermark = %{"account_id" => account_id, "kind" => kind, "value" => value}
+      when is_binary(kind) and is_binary(value) ->
+        if allowed_watermark_kind?(kind) do
+          watermark = %{"account_id" => account_id, "kind" => kind, "value" => value}
 
-        if Map.has_key?(proposal, :expected_lower_value) do
-          [Map.put(watermark, "expected_lower_value", proposal.expected_lower_value)]
+          if Map.has_key?(proposal, :expected_lower_value) do
+            [Map.put(watermark, "expected_lower_value", proposal.expected_lower_value)]
+          else
+            [watermark]
+          end
         else
-          [watermark]
+          []
         end
 
       _other ->
@@ -1573,17 +1588,22 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   defp serialize_watermarks(_proposals, _account_id), do: []
 
-  defp validate_watermarks([%{"account_id" => account_id, "kind" => kind, "value" => value}])
-       when is_integer(account_id) and kind in @allowed_watermark_kinds and is_binary(value) and
-              value != "",
-       do: :ok
+  defp validate_watermarks([
+         %{"account_id" => account_id, "kind" => kind, "value" => value}
+       ])
+       when is_integer(account_id) and is_binary(kind) and is_binary(value) and value != "" do
+    if allowed_watermark_kind?(kind),
+      do: :ok,
+      else: {:error, :source_discovery_watermark_invalid}
+  end
 
   defp validate_watermarks(_watermarks), do: {:error, :source_discovery_watermark_invalid}
 
   defp advance_watermarks(account, watermarks) when is_list(watermarks) do
     Enum.reduce_while(watermarks, :ok, fn watermark, :ok ->
       with true <- read_integer(watermark, "account_id") == account.id,
-           kind when kind in @allowed_watermark_kinds <- read_string(watermark, "kind"),
+           kind when is_binary(kind) <- read_string(watermark, "kind"),
+           true <- allowed_watermark_kind?(kind),
            value when is_binary(value) <- read_string(watermark, "value"),
            {:ok, _cursor} <- SourceCursors.put(account, kind, %{"value" => value}) do
         {:cont, :ok}
@@ -1595,6 +1615,84 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       end
     end)
   end
+
+  defp allowed_watermark_kind?(kind) do
+    kind in @allowed_watermark_kinds or GmailSourceReplay.watermark_kind?(kind, "discovery")
+  end
+
+  defp maybe_filter_settled_source_items(bundle, account, role, opts)
+       when is_list(opts) do
+    if is_map(Keyword.get(opts, :source_replay)) do
+      bundle
+    else
+      filter_settled_source_items(bundle, account, role)
+    end
+  end
+
+  defp validate_replay_opts(account, opts, role) do
+    GmailSourceReplay.validate_runtime_replay(account, Keyword.get(opts, :source_replay), role)
+  end
+
+  defp put_replay_context(context, opts, role) when is_map(context) and is_list(opts) do
+    case Keyword.get(opts, :source_replay) do
+      %{lower: lower, upper: upper, kind: kind}
+      when is_integer(lower) and is_integer(upper) and is_binary(kind) ->
+        if GmailSourceReplay.watermark_kind?(kind, role) do
+          context
+          |> Map.put(:source_replay_window, %{lower: lower, upper: upper})
+          |> Map.put(:source_watermark_kind_override, kind)
+        else
+          context
+        end
+
+      _other ->
+        context
+    end
+  end
+
+  defp put_replay_metadata(value, source) when is_map(value) do
+    replay =
+      cond do
+        is_list(source) -> Keyword.get(source, :source_replay)
+        is_map(source) and Map.get(source, "source_replay_mode") == "historical" -> source
+        true -> nil
+      end
+
+    case replay do
+      %{reference: reference, lower: lower, upper: upper} = replay
+      when is_binary(reference) and is_integer(lower) and is_integer(upper) ->
+        value
+        |> Map.put(:source_replay_mode, "historical")
+        |> Map.put(:source_replay_reference, reference)
+        |> Map.put(:source_replay_lower, lower)
+        |> Map.put(:source_replay_upper, upper)
+        |> maybe_put_replay_kind(replay)
+
+      %{
+        "source_replay_reference" => reference,
+        "source_replay_lower" => lower,
+        "source_replay_upper" => upper
+      } = replay
+      when is_binary(reference) and is_integer(lower) and is_integer(upper) ->
+        value
+        |> Map.put(:source_replay_mode, "historical")
+        |> Map.put(:source_replay_reference, reference)
+        |> Map.put(:source_replay_lower, lower)
+        |> Map.put(:source_replay_upper, upper)
+        |> maybe_put_replay_kind(replay)
+
+      _other ->
+        value
+    end
+  end
+
+  defp maybe_put_replay_kind(value, %{kind: kind}) when is_binary(kind),
+    do: Map.put(value, :source_replay_kind, kind)
+
+  defp maybe_put_replay_kind(value, %{"source_replay_kind" => kind}) when is_binary(kind),
+    do: Map.put(value, :source_replay_kind, kind)
+
+  defp maybe_put_replay_kind(value, _replay), do: value
 
   defp settle_watermarks(account, watermarks, opts)
        when is_list(watermarks) and is_list(opts) do

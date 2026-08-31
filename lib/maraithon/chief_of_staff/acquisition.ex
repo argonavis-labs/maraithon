@@ -2323,10 +2323,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       bundle = SourceBundle.mark_unavailable(bundle, "gmail", "google_gmail_not_connected")
       {put_source_summary(telemetry, "gmail", %{"status" => "unavailable"}), bundle}
     else
-      now_watermark =
-        (context[:timestamp] || DateTime.utc_now())
-        |> DateTime.to_unix(:second)
-        |> Integer.to_string()
+      now_watermark = gmail_upper_watermark(context, plan)
 
       query_upper_watermark =
         now_watermark
@@ -2343,6 +2340,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       watermark_mode = watermark_advance_mode(context, plan)
       deep_lookback? = deep_lookback_fetch?(plan)
       watermark_kind = source_watermark_kind(context, "gmail")
+      replay_window = plan.source_replay_window
       provider_count = length(providers)
       provider_concurrency = min(@gmail_provider_fetch_concurrency, provider_count)
       phase_budgets = gmail_phase_budgets(plan)
@@ -2381,7 +2379,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
               fallback_query,
               deep_lookback?,
               watermark_kind,
-              now_watermark
+              now_watermark,
+              replay_window
             )
 
           quota = Map.fetch!(provider_quotas, provider)
@@ -2395,7 +2394,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       # here would reintroduce old mail into an otherwise exact delta and send
       # the same batch through the model on every poll.
       commercial_providers =
-        if plan.exhaustive_account_delta? do
+        if plan.exhaustive_account_delta? or is_map(replay_window) do
           []
         else
           provider_specs
@@ -2410,12 +2409,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           provider_specs,
           fn {provider, _account, window, quota} ->
             safe_gmail_task(fn ->
+              candidate_limit = if is_map(replay_window), do: quota.total, else: quota.base
+
               fetch_gmail_provider_candidates(
                 user_id,
                 source_scope,
                 provider,
                 window.query,
-                quota.base,
+                candidate_limit,
                 detail_concurrency,
                 detail_timeout,
                 plan.exhaustive_account_delta?,
@@ -2681,7 +2682,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
          exhaustive?,
          window
        ) do
-    fetch_opts = gmail_candidate_fetch_opts(detail_concurrency, detail_timeout, exhaustive?)
+    fetch_opts =
+      gmail_candidate_fetch_opts(
+        detail_concurrency,
+        detail_timeout,
+        exhaustive?,
+        Map.get(window, :replay?, false),
+        message_limit
+      )
 
     case gmail_module().fetch_messages(
            user_id,
@@ -2709,7 +2717,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             metadata
           )
 
-        {:ok, filter_gmail_messages_to_window(annotated, window), metadata}
+        with {:ok, filtered} <- filter_gmail_messages_to_window(annotated, window) do
+          {:ok, filtered, metadata}
+        end
 
       {:ok, messages} when is_list(messages) ->
         # Test doubles and older connector implementations do not expose
@@ -2729,7 +2739,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
             metadata
           )
 
-        {:ok, filter_gmail_messages_to_window(annotated, window), metadata}
+        with {:ok, filtered} <- filter_gmail_messages_to_window(annotated, window) do
+          {:ok, filtered, metadata}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -3072,17 +3084,31 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
        ),
        do: {messages_by_provider, provider_statuses}
 
-  defp gmail_candidate_fetch_opts(detail_concurrency, detail_timeout, true) do
-    [
+  defp gmail_candidate_fetch_opts(
+         detail_concurrency,
+         detail_timeout,
+         true,
+         replay?,
+         message_limit
+       ) do
+    opts = [
       message_format: :full,
       message_fetch_concurrency: detail_concurrency,
       message_fetch_timeout_ms: detail_timeout,
       include_fetch_metadata: true,
       paginate: true
     ]
+
+    if replay?, do: Keyword.put(opts, :max_total_results, message_limit), else: opts
   end
 
-  defp gmail_candidate_fetch_opts(detail_concurrency, detail_timeout, _exhaustive?) do
+  defp gmail_candidate_fetch_opts(
+         detail_concurrency,
+         detail_timeout,
+         _exhaustive?,
+         _replay?,
+         _message_limit
+       ) do
     [
       message_format: :metadata,
       message_fetch_concurrency: detail_concurrency,
@@ -3333,13 +3359,41 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   # durable cursor. The provider query is widened by one additional second on
   # both sides, then hydrated messages are filtered locally to the exact
   # `[cursor - safety_overlap, now)` interval.
-  defp gmail_poll_window(_account, fallback_query, true, _kind, now),
+  defp gmail_poll_window(account, _fallback_query, _deep_lookback?, kind, _now, %{
+         lower: lower,
+         upper: upper
+       })
+       when is_integer(lower) and is_integer(upper) and lower >= 0 and upper > lower do
+    cursor =
+      case account && SourceCursors.get(account.id, kind) do
+        %{value: value} when is_binary(value) -> value
+        _other -> nil
+      end
+
+    %{
+      query:
+        "after:#{max(lower - @gmail_query_boundary_overlap_seconds, 0)} before:#{upper + @gmail_query_boundary_overlap_seconds}",
+      lower: lower,
+      upper: upper,
+      cursor: cursor,
+      replay?: true
+    }
+  end
+
+  defp gmail_poll_window(_account, fallback_query, true, _kind, now, _replay_window),
     do: %{query: fallback_query, lower: nil, upper: watermark_integer(now), cursor: nil}
 
-  defp gmail_poll_window(nil, fallback_query, _deep_lookback?, _kind, now),
+  defp gmail_poll_window(nil, fallback_query, _deep_lookback?, _kind, now, _replay_window),
     do: %{query: fallback_query, lower: nil, upper: watermark_integer(now), cursor: nil}
 
-  defp gmail_poll_window(account, fallback_query, _deep_lookback?, kind, now) do
+  defp gmail_poll_window(
+         account,
+         fallback_query,
+         _deep_lookback?,
+         kind,
+         now,
+         _replay_window
+       ) do
     upper = watermark_integer(now)
 
     case SourceCursors.get(account.id, kind) do
@@ -3366,23 +3420,60 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
+  defp filter_gmail_messages_to_window(
+         messages,
+         %{lower: lower, upper: upper, replay?: true}
+       )
+       when is_list(messages) and (is_nil(lower) or is_integer(lower)) and is_integer(upper) do
+    lower_frontier = if is_integer(lower), do: lower * 1_000_000
+    upper_frontier = upper * 1_000_000
+
+    messages
+    |> Enum.reduce_while({:ok, []}, fn message, {:ok, filtered} ->
+      case gmail_message_frontier(message) do
+        frontier when is_integer(frontier) ->
+          if (is_nil(lower_frontier) or frontier >= lower_frontier) and
+               frontier < upper_frontier do
+            {:cont, {:ok, [message | filtered]}}
+          else
+            {:cont, {:ok, filtered}}
+          end
+
+        _missing ->
+          {:halt, {:error, :gmail_source_replay_frontier_missing}}
+      end
+    end)
+    |> case do
+      {:ok, filtered} when length(filtered) <= @max_gmail_message_limit ->
+        {:ok, Enum.reverse(filtered)}
+
+      {:ok, _too_many} ->
+        {:error, :gmail_source_replay_item_limit}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
   defp filter_gmail_messages_to_window(messages, %{lower: lower, upper: upper})
        when is_list(messages) and (is_nil(lower) or is_integer(lower)) and is_integer(upper) do
     lower_frontier = if is_integer(lower), do: lower * 1_000_000
     upper_frontier = upper * 1_000_000
 
-    Enum.filter(messages, fn message ->
-      case gmail_message_frontier(message) do
-        frontier when is_integer(frontier) ->
-          (is_nil(lower_frontier) or frontier >= lower_frontier) and frontier < upper_frontier
+    {:ok,
+     Enum.filter(messages, fn message ->
+       case gmail_message_frontier(message) do
+         frontier when is_integer(frontier) ->
+           (is_nil(lower_frontier) or frontier >= lower_frontier) and frontier < upper_frontier
 
-        _missing ->
-          false
-      end
-    end)
+         _missing ->
+           false
+       end
+     end)}
   end
 
-  defp filter_gmail_messages_to_window(messages, _window) when is_list(messages), do: messages
+  defp filter_gmail_messages_to_window(messages, _window) when is_list(messages),
+    do: {:ok, messages}
 
   defp watermark_integer(value) when is_integer(value), do: value
 
@@ -3410,12 +3501,28 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp source_watermark_kind(context, source) when source in ["gmail", "slack"] do
+    override =
+      Map.get(
+        context,
+        :source_watermark_kind_override,
+        Map.get(context, "source_watermark_kind_override")
+      )
+
     role = Map.get(context, :source_watermark_role, Map.get(context, "source_watermark_role"))
 
-    case role do
-      role when role in ["discovery", "closure"] -> "#{source}_#{role}_watermark"
-      _other when source == "gmail" -> "gmail_poll_watermark"
-      _other -> "slack_watermark"
+    case {source, override, role} do
+      {"gmail", override, role}
+      when is_binary(override) and role in ["discovery", "closure"] ->
+        override
+
+      {_source, _override, role} when role in ["discovery", "closure"] ->
+        "#{source}_#{role}_watermark"
+
+      {"gmail", _override, _role} ->
+        "gmail_poll_watermark"
+
+      _other ->
+        "slack_watermark"
     end
   end
 
@@ -3564,6 +3671,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     morning_brief? = morning_brief_trigger?(user_id, skill_ids, skill_configs, context)
     account_message_sources? = not truthy?(Map.get(context, :skip_account_message_sources))
     exhaustive_account_delta? = truthy?(Map.get(context, :exhaustive_account_delta))
+    source_replay_window = source_replay_window(context)
 
     account_delta_source =
       case Map.get(context, :account_delta_source, Map.get(context, "account_delta_source")) do
@@ -3610,6 +3718,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       weather_config: weather_config,
       web_context: morning_brief?,
       exhaustive_account_delta?: exhaustive_account_delta?,
+      source_replay_window: source_replay_window,
       account_delta_source: account_delta_source,
       inbox_limit: max(max_email_scan_limit, 100),
       sent_limit: max(max_email_scan_limit * 2, 100),
@@ -3777,6 +3886,33 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       forward_days: @default_forward_days
     }
   end
+
+  defp gmail_upper_watermark(_context, %{source_replay_window: %{upper: upper}})
+       when is_integer(upper),
+       do: Integer.to_string(upper)
+
+  defp gmail_upper_watermark(context, _plan) do
+    (context[:timestamp] || DateTime.utc_now())
+    |> DateTime.to_unix(:second)
+    |> Integer.to_string()
+  end
+
+  defp source_replay_window(context) when is_map(context) do
+    case Map.get(context, :source_replay_window, Map.get(context, "source_replay_window")) do
+      %{lower: lower, upper: upper}
+      when is_integer(lower) and is_integer(upper) and lower >= 0 and upper > lower ->
+        %{lower: lower, upper: upper}
+
+      %{"lower" => lower, "upper" => upper}
+      when is_integer(lower) and is_integer(upper) and lower >= 0 and upper > lower ->
+        %{lower: lower, upper: upper}
+
+      _other ->
+        nil
+    end
+  end
+
+  defp source_replay_window(_context), do: nil
 
   defp news_config(skill_ids, skill_configs) do
     skill_ids

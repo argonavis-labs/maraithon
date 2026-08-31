@@ -746,6 +746,71 @@ defmodule Maraithon.Connectors.GmailTest do
       refute metadata.complete?
     end
 
+    test "bounded pagination stops before hydrating beyond the replay item cap" do
+      bypass = Bypass.open()
+      original_gmail_config = Application.get_env(:maraithon, :gmail, [])
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      on_exit(fn -> Application.put_env(:maraithon, :gmail, original_gmail_config) end)
+
+      user_id = "fetch-bounded-pagination-#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, _token} =
+        store_tokens(user_id, "google", %{
+          access_token: "bounded-access-token",
+          refresh_token: "bounded-refresh-token",
+          expires_in: 3_600,
+          scopes: ["gmail.readonly"]
+        })
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        assert conn.query_string |> URI.decode_query() |> Map.fetch!("maxResults") == "2"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "messages" => [%{"id" => "b1"}, %{"id" => "b2"}],
+            "nextPageToken" => "must-not-be-fetched"
+          })
+        )
+      end)
+
+      for id <- ["b1", "b2"] do
+        Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/#{id}", fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(
+            200,
+            Jason.encode!(%{
+              "id" => id,
+              "threadId" => "thread-#{id}",
+              "labelIds" => ["INBOX"],
+              "payload" => %{"headers" => []}
+            })
+          )
+        end)
+      end
+
+      assert {:ok, messages, metadata} =
+               Gmail.fetch_messages(user_id,
+                 max_results: 2,
+                 max_total_results: 2,
+                 paginate: true,
+                 message_format: :metadata,
+                 include_fetch_metadata: true
+               )
+
+      assert Enum.map(messages, & &1.message_id) == ["b1", "b2"]
+      assert metadata.listed_count == 2
+      assert metadata.truncated?
+      refute metadata.complete?
+    end
+
     test "returns empty list when no messages" do
       bypass = Bypass.open()
 

@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.SourceWatermarkCommitTest do
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobs
+  alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.SourceCycle
   alias Maraithon.Runtime.SourceWatermarkCommit
 
@@ -80,6 +81,65 @@ defmodule Maraithon.Runtime.SourceWatermarkCommitTest do
     assert {:error, :invalid_deferred_source_watermark} =
              SourceWatermarkCommit.commit_and_sanitize(job, result)
 
+    refute SourceCursors.get(account.id, "gmail_discovery_watermark")
+  end
+
+  test "binds replay settlement to its durable account window and reference" do
+    account = connected_account("replay-contract")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    lower = now |> DateTime.add(-24, :hour) |> DateTime.to_unix(:second)
+    upper = now |> DateTime.add(-1, :second) |> DateTime.to_unix(:second)
+    assert {:ok, replay} = GmailSourceReplay.build(account, lower, upper, now)
+
+    {:ok, _cursor} =
+      SourceCursors.put(account, replay.discovery_kind, %{value: Integer.to_string(lower)})
+
+    {:ok, job} =
+      BackgroundJobs.enqueue("runtime_partition:source_account_discovery", %{
+        user_id: account.user_id,
+        queue: "runtime_provider_account",
+        dedupe_key: "source-watermark-replay-contract:#{account.id}",
+        scheduled_at: now,
+        payload:
+          replay
+          |> GmailSourceReplay.payload()
+          |> Map.merge(%{"account_id" => account.id, "role" => "discovery"})
+      })
+
+    forged_result =
+      {:ok,
+       %{
+         account_id: account.id,
+         deferred_watermarks: [
+           %{
+             "account_id" => account.id,
+             "kind" => replay.discovery_kind,
+             "expected_lower_value" => Integer.to_string(lower),
+             "value" => Integer.to_string(upper + 1)
+           }
+         ]
+       }}
+
+    assert {:error, :invalid_gmail_source_replay_settlement} =
+             SourceWatermarkCommit.commit_and_sanitize(job, forged_result)
+
+    live_cursor_result =
+      put_in(
+        forged_result,
+        [Access.elem(1), :deferred_watermarks, Access.at(0)],
+        %{
+          "account_id" => account.id,
+          "kind" => "gmail_discovery_watermark",
+          "expected_lower_value" => Integer.to_string(lower),
+          "value" => Integer.to_string(upper)
+        }
+      )
+
+    assert {:error, :invalid_gmail_source_replay_settlement} =
+             SourceWatermarkCommit.commit_and_sanitize(job, live_cursor_result)
+
+    assert %{value: value} = SourceCursors.get(account.id, replay.discovery_kind)
+    assert value == Integer.to_string(lower)
     refute SourceCursors.get(account.id, "gmail_discovery_watermark")
   end
 

@@ -11,6 +11,45 @@ defmodule Maraithon.Runtime.SourceAccountDiscoveryTest do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.SourceAccountDiscovery
 
+  test "proof items hash canonical identities and normalize Gmail milliseconds" do
+    internal_date = 1_777_593_600_000
+
+    bundle =
+      SourceBundle.empty(%{timestamp: ~U[2026-05-01 00:00:00Z]})
+      |> SourceBundle.put_gmail(%{
+        "messages" => [
+          %{
+            "google_provider" => "google:proof@example.com",
+            "message_id" => "message-1",
+            "thread_id" => "thread-1",
+            "internal_date" => Integer.to_string(internal_date)
+          }
+        ]
+      })
+
+    assert [proof] = SourceAccountDiscovery.source_proof_items(bundle)
+
+    identity = "google:proof@example.com:message-1"
+    source_ref = "gmail:" <> identity
+
+    assert proof.source_identity_digest == :crypto.hash(:sha256, identity)
+    assert proof.source_ref_digest == :crypto.hash(:sha256, source_ref)
+    refute proof.source_identity_digest == proof.source_ref_digest
+    assert DateTime.to_unix(proof.provider_occurred_at, :millisecond) == internal_date
+  end
+
+  test "rejects malformed replay options before acquisition" do
+    {account, agent} = discovery_identity("invalid-replay")
+
+    assert {:error, :invalid_gmail_source_replay_payload} =
+             SourceAccountDiscovery.acquire(account, agent,
+               source_replay: %{lower: 1, upper: 2, reference: "tampered", kind: "tampered"},
+               acquisition: fn _user_id, _skills, _configs, _context ->
+                 flunk("malformed replay must fail before acquisition")
+               end
+             )
+  end
+
   test "empty account delta advances without a model handoff" do
     {account, agent} = discovery_identity("empty")
     now = DateTime.utc_now() |> DateTime.truncate(:second)

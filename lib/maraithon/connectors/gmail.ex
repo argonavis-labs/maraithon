@@ -375,10 +375,18 @@ defmodule Maraithon.Connectors.Gmail do
     label_ids = Keyword.get(opts, :label_ids, [])
     query = Keyword.get(opts, :query)
     paginate? = Keyword.get(opts, :paginate, false)
+    max_total_results = Keyword.get(opts, :max_total_results)
 
     case request_access_token(user_id_or_token, opts) do
       {:ok, token} ->
-        case list_message_refs(token, query, label_ids, max_results, paginate?) do
+        case list_message_refs(
+               token,
+               query,
+               label_ids,
+               max_results,
+               paginate?,
+               max_total_results
+             ) do
           {:ok, selected, list_metadata} ->
             {detailed, detail_failure_count} = fetch_message_details(selected, token, opts)
             body_fallback_count = Enum.count(detailed, &metadata_body_fallback?/1)
@@ -416,7 +424,7 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
-  defp list_message_refs(token, query, label_ids, max_results, false) do
+  defp list_message_refs(token, query, label_ids, max_results, false, _max_total_results) do
     with {:ok, response} <- request_message_list_page(token, query, label_ids, max_results, nil) do
       messages = normalize_message_refs(response["messages"])
 
@@ -425,36 +433,86 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
-  defp list_message_refs(token, query, label_ids, _max_results, true) do
-    list_all_message_refs(token, query, label_ids, nil, [], 0)
+  defp list_message_refs(token, query, label_ids, _max_results, true, max_total_results) do
+    case max_total_results do
+      limit when is_integer(limit) and limit > 0 ->
+        list_all_message_refs(token, query, label_ids, nil, [], 0, limit)
+
+      nil ->
+        list_all_message_refs(token, query, label_ids, nil, [], 0, nil)
+
+      _invalid ->
+        {:error, :invalid_gmail_message_pagination_limit}
+    end
   end
 
-  defp list_all_message_refs(token, query, label_ids, page_token, acc, page_count)
+  defp list_all_message_refs(
+         token,
+         query,
+         label_ids,
+         page_token,
+         acc,
+         page_count,
+         max_total_results
+       )
        when page_count < @max_message_list_pages do
+    page_size =
+      case max_total_results do
+        limit when is_integer(limit) -> min(@messages_page_size, max(limit - length(acc), 1))
+        nil -> @messages_page_size
+      end
+
     with {:ok, response} <-
-           request_message_list_page(token, query, label_ids, @messages_page_size, page_token) do
-      messages = acc ++ normalize_message_refs(response["messages"])
+           request_message_list_page(token, query, label_ids, page_size, page_token) do
+      messages =
+        (acc ++ normalize_message_refs(response["messages"]))
+        |> Enum.uniq_by(& &1["id"])
+
       next_page_token = response["nextPageToken"]
       next_page_count = page_count + 1
 
-      if present?(next_page_token) do
-        list_all_message_refs(
-          token,
-          query,
-          label_ids,
-          next_page_token,
-          messages,
-          next_page_count
-        )
-      else
-        {:ok, Enum.uniq_by(messages, & &1["id"]),
-         %{page_count: next_page_count, truncated?: false}}
+      cond do
+        is_integer(max_total_results) and length(messages) > max_total_results ->
+          {:ok, Enum.take(messages, max_total_results),
+           %{page_count: next_page_count, truncated?: true}}
+
+        not present?(next_page_token) ->
+          {:ok, maybe_take_message_refs(messages, max_total_results),
+           %{page_count: next_page_count, truncated?: false}}
+
+        is_integer(max_total_results) and length(messages) >= max_total_results ->
+          {:ok, Enum.take(messages, max_total_results),
+           %{page_count: next_page_count, truncated?: true}}
+
+        true ->
+          list_all_message_refs(
+            token,
+            query,
+            label_ids,
+            next_page_token,
+            messages,
+            next_page_count,
+            max_total_results
+          )
       end
     end
   end
 
-  defp list_all_message_refs(_token, _query, _label_ids, _page_token, _acc, _page_count),
-    do: {:error, :gmail_message_pagination_limit}
+  defp list_all_message_refs(
+         _token,
+         _query,
+         _label_ids,
+         _page_token,
+         _acc,
+         _page_count,
+         _max_total_results
+       ),
+       do: {:error, :gmail_message_pagination_limit}
+
+  defp maybe_take_message_refs(messages, limit) when is_integer(limit),
+    do: Enum.take(messages, limit)
+
+  defp maybe_take_message_refs(messages, nil), do: messages
 
   defp request_message_list_page(token, query, label_ids, max_results, page_token) do
     params =

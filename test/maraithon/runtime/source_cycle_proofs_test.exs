@@ -14,6 +14,7 @@ defmodule Maraithon.Runtime.SourceCycleProofsTest do
 
     assert {:ok, cycle} = SourceCycleProofs.create_cycle(fixture.attrs, [], [])
     assert cycle.reason_job_ids == []
+    assert cycle.proof_version == 2
     assert cycle.reason_job_count == 0
     assert is_nil(cycle.finalizer_job_id)
     assert cycle.source_item_count == 0

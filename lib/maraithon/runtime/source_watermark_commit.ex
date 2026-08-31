@@ -9,6 +9,7 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.SourceCycleSettlement
 
   @slack_conversation_reconcile_job "runtime_partition:slack_conversation_reconcile"
@@ -70,6 +71,7 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
              :ok <- validate_watermarks(watermarks, account_id, allowed_kinds),
              {:ok, account, current_value} <-
                lock_source_scope(job.user_id, account_id, hd(watermarks)),
+             :ok <- validate_source_contract(job, account, hd(watermarks)),
              {:ok, disposition} <- settlement_disposition(hd(watermarks), current_value) do
           settle_disposition(disposition, job, result, account, watermarks)
         else
@@ -100,7 +102,7 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
   defp validate_watermarks([watermark], account_id, allowed_kinds) when is_map(watermark) do
     with ^account_id <- read_integer(watermark, "account_id"),
          kind when is_binary(kind) <- read_string(watermark, "kind"),
-         true <- kind in allowed_kinds,
+         true <- allowed_kind?(kind, allowed_kinds),
          value when is_binary(value) and value != "" <- read_string(watermark, "value"),
          :ok <- validate_expected_lower(watermark) do
       :ok
@@ -111,6 +113,100 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
 
   defp validate_watermarks(_watermarks, _account_id, _allowed_kinds),
     do: {:error, :invalid_deferred_source_watermark}
+
+  defp allowed_kind?(kind, allowed_kinds) do
+    kind in allowed_kinds or
+      (GmailSourceReplay.watermark_kind?(kind, "discovery") and
+         "gmail_discovery_watermark" in allowed_kinds) or
+      (GmailSourceReplay.watermark_kind?(kind, "closure") and
+         "gmail_closure_watermark" in allowed_kinds)
+  end
+
+  defp validate_source_contract(%BackgroundJob{} = job, account, watermark) do
+    role = source_job_role(job.job_type)
+
+    expected_job_type =
+      case role do
+        "discovery" -> "runtime_partition:source_account_discovery"
+        "closure" -> "runtime_partition:source_account_closure_acquire"
+        nil -> nil
+      end
+
+    with role when role in ["discovery", "closure"] <- role,
+         {:ok, acquisition} <- replay_acquisition_job(job, role),
+         ^expected_job_type <- acquisition.job_type,
+         true <- acquisition.user_id == account.user_id,
+         true <- read_integer(acquisition.payload || %{}, "account_id") == account.id,
+         {:ok, replay} <-
+           GmailSourceReplay.from_payload(account, acquisition.payload || %{}, role),
+         :ok <- validate_mode_watermark(account, watermark, replay, role) do
+      :ok
+    else
+      _invalid -> {:error, :invalid_gmail_source_replay_settlement}
+    end
+  end
+
+  defp validate_mode_watermark(_account, watermark, replay, _role) when is_map(replay) do
+    if read_string(watermark, "kind") == replay.kind and
+         read_string(watermark, "value") == Integer.to_string(replay.upper) and
+         has_key?(watermark, "expected_lower_value") and
+         read_string(watermark, "expected_lower_value") == Integer.to_string(replay.lower) do
+      :ok
+    else
+      {:error, :invalid_gmail_source_replay_settlement}
+    end
+  end
+
+  defp validate_mode_watermark(account, watermark, nil, role) do
+    expected_kind = canonical_watermark_kind(account.provider, role)
+
+    if read_string(watermark, "kind") == expected_kind,
+      do: :ok,
+      else: {:error, :invalid_deferred_source_watermark}
+  end
+
+  defp source_job_role(job_type)
+       when job_type in [
+              "runtime_partition:source_account_discovery",
+              "runtime_partition:source_account_discovery_finalize"
+            ],
+       do: "discovery"
+
+  defp source_job_role(job_type)
+       when job_type in [
+              "runtime_partition:source_account_closure_acquire",
+              "runtime_partition:source_account_closure_finalize"
+            ],
+       do: "closure"
+
+  defp source_job_role(_job_type), do: nil
+
+  defp canonical_watermark_kind(provider, role) when is_binary(provider) do
+    source = if String.starts_with?(provider, "slack:"), do: "slack", else: "gmail"
+    "#{source}_#{role}_watermark"
+  end
+
+  defp replay_acquisition_job(%BackgroundJob{} = job, role) do
+    expected_root_type =
+      case role do
+        "discovery" -> "runtime_partition:source_account_discovery"
+        "closure" -> "runtime_partition:source_account_closure_acquire"
+      end
+
+    if job.job_type == expected_root_type do
+      {:ok, BackgroundJob.hydrate_payloads(job)}
+    else
+      job = BackgroundJob.hydrate_payloads(job)
+
+      with acquisition_id when is_binary(acquisition_id) <-
+             read_string(job.payload || %{}, "acquisition_job_id"),
+           %BackgroundJob{} = acquisition <- Repo.get(BackgroundJob, acquisition_id) do
+        {:ok, BackgroundJob.hydrate_payloads(acquisition)}
+      else
+        _missing -> {:error, :gmail_source_replay_acquisition_missing}
+      end
+    end
+  end
 
   defp validate_slack_conversation_watermark(watermark, account_id)
        when is_map(watermark) do
@@ -328,6 +424,7 @@ defmodule Maraithon.Runtime.SourceWatermarkCommit do
     do: Map.has_key?(map, key) or Map.has_key?(map, existing_atom(key))
 
   defp existing_atom("account_id"), do: :account_id
+  defp existing_atom("acquisition_job_id"), do: :acquisition_job_id
   defp existing_atom("kind"), do: :kind
   defp existing_atom("value"), do: :value
   defp existing_atom("expected_lower_value"), do: :expected_lower_value

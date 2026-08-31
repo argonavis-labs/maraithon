@@ -14,6 +14,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Agents.Agent
   alias Maraithon.ChiefOfStaff.Skills
   alias Maraithon.Connectors.SourceCursor
+  alias Maraithon.Connectors.SourceCursors
   alias Maraithon.OAuth.Token
   alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
@@ -21,6 +22,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.Config
   alias Maraithon.Runtime.FreshnessSweep
+  alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.NudgeSweep
   alias Maraithon.Runtime.ProactiveCheckIn
   alias Maraithon.Runtime.StalenessTriageSweep
@@ -102,6 +104,36 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   def wake_source_account(%ConnectedAccount{}, _opts), do: {:ok, %{outcome: "disconnected"}}
   def wake_source_account(_account, _opts), do: {:error, :invalid_source_account}
+
+  @doc """
+  Enqueues one bounded historical Gmail discovery and completion graph.
+
+  The graph uses replay-specific cursor chains and never mutates the live
+  discovery or closure watermarks.
+  """
+  def enqueue_gmail_source_replay(account_id, lower, upper)
+      when is_integer(account_id) do
+    with %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
+         now <- database_now!(),
+         {:ok, replay} <- GmailSourceReplay.build(account, lower, upper, now),
+         {:ok, agent} <- discovery_identity_for_user(account.user_id),
+         {:ok, result} <-
+           enqueue_source_graph(fn ->
+             with_source_account_fence(account, fn locked_account ->
+               enqueue_gmail_source_replay_locked(locked_account, agent, replay, now)
+             end)
+           end) do
+      {:ok, result}
+    else
+      nil -> {:error, :source_account_not_found}
+      {:skip, reason} -> {:error, reason}
+      {:error, _reason} = error -> error
+      _invalid -> {:error, :invalid_gmail_source_replay}
+    end
+  end
+
+  def enqueue_gmail_source_replay(_account_id, _lower, _upper),
+    do: {:error, :invalid_gmail_source_replay}
 
   @doc "Runs one bounded recurring discovery coordinator."
   def schedule("token_refresher"), do: schedule_token_refreshes()
@@ -499,7 +531,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     |> Repo.one()
   end
 
-  defp do_enqueue_source_discovery_job(account, agent, now) do
+  defp do_enqueue_source_discovery_job(account, agent, now, extra_payload \\ %{}) do
     BackgroundJobs.enqueue(@source_discovery_job, %{
       user_id: account.user_id,
       queue: @provider_queue,
@@ -508,13 +540,157 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       rate_limit_key: TokenRefresher.provider_family(account.provider),
       max_attempts: 5,
       scheduled_at: now,
+      result: replay_activity_result(extra_payload),
       payload:
         %{
           "user_id" => account.user_id,
           "account_id" => account.id,
           "role" => "discovery"
         }
+        |> Map.merge(extra_payload)
         |> maybe_put_discovery_agent_id(agent)
+    })
+  end
+
+  defp enqueue_gmail_source_replay_locked(account, agent, replay, now) do
+    with {:ok, nil} <- active_source_cycle_acquisition(account, "discovery"),
+         {:ok, nil} <- active_source_cycle_acquisition(account, "closure"),
+         {:ok, cursor_state} <- prepare_gmail_source_replay_cursors(account, replay) do
+      case cursor_state do
+        {:already_completed, verification} ->
+          {:ok,
+           %{
+             outcome: "already_completed",
+             source_replay_reference: replay.reference,
+             verification: verification
+           }}
+
+        :ready ->
+          replay_payload = GmailSourceReplay.payload(replay)
+
+          with {:ok, discovery_job} <-
+                 do_enqueue_source_discovery_job(account, agent, now, replay_payload),
+               {:ok, closure_job} <-
+                 enqueue_gmail_source_replay_closure(
+                   account,
+                   discovery_job.id,
+                   replay_payload,
+                   now
+                 ) do
+            {:ok,
+             %{
+               outcome: "enqueued",
+               source_replay_reference: replay.reference,
+               discovery_job_id: discovery_job.id,
+               closure_job_id: closure_job.id
+             }}
+          end
+
+        {:resume_closure, discovery_job_id} ->
+          with {:ok, closure_job} <-
+                 enqueue_gmail_source_replay_closure(
+                   account,
+                   discovery_job_id,
+                   GmailSourceReplay.payload(replay),
+                   now
+                 ) do
+            {:ok,
+             %{
+               outcome: "closure_resumed",
+               source_replay_reference: replay.reference,
+               discovery_job_id: discovery_job_id,
+               closure_job_id: closure_job.id
+             }}
+          end
+      end
+    else
+      {:ok, %BackgroundJob{}} -> {:error, :source_account_cycle_active}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp prepare_gmail_source_replay_cursors(account, replay) do
+    cursors = [
+      {replay.discovery_kind, replay.lower},
+      {replay.closure_kind, replay.lower}
+    ]
+
+    states =
+      Enum.map(cursors, fn {kind, lower} ->
+        lower_value = Integer.to_string(lower)
+        upper_value = Integer.to_string(replay.upper)
+
+        case SourceCursors.get(account.id, kind) do
+          nil -> :missing
+          %SourceCursor{value: ^lower_value} -> :lower
+          %SourceCursor{value: ^upper_value} -> :upper
+          %SourceCursor{} -> :invalid
+        end
+      end)
+
+    case states do
+      [:upper, :upper] ->
+        case GmailSourceReplay.verify(account.id, replay.lower, replay.upper) do
+          {:ok, verification} -> {:ok, {:already_completed, verification}}
+          {:error, _reason} = error -> error
+        end
+
+      [:upper, closure_state] when closure_state in [:missing, :lower] ->
+        with {:ok, discovery} <- GmailSourceReplay.verify_role(account, replay, "discovery"),
+             :ok <- initialize_replay_cursors(account, cursors, states) do
+          {:ok, {:resume_closure, discovery.acquisition_job_id}}
+        end
+
+      [discovery_state, closure_state]
+      when discovery_state in [:missing, :lower] and closure_state in [:missing, :lower] ->
+        with :ok <- initialize_replay_cursors(account, cursors, states) do
+          {:ok, :ready}
+        end
+
+      _invalid ->
+        {:error, :gmail_source_replay_cursor_mismatch}
+    end
+  end
+
+  defp initialize_replay_cursors(account, cursors, states) do
+    Enum.zip(cursors, states)
+    |> Enum.reduce_while(:ok, fn
+      {{kind, lower}, :missing}, :ok ->
+        case SourceCursors.put(account, kind, %{"value" => Integer.to_string(lower)}) do
+          {:ok, _cursor} -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+
+      {_cursor, state}, :ok when state in [:lower, :upper] ->
+        {:cont, :ok}
+
+      {_cursor, _state}, :ok ->
+        {:halt, {:error, :gmail_source_replay_cursor_mismatch}}
+    end)
+    |> case do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:gmail_source_replay_cursor_init_failed, reason}}
+    end
+  end
+
+  defp enqueue_gmail_source_replay_closure(account, discovery_job_id, replay_payload, now) do
+    BackgroundJobs.enqueue(@todo_account_closure_acquire_job, %{
+      user_id: account.user_id,
+      queue: @provider_queue,
+      dedupe_key: source_closure_acquire_dedupe_key(account.id, discovery_job_id),
+      partition_key: provider_partition(account.user_id, account.provider),
+      rate_limit_key: TokenRefresher.provider_family(account.provider),
+      max_attempts: 5,
+      scheduled_at: now,
+      result: replay_activity_result(replay_payload),
+      payload:
+        %{
+          "user_id" => account.user_id,
+          "account_id" => account.id,
+          "role" => "closure",
+          "discovery_job_id" => discovery_job_id
+        }
+        |> Map.merge(replay_payload)
     })
   end
 
@@ -1058,11 +1234,14 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     with {:ok, account_id} <- payload_integer(job, "account_id"),
          %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
          {:ok, agent} <- discovery_agent_from_payload(job.payload || %{}),
+         {:ok, replay} <-
+           GmailSourceReplay.from_payload(account, job.payload || %{}, "discovery"),
          true <- discovery_identity_valid?(job, account, agent),
          {:ok, result} <-
            SourceAccountDiscovery.acquire(account, agent,
              acquisition_job_id: job.id,
-             defer_watermark_commit: true
+             defer_watermark_commit: true,
+             source_replay: replay
            ) do
       maybe_enqueue_discovery_reason(job, account, result)
     else
@@ -1212,10 +1391,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     with {:ok, account_id} <- payload_integer(job, "account_id"),
          %ConnectedAccount{} = account <- Repo.get(ConnectedAccount, account_id),
          true <- account.user_id == job.user_id,
+         {:ok, replay} <-
+           GmailSourceReplay.from_payload(account, job.payload || %{}, "closure"),
          {:ok, result} <-
            SourceAccountClosure.acquire(account,
              acquisition_job_id: job.id,
-             defer_watermark_commit: true
+             defer_watermark_commit: true,
+             source_replay: replay
            ) do
       maybe_enqueue_closure_reason(job, account, result)
     else
@@ -1406,6 +1588,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
                     max_attempts: 25,
                     scheduled_at:
                       DateTime.add(database_now!(), max(length(reason_jobs), 1), :second),
+                    result: replay_activity_result(finalizer_payload),
                     payload: finalizer_payload
                   }),
                 true <-
@@ -1459,6 +1642,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         rate_limit_key: "model",
         max_attempts: 3,
         scheduled_at: database_now!(),
+        result: replay_activity_result(handoff),
         payload: handoff
       }
 
@@ -1546,6 +1730,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
                     max_attempts: 25,
                     scheduled_at:
                       DateTime.add(database_now!(), max(length(reason_jobs), 1), :second),
+                    result: replay_activity_result(finalizer_payload),
                     payload: finalizer_payload
                   }),
                 true <-
@@ -1604,6 +1789,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         rate_limit_key: "model",
         max_attempts: 3,
         scheduled_at: database_now!(),
+        result: replay_activity_result(handoff),
         payload: handoff
       }
 
@@ -1635,6 +1821,29 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       end
     end)
   end
+
+  defp replay_activity_result(source) when is_map(source) do
+    case {
+      Map.get(source, "source_replay_mode", Map.get(source, :source_replay_mode)),
+      Map.get(source, "source_replay_reference", Map.get(source, :source_replay_reference)),
+      Map.get(source, "source_replay_lower", Map.get(source, :source_replay_lower)),
+      Map.get(source, "source_replay_upper", Map.get(source, :source_replay_upper))
+    } do
+      {"historical", reference, lower, upper}
+      when is_binary(reference) and is_integer(lower) and is_integer(upper) ->
+        %{
+          "source_replay_mode" => "historical",
+          "source_replay_reference" => reference,
+          "source_replay_lower" => lower,
+          "source_replay_upper" => upper
+        }
+
+      _other ->
+        %{}
+    end
+  end
+
+  defp replay_activity_result(_source), do: %{}
 
   defp discovery_identity_valid?(job, account, %Agent{} = agent) do
     account.user_id == job.user_id and agent.user_id == job.user_id and
