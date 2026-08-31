@@ -101,6 +101,27 @@ defmodule Maraithon.AgentMarketplace do
 
   def required_connectors_for(_package), do: %{}
 
+  @doc """
+  Returns connector services that enrich an installed package when available,
+  without making installation depend on them.
+
+  Package versions intentionally persist only required connector readiness.
+  The built-in specification remains the authority for optional services so an
+  explicit consent flow can include a connected optional source rather than
+  silently omitting it from the agent's binding scope.
+  """
+  def optional_connectors_for(slug) when is_binary(slug) do
+    case Enum.find(AgentBuilder.library_specs(), &(&1.id == slug)) do
+      %{requirements: requirements} when is_list(requirements) ->
+        connector_requirements(requirements, false)
+
+      _missing ->
+        %{}
+    end
+  end
+
+  def optional_connectors_for(_package), do: %{}
+
   defp sync_builtin_package(spec) do
     spec
     |> builtin_manifest()
@@ -247,6 +268,7 @@ defmodule Maraithon.AgentMarketplace do
       "slack_search_messages",
       "slack_list_messages",
       "slack_get_thread_replies",
+      "telegram.send",
       "list_connected_accounts",
       "get_open_loops",
       "get_todo",
@@ -275,8 +297,12 @@ defmodule Maraithon.AgentMarketplace do
   defp mcp_allowlist_for(_behavior), do: []
 
   defp required_connectors(requirements) do
+    connector_requirements(requirements, true)
+  end
+
+  defp connector_requirements(requirements, required?) when is_list(requirements) do
     requirements
-    |> Enum.filter(&connector_requirement?/1)
+    |> Enum.filter(&connector_requirement?(&1, required?))
     |> Enum.map(fn requirement ->
       service =
         case requirement[:service] do
@@ -293,9 +319,11 @@ defmodule Maraithon.AgentMarketplace do
     |> Enum.group_by(& &1["provider"])
   end
 
-  defp connector_requirement?(%{kind: kind, provider: provider, required?: true})
+  defp connector_requirements(_requirements, _required?), do: %{}
+
+  defp connector_requirement?(%{kind: kind, provider: provider, required?: required?}, required?)
        when kind in [:provider, :provider_service] and is_binary(provider),
        do: true
 
-  defp connector_requirement?(_requirement), do: false
+  defp connector_requirement?(_requirement, _required?), do: false
 end

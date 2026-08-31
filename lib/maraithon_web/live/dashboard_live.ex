@@ -1176,9 +1176,7 @@ defmodule MaraithonWeb.DashboardLive do
                         class="mt-0.5 size-4 rounded border-zinc-300 text-zinc-950"
                       />
                       <span>
-                        Allow Chief of Staff to use Gmail, Google Calendar, Telegram
-                        delivery, this project's memory, and the package's listed tools
-                        for briefs and follow-through.
+                        <%= chief_of_staff_consent_description(@chief_of_staff_readiness) %>
                       </span>
                     </label>
                     <.button
@@ -2652,6 +2650,10 @@ defmodule MaraithonWeb.DashboardLive do
       user_id
       |> Connections.connector_readiness(required_connectors, return_to: "/dashboard")
       |> include_chief_of_staff_telegram_readiness(user_id)
+      |> include_connected_chief_of_staff_optional_readiness(
+        user_id,
+        AgentMarketplace.optional_connectors_for("ai_chief_of_staff")
+      )
 
     assign(socket,
       chief_of_staff_package: package,
@@ -2692,6 +2694,29 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp include_chief_of_staff_telegram_readiness(readiness, _user_id), do: readiness
+
+  # Slack enriches the Chief when it is connected, but it must not turn an
+  # otherwise-ready Gmail/Calendar installation into a setup-required state.
+  # Only healthy optional services are added, so the consent envelope mirrors
+  # every source the enabled Chief can actually read.
+  defp include_connected_chief_of_staff_optional_readiness(readiness, user_id, connectors)
+       when is_list(readiness) and is_binary(user_id) and is_map(connectors) do
+    connected_optional_services =
+      user_id
+      |> Connections.connector_readiness(connectors, return_to: "/dashboard")
+      |> Enum.filter(& &1.connected?)
+
+    Enum.reduce(connected_optional_services, readiness, fn optional_service, services ->
+      if Enum.any?(services, &same_connector_service?(&1, optional_service)) do
+        services
+      else
+        services ++ [optional_service]
+      end
+    end)
+  end
+
+  defp include_connected_chief_of_staff_optional_readiness(readiness, _user_id, _connectors),
+    do: readiness
 
   defp chief_of_staff_package do
     case Agents.get_agent_package_by_slug("ai_chief_of_staff", preload: [:latest_version]) do
@@ -3138,6 +3163,28 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp chief_of_staff_missing_readiness(_readiness), do: []
 
+  defp chief_of_staff_consent_description(readiness) when is_list(readiness) do
+    services =
+      readiness
+      |> Enum.filter(& &1.connected?)
+      |> Enum.map(& &1.label)
+      |> Enum.uniq()
+
+    service_text =
+      case services do
+        [] -> "the connected sources"
+        [service] -> service
+        [first, second] -> "#{first} and #{second}"
+        many -> "#{Enum.join(Enum.drop(many, -1), ", ")}, and #{List.last(many)}"
+      end
+
+    "Allow Chief of Staff to use #{service_text}, this project's memory, and the package's listed tools for briefs and follow-through."
+  end
+
+  defp chief_of_staff_consent_description(_readiness) do
+    "Allow Chief of Staff to use the connected sources, this project's memory, and the package's listed tools for briefs and follow-through."
+  end
+
   defp chief_of_staff_binding_consent(
          %{"binding_consent" => %{"acknowledged" => "true"}},
          user_id,
@@ -3190,6 +3237,10 @@ defmodule MaraithonWeb.DashboardLive do
     do: Keyword.put(opts, :binding_consent, consent)
 
   defp maybe_put_binding_consent(opts, _consent), do: opts
+
+  defp same_connector_service?(left, right) do
+    left.provider == right.provider and left.service == right.service
+  end
 
   defp chief_of_staff_install_config(params) when is_map(params) do
     schedule = Map.get(params, "schedule") || %{}

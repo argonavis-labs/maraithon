@@ -110,8 +110,9 @@ defmodule Maraithon.AgentBuilder do
           kind: :provider_service,
           provider: "slack",
           service: "channels",
-          label: "Slack Channels",
-          description: "Needed to find channel commitments that may need a reply.",
+          label: "Slack channels and threads",
+          description:
+            "Needed to find channel commitments and their thread replies that may need a follow-up.",
           required?: false
         },
         %{

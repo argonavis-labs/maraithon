@@ -10,12 +10,14 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
+  alias Maraithon.OAuth.Slack
   alias Maraithon.Projects
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentSupervisor
 
   setup do
     original_google = Application.get_env(:maraithon, :google, [])
+    original_slack = Application.get_env(:maraithon, :slack, [])
     original_telegram = Application.get_env(:maraithon, :telegram, [])
 
     Application.put_env(:maraithon, :google,
@@ -30,8 +32,15 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
       webhook_secret_token: "telegram_webhook_secret_token_123456789"
     )
 
+    Application.put_env(:maraithon, :slack,
+      client_id: "slack-client",
+      client_secret: "slack-secret",
+      redirect_uri: "http://localhost/auth/slack/callback"
+    )
+
     on_exit(fn ->
       Application.put_env(:maraithon, :google, original_google)
+      Application.put_env(:maraithon, :slack, original_slack)
       Application.put_env(:maraithon, :telegram, original_telegram)
     end)
 
@@ -128,6 +137,67 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     assert due_agent
     assert due_agent.timezone_name == "America/Los_Angeles"
     assert due_agent.timezone_offset_hours == -7
+
+    stop_agent_process(agent.id)
+  end
+
+  test "explicit Chief consent includes connected Slack channels and DMs without making Slack required",
+       %{conn: conn} do
+    user_id = "self-serve-slack-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "112233",
+        metadata: %{"chat_id" => "112233", "username" => "operator"}
+      })
+
+    {:ok, _google} =
+      OAuth.store_tokens(user_id, "google:operator@example.com", %{
+        access_token: "google-access",
+        refresh_token: "google-refresh",
+        scopes: Google.scopes_for(["gmail", "calendar"]),
+        metadata: %{"account_email" => "operator@example.com"}
+      })
+
+    {:ok, _slack_bot} =
+      OAuth.store_tokens(user_id, "slack:TCHIEF", %{
+        access_token: "slack-bot-access",
+        refresh_token: "slack-bot-refresh",
+        scopes: Slack.default_scopes(),
+        metadata: %{"team_id" => "TCHIEF", "team_name" => "Chief Workspace"}
+      })
+
+    {:ok, _slack_user} =
+      OAuth.store_tokens(user_id, "slack:TCHIEF:user:UCHIEF", %{
+        access_token: "slack-user-access",
+        refresh_token: "slack-user-refresh",
+        scopes: Slack.default_user_scopes(),
+        metadata: %{"team_id" => "TCHIEF", "team_name" => "Chief Workspace"}
+      })
+
+    {:ok, project} = Projects.create_project(user_id, %{"name" => "Slack Operator OS"})
+    conn = log_in_test_user(conn, user_id)
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    assert has_element?(view, "#chief-of-staff-install", "Slack channels and threads")
+    assert has_element?(view, "#chief-of-staff-install", "Slack Personal DMs")
+
+    result =
+      view
+      |> form("#chief-of-staff-install-form",
+        project_id: project.id,
+        binding_consent: %{acknowledged: "true"},
+        schedule: %{morning_brief_hour_local: "9", timezone: "America/Toronto"}
+      )
+      |> render_submit()
+
+    assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} = result
+
+    agent = Agents.get_agent!(redirect_id |> String.split("&") |> List.first())
+    binding = Maraithon.AgentIsolation.get_binding(agent.id)
+
+    assert binding.connector_scope["slack"]["services"] == ["channels", "dms"]
 
     stop_agent_process(agent.id)
   end
