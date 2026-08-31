@@ -6,6 +6,11 @@ defmodule Maraithon.Runtime.SourceAccountAdmission do
   @lock_namespace "maraithon.source-account-admission:"
   @reservation_retry_ms 100
   @default_reservation_timeout_ms 30_000
+  # A session-level advisory lock lives on the checked-out connection. Keep it
+  # alive long enough for the caller to observe its own deadline, release all
+  # reservations, and return a domain error instead of having DBConnection
+  # tear the session down at exactly the same instant.
+  @checkout_cleanup_grace_ms 15_000
 
   @doc false
   def with_reservations(account_ids, fun)
@@ -25,7 +30,8 @@ defmodule Maraithon.Runtime.SourceAccountAdmission do
     account_ids = account_ids |> Enum.uniq() |> Enum.sort()
 
     if account_ids != [] and Enum.all?(account_ids, &(is_integer(&1) and &1 > 0)) do
-      checkout_timeout = max(deadline - System.monotonic_time(:millisecond), 1)
+      checkout_timeout =
+        max(deadline - System.monotonic_time(:millisecond), 1) + @checkout_cleanup_grace_ms
 
       Repo.checkout(
         fn ->
