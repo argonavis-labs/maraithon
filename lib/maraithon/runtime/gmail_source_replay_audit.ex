@@ -109,7 +109,8 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
   def error_code(_reason), do: "gmail_source_replay_audit_failed"
 
   @doc false
-  def closure_fanout_efficiency(0, 0) do
+  def closure_fanout_efficiency(legacy_count, actual_count)
+      when legacy_count in 0..1 and actual_count == legacy_count do
     {:ok,
      %{
        applicable: false,
