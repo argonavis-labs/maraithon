@@ -53,6 +53,11 @@ defmodule MaraithonWeb.RuntimeController do
           "termination_requested",
           "termination_proven"
         ]),
+      # `open_tasks` only describes this serving incarnation. A task reserved
+      # by an earlier, lost incarnation can keep its partition draining even
+      # when this node is otherwise clean. Surface that global fence so deploy
+      # tooling cannot mistake a local drain for a safe handover.
+      unproven_tasks: count_unproven_tasks(),
       local_agent_leases: count_leases(node_id)
     }
   end
@@ -63,6 +68,18 @@ defmodule MaraithonWeb.RuntimeController do
     Repo.one(
       from(row in schema,
         where: field(row, ^field) == ^node_id and row.state in ^states,
+        select: count()
+      )
+    )
+  rescue
+    _error -> nil
+  end
+
+  defp count_unproven_tasks do
+    Repo.one(
+      from(task in TaskAssignment,
+        where:
+          task.state in ["reserved", "running", "termination_requested", "termination_proven"],
         select: count()
       )
     )

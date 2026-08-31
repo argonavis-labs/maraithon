@@ -99,16 +99,25 @@ if [[ -n "${api_token}" ]]; then
     drain_requested=true
     echo "Draining the serving revision's runtime before replacement"
 
+    runtime_drained=false
+
     for _attempt in $(seq 1 48); do
       status_json="$(runtime_status)"
-      if [[ "${status_json}" == *'"phase":"draining"'* && "${status_json}" == *'"open_tasks":0'* ]]; then
+      if [[ "${status_json}" == *'"phase":"draining"'* && "${status_json}" == *'"open_tasks":0'* && "${status_json}" == *'"unproven_tasks":0'* ]]; then
         echo "Runtime drained cleanly"
+        runtime_drained=true
         break
       fi
       sleep 5
     done
 
     echo "Runtime status before replacement: ${status_json:-unknown}"
+
+    if [[ "${runtime_drained}" != "true" ]]; then
+      echo "Refusing revision replacement while exact runtime work remains unproven" >&2
+      runtime_rejoin
+      exit 1
+    fi
   else
     echo "Serving revision has no drain endpoint yet; deploying without a pre-drain"
   fi
