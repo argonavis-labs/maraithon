@@ -34,7 +34,8 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
          {:ok, before_manifests} <- provider_manifests(accounts, lower, upper),
          {:ok, replays} <- build_replays(accounts, lower, upper),
          {:ok, enqueue_results} <- enqueue_replays(replays, lower, upper),
-         {:ok, local_verifications} <- await_replays(replays, lower, upper),
+         {:ok, local_verifications} <-
+           await_replays(replays, enqueue_results, lower, upper),
          {:ok, after_manifests} <- provider_manifests(accounts, lower, upper),
          {:ok, account_reports} <-
            verify_accounts(
@@ -205,8 +206,16 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
               {:ok, result} ->
                 outcome = Map.get(result, :outcome, Map.get(result, "outcome", "enqueued"))
 
-                {Map.put(results, account.id, %{account_id: account.id, outcome: outcome}),
-                 waiting, error}
+                enqueue_result = %{
+                  account_id: account.id,
+                  outcome: outcome,
+                  discovery_job_id:
+                    Map.get(result, :discovery_job_id, Map.get(result, "discovery_job_id")),
+                  closure_job_id:
+                    Map.get(result, :closure_job_id, Map.get(result, "closure_job_id"))
+                }
+
+                {Map.put(results, account.id, enqueue_result), waiting, error}
 
               {:error, :source_account_cycle_active} ->
                 {results, waiting ++ [entry], error}
@@ -233,12 +242,12 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
     end
   end
 
-  defp await_replays(replays, lower, upper) do
+  defp await_replays(replays, enqueue_results, lower, upper) do
     deadline = System.monotonic_time(:millisecond) + @completion_timeout_ms
-    do_await_replays(replays, lower, upper, deadline)
+    do_await_replays(replays, enqueue_results, lower, upper, deadline)
   end
 
-  defp do_await_replays(replays, lower, upper, deadline) do
+  defp do_await_replays(replays, enqueue_results, lower, upper, deadline) do
     verifications =
       Map.new(replays, fn %{account: account} ->
         {account.id, GmailSourceReplay.verify(account.id, lower, upper)}
@@ -248,7 +257,7 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
       Enum.all?(verifications, fn {_account_id, result} -> match?({:ok, _}, result) end) ->
         {:ok, Map.new(verifications, fn {account_id, {:ok, result}} -> {account_id, result} end)}
 
-      failed = failed_replay_jobs(replays) ->
+      failed = failed_replay_jobs(replays, enqueue_results) ->
         {:error, {:gmail_source_replay_job_failed, failed}}
 
       System.monotonic_time(:millisecond) >= deadline ->
@@ -262,12 +271,13 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
 
       true ->
         Process.sleep(@poll_interval_ms)
-        do_await_replays(replays, lower, upper, deadline)
+        do_await_replays(replays, enqueue_results, lower, upper, deadline)
     end
   end
 
-  defp failed_replay_jobs(replays) do
+  defp failed_replay_jobs(replays, enqueue_results) do
     references = MapSet.new(Enum.map(replays, & &1.replay.reference))
+    enqueue_results = Map.new(enqueue_results, &{&1.account_id, &1})
 
     failed =
       replays
@@ -276,12 +286,40 @@ defmodule Maraithon.Runtime.GmailSourceReplayAudit do
       |> Map.fetch!(:user_id)
       |> BackgroundJobs.list_latest_source_account_runs_for_user(limit: 10_000)
       |> Enum.filter(fn job ->
-        replay_reference(job.result) in references and job.status in ["failed", "cancelled"]
+        replay_reference(job.result) in references and job.status in ["failed", "cancelled"] and
+          current_replay_graph_job?(job, Map.get(enqueue_results, job.account_id))
       end)
       |> Enum.map(&%{job_id: &1.id, job_type: &1.job_type, status: &1.status})
 
     if failed == [], do: nil, else: failed
   end
+
+  defp current_replay_graph_job?(_job, nil), do: false
+
+  defp current_replay_graph_job?(job, enqueue_result) do
+    discovery_job_id = enqueue_result.discovery_job_id
+    closure_job_id = enqueue_result.closure_job_id
+
+    cond do
+      job.id in [discovery_job_id, closure_job_id] ->
+        true
+
+      job.job_type in [@discovery_reason_job, @discovery_finalize_job] ->
+        dedupe_key_contains_job_id?(job.dedupe_key, discovery_job_id)
+
+      job.job_type in [@closure_reason_job, @closure_finalize_job] ->
+        dedupe_key_contains_job_id?(job.dedupe_key, closure_job_id)
+
+      true ->
+        false
+    end
+  end
+
+  defp dedupe_key_contains_job_id?(dedupe_key, job_id)
+       when is_binary(dedupe_key) and is_binary(job_id),
+       do: String.contains?(dedupe_key, job_id)
+
+  defp dedupe_key_contains_job_id?(_dedupe_key, _job_id), do: false
 
   defp verify_accounts(replays, before_manifests, after_manifests, local_verifications) do
     replays
