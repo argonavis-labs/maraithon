@@ -1,0 +1,76 @@
+{
+  "_metadata": {
+    "major_version": 1,
+    "minor_version": 1
+  },
+  "display_information": {
+    "name": "Maraithon",
+    "description": "A chief of staff that keeps commitments and follow-ups current.",
+    "background_color": "#18181B"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Maraithon",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "https://maraithon.com/auth/slack/callback"
+    ],
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "chat:write",
+        "users:read",
+        "reactions:read"
+      ],
+      "user": [
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "chat:write",
+        "search:read",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://maraithon.com/webhooks/slack",
+      "bot_events": [
+        "app_mention",
+        "reaction_added",
+        "reaction_removed",
+        "member_joined_channel",
+        "member_left_channel"
+      ],
+      "user_events": [
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

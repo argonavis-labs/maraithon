@@ -30,6 +30,18 @@ The token resolver (`Maraithon.Tools.SlackHelpers.resolve_access_token/3`) defau
 
 Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**.
 
+For an existing or new app, prefer the versioned manifest at
+`priv/slack/app_manifest.json`: open **App Manifest** in Slack's app settings,
+replace the manifest with this file, and save. Verify repository alignment
+before applying it:
+
+```sh
+mix maraithon.slack.manifest.verify
+```
+
+The manifest contains no credentials. Slack app configuration tokens, signing
+secrets, client secrets, and OAuth tokens must remain outside the repository.
+
 ### 2. Configure OAuth & Permissions
 
 Under **OAuth & Permissions**:
