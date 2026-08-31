@@ -116,6 +116,11 @@ defmodule Maraithon.Runtime.SlackConversationReconcilerTest do
       )
     end)
 
+    assert {:ok, %{readable_conversations: 2, due: [default_due]}} =
+             SlackConversationReconciler.plan(account)
+
+    assert default_due.conversation_kind == "public_channel"
+
     assert {:ok, %{readable_conversations: 2, due: due}} =
              SlackConversationReconciler.plan(account, batch_size: 2)
 

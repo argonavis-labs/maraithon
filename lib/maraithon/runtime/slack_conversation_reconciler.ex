@@ -22,11 +22,11 @@ defmodule Maraithon.Runtime.SlackConversationReconciler do
   @history_page_limit 200
   @reply_page_limit 200
   @max_pages 2_000
-  # The discovery coordinator runs every minute in production. Ten keeps one
-  # complete 90-conversation workspace rotation under ten minutes without a
-  # burst: children still use independent provider partitions and the shared
-  # Slack rate-limit lane supplies back-pressure.
-  @default_batch_size 10
+  # Slack can enforce conversations.history and conversations.replies at one
+  # request per minute for an installed app. Events remain the instant path;
+  # anti-entropy advances one conversation per workspace rotation so provider
+  # back-pressure does not turn a burst into retries and exhausted jobs.
+  @default_batch_size 1
   @default_initial_lookback_seconds 48 * 60 * 60
   @default_overlap_seconds 60 * 60
 
