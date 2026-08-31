@@ -9,7 +9,16 @@ defmodule Maraithon.DatabaseTLS do
   fail closed or authenticate the wrong hostname.
   """
 
-  @repo_transport_keys [:url, :ssl, :socket, :hostname]
+  @repo_transport_keys [
+    :url,
+    :ssl,
+    :socket,
+    :hostname,
+    :username,
+    :password,
+    :database,
+    :socket_options
+  ]
   @operator_roles %{
     "DURABLE_PAYLOAD_VERIFIER_DATABASE_URL" => "maraithon_payload_verifier",
     "MARAITHON_ACTIVATION_DATABASE_URL" => "maraithon_activation_operator",
@@ -103,8 +112,12 @@ defmodule Maraithon.DatabaseTLS do
         ]
 
       %{mode: :insecure_override} ->
-        _uri = verified_uri!(url, env_name, allow_unverified_query?: true)
-        [url: url, ssl: false]
+        uri = verified_uri!(url, env_name, allow_unverified_query?: true)
+
+        case System.get_env("CLOUD_SQL_SOCKET_DIR", "") |> String.trim() do
+          "" -> [url: url, ssl: false]
+          socket_dir -> cloud_sql_socket_options!(uri, env_name, socket_dir)
+        end
 
       _invalid ->
         raise "database TLS audit configuration is missing or invalid"
@@ -154,6 +167,37 @@ defmodule Maraithon.DatabaseTLS do
     end
   rescue
     _error -> raise "#{env_name} must identify a valid database role"
+  end
+
+  defp cloud_sql_socket_options!(uri, env_name, socket_dir) do
+    unless Path.type(socket_dir) == :absolute do
+      raise "CLOUD_SQL_SOCKET_DIR must be an absolute path for #{env_name}"
+    end
+
+    {username, password} = database_credentials!(uri, env_name)
+    database = uri.path |> to_string() |> String.trim_leading("/") |> URI.decode()
+
+    if database == "" do
+      raise "#{env_name} must identify a database"
+    end
+
+    [
+      username: username,
+      password: password,
+      database: database,
+      socket: Path.join(socket_dir, ".s.PGSQL.5432"),
+      ssl: false
+    ]
+  end
+
+  defp database_credentials!(uri, env_name) do
+    case String.split(uri.userinfo || "", ":", parts: 2) do
+      [username, password] when username != "" and password != "" ->
+        {URI.decode(username), URI.decode(password)}
+
+      _missing ->
+        raise "#{env_name} must identify database credentials"
+    end
   end
 
   defp ca_options! do

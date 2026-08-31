@@ -9,7 +9,9 @@ defmodule Maraithon.DatabaseTLSTest do
     ca_path = System.get_env("DATABASE_TLS_CA_CERT_PATH")
     runtime_url = System.get_env("DATABASE_URL")
     activation_url = System.get_env("MARAITHON_ACTIVATION_DATABASE_URL")
+    cloud_sql_socket_dir = System.get_env("CLOUD_SQL_SOCKET_DIR")
     System.delete_env("DATABASE_TLS_CA_CERT_PATH")
+    System.delete_env("CLOUD_SQL_SOCKET_DIR")
 
     on_exit(fn ->
       restore_env(:database_tls_audit, audit)
@@ -17,6 +19,7 @@ defmodule Maraithon.DatabaseTLSTest do
       restore_system_env("DATABASE_TLS_CA_CERT_PATH", ca_path)
       restore_system_env("DATABASE_URL", runtime_url)
       restore_system_env("MARAITHON_ACTIVATION_DATABASE_URL", activation_url)
+      restore_system_env("CLOUD_SQL_SOCKET_DIR", cloud_sql_socket_dir)
     end)
 
     :ok
@@ -141,6 +144,34 @@ defmodule Maraithon.DatabaseTLSTest do
     assert configured[:ssl] == false
     assert configured[:pool_size] == 2
     refute Keyword.has_key?(configured, :socket)
+  end
+
+  test "operator configuration rebuilds Cloud SQL socket credentials from its own URL" do
+    Application.put_env(:maraithon, :database_tls_audit, %{mode: :insecure_override})
+    System.put_env("CLOUD_SQL_SOCKET_DIR", "/cloudsql/project:region:instance")
+
+    Application.put_env(:maraithon, Maraithon.Repo,
+      username: "maraithon_runtime",
+      password: "runtime-secret",
+      database: "maraithon",
+      socket: "/cloudsql/project:region:instance/.s.PGSQL.5432",
+      pool_size: 2
+    )
+
+    assert :ok =
+             DatabaseTLS.configure_repo!(
+               "ecto://maraithon_incident_operator:incident%3Asecret@localhost/maraithon",
+               "MARAITHON_INCIDENT_DATABASE_URL"
+             )
+
+    configured = Application.fetch_env!(:maraithon, Maraithon.Repo)
+    assert configured[:username] == "maraithon_incident_operator"
+    assert configured[:password] == "incident:secret"
+    assert configured[:database] == "maraithon"
+    assert configured[:socket] == "/cloudsql/project:region:instance/.s.PGSQL.5432"
+    assert configured[:ssl] == false
+    assert configured[:pool_size] == 2
+    refute Keyword.has_key?(configured, :url)
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:maraithon, key)

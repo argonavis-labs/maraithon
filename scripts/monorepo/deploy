@@ -103,10 +103,21 @@ if [[ -n "${api_token}" ]]; then
 
     for _attempt in $(seq 1 48); do
       status_json="$(runtime_status)"
-      if [[ "${status_json}" == *'"phase":"draining"'* && "${status_json}" == *'"open_tasks":0'* && "${status_json}" == *'"unproven_tasks":0'* ]]; then
-        echo "Runtime drained cleanly"
-        runtime_drained=true
-        break
+      if [[ "${status_json}" == *'"phase":"draining"'* && "${status_json}" == *'"open_tasks":0'* ]]; then
+        if [[ "${status_json}" == *'"unproven_tasks":0'* ]]; then
+          echo "Runtime drained cleanly"
+          runtime_drained=true
+          break
+        fi
+
+        # One-release bootstrap: the serving revision predates the global
+        # unproven-task field. This compatibility branch is removed as soon as
+        # the field-bearing revision is serving production.
+        if [[ "${status_json}" != *'"unproven_tasks":'* ]]; then
+          echo "Runtime drained cleanly (legacy status without global task count)"
+          runtime_drained=true
+          break
+        fi
       fi
       sleep 5
     done
