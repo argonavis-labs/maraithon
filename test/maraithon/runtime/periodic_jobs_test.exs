@@ -91,6 +91,24 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
 
     assert length(replay_cursors) == 2
     assert Enum.all?(replay_cursors, &(&1.value == Integer.to_string(lower)))
+
+    assert {:ok, waiting_result, {:reschedule_in, 10_000}} =
+             PeriodicJobs.execute(closure)
+
+    assert waiting_result.outcome == "waiting_for_discovery"
+    assert waiting_result["source_replay_mode"] == "historical"
+    assert waiting_result["source_replay_reference"] == reference
+    assert waiting_result["source_replay_lower"] == lower
+    assert waiting_result["source_replay_upper"] == upper
+
+    closure
+    |> BackgroundJob.changeset(%{status: "pending", result: waiting_result})
+    |> Repo.update!()
+
+    persisted_closure = Repo.get!(BackgroundJob, closure.id)
+    assert persisted_closure.result["source_replay_reference"] == reference
+    assert persisted_closure.result["source_replay_lower"] == lower
+    assert persisted_closure.result["source_replay_upper"] == upper
   end
 
   test "Gmail source replay resumes closure from a verified completed discovery" do

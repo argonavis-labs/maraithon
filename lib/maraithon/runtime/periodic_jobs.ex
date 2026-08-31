@@ -1327,7 +1327,9 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          %{
            outcome: "waiting_for_discovery",
            dependency_stage: stage
-         }, {:reschedule_in, @source_dependency_retry_ms}}
+         }
+         |> Map.merge(replay_activity_result(job.payload || %{})),
+         {:reschedule_in, @source_dependency_retry_ms}}
 
       {:error, reason} ->
         {:error, {:discard, reason}}
