@@ -104,6 +104,58 @@ defmodule Maraithon.Runtime.PeriodicJobsTest do
              )
   end
 
+  test "Slack planner stays Activity-visible but does not fan out over an active workspace child" do
+    user_id = "periodic-slack-active-#{System.unique_integer([:positive])}@example.com"
+    team_id = "T-ACTIVE-PLANNER"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      ConnectedAccounts.upsert_manual(user_id, "slack:#{team_id}", %{
+        external_account_id: team_id,
+        metadata: %{"team_id" => team_id}
+      })
+
+    assert {:ok, %BackgroundJob{}} =
+             BackgroundJobs.enqueue("runtime_partition:slack_conversation_reconcile", %{
+               user_id: user_id,
+               queue: "runtime_provider_account",
+               dedupe_key: "runtime-partition:slack-conversation:active-child:#{account.id}",
+               scheduled_at: DateTime.utc_now(),
+               payload: %{
+                 "account_id" => account.id,
+                 "channel_id" => "C-ACTIVE",
+                 "conversation_kind" => "public_channel"
+               }
+             })
+
+    planner = %BackgroundJob{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      queue: "runtime_provider_account",
+      job_type: "runtime_partition:slack_reconciliation_plan",
+      payload: %{"account_id" => account.id, "role" => "discovery"}
+    }
+
+    assert {:ok,
+            %{
+              outcome: "deferred_active_child",
+              fanout_count: 0,
+              enqueued_fanouts: 0,
+              readable_conversations: nil
+            }} = PeriodicJobs.execute(planner)
+
+    assert 1 ==
+             Repo.aggregate(
+               from(job in BackgroundJob,
+                 where:
+                   job.user_id == ^user_id and
+                     job.job_type == "runtime_partition:slack_conversation_reconcile" and
+                     job.status in ["pending", "running"]
+               ),
+               :count
+             )
+  end
+
   test "source account wake makes the Activity-visible closure acquisition wait for discovery" do
     user_id = "periodic-wake-dependency-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

@@ -9,7 +9,7 @@ defmodule Maraithon.Runtime.SlackConversationReconcilerTest do
   alias Maraithon.OAuth
   alias Maraithon.Repo
   alias Maraithon.Runtime.SlackConversationReconciler
-  alias Maraithon.Runtime.{BackgroundJob, SourceWatermarkCommit}
+  alias Maraithon.Runtime.{BackgroundJob, BackgroundJobs, SourceWatermarkCommit}
 
   setup do
     original_slack_config = Application.get_env(:maraithon, :slack, [])
@@ -17,6 +17,38 @@ defmodule Maraithon.Runtime.SlackConversationReconcilerTest do
     on_exit(fn -> Application.put_env(:maraithon, :slack, original_slack_config) end)
 
     :ok
+  end
+
+  test "defers without a provider call while the workspace already has an active child" do
+    user_id = "slack-reconciler-active-#{System.unique_integer([:positive])}@example.com"
+    team_id = "T-ACTIVE"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, account} =
+      Maraithon.ConnectedAccounts.upsert_manual(user_id, "slack:#{team_id}", %{
+        external_account_id: team_id,
+        metadata: %{"team_id" => team_id}
+      })
+
+    assert {:ok, %BackgroundJob{}} =
+             BackgroundJobs.enqueue(SlackConversationReconciler.child_job_type(), %{
+               user_id: user_id,
+               queue: "runtime_provider_account",
+               dedupe_key: SlackConversationReconciler.child_dedupe_key(account.id, "C-ACTIVE"),
+               scheduled_at: DateTime.utc_now(),
+               payload: %{
+                 "account_id" => account.id,
+                 "channel_id" => "C-ACTIVE",
+                 "conversation_kind" => "public_channel"
+               }
+             })
+
+    assert {:ok,
+            %{
+              readable_conversations: nil,
+              due: [],
+              deferred_reason: "workspace_child_active"
+            }} = SlackConversationReconciler.plan(account)
   end
 
   test "plans readable conversation fan-outs and seals history plus replies before its cursor" do

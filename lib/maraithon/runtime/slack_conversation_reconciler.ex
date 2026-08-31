@@ -34,30 +34,43 @@ defmodule Maraithon.Runtime.SlackConversationReconciler do
   def plan(account, opts \\ [])
 
   def plan(%ConnectedAccount{status: "connected"} = account, opts) do
-    with {:ok, team_id} <- team_id(account),
-         {:ok, token} <-
-           SlackHelpers.resolve_access_token(account.user_id, team_id, token_preference: "user"),
-         {:ok, conversations} <- list_all_conversations(token.access_token) do
-      due =
-        conversations
-        |> Enum.filter(&readable?/1)
-        |> reject_active(account)
-        |> sort_by_cursor_age(account)
-        |> Enum.take(batch_size(opts))
-        |> Enum.map(fn conversation ->
-          %{
-            channel_id: conversation["id"],
-            conversation_kind: conversation_kind(conversation),
-            dedupe_key: child_dedupe_key(account.id, conversation["id"])
-          }
-        end)
+    with {:ok, team_id} <- team_id(account) do
+      if active_child?(account) do
+        {:ok,
+         %{
+           team_id: team_id,
+           readable_conversations: nil,
+           due: [],
+           deferred_reason: "workspace_child_active"
+         }}
+      else
+        with {:ok, token} <-
+               SlackHelpers.resolve_access_token(account.user_id, team_id,
+                 token_preference: "user"
+               ),
+             {:ok, conversations} <- list_all_conversations(token.access_token) do
+          due =
+            conversations
+            |> Enum.filter(&readable?/1)
+            |> reject_active(account)
+            |> sort_by_cursor_age(account)
+            |> Enum.take(batch_size(opts))
+            |> Enum.map(fn conversation ->
+              %{
+                channel_id: conversation["id"],
+                conversation_kind: conversation_kind(conversation),
+                dedupe_key: child_dedupe_key(account.id, conversation["id"])
+              }
+            end)
 
-      {:ok,
-       %{
-         team_id: team_id,
-         readable_conversations: Enum.count(conversations, &readable?/1),
-         due: due
-       }}
+          {:ok,
+           %{
+             team_id: team_id,
+             readable_conversations: Enum.count(conversations, &readable?/1),
+             due: due
+           }}
+        end
+      end
     end
   end
 
@@ -119,6 +132,19 @@ defmodule Maraithon.Runtime.SlackConversationReconciler do
     do: {:error, :invalid_slack_reconciliation_account}
 
   def child_job_type, do: @child_job
+
+  @doc false
+  def active_child?(%ConnectedAccount{} = account) do
+    dedupe_pattern = "runtime-partition:slack-conversation:%:#{account.id}"
+
+    Repo.exists?(
+      from(job in BackgroundJob,
+        where:
+          job.user_id == ^account.user_id and job.job_type == ^@child_job and
+            job.status in ["pending", "running"] and like(job.dedupe_key, ^dedupe_pattern)
+      )
+    )
+  end
 
   def child_dedupe_key(account_id, channel_id)
       when is_integer(account_id) and is_binary(channel_id) do

@@ -1080,9 +1080,21 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          {:ok, plan} <- SlackConversationReconciler.plan(account),
          fanout_count = length(plan.due),
          {:ok, enqueued} <- enqueue_slack_reconciliation_children(account, plan.due, job) do
+      outcome =
+        cond do
+          Map.get(plan, :deferred_reason) == "workspace_child_active" ->
+            "deferred_active_child"
+
+          fanout_count == 0 ->
+            "up_to_date"
+
+          true ->
+            "fanout_ready"
+        end
+
       {:ok,
        %{
-         outcome: if(fanout_count == 0, do: "up_to_date", else: "fanout_ready"),
+         outcome: outcome,
          account_id: account.id,
          readable_conversations: plan.readable_conversations,
          fanout_count: fanout_count,
@@ -1147,6 +1159,16 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp enqueue_slack_reconciliation_children(account, conversations, planner_job)
        when is_list(conversations) do
+    with_source_account_fence(account, fn locked_account ->
+      if SlackConversationReconciler.active_child?(locked_account) do
+        {:ok, 0}
+      else
+        do_enqueue_slack_reconciliation_children(locked_account, conversations, planner_job)
+      end
+    end)
+  end
+
+  defp do_enqueue_slack_reconciliation_children(account, conversations, planner_job) do
     fanout_count = length(conversations)
     fanout_started_at = database_now!()
 
