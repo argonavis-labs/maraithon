@@ -187,33 +187,56 @@ defmodule Maraithon.Runtime do
         {:error, :agent_setup_required}
 
       agent ->
-        case Agents.claim_agent_start(agent.id) do
-          {:ok, updated_agent} ->
-            case start_agent_process(updated_agent) do
-              {:ok, _pid} ->
-                Logger.info("Started existing agent #{id}",
-                  agent_id: id,
-                  behavior: updated_agent.behavior
-                )
+        with :ok <- prepare_explicit_agent_start(agent.id),
+             {:ok, updated_agent} <- Agents.claim_agent_start(agent.id) do
+          case start_agent_process(updated_agent) do
+            {:ok, _pid} ->
+              Logger.info("Started existing agent #{id}",
+                agent_id: id,
+                behavior: updated_agent.behavior
+              )
 
-                {:ok, updated_agent}
+              {:ok, updated_agent}
 
-              {:error, reason} = error ->
-                # `running` is desired state, not process liveness. An ambiguous
-                # spawn may already have crossed init, and an owned remote
-                # incarnation is also a successful durable intent. Never roll
-                # desired state back based on a launcher return classification.
-                Logger.error("Failed to start existing agent #{id}: #{inspect(reason)}",
-                  agent_id: id
-                )
+            {:error, reason} = error ->
+              # `running` is desired state, not process liveness. An ambiguous
+              # spawn may already have crossed init, and an owned remote
+              # incarnation is also a successful durable intent. Never roll
+              # desired state back based on a launcher return classification.
+              Logger.error("Failed to start existing agent #{id}: #{inspect(reason)}",
+                agent_id: id
+              )
 
-                error
-            end
-
+              error
+          end
+        else
           {:error, reason} = error ->
-            Logger.error("Failed to claim agent start #{id}: #{inspect(reason)}", agent_id: id)
+            Logger.error("Failed to prepare or claim agent start #{id}: #{inspect(reason)}",
+              agent_id: id
+            )
+
             error
         end
+    end
+  end
+
+  # Automatic recovery must remain fenced after the durable crash-loop guard
+  # trips. An explicit operator start is different: it is the audited human
+  # decision to retry after the failed generation has no lease or processing
+  # directive. Reset through the existing exact-protocol helper before claiming
+  # a fresh owner generation.
+  defp prepare_explicit_agent_start(agent_id) do
+    case AgentRestartGuards.get(agent_id) do
+      %{tripped: true} -> reset_restart_guard_for_operator(agent_id)
+      %{needs_recovery: true} -> reset_restart_guard_for_operator(agent_id)
+      _clean_or_missing -> :ok
+    end
+  end
+
+  defp reset_restart_guard_for_operator(agent_id) do
+    case AgentRestartGuards.reset_for_operator(agent_id) do
+      {:ok, _guard} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 
