@@ -162,4 +162,30 @@ defmodule Maraithon.Todos.SignalGateTest do
 
     assert {:ok, _attrs} = SignalGate.allow_candidate?(candidate)
   end
+
+  test "reads direct asks from exact source-account provider records" do
+    candidate = %{
+      "source" => "gmail",
+      "title" => "Send availability for the planning meeting",
+      "source_item_id" => "gmail-message-source-fanout",
+      "dedupe_key" => "source-discovery:account:message",
+      "metadata" => %{
+        "source_ref" => "gmail:provider:message",
+        "source_record" => %{
+          "subject" => "Planning meeting",
+          "body" =>
+            "Could you please send two or three times that work for you this week? We are waiting on your reply before scheduling.",
+          "evidence_complete" => true
+        }
+      }
+    }
+
+    proposed = %{
+      "summary" => "The organizer needs your availability before scheduling the meeting.",
+      "next_action" => "Reply with two or three available times.",
+      "metadata" => %{"direct_ask" => true}
+    }
+
+    assert {:ok, _attrs} = SignalGate.allow_candidate?(candidate, proposed)
+  end
 end

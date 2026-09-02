@@ -622,7 +622,8 @@ defmodule Maraithon.Todos.SignalGate do
       read_value(metadata, "matching_message_excerpt"),
       read_value(metadata, "last_meaningful_message"),
       read_value(metadata, "quote"),
-      read_value(metadata, "source_quote")
+      read_value(metadata, "source_quote"),
+      provider_source_record_evidence(metadata)
     ]
     |> Enum.flat_map(&evidence_strings/1)
     |> Enum.take(16)
@@ -738,13 +739,33 @@ defmodule Maraithon.Todos.SignalGate do
       read_value(metadata, "body_excerpt"),
       read_value(metadata, "source_body"),
       read_value(metadata, "matching_message_excerpt"),
-      read_value(metadata, "last_meaningful_message")
+      read_value(metadata, "last_meaningful_message"),
+      provider_source_record_evidence(metadata)
     ]
     |> Enum.flat_map(&evidence_strings/1)
     |> Enum.take(32)
     |> Enum.join(" ")
     |> String.slice(0, 12_000)
     |> String.downcase()
+  end
+
+  # The exact source-account fan-out keeps lossless provider evidence under
+  # metadata.source_record so it can hand small sealed partitions between
+  # durable jobs without copying an email body or Slack thread into every
+  # top-level candidate field. Treat that internal record as trusted source
+  # evidence at the final deterministic admission boundary. Without this,
+  # valid model create/update decisions are downgraded to skip because the gate
+  # cannot see the direct ask that the model just evaluated.
+  defp provider_source_record_evidence(metadata) do
+    source_record = read_map(metadata, "source_record")
+
+    [
+      read_value(source_record, "subject"),
+      read_value(source_record, "snippet"),
+      read_value(source_record, "body"),
+      read_value(source_record, "text"),
+      read_value(source_record, "thread_context")
+    ]
   end
 
   defp evidence_strings(value) when is_binary(value) do
