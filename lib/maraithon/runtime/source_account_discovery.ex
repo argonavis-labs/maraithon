@@ -627,7 +627,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         "source_account_label" => account_label,
         "source_item_id" => source_item_id(record),
         "source_occurred_at" => source_occurred_at(record),
-        "dedupe_key" => "source-discovery:#{account.id}:#{short_digest(source_ref)}",
+        "dedupe_key" =>
+          "source-discovery:#{account.id}:#{short_digest(source_work_identity(record))}",
         "metadata" => %{
           "source_ref" => source_ref,
           "source_record" => candidate_source_record(record),
@@ -940,6 +941,22 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     channel_id = read_string(item, "channel_id")
     ts = read_string(item, "ts")
     if channel_id && ts, do: channel_id <> ":" <> ts
+  end
+
+  # A conversation represents one evolving open loop even when a provider
+  # delivers several messages for it at once. Key Gmail work by thread and
+  # Slack work by thread root so concurrent fan-outs cannot surface duplicate
+  # work items for repeated notifications or replies in the same conversation.
+  defp source_work_identity(%{source: :gmail, identity: identity, item: item}) do
+    provider = read_string(item, "google_provider") || "unknown"
+    "gmail:#{provider}:#{read_string(item, "thread_id") || identity}"
+  end
+
+  defp source_work_identity(%{source: :slack, identity: identity, item: item}) do
+    team_id = read_string(item, "team_id") || "unknown"
+    channel_id = read_string(item, "channel_id") || "unknown"
+    thread_id = read_string(item, "thread_ts") || read_string(item, "ts") || identity
+    "slack:#{team_id}:#{channel_id}:#{thread_id}"
   end
 
   defp source_occurred_at(%{source: :gmail, item: item}) do
