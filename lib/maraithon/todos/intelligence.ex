@@ -264,6 +264,8 @@ defmodule Maraithon.Todos.Intelligence do
          todo_relevance_memories,
          candidates
        ) do
+    source_intake_guidance = source_intake_guidance(shared_context)
+
     payload = %{
       "existing_todos" => existing_todos,
       "todo_relevance_memories" => todo_relevance_memories
@@ -288,6 +290,7 @@ defmodule Maraithon.Todos.Intelligence do
        next action.
 
        Requirements:
+       #{source_intake_guidance}
        - Return one decision for every candidate_todos item. `candidate_todos`,
          `existing_todo_id`, and the `todo` response object are internal JSON contract names.
        - Executive bar: admit a candidate only if a competent chief of staff
@@ -600,6 +603,31 @@ defmodule Maraithon.Todos.Intelligence do
        """}
     end
   end
+
+  defp source_intake_guidance(%{"source" => "source_account_discovery"}) do
+    """
+    - This request is the exact source-account fan-out intake. For each candidate,
+      `metadata.source_record.body`, `.text`, and `.thread_context` are the sealed
+      provider evidence to evaluate; they are not model-generated candidate copy.
+    - For this intake, a clear outstanding human ask, reply owed, scheduling
+      request, approval/decision request, deliverable, or operator promise is
+      durable work even when it is routine rather than an emergency. A specific
+      person waiting for that action satisfies the executive-importance test by
+      itself; do not additionally require a deadline, revenue impact, or material
+      risk.
+    - Prefer create or update when the source conversation says `can you`, `could
+      you`, `would you`, `please`, `let me know`, asks for times/availability,
+      requests a reply/review/send/confirm/decision, or records `I will`/`I'll`,
+      unless later evidence clearly shows the loop is closed or someone else owns
+      it. Do not skip a real interpersonal obligation merely because it looks
+      easy, polite, or low-effort.
+    - Keep skipping newsletters, promotions, receipts, passive notifications,
+      completed threads, vague suggestions, and messages with no operator-owned
+      action. The deterministic signal gate still validates every proposed write.
+    """
+  end
+
+  defp source_intake_guidance(_shared_context), do: ""
 
   defp fit_bounded_prompt(payload, existing, opts) do
     case try_prompt(
