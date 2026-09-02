@@ -517,8 +517,17 @@ defmodule Maraithon.Runtime.Agent do
 
     data = drain_deferred_messages(data)
 
-    if data.exact_owner?, do: send(self(), :claim_directive)
-    {:keep_state, data}
+    if data.exact_owner? do
+      # A busy Agent can have a continuous backlog of Directive notifications.
+      # Those mailbox events may remain ahead of the named renewal timeout while
+      # each completed Directive immediately admits the next one. Renew at this
+      # cooperative boundary as well, so throughput cannot starve the lease that
+      # fences that work. The timer remains the idle/waiting safety net.
+      send(self(), :claim_directive)
+      renew_exact_lease(data)
+    else
+      {:keep_state, data}
+    end
   end
 
   def idle(:internal, :claim_directive, %{exact_owner?: true} = data) do
