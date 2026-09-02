@@ -609,6 +609,12 @@ defmodule Maraithon.Todos.Intelligence do
     - This request is the exact source-account fan-out intake. For each candidate,
       `metadata.source_record.body`, `.text`, and `.thread_context` are the sealed
       provider evidence to evaluate; they are not model-generated candidate copy.
+    - In this intake, an explicit outstanding obligation is a positive admission
+      signal, not merely a reason to keep considering the item. Return create or
+      update for a clear operator-owned ask, promise, scheduling response,
+      approval, deliverable, or required account/security action unless the
+      supplied thread proves it closed. This source-specific rule controls when
+      the generic guidance below says to default to skip.
     - For this intake, a clear outstanding human ask, reply owed, scheduling
       request, approval/decision request, deliverable, or operator promise is
       durable work even when it is routine rather than an emergency. A specific
