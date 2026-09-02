@@ -630,6 +630,12 @@ defmodule Maraithon.Todos.Intelligence do
     - Keep skipping newsletters, promotions, receipts, passive notifications,
       completed threads, vague suggestions, and messages with no operator-owned
       action. The deterministic signal gate still validates every proposed write.
+    - An internal automated operational report is not passive when it names a
+      concrete production failure or error count and tells the operator to
+      investigate, check logs, remediate, or make a decision. Create or update
+      that work even though the sender is automated. Still skip a self-healing
+      notice that explicitly says the system is retrying and requires no current
+      operator action.
     """
   end
 
