@@ -2143,6 +2143,90 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     end)
   end
 
+  test "an exact executing Effect can return to pending after a proven retry settlement" do
+    assert {:ok, :activated} = activate_exact()
+    {agent, owner_generation} = exact_agent("effect-proven-retry")
+    now = DatabaseClock.now!()
+
+    effect =
+      insert_claimed_exact_effect!(
+        agent,
+        owner_generation,
+        Ecto.UUID.generate(),
+        Atom.to_string(node()),
+        Ecto.UUID.generate(),
+        Ecto.UUID.generate(),
+        now
+      )
+
+    assignment = TaskClaims.get(effect.coordination_task_assignment_id)
+
+    assert {:ok, {1, _rows}} =
+             Repo.transaction(fn ->
+               ProtocolCutover.require_exact_write!()
+
+               entered =
+                 TaskClaims.enter_effect_provider_in_transaction!(
+                   assignment,
+                   agent.id,
+                   owner_generation
+                 )
+
+               assert entered.provider_boundary == "entered"
+
+               Repo.update_all(
+                 from(stored in Effect,
+                   where: stored.id == ^effect.id and stored.status == "claimed"
+                 ),
+                 set: [status: "executing", updated_at: DatabaseClock.now!()]
+               )
+             end)
+
+    assert {:ok, {1, _rows}} =
+             Repo.transaction(fn ->
+               ProtocolCutover.require_exact_write!()
+
+               settled =
+                 TaskClaims.settle_effect_in_transaction(
+                   assignment,
+                   agent.id,
+                   owner_generation,
+                   "retry_scheduled"
+                 )
+
+               assert settled.state == "settled"
+               assert settled.provider_boundary == "outcome_known"
+               assert settled.outcome == "retry_scheduled"
+
+               Repo.update_all(
+                 from(stored in Effect,
+                   where: stored.id == ^effect.id and stored.status == "executing"
+                 ),
+                 set: [
+                   status: "pending",
+                   claimed_by: nil,
+                   claimed_at: nil,
+                   claim_token: nil,
+                   claim_owner_node: nil,
+                   claim_heartbeat_at: nil,
+                   claim_expires_at: nil,
+                   claim_supervisor_id: nil,
+                   claim_task_id: nil,
+                   coordination_task_assignment_id: nil,
+                   attempts: 1,
+                   retry_after: DateTime.add(DatabaseClock.now!(), 1, :second),
+                   updated_at: DatabaseClock.now!()
+                 ]
+               )
+             end)
+
+    retried = Repo.get!(Effect, effect.id)
+    assert retried.status == "pending"
+    assert retried.claim_token == nil
+    assert retried.coordination_task_assignment_id == nil
+    assert retried.attempts == 1
+  end
+
   test "coupled Task.Supervisor restart kills predecessor tasks before absence settlement" do
     assert {:ok, :activated} = activate_exact()
     {agent, owner_generation} = exact_agent("effect-registry-restart")
