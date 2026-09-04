@@ -417,6 +417,7 @@ defmodule Maraithon.Runtime.Scheduler do
       DbResilience.with_database("scheduler replace unique job", fn ->
         Repo.transaction(fn ->
           :ok = DurablePayload.require_current_mutation!()
+          lock_schedule_agent(agent_id)
           lock_unique_jobs(agent_id, job_type)
 
           {cancelled_count, _} =
@@ -449,6 +450,13 @@ defmodule Maraithon.Runtime.Scheduler do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp lock_schedule_agent(agent_id) do
+    # Exact delivery owns Agent before ScheduledJob. Take the FK-equivalent
+    # Agent lock before cancelling an older job so a replacement INSERT cannot
+    # form the inverse ScheduledJob -> Agent dependency.
+    Repo.one(from(agent in Agent, where: agent.id == ^agent_id, lock: "FOR KEY SHARE"))
   end
 
   defp lock_unique_jobs(agent_id, job_type) do
