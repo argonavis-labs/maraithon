@@ -16,7 +16,7 @@ defmodule Maraithon.Runtime.Scheduler do
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.ScheduledJob
-  alias Maraithon.Runtime.Coordination.{Protocol, Scope}
+  alias Maraithon.Runtime.Coordination.{Authority, Protocol, Scope}
 
   require Logger
 
@@ -536,6 +536,16 @@ defmodule Maraithon.Runtime.Scheduler do
       with true <- is_binary(user_id),
            {:ok, session, partition} <- Scope.partition_for_user(user_id) do
         Repo.transaction(fn ->
+          # Fair background-job admission holds this partition before its User
+          # privacy fence. Scheduled delivery must acquire the same pair in the
+          # same order or the two schedulers can deadlock under load.
+          Authority.fence_partition!(
+            session,
+            partition.partition_id,
+            partition.ownership_epoch,
+            :ready
+          )
+
           :ok = DurablePayload.require_current_mutation!()
 
           payload = %{
