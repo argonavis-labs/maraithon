@@ -280,13 +280,16 @@ defmodule MaraithonWeb.TodosLive do
 
   def handle_event("complete_todo", %{"id" => todo_id}, socket) do
     user_id = current_user_id(socket)
+    detail? = socket.assigns.selected_todo_id == todo_id
+    preferred_next_todo_id = preferred_next_todo_id(socket.assigns.todos, todo_id)
 
     case Todos.mark_done(user_id, todo_id, todo_action_opts(user_id, "Completed from Work page.")) do
       {:ok, _todo} ->
         {:noreply,
          socket
          |> refresh_todos()
-         |> put_flash(:info, "Work item done.")}
+         |> put_flash(:info, "Work item done.")
+         |> maybe_advance_after_completion(detail?, todo_id, preferred_next_todo_id)}
 
       {:error, reason} ->
         {:noreply,
@@ -677,6 +680,7 @@ defmodule MaraithonWeb.TodosLive do
       <%= if @selected_todo do %>
         <.todo_detail_panel
           todo={@selected_todo}
+          todos={@todos}
           filters={@filters}
           project_options={@project_options}
           timezone_info={@timezone_info}
@@ -954,7 +958,6 @@ defmodule MaraithonWeb.TodosLive do
                         checked={MapSet.member?(@selected_todo_ids, todo.id)}
                         phx-click="toggle_todo_selection"
                         phx-value-id={todo.id}
-                        onclick="event.stopPropagation()"
                         class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
                       />
                     </.table_cell>
@@ -992,7 +995,6 @@ defmodule MaraithonWeb.TodosLive do
                         type="button"
                         phx-click="complete_todo"
                         phx-value-id={todo.id}
-                        onclick="event.stopPropagation()"
                         variant="plain"
                         class="text-xs text-zinc-500 hover:text-zinc-950"
                       >
@@ -1117,6 +1119,7 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   attr :todo, :any, required: true
+  attr :todos, :list, required: true
   attr :filters, :map, required: true
   attr :project_options, :list, required: true
   attr :timezone_info, :map, required: true
@@ -1132,10 +1135,13 @@ defmodule MaraithonWeb.TodosLive do
   defp todo_detail_panel(assigns) do
     can_edit_next_action = todo_next_action_editable?(assigns.todo)
     source_action = SourceActions.for_todo(assigns.todo) || %{}
+    {previous_todo, next_todo} = todo_neighbors(assigns.todos, assigns.todo.id)
 
     assigns =
       assigns
       |> assign(:can_edit_next_action, can_edit_next_action)
+      |> assign(:previous_todo, previous_todo)
+      |> assign(:next_todo, next_todo)
       |> assign(:decision_signal?, todo_decision_signal?(assigns.todo))
       |> assign(:facts, todo_fact_rows(assigns.todo, assigns.timezone_info))
       |> assign(:open_url, Map.get(source_action, "open_url"))
@@ -1149,29 +1155,118 @@ defmodule MaraithonWeb.TodosLive do
       )
 
     ~H"""
-    <div id="todo-detail" class="mx-auto max-w-5xl space-y-5">
-      <.link
-        patch={todos_path(@filters)}
-        class="inline-flex items-center gap-1 text-sm/6 font-medium text-zinc-500 hover:text-zinc-950"
-      >
-        <span aria-hidden="true">←</span> Back to todos
-      </.link>
+    <div id="todo-detail" class="mx-auto max-w-5xl space-y-5" phx-hook=".TodoHotkeys">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <.link
+          patch={todos_path(@filters)}
+          class="inline-flex items-center gap-1 text-sm/6 font-medium text-zinc-500 hover:text-zinc-950"
+        >
+          <span aria-hidden="true">←</span> Back to todos
+        </.link>
+
+        <nav id="todo-sibling-navigation" aria-label="Todo navigation" class="flex items-center gap-1">
+          <.button
+            :if={@previous_todo}
+            id="previous-todo"
+            patch={todo_detail_path(@filters, @previous_todo.id)}
+            variant="plain"
+            class="text-xs text-zinc-500"
+            aria-label="Previous todo"
+            aria-keyshortcuts="ArrowLeft"
+            title="Previous todo (Left arrow)"
+          >
+            <span aria-hidden="true">←</span> Previous
+          </.button>
+          <.button
+            :if={is_nil(@previous_todo)}
+            id="previous-todo"
+            type="button"
+            disabled
+            variant="plain"
+            class="text-xs text-zinc-400"
+            aria-label="Previous todo"
+          >
+            <span aria-hidden="true">←</span> Previous
+          </.button>
+          <.button
+            :if={@next_todo}
+            id="next-todo"
+            patch={todo_detail_path(@filters, @next_todo.id)}
+            variant="plain"
+            class="text-xs text-zinc-500"
+            aria-label="Next todo"
+            aria-keyshortcuts="ArrowRight"
+            title="Next todo (Right arrow)"
+          >
+            Next <span aria-hidden="true">→</span>
+          </.button>
+          <.button
+            :if={is_nil(@next_todo)}
+            id="next-todo"
+            type="button"
+            disabled
+            variant="plain"
+            class="text-xs text-zinc-400"
+            aria-label="Next todo"
+          >
+            Next <span aria-hidden="true">→</span>
+          </.button>
+        </nav>
+      </div>
 
       <header class="border-b border-zinc-950/10 pb-5">
-        <div class="flex flex-wrap items-center gap-2">
-          <.badge color={status_color(@todo.status)}><%= todo_status_label(@todo.status) %></.badge>
-          <.badge color={attention_color(@todo.attention_mode)}>
-            <%= attention_mode_label(@todo.attention_mode) %>
-          </.badge>
-          <.badge :if={@decision_signal?} color="indigo">Decision</.badge>
-          <.badge :if={@todo.priority >= 75} color={priority_color(@todo.priority)}>
-            <%= priority_label(@todo.priority) %>
-          </.badge>
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <.badge color={status_color(@todo.status)}><%= todo_status_label(@todo.status) %></.badge>
+              <.badge color={attention_color(@todo.attention_mode)}>
+                <%= attention_mode_label(@todo.attention_mode) %>
+              </.badge>
+              <.badge :if={@decision_signal?} color="indigo">Decision</.badge>
+              <.badge :if={@todo.priority >= 75} color={priority_color(@todo.priority)}>
+                <%= priority_label(@todo.priority) %>
+              </.badge>
+            </div>
+            <h1 class="mt-3 text-2xl/8 font-semibold tracking-tight text-zinc-950"><%= @todo.title %></h1>
+            <p :if={present?(@todo.summary)} class="mt-2 max-w-3xl text-sm/6 text-zinc-600">
+              <%= @todo.summary %>
+            </p>
+          </div>
+
+          <div id="todo-primary-actions" class="flex shrink-0 flex-wrap items-center gap-2">
+            <.button
+              :if={@can_edit_next_action}
+              type="button"
+              phx-click="complete_todo"
+              phx-value-id={@todo.id}
+            >
+              Mark done
+            </.button>
+            <.button navigate={~p"/todos/#{@todo.id}/chat"} variant="outline">
+              Ask Maraithon
+            </.button>
+            <.button
+              :if={@can_edit_next_action}
+              type="button"
+              phx-click="dismiss_todo"
+              phx-value-id={@todo.id}
+              variant="plain"
+              class="text-xs text-zinc-600"
+            >
+              Dismiss
+            </.button>
+            <.button
+              :if={@can_edit_next_action}
+              type="button"
+              phx-click="see_less_todo"
+              phx-value-id={@todo.id}
+              variant="plain"
+              class="text-xs text-zinc-600"
+            >
+              Show less
+            </.button>
+          </div>
         </div>
-        <h1 class="mt-3 text-2xl/8 font-semibold tracking-tight text-zinc-950"><%= @todo.title %></h1>
-        <p :if={present?(@todo.summary)} class="mt-2 max-w-3xl text-sm/6 text-zinc-600">
-          <%= @todo.summary %>
-        </p>
       </header>
 
       <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_17rem]">
@@ -1230,26 +1325,6 @@ defmodule MaraithonWeb.TodosLive do
               </div>
             </dl>
 
-            <div :if={@can_edit_next_action} class="mt-4 grid gap-2 border-t border-zinc-950/10 pt-4">
-              <.button type="button" phx-click="complete_todo" phx-value-id={@todo.id}>
-                Mark done
-              </.button>
-              <div class="flex justify-center gap-1">
-                <.button type="button" phx-click="dismiss_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
-                  Dismiss
-                </.button>
-                <.button type="button" phx-click="see_less_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
-                  Show less
-                </.button>
-              </div>
-            </div>
-
-            <div class="mt-4 border-t border-zinc-950/10 pt-4">
-              <.button navigate={~p"/todos/#{@todo.id}/chat"} variant="outline" class="w-full">
-                Ask Maraithon
-              </.button>
-            </div>
-
             <details :if={@can_edit_next_action} class="mt-4 border-t border-zinc-950/10 pt-4">
               <summary class="cursor-pointer list-none text-xs/5 font-medium text-zinc-500 hover:text-zinc-950">
                 Edit next action
@@ -1279,6 +1354,36 @@ defmodule MaraithonWeb.TodosLive do
           </.panel>
         </aside>
       </div>
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".TodoHotkeys">
+        export default {
+          mounted() {
+            this.handleKeydown = (event) => {
+              const target = event.target
+              const tag = target?.tagName
+              const typing = target?.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+              if (typing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+
+              const linkId = event.key === "ArrowLeft"
+                ? "previous-todo"
+                : event.key === "ArrowRight"
+                  ? "next-todo"
+                  : null
+
+              if (!linkId) return
+              const link = document.getElementById(linkId)
+              if (!link || link.disabled) return
+              event.preventDefault()
+              link.click()
+            }
+
+            window.addEventListener("keydown", this.handleKeydown)
+          },
+          destroyed() {
+            window.removeEventListener("keydown", this.handleKeydown)
+          }
+        }
+      </script>
     </div>
     """
   end
@@ -1921,6 +2026,47 @@ defmodule MaraithonWeb.TodosLive do
     socket.assigns.todos
     |> Enum.map(& &1.id)
     |> MapSet.new()
+  end
+
+  defp todo_neighbors(todos, todo_id) when is_list(todos) and is_binary(todo_id) do
+    case Enum.find_index(todos, &(&1.id == todo_id)) do
+      nil ->
+        {nil, nil}
+
+      index ->
+        previous_todo = if index > 0, do: Enum.at(todos, index - 1)
+        {previous_todo, Enum.at(todos, index + 1)}
+    end
+  end
+
+  defp todo_neighbors(_todos, _todo_id), do: {nil, nil}
+
+  defp preferred_next_todo_id(todos, todo_id) do
+    case todo_neighbors(todos, todo_id) do
+      {_previous_todo, %Todo{id: next_todo_id}} -> next_todo_id
+      {%Todo{id: previous_todo_id}, nil} -> previous_todo_id
+      _neighbors -> nil
+    end
+  end
+
+  defp maybe_advance_after_completion(socket, false, _completed_todo_id, _preferred_todo_id),
+    do: socket
+
+  defp maybe_advance_after_completion(socket, true, completed_todo_id, preferred_todo_id) do
+    remaining_todo_ids =
+      socket.assigns.todos
+      |> Enum.map(& &1.id)
+      |> Enum.reject(&(&1 == completed_todo_id))
+
+    next_todo_id =
+      if preferred_todo_id in remaining_todo_ids,
+        do: preferred_todo_id,
+        else: List.first(remaining_todo_ids)
+
+    case next_todo_id do
+      nil -> push_patch(socket, to: todos_path(socket.assigns.filters))
+      todo_id -> push_patch(socket, to: todo_detail_path(socket.assigns.filters, todo_id))
+    end
   end
 
   defp all_visible_todos_selected?([], _selected_todo_ids), do: false

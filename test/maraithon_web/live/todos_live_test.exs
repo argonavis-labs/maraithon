@@ -710,6 +710,38 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute has_element?(view, "#todo-#{second.id}")
   end
 
+  test "row Done action completes the todo without blocking the LiveView click", %{conn: conn} do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Finish the row action",
+                 "summary" => "The row action should reach the server.",
+                 "next_action" => "Mark this work item done.",
+                 "priority" => 90,
+                 "dedupe_key" => "todos-live:row-done"
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/todos")
+
+    assert has_element?(view, "#todo-#{todo.id} button[phx-click='complete_todo']", "Done")
+    refute has_element?(view, "#todo-#{todo.id} button[phx-click='complete_todo'][onclick]")
+
+    refute has_element?(
+             view,
+             "#todo-#{todo.id} input[phx-click='toggle_todo_selection'][onclick]"
+           )
+
+    view
+    |> element("#todo-#{todo.id} button[phx-click='complete_todo']")
+    |> render_click()
+
+    assert Todos.get_for_user(@user_email, todo.id).status == "done"
+    refute has_element?(view, "#todo-#{todo.id}")
+  end
+
   test "bulk see less records feedback and dismisses selected todos", %{conn: conn} do
     install_see_less_model()
 
@@ -848,6 +880,76 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     assert_patch(click_view, "/todos/#{todo.id}")
     assert render(click_view) =~ "Review detail work item"
+  end
+
+  test "detail actions stay at the top and completion advances to the next todo", %{conn: conn} do
+    assert {:ok, _todos} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "First ranked detail todo",
+                 "summary" => "Complete this one first.",
+                 "next_action" => "Finish the first item.",
+                 "priority" => 99,
+                 "dedupe_key" => "todos-live:detail-navigation:first"
+               },
+               %{
+                 "source" => "slack",
+                 "kind" => "slack_triage",
+                 "title" => "Second ranked detail todo",
+                 "summary" => "This item should open next.",
+                 "next_action" => "Continue with the second item.",
+                 "priority" => 80,
+                 "dedupe_key" => "todos-live:detail-navigation:second"
+               }
+             ])
+
+    [first, second] = Todos.list_for_user(@user_email, statuses: ["open"], limit: 2)
+    {:ok, view, _html} = live(conn, "/todos/#{first.id}")
+
+    assert has_element?(view, "#todo-detail[phx-hook='.TodoHotkeys']")
+    assert has_element?(view, "#todo-detail > header #todo-primary-actions")
+
+    assert has_element?(
+             view,
+             "#todo-primary-actions button[phx-click='complete_todo']",
+             "Mark done"
+           )
+
+    assert has_element?(view, "#todo-primary-actions a", "Ask Maraithon")
+    refute has_element?(view, "#todo-detail aside button[phx-click='complete_todo']")
+    assert has_element?(view, "#previous-todo[disabled]")
+
+    assert has_element?(
+             view,
+             "#next-todo[href='/todos/#{second.id}'][aria-keyshortcuts='ArrowRight']"
+           )
+
+    view
+    |> element("#next-todo")
+    |> render_click()
+
+    assert_patch(view, "/todos/#{second.id}")
+
+    assert has_element?(
+             view,
+             "#previous-todo[href='/todos/#{first.id}'][aria-keyshortcuts='ArrowLeft']"
+           )
+
+    view
+    |> element("#previous-todo")
+    |> render_click()
+
+    assert_patch(view, "/todos/#{first.id}")
+
+    view
+    |> element("#todo-primary-actions button[phx-click='complete_todo']")
+    |> render_click()
+
+    assert_patch(view, "/todos/#{second.id}")
+    assert Todos.get_for_user(@user_email, first.id).status == "done"
+    assert render(view) =~ "Second ranked detail work item"
   end
 
   test "detail panel edits the next action without losing context", %{conn: conn} do
