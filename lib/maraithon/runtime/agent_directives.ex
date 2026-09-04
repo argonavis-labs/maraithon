@@ -5,9 +5,10 @@ defmodule Maraithon.Runtime.AgentDirectives do
   Enqueue is idempotent on `{agent_id, dedupe_key}` and never wakes a future
   schedule early. Claim is a workload-entry operation and therefore requires a
   live ready lease. Renew/terminal settlement use the exact live owner fence so
-  a draining owner can durably finish already-started work. Every mutating path
-  follows Agent -> same-user Binding -> Guard -> Lease -> LifecycleOperation
-  -> Directive lock order.
+  a draining owner can durably finish already-started work. Enqueue follows the
+  privacy-safe User -> Agent -> same-user Binding -> Guard -> Lease ->
+  LifecycleOperation -> Directive order; lease-fenced paths inherit the
+  canonical authority prefix from `AgentLeases`.
   """
 
   import Ecto.Query
@@ -61,7 +62,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
   Enqueues one directive inside a caller-owned transaction.
 
   The caller must acquire no lower-order work locks before calling this
-  function: it obtains the canonical Agent authority prefix and Directive lock.
+  function: it obtains the canonical User/Agent authority prefix and Directive
+  lock.
   """
   def enqueue_in_transaction(agent_id, user_id, kind, payload, dedupe_key, opts \\ [])
 
@@ -838,8 +840,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
   end
 
   defp enqueue_prepared!(prepared) do
+    _user = prelock_enqueue_user!(prepared.agent_id, prepared.user_id)
     agent = lock_agent!(prepared.agent_id)
-    _user = WriteFence.lock_user_writable!(prepared.user_id)
     :ok = WriteFence.ensure_agent_writable!(prepared.agent_id)
     binding = lock_binding(agent)
     _guard = lock_guard(prepared.agent_id)
@@ -874,6 +876,14 @@ defmodule Maraithon.Runtime.AgentDirectives do
 
       _changed_request ->
         Repo.rollback(:directive_idempotency_conflict)
+    end
+  end
+
+  defp prelock_enqueue_user!(agent_id, requested_user_id) do
+    case Repo.one(from(agent in Agent, where: agent.id == ^agent_id, select: agent.user_id)) do
+      ^requested_user_id -> WriteFence.lock_user_writable!(requested_user_id)
+      nil -> Repo.rollback(:agent_not_found)
+      _other_user_id -> Repo.rollback(:agent_owner_mismatch)
     end
   end
 
