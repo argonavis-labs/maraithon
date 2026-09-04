@@ -179,11 +179,42 @@ defmodule Maraithon.Runtime.Coordination.Authority do
       _ = Protocol.locked_active!()
       set_local!("maraithon.runtime_node_action", session.id)
 
-      update_node!(
-        session,
-        "state = 'revoked', ready_at = NULL, revoked_at = timezone('UTC', clock_timestamp()), updated_at = timezone('UTC', clock_timestamp())",
-        "state = 'draining'"
-      )
+      result =
+        SQL.query!(
+          Repo,
+          """
+          UPDATE public.runtime_node_incarnations AS node
+          SET state = 'revoked', ready_at = NULL,
+              revoked_at = timezone('UTC', clock_timestamp()),
+              updated_at = timezone('UTC', clock_timestamp())
+          WHERE node.id = $1::uuid AND node.activation_epoch = $2::uuid
+            AND node.state = 'draining'
+            AND NOT EXISTS (
+              SELECT 1 FROM public.runtime_task_assignments AS assignment
+              WHERE assignment.node_incarnation_id = node.id
+                AND assignment.state IN (
+                  'reserved', 'running', 'termination_requested', 'termination_proven'
+                )
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM public.agent_runtime_leases AS lease
+              WHERE lease.coordination_node_incarnation_id = node.id
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM public.runtime_partitions AS partition
+              WHERE partition.owner_node_incarnation_id = node.id
+            )
+          RETURNING node.id, node.activation_epoch, node.node_name, node.revision,
+                    node.state, node.lease_expires_at, node.ready_at, node.draining_at,
+                    node.revoked_at, node.metadata, node.inserted_at, node.updated_at
+          """,
+          [Ecto.UUID.dump!(session.id), Ecto.UUID.dump!(session.activation_epoch)]
+        )
+
+      case result.rows do
+        [_row] -> load(NodeIncarnation, result)
+        [] -> Repo.rollback(:node_not_drained)
+      end
     end)
   end
 

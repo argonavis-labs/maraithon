@@ -475,12 +475,22 @@ defmodule Maraithon.Runtime.Coordination.Session do
   defp drain(state), do: {:ok, state}
 
   defp revoke_drained_node(session) do
-    Authority.revoke_node(%{
-      session
-      | state: "draining",
-        ready_at: nil,
-        draining_at: session.draining_at || session.updated_at
-    })
+    result =
+      Authority.revoke_node(%{
+        session
+        | state: "draining",
+          ready_at: nil,
+          draining_at: session.draining_at || session.updated_at
+      })
+
+    case result do
+      {:error, :node_not_drained} ->
+        Logger.warning("Node revocation deferred until local task proofs and partitions clear")
+        {:error, :node_revocation_deferred}
+
+      other ->
+        other
+    end
   rescue
     error in Postgrex.Error ->
       Logger.warning("Node revocation deferred until local task proofs land",

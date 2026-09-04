@@ -996,6 +996,19 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     end
   end
 
+  test "node revocation defers without violating the database fence while partitions remain" do
+    %{node: node} = active_authority!([Ecto.UUID.generate()])
+
+    assert {:ok, :draining} = Authority.begin_node_drain(node)
+    assert {:error, :node_not_drained} = Authority.revoke_node(node)
+
+    assert [["draining"]] =
+             Repo.query!(
+               "SELECT state FROM public.runtime_node_incarnations WHERE id = $1::uuid",
+               [Ecto.UUID.dump!(node.id)]
+             ).rows
+  end
+
   test "node and partition drains lock overlapping Agent leases in agent order" do
     protocol_snapshot = snapshot_protocol_pair!()
 
