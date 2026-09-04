@@ -18,7 +18,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
   @default_pending_candidate_limit 25
   @max_required_candidate_share 12
   @max_query_limit 100
-  @live_statuses ~w(pending planned held)
+  @live_dedupe_target "(user_id, dedupe_key) WHERE status IN ('pending', 'planned', 'held')"
   @expirable_live_statuses ~w(pending planned)
   # SPEC 02 R7: a "held" candidate has no expires_at-based owner (its
   # original expires_at is stale pre-hold data); age is measured from
@@ -56,21 +56,20 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
 
     %ProactiveCandidate{}
     |> ProactiveCandidate.enqueue_changeset(normalized)
-    |> Repo.insert()
-    |> case do
-      {:ok, candidate} ->
-        {:ok, candidate}
+    |> Repo.insert(
+      on_conflict: live_dedupe_conflict(),
+      conflict_target: {:unsafe_fragment, @live_dedupe_target},
+      returning: true
+    )
+  end
 
-      {:error, changeset} = error ->
-        if live_dedupe_error?(changeset) do
-          case get_live(normalized["user_id"], normalized["dedupe_key"]) do
-            %ProactiveCandidate{} = candidate -> {:ok, candidate}
-            nil -> error
-          end
-        else
-          error
-        end
-    end
+  # A duplicate live candidate is a normal idempotency race, not a failed
+  # write. Return the existing row atomically without changing its contents or
+  # making PostgreSQL emit a unique-violation error first.
+  defp live_dedupe_conflict do
+    from(candidate in ProactiveCandidate,
+      update: [set: [dedupe_key: candidate.dedupe_key]]
+    )
   end
 
   defp enqueue_json_safe?(attrs) do
@@ -851,28 +850,6 @@ defmodule Maraithon.TelegramAssistant.ProactiveQueue do
   defp get_candidate(%ProactiveCandidate{} = candidate), do: candidate
   defp get_candidate(id) when is_binary(id), do: Repo.get(ProactiveCandidate, id)
   defp get_candidate(_candidate_or_id), do: nil
-
-  defp get_live(user_id, dedupe_key) when is_binary(user_id) and is_binary(dedupe_key) do
-    ProactiveCandidate
-    |> where([candidate], candidate.user_id == ^user_id)
-    |> where([candidate], candidate.dedupe_key == ^dedupe_key)
-    |> where([candidate], candidate.status in ^@live_statuses)
-    |> order_by([candidate], desc: candidate.inserted_at)
-    |> limit(1)
-    |> Repo.one()
-  end
-
-  defp get_live(_user_id, _dedupe_key), do: nil
-
-  defp live_dedupe_error?(changeset) do
-    Enum.any?(changeset.errors, fn
-      {:user_id, {_message, opts}} ->
-        Keyword.get(opts, :constraint_name) == "proactive_candidates_live_dedupe_index"
-
-      {_field, {_message, opts}} ->
-        Keyword.get(opts, :constraint_name) == "proactive_candidates_live_dedupe_index"
-    end)
-  end
 
   defp raw_attr(attrs, key) when is_map(attrs) and is_binary(key) do
     case Map.fetch(attrs, key) do
