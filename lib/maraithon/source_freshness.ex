@@ -14,6 +14,7 @@ defmodule Maraithon.SourceFreshness do
   alias Maraithon.Companion.Devices
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Normalization
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
   alias Maraithon.SourceErrorCopy
   alias Maraithon.SourceLabels
@@ -181,18 +182,20 @@ defmodule Maraithon.SourceFreshness do
       when is_binary(user_id) and is_binary(provider) and (is_map(attrs) or is_list(attrs)) do
     attrs = Map.new(attrs)
 
-    case latest_account(user_id, provider) do
-      %ConnectedAccount{} = account ->
-        now = read_datetime(attrs, :at) || DateTime.utc_now()
+    Repo.transaction(fn ->
+      _user = WriteFence.lock_user_writable!(user_id)
 
-        metadata =
-          (account.metadata || %{})
-          |> Map.drop(["last_error", "reconnect_notification", "reauth_notification"])
-          |> put_iso("last_successful_sync_at", now)
-          |> maybe_put_iso("last_webhook_at", read_datetime(attrs, :last_webhook_at))
-          |> maybe_put_iso("last_full_scan_at", read_datetime(attrs, :last_full_scan_at))
+      case latest_account(user_id, provider) do
+        %ConnectedAccount{} = account ->
+          now = read_datetime(attrs, :at) || DateTime.utc_now()
 
-        result =
+          metadata =
+            (account.metadata || %{})
+            |> Map.drop(["last_error", "reconnect_notification", "reauth_notification"])
+            |> put_iso("last_successful_sync_at", now)
+            |> maybe_put_iso("last_webhook_at", read_datetime(attrs, :last_webhook_at))
+            |> maybe_put_iso("last_full_scan_at", read_datetime(attrs, :last_full_scan_at))
+
           account
           |> ConnectedAccount.changeset(%{
             status: "connected",
@@ -200,24 +203,25 @@ defmodule Maraithon.SourceFreshness do
             last_refreshed_at: now
           })
           |> Repo.update()
+          |> case do
+            {:ok, updated_account} -> {account, updated_account}
+            {:error, reason} -> Repo.rollback(reason)
+          end
 
-        case result do
-          {:ok, updated_account} = ok ->
-            # R4: `account` (pre-write) still carries the prior status and
-            # any pending reconnect notification; `updated_account` is the
-            # fresh "connected" state. This is the general success hook for
-            # real syncs (Gmail/Calendar/Slack poll, watch renewal), unlike
-            # `ConnectedAccounts.upsert_from_oauth/3` which only fires on
-            # token refresh.
-            ConnectedAccounts.maybe_report_recovery(account, updated_account)
-            ok
+        nil ->
+          Repo.rollback(:connected_account_not_found)
+      end
+    end)
+    |> case do
+      {:ok, {account, updated_account}} ->
+        # R4: `account` (pre-write) still carries the prior status and any
+        # pending reconnect notification; report recovery only after the
+        # freshness transaction commits so no network delivery holds locks.
+        ConnectedAccounts.maybe_report_recovery(account, updated_account)
+        {:ok, updated_account}
 
-          error ->
-            error
-        end
-
-      nil ->
-        {:error, :connected_account_not_found}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
