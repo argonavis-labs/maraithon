@@ -843,6 +843,10 @@ defmodule MaraithonWeb.TodosLiveTest do
              "#todo-loading-shell[data-todo-loading-shell='true'][role='status']"
            )
 
+    assert has_element?(view, "#todo-loading-shell .todo-boot-sr-only", "Loading todos…")
+    assert has_element?(view, "#todo-loading-shell .todo-boot-nav")
+    assert has_element?(view, "#todo-loading-shell .todo-boot-table")
+
     assert has_element?(
              view,
              "#todo-ready-content[data-todo-ready-content='true'][hidden][inert][aria-hidden='true']"

@@ -1487,63 +1487,76 @@ defmodule MaraithonWeb.TodosLive do
       aria-live="polite"
       aria-label="Loading todos"
     >
-      <span class="sr-only">Loading todos…</span>
+      <span class="todo-boot-sr-only">Loading todos…</span>
 
-      <div class="space-y-4 animate-pulse motion-reduce:animate-none" aria-hidden="true">
-        <div class="flex items-center justify-between gap-4">
-          <div class="h-9 w-28 rounded-md bg-zinc-200"></div>
-          <div class="h-9 w-28 rounded-md bg-zinc-200"></div>
-        </div>
-
-        <div class="h-10 w-32 rounded-lg border border-zinc-950/5 bg-white shadow-sm"></div>
-
-        <.panel body_class="p-0">
-          <:header>
-            <div class="flex flex-wrap items-center justify-between gap-4">
-              <div class="flex items-center gap-2">
-                <div class="h-9 w-24 rounded-md bg-zinc-100"></div>
-                <div class="h-9 w-28 rounded-md bg-zinc-100"></div>
-                <div class="h-9 w-20 rounded-md bg-zinc-100"></div>
-              </div>
-              <div class="flex items-center gap-3">
-                <div class="h-5 w-16 rounded bg-zinc-100"></div>
-                <div class="h-9 w-32 rounded-md bg-zinc-100"></div>
+      <div class="todo-boot-pulse" aria-hidden="true">
+        <div class="todo-boot-nav">
+          <div class="todo-boot-nav-inner">
+            <div class="todo-boot-nav-left">
+              <span class="todo-boot-line" style="width: 6rem; height: 1rem;"></span>
+              <div class="todo-boot-nav-links">
+                <span class="todo-boot-line todo-boot-line-light" style="width: 2.75rem;"></span>
+                <span class="todo-boot-line todo-boot-line-light" style="width: 3.25rem;"></span>
+                <span class="todo-boot-line todo-boot-line-light" style="width: 2.5rem;"></span>
               </div>
             </div>
-          </:header>
+            <div class="todo-boot-controls">
+              <span class="todo-boot-check" style="width: 2rem; height: 2rem; border-radius: 9999px;"></span>
+              <span class="todo-boot-line todo-boot-line-light" style="width: 5.5rem;"></span>
+            </div>
+          </div>
+        </div>
 
-          <div class="overflow-x-hidden">
-            <div class="min-w-[58rem]">
-              <div class="grid grid-cols-[2.5rem_minmax(20rem,1.6fr)_minmax(10rem,0.7fr)_9rem_5rem] items-center gap-4 border-b border-zinc-950/10 bg-zinc-50/70 px-5 py-3">
-                <div class="size-4 rounded bg-zinc-200"></div>
-                <div class="h-3 w-16 rounded bg-zinc-200"></div>
-                <div class="h-3 w-14 rounded bg-zinc-200"></div>
-                <div class="h-3 w-10 rounded bg-zinc-200"></div>
-                <div class="ml-auto h-3 w-12 rounded bg-zinc-200"></div>
+        <main class="todo-boot-main">
+          <div class="todo-boot-stack">
+            <div class="todo-boot-header">
+              <span class="todo-boot-line" style="width: 7rem; height: 2rem;"></span>
+              <span class="todo-boot-box" style="width: 7.5rem;"></span>
+            </div>
+
+            <span class="todo-boot-box" style="width: 8rem; height: 2.5rem; background: #fff;"></span>
+
+            <div class="todo-boot-panel">
+              <div class="todo-boot-toolbar">
+                <div class="todo-boot-controls">
+                  <span class="todo-boot-box" style="width: 6rem;"></span>
+                  <span class="todo-boot-box" style="width: 7rem;"></span>
+                  <span class="todo-boot-box" style="width: 5rem;"></span>
+                </div>
+                <div class="todo-boot-controls">
+                  <span class="todo-boot-line todo-boot-line-light" style="width: 4rem;"></span>
+                  <span class="todo-boot-box" style="width: 8rem;"></span>
+                </div>
               </div>
 
-              <div
-                :for={_row <- 1..6}
-                class="grid min-h-24 grid-cols-[2.5rem_minmax(20rem,1.6fr)_minmax(10rem,0.7fr)_9rem_5rem] items-start gap-4 border-b border-zinc-950/5 px-5 py-4 last:border-b-0"
-              >
-                <div class="mt-1 size-4 rounded bg-zinc-100"></div>
-                <div class="space-y-3">
-                  <div class="flex items-center gap-2">
-                    <div class="h-4 w-2/5 rounded bg-zinc-200"></div>
-                    <div class="h-5 w-14 rounded-md bg-zinc-100"></div>
+              <div style="overflow: hidden;">
+                <div class="todo-boot-table">
+                  <div class="todo-boot-grid todo-boot-grid-head">
+                    <span class="todo-boot-check"></span>
+                    <span class="todo-boot-line" style="width: 4rem;"></span>
+                    <span class="todo-boot-line" style="width: 3.5rem;"></span>
+                    <span class="todo-boot-line" style="width: 2.5rem;"></span>
+                    <span class="todo-boot-line" style="width: 3rem; margin-left: auto;"></span>
                   </div>
-                  <div class="h-3 w-4/5 rounded bg-zinc-100"></div>
+
+                  <div :for={_row <- 1..6} class="todo-boot-grid todo-boot-row">
+                    <span class="todo-boot-check" style="margin-top: 0.25rem;"></span>
+                    <div class="todo-boot-cell">
+                      <span class="todo-boot-line" style="width: 42%; height: 1rem;"></span>
+                      <span class="todo-boot-line todo-boot-line-light" style="width: 82%;"></span>
+                    </div>
+                    <div class="todo-boot-cell">
+                      <span class="todo-boot-line" style="width: 5rem;"></span>
+                      <span class="todo-boot-line todo-boot-line-light" style="width: 6rem; height: 1.25rem;"></span>
+                    </div>
+                    <span class="todo-boot-line todo-boot-line-light" style="width: 5rem;"></span>
+                    <span class="todo-boot-box" style="width: 3rem; height: 1.75rem; margin-left: auto;"></span>
+                  </div>
                 </div>
-                <div class="space-y-3">
-                  <div class="h-3.5 w-20 rounded bg-zinc-200"></div>
-                  <div class="h-5 w-24 rounded-md bg-zinc-100"></div>
-                </div>
-                <div class="h-3.5 w-20 rounded bg-zinc-100"></div>
-                <div class="ml-auto h-7 w-12 rounded-md bg-zinc-100"></div>
               </div>
             </div>
           </div>
-        </.panel>
+        </main>
       </div>
     </section>
     """
