@@ -2032,34 +2032,36 @@ defmodule Maraithon.Runtime.Agent do
        )
        when is_binary(directive_id) and is_binary(claim_token) and is_binary(run_id) do
     result =
-      AgentDirectives.with_live_claim(
-        data.agent_id,
-        directive_id,
-        data.owner_token,
-        claim_token,
-        :ready,
-        fn directive, now ->
-          with {:ok, persisted_effect_id} <-
-                 Effects.request_prepared(data.agent_id, effect_type, tool_name, params, %{
-                   effect_id: effect_id,
-                   idempotency_key: idempotency_key,
-                   agent_run_id: run_id,
-                   agent_run_step_id: effect_info.run_step_id,
-                   runtime_owner_generation: data.owner_token
-                 }),
-               {:ok, _directive, _ordinal} <-
-                 AgentDirectives.admit_effect_locked(directive, run_id, now) do
-            updated_data =
-              append_event!(data, "effect_requested", %{
-                effect_id: effect_id,
-                effect_type: to_string(effect_type),
-                idempotency_key: idempotency_key
-              })
+      with :ok <- renew_effect_admission_authority(data) do
+        AgentDirectives.with_live_claim(
+          data.agent_id,
+          directive_id,
+          data.owner_token,
+          claim_token,
+          :ready,
+          fn directive, now ->
+            with {:ok, persisted_effect_id} <-
+                   Effects.request_prepared(data.agent_id, effect_type, tool_name, params, %{
+                     effect_id: effect_id,
+                     idempotency_key: idempotency_key,
+                     agent_run_id: run_id,
+                     agent_run_step_id: effect_info.run_step_id,
+                     runtime_owner_generation: data.owner_token
+                   }),
+                 {:ok, _directive, _ordinal} <-
+                   AgentDirectives.admit_effect_locked(directive, run_id, now) do
+              updated_data =
+                append_event!(data, "effect_requested", %{
+                  effect_id: effect_id,
+                  effect_type: to_string(effect_type),
+                  idempotency_key: idempotency_key
+                })
 
-            {:ok, {persisted_effect_id, updated_data}}
+              {:ok, {persisted_effect_id, updated_data}}
+            end
           end
-        end
-      )
+        )
+      end
 
     case result do
       {:ok, {persisted_effect_id, updated_data}} ->
@@ -3341,48 +3343,7 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp renew_exact_lease(%{exact_owner?: true, exact_activated?: true} = data) do
-    renewal =
-      Repo.transaction(fn ->
-        ProtocolCutover.require_current_mutation!()
-
-        lease_result =
-          case data.guard_generation do
-            nil ->
-              AgentLeases.renew(data.agent_id, data.owner_token, ttl_ms: data.lease_ttl_ms)
-
-            guard_generation ->
-              AgentLeases.renew_recovery(
-                data.agent_id,
-                data.owner_token,
-                guard_generation,
-                ttl_ms: data.lease_ttl_ms
-              )
-          end
-
-        lease =
-          case lease_result do
-            {:ok, lease} -> lease
-            {:error, reason} -> Repo.rollback(reason)
-          end
-
-        case {data.current_directive_id, data.current_directive_claim_token} do
-          {directive_id, claim_token}
-          when is_binary(directive_id) and is_binary(claim_token) ->
-            case AgentDirectives.renew_claim_in_transaction(
-                   data.agent_id,
-                   directive_id,
-                   data.owner_token,
-                   claim_token,
-                   ttl_ms: data.lease_ttl_ms
-                 ) do
-              {:ok, _directive} -> lease
-              {:error, reason} -> Repo.rollback(reason)
-            end
-
-          _no_active_directive ->
-            lease
-        end
-      end)
+    renewal = renew_exact_authority(data)
 
     case renewal do
       {:ok, %{draining_at: nil}} ->
@@ -3404,6 +3365,60 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp renew_exact_lease(data), do: {:keep_state, data}
+
+  defp renew_effect_admission_authority(%{exact_owner?: true, exact_activated?: true} = data) do
+    case renew_exact_authority(data) do
+      {:ok, %{draining_at: nil}} -> :ok
+      {:ok, _draining_lease} -> {:error, :runtime_authority_revoked}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp renew_effect_admission_authority(_data), do: :ok
+
+  defp renew_exact_authority(data) do
+    Repo.transaction(fn ->
+      ProtocolCutover.require_current_mutation!()
+
+      lease_result =
+        case data.guard_generation do
+          nil ->
+            AgentLeases.renew(data.agent_id, data.owner_token, ttl_ms: data.lease_ttl_ms)
+
+          guard_generation ->
+            AgentLeases.renew_recovery(
+              data.agent_id,
+              data.owner_token,
+              guard_generation,
+              ttl_ms: data.lease_ttl_ms
+            )
+        end
+
+      lease =
+        case lease_result do
+          {:ok, lease} -> lease
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      case {data.current_directive_id, data.current_directive_claim_token} do
+        {directive_id, claim_token}
+        when is_binary(directive_id) and is_binary(claim_token) ->
+          case AgentDirectives.renew_claim_in_transaction(
+                 data.agent_id,
+                 directive_id,
+                 data.owner_token,
+                 claim_token,
+                 ttl_ms: data.lease_ttl_ms
+               ) do
+            {:ok, _directive} -> lease
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        _no_active_directive ->
+          lease
+      end
+    end)
+  end
 
   defp stop_agent(reason, %{exact_owner?: true} = data) do
     if begin_exact_draining(data) do

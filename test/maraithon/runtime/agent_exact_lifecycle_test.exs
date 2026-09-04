@@ -422,18 +422,30 @@ defmodule Maraithon.Runtime.AgentExactLifecycleTest do
     {supervisor, watcher} = exact_runtime(recover?: false)
 
     {:ok, pid} =
-      start_exact(agent, supervisor, watcher, ttl_ms: 60_000, renew_interval_ms: 5_000)
+      start_exact(agent, supervisor, watcher, ttl_ms: 60_000, renew_interval_ms: 30_000)
 
     wait_for_state(pid, :idle)
     owner_token = registry_token(agent.id)
     message_id = "directive-message-1"
 
-    assert {:ok, %{directive_id: directive_id, message_id: ^message_id}} =
-             with_agent_suspended(pid, fn ->
-               Runtime.send_message(agent.id, "hello exact runtime", %{
-                 "message_id" => message_id
-               })
-             end)
+    {near_expiry, send_result} =
+      with_agent_suspended(pid, fn ->
+        lease = AgentLeases.get(agent.id)
+        near_expiry = DateTime.add(DatabaseClock.now!(), 5, :second)
+
+        lease
+        |> Ecto.Changeset.change(lease_until: near_expiry)
+        |> Repo.update!()
+
+        result =
+          Runtime.send_message(agent.id, "hello exact runtime", %{
+            "message_id" => message_id
+          })
+
+        {near_expiry, result}
+      end)
+
+    assert {:ok, %{directive_id: directive_id, message_id: ^message_id}} = send_result
 
     waiting_data =
       assert_eventually_value(fn ->
@@ -448,6 +460,7 @@ defmodule Maraithon.Runtime.AgentExactLifecycleTest do
         directive = Repo.get!(AgentDirective, directive_id)
         [{effect_id, effect_info}] = Map.to_list(waiting_data.pending_effects)
         effect = Repo.get!(Effect, effect_id)
+        renewed_lease = AgentLeases.get(agent.id)
 
         assert directive.status == "processing"
         assert directive.claimed_by_generation == owner_token
@@ -457,6 +470,7 @@ defmodule Maraithon.Runtime.AgentExactLifecycleTest do
         assert directive.effect_admitted_at != nil
         assert effect.agent_run_id == directive.active_run_id
         assert effect.agent_run_step_id == effect_info.run_step_id
+        assert DateTime.compare(renewed_lease.lease_until, near_expiry) == :gt
 
         requested_event =
           agent.id
