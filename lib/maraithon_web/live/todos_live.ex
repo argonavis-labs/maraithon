@@ -760,30 +760,41 @@ defmodule MaraithonWeb.TodosLive do
         phx-hook=".TodoKeyboardShortcuts"
         data-view={if(@selected_todo, do: "detail", else: "index")}
         data-selected-todo-id={@selected_todo && @selected_todo.id}
+        data-shortcuts-ready="false"
+        aria-busy="true"
       >
-        <%= if @selected_todo do %>
-          <.todo_detail_panel
-            todo={@selected_todo}
-            todos={@todos}
-            filters={@filters}
-            project_options={@project_options}
-            timezone_info={@timezone_info}
-            brief={@brief}
-            brief_state={@brief_state}
-            brief_progress={@brief_progress}
-            reply_form={@reply_form}
-            reply_target={@reply_target}
-            reply_target_state={@reply_target_state}
-            reply_sending?={@reply_sending?}
-            reply_sent={@reply_sent}
-          />
-        <% else %>
-          <div class="space-y-4">
-            <.page_header title="Todos">
-              <:actions>
-                <.shortcut_help_button />
-              </:actions>
-            </.page_header>
+        <.todo_loading_shell />
+
+        <div
+          id="todo-ready-content"
+          data-todo-ready-content="true"
+          aria-hidden="true"
+          inert
+          hidden
+        >
+          <%= if @selected_todo do %>
+            <.todo_detail_panel
+              todo={@selected_todo}
+              todos={@todos}
+              filters={@filters}
+              project_options={@project_options}
+              timezone_info={@timezone_info}
+              brief={@brief}
+              brief_state={@brief_state}
+              brief_progress={@brief_progress}
+              reply_form={@reply_form}
+              reply_target={@reply_target}
+              reply_target_state={@reply_target_state}
+              reply_sending?={@reply_sending?}
+              reply_sent={@reply_sent}
+            />
+          <% else %>
+            <div class="space-y-4">
+              <.page_header title="Todos">
+                <:actions>
+                  <.shortcut_help_button />
+                </:actions>
+              </.page_header>
 
           <details class="group">
             <summary class="inline-flex cursor-pointer list-none items-center gap-6 rounded-lg border border-zinc-950/10 bg-white px-3 py-2 text-sm/6 font-medium text-zinc-700 hover:text-zinc-950">
@@ -1106,19 +1117,27 @@ defmodule MaraithonWeb.TodosLive do
               </.table>
           </div>
         </.panel>
-          </div>
-        <% end %>
+            </div>
+          <% end %>
 
-        <.shortcut_help_modal shortcut_groups={@shortcut_groups} />
+          <.shortcut_help_modal shortcut_groups={@shortcut_groups} />
+        </div>
 
         <script :type={Phoenix.LiveView.ColocatedHook} name=".TodoKeyboardShortcuts">
           export default {
             mounted() {
+              this.shortcutsReady = false
               this.shortcutsOpen = false
               this.optimisticRows = new Map()
               this.processingTodoIds = new Set()
 
               this.handleClick = (event) => {
+                if (!this.shortcutsReady) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  return
+                }
+
                 const trigger = event.target?.closest?.("[data-shortcuts-trigger='true']")
                 const close = event.target?.closest?.("[data-shortcuts-close='true']")
                 const resolve = event.target?.closest?.("[data-todo-resolve]")
@@ -1139,6 +1158,7 @@ defmodule MaraithonWeb.TodosLive do
               }
 
               this.handleKeydown = (event) => {
+                if (!this.shortcutsReady) return
                 if (event.metaKey || event.ctrlKey || event.altKey) return
 
                 const target = event.target
@@ -1208,12 +1228,13 @@ defmodule MaraithonWeb.TodosLive do
 
               this.el.addEventListener("click", this.handleClick)
               window.addEventListener("keydown", this.handleKeydown)
-              this.scrollActiveTodoIntoView()
+              this.beginReadyTransition()
             },
             beforeUpdate() {
               this.activeTodoIdBeforeUpdate = this.activeTodoId()
             },
             updated() {
+              if (this.shortcutsReady) this.revealReadyContent()
               this.syncShortcutModal()
               this.restoreActiveTodoAfterUpdate()
               this.scrollActiveTodoIntoView()
@@ -1227,6 +1248,29 @@ defmodule MaraithonWeb.TodosLive do
               if (key === "ArrowDown" || key === "ArrowRight") return "j"
               if (key === "ArrowUp" || key === "ArrowLeft") return "k"
               return key
+            },
+            beginReadyTransition() {
+              window.requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => {
+                  this.revealReadyContent()
+                  this.shortcutsReady = true
+                  this.el.dataset.shortcutsReady = "true"
+                  this.scrollActiveTodoIntoView()
+                })
+              })
+            },
+            revealReadyContent() {
+              const loader = this.el.querySelector("[data-todo-loading-shell='true']")
+              const content = this.el.querySelector("[data-todo-ready-content='true']")
+
+              if (loader) loader.hidden = true
+              if (content) {
+                content.hidden = false
+                content.removeAttribute("inert")
+                content.removeAttribute("aria-hidden")
+              }
+
+              this.el.removeAttribute("aria-busy")
             },
             todoRows() {
               return Array.from(this.el.querySelectorAll("[data-todo-row='true']:not([hidden])"))
@@ -1431,6 +1475,77 @@ defmodule MaraithonWeb.TodosLive do
         </.button>
       </div>
     </div>
+    """
+  end
+
+  defp todo_loading_shell(assigns) do
+    ~H"""
+    <section
+      id="todo-loading-shell"
+      data-todo-loading-shell="true"
+      role="status"
+      aria-live="polite"
+      aria-label="Loading todos"
+    >
+      <span class="sr-only">Loading todos…</span>
+
+      <div class="space-y-4 animate-pulse motion-reduce:animate-none" aria-hidden="true">
+        <div class="flex items-center justify-between gap-4">
+          <div class="h-9 w-28 rounded-md bg-zinc-200"></div>
+          <div class="h-9 w-28 rounded-md bg-zinc-200"></div>
+        </div>
+
+        <div class="h-10 w-32 rounded-lg border border-zinc-950/5 bg-white shadow-sm"></div>
+
+        <.panel body_class="p-0">
+          <:header>
+            <div class="flex flex-wrap items-center justify-between gap-4">
+              <div class="flex items-center gap-2">
+                <div class="h-9 w-24 rounded-md bg-zinc-100"></div>
+                <div class="h-9 w-28 rounded-md bg-zinc-100"></div>
+                <div class="h-9 w-20 rounded-md bg-zinc-100"></div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="h-5 w-16 rounded bg-zinc-100"></div>
+                <div class="h-9 w-32 rounded-md bg-zinc-100"></div>
+              </div>
+            </div>
+          </:header>
+
+          <div class="overflow-x-hidden">
+            <div class="min-w-[58rem]">
+              <div class="grid grid-cols-[2.5rem_minmax(20rem,1.6fr)_minmax(10rem,0.7fr)_9rem_5rem] items-center gap-4 border-b border-zinc-950/10 bg-zinc-50/70 px-5 py-3">
+                <div class="size-4 rounded bg-zinc-200"></div>
+                <div class="h-3 w-16 rounded bg-zinc-200"></div>
+                <div class="h-3 w-14 rounded bg-zinc-200"></div>
+                <div class="h-3 w-10 rounded bg-zinc-200"></div>
+                <div class="ml-auto h-3 w-12 rounded bg-zinc-200"></div>
+              </div>
+
+              <div
+                :for={_row <- 1..6}
+                class="grid min-h-24 grid-cols-[2.5rem_minmax(20rem,1.6fr)_minmax(10rem,0.7fr)_9rem_5rem] items-start gap-4 border-b border-zinc-950/5 px-5 py-4 last:border-b-0"
+              >
+                <div class="mt-1 size-4 rounded bg-zinc-100"></div>
+                <div class="space-y-3">
+                  <div class="flex items-center gap-2">
+                    <div class="h-4 w-2/5 rounded bg-zinc-200"></div>
+                    <div class="h-5 w-14 rounded-md bg-zinc-100"></div>
+                  </div>
+                  <div class="h-3 w-4/5 rounded bg-zinc-100"></div>
+                </div>
+                <div class="space-y-3">
+                  <div class="h-3.5 w-20 rounded bg-zinc-200"></div>
+                  <div class="h-5 w-24 rounded-md bg-zinc-100"></div>
+                </div>
+                <div class="h-3.5 w-20 rounded bg-zinc-100"></div>
+                <div class="ml-auto h-7 w-12 rounded-md bg-zinc-100"></div>
+              </div>
+            </div>
+          </div>
+        </.panel>
+      </div>
+    </section>
     """
   end
 

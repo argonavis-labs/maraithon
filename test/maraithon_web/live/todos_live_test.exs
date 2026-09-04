@@ -835,6 +835,21 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     assert has_element?(
              view,
+             "#todo-keyboard-scope[data-shortcuts-ready='false'][aria-busy='true']"
+           )
+
+    assert has_element?(
+             view,
+             "#todo-loading-shell[data-todo-loading-shell='true'][role='status']"
+           )
+
+    assert has_element?(
+             view,
+             "#todo-ready-content[data-todo-ready-content='true'][hidden][inert][aria-hidden='true']"
+           )
+
+    assert has_element?(
+             view,
              "#todo-shortcuts-trigger[data-shortcuts-trigger='true']",
              "Shortcuts"
            )
