@@ -238,11 +238,26 @@ defmodule Maraithon.Runtime.EffectClaimRenewer do
     # and all provider tasks as the physical backstop.
     Logger.warning("Effect claim heartbeat failed closed",
       failure_code: Maraithon.Redaction.error_class(reason),
+      error_class: heartbeat_failure_class(reason),
       remembered_local_tasks: map_size(state.renewal_deadlines)
     )
 
     {:fatal, {:error, :effect_claim_heartbeat_failed}, state}
   end
+
+  defp heartbeat_failure_class({wrapper, reason})
+       when wrapper in [
+              :effect_claim_heartbeat_failed,
+              :effect_claim_heartbeat_exception,
+              :effect_claim_heartbeat_exit,
+              :effect_claim_termination_unproved
+            ],
+       do: heartbeat_failure_class(reason)
+
+  defp heartbeat_failure_class(%Postgrex.Error{postgres: %{code: code}}) when is_atom(code),
+    do: "postgres_#{code}"
+
+  defp heartbeat_failure_class(reason), do: Maraithon.Redaction.error_class(reason)
 
   defp identity_key(identity) do
     {
