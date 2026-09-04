@@ -742,6 +742,111 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute has_element?(view, "#todo-#{todo.id}")
   end
 
+  test "Gmail-style shortcuts move, select, open, complete, and dismiss the active todo", %{
+    conn: conn
+  } do
+    assert {:ok, _todos} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "First shortcut todo",
+                 "summary" => "This should be active first.",
+                 "next_action" => "Open the first todo.",
+                 "priority" => 99,
+                 "dedupe_key" => "todos-live:shortcuts:first"
+               },
+               %{
+                 "source" => "slack",
+                 "kind" => "general",
+                 "title" => "Second shortcut todo",
+                 "summary" => "This should be active second.",
+                 "next_action" => "Complete the second todo.",
+                 "priority" => 90,
+                 "dedupe_key" => "todos-live:shortcuts:second"
+               },
+               %{
+                 "source" => "calendar",
+                 "kind" => "general",
+                 "title" => "Third shortcut todo",
+                 "summary" => "This should be dismissed last.",
+                 "next_action" => "Dismiss the third todo.",
+                 "priority" => 80,
+                 "dedupe_key" => "todos-live:shortcuts:third"
+               }
+             ])
+
+    [first, second, third] = Todos.list_for_user(@user_email, statuses: ["open"], limit: 3)
+    {:ok, view, _html} = live(conn, "/todos")
+
+    assert has_element?(view, "#todo-keyboard-scope[data-view='index']")
+    assert has_element?(view, "#todo-#{first.id}[data-active='true'][aria-current='true']")
+    refute has_element?(view, "#todo-#{second.id}[data-active='true']")
+
+    render_hook(view, "todo_shortcut", %{"key" => "j"})
+    assert has_element?(view, "#todo-#{second.id}[data-active='true'][aria-current='true']")
+
+    render_hook(view, "todo_shortcut", %{"key" => "x"})
+
+    assert has_element?(
+             view,
+             "#todo-#{second.id} input[phx-click='toggle_todo_selection'][checked]"
+           )
+
+    assert render(view) =~ "1 selected"
+
+    render_hook(view, "todo_shortcut", %{"key" => "k"})
+    assert has_element?(view, "#todo-#{first.id}[data-active='true']")
+
+    render_hook(view, "todo_shortcut", %{"key" => "o"})
+    assert_patch(view, "/todos/#{first.id}")
+    assert has_element?(view, "#todo-keyboard-scope[data-view='detail']")
+
+    render_hook(view, "todo_shortcut", %{"key" => "j"})
+    assert_patch(view, "/todos/#{second.id}")
+
+    render_hook(view, "todo_shortcut", %{"key" => "u"})
+    assert_patch(view, "/todos")
+    assert has_element?(view, "#todo-#{second.id}[data-active='true']")
+
+    render_hook(view, "todo_shortcut", %{"key" => "e"})
+    assert Todos.get_for_user(@user_email, second.id).status == "done"
+    refute has_element?(view, "#todo-#{second.id}")
+    assert has_element?(view, "#todo-#{third.id}[data-active='true']")
+
+    render_hook(view, "todo_shortcut", %{"key" => "#"})
+    assert Todos.get_for_user(@user_email, third.id).status == "dismissed"
+    refute has_element?(view, "#todo-#{third.id}")
+    assert has_element?(view, "#todo-#{first.id}[data-active='true']")
+  end
+
+  test "shortcut help is visible from the todo list and opens from the question-mark key", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = live(conn, "/todos")
+
+    assert has_element?(view, "#todo-shortcuts-trigger", "Shortcuts")
+    refute has_element?(view, "#todo-shortcuts-modal")
+
+    view
+    |> element("#todo-shortcuts-trigger")
+    |> render_click()
+
+    assert has_element?(view, "#todo-shortcuts-modal [role='dialog'][aria-modal='true']")
+    assert render(view) =~ "The blue row is the active todo."
+    assert render(view) =~ "Mark done"
+    assert render(view) =~ "Focus search"
+
+    view
+    |> element("#todo-shortcuts-close")
+    |> render_click()
+
+    refute has_element?(view, "#todo-shortcuts-modal")
+
+    render_hook(view, "todo_shortcut", %{"key" => "?"})
+    assert has_element?(view, "#todo-shortcuts-modal")
+  end
+
   test "bulk see less records feedback and dismisses selected todos", %{conn: conn} do
     install_see_less_model()
 
@@ -896,7 +1001,7 @@ defmodule MaraithonWeb.TodosLiveTest do
                },
                %{
                  "source" => "slack",
-                 "kind" => "slack_triage",
+                 "kind" => "general",
                  "title" => "Second ranked detail todo",
                  "summary" => "This item should open next.",
                  "next_action" => "Continue with the second item.",
@@ -908,7 +1013,11 @@ defmodule MaraithonWeb.TodosLiveTest do
     [first, second] = Todos.list_for_user(@user_email, statuses: ["open"], limit: 2)
     {:ok, view, _html} = live(conn, "/todos/#{first.id}")
 
-    assert has_element?(view, "#todo-detail[phx-hook='.TodoHotkeys']")
+    assert has_element?(
+             view,
+             "#todo-keyboard-scope[phx-hook='.TodoKeyboardShortcuts'][data-view='detail']"
+           )
+
     assert has_element?(view, "#todo-detail > header #todo-primary-actions")
 
     assert has_element?(
@@ -923,7 +1032,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     assert has_element?(
              view,
-             "#next-todo[href='/todos/#{second.id}'][aria-keyshortcuts='ArrowRight']"
+             "#next-todo[href='/todos/#{second.id}'][aria-keyshortcuts='ArrowRight J']"
            )
 
     view
@@ -934,7 +1043,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     assert has_element?(
              view,
-             "#previous-todo[href='/todos/#{first.id}'][aria-keyshortcuts='ArrowLeft']"
+             "#previous-todo[href='/todos/#{first.id}'][aria-keyshortcuts='ArrowLeft K']"
            )
 
     view
