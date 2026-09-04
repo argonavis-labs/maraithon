@@ -809,42 +809,42 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert_patch(view, "/todos")
     assert has_element?(view, "#todo-#{second.id}[data-active='true']")
 
-    render_hook(view, "todo_shortcut", %{"key" => "e"})
+    render_hook(view, "resolve_todo_shortcut", %{
+      "action" => "complete",
+      "id" => second.id
+    })
+
     assert Todos.get_for_user(@user_email, second.id).status == "done"
     refute has_element?(view, "#todo-#{second.id}")
     assert has_element?(view, "#todo-#{third.id}[data-active='true']")
 
-    render_hook(view, "todo_shortcut", %{"key" => "#"})
+    render_hook(view, "resolve_todo_shortcut", %{
+      "action" => "dismiss",
+      "id" => third.id
+    })
+
     assert Todos.get_for_user(@user_email, third.id).status == "dismissed"
     refute has_element?(view, "#todo-#{third.id}")
     assert has_element?(view, "#todo-#{first.id}[data-active='true']")
   end
 
-  test "shortcut help is visible from the todo list and opens from the question-mark key", %{
+  test "shortcut help is rendered up front for instant client-side display", %{
     conn: conn
   } do
     {:ok, view, _html} = live(conn, "/todos")
 
-    assert has_element?(view, "#todo-shortcuts-trigger", "Shortcuts")
-    refute has_element?(view, "#todo-shortcuts-modal")
+    assert has_element?(
+             view,
+             "#todo-shortcuts-trigger[data-shortcuts-trigger='true']",
+             "Shortcuts"
+           )
 
-    view
-    |> element("#todo-shortcuts-trigger")
-    |> render_click()
-
+    assert has_element?(view, "#todo-shortcuts-modal[data-shortcuts-modal='true'][hidden]")
     assert has_element?(view, "#todo-shortcuts-modal [role='dialog'][aria-modal='true']")
+    assert has_element?(view, "#todo-shortcuts-close[data-shortcuts-close='true']")
     assert render(view) =~ "The blue row is the active todo."
     assert render(view) =~ "Mark done"
     assert render(view) =~ "Focus search"
-
-    view
-    |> element("#todo-shortcuts-close")
-    |> render_click()
-
-    refute has_element?(view, "#todo-shortcuts-modal")
-
-    render_hook(view, "todo_shortcut", %{"key" => "?"})
-    assert has_element?(view, "#todo-shortcuts-modal")
   end
 
   test "bulk see less records feedback and dismisses selected todos", %{conn: conn} do

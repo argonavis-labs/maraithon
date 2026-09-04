@@ -127,7 +127,6 @@ defmodule MaraithonWeb.TodosLive do
        selected_todo_ids: MapSet.new(),
        selected_todo_id: nil,
        selected_todo: nil,
-       shortcuts_open?: false,
        timezone_info: default_timezone_info(),
        brief: nil,
        brief_state: :idle,
@@ -290,36 +289,25 @@ defmodule MaraithonWeb.TodosLive do
     {:noreply, assign(socket, :selected_todo_ids, MapSet.new())}
   end
 
-  def handle_event("open_shortcuts", _params, socket) do
-    {:noreply, assign(socket, :shortcuts_open?, true)}
-  end
-
-  def handle_event("close_shortcuts", _params, socket) do
-    {:noreply, assign(socket, :shortcuts_open?, false)}
-  end
-
-  def handle_event("todo_shortcut", %{"key" => "?"}, socket) do
-    {:noreply, assign(socket, :shortcuts_open?, true)}
-  end
-
   def handle_event("todo_shortcut", %{"key" => key}, socket) when key in ["j", "k"] do
     direction = if key == "j", do: :next, else: :previous
     {:noreply, navigate_todo_shortcut(socket, direction)}
   end
 
-  def handle_event("todo_shortcut", %{"key" => key}, socket) when key in ["o", "Enter"] do
-    {:noreply, open_active_todo(socket)}
+  def handle_event("todo_shortcut", %{"key" => key} = params, socket)
+      when key in ["o", "Enter"] do
+    {:noreply, open_active_todo(socket, Map.get(params, "id"))}
   end
 
-  def handle_event("todo_shortcut", %{"key" => "x"}, socket) do
-    case index_active_todo(socket) do
+  def handle_event("todo_shortcut", %{"key" => "x"} = params, socket) do
+    case shortcut_target_todo(socket, Map.get(params, "id")) do
       %Todo{id: todo_id} -> handle_event("toggle_todo_selection", %{"id" => todo_id}, socket)
       nil -> {:noreply, socket}
     end
   end
 
-  def handle_event("todo_shortcut", %{"key" => "e"}, socket) do
-    case shortcut_target_todo(socket) do
+  def handle_event("todo_shortcut", %{"key" => "e"} = params, socket) do
+    case shortcut_target_todo(socket, Map.get(params, "id")) do
       %Todo{id: todo_id, status: status} when status in ["open", "snoozed"] ->
         handle_event("complete_todo", %{"id" => todo_id}, socket)
 
@@ -328,8 +316,8 @@ defmodule MaraithonWeb.TodosLive do
     end
   end
 
-  def handle_event("todo_shortcut", %{"key" => "#"}, socket) do
-    case shortcut_target_todo(socket) do
+  def handle_event("todo_shortcut", %{"key" => "#"} = params, socket) do
+    case shortcut_target_todo(socket, Map.get(params, "id")) do
       %Todo{id: todo_id, status: status} when status in ["open", "snoozed"] ->
         handle_event("dismiss_todo", %{"id" => todo_id}, socket)
 
@@ -348,6 +336,34 @@ defmodule MaraithonWeb.TodosLive do
 
   def handle_event("todo_shortcut", _params, socket), do: {:noreply, socket}
 
+  def handle_event(
+        "resolve_todo_shortcut",
+        %{"action" => action, "id" => todo_id},
+        socket
+      )
+      when action in ["complete", "dismiss"] and is_binary(todo_id) do
+    result =
+      case shortcut_target_todo(socket, todo_id) do
+        %Todo{status: status} when status in ["open", "snoozed"] ->
+          case action do
+            "complete" -> resolve_todo(socket, todo_id, :complete)
+            "dismiss" -> resolve_todo(socket, todo_id, :dismiss)
+          end
+
+        _todo ->
+          {:error, socket}
+      end
+
+    case result do
+      {:ok, socket} -> {:reply, %{ok: true}, socket}
+      {:error, socket} -> {:reply, %{ok: false}, socket}
+    end
+  end
+
+  def handle_event("resolve_todo_shortcut", _params, socket) do
+    {:reply, %{ok: false}, socket}
+  end
+
   def handle_event("complete_selected_todos", _params, socket) do
     {:noreply, apply_bulk_todo_action(socket, :complete)}
   end
@@ -361,46 +377,16 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   def handle_event("complete_todo", %{"id" => todo_id}, socket) do
-    user_id = current_user_id(socket)
-    detail? = socket.assigns.selected_todo_id == todo_id
-    preferred_next_todo_id = preferred_next_todo_id(socket.assigns.todos, todo_id)
-
-    case Todos.mark_done(user_id, todo_id, todo_action_opts(user_id, "Completed from Work page.")) do
-      {:ok, _todo} ->
-        {:noreply,
-         socket
-         |> prepare_active_todo_after_resolution(todo_id, preferred_next_todo_id)
-         |> refresh_todos()
-         |> put_flash(:info, "Work item done.")
-         |> maybe_advance_after_resolution(detail?, todo_id, preferred_next_todo_id)}
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> refresh_todos()
-         |> put_flash(:error, TodoActionCopy.error(:complete, reason))}
+    case resolve_todo(socket, todo_id, :complete) do
+      {:ok, socket} -> {:noreply, socket}
+      {:error, socket} -> {:noreply, socket}
     end
   end
 
   def handle_event("dismiss_todo", %{"id" => todo_id}, socket) do
-    user_id = current_user_id(socket)
-    detail? = socket.assigns.selected_todo_id == todo_id
-    preferred_next_todo_id = preferred_next_todo_id(socket.assigns.todos, todo_id)
-
-    case Todos.dismiss(user_id, todo_id, todo_action_opts(user_id, "Dismissed from Work page.")) do
-      {:ok, _todo} ->
-        {:noreply,
-         socket
-         |> prepare_active_todo_after_resolution(todo_id, preferred_next_todo_id)
-         |> refresh_todos()
-         |> put_flash(:info, "Work item dismissed.")
-         |> maybe_advance_after_resolution(detail?, todo_id, preferred_next_todo_id)}
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> refresh_todos()
-         |> put_flash(:error, TodoActionCopy.error(:dismiss, reason))}
+    case resolve_todo(socket, todo_id, :dismiss) do
+      {:ok, socket} -> {:noreply, socket}
+      {:error, socket} -> {:noreply, socket}
     end
   end
 
@@ -773,7 +759,7 @@ defmodule MaraithonWeb.TodosLive do
         id="todo-keyboard-scope"
         phx-hook=".TodoKeyboardShortcuts"
         data-view={if(@selected_todo, do: "detail", else: "index")}
-        data-shortcuts-open={to_string(@shortcuts_open?)}
+        data-selected-todo-id={@selected_todo && @selected_todo.id}
       >
         <%= if @selected_todo do %>
           <.todo_detail_panel
@@ -1053,14 +1039,15 @@ defmodule MaraithonWeb.TodosLive do
                     phx-click="open_todo_detail"
                     phx-value-id={todo.id}
                     data-todo-row="true"
+                    data-todo-id={todo.id}
                     data-active={to_string(todo.id == @active_todo_id)}
                     aria-current={if(todo.id == @active_todo_id, do: "true")}
-                    class={todo_row_class(todo, @selected_todo_ids, @active_todo_id)}
+                    class={todo_row_class(todo, @selected_todo_ids)}
                   >
                     <.table_cell class="w-10 align-top">
                       <span
-                        :if={todo.id == @active_todo_id}
-                        class="absolute inset-y-2 left-0 w-0.5 rounded-full bg-blue-600"
+                        data-active-indicator="true"
+                        class="absolute inset-y-2 left-0 hidden w-0.5 rounded-full bg-blue-600 group-data-[active=true]:block"
                         aria-hidden="true"
                       />
                       <input
@@ -1104,6 +1091,8 @@ defmodule MaraithonWeb.TodosLive do
                       <.button
                         :if={todo.status in ["open", "snoozed"]}
                         type="button"
+                        data-todo-resolve="complete"
+                        data-todo-id={todo.id}
                         phx-click="complete_todo"
                         phx-value-id={todo.id}
                         variant="plain"
@@ -1120,11 +1109,35 @@ defmodule MaraithonWeb.TodosLive do
           </div>
         <% end %>
 
-        <.shortcut_help_modal :if={@shortcuts_open?} shortcut_groups={@shortcut_groups} />
+        <.shortcut_help_modal shortcut_groups={@shortcut_groups} />
 
         <script :type={Phoenix.LiveView.ColocatedHook} name=".TodoKeyboardShortcuts">
           export default {
             mounted() {
+              this.shortcutsOpen = false
+              this.optimisticRows = new Map()
+              this.processingTodoIds = new Set()
+
+              this.handleClick = (event) => {
+                const trigger = event.target?.closest?.("[data-shortcuts-trigger='true']")
+                const close = event.target?.closest?.("[data-shortcuts-close='true']")
+                const resolve = event.target?.closest?.("[data-todo-resolve]")
+
+                if (trigger) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  this.openShortcuts()
+                } else if (close) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  this.closeShortcuts()
+                } else if (resolve) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  this.optimisticallyResolveTodo(resolve.dataset.todoId, resolve.dataset.todoResolve)
+                }
+              }
+
               this.handleKeydown = (event) => {
                 if (event.metaKey || event.ctrlKey || event.altKey) return
 
@@ -1132,23 +1145,24 @@ defmodule MaraithonWeb.TodosLive do
                 const tag = target?.tagName
                 const typing = target?.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
                 const key = event.key.length === 1 ? event.key.toLowerCase() : event.key
-                const shortcutsOpen = this.el.dataset.shortcutsOpen === "true"
 
-                if (shortcutsOpen) {
+                if (this.shortcutsOpen) {
                   if (key === "Escape") {
                     event.preventDefault()
-                    this.pushEvent("close_shortcuts", {})
+                    this.closeShortcuts()
                   }
                   return
                 }
 
+                if (typing) return
+
                 if (key === "?") {
                   event.preventDefault()
-                  this.pushEvent("todo_shortcut", {key})
+                  this.openShortcuts()
                   return
                 }
 
-                if (typing || (event.shiftKey && key !== "#")) return
+                if (event.shiftKey && key !== "#") return
 
                 if (key === "/" && this.el.dataset.view === "index") {
                   const search = this.el.querySelector("[data-todo-search='true']")
@@ -1171,19 +1185,41 @@ defmodule MaraithonWeb.TodosLive do
 
                 if (!allowed.includes(normalizedKey)) return
                 event.preventDefault()
-                this.pushEvent("todo_shortcut", {key: normalizedKey})
+
+                if (this.el.dataset.view === "index" && ["j", "k"].includes(normalizedKey)) {
+                  this.moveActiveTodo(normalizedKey === "j" ? 1 : -1)
+                  return
+                }
+
+                const todoId = this.activeTodoId()
+
+                if (this.el.dataset.view === "index" && normalizedKey === "x") {
+                  this.toggleActiveCheckbox()
+                }
+
+                if (["e", "#"].includes(normalizedKey) && todoId) {
+                  const action = normalizedKey === "e" ? "complete" : "dismiss"
+                  this.optimisticallyResolveTodo(todoId, action)
+                  return
+                }
+
+                this.pushEvent("todo_shortcut", {key: normalizedKey, id: todoId})
               }
 
+              this.el.addEventListener("click", this.handleClick)
               window.addEventListener("keydown", this.handleKeydown)
-              this.shortcutsWereOpen = this.el.dataset.shortcutsOpen === "true"
-              this.syncShortcutModalFocus()
               this.scrollActiveTodoIntoView()
             },
+            beforeUpdate() {
+              this.activeTodoIdBeforeUpdate = this.activeTodoId()
+            },
             updated() {
-              this.syncShortcutModalFocus()
+              this.syncShortcutModal()
+              this.restoreActiveTodoAfterUpdate()
               this.scrollActiveTodoIntoView()
             },
             destroyed() {
+              this.el.removeEventListener("click", this.handleClick)
               window.removeEventListener("keydown", this.handleKeydown)
               document.documentElement.classList.remove("overflow-hidden")
             },
@@ -1192,26 +1228,118 @@ defmodule MaraithonWeb.TodosLive do
               if (key === "ArrowUp" || key === "ArrowLeft") return "k"
               return key
             },
+            todoRows() {
+              return Array.from(this.el.querySelectorAll("[data-todo-row='true']:not([hidden])"))
+            },
+            activeTodoRow() {
+              return this.el.querySelector("[data-todo-row='true'][data-active='true']:not([hidden])")
+            },
+            activeTodoId() {
+              if (this.el.dataset.view === "detail") return this.el.dataset.selectedTodoId || null
+              return this.activeTodoRow()?.dataset.todoId || null
+            },
+            setActiveTodo(row) {
+              if (!row) return
+
+              this.todoRows().forEach((candidate) => {
+                const active = candidate === row
+                candidate.dataset.active = active ? "true" : "false"
+                if (active) candidate.setAttribute("aria-current", "true")
+                else candidate.removeAttribute("aria-current")
+              })
+
+              row.scrollIntoView({block: "nearest"})
+            },
+            moveActiveTodo(offset) {
+              const rows = this.todoRows()
+              const activeRow = this.activeTodoRow()
+              const activeIndex = rows.indexOf(activeRow)
+              const targetIndex = Math.max(0, Math.min(rows.length - 1, activeIndex + offset))
+              this.setActiveTodo(rows[targetIndex])
+            },
+            toggleActiveCheckbox() {
+              const checkbox = this.activeTodoRow()?.querySelector("input[type='checkbox']")
+              if (checkbox) checkbox.checked = !checkbox.checked
+            },
+            optimisticallyResolveTodo(todoId, action) {
+              if (!todoId || !["complete", "dismiss"].includes(action)) return
+              if (this.processingTodoIds.has(todoId)) return
+              this.processingTodoIds.add(todoId)
+
+              const row = this.el.querySelector(`[data-todo-row='true'][data-todo-id='${todoId}']`)
+
+              if (row) {
+                const rows = this.todoRows()
+                const index = rows.indexOf(row)
+                const nextRow = rows[index + 1] || rows[index - 1]
+                this.optimisticRows.set(todoId, row)
+                row.hidden = true
+                this.setActiveTodo(nextRow)
+              } else {
+                this.el.setAttribute("aria-busy", "true")
+                const button = this.el.querySelector(`[data-todo-resolve='${action}'][data-todo-id='${todoId}']`)
+
+                if (button) {
+                  this.processingButton = {
+                    element: button,
+                    html: button.innerHTML,
+                    disabled: button.disabled
+                  }
+                  button.disabled = true
+                  button.textContent = action === "complete" ? "Marking done…" : "Dismissing…"
+                }
+              }
+
+              this.pushEvent("resolve_todo_shortcut", {action, id: todoId}, (reply) => {
+                this.el.removeAttribute("aria-busy")
+                const optimisticRow = this.optimisticRows.get(todoId)
+
+                if (reply?.ok !== true && optimisticRow?.isConnected) {
+                  optimisticRow.hidden = false
+                  this.setActiveTodo(optimisticRow)
+                }
+
+                this.optimisticRows.delete(todoId)
+                this.processingTodoIds.delete(todoId)
+
+                if (this.processingButton?.element?.isConnected) {
+                  this.processingButton.element.innerHTML = this.processingButton.html
+                  this.processingButton.element.disabled = this.processingButton.disabled
+                }
+
+                this.processingButton = null
+              })
+            },
             scrollActiveTodoIntoView() {
               if (this.el.dataset.view !== "index") return
               window.requestAnimationFrame(() => {
-                this.el.querySelector("[data-todo-row='true'][data-active='true']")
-                  ?.scrollIntoView({block: "nearest"})
+                this.activeTodoRow()?.scrollIntoView({block: "nearest"})
               })
             },
-            syncShortcutModalFocus() {
-              const shortcutsOpen = this.el.dataset.shortcutsOpen === "true"
-              document.documentElement.classList.toggle("overflow-hidden", shortcutsOpen)
-              if (shortcutsOpen === this.shortcutsWereOpen) return
-
+            restoreActiveTodoAfterUpdate() {
+              if (this.el.dataset.view !== "index" || !this.activeTodoIdBeforeUpdate) return
+              const row = this.el.querySelector(`[data-todo-row='true'][data-todo-id='${this.activeTodoIdBeforeUpdate}']`)
+              if (row) this.setActiveTodo(row)
+              this.activeTodoIdBeforeUpdate = null
+            },
+            openShortcuts() {
+              this.shortcutsOpen = true
+              this.syncShortcutModal()
               window.requestAnimationFrame(() => {
-                const focusTarget = shortcutsOpen
-                  ? document.getElementById("todo-shortcuts-close")
-                  : document.getElementById("todo-shortcuts-trigger")
-                focusTarget?.focus()
+                this.el.querySelector("#todo-shortcuts-close")?.focus()
               })
-
-              this.shortcutsWereOpen = shortcutsOpen
+            },
+            closeShortcuts() {
+              this.shortcutsOpen = false
+              this.syncShortcutModal()
+              window.requestAnimationFrame(() => {
+                this.el.querySelector("[data-shortcuts-trigger='true']")?.focus()
+              })
+            },
+            syncShortcutModal() {
+              const modal = this.el.querySelector("[data-shortcuts-modal='true']")
+              if (modal) modal.hidden = !this.shortcutsOpen
+              document.documentElement.classList.toggle("overflow-hidden", this.shortcutsOpen)
             }
           }
         </script>
@@ -1314,7 +1442,7 @@ defmodule MaraithonWeb.TodosLive do
       id="todo-shortcuts-trigger"
       type="button"
       variant="outline"
-      phx-click="open_shortcuts"
+      data-shortcuts-trigger="true"
       aria-haspopup="dialog"
       aria-controls="todo-shortcuts-modal"
       title="Keyboard shortcuts (?)"
@@ -1333,10 +1461,15 @@ defmodule MaraithonWeb.TodosLive do
 
   defp shortcut_help_modal(assigns) do
     ~H"""
-    <div id="todo-shortcuts-modal" class="fixed inset-0 z-50" data-shortcuts-modal="true">
+    <div
+      id="todo-shortcuts-modal"
+      class="fixed inset-0 z-50"
+      data-shortcuts-modal="true"
+      hidden
+    >
       <div
         class="absolute inset-0 bg-zinc-950/35"
-        phx-click="close_shortcuts"
+        data-shortcuts-close="true"
         aria-hidden="true"
       />
       <div class="relative mx-auto flex min-h-full w-full max-w-xl items-start px-3 pt-[12vh] sm:px-6">
@@ -1360,7 +1493,7 @@ defmodule MaraithonWeb.TodosLive do
               id="todo-shortcuts-close"
               type="button"
               variant="plain"
-              phx-click="close_shortcuts"
+              data-shortcuts-close="true"
               aria-label="Close keyboard shortcuts"
               class="-mr-2 -mt-1 px-2 text-zinc-500"
             >
@@ -1541,6 +1674,8 @@ defmodule MaraithonWeb.TodosLive do
             <.button
               :if={@can_edit_next_action}
               type="button"
+              data-todo-resolve="complete"
+              data-todo-id={@todo.id}
               phx-click="complete_todo"
               phx-value-id={@todo.id}
             >
@@ -1552,6 +1687,8 @@ defmodule MaraithonWeb.TodosLive do
             <.button
               :if={@can_edit_next_action}
               type="button"
+              data-todo-resolve="dismiss"
+              data-todo-id={@todo.id}
               phx-click="dismiss_todo"
               phx-value-id={@todo.id}
               variant="plain"
@@ -2324,11 +2461,18 @@ defmodule MaraithonWeb.TodosLive do
 
   defp index_active_todo(_socket), do: nil
 
-  defp shortcut_target_todo(%{assigns: %{selected_todo: %Todo{} = todo}}), do: todo
-  defp shortcut_target_todo(socket), do: index_active_todo(socket)
+  defp shortcut_target_todo(socket, todo_id) when is_binary(todo_id) do
+    case socket.assigns.selected_todo do
+      %Todo{id: ^todo_id} = todo -> todo
+      _selected_todo -> Enum.find(socket.assigns.todos, &(&1.id == todo_id))
+    end
+  end
 
-  defp open_active_todo(socket) do
-    case index_active_todo(socket) do
+  defp shortcut_target_todo(%{assigns: %{selected_todo: %Todo{} = todo}}, _todo_id), do: todo
+  defp shortcut_target_todo(socket, _todo_id), do: index_active_todo(socket)
+
+  defp open_active_todo(socket, todo_id) do
+    case shortcut_target_todo(socket, todo_id) do
       %Todo{id: todo_id} ->
         socket
         |> assign(:active_todo_id, todo_id)
@@ -2336,6 +2480,50 @@ defmodule MaraithonWeb.TodosLive do
 
       nil ->
         socket
+    end
+  end
+
+  defp resolve_todo(socket, todo_id, :complete) do
+    user_id = current_user_id(socket)
+    detail? = socket.assigns.selected_todo_id == todo_id
+    preferred_next_todo_id = preferred_next_todo_id(socket.assigns.todos, todo_id)
+
+    case Todos.mark_done(user_id, todo_id, todo_action_opts(user_id, "Completed from Work page.")) do
+      {:ok, _todo} ->
+        {:ok,
+         socket
+         |> prepare_active_todo_after_resolution(todo_id, preferred_next_todo_id)
+         |> refresh_todos()
+         |> put_flash(:info, "Work item done.")
+         |> maybe_advance_after_resolution(detail?, todo_id, preferred_next_todo_id)}
+
+      {:error, reason} ->
+        {:error,
+         socket
+         |> refresh_todos()
+         |> put_flash(:error, TodoActionCopy.error(:complete, reason))}
+    end
+  end
+
+  defp resolve_todo(socket, todo_id, :dismiss) do
+    user_id = current_user_id(socket)
+    detail? = socket.assigns.selected_todo_id == todo_id
+    preferred_next_todo_id = preferred_next_todo_id(socket.assigns.todos, todo_id)
+
+    case Todos.dismiss(user_id, todo_id, todo_action_opts(user_id, "Dismissed from Work page.")) do
+      {:ok, _todo} ->
+        {:ok,
+         socket
+         |> prepare_active_todo_after_resolution(todo_id, preferred_next_todo_id)
+         |> refresh_todos()
+         |> put_flash(:info, "Work item dismissed.")
+         |> maybe_advance_after_resolution(detail?, todo_id, preferred_next_todo_id)}
+
+      {:error, reason} ->
+        {:error,
+         socket
+         |> refresh_todos()
+         |> put_flash(:error, TodoActionCopy.error(:dismiss, reason))}
     end
   end
 
@@ -2624,12 +2812,10 @@ defmodule MaraithonWeb.TodosLive do
   defp sort_indicator(%{"sort" => field, "dir" => "desc"}, field), do: "v"
   defp sort_indicator(_filters, _field), do: ""
 
-  defp todo_row_class(%Todo{} = todo, selected_todo_ids, active_todo_id) do
+  defp todo_row_class(%Todo{} = todo, selected_todo_ids) do
     [
-      "cursor-pointer transition-colors hover:bg-zinc-950/[0.025]",
-      MapSet.member?(selected_todo_ids, todo.id) && todo.id != active_todo_id && "bg-blue-50/60",
-      active_todo_id == todo.id &&
-        "bg-blue-50 outline outline-2 -outline-offset-2 outline-blue-500/40"
+      "group relative cursor-pointer transition-all duration-100 hover:bg-zinc-950/[0.025] data-[active=true]:bg-blue-50 data-[active=true]:outline data-[active=true]:outline-2 data-[active=true]:-outline-offset-2 data-[active=true]:outline-blue-500/40",
+      MapSet.member?(selected_todo_ids, todo.id) && "bg-blue-50/60"
     ]
     |> Enum.filter(&is_binary/1)
     |> Enum.join(" ")
