@@ -172,35 +172,24 @@ defmodule Maraithon.Crm.Ingest do
         {:duplicate, existing}
 
       nil ->
-        case Repo.insert(changeset) do
-          {:ok, %Observation{} = obs} ->
+        proposed_id = Ecto.Changeset.get_field(changeset, :id) || Ecto.UUID.generate()
+        changeset = Ecto.Changeset.put_change(changeset, :id, proposed_id)
+
+        case Repo.insert(changeset,
+               on_conflict: [set: [source_item_id: source_item_id]],
+               conflict_target: [:user_id, :source, :source_item_id],
+               returning: true
+             ) do
+          {:ok, %Observation{id: ^proposed_id} = obs} ->
             {:ok, obs}
 
-          {:error, %Ecto.Changeset{} = invalid} ->
-            if duplicate_constraint?(invalid) do
-              existing =
-                Repo.get_by(Observation,
-                  user_id: user_id,
-                  source: source,
-                  source_item_id: source_item_id
-                )
+          {:ok, %Observation{} = obs} ->
+            {:duplicate, obs}
 
-              {:duplicate, existing}
-            else
-              {:error, invalid}
-            end
+          {:error, %Ecto.Changeset{} = invalid} ->
+            {:error, invalid}
         end
     end
-  end
-
-  defp duplicate_constraint?(%Ecto.Changeset{errors: errors}) do
-    Enum.any?(errors, fn
-      {field, {_msg, opts}} when field in [:source_item_id, :user_id] ->
-        Keyword.get(opts, :constraint) == :unique
-
-      _ ->
-        false
-    end)
   end
 
   defp finalize_observation(user_id, %Observation{} = obs) do

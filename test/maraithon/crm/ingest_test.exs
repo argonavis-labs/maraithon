@@ -56,6 +56,33 @@ defmodule Maraithon.Crm.IngestTest do
       assert Repo.aggregate(Observation, :count, :id) == 1
     end
 
+    test "concurrent duplicate observations converge without a constraint error", %{
+      user_id: user_id
+    } do
+      sandbox_owner = self()
+
+      results =
+        1..2
+        |> Task.async_stream(
+          fn _attempt ->
+            Ecto.Adapters.SQL.Sandbox.allow(Repo, sandbox_owner, self())
+
+            Ingest.observe(
+              user_id,
+              sample_changeset(user_id, "msg-race", "riley@example.com", "Riley")
+            )
+          end,
+          max_concurrency: 2,
+          ordered: false,
+          timeout: :infinity
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert Enum.count(results, &match?({:ok, :buffered, _id}, &1)) == 1
+      assert Enum.count(results, &match?({:ok, :duplicate}, &1)) == 1
+      assert Repo.aggregate(Observation, :count, :id) == 1
+    end
+
     test "size threshold flushes the window and enqueues exactly one job",
          %{user_id: user_id} do
       threshold = WindowPolicy.max_observations()
