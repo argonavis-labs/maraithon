@@ -212,10 +212,10 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
       window_id when is_binary(window_id) ->
         result = process_ingestion_window(window_id)
 
-        # New communications change who matters; refresh the activity-based
-        # ranking, the relationship graph, and downstream intelligence after
-        # each learned window.
-        with {:ok, user_id} <- require_user_id(job) do
+        # Refresh downstream intelligence only after learning new observations.
+        # Failed attempts and replays of completed windows have no new result.
+        with {:ok, %{observations_count: count}} when count > 0 <- result,
+             {:ok, user_id} <- require_user_id(job) do
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_communication_score_refresh(user_id)
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_relationship_graph_refresh(user_id)
           _ = Maraithon.Runtime.BackgroundJobs.enqueue_person_dedupe(user_id)
