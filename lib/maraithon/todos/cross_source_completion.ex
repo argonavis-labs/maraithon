@@ -229,7 +229,13 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         |> Enum.uniq()
         |> Enum.sort()
 
-      if expected != [] and actual == expected do
+      unscoped? =
+        Enum.any?(evidence, fn item ->
+          read_string(item, "channel", nil) != "source_health" and
+            is_nil(read_string(item, "source_ref", nil))
+        end)
+
+      if expected != [] and actual == expected and not unscoped? do
         :ok
       else
         {:error, :cross_source_completion_source_coverage_incomplete}
@@ -440,7 +446,12 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     cutoff = DateTime.add(now, -@evidence_window_days * 24 * 3600, :second)
 
     persisted_evidence =
-      if Keyword.has_key?(opts, :source_account_id) do
+      if Keyword.get(opts, :exact_source_delta, false) or
+           Keyword.has_key?(opts, :source_account_id) do
+        # Exact workers must decide from their sealed source bundle, whose
+        # references and revisions become the cycle proof. General CRM/local
+        # evidence belongs to the separate cross-source backstop, not every
+        # account × todo batch.
         []
       else
         observation_evidence(user_id, cutoff) ++ outgoing_message_evidence(user_id, cutoff)
@@ -1064,7 +1075,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp evaluate_fitting(user_id, todos, evidence, now, opts) do
     evaluation =
       if Keyword.get(opts, :exact_source_delta, false) do
-        evaluate_exact_evidence_chunks(user_id, todos, evidence, now, opts)
+        evaluate_exact_candidates(user_id, todos, evidence, now, opts)
       else
         evaluate(user_id, todos, evidence, now, opts)
       end
@@ -1086,7 +1097,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
                %{
                  checked: left_result.checked + right_result.checked,
                  completed: left_result.completed + right_result.completed,
-                 model_calls: left_result.model_calls + right_result.model_calls
+                 model_calls: left_result.model_calls + right_result.model_calls,
+                 policy_decision_refs:
+                   Map.get(left_result, :policy_decision_refs, []) ++
+                     Map.get(right_result, :policy_decision_refs, [])
                }, left_todos ++ right_todos}
             end
           else
@@ -1194,6 +1208,43 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
         error
     end
+  end
+
+  defp evaluate_exact_candidates(user_id, todos, evidence, now, opts) do
+    {candidates, ruled_out} = exact_model_candidates(todos, evidence)
+
+    evaluation =
+      if candidates == [],
+        do: %{checked: 0, completed: 0, model_calls: 0},
+        else: evaluate_exact_evidence_chunks(user_id, candidates, evidence, now, opts)
+
+    case evaluation do
+      %{} = result ->
+        result
+        |> Map.update!(:checked, &(&1 + length(ruled_out)))
+        |> Map.put(:policy_decision_refs, Enum.map(ruled_out, & &1.id))
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  # The same strict timestamp gate is enforced again when applying a quote.
+  # If no authorized source is later than a todo's request/reopen boundary,
+  # its negative decision is already known. Keep all source material as
+  # context for the remaining candidates, and retain every decision receipt.
+  defp exact_model_candidates(todos, evidence) do
+    latest =
+      evidence
+      |> Enum.filter(&allowed_evidence_channel?(read_string(&1, "channel", nil)))
+      |> Enum.map(&(&1 |> read_string("at", nil) |> parse_datetime()))
+      |> Enum.filter(&is_struct(&1, DateTime))
+      |> Enum.max(DateTime, fn -> nil end)
+
+    Enum.split_with(todos, fn todo ->
+      boundary = Todo.completion_evidence_after(todo)
+      is_nil(boundary) or evidence_after_todo?(latest, boundary)
+    end)
   end
 
   defp evaluate_exact_chunks(user_id, todos, evidence_chunks, now, opts) do
@@ -2117,11 +2168,16 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
         kind_authorized?.(item) and evidence_channel == channel and
           evidence_channel != "source_health" and resolution_linked?(todo, resolution, item) and
-          match?(%DateTime{}, evidence_at) and DateTime.compare(evidence_at, todo_at) == :gt and
+          evidence_after_todo?(evidence_at, todo_at) and
           evidence_quote_matches?(quote, text, subject)
       end)
     end
   end
+
+  defp evidence_after_todo?(%DateTime{} = evidence_at, %DateTime{} = todo_at),
+    do: DateTime.compare(evidence_at, todo_at) == :gt
+
+  defp evidence_after_todo?(_evidence_at, _todo_at), do: false
 
   defp resolution_linked?(todo, resolution, item) do
     account = read_string(item, "account", nil)

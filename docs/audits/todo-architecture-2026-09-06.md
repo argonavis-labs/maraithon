@@ -772,8 +772,10 @@ for `kent@runner.now`, using the manual-first development policy.
     lower cursor, compatible evaluation/partitioning versions, intact bound
     payloads, matching account and batch identities, terminal predecessor
     children, and exact completed task evidence. Fresh acquisitions capture
-    their lower cursor; older version-1 graphs qualify only when the cursor
-    predates their acquisition. The existing fenced finalizer still proves
+    their lower cursor. The initial version-1 implementation also accepted
+    older graphs when the cursor predated their acquisition. Version 2 now
+    requires an explicit matching lower cursor and excludes all version-1
+    evaluations because of finding 49. The existing fenced finalizer still proves
     complete coverage and commits the cursor. No original job, ambiguous
     outcome, source-cycle proof, or published child list is rewritten.
 
@@ -823,6 +825,43 @@ for `kent@runner.now`, using the manual-first development policy.
     Deployment workflow `34073869387` succeeded at 01:46:21 for code through `32d70d26`,
     including the previously queued Slack identity, participant batching, and
     finalizer payload-read fixes.
+
+49. **Exact closure prompts include evidence outside their sealed bundle.**
+    Account workers deliberately check todos from every source, so they no
+    longer pass `source_account_id`. The collector used that option to omit
+    global CRM and local-message evidence. The exact coverage check ignored
+    records without a source reference, allowing unbound evidence into these
+    decisions. Read-only execution `7f66n` found 120 Calendar observations
+    and 80 iMessages, totaling 39,160 encoded bytes, added to every Gmail batch.
+
+    The collector now excludes persisted global evidence in exact mode, and
+    the validator rejects non-health records without a source reference.
+    The general cross-source backstop retains its broader evidence sources.
+    Evaluation version 2 retires incompatible reason jobs and finalizers
+    through ordinary fenced cleanup; recovery cannot reuse version-1 results.
+    This intentionally requires one fresh scan under the corrected contract.
+    Previously recorded todo completions and original job outcomes are not
+    rewritten. Read-only execution `zlf4l` completed successfully at 02:24:35
+    and verified the fixed collector matches source-only evidence in all
+    twenty inspected Gmail partitions, with strict reference validation.
+
+50. **Older source partitions spend model calls on impossible closures.**
+    Quote authorization already requires evidence strictly after the todo's
+    request or latest reopening. Exact evaluation now applies the same gate
+    before calling the model. It retains all source context for the remaining
+    candidates and records negative decisions as policy evaluations with
+    reason `no_later_source_evidence`. Finalization retains complete todo and
+    source coverage; a model evaluation in another partition takes precedence
+    when choosing the aggregate receipt. The policy never claims a closure.
+
+    Read-only projection `zlf4l` used the original 899-todo batch membership
+    across 460 Gmail children. It ruled out 10,472 of 17,980 todo-partition
+    comparisons and left 68 complete batches needing no model call. For the
+    first todo batch in each of twenty source partitions, scope filtering
+    reduced prepared requests from 86 to 68, and temporal filtering reduced
+    that further to 46. These are prompt-preparation projections, not observed
+    provider calls or latency savings. `make build` passed with warnings as
+    errors; no automated tests were run. Deployment is pending.
 
 ## Delivery state
 
@@ -1605,3 +1644,14 @@ awaited termination, and 1,168 outcome-known Effects had matching evidence.
 The Gmail cursors still awaited full settlement. The observer remains live;
 its next samples include the new revision's scheduled checkpoint and SQL
 interval. No automated tests were run; `make build` passed for `0137657e`.
+
+Observer `ztf7l` completed successfully at 02:17:04. Its final sample at
+02:16:59 retained all 64 partitions ready/live, no task awaiting termination,
+the 02:15:56.934 checkpoint, and 1,170 outcome-known Effects with zero missing
+evidence. The Chief's 02:11:19 wakeup completed two Effects by 02:12:00.
+Account 1 had 54/276 children complete, including all 41 reused jobs; account
+2 had 29/184 complete, including all seven reused jobs. Neither had an error.
+Both Gmail closure cursors still awaited settlement. The SQL interval totaled
+203.30 seconds; the largest entry was the node-authority lock at 14.83%, then
+full background-job reads at 10.14% and claimed-at renewal at 8.49%. It
+includes rollout and cleanup, so it is not a steady-state comparison.

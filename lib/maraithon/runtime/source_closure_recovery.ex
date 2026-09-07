@@ -10,7 +10,6 @@ defmodule Maraithon.Runtime.SourceClosureRecovery do
   import Ecto.Query
 
   alias Maraithon.Accounts.ConnectedAccount
-  alias Maraithon.Connectors.SourceCursor
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
@@ -21,10 +20,16 @@ defmodule Maraithon.Runtime.SourceClosureRecovery do
   @interrupted_errors ~w(provider_outcome_ambiguous source_graph_abandoned source_closure_child_failed)
   @result_fields ~w(account_id source_items source_partition_count todo_count todo_batch_count fanout_count)a
 
-  # Version 1 includes the bounded graphs published before this marker existed.
+  # Version 2 confines decisions to the sealed bundle. Version 1 could include
+  # unbound CRM/local evidence, so its completed batches cannot prove v2 work.
   # Bump this when completion semantics invalidate previously evaluated batches.
-  @evaluation_version 1
+  @evaluation_version 2
   def evaluation_version, do: @evaluation_version
+
+  def compatible_evaluation?(result) when is_map(result),
+    do: Map.get(result, "closure_evaluation_version", 1) == @evaluation_version
+
+  def compatible_evaluation?(_result), do: false
 
   @doc "Returns a publication plan for the latest interrupted live closure window."
   def recover(%ConnectedAccount{status: "connected"} = account, %BackgroundJob{} = current) do
@@ -45,7 +50,7 @@ defmodule Maraithon.Runtime.SourceClosureRecovery do
          true <- compatible_acquisition?(previous, account),
          {:ok, finalizer, reasons} <- load_graph(previous, account),
          true <- interrupted_graph?(finalizer, reasons),
-         {:ok, watermark} <- recovery_watermark(previous, finalizer, account),
+         {:ok, watermark} <- recovery_watermark(finalizer, account),
          true <- valid_handoffs?(previous, reasons, account),
          true <- completed_outcomes_proven?([previous | reasons]) do
       {:ok, publication(previous, finalizer, reasons, current, watermark)}
@@ -64,7 +69,7 @@ defmodule Maraithon.Runtime.SourceClosureRecovery do
       is_nil(previous.payload["source_replay_mode"]) and
       result["outcome"] == "fanout_ready" and
       result["closure_partitioning_version"] == 1 and
-      Map.get(result, "closure_evaluation_version", 1) == @evaluation_version and
+      compatible_evaluation?(result) and
       is_list(result["reason_job_ids"]) and result["reason_job_ids"] != [] and
       length(result["reason_job_ids"]) == result["fanout_count"] and
       length(Enum.uniq(result["reason_job_ids"])) == result["fanout_count"]
@@ -125,7 +130,7 @@ defmodule Maraithon.Runtime.SourceClosureRecovery do
   defp interrupted?(job),
     do: job.status in ["failed", "cancelled"] and job.last_error in @interrupted_errors
 
-  defp recovery_watermark(previous, finalizer, account) do
+  defp recovery_watermark(finalizer, account) do
     kind =
       if String.starts_with?(account.provider, "slack:"),
         do: "slack_closure_watermark",
@@ -137,7 +142,7 @@ defmodule Maraithon.Runtime.SourceClosureRecovery do
     with [%{"account_id" => account_id, "kind" => ^kind, "value" => upper} = watermark] <-
            finalizer.payload["watermarks"],
          true <- account_id == account.id,
-         true <- same_lower_cursor?(watermark, cursor, previous),
+         true <- same_lower_cursor?(watermark, cursor),
          {upper_value, ""} when upper_value >= 0 <- Integer.parse(upper),
          true <- after_lower?(upper_value, lower) do
       {:ok, Map.put(watermark, "expected_lower_value", lower)}
@@ -146,15 +151,10 @@ defmodule Maraithon.Runtime.SourceClosureRecovery do
     end
   end
 
-  defp same_lower_cursor?(%{"expected_lower_value" => expected}, cursor, _previous),
+  defp same_lower_cursor?(%{"expected_lower_value" => expected}, cursor),
     do: expected == (cursor && cursor.value)
 
-  # Old publications did not capture a lower bound. Only reuse one when the
-  # existing cursor demonstrably predates the acquisition and has not changed.
-  defp same_lower_cursor?(_watermark, %SourceCursor{} = cursor, previous),
-    do: DateTime.compare(cursor.updated_at, previous.inserted_at) != :gt
-
-  defp same_lower_cursor?(_watermark, nil, _previous), do: false
+  defp same_lower_cursor?(_watermark, _cursor), do: false
 
   defp after_lower?(_upper, nil), do: true
 

@@ -348,7 +348,10 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
          superseded_todo_decision_count: length(todo_manifest.superseded_refs),
          superseded_todo_decision_refs: todo_manifest.superseded_refs,
          todo_decision_manifest:
-           Enum.map(todo_manifest.evaluated_refs, &%{todo_ref: &1, action: "evaluated"}) ++
+           evaluated_decision_manifest(
+             todo_manifest.evaluated_refs,
+             Map.get(result, :policy_decision_refs, [])
+           ) ++
              Enum.map(todo_manifest.superseded_refs, &%{todo_ref: &1, action: "superseded"}),
          model_calls: Map.get(result, :model_calls, 0),
          fanout_index: fanout_index,
@@ -372,6 +375,18 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   end
 
   def reason(_account, _payload, _opts), do: {:error, :invalid_source_closure_payload}
+
+  defp evaluated_decision_manifest(evaluated_refs, policy_refs) do
+    policy_refs = MapSet.new(policy_refs)
+
+    Enum.map(evaluated_refs, fn ref ->
+      entry = %{todo_ref: ref, action: "evaluated"}
+
+      if MapSet.member?(policy_refs, ref),
+        do: Map.merge(entry, %{evaluator: "policy", reason_code: "no_later_source_evidence"}),
+        else: entry
+    end)
+  end
 
   @doc "Advances a closure cursor only after all source partitions prove complete."
   def finalize(account, payload, child_results, opts \\ [])
@@ -588,6 +603,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
       for {todo_ref, "superseded"} <- manifest_entries, do: todo_ref
 
     length(manifests) == length(decision_refs) and
+      Enum.all?(manifests, &valid_decision_evaluator?/1) and
       Enum.all?(manifest_entries, fn
         {todo_ref, action}
         when is_binary(todo_ref) and action in ["evaluated", "superseded"] ->
@@ -601,6 +617,14 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
       Enum.sort(manifest_superseded_refs) == Enum.sort(superseded_refs) and
       length(Enum.uniq(evaluated_refs ++ superseded_refs)) == length(decision_refs) and
       persisted_todos_exist?(account, decision_refs)
+  end
+
+  defp valid_decision_evaluator?(entry) do
+    case {result_string(entry, "evaluator"), result_string(entry, "reason_code")} do
+      {nil, nil} -> true
+      {"policy", "no_later_source_evidence"} -> result_string(entry, "action") == "evaluated"
+      _invalid -> false
+    end
   end
 
   defp persisted_todos_exist?(account, todo_ids) do

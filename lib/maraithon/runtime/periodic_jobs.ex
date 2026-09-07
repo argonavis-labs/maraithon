@@ -219,7 +219,11 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   end
 
   def execute(%BackgroundJob{queue: @model_queue, job_type: type} = job)
-      when type in [@source_discovery_reason_job, @todo_account_closure_reason_job] do
+      when type in [
+             @source_discovery_reason_job,
+             @todo_account_closure_reason_job,
+             @todo_account_closure_finalize_job
+           ] do
     # Older graphs predate staged publication, but their completed acquisition
     # still names every child. Avoid spending model capacity on their remaining
     # children once a terminal failure has made finalization impossible.
@@ -292,6 +296,12 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         with {:ok, _cancelled} <- SourceGraphCleanup.cancel_unclaimed(job, ids) do
           {:error, {:discard, :source_graph_abandoned}}
         end
+
+      job.job_type in [@todo_account_closure_reason_job, @todo_account_closure_finalize_job] and
+          not SourceClosureRecovery.compatible_evaluation?(result) ->
+        # A policy change must not seal a mixture of old and new decisions.
+        # Normal fenced cleanup retires this publication before a fresh scan.
+        {:error, {:discard, :source_closure_evaluation_policy_changed}}
 
       repack_legacy_source_graph?(job, result, ids) ->
         # Settle this worker normally before any model call. Its terminal

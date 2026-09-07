@@ -286,7 +286,14 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
   defp closure_receipt_entry(entries) do
     entries
     |> Enum.sort_by(fn {entry, reason_job_id} ->
-      {if(read_string(entry, "action") == "evaluated", do: 0, else: 1), reason_job_id}
+      priority =
+        cond do
+          read_string(entry, "action") != "evaluated" -> 2
+          read_string(entry, "evaluator") == "policy" -> 1
+          true -> 0
+        end
+
+      {priority, reason_job_id}
     end)
     |> hd()
   end
@@ -346,7 +353,13 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
     todo = Map.get(todos, todo_id)
 
     if is_map(snapshot) and match?(%Todo{user_id: ^user_id}, todo) do
-      {outcome, evaluator, reason_code} = closure_outcome(action, todo.status)
+      {outcome, evaluator, reason_code} =
+        if read_string(entry, "evaluator") == "policy" and
+             read_string(entry, "reason_code") == "no_later_source_evidence" do
+          temporal_closure_outcome(todo.status)
+        else
+          closure_outcome(action, todo.status)
+        end
 
       %{
         todo_id: todo.id,
@@ -367,6 +380,11 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
     do: {"still_open", "model", "no_completion_evidence"}
 
   defp closure_outcome(_action, _status), do: {"superseded", "policy", "todo_superseded"}
+
+  defp temporal_closure_outcome(status) when status in ["open", "snoozed"],
+    do: {"still_open", "policy", "no_later_source_evidence"}
+
+  defp temporal_closure_outcome(_status), do: {"superseded", "policy", "todo_superseded"}
 
   defp normalize_proof_item(item) when is_map(item) do
     source_ref = read_string(item, "source_ref")
