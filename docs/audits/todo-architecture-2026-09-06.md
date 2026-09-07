@@ -786,7 +786,11 @@ for `kent@runner.now`, using the manual-first development policy.
     the selected replacements were after the intended cutoff. The application
     uses `DateTime.compare/2`. The implementation additionally checks the
     acquisition's exact completion evidence. `make build` passed; no tests
-    were run. The recovery change is ready for its next server rollout.
+    were run. Commit `0137657e` deployed in revision `maraithon-00223-9vh`
+    through successful workflow `34074912781`. At 02:08:57, observer `ztf7l`
+    verified account 2's new 184-child publication reused all seven completed
+    predecessor jobs and had completed three fresh children. Account 1's
+    replacement acquisition was still preparing. Full settlement remains open.
 
 47. **Waiting finalizers repeatedly load encrypted child payloads.**
     `completed_child_results/1` loaded full background-job rows and verified
@@ -820,8 +824,8 @@ for `kent@runner.now`, using the manual-first development policy.
 
 ## Delivery state
 
-Current server: `maraithon-00222-njf`, code through `32d70d26`, deployed by
-successful workflow `34073869387`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00223-9vh`, code through `0137657e` (workflow head
+`c0829b02`), deployed by successful workflow `34074912781`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -1563,3 +1567,28 @@ participant-ingestion comparison, so it does not quantify the CRM batching
 fix's savings. At approximately 02:00, `wnfkh` also observed account 2's new
 acquisition `13b2aca7-5842-4b9b-86c5-e56663edd263` running; the earlier new-graph
 samples had not yet included it.
+
+Workflow `34074912781` completed successfully at 02:05:06; revision
+`maraithon-00223-9vh` serves 100% of traffic. The Chief recovered at
+02:05:56.503. Observer `ztf7l` saw all 64 partitions ready/live at 02:06:56
+and 02:08:57, without a task awaiting termination or a new coverage error.
+The first sample at 02:04:55 caught the rollout and is not a steady-state
+health observation. The observer remains running for the next checkpoint,
+Effects, schedules, SQL interval, and both resumed Gmail graphs.
+
+The account-2 replacement `5b28ef9c-f667-41ed-acc4-c7c2aaac2a2f` names
+predecessor `13b2aca7-5842-4b9b-86c5-e56663edd263` and reuses its seven completed
+children in the new publication. At 02:08:57 it had ten completed children,
+five running, and 169 pending, with no error. The predecessor remains
+unchanged with seven completed, 171 cancelled, and six failed children,
+including two ambiguous provider outcomes. Account 1's predecessor retained
+41 completed children and was fully terminal; its replacement acquisition
+`1e5c5f04-bded-4823-b346-dff2e2eafc63` was running. Slack's existing 23-child
+scan completed and finalized normally at 02:06:38.
+
+The installed Mac app remained paired and showed 899 active work items.
+Opening `/chat` in Chrome redirected to the signed-out landing page, so the
+interactive chat check remains pending; no login email or chat was sent.
+No request with HTTP status 429 or higher appeared in the request-log query
+from 01:46 through approximately 02:05. The earlier intermittent rejection
+cause remains unresolved.
