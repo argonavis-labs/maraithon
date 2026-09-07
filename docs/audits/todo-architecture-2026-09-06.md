@@ -766,12 +766,27 @@ for `kent@runner.now`, using the manual-first development policy.
     sample had Gmail at 38/300 and 36/175 and Slack at 22/25 completed children.
     No cursor advanced. Previously persisted completions remain evidence-backed.
 
-    Status: revision 222 was required to unblock the deterministic coverage
-    failure in finding 48. Keep this revision stable while replacement scans
-    recover. Investigate retaining completed coverage and retrying only
-    interrupted reasoning under a new task assignment, while preserving the
-    immutable published graph, outcome evidence, and source-cycle proof rules.
-    No ambiguous outcome has been relabeled and no cursor has been forced.
+    Status: `SourceClosureRecovery` prepares a new publication for the latest
+    interrupted live window. It reuses completed job IDs and copies only
+    abandoned children into fresh jobs. Eligibility requires an unchanged
+    lower cursor, compatible evaluation/partitioning versions, intact bound
+    payloads, matching account and batch identities, terminal predecessor
+    children, and exact completed task evidence. Fresh acquisitions capture
+    their lower cursor; older version-1 graphs qualify only when the cursor
+    predates their acquisition. The existing fenced finalizer still proves
+    complete coverage and commits the cursor. No original job, ambiguous
+    outcome, source-cycle proof, or published child list is rewritten.
+
+    Read-only projection `wnfkh` inspected both stored predecessor graphs:
+    account 1 would reuse 69 of 300 children and rerun 231; account 2 would
+    reuse 73 of 200 and rerun 127. The projected new parent identities and
+    unique reused IDs matched. Loading and verifying the plans took 9.35 and
+    2.77 seconds. A diagnostic-only structural DateTime comparison emitted a
+    warning; both printed acquisition timestamps independently establish that
+    the selected replacements were after the intended cutoff. The application
+    uses `DateTime.compare/2`. The implementation additionally checks the
+    acquisition's exact completion evidence. `make build` passed; no tests
+    were run. The recovery change is ready for its next server rollout.
 
 47. **Waiting finalizers repeatedly load encrypted child payloads.**
     `completed_child_results/1` loaded full background-job rows and verified
@@ -1529,3 +1544,22 @@ six running, with no recorded error. No new exact source-coverage error
 appeared in the sample. Both Gmail closure watermarks still date from
 September 2, so Gmail completion catch-up is not yet established. The todo
 counts remained 899 open, 22 done, and 137 dismissed.
+
+Observer `9lg66` completed successfully at 01:58:38.148. Its final sample
+retained all 64 ready/live partitions, no termination request, and 1,166
+outcome-known Effects with no missing evidence. The scheduled checkpoint
+persisted at 01:57:01.894 with no snapshot failure. Fourteen of eighteen
+recurring schedules advanced in the ten-minute interval; the longer-period
+schedules were not due, and none had a recorded error. Slack closure advanced
+to `1788746289` at 01:58:10.586. Account-1 Gmail had 22/276 children complete,
+six running, and one pending timeout retry; no new source-coverage error was
+recorded. Both Gmail closure cursors still awaited settlement.
+
+The same SQL interval totaled 169.05 seconds of execution time. The largest
+entry was the node-authority row lock (12.88%), followed by task activation
+(10.82%) and the User fence (9.98%). Expensive catalog verification and lease
+renewal did not dominate the top ten. This window is not a controlled
+participant-ingestion comparison, so it does not quantify the CRM batching
+fix's savings. At approximately 02:00, `wnfkh` also observed account 2's new
+acquisition `13b2aca7-5842-4b9b-86c5-e56663edd263` running; the earlier new-graph
+samples had not yet included it.
