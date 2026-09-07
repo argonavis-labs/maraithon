@@ -5,6 +5,15 @@ rank them beside manually added work, and automatically close work when fresh
 evidence proves it was handled. Ship small changes to the single-user test app
 for `kent@runner.now`, using the manual-first development policy.
 
+Latest delivery (September 7, 04:14 UTC): revision `maraithon-00233-r7s`,
+code `51167f39`, successful workflow `34082107360`. Chat works; expired briefs
+refresh; named email drafts no longer target digest senders; explicit mailboxes
+are retained; exhausted model retries can reuse completed closure batches.
+The remaining live check is Gmail account 1's full closure catch-up and the
+current revision's runtime cycle. Account 2 and Slack have completed catch-up
+and subsequent deltas. Browser and narrow compile checks passed; no test
+suites were run. Detailed findings and chronological evidence follow.
+
 ## Architecture to retain
 
 - PostgreSQL owns runtime leases, task outcomes, and source progress. OTP
@@ -1082,14 +1091,18 @@ for `kent@runner.now`, using the manual-first development policy.
     successful workflow `34081849265`. Read-only projection `99k5p` completed
     successfully at 04:07:30: Michael retains his explicit address, personal
     mailbox, and original thread; DuraServ has no resolved address and direct
-    send is false. Live UI verification remains in progress.
+    send is false. Signed-in Chrome on revision `maraithon-00232-z6x`
+    shows “Recipient email needed” for DuraServ, retains Copy/Open, and omits
+    Ready to send and Send email. Michael retains Ready to send and Send email
+    with his original conversation visible. No email was sent.
 
     The account follow-up requires a concrete source/saved mailbox before
     creating a draft. Both Gmail API helpers and direct message sends now
     preserve an explicit account choice: a missing token returns its error,
     instead of retrying with the default Google account. Implicit default
     selection remains available to callers that do not specify an account.
-    This follow-up compiled successfully; no test suite was run.
+    This follow-up compiled successfully and shipped as `51167f39` in
+    revision `maraithon-00233-r7s`, workflow `34082107360`; no test suite was run.
 
 60. **Exhausted model retries discard completed closure batches.**
     Gmail account 1 retained 296/299 results after revision 231's rollout.
@@ -1105,13 +1118,19 @@ for `kent@runner.now`, using the manual-first development policy.
     siblings still require matching exact task outcome evidence; the sealed
     source identities, unchanged lower cursor, and full finalizer coverage
     remain mandatory. Nothing resets a failed task or advances a cursor by
-    assertion. `make build` passed; tests were not run. Deployment and live
-    recovery verification remain in progress.
+    assertion. `make build` passed; tests were not run. Read-only projection
+    `btwjn` completed successfully at 04:11:08 UTC. Against the actual failed
+    299-child graph it retained 297 completed jobs and produced only two new
+    handoffs. No jobs or cursors were changed by this projection. `31f21cde`
+    shipped with `51167f39` in revision `maraithon-00233-r7s`, successful
+    workflow `34082107360`. Full live catch-up remains in progress; the fresh
+    276-child scan started before this fix and cannot reuse a different sealed
+    source window.
 
 ## Delivery state
 
-Current server: `maraithon-00231-s8p`, code through `35d1c852`, deployed by
-successful workflow `34081063445`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00233-r7s`, code through `51167f39`, deployed by
+successful workflow `34082107360`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -2034,8 +2053,14 @@ The 04:01:10–04:07:13 SQL interval stayed on revision 231 and totaled 111.21
 seconds. The leading categories were encrypted job reads (13.81%), task
 activation (12.34%), node-authority locking (10.11%), and user locks (9.74%).
 Claim renewal was 4.00%; catalog verification was outside the top ten.
-This includes the avoidable full reacquisition, so it is not an idle-load
-benchmark. The routing projection `99k5p` separately confirmed Michael's
+This includes the avoidable full reacquisition and read-only diagnostic job
+reads, so it is not an idle-load benchmark or an application-only profile. The routing projection `99k5p` separately confirmed Michael's
 address, personal Gmail account, and original thread, while DuraServ resolved
 to no address with direct send disabled. It used only metadata GETs and pure
 routing helpers; no draft or message was created.
+
+Current read-only observer `74rhc` follows revision 233 for ten minutes using
+pool size two, Vault, and Repo only. It reads the latest acquisition's published
+child IDs and aggregates status rows; it does not decrypt every child payload
+or call providers. Its result is still pending. Follow this execution rather
+than submitting duplicate observers while it runs.
