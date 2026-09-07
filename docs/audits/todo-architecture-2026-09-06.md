@@ -708,7 +708,7 @@ for `kent@runner.now`, using the manual-first development policy.
 
     Status: `e5570dfe` uses the target message as the thread fallback for both
     grouping and deduplication, retaining the mutation identity for provenance.
-    It passed `make build` and is committed locally, awaiting the next rollout.
+    It passed `make build` and deployed in revision `maraithon-00222-njf`.
     Preview execution `4ltkx` failed read-only because its activity table name
     was incorrect. `bbsrb` returned no matches because the Slack account has
     a null `external_account_id`; its provider suffix identifies the workspace.
@@ -725,7 +725,8 @@ for `kent@runner.now`, using the manual-first development policy.
     a reference to the original. Notes and source records remain intact, and outcome learning
     was explicitly disabled for this agent-authored maintenance. All 96
     duplicates were dismissed, all 96 originals remained open, and all 96
-    duplicate notes were retained. Independent read-back `678bp` is running.
+    duplicate notes were retained. Independent read-back `678bp` verified
+    all 96 pairs with zero mismatches at 01:35:52.
     Tests were not run.
 
 44. **Contact matching repeatedly reloads every active CRM person.** The
@@ -742,8 +743,7 @@ for `kent@runner.now`, using the manual-first development policy.
     participants, versus twelve Gmail participants and one Slack participant.
     `01d41dc5` resolves existing participants once per observation, while misses
     use the ordinary fresh lookup/upsert path and can see earlier creates.
-    This follow-up passed compile and is committed locally; its rollout is
-    held while the source scans recover from the preceding deployment.
+    This follow-up passed compile and deployed in revision 222.
     Production savings are not yet measured. Tests were not run.
 
 45. **Relationship attempts enqueue follow-up work without a learned result.**
@@ -766,7 +766,8 @@ for `kent@runner.now`, using the manual-first development policy.
     sample had Gmail at 38/300 and 36/175 and Slack at 22/25 completed children.
     No cursor advanced. Previously persisted completions remain evidence-backed.
 
-    Status: no further server push is planned while the replacement scans
+    Status: revision 222 was required to unblock the deterministic coverage
+    failure in finding 48. Keep this revision stable while replacement scans
     recover. Investigate retaining completed coverage and retrying only
     interrupted reasoning under a new task assignment, while preserving the
     immutable published graph, outcome evidence, and source-cycle proof rules.
@@ -783,20 +784,37 @@ for `kent@runner.now`, using the manual-first development policy.
     complete, it loads and verifies their payloads, checks the returned count,
     and restores publication order through a map. Missing, failed, cancelled,
     and pending children retain their existing outcomes. `make build` passed;
-    tests were not run. The commit awaits the next server rollout.
+    tests were not run. The commit deployed in revision 222.
+
+48. **Blank Gmail messages prevent an exact completion batch from settling.**
+    Read-only diagnostic `mxxnh` found one acquired message with no usable
+    subject or body in each Gmail account. `evidence_item/2` dropped those
+    records, leaving 29/30 and 7/8 expected source references. The exact
+    coverage check consequently rejected both batches before any model call.
+
+    `32d70d26` retains blank records in exact mode so their source identities
+    remain covered. They cannot match a completion quote, and a bundle with
+    no actionable text or subject does not justify a model call on its own.
+    The ordinary non-exact filtering remains unchanged. `make build` passed;
+    tests were not run. Read-only projection `r4kqc` ran the changed extractor
+    over the same stored failing bundles and produced 30/30 and 8/8 references,
+    with no missing or extra identities and no provider call or mutation.
+    Deployment workflow `34073869387` succeeded at 01:46:21 for code through `32d70d26`,
+    including the previously queued Slack identity, participant batching, and
+    finalizer payload-read fixes.
 
 ## Delivery state
 
-Current server: `maraithon-00221-npj`, code through `9403199d`, deployed by
-successful workflow `34071688696`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00222-njf`, code through `32d70d26`, deployed by
+successful workflow `34073869387`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
 New Todo, saved wording and multiline notes after a fresh load, user completion,
 the completed-row display, and Command-N/Escape. The two manual check items
 are completed; these user actions are not automatic-closure evidence. The app
-was returned to the unfiltered active list, which loaded 997 items after
-the pagination-retry update.
+was returned to the unfiltered active list, which loaded 899 items after
+the duplicate cleanup.
 No public Sparkle release was made.
 
 
@@ -1496,3 +1514,18 @@ This check compares the stored source-item references with extracted evidence
 before making a model call. Read-only diagnostic `mxxnh` compares one affected
 stored bundle per account to locate the omitted or extra references. It makes
 no provider call and does not alter a job, todo, cursor, or outcome.
+
+Revision 222 recovered the Chief at 01:47:01.647. Observer `9lg66` at
+01:52:32 retained all 64 partitions ready/live, no task awaiting termination,
+an untripped guard, and 1,166 outcome-known Effects with no missing evidence.
+The new Chief wakeup completed two Effects by 01:50:28; a checkpoint on this
+revision and the observer's SQL interval remain to be collected.
+
+The new Slack graph completed all 23 children and finalized at 01:51:15.137.
+Its closure watermark subsequently advanced to `1788745918` at 01:51:59.978,
+while discovery also continued advancing. The new account-1 Gmail graph
+`cf6113aa-3ff6-46c3-9979-f3d473bbc51b` had six of 276 children complete and
+six running, with no recorded error. No new exact source-coverage error
+appeared in the sample. Both Gmail closure watermarks still date from
+September 2, so Gmail completion catch-up is not yet established. The todo
+counts remained 899 open, 22 done, and 137 dismissed.
