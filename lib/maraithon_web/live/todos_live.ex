@@ -2,6 +2,7 @@ defmodule MaraithonWeb.TodosLive do
   use MaraithonWeb, :live_view
 
   alias Maraithon.{BriefingSchedules, Projects, Repo, SourceLabels, Timezones}
+  alias Maraithon.AssistantChat.TodoThreadPrimer
   alias Maraithon.Todos
   alias Maraithon.Todos.{Brief, BriefActions, DecisionSignals, SourceActions, Todo}
   alias MaraithonWeb.TodoActionCopy
@@ -2208,7 +2209,9 @@ defmodule MaraithonWeb.TodosLive do
       >
         <div>
           <h3 class="text-sm/6 font-semibold text-zinc-950"><%= @reply_heading %></h3>
-          <p class="text-xs/5 text-zinc-500">Review the wording, then send without leaving this todo.</p>
+          <p :if={@reply_target_state != :unavailable} class="text-xs/5 text-zinc-500">
+            Review the wording, then send without leaving this todo.
+          </p>
         </div>
         <.field :if={@gmail?} label="Subject" for="todo-reply-subject">
           <.c_input
@@ -2239,7 +2242,9 @@ defmodule MaraithonWeb.TodosLive do
             Sending through <%= @provider_label %>
           </p>
           <p :if={@reply_target_state == :unavailable} class="mr-auto text-xs/5 text-zinc-500">
-            Direct send is not available here. Copy it and send from <%= @provider_label %>.
+            <%= if @gmail? and is_nil(TodoThreadPrimer.gmail_draft_recipient(@todo)),
+              do: "Recipient email needed. Copy the reply and address it in Gmail.",
+              else: "Direct send is not available here. Copy it and send from #{@provider_label}." %>
           </p>
           <.button
             type="button"

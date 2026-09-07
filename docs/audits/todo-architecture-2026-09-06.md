@@ -1047,17 +1047,44 @@ for `kent@runner.now`, using the manual-first development policy.
     generated brief cannot claim that sending the edited text completes the
     todo. New prompts require explicit calendar dates and treat past deadlines
     as overdue. Web loading/failure states no longer reveal the expired brief.
-    `make build` passed; no tests were run. Read-only projection `6c2ks` and
-    browser verification remain in progress.
+    `make build` passed; no tests were run. Shipped in `35d1c852`, revision
+    `maraithon-00231-s8p`, successful workflow `34081063445`. Read-only
+    projection `6c2ks` completed successfully at 03:50:50 UTC: Michael,
+    DuraServ, and Uride's expired, unchanged generated drafts projected to
+    empty maps without altering stored data. Signed-in Chrome refreshed
+    Michael at 03:55, DuraServ at 03:57, and Uride at 04:02. The old August 31
+    advice and three-hour countdown are gone; the briefs describe passed
+    deadlines as overdue and propose explicit September dates. Michael's
+    suggested availability still requires Kent and Christina's confirmation.
 
-    The DuraServ detail points to a daily-brief source while offering a reply
-    to Tal; its exact recipient/thread resolution also needs read-only review
-    before any connected send is exercised. No send was attempted.
+59. **A named reply can silently target a digest sender and its thread.**
+    DuraServ's fresh brief says `to: Tal`, while its source is Runner's
+    September 5 daily digest. Read-only metadata review `pdm4w` completed at
+    04:03:38 UTC and exercised the existing pure recipient/thread helpers:
+    it resolved to `runner@hey.runner.now` in digest thread
+    `1a07029429174d3e`. Michael's explicit email correctly resolved to
+    `m.lippi@ipcsecurities.com` in his original thread. No draft was saved and
+    no email was sent. Earlier review `v67rh` failed on a nil account label;
+    `vk7f6` returned HTTP errors because the bounded HTTP task supervisor was
+    absent. `pdm4w` started that leaf supervisor alongside Req, Vault, and Repo.
+
+    Explicit draft recipients now take precedence without fallback to an
+    unrelated sender or a fuzzy contact match. A name-only generated email
+    remains copyable, but direct send requires one concrete external address.
+    The web page explains the missing address and removes its ready/send
+    controls. The prompt asks for a source-backed address or a step to find it.
+    Shared preparation also checks the source's actual participant and subject
+    before inheriting thread/reply headers, and uses the account that supplied
+    the source. Gmail draft creation and its saved send payload share this
+    routing map. New routing metadata prevents the primer from reusing an old
+    prepared Gmail action based on body text alone. `make build` passed; tests
+    were not run under the manual-first policy. Read-only projection of the
+    changed resolver and live UI verification remain in progress.
 
 ## Delivery state
 
-Current server: `maraithon-00230-6p6`, code through `b9a61e2f`, deployed by
-successful workflow `34080167164`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00231-s8p`, code through `35d1c852`, deployed by
+successful workflow `34081063445`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified

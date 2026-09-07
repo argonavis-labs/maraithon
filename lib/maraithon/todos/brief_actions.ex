@@ -127,8 +127,12 @@ defmodule Maraithon.Todos.BriefActions do
   """
   def sendable?(%Todo{} = todo) do
     case Brief.reply(todo) do
-      %{"channel" => channel} ->
-        channel in @connected_channels and todo.status in ~w(open snoozed)
+      %{"channel" => "gmail"} ->
+        todo.status in ~w(open snoozed) and
+          is_binary(TodoThreadPrimer.gmail_draft_recipient(todo))
+
+      %{"channel" => "slack"} ->
+        todo.status in ~w(open snoozed)
 
       _other ->
         false

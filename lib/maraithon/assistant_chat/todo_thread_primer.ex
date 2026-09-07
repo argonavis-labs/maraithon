@@ -25,7 +25,8 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   alias Maraithon.Todos
   alias Maraithon.Todos.{ActionDrafts, Brief, Todo}
 
-  @primer_version 10
+  @primer_version 11
+  @gmail_routing_version 1
   @availability_timezone "America/Toronto"
   @availability_offset_hours -5
   @availability_slot_minutes 30
@@ -322,6 +323,8 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
 
     present?(body) and
       read_string(payload || %{}, "body") == body and
+      raw_map_value(payload || %{}, "gmail_routing_version") == @gmail_routing_version and
+      current_gmail_recipient?(todo, payload || %{}) and
       present?(read_string(payload || %{}, "draft_id")) and
       present?(read_string(payload || %{}, "to")) and
       present?(read_string(payload || %{}, "subject"))
@@ -329,6 +332,16 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
 
   defp prepared_action_matches_current_draft?(_prepared_action, _conversation, _todo, _draft),
     do: false
+
+  defp current_gmail_recipient?(todo, payload) do
+    draft = todo.action_draft || %{}
+
+    if explicit_email_recipient(draft) || read_string(draft, "source") == "todo_brief" do
+      same_email?(gmail_draft_recipient(todo), read_string(payload, "to"))
+    else
+      true
+    end
+  end
 
   defp create_primer_prepared_action(%Conversation{} = conversation, %Todo{} = todo, draft, opts) do
     case prepared_action_attrs_with_timeout(conversation, todo, draft, opts) do
@@ -436,57 +449,24 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
            gmail_recipient(conversation.user_id, todo, draft_map, metadata, source_message),
          subject when is_binary(subject) <-
            gmail_subject(todo, draft_map, metadata, source_message),
+         delivery <-
+           gmail_delivery_context(todo, draft_map, metadata, source_message, to, subject),
          body <- calendar_enriched_message_body(conversation.user_id, todo, source_message, body),
-         {:ok, draft_id} <-
-           save_gmail_draft(
-             conversation.user_id,
-             todo,
-             draft_map,
-             metadata,
-             source_message,
-             to,
-             subject,
-             body
-           ) do
-      account = gmail_account(todo, draft_map, metadata)
-
+         {:ok, draft_id} <- save_gmail_draft(conversation.user_id, delivery, to, subject, body) do
       payload =
-        %{
+        delivery
+        |> Map.merge(%{
           "user_id" => conversation.user_id,
           "todo_id" => todo.id,
           "draft_id" => draft_id,
+          "gmail_routing_version" => @gmail_routing_version,
           "to" => to,
           "recipient" => to,
           "subject" => subject,
           "body" => body,
-          "cc" => read_string(draft_map, "cc"),
-          "bcc" => read_string(draft_map, "bcc"),
-          "thread_id" => gmail_thread_id(todo, draft_map, metadata, source_message),
-          "reply_to_message_id" =>
-            first_present([
-              read_string(draft_map, "reply_to_message_id"),
-              read_string(metadata, "reply_to_message_id"),
-              read_string(metadata, "message_id"),
-              read_string(source_message, "message_id")
-            ]),
-          "in_reply_to" =>
-            first_present([
-              read_string(draft_map, "in_reply_to"),
-              read_string(metadata, "in_reply_to"),
-              read_string(source_message, "internet_message_id")
-            ]),
-          "references" =>
-            first_present([
-              read_string(draft_map, "references"),
-              read_string(metadata, "references"),
-              read_string(source_message, "references"),
-              read_string(source_message, "internet_message_id")
-            ]),
-          "account" => account,
-          "from" => account,
           "source_from" => read_string(source_message, "from"),
           "source_to" => read_string(source_message, "to")
-        }
+        })
         |> compact_map()
 
       {:ok,
@@ -498,57 +478,16 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
     end
   end
 
-  defp save_gmail_draft(
-         user_id,
-         %Todo{} = todo,
-         draft_map,
-         metadata,
-         source_message,
-         to,
-         subject,
-         body
-       ) do
+  defp save_gmail_draft(user_id, delivery, to, subject, body) do
     args =
-      %{
+      delivery
+      |> Map.merge(%{
         "user_id" => user_id,
         "action" => "create",
         "to" => to,
         "subject" => subject,
-        "body" => body,
-        "cc" => read_string(draft_map, "cc"),
-        "bcc" => read_string(draft_map, "bcc"),
-        "thread_id" => gmail_thread_id(todo, draft_map, metadata, source_message),
-        "in_reply_to" =>
-          first_present([
-            read_string(draft_map, "in_reply_to"),
-            read_string(metadata, "in_reply_to"),
-            read_string(draft_map, "reply_to_message_id"),
-            read_string(metadata, "reply_to_message_id"),
-            read_string(source_message, "internet_message_id")
-          ]),
-        "references" =>
-          first_present([
-            read_string(draft_map, "references"),
-            read_string(metadata, "references"),
-            read_string(source_message, "references"),
-            read_string(source_message, "internet_message_id")
-          ]),
-        "account" =>
-          [
-            read_string(draft_map, "account"),
-            read_string(draft_map, "google_account_email"),
-            read_string(metadata, "google_account_email"),
-            read_string(metadata, "account_email")
-          ]
-          |> first_present()
-          |> gmail_account_email_value(),
-        "provider" =>
-          first_present([
-            read_string(draft_map, "provider"),
-            read_string(draft_map, "google_provider"),
-            read_string(metadata, "google_provider")
-          ])
-      }
+        "body" => body
+      })
       |> compact_map()
 
     case Tools.execute("gmail_drafts", args, %{surface: "internal", user_id: user_id}) do
@@ -1434,17 +1373,52 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
     end
   end
 
-  defp gmail_recipient(user_id, %Todo{} = todo, draft_map, metadata, source_message) do
-    direct =
-      []
-      |> Kernel.++(email_field_values(draft_map, ~w(to recipient_email recipient reply_to)))
-      |> Kernel.++(email_field_values(metadata, ~w(reply_to from_email from sender)))
-      |> Kernel.++(email_field_values(source_message, ~w(reply_to from sender)))
-      |> Enum.find_value(&valid_external_email_destination(&1, todo))
+  @doc "Returns the email address explicitly saved on a todo draft, without provider or contact lookups."
+  def gmail_draft_recipient(%Todo{} = todo) do
+    todo.action_draft
+    |> explicit_email_recipient()
+    |> valid_explicit_email_destination(todo)
+  end
 
-    direct ||
-      crm_email_recipient(user_id, todo, draft_map, metadata, source_message) ||
-      local_contact_email_recipient(user_id, todo, draft_map, metadata, source_message)
+  def gmail_draft_recipient(_todo), do: nil
+
+  defp explicit_email_recipient(draft_map) do
+    ~w(to recipient_email recipient reply_to)
+    |> Enum.find_value(&read_string(draft_map || %{}, &1))
+  end
+
+  defp valid_explicit_email_destination(value, todo) when is_binary(value) do
+    case Regex.scan(~r/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i, value) do
+      [[email]] -> valid_external_email_destination(email, todo)
+      _ -> nil
+    end
+  end
+
+  defp valid_explicit_email_destination(_value, _todo), do: nil
+
+  defp gmail_recipient(user_id, %Todo{} = todo, draft_map, metadata, source_message) do
+    todo = %{
+      todo
+      | source_account_label: gmail_account(todo, draft_map, metadata, source_message)
+    }
+
+    explicit = explicit_email_recipient(draft_map)
+
+    # A named recipient is an instruction, not permission to substitute the
+    # source sender. Generated briefs must carry their own concrete address.
+    if explicit || read_string(draft_map, "source") == "todo_brief" do
+      valid_explicit_email_destination(explicit, todo)
+    else
+      direct =
+        []
+        |> Kernel.++(email_field_values(metadata, ~w(reply_to from_email from sender)))
+        |> Kernel.++(email_field_values(source_message, ~w(reply_to from sender)))
+        |> Enum.find_value(&valid_external_email_destination(&1, todo))
+
+      direct ||
+        crm_email_recipient(user_id, todo, draft_map, metadata, source_message) ||
+        local_contact_email_recipient(user_id, todo, draft_map, metadata, source_message)
+    end
   end
 
   defp valid_email_destination(value) when is_binary(value) do
@@ -1458,7 +1432,10 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
 
   defp valid_external_email_destination(value, %Todo{} = todo) do
     with email when is_binary(email) <- valid_email_destination(value),
-         false <- same_email?(email, todo.source_account_label) do
+         false <- same_email?(email, todo.source_account_label),
+         false <- same_email?(email, todo.user_id),
+         false <- same_email?(email, read_string(todo.metadata || %{}, "google_account_email")),
+         false <- same_email?(email, read_string(todo.metadata || %{}, "account_email")) do
       email
     else
       _ -> nil
@@ -1706,17 +1683,56 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
     end
   end
 
-  defp gmail_thread_id(%Todo{}, draft_map, metadata, source_message) do
-    first_present([
-      read_string(draft_map, "thread_id"),
-      read_string(metadata, "thread_id"),
-      read_string(source_message, "thread_id"),
-      read_string(metadata, "gmail_thread_id")
-    ])
+  defp gmail_delivery_context(todo, draft_map, metadata, source_message, to, subject) do
+    account = gmail_account(todo, draft_map, metadata, source_message)
+
+    base = %{
+      "account" => account,
+      "from" => account,
+      "provider" => read_string(source_message, "google_provider"),
+      "cc" => read_string(draft_map, "cc"),
+      "bcc" => read_string(draft_map, "bcc")
+    }
+
+    # A digest or forwarded source can describe a different conversation. Only
+    # reuse fetched reply headers when both the participant and subject agree.
+    participant? =
+      source_message
+      |> email_field_values(~w(reply_to from to cc))
+      |> Enum.flat_map(&Regex.scan(~r/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i, &1))
+      |> List.flatten()
+      |> Enum.any?(&same_email?(&1, to))
+
+    source_subject = read_string(source_message, "subject")
+
+    if participant? and is_binary(source_subject) and
+         reply_subject_identity(source_subject) == reply_subject_identity(subject) do
+      Map.merge(base, %{
+        "thread_id" => read_string(source_message, "thread_id"),
+        "reply_to_message_id" => read_string(source_message, "message_id"),
+        "in_reply_to" => read_string(source_message, "internet_message_id"),
+        "references" =>
+          first_present([
+            read_string(source_message, "references"),
+            read_string(source_message, "internet_message_id")
+          ])
+      })
+      |> compact_map()
+    else
+      compact_map(base)
+    end
   end
 
-  defp gmail_account(%Todo{} = todo, draft_map, metadata) do
+  defp reply_subject_identity(subject) do
+    subject
+    |> String.replace(~r/^(?:\s*(?:re|fw|fwd):)+\s*/i, "")
+    |> String.trim()
+    |> String.downcase()
+  end
+
+  defp gmail_account(%Todo{} = todo, draft_map, metadata, source_message) do
     [
+      read_string(source_message, "google_account_email"),
       read_string(draft_map, "from"),
       read_string(draft_map, "account"),
       read_string(draft_map, "google_account_email"),
