@@ -11,6 +11,45 @@ defmodule Maraithon.Tools.LocalMessagesHelpers do
 
   @snippet_limit 200
 
+  @doc "Serializes a message collection with one CRM contact lookup."
+  def serialize_summaries(messages, user_id) when is_list(messages) do
+    people = people_for_messages(messages, user_id)
+
+    Enum.map(messages, fn msg ->
+      msg
+      |> serialize_summary()
+      |> put_resolved_sender(Map.get(people, msg.sender_handle))
+    end)
+  end
+
+  @doc "Serializes a chat collection with one CRM contact lookup."
+  def serialize_chat_summaries(chats, user_id) when is_list(chats) do
+    people =
+      chats
+      |> Enum.map(& &1.latest_message)
+      |> people_for_messages(user_id)
+
+    Enum.map(chats, fn chat ->
+      person =
+        case chat.latest_message do
+          %LocalMessage{sender_handle: handle} -> Map.get(people, handle)
+          nil -> nil
+        end
+
+      chat |> serialize_chat_summary() |> put_resolved_latest_sender(person)
+    end)
+  end
+
+  defp people_for_messages(messages, user_id) do
+    handles =
+      Enum.flat_map(messages, fn
+        %LocalMessage{sender_handle: handle} -> [handle]
+        _ -> []
+      end)
+
+    Crm.people_by_contact_values(user_id, handles)
+  end
+
   @doc """
   Compact summary for list/search results.
   """
@@ -121,34 +160,34 @@ defmodule Maraithon.Tools.LocalMessagesHelpers do
 
   defp add_resolved_sender(summary, user_id, %LocalMessage{sender_handle: handle})
        when is_binary(user_id) and is_binary(handle) do
-    case Crm.find_person_by_contact(user_id, handle) do
-      %Person{} = person ->
-        summary
-        |> Map.put(:sender_display_name, person.display_name)
-        |> Map.put(:sender_person_id, person.id)
-        |> maybe_put(:sender_relationship, person.relationship)
-
-      nil ->
-        summary
-    end
+    put_resolved_sender(summary, Crm.find_person_by_contact(user_id, handle))
   end
 
   defp add_resolved_sender(summary, _user_id, _msg), do: summary
 
+  defp put_resolved_sender(summary, %Person{} = person) do
+    summary
+    |> Map.put(:sender_display_name, person.display_name)
+    |> Map.put(:sender_person_id, person.id)
+    |> maybe_put(:sender_relationship, person.relationship)
+  end
+
+  defp put_resolved_sender(summary, nil), do: summary
+
   defp add_resolved_latest_sender(summary, user_id, %LocalMessage{sender_handle: handle})
        when is_binary(user_id) and is_binary(handle) do
-    case Crm.find_person_by_contact(user_id, handle) do
-      %Person{} = person ->
-        summary
-        |> Map.put(:latest_sender_display_name, person.display_name)
-        |> Map.put(:latest_sender_person_id, person.id)
-
-      nil ->
-        summary
-    end
+    put_resolved_latest_sender(summary, Crm.find_person_by_contact(user_id, handle))
   end
 
   defp add_resolved_latest_sender(summary, _user_id, _latest), do: summary
+
+  defp put_resolved_latest_sender(summary, %Person{} = person) do
+    summary
+    |> Map.put(:latest_sender_display_name, person.display_name)
+    |> Map.put(:latest_sender_person_id, person.id)
+  end
+
+  defp put_resolved_latest_sender(summary, nil), do: summary
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, _key, ""), do: map

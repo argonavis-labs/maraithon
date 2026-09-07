@@ -1289,11 +1289,10 @@ defmodule Maraithon.Crm do
   defp find_existing_person(user_id, attrs) do
     identifiers = contact_identifiers(attrs)
     display_name = normalize_display_name(attrs)
+    people_by_contact = people_by_contact_values(user_id, identifiers)
 
     contact_match =
-      Enum.find_value(identifiers, fn value ->
-        find_person_by_contact(user_id, value)
-      end)
+      Enum.find_value(identifiers, &Map.get(people_by_contact, &1))
 
     contact_match || find_existing_person_by_name(user_id, display_name, identifiers)
   end

@@ -35,7 +35,7 @@ defmodule Maraithon.Tools.MessagesSearch do
          source: "local_messages",
          query: query,
          count: length(messages),
-         messages: Enum.map(messages, &LocalMessagesHelpers.serialize_summary(&1, user_id))
+         messages: LocalMessagesHelpers.serialize_summaries(messages, user_id)
        }}
     end
   end

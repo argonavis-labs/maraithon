@@ -564,16 +564,21 @@ defmodule Maraithon.OpenLoops do
 
     recent_messages = LocalMessages.recent_for_user(user_id, limit: 200)
 
-    recent_messages
-    |> Enum.filter(fn msg ->
-      msg.is_from_me == false and
-        is_struct(msg.sent_at, DateTime) and
-        DateTime.compare(msg.sent_at, cutoff) != :lt and
-        imessage_question_or_ask?(msg.text) and
-        not imessage_replied_after?(recent_messages, msg)
-    end)
+    pending_messages =
+      Enum.filter(recent_messages, fn msg ->
+        msg.is_from_me == false and
+          is_struct(msg.sent_at, DateTime) and
+          DateTime.compare(msg.sent_at, cutoff) != :lt and
+          imessage_question_or_ask?(msg.text) and
+          not imessage_replied_after?(recent_messages, msg)
+      end)
+
+    people_by_handle =
+      Crm.people_by_contact_values(user_id, Enum.map(pending_messages, & &1.sender_handle))
+
+    pending_messages
     |> Enum.map(fn msg ->
-      sender_person = message_sender_person(user_id, msg)
+      sender_person = Map.get(people_by_handle, msg.sender_handle)
 
       %{
         "type" => "imessage_pending_reply",
