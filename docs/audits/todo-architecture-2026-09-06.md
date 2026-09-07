@@ -863,7 +863,11 @@ for `kent@runner.now`, using the manual-first development policy.
     provider calls or latency savings. `make build` passed with warnings as
     errors; no automated tests were run. Commit `053bdde4` deployed in revision
     `maraithon-00224-l5j` through workflow `34076511804`, which succeeded at
-    02:34:04. Live scan verification is underway in observer `2xl2b`.
+    02:34:04. At 02:39:33, observer `2xl2b` verified two completed Gmail batches
+    with forty policy decisions, zero model calls, and all 8/8 and 33/33 source
+    references retained. Other sampled batches mixed policy and model decisions
+    with full manifests. Account 2 reached 47/184 completed children at 02:41:34
+    without an error before the next rollout.
 
 51. **Dependency waits trigger provider throttling and failure backoff.**
     Discovery and closure finalizers returned `retry_after` while their own
@@ -881,12 +885,19 @@ for `kent@runner.now`, using the manual-first development policy.
     a provider cooldown. Missing or failed children still fail finalization,
     and actual provider/capacity errors retain their retry behavior. The shared
     ten-second model-capacity constant was renamed to describe its remaining
-    use. `make build` passed; no automated tests were run. Deployment is pending.
+    use. `make build` passed; no automated tests were run. Commit `9e289360`
+    deployed as `maraithon-00225-twr` through workflow `34076982880`, successful
+    at 02:42:46. Read-only observer `xvsn2` confirmed both old finalizers had
+    reached twenty dependency retries and six attempts by final failure. At
+    02:45:32, a discovery finalizer used the new waiting outcome, retained zero
+    attempts and no error, and scheduled its next poll exactly ten seconds
+    after the prior one. The shared model cooldown remained unchanged since
+    02:41:40. Closure-finalizer waiting and complete catch-up remain under review.
 
 ## Delivery state
 
-Current server: `maraithon-00224-l5j`, code through `053bdde4`, deployed by
-successful workflow `34076511804`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00225-twr`, code through `9e289360`, deployed by
+successful workflow `34076982880`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -1675,3 +1686,38 @@ Both Gmail closure cursors still awaited settlement. The SQL interval totaled
 203.30 seconds; the largest entry was the node-authority lock at 14.83%, then
 full background-job reads at 10.14% and claimed-at renewal at 8.49%. It
 includes rollout and cleanup, so it is not a steady-state comparison.
+
+Revision 224 recovered the Chief at 02:34:36.164. Its 02:35:10 wakeup
+completed two Effects by 02:35:56, bringing the total to 1,174 outcome-known
+Effects with no missing evidence. Observer `2xl2b` completed successfully at
+02:43:40. Its first and last samples caught the rollouts into revisions 224
+and 225; the middle samples retained 64 live/ready partitions. Its SQL window
+therefore is not a steady-state comparison. Account 2's version-2 Gmail graph
+completed fifty children before revision 225 interrupted four provider calls.
+
+Revision 225 recovered the Chief at 02:43:20.203. At 02:45:32, `xvsn2` showed
+all 64 partitions ready/live, no task awaiting termination, and 1,176
+outcome-known Effects with matching evidence. Gmail account 2's replacement
+`fb086130-a551-4d44-8ff7-a3e0ccbe731f` preserved all fifty completed version-2
+jobs and had completed ten more, with no error. Account 1's new acquisition
+was running. The observer remains active for checkpoint, finalizer behavior,
+source-cycle settlement, and a SQL interval starting after its second sample.
+
+The Mac app refreshed to 899 active and 24 completed items. Manual review of
+the latest Abe Choi completion showed the reply quote, local completion time,
+original request, retained notes, and original Gmail link. A read-only source
+review is checking all three completed Abe Choi entries. The earlier browser
+tab is no longer open, and no authenticated Maraithon browser session was
+available. Kent was asked asynchronously to sign in for the remaining chat
+check; runtime work continues independently.
+
+The eleven earlier 429 request logs all reported that Cloud Run had no
+available instance, with zero request latency and no container instance ID.
+Current configuration is manual scaling at one instance, two CPUs, 2 GiB RAM,
+and request concurrency forty. Cloud Run's
+[manual scaling documentation](https://docs.cloud.google.com/run/docs/configuring/services/manual-scaling)
+states that revision-level min/max settings are ignored in this mode. Its
+[troubleshooting guide](https://docs.cloud.google.com/run/docs/troubleshooting#abort-request)
+classifies this response as an instance-availability/scaling problem. The
+specific transient trigger remains unproven; these findings do not establish
+that request concurrency forty was exhausted. No scaling setting was changed.
