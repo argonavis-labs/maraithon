@@ -861,12 +861,14 @@ for `kent@runner.now`, using the manual-first development policy.
     reduced prepared requests from 86 to 68, and temporal filtering reduced
     that further to 46. These are prompt-preparation projections, not observed
     provider calls or latency savings. `make build` passed with warnings as
-    errors; no automated tests were run. Deployment is pending.
+    errors; no automated tests were run. Commit `053bdde4` deployed in revision
+    `maraithon-00224-l5j` through workflow `34076511804`, which succeeded at
+    02:34:04. Live scan verification is underway in observer `2xl2b`.
 
 ## Delivery state
 
-Current server: `maraithon-00223-9vh`, code through `0137657e` (workflow head
-`c0829b02`), deployed by successful workflow `34074912781`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00224-l5j`, code through `053bdde4`, deployed by
+successful workflow `34076511804`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
