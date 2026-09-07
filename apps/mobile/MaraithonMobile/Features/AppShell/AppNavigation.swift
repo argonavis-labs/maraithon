@@ -4,7 +4,7 @@ import Observation
 @MainActor
 @Observable
 final class AppNavigation {
-    var selectedTab: AppTab = .todos
+    var selectedTab: AppTab = .today
     var requestedTodoFilter: TodoFilter?
     var requestedPeopleFilter: CRMStatusFilter?
     var requestedChatPrompt: String?

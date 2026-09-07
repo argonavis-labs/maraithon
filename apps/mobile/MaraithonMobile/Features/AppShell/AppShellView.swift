@@ -30,12 +30,12 @@ struct AppShellView: View {
             get: { navigation.selectedTab },
             set: { navigation.selectedTab = $0 }
         )) {
-            Tab("Todos", systemImage: "checklist", value: .todos) {
-                TodosView()
+            Tab("Today", systemImage: "sun.max", value: .today) {
+                TodayView()
             }
 
-            Tab("Today", systemImage: "sparkles.rectangle.stack", value: .today) {
-                TodayView()
+            Tab("Todos", systemImage: "checklist", value: .todos) {
+                TodosView()
             }
 
             Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: .chat) {

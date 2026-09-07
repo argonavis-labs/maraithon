@@ -7,12 +7,19 @@ struct AccountMenuButton: View {
     @State private var isConfirmingReset = false
     @State private var isShowingActivityLog = false
     @State private var isShowingGoals = false
+    @State private var isShowingSettings = false
     @State private var resetError: String?
 
     var body: some View {
         Menu {
             if let email = sessionStore.user?.email {
                 Label(email, systemImage: "person.crop.circle")
+            }
+
+            Button {
+                isShowingSettings = true
+            } label: {
+                Label("Settings", systemImage: "gearshape")
             }
 
             if sessionStore.user?.sessionToken != nil {
@@ -46,7 +53,7 @@ struct AccountMenuButton: View {
         } label: {
             Image(systemName: "person.crop.circle")
         }
-        .accessibilityLabel("Account")
+        .accessibilityLabel("Account and settings")
         .confirmationDialog(
             AccountMenuCopy.resetLocalWorkspaceTitle,
             isPresented: $isConfirmingReset,
@@ -75,6 +82,9 @@ struct AccountMenuButton: View {
         }
         .sheet(isPresented: $isShowingGoals) {
             GoalsProfileView()
+        }
+        .sheet(isPresented: $isShowingSettings) {
+            SettingsView()
         }
     }
 

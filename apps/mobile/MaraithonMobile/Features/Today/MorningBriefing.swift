@@ -131,7 +131,7 @@ struct BriefDetailView: View {
                 Divider()
 
                 ForEach(blocks.indices, id: \.self) { index in
-                    blockView(blocks[index])
+                    BriefBlockView(block: blocks[index])
                 }
             }
             .padding(20)
@@ -142,24 +142,16 @@ struct BriefDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    @ViewBuilder
-    private func blockView(_ block: BriefMarkdown.Block) -> some View {
+}
+
+struct BriefBlockView: View {
+    let block: BriefMarkdown.Block
+
+    var body: some View {
         switch block {
         case .heading(let text):
-            Text(text)
-                .font(.headline)
-                .padding(.top, 4)
-
-        case .bullet(let text):
-            HStack(alignment: .top, spacing: 8) {
-                Text("•")
-                    .foregroundStyle(.secondary)
-                Text(BriefMarkdown.inline(text))
-                    .font(.body)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-        case .paragraph(let text):
+            Text(text).font(.headline)
+        case .bullet(let text), .paragraph(let text):
             Text(BriefMarkdown.inline(text))
                 .font(.body)
                 .fixedSize(horizontal: false, vertical: true)
@@ -192,7 +184,7 @@ enum BriefMarkdown {
 
             if line.isEmpty {
                 flushParagraph()
-            } else if line.hasPrefix("##") {
+            } else if line.hasPrefix("#") {
                 flushParagraph()
                 let heading = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
                 blocks.append(.heading(heading))

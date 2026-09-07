@@ -662,6 +662,7 @@ struct MobileAPIClient: Sendable {
         let body: String?
         let status: String
         let scheduledFor: Date?
+        let localDate: String?
         let sentAt: Date?
         let linkedTodoIDs: [String]
         let insertedAt: Date?
@@ -674,6 +675,7 @@ struct MobileAPIClient: Sendable {
             case body
             case status
             case scheduledFor = "scheduled_for"
+            case localDate = "local_date"
             case sentAt = "sent_at"
             case linkedTodoIDs = "linked_todo_ids"
             case insertedAt = "inserted_at"
@@ -688,6 +690,7 @@ struct MobileAPIClient: Sendable {
             body = try container.decodeIfPresent(String.self, forKey: .body)
             status = try container.decodeIfPresent(String.self, forKey: .status) ?? "pending"
             scheduledFor = try container.decodeIfPresent(Date.self, forKey: .scheduledFor)
+            localDate = try container.decodeIfPresent(String.self, forKey: .localDate)
             sentAt = try container.decodeIfPresent(Date.self, forKey: .sentAt)
             linkedTodoIDs = try container.decodeIfPresent([String].self, forKey: .linkedTodoIDs) ?? []
             insertedAt = try container.decodeIfPresent(Date.self, forKey: .insertedAt)
@@ -698,18 +701,47 @@ struct MobileAPIClient: Sendable {
         }
     }
 
-    private struct BriefsResponse: Decodable, Sendable {
+    struct MorningSchedule: Decodable, Sendable {
+        let configured: Bool
+        let hour: Int
+        let minute: Int
+        let displayTime: String
+        let timezone: String?
+        let timezoneLabel: String
+
+        enum CodingKeys: String, CodingKey {
+            case configured, hour, minute, timezone
+            case displayTime = "display_time"
+            case timezoneLabel = "timezone_label"
+        }
+
+        var refreshDescription: String {
+            "Every morning at \(displayTime) · \(timezoneLabel)"
+        }
+    }
+
+    struct BriefsResponse: Decodable, Sendable {
         let briefs: [RemoteBrief]
+        let morningSchedule: MorningSchedule?
+
+        enum CodingKeys: String, CodingKey {
+            case briefs
+            case morningSchedule = "morning_schedule"
+        }
     }
 
     func listBriefs(sessionToken: String, limit: Int = 8) async throws -> [RemoteBrief] {
+        try await loadDailyBriefs(sessionToken: sessionToken, limit: limit).briefs
+    }
+
+    func loadDailyBriefs(sessionToken: String, limit: Int = 8) async throws -> BriefsResponse {
         let clampedLimit = max(1, min(limit, 30))
         let response: BriefsResponse = try await send(
             path: "/briefs?limit=\(clampedLimit)",
             sessionToken: sessionToken,
             responseType: BriefsResponse.self
         )
-        return response.briefs
+        return response
     }
 
     struct RemoteRelatedPerson: Decodable, Equatable, Sendable {
