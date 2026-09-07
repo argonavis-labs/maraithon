@@ -339,6 +339,7 @@ defmodule MaraithonWeb.AgentsLive do
     with true <- is_binary(id),
          true <- agent_owned_by_current_user?(socket, id),
          {:ok, start_params} <- build_agent_start_params(launch, current_user_id(socket)),
+         start_params <- preserve_packaged_behavior(start_params, socket.assigns.selected_agent),
          {:ok, agent} <- Runtime.update_agent(id, start_params) do
       emit_action_telemetry("update", :workspace, agent.id, :ok)
 
@@ -2024,6 +2025,22 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp build_agent_start_params(launch, user_id),
     do: AgentBuilder.build_start_params(launch, user_id)
+
+  # The form displays a package's underlying template. Saving a clock or
+  # instruction edit must not silently replace its package-driven behavior.
+  defp preserve_packaged_behavior(params, %{config: config}) when is_map(config) do
+    package_id = config["agent_package_version_id"]
+
+    if config["marketplace_behavior"] == "manifest_agent" and is_binary(package_id) and
+         params["behavior"] == config["source_behavior"] and
+         get_in(params, ["config", "agent_package_version_id"]) == package_id do
+      Map.put(params, "behavior", "manifest_agent")
+    else
+      params
+    end
+  end
+
+  defp preserve_packaged_behavior(params, _agent), do: params
 
   defp agent_owned_by_current_user?(socket, agent_id) when is_binary(agent_id) do
     not is_nil(Agents.get_agent_for_user(agent_id, current_user_id(socket)))
