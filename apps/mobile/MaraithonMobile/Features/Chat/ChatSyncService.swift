@@ -57,6 +57,13 @@ struct ChatSyncService {
     ) async throws {
         let sessionToken = try sessionToken(from: sessionStore)
 
+        var keepValidator = false
+        defer {
+            if !keepValidator {
+                ETagStore.shared.set(nil, for: MobileAPIClient.ETagKey.chatThreads)
+            }
+        }
+
         let remoteThreads: [MobileAPIClient.RemoteChatThread]
         do {
             remoteThreads = try await api.listChatThreads(
@@ -66,6 +73,7 @@ struct ChatSyncService {
         } catch MobileAPIError.notModified {
             // The thread collection is unchanged; skip the merge and the
             // delete-reconcile entirely.
+            keepValidator = true
             return
         }
 
@@ -92,6 +100,7 @@ struct ChatSyncService {
         }
 
         try modelContext.save()
+        keepValidator = true
     }
 
     func refreshThread(

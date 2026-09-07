@@ -224,7 +224,11 @@ extension MobileAPIClient: MobileChatAPI {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(UUID.self, forKey: .id)
-            clientMessageID = try container.decodeIfPresent(UUID.self, forKey: .clientMessageID)
+            // The server also uses namespaced idempotency keys for assistant
+            // replies and action results. Only UUID keys correlate with local
+            // optimistic sends; every remote message still has its stable id.
+            clientMessageID = try container.decodeIfPresent(String.self, forKey: .clientMessageID)
+                .flatMap(UUID.init(uuidString:))
             role = try container.decodeIfPresent(String.self, forKey: .role) ?? ChatRole.assistant.rawValue
             body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
             turnKind = try container.decodeIfPresent(String.self, forKey: .turnKind)

@@ -127,7 +127,8 @@ struct MobileAPIClient: Sendable {
     /// version whenever persisted rows need a mandatory one-time backfill.
     enum ETagKey {
         static let people = "people"
-        static let chatThreads = "chat-threads"
+        // Older builds could cache this validator before decoding failed.
+        static let chatThreads = "chat-threads-v2"
 
         static func todos(includeCards: Bool) -> String {
             // Refetch once so existing completed rows acquire their resolution note.
@@ -1469,18 +1470,21 @@ struct MobileAPIClient: Sendable {
 
         switch httpResponse.statusCode {
         case 200..<300:
+            let decoded: Response
+            // Accept the body before its validator. A failed decode must not
+            // turn the next refresh into a 304 over data we never saved.
+            if data.isEmpty, let empty = try? Self.decoder.decode(Response.self, from: Data("{}".utf8)) {
+                decoded = empty
+            } else {
+                decoded = try Self.decoder.decode(Response.self, from: data)
+            }
             if let etagKey {
                 // Store the fresh validator; a 200 without one means the
                 // server stopped supporting ETags, so drop the stale value
                 // instead of replaying it forever.
                 ETagStore.shared.set(httpResponse.value(forHTTPHeaderField: "ETag"), for: etagKey)
             }
-            // 204-style responses carry no body; any all-optional/empty
-            // Decodable should succeed rather than choking on zero bytes.
-            if data.isEmpty, let empty = try? Self.decoder.decode(Response.self, from: Data("{}".utf8)) {
-                return empty
-            }
-            return try Self.decoder.decode(Response.self, from: data)
+            return decoded
         case 304:
             throw MobileAPIError.notModified
         case 401:
