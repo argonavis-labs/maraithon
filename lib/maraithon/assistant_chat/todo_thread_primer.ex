@@ -23,7 +23,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   alias Maraithon.Timezones
   alias Maraithon.Tools
   alias Maraithon.Todos
-  alias Maraithon.Todos.{ActionDrafts, Todo}
+  alias Maraithon.Todos.{ActionDrafts, Brief, Todo}
 
   @primer_version 10
   @availability_timezone "America/Toronto"
@@ -36,6 +36,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   def ensure(conversation, todo, opts \\ [])
 
   def ensure(%Conversation{} = conversation, %Todo{} = todo, opts) when is_list(opts) do
+    todo = Brief.with_current_draft(todo)
     card = ActionCards.for_todo(todo, include_disconnected: true)
     draft = draft_for(todo, card)
     text = primer_text(todo, card, draft)
@@ -98,6 +99,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
 
   def resolve_send_action_attrs(%Conversation{} = conversation, %Todo{} = todo, opts)
       when is_list(opts) do
+    todo = Brief.with_current_draft(todo)
     card = ActionCards.for_todo(todo, include_disconnected: true)
     draft = draft_for(todo, card)
     prepared_action_attrs_with_timeout(conversation, todo, draft, opts)

@@ -647,7 +647,7 @@ defmodule MaraithonWeb.TodosLive do
 
           true ->
             assign(socket,
-              brief: Brief.stored(todo),
+              brief: if(todo.status in ~w(open snoozed), do: nil, else: Brief.stored(todo)),
               brief_state: :idle,
               brief_todo_id: todo.id,
               brief_progress: nil
@@ -663,12 +663,13 @@ defmodule MaraithonWeb.TodosLive do
 
     socket
     |> assign(
-      brief: if(force?, do: nil, else: socket.assigns.brief),
+      brief: nil,
       brief_state: :generating,
       brief_todo_id: todo.id,
       brief_progress: @generating_progress,
       brief_polls_left: @brief_max_polls
     )
+    |> reset_reply_target()
     |> start_async({:todo_brief, todo.id}, fn ->
       Brief.generate_and_store(user_id, todo.id,
         force: force?,
@@ -682,7 +683,7 @@ defmodule MaraithonWeb.TodosLive do
      socket
      |> refresh_todos()
      |> assign(
-       brief: Brief.current(todo) || Brief.stored(todo),
+       brief: Brief.current(todo),
        brief_state: :ready,
        brief_progress: nil
      )
@@ -1807,7 +1808,7 @@ defmodule MaraithonWeb.TodosLive do
       |> assign(:facts, todo_fact_rows(assigns.todo, assigns.timezone_info))
       |> assign(:open_url, Map.get(source_action, "open_url"))
       |> assign(:open_label, Map.get(source_action, "open_label"))
-      |> assign(:reply, brief_reply(assigns.brief))
+      |> assign(:reply, if(is_map(assigns.brief), do: Brief.reply(assigns.todo)))
       |> assign(:source_history, source_history(assigns.brief, source_action))
       |> assign(:source_subject, source_subject(assigns.brief, source_action))
       |> assign(
@@ -2289,11 +2290,6 @@ defmodule MaraithonWeb.TodosLive do
     </.panel>
     """
   end
-
-  defp brief_reply(%{"reply" => %{"body" => body} = reply}) when is_binary(body) and body != "",
-    do: reply
-
-  defp brief_reply(_brief), do: nil
 
   defp source_history(%{"source_history" => history}, _source_action)
        when is_list(history) and history != [],

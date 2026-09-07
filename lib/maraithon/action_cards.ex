@@ -140,7 +140,7 @@ defmodule Maraithon.ActionCards do
   def for_todo(todo, opts \\ [])
 
   def for_todo(%Todo{} = todo, opts) when is_list(opts) do
-    todo = polish_todo_copy(todo)
+    todo = todo |> polish_todo_copy() |> Maraithon.Todos.Brief.with_current_draft()
     metadata = todo.metadata || %{}
     public_metadata = PublicMetadata.todo(metadata)
     profile = AttentionRanker.profile(todo)
@@ -336,6 +336,8 @@ defmodule Maraithon.ActionCards do
   end
 
   def draft_preview(%Todo{} = todo) do
+    todo = Maraithon.Todos.Brief.with_current_draft(todo)
+
     if placeholder_draft?(todo.action_draft) do
       nil
     else

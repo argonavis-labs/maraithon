@@ -300,7 +300,10 @@ defmodule Maraithon.Todos do
 
   defp cast_todo_id(_value), do: []
 
-  defp polish_todo_copy(%Todo{} = todo), do: UserFacingCopy.polish_attrs(todo)
+  defp polish_todo_copy(%Todo{} = todo) do
+    todo |> UserFacingCopy.polish_attrs() |> Brief.with_current_draft()
+  end
+
   defp polish_todo_copy(other), do: other
 
   defp enqueue_brief(%Todo{} = todo) do
@@ -635,15 +638,22 @@ defmodule Maraithon.Todos do
 
   @doc """
   Stores a generated chief-of-staff brief on the todo and, when the brief
-  includes a reply, replaces the todo's `action_draft` with it. Clears any
-  generation lease. Uses a direct write because the todo's own copy (title,
-  summary, next action) does not change.
+  includes a reply, refreshes its unedited generated draft. Retains user-edited
+  drafts and rejects a result whose source todo changed during generation.
+  Clears the generation lease without changing the todo's own copy.
   """
-  def put_brief(user_id, todo_id, brief, action_draft)
+  def put_brief(user_id, todo_id, brief, action_draft, opts \\ [])
+
+  def put_brief(user_id, todo_id, brief, action_draft, opts)
       when is_binary(user_id) and is_binary(todo_id) and is_map(brief) do
     Repo.transaction(fn ->
       case get_todo_for_update(user_id, todo_id) do
         %Todo{} = todo ->
+          if is_binary(brief["fingerprint"]) and
+               brief["fingerprint"] != Brief.fingerprint(polish_todo_copy(todo)) do
+            Repo.rollback(:todo_changed)
+          end
+
           metadata =
             (todo.metadata || %{})
             |> Map.put(Brief.metadata_key(), brief)
@@ -651,7 +661,7 @@ defmodule Maraithon.Todos do
 
           changes =
             %{metadata: metadata}
-            |> maybe_put_action_draft(action_draft)
+            |> maybe_put_brief_draft(todo, action_draft, opts)
 
           case todo |> Todo.changeset(changes) |> Repo.update() do
             {:ok, updated} -> updated
@@ -668,12 +678,22 @@ defmodule Maraithon.Todos do
     end
   end
 
-  def put_brief(_user_id, _todo_id, _brief, _action_draft), do: {:error, :not_found}
+  def put_brief(_user_id, _todo_id, _brief, _action_draft, _opts), do: {:error, :not_found}
 
-  defp maybe_put_action_draft(changes, %{} = draft) when map_size(draft) > 0,
-    do: Map.put(changes, :action_draft, draft)
+  defp maybe_put_brief_draft(changes, todo, draft, opts) do
+    generated? = Brief.generated_draft?(todo)
 
-  defp maybe_put_action_draft(changes, _draft), do: changes
+    replace? =
+      cond do
+        generated? -> true
+        is_nil(draft) -> false
+        todo.action_draft in [nil, %{}] -> true
+        Brief.stored(todo) -> false
+        true -> Keyword.get(opts, :expected_action_draft, todo.action_draft) == todo.action_draft
+      end
+
+    if replace?, do: Map.put(changes, :action_draft, draft || %{}), else: changes
+  end
 
   def annotate_scope(user_id, todo_id, attrs \\ [])
 
@@ -745,7 +765,7 @@ defmodule Maraithon.Todos do
   def summarize_for_prompt(_user_id, _limit), do: []
 
   def serialize_for_prompt(%Todo{} = todo) do
-    todo = UserFacingCopy.polish_attrs(todo)
+    todo = polish_todo_copy(todo)
 
     %{
       id: todo.id,

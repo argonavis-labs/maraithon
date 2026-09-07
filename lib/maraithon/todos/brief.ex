@@ -33,6 +33,7 @@ defmodule Maraithon.Todos.Brief do
   @max_steps 8
   @max_open_questions 3
   @max_prompt_bytes 100_000
+  @max_age_seconds 6 * 60 * 60
 
   def version, do: @version
   def sentinel, do: @sentinel
@@ -41,11 +42,20 @@ defmodule Maraithon.Todos.Brief do
   @doc """
   Returns the stored brief when it is current for this todo, otherwise nil.
 
-  A brief is current when its version matches and its fingerprint still
-  matches the todo's content. Status is deliberately not part of the
-  fingerprint so a brief survives Mark done.
+  Active work also expires after six hours or when its next due time passes.
+  Closed work retains its historical brief. Time expiry is refreshed on demand,
+  rather than scheduling the whole inventory again during source ingestion.
   """
   def current(%Todo{} = todo) do
+    case content_current(todo) do
+      %{} = brief -> if fresh?(todo, brief), do: brief
+      nil -> nil
+    end
+  end
+
+  def current(_todo), do: nil
+
+  defp content_current(%Todo{} = todo) do
     case stored(todo) do
       %{"version" => @version, "fingerprint" => fingerprint} = brief ->
         if fingerprint == fingerprint(todo), do: brief, else: nil
@@ -55,7 +65,44 @@ defmodule Maraithon.Todos.Brief do
     end
   end
 
-  def current(_todo), do: nil
+  defp fresh?(%Todo{status: status}, _brief) when status not in ~w(open snoozed), do: true
+
+  defp fresh?(todo, brief) do
+    with value when is_binary(value) <- brief["generated_at"],
+         {:ok, generated_at, _offset} <- DateTime.from_iso8601(value) do
+      now = DateTime.utc_now()
+      expires_at = DateTime.add(generated_at, @max_age_seconds, :second)
+
+      due_passed? =
+        match?(%DateTime{}, todo.due_at) and
+          DateTime.compare(todo.due_at, generated_at) == :gt and
+          DateTime.compare(todo.due_at, now) != :gt
+
+      DateTime.compare(generated_at, now) != :gt and
+        DateTime.compare(now, expires_at) == :lt and not due_passed?
+    else
+      _ -> false
+    end
+  end
+
+  @doc "Hide an expired generated draft in projections while retaining stored and edited wording."
+  def with_current_draft(%Todo{} = todo) do
+    if is_nil(current(todo)) and generated_draft?(todo),
+      do: %{todo | action_draft: %{}},
+      else: todo
+  end
+
+  @doc false
+  def generated_draft?(%Todo{} = todo) do
+    case stored(todo) do
+      %{"reply" => reply} ->
+        generated = action_draft_from_reply(reply)
+        is_map(generated) and generated == todo.action_draft
+
+      _ ->
+        false
+    end
+  end
 
   @doc "The stored brief regardless of freshness, or nil."
   def stored(%Todo{metadata: metadata}) when is_map(metadata) do
@@ -80,25 +127,45 @@ defmodule Maraithon.Todos.Brief do
   @doc "The reply prepared by the brief, or nil."
   def reply(%Todo{} = todo) do
     case current(todo) do
-      %{"reply" => %{"body" => body} = reply} when is_binary(body) and body != "" -> reply
-      _other -> nil
+      %{"reply" => %{"body" => body} = reply} when is_binary(body) and body != "" ->
+        preserve_edited_reply(todo, reply)
+
+      _other ->
+        nil
     end
   end
 
   def reply(_todo), do: nil
 
+  defp preserve_edited_reply(
+         %Todo{action_draft: %{"source" => "todo_brief"} = draft} = todo,
+         reply
+       ) do
+    if not generated_draft?(todo) and is_binary(draft["body"]) and draft["body"] != "" do
+      reply
+      |> Map.merge(Map.take(draft, ~w(channel to subject body)))
+      |> Map.put("resolves_todo", false)
+    else
+      reply
+    end
+  end
+
+  defp preserve_edited_reply(_todo, reply), do: reply
+
   @doc "Public projection for API surfaces (no fingerprint)."
   def public(%Todo{} = todo) do
     case current(todo) do
       nil -> nil
-      brief -> Map.drop(brief, ["fingerprint"])
+      brief -> brief |> Map.drop(["fingerprint"]) |> Map.put("reply", reply(todo))
     end
   end
 
   def public(_todo), do: nil
 
   @doc "Durably schedules a missing or stale brief on the per-user model lane."
-  def enqueue_generation(%Todo{} = todo) do
+  def enqueue_generation(todo, opts \\ [])
+
+  def enqueue_generation(%Todo{} = todo, opts) do
     cond do
       todo.status not in ~w(open snoozed) ->
         {:ok, nil}
@@ -106,20 +173,28 @@ defmodule Maraithon.Todos.Brief do
       current(todo) ->
         {:ok, nil}
 
+      content_current(todo) && not Keyword.get(opts, :refresh_expired, false) ->
+        {:ok, nil}
+
       true ->
+        refresh_key =
+          if Keyword.get(opts, :refresh_expired, false),
+            do: ":refresh:#{(stored(todo) || %{})["generated_at"] || "missing"}",
+            else: ""
+
         BackgroundJobs.enqueue("todo_brief_generation", %{
           user_id: todo.user_id,
           queue: "runtime_model_user",
           partition_key: tenant_partition(todo.user_id),
           rate_limit_key: "model",
-          dedupe_key: "todo-brief:#{todo.id}:#{fingerprint(todo)}",
+          dedupe_key: "todo-brief:#{todo.id}:#{fingerprint(todo)}#{refresh_key}",
           max_attempts: 3,
           payload: %{"todo_id" => todo.id}
         })
     end
   end
 
-  def enqueue_generation(_todo), do: {:error, :invalid_todo}
+  def enqueue_generation(_todo, _opts), do: {:error, :invalid_todo}
 
   @doc """
   Generates the brief for a todo and stores it on the todo.
@@ -152,7 +227,9 @@ defmodule Maraithon.Todos.Brief do
         |> Map.put("model", model)
         |> Map.put("fingerprint", fingerprint(todo))
 
-      Todos.put_brief(user_id, todo.id, stored_brief, action_draft_from_reply(brief["reply"]))
+      Todos.put_brief(user_id, todo.id, stored_brief, action_draft_from_reply(brief["reply"]),
+        expected_action_draft: todo.action_draft
+      )
     else
       {:error, :already_current} ->
         {:ok, Todos.get_for_user(user_id, todo_id)}
@@ -312,6 +389,7 @@ defmodule Maraithon.Todos.Brief do
 
     Your bar:
     - Be specific. Use names, dates, numbers, and facts from the sources. Never invent facts; if something is unknown, name exactly what to check.
+    - Anchor timing to NOW. Use explicit calendar dates for deadlines and proposed commitments, not relative countdowns such as "in 3 hours", "today", or "tomorrow". A past deadline is overdue; do not recommend meeting it or carry an old proposed date into a new reply.
     - No preamble, no hedging, no filler, no praise. Every sentence must earn its place.
     - Think about what the other person actually needs and what the user is on the hook for. Point out anything the user already did that resolves or partly resolves this.
     - Plain hyphens only. Never use em dashes or en dashes anywhere in the output.

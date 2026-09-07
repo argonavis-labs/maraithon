@@ -1022,7 +1022,8 @@ for `kent@runner.now`, using the manual-first development policy.
     priorities, returned its Send button, and showed no failed-reply alert.
     Reload retained the answer and successful display. The complete live
     request compacted from 561,427 to 116,419 bytes at 03:40:09. The read-only
-    observer will confirm the durable completed status and recorded steps.
+    observer confirmed run `62321861-fd94-4b35-b781-b89aade00599`
+    completed at 03:40:16.630 with no error, sixteen seconds after startup.
 
 58. **Cached todo briefs retain expired time-relative advice.**
     Manual Chrome review of Michael Lippi's top-ranked todo showed a brief
@@ -1031,8 +1032,24 @@ for `kent@runner.now`, using the manual-first development policy.
     "about 3 hours from now" deadline. `Brief.current/1` checks the version
     and todo-content fingerprint, with no time freshness check. These are
     existing saved briefs, not new output from the priority-chat check.
-    Remaining work: make time-sensitive brief freshness explicit without
-    regenerating the full todo inventory on every scan or losing user edits.
+    Active briefs now expire after six hours or once a due time that was
+    still ahead at generation passes. Closed work retains its historical
+    brief. Web detail refreshes on open; the existing mobile detail-open event
+    schedules an individual refresh. Background ingestion skips briefs whose
+    content still matches and only expired with time. Refresh jobs deduplicate
+    against the prior generation timestamp. No inventory-wide timer was added.
+
+    Shared projections hide an expired draft only when it exactly matches
+    the stored generated reply. Saved edits remain available, and generation
+    preserves them under the row lock. A changed todo fingerprint rejects a
+    delayed result; first-generation draft updates also compare the draft
+    present when generation began. When an edited reply is retained, the new
+    generated brief cannot claim that sending the edited text completes the
+    todo. New prompts require explicit calendar dates and treat past deadlines
+    as overdue. Web loading/failure states no longer reveal the expired brief.
+    `make build` passed; no tests were run. Read-only projection `6c2ks` and
+    browser verification remain in progress.
+
     The DuraServ detail points to a daily-brief source while offering a reply
     to Tal; its exact recipient/thread resolution also needs read-only review
     before any connected send is exercised. No send was attempted.
@@ -1926,3 +1943,19 @@ Read-only observer `vvs7d` is running a separate twelve-minute measurement
 on the current revision, including the fresh chat's durable status and the
 three visible todos' source-address metadata. It starts Vault and Repo only,
 uses pool size two, and performs no provider calls or data mutations.
+
+
+Observer `mgfpq` completed successfully at 03:42:19. Its final sample retained
+64 ready/live partitions, six running tasks, no pending termination, and 1,186
+outcome-known Effects with matching evidence. Gmail account 1 reached 201/299
+completed children, retaining all 199 reused results. Its SQL interval crossed
+rollouts, with node-authority locking at 21.40% of 347.50 seconds, so it does
+not establish steady-state contention.
+
+Observer `vvs7d` confirmed at 03:49:30 that account 1 had reached 261/299
+completed children, with five running and 33 pending (five timeout retries).
+Gmail account 2 and Slack had settled and were advancing through empty deltas.
+All 64 partitions remained ready/live and 1,188 outcome-known Effects had
+matching evidence. The Chief's 03:48:20 wake completed its Effects by 03:48:54.
+The current-revision observation continues through its checkpoint and SQL
+window.

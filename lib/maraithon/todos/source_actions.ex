@@ -36,6 +36,7 @@ defmodule Maraithon.Todos.SourceActions do
   neither a usable deep link nor draft material.
   """
   def for_todo(%Todo{} = todo) do
+    todo = Brief.with_current_draft(todo)
     metadata = todo.metadata || %{}
     provider = provider(todo, metadata)
     draft = draft_text(todo)

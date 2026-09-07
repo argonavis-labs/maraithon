@@ -2,7 +2,7 @@ defmodule MaraithonWeb.MobileTodoController do
   use MaraithonWeb, :controller
 
   alias Maraithon.{AssistantChat, Crm, SourceFreshness, Todos}
-  alias Maraithon.Todos.{BriefActions, Todo}
+  alias Maraithon.Todos.{Brief, BriefActions, Todo}
   alias MaraithonWeb.MobileChatJSON
   alias MaraithonWeb.MobileConditional
   alias MaraithonWeb.MobileJSON
@@ -119,6 +119,10 @@ defmodule MaraithonWeb.MobileTodoController do
            source: "mobile_detail"
          ) do
       :ok ->
+        user_id
+        |> Todos.get_for_user(todo_id)
+        |> Brief.enqueue_generation(refresh_expired: true)
+
         json(conn, %{ok: true})
 
       {:error, :not_found} ->
