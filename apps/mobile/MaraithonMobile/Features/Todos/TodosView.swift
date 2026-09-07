@@ -4,6 +4,7 @@ import SwiftUI
 struct TodosView: View {
     @Environment(AppNavigation.self) private var appNavigation
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(SessionStore.self) private var sessionStore
     @Query(sort: \TodoItem.updatedAt, order: .reverse) private var todos: [TodoItem]
     @State private var filter: TodoFilter = .open
@@ -13,7 +14,12 @@ struct TodosView: View {
     @State private var actionErrorMessage: String?
     @State private var refreshErrorMessage: String?
     @State private var isRefreshing = false
+    @State private var refreshTask: Task<Void, Never>?
     @State private var workLists: TodoWorkLists?
+
+    private var isVisible: Bool {
+        scenePhase == .active && appNavigation.selectedTab == .todos
+    }
 
     private var emptyState: TodoEmptyState {
         filter.emptyState(searchText: searchText, hasAnyWork: !todos.isEmpty)
@@ -171,10 +177,6 @@ struct TodosView: View {
             .sheet(item: $editingTodo) { todo in
                 TodoEditorView(todo: todo)
             }
-            .task {
-                rebuildWorkLists()
-                await refreshLatestWork()
-            }
             .onChange(of: todoSignature) { _, _ in
                 rebuildWorkLists()
             }
@@ -194,6 +196,11 @@ struct TodosView: View {
                 applyRequestedFilterIfNeeded()
             }
         }
+        .task(id: isVisible) {
+            guard isVisible else { return }
+            rebuildWorkLists()
+            await refreshLatestWork()
+        }
     }
 
     private func rebuildWorkLists() {
@@ -201,21 +208,40 @@ struct TodosView: View {
     }
 
     private func refreshLatestWork(force: Bool = false) async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        defer { isRefreshing = false }
-
-        do {
-            try await ProductionDataSync.refreshTodos(
-                sessionStore: sessionStore,
-                modelContext: modelContext,
-                includeCards: true,
-                force: force
-            )
-            refreshErrorMessage = nil
-        } catch {
-            refreshErrorMessage = "Could not refresh todos. \(MobileErrorCopy.message(for: error))"
+        if let refreshTask {
+            await refreshTask.value
+            return
         }
+
+        // A page-by-page sync belongs to the saved collection, not the visible
+        // list. SwiftUI cancels its .task when a row opens or the tab changes;
+        // an independently owned task lets the remaining pages finish saving.
+        // Returning to Todos or pulling to refresh joins that same operation.
+        let task = Task { @MainActor in
+            isRefreshing = true
+            refreshErrorMessage = nil
+            defer {
+                isRefreshing = false
+                refreshTask = nil
+            }
+
+            do {
+                try await ProductionDataSync.refreshTodos(
+                    sessionStore: sessionStore,
+                    modelContext: modelContext,
+                    includeCards: true,
+                    force: force
+                )
+            } catch is CancellationError {
+                // Session changes stop the merge without reporting a failure
+                // against the newly signed-in user's list.
+            } catch {
+                guard !Task.isCancelled else { return }
+                refreshErrorMessage = "Could not refresh todos. \(MobileErrorCopy.message(for: error))"
+            }
+        }
+        refreshTask = task
+        await task.value
     }
 
     private func toggle(_ todo: TodoItem) {
