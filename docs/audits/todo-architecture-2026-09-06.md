@@ -5,12 +5,14 @@ rank them beside manually added work, and automatically close work when fresh
 evidence proves it was handled. Ship small changes to the single-user test app
 for `kent@runner.now`, using the manual-first development policy.
 
-Latest delivery (September 7, 04:14 UTC): revision `maraithon-00233-r7s`,
-code `51167f39`, successful workflow `34082107360`. Chat works; expired briefs
+Latest delivery (September 7): revision `maraithon-00234-g2q`,
+code `744ba7e1`, successful workflow `34084822177`. Intake now retrieves older
+matching work before deciding whether a reminder needs a new todo. Chat works; expired briefs
 refresh; named email drafts no longer target digest senders; explicit mailboxes
 are retained; exhausted model retries can reuse completed closure batches.
-The remaining live check is Gmail account 1's full closure catch-up and the
-current revision's runtime cycle. Account 2 and Slack have completed catch-up
+Remaining work includes Gmail account 1's full closure catch-up and repeated
+Slack escalation todos plus their personal ownership (findings 61–62). Revision 233's scheduled runtime cycle has
+passed the production checks. Account 2 and Slack have completed catch-up
 and subsequent deltas. Browser and narrow compile checks passed; no test
 suites were run. Detailed findings and chronological evidence follow.
 
@@ -23,11 +25,11 @@ investigation; the remaining gaps are stated here.
 | Requirement | Authoritative evidence inspected | Current result |
 | --- | --- | --- |
 | Discover commitments and decisions from connected apps using deltas. | Current `PeriodicJobs`, `SourceAccountDiscovery`, and `SourceCycleSettlement` paths; production discovery cursors for both Gmail accounts and Slack; source-backed Chrome todo details. | Discovery is advancing. Gmail account 1 discovery was at September 7 04:13:28 UTC in observer 233's first sample. Its separate closure cursor still lags. |
-| Rank sourced work alongside manually entered todos and make it actionable. | Signed-in `/todos`, successful priority chat run `62321861`, original source threads in the Michael/Uride/DuraServ details, and the recorded Mac create/edit/complete round trip. Current shared reply routing and brief projections were inspected again. | Manually verified. Suggested dates/commitments still need the user's review; no third-party message was sent. |
-| Wake regularly and fan work out without blocking OTP ownership. | Current one-minute discovery/completion schedules, ten-minute Chief default, independent non-mailbox completion backstop, workload/account rotation, and live observer `74rhc`. | Revision 233 recovered at 04:15:00; its first two samples had 64 ready/live partitions and the second had six running tasks. Its complete scheduled Effect/checkpoint cycle is still being observed. |
-| Close work only on current, matching evidence and keep the list current. | Current quote/time/relationship checks, row-locked stale-result rejection, immutable source-cycle settlement, sampled Abe Choi closure evidence from `f7ztc`, completed account-2/Slack cycles, and current Gmail graph status. | Evidence-backed sampled closures and two accounts' settled deltas are verified. Gmail account 1's complete catch-up is still required; its fresh 276-child graph had 8 complete at 04:18:55. |
+| Rank sourced work alongside manually entered todos and make it actionable. | Signed-in `/todos`, successful priority chat run `62321861`, original source threads in the Michael/Uride/DuraServ details, and the recorded Mac create/edit/complete round trip. Current shared reply routing and brief projections were inspected again. | Manual todo actions and sampled priorities were verified, but the Uride reminder review exposed duplicate and ownership gaps (61–62). Suggested commitments need the user's review; no third-party message was sent. |
+| Wake regularly and fan work out without blocking OTP ownership. | Current one-minute discovery/completion schedules, ten-minute Chief default, independent non-mailbox completion backstop, workload/account rotation, and live observer `74rhc`. | Revision 233 recovered at 04:15:00; its first two samples had 64 ready/live partitions and the second had six running tasks. Observer `74rhc` completed at 04:27:01 with a scheduled wake, two completed Effects, and the 04:25 checkpoint; all six samples retained 64 ready/live partitions. |
+| Close work only on current, matching evidence and keep the list current. | Current quote/time/relationship checks, row-locked stale-result rejection, immutable source-cycle settlement, sampled Abe Choi closure evidence from `f7ztc`, completed account-2/Slack cycles, and current Gmail graph status. | Evidence-backed sampled closures and two accounts' settled deltas are verified. Gmail account 1's complete catch-up is still required; its fresh 276-child graph had 46 complete at 04:26:57, with three pending timeout retries. |
 | Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded card serialization and Mac refresh timings, bounded fanout/prompt packing, live provider cache counters, completed-child reuse, and timeout-recovery projection `btwjn`. | Implemented and measured where noted. The timeout projection retained 297 results and retried two children; production completion of the current recovered graph remains outstanding. |
-| Ship small changes to the test app without staging or added deployment gates. | All 53 actual Git commit IDs cited in the findings are ancestors of deployed code `51167f39`; current `Makefile` maps `make deploy` to `deploy-fast`; workflow `34082107360` completed with optional validation/replay steps skipped. | Shipped to revision 233 at 100% traffic. The worktree was clean at the start of this audit. Compile/manual checks followed `docs/development-mode.md`; no test suites were run. |
+| Ship small changes to the test app without staging or added deployment gates. | All 54 actual Git commit IDs cited in the findings are ancestors of deployed code `744ba7e1`; current `Makefile` maps `make deploy` to `deploy-fast`; workflow `34084822177` completed through the normal cached deployment path. | Shipped to revision 234 at 100% traffic. Compile/manual checks followed `docs/development-mode.md`; no test suites were run. |
 | Update native clients where the todo loop needs changes. | Latest companion source change is `19e358dc`; the installed Mac executable was built September 6 at 20:53 local time. Latest iPhone source change is `1ba7bb51`, matching successful release workflow `34067357201`; current paging, manual-entry, and completion-display code was inspected. | Mac update is installed and previously exercised while paired. TestFlight 1.0.1 (20260906233635) is available to Kent. Physical iPhone behavior was not exercised in this session; no further native change is currently needed by the server fixes. |
 
 ## Architecture to retain
@@ -1143,6 +1145,84 @@ investigation; the remaining gaps are stated here.
     276-child scan started before this fix and cannot reuse a different sealed
     source window.
 
+61. **Reminder messages cannot find older versions of the same open work.**
+    Exact source discovery disables embedding lookup and presents only the 80
+    most recently updated todos. A daily Slack escalation gets a new message ID
+    and thread, so the model cannot see the original task outside that window.
+    Read-only execution `c9tml` completed September 7 at 04:34:12 UTC and found
+    four open versions of Uride Task #126 and three of Task #140. Chrome search for “Josue Alexander” independently
+    displayed all four active versions. The original contains the actual
+    Sudbury-to-Edmonton transfer request; reminders lose that specific context.
+    Their source
+    account and channel match, while their reminder timestamps differ. The
+    independent completion backstop also completed at 04:32:26 with no error;
+    that loop does not repair duplicate intake.
+
+    Add a bounded local text search over the user's open work before prompt
+    construction. Batch candidate searches, hydrate only five matches each,
+    and present relevant older work ahead of recency. Text similarity retrieves
+    context; the model still compares task reference, person, account, owner,
+    and requested outcome before choosing update. Preserve that relevance order
+    when compacting oversized prompts. The change adds no embedding/model call
+    and does not alter source cursors, exact decision coverage, or ownership.
+    Status: implemented locally; `make build` passed. Actual source retrieval
+    and the new SQL path are being checked through read-only Cloud Run jobs
+    `vgsgx` and `swcp8` initially failed because the diagnostic used a nil
+    external account ID. Corrected execution `7kb92` resolves the workspace
+    from the connected provider. It completed at 04:43:21, but Slack returned
+    no message at either exact timestamp, so it did not exercise retrieval.
+    The large work preview also exceeded the logging line limit. The follow-up
+    reads sealed source handoffs and emits bounded work batches. Its first
+    attempt `sl25t` failed diagnostic compilation because datetime query values
+    were not interpolated; the corrected script was compiled locally without
+    execution before resubmission. Corrected execution `jk22b` succeeded at
+    04:49:37 and returned 1,169 active Uride escalation rows in bounded batches.
+    There are 385 unambiguous task-number groups with 703 extra entries and
+    81 rows with missing/multiple task references; these counts are candidates
+    for consolidation, not authority to dismiss every row.
+
+    The first text-search check took 209–337 ms per example and recovered older
+    reminders outside the recent 80, but common template words still excluded
+    the richer original. Ranking now weights each overlapping term by inverse
+    frequency in the user’s open work, so distinctive people/task references
+    outrank generic escalation wording. Read-only execution `mdtfn` returned both exact sealed reminder bodies and
+    recovered all four versions for each sampled task, including the original
+    detailed records outside the recent 80. These weighted lookups took
+    244–424 ms per example. `744ba7e1` passed `make build` and was pushed;
+    workflow `34084822177` succeeded and revision `maraithon-00234-g2q`
+    serves 100% of traffic. The original 703-extra count excludes
+    task references present only in notes: Task #140 also has an older fourth
+    version, whose notes explicitly identify the task.
+
+    Two groups (Tasks #126 and #140) were manually reviewed against task ID,
+    person, requested outcome, account/channel, source snapshots, notes, and
+    user activity. Execution `hrznn` consolidated their six later reminders
+    into their two oldest detailed todos. It verifies the sealed source payload,
+    locks and compares every reviewed todo, rejects user activity or a shared
+    insight, records duplicate links, and uses the Todo dismissal context with
+    outcome learning disabled. It completed at 04:59:14: all six duplicates are dismissed, both originals
+    remain open, and all eight notes are retained. Chrome independently shows
+    one Josue task and one Task #140 document-review row; distinct Tasks #325,
+    #410, and #411 remain in the Kamaldeep search. No real-world completion
+    was asserted. Full consolidation remains outstanding.
+
+    Revision 234 recovered its Chief at 04:59:04. The 04:59:59 observer sample
+    had 60 ready and four preparing partitions, all with live leases, six running
+    assignments, and no termination-requested task. Current matching Effect
+    evidence is complete (1,202 outcomes, zero missing). The interrupted Gmail
+    graph retained 210 completed children; five ambiguous provider outcomes
+    and the remaining abandoned work require recovery. That recovery and a
+    full scheduled cycle on revision 234 are not yet verified.
+
+62. **Team escalation ownership is being inferred as personal obligation.**
+    The exact sealed bodies for Tasks #126 and #140 name
+    `recruitment_supervisor` as owner. Their generated todos nevertheless claim
+    Kent is the exclusive decision/review bottleneck. The current prompt requires
+    operator ownership, but does not have evidence here binding that role to
+    Kent. A focused clarification was requested about whether routine Uride
+    onboarding escalations belong on his personal list. Broader admission and
+    cleanup changes remain pending that context; duplicate repair is independent.
+
 ## Delivery state
 
 Current server: `maraithon-00233-r7s`, code through `51167f39`, deployed by
@@ -2078,5 +2158,23 @@ routing helpers; no draft or message was created.
 Current read-only observer `74rhc` follows revision 233 for ten minutes using
 pool size two, Vault, and Repo only. It reads the latest acquisition's published
 child IDs and aggregates status rows; it does not decrypt every child payload
-or call providers. Its result is still pending. Follow this execution rather
-than submitting duplicate observers while it runs.
+or call providers. It completed successfully at 04:27:01 UTC. All six samples had 64 ready/live
+partitions and no termination-requested tasks. The 04:21:30 wake completed
+Effects by 04:22:03; the checkpoint persisted at 04:25:00 with no snapshot
+failure. All 1,194 outcome-known Effects had matching evidence, and all 18
+recurring schedules had no error or overdue execution in the final sample.
+Gmail account 1 reached 46/276 completed children; its full cursor catch-up
+remains unproven.
+
+
+Revision 233's 04:18:55–04:26:57 SQL window totaled 84.20 seconds. Fair
+admission accounted for 13.73%, background claim renewal 11.27%, task
+activation 10.39%, and node-authority locking 10.13%; catalog verification was
+outside the top eight. No verification or renewal query dominated the sample.
+This interval ran entirely on revision 233 without a rollout. It includes
+lightweight observer reads, not a synthetic benchmark.
+
+The list grew from 905 to 953 open todos while new Slack deltas arrived.
+Read-only execution `4qw77` samples the latest twelve additions and their
+stored source quotes to review quality and repeated work. It is still starting;
+follow this handle rather than restarting it.
