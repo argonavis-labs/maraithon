@@ -637,6 +637,39 @@ for `kent@runner.now`, using the manual-first development policy.
     took 1,486 ms. The old Gmail graph's remaining claimed retries then retired
     normally; all children were terminal by 00:21:14.
 
+40. **Shared model names collapse interactive and background capacity.**
+    Production points primary, chat, fast, and routing tiers at the same model.
+    Model-based classification therefore sends all of these requests to the
+    three-slot reasoning bucket, despite the existing separate chat budget.
+    The assistant's streaming client and default harness also call the generic
+    completion API instead of its chat counterpart.
+
+    Explicit chat and routing APIs now select chat capacity independently of
+    model identity. Both streaming and non-streaming assistant paths use them;
+    streaming fallback retains the same capacity class. Generic requests and
+    durable Effects retain model-based classification. Provider cooldowns stay
+    shared across buckets. Status: implemented; compile passed. No tests run
+    under the manual-first policy. Live rollout is pending.
+
+41. **Source catch-up uses only three background model workers.**
+    At 00:35:54, replacement Gmail graphs had completed only eight of 300 and
+    eight of 175 children; Slack had eleven of 25. No replacement child had
+    failed. The one-minute SQL window totaled 6.85 seconds, all 64 partitions
+    retained live leases, and scheduled checkpoint, wakeup, and heartbeat
+    events persisted. No provider rate-limit or application error was returned
+    by the revision-219 log check from 00:20 onward.
+
+    Make model-worker concurrency configurable at runtime. The combined
+    deployment will use six model workers, six source-tenant slots per queue,
+    and eight reasoning slots, leaving two slots beyond the model-worker
+    ceiling for direct calls such as Chief of Staff Effects. Interactive calls
+    use the separate four-slot chat bucket from finding 40. The existing
+    provider worker count, account ordering, fair admission, and shared
+    provider cooldown remain in effect. Status: implemented; compile and shell
+    syntax checks passed. No tests run. Throughput and contention after rollout
+    still need observation; low SQL execution time alone does not prove spare
+    CPU capacity.
+
 ## Delivery state
 
 Current server: `maraithon-00219-lxk`, code through `5ac6467a`, deployed by
