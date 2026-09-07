@@ -100,7 +100,7 @@ defmodule Maraithon.Todos.Intelligence do
       with :ok <- validate_required_prompt(shared_seed, candidates, opts),
            existing <-
              user_id
-             |> Todos.list_recent_for_user(limit: Keyword.get(opts, :existing_limit, 80))
+             |> existing_work(candidates, opts)
              |> augment_with_semantic_candidates(user_id, candidates, opts),
            {:ok, prompt, admitted_existing} <-
              build_prompt(user_id, candidates, existing, opts, shared_seed),
@@ -123,6 +123,16 @@ defmodule Maraithon.Todos.Intelligence do
   end
 
   def ingest_many(_user_id, _candidates, _opts), do: {:error, :invalid_todo_candidates}
+
+  defp existing_work(user_id, candidates, opts) do
+    limit = Keyword.get(opts, :existing_limit, 80)
+    related = Maraithon.Todos.RelatedWork.find(user_id, candidates)
+    recent = Todos.list_recent_for_user(user_id, limit: limit)
+
+    (related ++ recent)
+    |> Enum.uniq_by(& &1.id)
+    |> Enum.take(limit)
+  end
 
   # SPEC 05 R5: embedding-similarity dedupe fallback. `existing` (recent
   # todos, capped by :existing_limit) may not contain a true semantic
@@ -356,6 +366,12 @@ defmodule Maraithon.Todos.Intelligence do
          never counts as source evidence and cannot authorize the write by itself.
        - Use action "update" with existing_todo_id when the candidate is the same
          underlying work as an existing saved work item and should refresh it.
+       - A later reminder or escalation can describe that same work even with a
+         new message ID or thread. Compare its task/ticket reference, person,
+         account, and requested outcome. When they identify the same open work,
+         update the original; elapsed time or repeated urgency is not a new task.
+         Preserve the original's concrete request and useful details when a
+         reminder supplies only a generic label; revise them only with new evidence.
        - For update decisions, use the existing saved work item's current
          dedupe_key exactly. Do not invent a new dedupe_key for an update.
        - Use action "skip" only when no write should happen.
@@ -782,15 +798,14 @@ defmodule Maraithon.Todos.Intelligence do
         end
       end)
 
+    # Existing context is ordered by relevance before recency. Keep that order
+    # when only a subset fits, rather than preferring unrelated shorter titles.
     admitted_by_index =
       pairs
       |> Enum.map(fn {{item, original}, index} ->
         {index, project_existing_todo(item, @existing_prompt_item_max_bytes), original}
       end)
       |> Enum.reject(fn {_index, projected, _original} -> is_nil(projected) end)
-      |> Enum.sort_by(fn {index, projected, _original} ->
-        {PromptBudget.encoded_bytes(projected), index}
-      end)
       |> Enum.reduce(admitted_by_index, fn {index, projected, original}, acc ->
         maybe_admit_existing(acc, index, projected, original, max_bytes)
       end)
