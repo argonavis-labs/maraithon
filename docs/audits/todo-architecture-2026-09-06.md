@@ -5,18 +5,20 @@ rank them beside manually added work, and automatically close work when fresh
 evidence proves it was handled. Ship small changes to the single-user test app
 for `kent@runner.now`, using the manual-first development policy.
 
-Latest delivery (September 7): revision `maraithon-00236-cm5`,
-code `248bd58e`, successful workflow `34087225973`. Intake now retrieves older
-matching work before deciding whether a reminder needs a new todo, and requires
-source-backed personal ownership rather than defaulting team work to Kent.
-The latest prompt also excludes earlier generated copy as ownership proof; its
-natural model behavior remains to be observed. Chat works; expired briefs
-refresh; named email drafts no longer target digest senders; explicit mailboxes
+Latest delivery (September 7): revision `maraithon-00239-d4s`,
+code `623a9953`, successful workflow `34088767335`. Intake retrieves older
+matching work, requires source-backed personal ownership, and now retains
+connected provider participant IDs. A fresh Slack ownership case remains to
+be observed. Source revision hashes now survive JSON handoffs: normal Gmail
+polls reuse settled evidence instead of repeating model jobs. Closed-todo brief
+jobs now retire without generating new advice; natural execution of that guard
+remains unobserved because the prior backlog finished before deployment.
+Chat works; expired briefs refresh; named email drafts no longer target digest senders; explicit mailboxes
 are retained; exhausted model retries can reuse completed closure batches.
 Gmail account 1's 276-batch backlog settled at 05:18:49, advancing its closure
 cursor from September 2 to September 7 04:05:17 UTC. Its next deltas also
-settled, and the cursor was current by 05:21:19. The reviewed reminder cleanup is complete: 725 duplicates consolidated into
-311 originals, with all 1,036 rows independently verified and 499 active todos
+settled, and the cursor was current by 05:21:19. The reviewed reminder cleanup
+is complete: 725 duplicates consolidated into 311 originals, with all 1,036 rows independently verified and 499 active todos
 remaining. The open scope question is whether routine team-owned Uride
 escalations belong on Kent's personal list (finding 62).
 Revision 233's scheduled runtime cycle passed the production checks; revision
@@ -33,12 +35,12 @@ investigation; the remaining gaps are stated here.
 
 | Requirement | Authoritative evidence inspected | Current result |
 | --- | --- | --- |
-| Discover commitments and decisions from connected apps using deltas. | Current `PeriodicJobs`, `SourceAccountDiscovery`, and `SourceCycleSettlement` paths; production discovery cursors for both Gmail accounts and Slack; source-backed Chrome todo details. | Discovery is advancing. Gmail account 1 discovery is advancing in the September 7 05:19 window. Its closure backlog and following deltas settled, and its cursor is current. |
+| Discover commitments and decisions from connected apps using deltas. | Current `PeriodicJobs`, `SourceAccountDiscovery`, and `SourceCycleSettlement` paths; production discovery cursors for both Gmail accounts and Slack; source-backed Chrome todo details. | The closure backlog and following deltas settled. On revision 239, both Gmail accounts and Slack advanced their discovery and closure cursors between the 06:06:28 and 06:07:29 read-only samples. All were current within seconds of the final sample. |
 | Rank sourced work alongside manually entered todos and make it actionable. | Signed-in `/todos`, successful priority chat run `62321861`, original source threads in the Michael/Uride/DuraServ details, and the recorded Mac create/edit/complete round trip. Current shared reply routing and brief projections were inspected again. | Manual todo actions and sampled priorities were verified. The 725 reviewed reminders are consolidated, with notes and source links retained and zero read-back mismatches. The latest ownership prompt is deployed; the intended scope of team escalations and its natural intake behavior remain open. No third-party message was sent. |
 | Wake regularly and fan work out without blocking OTP ownership. | Current one-minute discovery/completion schedules, ten-minute Chief default, independent non-mailbox completion backstop, workload/account rotation, and completed observer `ltv7q`. | Revision 235 recovered at 05:12:07. Scheduled Effects completed at 05:16:06 and 05:26:41, and its checkpoint persisted at 05:22:07. All eight samples retained 64 ready/live partitions, with no pending termination and no missing Effect evidence. |
 | Close work only on current, matching evidence and keep the list current. | Current quote/time/relationship checks, row-locked stale-result rejection, immutable source-cycle settlement, sampled Abe Choi closure evidence from `f7ztc`, completed account-2/Slack cycles, and current Gmail graph status. | Evidence-backed sampled closures and two accounts' settled deltas are verified. Gmail account 1's 276-child backlog completed and its cursor advanced at 05:18:49. The following four-source, fifteen-child delta also settled; by 05:21:19 closure and discovery cursors were advancing through empty deltas. |
-| Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded card serialization and Mac refresh timings, bounded fanout/prompt packing, live provider cache counters, completed-child reuse, and timeout-recovery projection `btwjn`. | Implemented and measured where noted. The timeout projection retained 297 results and retried two children; production recovery retained all 214 completed results at 05:06. The full 276-child recovered graph settled at 05:18:49; its successor uses a new delta and the smaller todo snapshot. |
-| Ship small changes to the test app without staging or added deployment gates. | All prior delivery commits plus ownership fixes `afeeb604` and `248bd58e` are in the deployed history; current `Makefile` maps `make deploy` to `deploy-fast`; workflow `34087225973` completed through the normal cached deployment path. | Shipped to revision 236 at 100% traffic; its Chief recovered at 05:36:54. The complete runtime cycle was verified on revision 235 immediately before this prompt-only deployment. Compile/manual checks followed `docs/development-mode.md`; no test suites were run. |
+| Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded serialization and refresh timings, bounded fanout/prompt packing, provider cache counters, completed-child reuse, and source-revision read-back `8rxjc` plus normal-poll observer `nn5qw`. | Recovery retained completed children and settled the 276-child catch-up graph. The corrected source hash preserves existing receipts: revision 237 advanced discovery/closure cursors through empty deltas with zero new reasoning jobs for the repeated email. The preceding unchanged-email closure cycle had thirteen children over 499 todos. Closed-brief queue suppression is also deployed, but its natural skip path remains unobserved. |
+| Ship small changes to the test app without staging or added deployment gates. | Semantic commits `e0aac126`, `0f97c8e6`, and `623a9953` were shipped by successful workflows `34088164690`, `34088440731`, and `34088767335`; `make deploy` still uses the normal cached path. | Revision 239 serves 100% of traffic. The complete runtime cycle was verified on revision 235; revision 237 normal delta scans and two ready/live partition samples verified the hash fix. Its third observation crossed the revision-238 rollout. The Chief recovered on revision 239 at 06:02:21. Corrected follow-up `57pqw` completed at 06:07:34: both samples had 64 ready/live partitions, no active assignments, and all six cursors advanced. The full periodic Effect/checkpoint/SQL audit was not repeated on revision 239. All three changes passed `make build`; no test suites were run. |
 | Update native clients where the todo loop needs changes. | Latest companion source change is `19e358dc`; the installed Mac executable was built September 6 at 20:53 local time. Latest iPhone source change is `1ba7bb51`, matching successful release workflow `34067357201`; current paging, manual-entry, and completion-display code was inspected. | Mac update is installed and previously exercised while paired. TestFlight 1.0.1 (20260906233635) is available to Kent. Physical iPhone behavior was not exercised in this session; no further native change is currently needed by the server fixes. |
 
 ## Architecture to retain
@@ -1402,7 +1404,12 @@ investigation; the remaining gaps are stated here.
     an existing current brief. A job queued while a todo was open can therefore
     claim a generation lease and call the model after it has been dismissed or
     completed. Recent dismissed reminder rows continued to receive updates after
-    consolidation; read-only `f5xph` is checking their generation timestamps.
+    consolidation. Read-only `f5xph` completed successfully at 05:59:27:
+    eight sampled reminders dismissed at 05:16 received new briefs between
+    05:46:57 and 05:50:40. Since 05:16:30 there were 159 brief-job completions;
+    the queue had no pending/running brief jobs at 05:59:23. The wasted generation
+    is established, but that backlog drained before this fix could be observed
+    on a naturally queued closed todo.
     The brief fingerprint intentionally preserves historical briefs across
     closure and does not include status, so an in-flight result also needs a
     separate status check before storing a new draft.
@@ -1412,11 +1419,27 @@ investigation; the remaining gaps are stated here.
     remains available. Generation passes its expected status to `put_brief/5`,
     which checks it under the todo row lock and rejects a result after a status
     change. `make build` passed; no tests were run under the manual-first policy.
+    Shipped as `623a9953` in revision `maraithon-00239-d4s`, successful workflow
+    `34088767335`. No forced model replay or synthetic business event was used
+    to manufacture a naturally queued closed-todo case.
+
+    Final diagnostic `8hrwt` failed before executing its queries because a
+    `DateTime` literal was not interpolated into Ecto's query AST. The script
+    was corrected to use a bound parameter and rerun as `57pqw`; this was a
+    diagnostic-script error, not an application failure. Corrected `57pqw`
+    completed successfully at 06:07:34. Both samples (06:06:28 and 06:07:29)
+    found revision 239 with all 64 partitions ready/live, no active assignments
+    or queued brief jobs, and 499 open/27 done/863 dismissed todos. All six
+    source cursors advanced and were current within seconds of the last sample.
+    The repeated email still had exactly 26 discovery and 12 closure receipts,
+    unchanged since before revision 237 while still inside the one-hour overlap.
+    The Chief recovered on revision 239 at 06:02:21. This does not repeat the
+    full periodic Effect/checkpoint/SQL proof recorded earlier for revision 235.
 
 ## Delivery state
 
-Current server: `maraithon-00236-cm5`, code through `248bd58e`, deployed by
-successful workflow `34087225973`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00239-d4s`, code through `623a9953`, deployed by
+successful workflow `34088767335`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
