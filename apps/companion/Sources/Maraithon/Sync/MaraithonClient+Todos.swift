@@ -77,9 +77,41 @@ extension MaraithonClient {
             body: nil,
             queryItems: queryItems
         )
-        let (data, response) = try await transport(request)
-        try Self.validate(response: response, data: data)
-        return try JSONDecoder().decode(CompanionTodosResponse.self, from: data)
+        var retries = 0
+        while true {
+            try Task.checkCancellation()
+            let (data, response) = try await transport(request)
+            if let http = response as? HTTPURLResponse,
+               retries < 3,
+               [429, 502, 503, 504].contains(http.statusCode),
+               let delay = Self.todoReadRetryDelay(http, retries: retries) {
+                retries += 1
+                try await Task.sleep(for: .seconds(delay))
+                continue
+            }
+            try Self.validate(response: response, data: data)
+            return try JSONDecoder().decode(CompanionTodosResponse.self, from: data)
+        }
+    }
+
+    /// Retry only the current read page. Keep prior pages and honor short
+    /// server cooldowns without leaving a manual refresh waiting indefinitely.
+    private static func todoReadRetryDelay(_ response: HTTPURLResponse, retries: Int) -> TimeInterval? {
+        let fallback = pow(2.0, Double(retries))
+        guard let header = response.value(forHTTPHeaderField: "Retry-After") else { return fallback }
+
+        let delay: TimeInterval
+        if let seconds = TimeInterval(header), seconds.isFinite, seconds >= 0 {
+            delay = seconds
+        } else {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+            guard let date = formatter.date(from: header) else { return fallback }
+            delay = max(0, date.timeIntervalSinceNow)
+        }
+        return delay <= 30 ? max(1, delay) : nil
     }
 
     /// Fetches richer source context only for the item being inspected.
