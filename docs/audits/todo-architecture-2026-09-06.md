@@ -1389,3 +1389,18 @@ configured forty. One instance remained allocated to revision 220; the older
 219 instance also remained allocated. No further 429 appeared in the check
 from 00:54 onward. The rejection cause is still unresolved; increasing the
 concurrency setting is not supported by these observations.
+
+At 01:10:41, `z9zdf` observed revision 221 with all 64 partitions ready/live,
+no task awaiting termination, the restart guard recovered and untripped,
+and 1,158 outcome-known Effects with zero missing evidence. New Slack
+acquisition `21e7fb31-79c4-4926-ab32-7c0ddddbcf8c` published 25 children; six
+were running. A Gmail acquisition was active. The old account-1 children were
+fully terminal (252 cancelled, forty completed, eight failed), with its
+finalizer still pending. Closure cursors remained unchanged. The observer's
+second sample began at 01:12:43; final output is still being collected.
+
+A narrow read-only follow-up, `maraithon-todo-validation-pbvft`, was submitted
+at approximately 01:12 to inspect the rounded Slack observations' event type,
+target identity, and task reference. It does not modify source data or todos.
+The worktree has the attendee batching commit and these audit updates ahead
+of the deployed revision; no additional server push has been made.
