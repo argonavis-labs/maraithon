@@ -1324,7 +1324,12 @@ investigation; the remaining gaps are stated here.
     to the named task owner. `make build` passed; workflow `34087225973` is
     deploying this follow-up. It subsequently succeeded; revision
     `maraithon-00236-cm5` serves 100% of traffic and recovered its Chief at
-    05:36:54. Its natural model behavior remains unverified.
+    05:36:54. Read-only `6c29s` completed at 05:43:00 and inspected five
+    naturally completed intake jobs on revision 236. All skipped the same
+    routine Amazon shipment notification; no fresh Slack intake was available,
+    so the team-ownership behavior remains unverified. All six source cursors
+    were advancing and the list remained at 499 open, 27 done, 863 dismissed.
+    The repeated identical Gmail input exposed finding 63 below.
 
     Existing team-work cleanup remains pending Kent's intended scope;
     source-verified duplicate repair is independent. Read-only execution
@@ -1333,6 +1338,30 @@ investigation; the remaining gaps are stated here.
     join in read-only `bztqn` returned no observations for 55 remaining rows;
     CRM mutation identity is separate from its metadata channel/timestamp, so
     the follow-up uses those provider fields plus the exact workspace.
+
+
+63. **Source revision hashes change across the durable JSON boundary.**
+    Read-only `6c29s` found five consecutive revision-236 intake jobs between
+    05:37:49 and 05:41:57 evaluating the same unchanged Amazon shipment email.
+    Their restored source records are identical, yet the one-hour safety overlap
+    sends the message through the model again on each poll. The Gmail connector
+    emits `internal_date` as a `DateTime`, and `SourceBundle` retains that struct.
+    Acquisition hashes the raw Erlang term; settlement hashes the JSON-restored
+    handoff, where the date is a string. The settled-revision lookup therefore
+    cannot match the provider form to its own prior receipt.
+
+    Normalize the full source item through its durable JSON representation
+    before computing the deterministic revision digest. This preserves existing
+    JSON-backed proof hashes and all body, label, and thread-context changes;
+    it does not remove the safety overlap or rewrite historical receipts.
+    Both discovery and closure use the shared helper. `make build` passed;
+    no tests were run under the manual-first policy. Read-only `8rxjc` completed
+    successfully at 05:46:33. The actual saved email had 20 discovery and 10
+    closure receipts, all for one revision. Reconstructing the connector's
+    `DateTime` form matched none under the old hash. The fixed hash matched
+    every receipt and preserved the existing JSON-form hash exactly; both role
+    filters reduced that settled source from one item to zero. This read-back
+    made no provider/model calls and changed no ledger rows or cursors.
 
 ## Delivery state
 

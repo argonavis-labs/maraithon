@@ -485,14 +485,26 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
         source_ref: source_ref,
         source_ref_digest: SourceCycleProofs.reference_digest(source_ref),
         source_identity_digest: :crypto.hash(:sha256, record.identity),
-        source_revision_digest:
-          :crypto.hash(:sha256, :erlang.term_to_binary(record.item, [:deterministic])),
+        source_revision_digest: source_revision_digest(record.item),
         provider_occurred_at: provider_occurred_at(record)
       }
     end)
   end
 
   def source_proof_items(_bundle), do: []
+
+  defp source_revision_digest(item) do
+    # Provider reads can contain DateTime structs, while sealed handoffs contain
+    # their JSON strings. Hash the same representation on both sides, otherwise
+    # every safety-overlap poll treats an unchanged message as a new revision.
+    # Keep the full record: changed bodies, labels, and thread context must still
+    # invalidate the settled receipt. Existing JSON-backed proofs keep their hash.
+    item
+    |> Jason.encode!()
+    |> Jason.decode!()
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+  end
 
   @doc false
   def filter_settled_source_items(bundle, %ConnectedAccount{} = account, role)
