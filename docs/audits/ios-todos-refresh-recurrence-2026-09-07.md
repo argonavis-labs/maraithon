@@ -46,7 +46,8 @@ After-fix manual checks retained the bad v5 marker to verify the upgrade path:
 - Backgrounding and returning during this resumed refresh completed through
   offset 1400. Only then did `todos.v6.cards` appear in saved preferences, and
   the refresh indicator disappeared without a warning.
-- A subsequent cold launch reopened the saved list without a warning.
+- A subsequent cold launch reopened the saved list without a warning; Cloud
+  Run recorded the expected page-one 304 at 20:39:13 UTC after the full save.
 
 No business message, todo completion, or dismissal was submitted. Existing
 todo details were opened through the normal UI. These are simulator/manual
@@ -74,3 +75,12 @@ zero created, zero revoked. Both builds were processed and available to
 Founders, including Kent's verified tester membership. Normal certificate
 expiry still requires scheduled renewal; per-release certificate churn is
 removed.
+
+## Final release
+
+The additional validator fix shipped from `a164cac4` as TestFlight
+**1.0.1 (20260907204020)** through successful workflow
+[34160278360](https://github.com/argonavis-labs/maraithon/actions/runs/34160278360).
+Apple reports the build as `VALID`; the release verified Founders access and
+Kent's tester membership. A third certificate inventory comparison after
+archive/upload again found the same 11 IDs, with zero created or revoked.
