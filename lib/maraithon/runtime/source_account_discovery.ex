@@ -953,7 +953,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   defp source_work_identity(%{source: :slack, identity: identity, item: item}) do
     team_id = read_string(item, "team_id") || "unknown"
     channel_id = read_string(item, "channel_id") || "unknown"
-    thread_id = read_string(item, "thread_ts") || read_string(item, "ts") || identity
+    thread_id = slack_work_thread(item, identity)
     "slack:#{team_id}:#{channel_id}:#{thread_id}"
   end
 
@@ -1435,7 +1435,15 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   defp source_group_identity(%{source: :slack, identity: identity, item: item}) do
     {:slack, read_string(item, "team_id"), read_string(item, "channel_id"),
-     read_string(item, "thread_ts") || read_string(item, "ts") || identity}
+     slack_work_thread(item, identity)}
+  end
+
+  # Historical edit/reaction observations can lack a thread root. Their target
+  # still identifies the existing work; the event timestamp identifies only
+  # the mutation and must not become a second todo's identity.
+  defp slack_work_thread(item, fallback) do
+    read_string(item, "thread_ts") || read_string(item, "target_ts") ||
+      read_string(item, "ts") || fallback
   end
 
   defp provider_occurred_at(%{source: :gmail, item: item}) do

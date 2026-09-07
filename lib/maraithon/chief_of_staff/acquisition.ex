@@ -1798,7 +1798,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "channel_name" => "event ingress",
       "conversation_kind" => "event",
       "ts" => ts,
-      "thread_ts" => normalize_string(metadata["thread_ts"]),
+      "thread_ts" =>
+        normalize_string(metadata["thread_ts"]) || normalize_string(metadata["target_ts"]),
       "target_ts" => normalize_string(metadata["target_ts"]),
       "subtype" => normalize_string(metadata["event_type"]),
       "provider_event_id" => normalize_string(metadata["provider_event_id"]),
