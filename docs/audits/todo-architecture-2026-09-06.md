@@ -693,7 +693,7 @@ for `kent@runner.now`, using the manual-first development policy.
     branch itself was not exercised live. Tests were not run. The server's
     instance-capacity rejection remains a separate investigation.
 
-43. **Slack todos have duplicate identities with lost timestamp precision.**
+43. **Slack edits can create a second todo for the original message.**
     Read-only execution `4tqr2` confirmed three pairs for the same named work:
     each pair has one fractional Slack timestamp and another ending in
     `.000000`. The rows were inserted on September 5, about 45 minutes apart.
@@ -701,9 +701,32 @@ for `kent@runner.now`, using the manual-first development policy.
     traced the rounded identities to three CRM mutation observations inserted
     at 14:19 on September 5. Their stored `metadata.ts` already ends in
     `.000000`, their thread timestamps are absent, and their provider event
-    IDs are null. Status: historical ingress provenance and the creation path still need investigation before
-    a repair can safely choose canonical identities. No todo was merged,
-    dismissed, deleted, or marked complete during this inspection.
+    IDs are null. Execution `pbvft` proved all three are `message_changed`
+    observations whose `target_ts` exactly matches the original todo's full
+    timestamp. The acquisition and discovery fallbacks ignored that explicit
+    target when `thread_ts` was absent, giving the edit a separate work identity.
+
+    Status: `e5570dfe` uses the target message as the thread fallback for both
+    grouping and deduplication, retaining the mutation identity for provenance.
+    It passed `make build` and is committed locally, awaiting the next rollout.
+    Preview execution `4ltkx` failed read-only because its activity table name
+    was incorrect. `bbsrb` returned no matches because the Slack account has
+    a null `external_account_id`; its provider suffix identifies the workspace.
+    Correcting that match in `gtx9t` found 96 distinct pairs. Its large log was
+    truncated; `8lhtp` returned the complete result in compressed form.
+
+    At review, all 96 pairs had distinct original and duplicate IDs, open status, the
+    same owner/account, matching task identities, and no recorded user
+    lifecycle activity. Two generated due dates differ only by seconds; the
+    originals retain their more precise timestamps. Repair execution `9pfmd`
+    completed successfully at 01:33:48.730. In batches of five, it locked and
+    rechecked the reviewed snapshots and explicit observation targets, retained
+    each original, and dismissed each duplicate through the Todo context with
+    a reference to the original. Notes and source records remain intact, and outcome learning
+    was explicitly disabled for this agent-authored maintenance. All 96
+    duplicates were dismissed, all 96 originals remained open, and all 96
+    duplicate notes were retained. Independent read-back `678bp` is running.
+    Tests were not run.
 
 44. **Contact matching repeatedly reloads every active CRM person.** The
     ten-minute `h9k56` SQL window measured 3,640 calls to the full ranked
@@ -748,6 +771,19 @@ for `kent@runner.now`, using the manual-first development policy.
     interrupted reasoning under a new task assignment, while preserving the
     immutable published graph, outcome evidence, and source-cycle proof rules.
     No ambiguous outcome has been relabeled and no cursor has been forced.
+
+47. **Waiting finalizers repeatedly load encrypted child payloads.**
+    `completed_child_results/1` loaded full background-job rows and verified
+    every payload binding before checking whether the graph was still running.
+    Each pending poll therefore read source bundles and results for up to 300
+    current children without using them. Completed results were also reordered
+    with a repeated linear search.
+
+    Status: `fc7f3837` first selects only child IDs and statuses. Once all are
+    complete, it loads and verifies their payloads, checks the returned count,
+    and restores publication order through a map. Missing, failed, cancelled,
+    and pending children retain their existing outcomes. `make build` passed;
+    tests were not run. The commit awaits the next server rollout.
 
 ## Delivery state
 
@@ -1404,3 +1440,59 @@ at approximately 01:12 to inspect the rounded Slack observations' event type,
 target identity, and task reference. It does not modify source data or todos.
 The worktree has the attendee batching commit and these audit updates ahead
 of the deployed revision; no additional server push has been made.
+
+Recovery observer `z9zdf` completed successfully at 01:12:52. Its second
+sample retained 64 ready/live partitions and 1,158 outcome-known Effects with
+matching evidence. All three abandoned predecessor graphs, including their
+finalizers, were terminal. The replacement Slack graph had five completed
+children and Gmail account 2 had one; neither had failed children.
+
+Follow-up observer `bkxth` confirmed the 01:19:10.934 checkpoint and 1,160
+outcome-known Effects with zero missing evidence. At 01:22:22 it retained all
+64 live/ready partitions and an untripped, recovered guard. The current Slack
+graph had 21/25 children complete, Gmail account 1 had 10/300, and account 2
+had 14/200. All had zero failed children. Discovery cursors continued to
+advance; closure cursors still awaited full settlement.
+
+The Mac app refreshed successfully during this check and showed 995 active
+items and 22 completed items. The completed list contains the Slack Task #357
+and Loewith Greenberg completions described above.
+
+Read-only review `v2t6t` inspected thirteen stored messages in the Loewith
+Greenberg thread. Charlie's September 4 05:57 UTC reply apologized, accepted
+responsibility, set out onboarding milestones, and offered an immediate
+workshop. Jennifer's 13:42 reply accepted that plan and chose 2:30 that day;
+Charlie's 16:35 reply confirmed the invitation was sent. This supports closing
+the escalation/handoff todo. It does not prove the later implementation work
+finished. The todo was left unchanged after this semantic review.
+
+Observer `bkxth` completed successfully at 01:26:30. Its final sample retained
+64 live/ready partitions, a recovered/untripped guard, and 1,160 outcome-known
+Effects with no missing evidence. Gmail account 1 had 17/300 children complete
+and account 2 had 24/200, with no failed children. The SQL window includes the
+one-off duplicate preview's 15.28 seconds (12.93% of measured execution time),
+so it must not be treated as an application-only performance comparison.
+
+Read-only execution `8lhtp` confirmed all 25 Slack closure children completed.
+Finalizer `8af9bbd6-f118-4857-9384-db7e26955b2a` completed at 01:27:13.211 with no
+error, and `slack_closure_watermark` advanced to `1788743405` at 01:27:13.204.
+This is the first observed full settlement of the replacement Slack scan;
+the Gmail scans and the next Slack delta remain to be checked.
+
+The Mac completion inspector was also opened manually. It shows the Loewith
+Greenberg evidence quote, local completion time, original request, retained
+notes, original Gmail link, and Reopen action. No status action was invoked.
+
+At 01:35:52, independent read-back `678bp` verified all 96 repaired pairs with
+zero mismatches: duplicate status, original status/title, both notes, source
+identities, and both directions of the provenance link matched. The Mac app
+then showed 899 active items, down from 995 before cleanup.
+
+The same sample retained 64 live/ready partitions, the 01:29:11.692 checkpoint,
+and 1,162 outcome-known Effects with no missing evidence. Gmail account 1
+had 44/300 children complete and account 2 had 46/200. Both still had pending
+children whose last error was `cross_source_completion_source_coverage_incomplete`.
+This check compares the stored source-item references with extracted evidence
+before making a model call. Read-only diagnostic `mxxnh` compares one affected
+stored bundle per account to locate the omitted or extra references. It makes
+no provider call and does not alter a job, todo, cursor, or outcome.
