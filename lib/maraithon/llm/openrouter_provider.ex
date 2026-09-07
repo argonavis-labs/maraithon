@@ -987,7 +987,7 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     |> append_stream_delta(delta, on_chunk)
     |> deliver_reasoning_delta(reasoning_delta, on_reasoning)
     |> maybe_put_stream_model(event["model"])
-    |> maybe_put_stream_finish_reason(extract_stream_finish_reason(choices))
+    |> maybe_put_stream_finish_reason(extract_stream_finish_reason(choices), event)
     |> maybe_put_stream_usage(event["usage"])
   end
 
@@ -1080,21 +1080,40 @@ defmodule Maraithon.LLM.OpenRouterProvider do
 
   defp maybe_put_stream_model(acc, _model), do: acc
 
-  defp maybe_put_stream_finish_reason(%{finish_reason: nil} = acc, reason)
+  defp maybe_put_stream_finish_reason(%{finish_reason: nil} = acc, reason, _event)
        when is_binary(reason) and reason != "",
        do: %{acc | finish_reason: reason}
 
-  defp maybe_put_stream_finish_reason(%{finish_reason: existing} = acc, reason)
+  defp maybe_put_stream_finish_reason(%{finish_reason: existing} = acc, reason, event)
        when is_binary(reason) and reason != "" do
-    failure_code =
-      if existing == reason,
-        do: "stream_repeated_finish_reason",
-        else: "stream_conflicting_finish_reason"
+    cond do
+      existing != reason ->
+        %{acc | error: "stream_conflicting_finish_reason"}
 
-    %{acc | error: failure_code}
+      usage_only_stream_event?(event) ->
+        acc
+
+      true ->
+        %{acc | error: "stream_repeated_finish_reason"}
+    end
   end
 
-  defp maybe_put_stream_finish_reason(acc, _reason), do: acc
+  defp maybe_put_stream_finish_reason(acc, _reason, _event), do: acc
+
+  # OpenRouter repeats the terminal reason on its final accounting frame.
+  # Accept that content-free frame while retaining conflicting/repeated-content
+  # rejection and the requirement for a subsequent [DONE] event.
+  defp usage_only_stream_event?(%{
+         "usage" => %{},
+         "choices" => [%{"delta" => delta}]
+       })
+       when is_map(delta) do
+    Map.get(delta, "content") in [nil, ""] and
+      Map.get(delta, "role") in [nil, "assistant"] and
+      Map.drop(delta, ["content", "role"]) == %{}
+  end
+
+  defp usage_only_stream_event?(_event), do: false
 
   defp maybe_put_stream_usage(acc, %{} = usage), do: Map.put(acc, :usage, usage)
   defp maybe_put_stream_usage(acc, _usage), do: acc

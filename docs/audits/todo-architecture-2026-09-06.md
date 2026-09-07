@@ -921,8 +921,12 @@ for `kent@runner.now`, using the manual-first development policy.
     and from 3,909 to 50,475 bytes for account 2. Both retained forty candidates
     per batch and their respective two/four prompt chunks. Each pair shared
     its expected session key. The projection made no model calls and changed
-    no records; actual provider cache hits remain to be measured after deploy.
-    `make build` passed; no automated tests were run.
+    no records. Commit `1e783f0d` deployed successfully as revision 226 in
+    workflow `34078364173`. Production reported positive cache reads on all
+    four sampled initial calls. Three revision-227 calls at 03:15:37–03:15:43
+    each reused 20,864 tokens out of about 30,000 input tokens (about 69%);
+    other calls reused less. This proves reuse, not a uniform cache rate or
+    a measured billing reduction. `make build` passed; no tests were run.
 
 53. **Closure settlement omitted the policy decision field mappings.**
     At 03:05:55, Gmail account 2 reached finalization, but receipt selection
@@ -932,8 +936,12 @@ for `kent@runner.now`, using the manual-first development policy.
     without adding their fixed mappings. Both are now included in the closed
     key set. No dynamic atoms, settlement rules, or existing outcomes change.
     The fenced finalizer can retry against the already-completed children.
-    `make build` passed; no automated tests were run. Live settlement remains
-    to be verified after deployment.
+    Commit `c0be077c` deployed as revision 227 in successful workflow
+    `34078620021`. Account 2 saved its 184-child, 172-source, 899-todo source
+    cycle at 03:14:22 and advanced its closure cursor at 03:14:25 from
+    `1788356523` to `1788748667`. A subsequent two-source delta was already
+    processing. Account 1 still awaits catch-up. `make build` passed; no tests
+    were run.
 
 54. **Interactive chat rejects its own context before replying.**
     A signed-in Chrome question asking for three priority todos created run
@@ -955,8 +963,17 @@ for `kent@runner.now`, using the manual-first development policy.
     the current user request and complete tool definitions remain intact.
     Raw source records remain available through the existing tools. The
     provider's final request validation remains authoritative.
-    `make build` passed; no automated tests were run. A read-only projection
-    and the browser retry will verify the change against live account data.
+    Read-only projection `phf6n` completed successfully at 03:25:09. Its
+    382,581-byte context became a 95,926-byte snapshot and a 116,388-byte
+    complete request; context-step and provider validation passed, with the
+    current request and all 93 tools preserved. The diagnostic's 96 KB
+    preflight check returned false because preflight uses conservative scalar
+    costs; the actual snapshot storage limit is 640 KB and the stricter
+    256 KB context-step check passed. Revision 228's browser retry compacted
+    the full live request from 559,908 to 116,440 bytes and reached streaming
+    generation at 03:27:06, proving the original blocker resolved. A separate
+    stream protocol mismatch then prevented delivery (finding 56).
+    `make build` passed; no automated tests were run.
 
 55. **Failed web chat replies leave a silent conversation.**
     The manual check showed only the saved user question after its run
@@ -965,13 +982,28 @@ for `kent@runner.now`, using the manual-first development policy.
     loads and shows a shared Catalyst alert for failed/degraded replies.
     Starting a new conversation clears the previous reply state. No internal
     errors or context payloads appear in the alert. `make build` passed; no
-    automated tests were run. The existing failed conversation provides the
-    live case for visual verification after deploy.
+    automated tests were run. Revision 228's signed-in Chrome reload displayed
+    the alert for the earlier failed run. The retry cleared it while working
+    and displayed it again when the separate stream failure occurred.
+
+56. **OpenRouter's final usage frame is mistaken for a duplicate completion.**
+    Revision 228's read-only priority question reached three streaming model
+    attempts at 03:27:06–03:27:24. Each returned output and usage, then failed
+    with `stream_repeated_finish_reason`. OpenRouter's
+    [streaming contract](https://openrouter.ai/docs/api_reference/streaming)
+    explicitly repeats the terminal finish reason on a final content-free
+    usage frame before `[DONE]`. The parser previously rejected every repeat.
+
+    It now accepts the same finish reason only when the event has usage and
+    exactly one content-free delta containing only content/role fields.
+    Conflicting reasons, repeated content, provider errors, incomplete streams,
+    and stream size limits retain their rejection paths. Delivery still waits
+    for `[DONE]`. Live verification remains open.
 
 ## Delivery state
 
-Current server: `maraithon-00225-twr`, code through `9e289360`, deployed by
-successful workflow `34076982880`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00228-jsb`, code through `dd90701e`, deployed by
+successful workflow `34079458681`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -1818,3 +1850,30 @@ children were complete. Account 2 reached 83/184, including all fifty reused
 jobs. Neither graph had an error. Two discovery finalizers were waiting with
 zero attempts, no error, and ten-second deadlines; the model cooldown still
 had not changed since 02:41:40. Full Gmail settlement remains open.
+
+
+Observer `xvsn2` completed successfully at 02:53:41. Its final sample retained
+64 ready/live partitions, no task awaiting termination, a 02:53:20 Chief
+checkpoint, and 1,176 outcome-known Effects with no missing evidence. Across
+02:43:32–02:53:38, SQL totaled 156.10 seconds: full job reads accounted for
+14.49%, task activation 12.08%, and claimed-at renewals 9.28%; catalog
+verification did not dominate.
+
+Observer `xdsjw` completed successfully at 03:19:19. Its final sample retained
+64 ready/live partitions, five running tasks, no task awaiting termination,
+and 1,182 outcome-known Effects with no missing evidence. Revision 227's
+03:15:17 Chief wake completed its Effects by 03:15:55. Recurring schedules
+advanced, Slack cursors advanced, and Gmail account 2 settled its prior scan.
+Account 1 had 136/299 closure children complete, retaining all 121 reused
+results; three were running and 160 pending, including one timeout retry.
+The 03:09–03:19 SQL window crossed rollouts: node-authority locking was 12.97%
+of 249.20 seconds, user locking 10.73%, and full job reads 8.87%. It is not a
+steady-state performance comparison.
+
+Kent's signed-in Chrome session resolved the login blocker. A request at
+03:07:04 reproduced the platform's no-available-instance 429 on revision 225,
+twenty seconds before the next ReplaceService request. The prior six-minute
+window showed one active instance, request concurrency 2–3, CPU mean 35.74%
+(max one-minute 46.81%), and memory near 24%. These samples do not establish
+CPU, memory, or configured concurrency exhaustion. The specific transient
+trigger remains unproven; no scaling changes were made.
