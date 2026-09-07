@@ -623,6 +623,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
 
   defp todo_candidates(account, bundle) do
     account_label = source_account_label(account)
+    account_identity = source_account_identity(account)
 
     bundle
     |> source_records()
@@ -645,6 +646,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
           "source-discovery:#{account.id}:#{short_digest(source_work_identity(record))}",
         "metadata" => %{
           "source_ref" => source_ref,
+          "source_account_identity" => account_identity,
           "source_record" => candidate_source_record(record),
           "source_roles" => record.roles |> MapSet.to_list() |> Enum.map(&Atom.to_string/1)
         }
@@ -679,7 +681,9 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       |> Enum.map(fn message ->
         %{
           "ts" => read_string(message, "ts"),
+          "user_id" => read_string(message, "user"),
           "user" => read_string(message, "user_display_name") || read_string(message, "user"),
+          "mentioned_users" => Map.get(message, "mentioned_users", []),
           "text" => read_string(message, "text_resolved") || read_string(message, "text")
         }
       end)
@@ -687,7 +691,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     evidence =
       item
       |> candidate_fields(
-        ~w(team_id channel_id channel_name conversation_kind is_dm is_mpim ts thread_ts target_ts provider_event_id user user_display_name user_name counterparty_id counterparty_display_name bot_id subtype permalink date thread_context_complete thread_context_frontier)
+        ~w(team_id channel_id channel_name conversation_kind is_dm is_mpim ts thread_ts target_ts provider_event_id user user_display_name user_name mentioned_users counterparty_id counterparty_display_name bot_id subtype permalink date thread_context_complete thread_context_frontier)
       )
       |> put_candidate_size("text", text)
       |> Map.put("text", text)
@@ -1015,6 +1019,16 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     metadata = if is_map(metadata), do: metadata, else: %{}
 
     read_string(metadata, "account_email") || read_string(metadata, "team_name") || provider
+  end
+
+  defp source_account_identity(%ConnectedAccount{} = account) do
+    # These fields come from the connected OAuth account, not generated People
+    # or memory context. Do not pass tokens or identify the integration bot as
+    # the human operator.
+    (account.metadata || %{})
+    |> candidate_fields(~w(account_email team_id authed_user_id slack_user_id))
+    |> Map.put("provider", account.provider)
+    |> Map.put("connected_account_id", account.id)
   end
 
   defp short_digest(value) do

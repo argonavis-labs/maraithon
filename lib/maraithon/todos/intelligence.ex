@@ -641,6 +641,12 @@ defmodule Maraithon.Todos.Intelligence do
     - This request is the exact source-account fan-out intake. For each candidate,
       `metadata.source_record.body`, `.text`, and `.thread_context` are the sealed
       provider evidence to evaluate; they are not model-generated candidate copy.
+    - `metadata.source_account_identity` contains the connected OAuth account's
+      provider identity. Use its account_email or authenticated Slack user ID
+      (`authed_user_id`/`slack_user_id`) to match source senders and mentioned_users,
+      including thread participant user_id values. The app login email may differ
+      from the connected mailbox. This identifies the participant; it does not
+      assign every message or team role in that account to the operator.
     - Resolve who is being asked from the source participants and trusted user
       context. A channel-wide "please review" or "still open, owner: support_team"
       does not assign the work to the operator. Require a direct ask, a verified

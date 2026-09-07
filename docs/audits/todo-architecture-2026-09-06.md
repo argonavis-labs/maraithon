@@ -1363,6 +1363,25 @@ investigation; the remaining gaps are stated here.
     filters reduced that settled source from one item to zero. This read-back
     made no provider/model calls and changed no ledger rows or cursors.
 
+
+64. **Ownership intake drops authenticated Slack participant identity.**
+    `SourceScope` and candidate account labels expose a Slack workspace, but
+    do not bind its provider user ID to the operator. OAuth already stores
+    `authed_user_id`/`slack_user_id`; acquisition already resolves
+    `mentioned_users` to provider IDs and display names. Candidate projection
+    dropped those mentions, and thread projection replaced sender IDs with
+    names. A strict ownership prompt therefore lacked existing connector facts
+    needed to distinguish the operator's promises and direct mentions from
+    another participant's work.
+
+    Exact intake now includes a small allowlist of account identity metadata,
+    retains source mention identities and thread sender IDs, and tells the
+    model to use them to identify participants. Account access still does not
+    imply ownership of team tasks or a named team role. The change uses the
+    already-loaded account and source bundle, with no additional database,
+    directory, or provider calls and no credential fields in the prompt.
+    `make build` passed. No tests were run under the manual-first policy.
+
 ## Delivery state
 
 Current server: `maraithon-00236-cm5`, code through `248bd58e`, deployed by
