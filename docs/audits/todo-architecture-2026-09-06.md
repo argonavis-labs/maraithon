@@ -892,7 +892,37 @@ for `kent@runner.now`, using the manual-first development policy.
     02:45:32, a discovery finalizer used the new waiting outcome, retained zero
     attempts and no error, and scheduled its next poll exactly ten seconds
     after the prior one. The shared model cooldown remained unchanged since
-    02:41:40. Closure-finalizer waiting and complete catch-up remain under review.
+    02:41:40. By 02:53:36, both Gmail closure finalizers also used ten-second
+    waiting outcomes with zero attempts, no error, and no provider retry count.
+    The shared cooldown was still unchanged. Complete catch-up remains open.
+
+52. **Changing prompt prefixes prevent reuse of repeated closure evidence.**
+    Exact closure batches placed changing todo JSON and the current timestamp
+    before their repeated source material. The evidence itself began with a
+    timestamped source-health record. Prompt preparation was already quick
+    (17 ms median across 100 live batches), but 150 completed model calls used
+    3,850,942 input tokens between 02:48:17 and 02:53:38. The logged cost is a
+    list-price estimate, not cache-adjusted provider billing.
+
+    Prompts now place source activity first, followed by health context, todo
+    candidates, and the current time. Exact batches share an opaque session
+    key derived from the user and sorted source references. Request budgeting
+    validates the key and the OpenRouter adapter forwards it. This follows
+    OpenRouter's documented automatic Moonshot caching and
+    [session routing](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
+    Source content, evaluation rules, and recovery version remain unchanged.
+    Provider-reported cache read/write token counts are emitted through the
+    numeric log allowlist; unreported values stay null rather than implying
+    zero usage.
+
+    Read-only projection `chxjt` completed successfully at 03:02:52. For two
+    consecutive todo batches against the same source partition, the common
+    prompt prefix increased from 3,909 to 50,149 bytes for Gmail account 1,
+    and from 3,909 to 50,475 bytes for account 2. Both retained forty candidates
+    per batch and their respective two/four prompt chunks. Each pair shared
+    its expected session key. The projection made no model calls and changed
+    no records; actual provider cache hits remain to be measured after deploy.
+    `make build` passed; no automated tests were run.
 
 ## Delivery state
 

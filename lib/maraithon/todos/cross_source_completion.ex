@@ -166,6 +166,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         evidence = collect_evidence(user_id, open_todos, now, opts)
 
         with :ok <- validate_exact_source_evidence(evidence, opts) do
+          opts = put_exact_source_session(opts, user_id)
+
           if actionable_evidence?(evidence) do
             todos = select_candidates(user_id, open_todos, evidence)
 
@@ -213,6 +215,20 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   end
 
   defp actionable_evidence?(_evidence), do: false
+
+  defp put_exact_source_session(opts, user_id) do
+    if Keyword.get(opts, :exact_source_delta, false) do
+      refs = opts |> Keyword.fetch!(:source_item_refs) |> Enum.sort()
+
+      key =
+        :crypto.hash(:sha256, :erlang.term_to_binary({user_id, refs}))
+        |> Base.encode16(case: :lower)
+
+      Keyword.put(opts, :llm_session_id, "source-closure:" <> key)
+    else
+      opts
+    end
+  end
 
   defp validate_exact_source_evidence(evidence, opts) do
     if Keyword.get(opts, :exact_source_delta, false) do
@@ -1365,8 +1381,13 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   # every other field exactly, including author, timestamp, account and IDs.
   # Keep all coverage references and the first scalar ref for provenance.
   defp coalesce_exact_prompt_evidence(evidence) do
+    # Sweep health carries the current evaluation time. Keep that volatile
+    # context after source records so repeated batches share a stable prefix.
+    {health, activity} =
+      Enum.split_with(evidence, &(read_string(&1, "channel", nil) == "source_health"))
+
     {order, grouped} =
-      Enum.reduce(evidence, {[], %{}}, fn item, {order, grouped} ->
+      Enum.reduce(activity ++ health, {[], %{}}, fn item, {order, grouped} ->
         key = Map.delete(item, "source_ref")
         refs = MapSet.new(List.wrap(read_string(item, "source_ref", nil)))
 
@@ -1919,11 +1940,13 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       appeared in multiple acquired messages. It is one activity with several
       coverage references, not independent confirmations.
 
+    RECENT_ACTIVITY_JSON:
+    #{evidence_json}
+
     OPEN_WORK_ITEMS_JSON:
     #{todos_json}
 
-    RECENT_ACTIVITY_JSON (current time #{DateTime.to_iso8601(now)}):
-    #{evidence_json}
+    Current time: #{DateTime.to_iso8601(now)}
 
     #{resolution_coverage_instruction(exhaustive?)}Respond with only this JSON shape, no prose:
     {
@@ -1968,7 +1991,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     config = Application.get_env(:maraithon, :todos, [])
     llm_request = Keyword.get(opts, :llm_request, &LLM.complete/1)
 
-    llm_request.(%{
+    params = %{
       "messages" => [%{"role" => "user", "content" => prompt}],
       "max_tokens" => Keyword.get(opts, :max_tokens, @default_max_tokens),
       "temperature" => 0.1,
@@ -1977,7 +2000,15 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       # budget on hybrid models and left no parseable response.
       "reasoning_effort" => Keyword.get(config, :reasoning_effort, "none"),
       "timeout_ms" => Keyword.get(opts, :timeout_ms, @default_timeout_ms)
-    })
+    }
+
+    params =
+      case Keyword.get(opts, :llm_session_id) do
+        session_id when is_binary(session_id) -> Map.put(params, "session_id", session_id)
+        _none -> params
+      end
+
+    llm_request.(params)
   end
 
   defp decode_response(response) do

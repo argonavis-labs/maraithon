@@ -13,6 +13,7 @@ defmodule Maraithon.SafeLogMetadata do
 
   @numeric_fields ~w(
     durationms retryafterms inputtokens outputtokens reasoningtokens costusd
+    cachereadtokens cachewritetokens
     choicecount detailfailurecount promptbytes promptbytecap basepromptbytes
     availablecandidates includedcandidates users usercount planned interruptnow
     providererrorcode digest held delivered deliveryunknown failed undeliverable expired recovered
@@ -59,6 +60,8 @@ defmodule Maraithon.SafeLogMetadata do
     :input_tokens,
     :output_tokens,
     :reasoning_tokens,
+    :cache_read_tokens,
+    :cache_write_tokens,
     :cost_usd,
     :finish_reason,
     :choice_count,

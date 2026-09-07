@@ -39,7 +39,8 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     {"parallel_tool_calls", :parallel_tool_calls},
     {"structured_outputs", :structured_outputs},
     {"logprobs", :logprobs},
-    {"top_logprobs", :top_logprobs}
+    {"top_logprobs", :top_logprobs},
+    {"session_id", :session_id}
   ]
 
   @impl true
@@ -533,6 +534,8 @@ defmodule Maraithon.LLM.OpenRouterProvider do
           model: model,
           input_tokens: input_tokens,
           output_tokens: output_tokens,
+          cache_read_tokens: cache_token_count(response, "cached_tokens"),
+          cache_write_tokens: cache_token_count(response, "cache_write_tokens"),
           cost_usd: usage.total_cost
         )
 
@@ -680,6 +683,15 @@ defmodule Maraithon.LLM.OpenRouterProvider do
     |> Map.get(primary_key)
     |> Kernel.||(Map.get(usage, fallback_key))
     |> normalize_token_count()
+  end
+
+  defp cache_token_count(response, key) do
+    value = response |> response_usage() |> map_value("prompt_tokens_details") |> Map.get(key)
+
+    case value do
+      count when is_integer(count) and count >= 0 -> count
+      _unreported -> nil
+    end
   end
 
   defp response_choices(response) when is_map(response) do

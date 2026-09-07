@@ -9,7 +9,7 @@ defmodule Maraithon.LLM.RequestBudget do
   @allowed_keys ~w(
     messages model max_tokens max_output_tokens temperature reasoning_effort timeout_ms
     tools tool_choice response_format reasoning stream top_p seed presence_penalty frequency_penalty
-    parallel_tool_calls structured_outputs logprobs top_logprobs
+    parallel_tool_calls structured_outputs logprobs top_logprobs session_id
   )
 
   def validate_body(body) when is_map(body) do
@@ -46,6 +46,7 @@ defmodule Maraithon.LLM.RequestBudget do
     with :ok <- validate_messages(bounded["messages"]),
          :ok <- validate_tools(bounded["tools"]),
          :ok <- validate_model(bounded["model"]),
+         :ok <- validate_session_id(bounded["session_id"]),
          :ok <- validate_token_count(bounded["max_tokens"]),
          :ok <- validate_token_count(bounded["max_output_tokens"]),
          :ok <- validate_temperature(bounded["temperature"]),
@@ -212,6 +213,13 @@ defmodule Maraithon.LLM.RequestBudget do
   defp validate_model(nil), do: :ok
   defp validate_model(model) when is_binary(model) and byte_size(model) <= 255, do: :ok
   defp validate_model(_model), do: :error
+
+  defp validate_session_id(nil), do: :ok
+
+  defp validate_session_id(value) when is_binary(value) and byte_size(value) in 1..256,
+    do: if(String.valid?(value), do: :ok, else: :error)
+
+  defp validate_session_id(_value), do: :error
 
   defp validate_token_count(nil), do: :ok
 
