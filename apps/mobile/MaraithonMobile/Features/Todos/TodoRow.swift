@@ -15,106 +15,43 @@ struct TodoRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 10) {
             Button(action: onToggle) {
                 Image(systemName: todo.isCompleted ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
+                    .font(.title2)
                     .foregroundStyle(todo.isCompleted ? .green : .secondary)
+                    .frame(minWidth: 28, minHeight: 44, alignment: .top)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(todo.isCompleted ? "Mark incomplete" : "Mark complete")
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(todo.title)
-                    .font(.headline)
+                    .font(.body)
                     .strikethrough(todo.isCompleted)
                     .foregroundStyle(todo.isCompleted ? .secondary : .primary)
 
-                if let rowContext = decisionContext.rowContext {
-                    Text(rowContext)
+                if let context = decisionContext.rowContext {
+                    Text(context)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
-
-                if let rowReason = decisionContext.rowReason {
-                    Text(rowReason)
-                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
 
-                if let nextAction = decisionContext.rowMove {
-                    Label(nextAction, systemImage: "arrow.turn.down.right")
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                }
-
-                HStack(spacing: 8) {
-                    if todo.status == .snoozed {
-                        StatusPill(title: TodoStatus.snoozed.title, tint: .orange)
-                    } else if todo.attentionMode == .monitor, todo.isActive {
-                        StatusPill(title: TodoAttentionMode.monitor.title, tint: .teal)
-                    }
-
-                    if todo.isActive, let signal = TodoDecisionSignals.signalPillTitle(for: todo) {
-                        StatusPill(title: signal, tint: .purple)
-                    }
-
-                    if todo.isActive && (todo.priority == .critical || todo.priority == .high) {
-                        StatusPill(title: todo.priority.title, tint: todo.priority.tint)
-                    }
-
-                    if let dueDate = todo.dueDate {
-                        Label(dueText(for: dueDate), systemImage: dueSystemImage(for: dueDate))
-                            .font(.caption)
-                            .foregroundStyle(dueTint(for: dueDate))
-                            .lineLimit(1)
-                    }
-
-                    if let contact = todo.contact {
-                        Label(contact.name, systemImage: "person.crop.circle")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                if let sourceLabel = sourceLabel {
-                    Label(sourceLabel, systemImage: "tray.full")
+                if let dueDate = todo.dueDate {
+                    Text(dueText(for: dueDate))
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                        .foregroundStyle(dueTint(for: dueDate))
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
     }
 
     private func dueText(for dueDate: Date) -> String {
         TodoRowCopy.dueText(for: todo, dueDate: dueDate)
-    }
-
-    private var sourceLabel: String? {
-        let label = todo.sourceProviderLabel ?? todo.sourceSystem
-        let trimmed = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed.replacingOccurrences(of: "_", with: " ").capitalized
-    }
-
-    private func dueSystemImage(for dueDate: Date) -> String {
-        guard !todo.isCompleted else { return "calendar" }
-        if TodoRowCopy.isStaleKeepClose(todo) {
-            return "questionmark.circle"
-        }
-        let calendar = Calendar.current
-        if dueDate < Date(), !calendar.isDateInToday(dueDate) {
-            return "clock.badge.exclamationmark"
-        }
-        if calendar.isDateInToday(dueDate) {
-            return "calendar.badge.clock"
-        }
-        return "calendar"
     }
 
     private func dueTint(for dueDate: Date) -> Color {

@@ -79,7 +79,7 @@ struct TodoDetailView: View {
                         }
                     }
                 } label: {
-                    Label("Work item actions", systemImage: "ellipsis.circle")
+                    Label("Todo actions", systemImage: "ellipsis.circle")
                 }
                 .disabled(isPerformingAction)
 
@@ -447,7 +447,7 @@ struct TodoDetailView: View {
 }
 
 enum TodoDetailCopy {
-    static let navigationTitle = "Work"
+    static let navigationTitle = "Todo"
     static let editButtonTitle = "Edit"
     static let loadingDetailsTitle = "Loading details"
     static let loadingQueuedTitle = "Preparing details"

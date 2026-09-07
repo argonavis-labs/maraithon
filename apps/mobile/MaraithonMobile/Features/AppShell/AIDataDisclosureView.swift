@@ -133,7 +133,7 @@ enum AIDataDisclosureCopy {
     static let controlBody =
         "You only need to share data when you actively use an AI feature. You can:"
     static let controlBullets = [
-        "Skip Chat and the AI-powered Today summaries — the rest of the app (Work, People, Stream) works without sending anything to OpenAI.",
+        "You can use your Todos list without opening Chat or generating an AI summary.",
         "Delete a chat thread at any time to remove its history from Maraithon.",
         "Delete your account in Settings to wipe all your data, including anything previously sent for AI processing.",
     ]

@@ -6,11 +6,10 @@ struct TodosView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(SessionStore.self) private var sessionStore
     @Query(sort: \TodoItem.updatedAt, order: .reverse) private var todos: [TodoItem]
-    @State private var filter: TodoFilter = .needsAction
+    @State private var filter: TodoFilter = .open
     @State private var searchText = ""
     @State private var isAddingTodo = false
     @State private var editingTodo: TodoItem?
-    @State private var selectedTodo: TodoItem?
     @State private var actionErrorMessage: String?
     @State private var refreshErrorMessage: String?
     @State private var isRefreshing = false
@@ -34,10 +33,8 @@ struct TodosView: View {
         let lists = currentWorkLists
         NavigationStack {
             VStack(spacing: 0) {
-                TodoFilterStrip(selection: $filter, counts: lists.counts)
-
                 if isRefreshing {
-                    ProgressView("Refreshing work")
+                    ProgressView("Refreshing todos")
                         .controlSize(.small)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 16)
@@ -64,6 +61,17 @@ struct TodosView: View {
                 }
 
                 List {
+                    if filter != .open {
+                        HStack {
+                            Text(filter.title)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Show active") { filter = .open }
+                                .font(.subheadline)
+                        }
+                        .listRowSeparator(.hidden)
+                    }
+
                     if lists.filtered.isEmpty && !isRefreshing {
                         ContentUnavailableView(
                             emptyState.title,
@@ -72,12 +80,12 @@ struct TodosView: View {
                         )
                     } else {
                         ForEach(lists.filtered) { todo in
-                            TodoRow(todo: todo) {
-                                toggle(todo)
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedTodo = todo
+                            NavigationLink {
+                                TodoDetailView(todo: todo)
+                            } label: {
+                                TodoRow(todo: todo) {
+                                    toggle(todo)
+                                }
                             }
                             .swipeActions(edge: .leading) {
                                 Button {
@@ -128,19 +136,33 @@ struct TodosView: View {
                 }
                 .listStyle(.plain)
             }
-            .navigationTitle(filter.navigationTitle)
-            .searchable(text: $searchText, prompt: filter.searchPrompt)
+            .navigationTitle("Todos")
+            .searchable(text: $searchText, prompt: "Search todos")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     AccountMenuButton()
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Show todos", selection: $filter) {
+                            ForEach([TodoFilter.open] + TodoFilter.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: filter == .open
+                              ? "line.3.horizontal.decrease.circle"
+                              : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .accessibilityLabel("Filter todos")
+                    .accessibilityValue(filter.title)
+
                     Button {
                         isAddingTodo = true
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("Add work item")
+                    .accessibilityLabel("Add todo")
                 }
             }
             .sheet(isPresented: $isAddingTodo) {
@@ -148,9 +170,6 @@ struct TodosView: View {
             }
             .sheet(item: $editingTodo) { todo in
                 TodoEditorView(todo: todo)
-            }
-            .navigationDestination(item: $selectedTodo) { todo in
-                TodoDetailView(todo: todo)
             }
             .task {
                 rebuildWorkLists()
@@ -195,7 +214,7 @@ struct TodosView: View {
             )
             refreshErrorMessage = nil
         } catch {
-            refreshErrorMessage = "Could not refresh work. \(MobileErrorCopy.message(for: error))"
+            refreshErrorMessage = "Could not refresh todos. \(MobileErrorCopy.message(for: error))"
         }
     }
 
@@ -335,11 +354,9 @@ struct TodosView: View {
 /// search text, or filter changes instead of on every body pass.
 private struct TodoWorkLists {
     let filtered: [TodoItem]
-    let counts: TodoFilterCounts
 
     init(todos: [TodoItem], filter: TodoFilter, searchText: String) {
         filtered = TodoFiltering.filter(todos, by: filter, searchText: searchText)
-        counts = TodoFiltering.counts(in: todos, searchText: searchText)
     }
 }
 

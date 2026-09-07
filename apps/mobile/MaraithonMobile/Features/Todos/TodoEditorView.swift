@@ -281,8 +281,8 @@ enum TodoEditorCopy {
     static let relatedPersonSectionTitle = "Related person"
     static let personPickerTitle = "Person"
     static let noPersonLabel = "No one linked"
-    static let newNavigationTitle = "New work item"
-    static let editNavigationTitle = "Edit work item"
+    static let newNavigationTitle = "New todo"
+    static let editNavigationTitle = "Edit todo"
     static let reviewDecisionNavigationTitle = "Review decision"
 
     static func navigationTitle(isNew: Bool, hasDecisionContext: Bool) -> String {

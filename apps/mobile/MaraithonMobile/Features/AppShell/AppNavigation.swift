@@ -4,7 +4,7 @@ import Observation
 @MainActor
 @Observable
 final class AppNavigation {
-    var selectedTab: AppTab = .today
+    var selectedTab: AppTab = .todos
     var requestedTodoFilter: TodoFilter?
     var requestedPeopleFilter: CRMStatusFilter?
     var requestedChatPrompt: String?
@@ -28,12 +28,9 @@ final class AppNavigation {
         switch url.host {
         case "today":
             selectedTab = .today
-        case "todos":
+        case "todos", "stream", "people", "crm":
+            // Older links to retired tabs still land on the main list.
             selectedTab = .todos
-        case "stream":
-            selectedTab = .stream
-        case "people", "crm":
-            selectedTab = .crm
         case "chat":
             requestedChatThreadID = url.pathComponents.count > 1 ? url.lastPathComponent : nil
             selectedTab = .chat
@@ -45,11 +42,6 @@ final class AppNavigation {
     func showTodos(_ filter: TodoFilter) {
         requestedTodoFilter = filter
         selectedTab = .todos
-    }
-
-    func showPeople(_ filter: CRMStatusFilter) {
-        requestedPeopleFilter = filter
-        selectedTab = .crm
     }
 
     func showChat(prompt: String? = nil) {
