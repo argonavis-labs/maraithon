@@ -648,8 +648,10 @@ for `kent@runner.now`, using the manual-first development policy.
     model identity. Both streaming and non-streaming assistant paths use them;
     streaming fallback retains the same capacity class. Generic requests and
     durable Effects retain model-based classification. Provider cooldowns stay
-    shared across buckets. Status: implemented; compile passed. No tests run
-    under the manual-first policy. Live rollout is pending.
+    shared across buckets. Status: deployed in revision `maraithon-00220-k78`
+    through `62c40c63`, successful workflow `34070458277`; compile passed.
+    No tests run under the manual-first policy. Interactive chat has not yet
+    been manually exercised under source load.
 
 41. **Source catch-up uses only three background model workers.**
     At 00:35:54, replacement Gmail graphs had completed only eight of 300 and
@@ -665,23 +667,62 @@ for `kent@runner.now`, using the manual-first development policy.
     ceiling for direct calls such as Chief of Staff Effects. Interactive calls
     use the separate four-slot chat bucket from finding 40. The existing
     provider worker count, account ordering, fair admission, and shared
-    provider cooldown remain in effect. Status: implemented; compile and shell
-    syntax checks passed. No tests run. Throughput and contention after rollout
-    still need observation; low SQL execution time alone does not prove spare
-    CPU capacity.
+    provider cooldown remain in effect. Status: deployed through `e06dd8ae` in
+    revision `maraithon-00220-k78`; compile and shell syntax checks passed.
+    No tests run. Cloud Monitoring's pre-rollout steady interval, 00:26–00:38,
+    averaged 36.80% CPU and 27.43% memory utilization. At 00:45:52 the durable
+    tenant budget was six and six source model workers were active. The first
+    post-rollout sample still saw three slots before the next recurring
+    completion pass reconciled the configured budget. The final 00:53:58
+    sample retained six workers, with Gmail at 26/300 and 26/175 children and
+    Slack at 8/25; none of these graphs had failed children. Closure cursors
+    still awaited settlement. CPU averaged 61.66% from 00:45–00:54, peaking at
+    an 80.47% one-minute mean; memory averaged 35.35% in the available samples.
+
+42. **A transient Mac page failure aborts the entire todo refresh.** The
+    00:48 refresh loaded two pages, then received HTTP 429 on offset 400.
+    Cloud Run reported no available instance; the app retained its older
+    993-item snapshot and displayed the error.
+
+    Read-only todo pagination now retries the current page up to three times
+    for 429, 502, 503, and 504, with cancellation-aware backoff and short
+    Retry-After support. Status: implemented in `19e358dc`, signed narrow Mac
+    build passed, installed in place with the same signing requirement and
+    pairing restored. The updated app loaded all 997 active todos at
+    00:54:29. No transient failure occurred during that run, so the retry
+    branch itself was not exercised live. Tests were not run. The server's
+    instance-capacity rejection remains a separate investigation.
+
+43. **Slack todos have duplicate identities with lost timestamp precision.**
+    Read-only execution `4tqr2` confirmed three pairs for the same named work:
+    each pair has one fractional Slack timestamp and another ending in
+    `.000000`. The rows were inserted on September 5, about 45 minutes apart.
+    Current source discovery preserves the raw timestamp. Status: historical
+    source provenance and the creation path still need investigation before
+    a repair can safely choose canonical identities. No todo was merged,
+    dismissed, deleted, or marked complete during this inspection.
+
+44. **Contact matching repeatedly reloads every active CRM person.** The
+    ten-minute `h9k56` SQL window measured 3,640 calls to the full ranked
+    contact-scan query, consuming 84.64 seconds (28.01% of SQL time).
+    `Crm.people_for_contact_scan/1` is the matching query; single-contact
+    callers reload the full collection for every lookup. Status: tracing
+    ingestion and serializer callers and removing repeated reads. Separate
+    follow-up work is needed for CRM refresh jobs launched after failed or
+    already-completed relationship ingestion.
 
 ## Delivery state
 
-Current server: `maraithon-00219-lxk`, code through `5ac6467a`, deployed by
-successful workflow `34069227776`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00220-k78`, code through `e06dd8ae`, deployed by
+successful workflow `34070458277`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
-workflow `34067357201`. The signed local Mac development app includes finding 32 and is installed
+workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
 New Todo, saved wording and multiline notes after a fresh load, user completion,
 the completed-row display, and Command-N/Escape. The two manual check items
 are completed; these user actions are not automatic-closure evidence. The app
-was returned to the unfiltered active list, which contained 993 items after
-the completion-inspector update.
+was returned to the unfiltered active list, which loaded 997 items after
+the pagination-retry update.
 No public Sparkle release was made.
 
 
