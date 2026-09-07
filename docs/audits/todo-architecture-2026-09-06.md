@@ -865,6 +865,24 @@ for `kent@runner.now`, using the manual-first development policy.
     `maraithon-00224-l5j` through workflow `34076511804`, which succeeded at
     02:34:04. Live scan verification is underway in observer `2xl2b`.
 
+51. **Dependency waits trigger provider throttling and failure backoff.**
+    Discovery and closure finalizers returned `retry_after` while their own
+    children were still running. The generic runner blocks the shared
+    `runtime_model_user` / `model` rate-limit key for this result, then starts
+    incrementing failure attempts after twenty such polls. An ordinary graph
+    wait could therefore delay unrelated model workers, grow into minutes of
+    backoff, and eventually fail an otherwise valid scan. At 02:35:32,
+    observer `2xl2b` found the abandoned Gmail graphs' finalizers still pending
+    for 02:37:02 and 02:41:02 with `source_closure_children_pending`.
+
+    Both finalizers now use the existing fenced self-reschedule outcome at a
+    ten-second interval, recording the pending-child count and retaining replay
+    metadata. This path clears the ordinary failure counters and does not set
+    a provider cooldown. Missing or failed children still fail finalization,
+    and actual provider/capacity errors retain their retry behavior. The shared
+    ten-second model-capacity constant was renamed to describe its remaining
+    use. `make build` passed; no automated tests were run. Deployment is pending.
+
 ## Delivery state
 
 Current server: `maraithon-00224-l5j`, code through `053bdde4`, deployed by

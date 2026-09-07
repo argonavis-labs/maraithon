@@ -46,7 +46,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @model_queue "runtime_model_user"
   @active_statuses ~w(pending running)
   @default_retry_after_seconds 30
-  @source_finalizer_retry_seconds 10
+  @model_capacity_retry_seconds 10
   @source_dependency_retry_ms 10_000
   @source_graph_publication "parent_completion_v1"
   @slack_reconciliation_fanout_spacing_seconds 6
@@ -1862,9 +1862,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       false ->
         {:error, :source_discovery_identity_mismatch}
 
-      {:pending, _count} ->
-        {:error,
-         {:retry_after, @source_finalizer_retry_seconds, :source_discovery_children_pending}}
+      {:pending, count} ->
+        wait_for_source_children(job, count)
 
       {:error, :source_discovery_child_failed} ->
         {:error, {:discard, :source_discovery_child_failed}}
@@ -1905,9 +1904,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       false ->
         {:error, :source_account_user_mismatch}
 
-      {:pending, _count} ->
-        {:error,
-         {:retry_after, @source_finalizer_retry_seconds, :source_closure_children_pending}}
+      {:pending, count} ->
+        wait_for_source_children(job, count)
 
       {:error, :source_discovery_child_failed} ->
         {:error, {:discard, :source_closure_child_failed}}
@@ -2126,6 +2124,16 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       true ->
         {:error, :source_discovery_child_invalid_status}
     end
+  end
+
+  defp wait_for_source_children(job, count) do
+    # Waiting on our own graph is normal progress, not provider throttling.
+    # The self-reschedule outcome preserves the task fence without exhausting
+    # retries or blocking every worker sharing the model rate-limit key.
+    {:ok,
+     %{outcome: "waiting_for_source_children", pending_children: count}
+     |> Map.merge(replay_activity_result(job.payload || %{})),
+     {:reschedule_in, @source_dependency_retry_ms}}
   end
 
   defp maybe_enqueue_closure_reason(
@@ -2473,12 +2481,12 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   # slot while another bounded model call is still in flight.
   defp retry_after_seconds({:llm_busy, retry_after_ms}, _depth)
        when is_integer(retry_after_ms) and retry_after_ms >= 0,
-       do: {:ok, max(div(retry_after_ms + 999, 1_000), @source_finalizer_retry_seconds)}
+       do: {:ok, max(div(retry_after_ms + 999, 1_000), @model_capacity_retry_seconds)}
 
   defp retry_after_seconds({:llm_busy, _detail}, _depth),
-    do: {:ok, @source_finalizer_retry_seconds}
+    do: {:ok, @model_capacity_retry_seconds}
 
-  defp retry_after_seconds(:llm_busy, _depth), do: {:ok, @source_finalizer_retry_seconds}
+  defp retry_after_seconds(:llm_busy, _depth), do: {:ok, @model_capacity_retry_seconds}
 
   defp retry_after_seconds({:http_status, 429, _detail}, _depth),
     do: {:ok, @default_retry_after_seconds}
