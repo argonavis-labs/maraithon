@@ -1078,8 +1078,18 @@ for `kent@runner.now`, using the manual-first development policy.
     the source. Gmail draft creation and its saved send payload share this
     routing map. New routing metadata prevents the primer from reusing an old
     prepared Gmail action based on body text alone. `make build` passed; tests
-    were not run under the manual-first policy. Read-only projection of the
-    changed resolver and live UI verification remain in progress.
+    were not run under the manual-first policy. `00fe2479` deployed through
+    successful workflow `34081849265`. Read-only projection `99k5p` completed
+    successfully at 04:07:30: Michael retains his explicit address, personal
+    mailbox, and original thread; DuraServ has no resolved address and direct
+    send is false. Live UI verification remains in progress.
+
+    The account follow-up requires a concrete source/saved mailbox before
+    creating a draft. Both Gmail API helpers and direct message sends now
+    preserve an explicit account choice: a missing token returns its error,
+    instead of retrying with the default Google account. Implicit default
+    selection remains available to callers that do not specify an account.
+    This follow-up compiled successfully; no test suite was run.
 
 60. **Exhausted model retries discard completed closure batches.**
     Gmail account 1 retained 296/299 results after revision 231's rollout.

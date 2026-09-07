@@ -451,6 +451,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
            gmail_subject(todo, draft_map, metadata, source_message),
          delivery <-
            gmail_delivery_context(todo, draft_map, metadata, source_message, to, subject),
+         true <- is_binary(delivery["account"]),
          body <- calendar_enriched_message_body(conversation.user_id, todo, source_message, body),
          {:ok, draft_id} <- save_gmail_draft(conversation.user_id, delivery, to, subject, body) do
       payload =
@@ -1738,8 +1739,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
       read_string(draft_map, "google_account_email"),
       read_string(metadata, "google_account_email"),
       read_string(metadata, "account_email"),
-      todo.source_account_label,
-      todo.user_id
+      todo.source_account_label
     ]
     |> first_present()
     |> gmail_account_email_value()

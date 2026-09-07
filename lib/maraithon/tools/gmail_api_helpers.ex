@@ -43,12 +43,6 @@ defmodule Maraithon.Tools.GmailApiHelpers do
         {:ok, access_token} ->
           {:ok, user_id, provider, access_token}
 
-        {:error, :no_token} when provider != "google" ->
-          case OAuth.get_valid_access_token(user_id, "google") do
-            {:ok, access_token} -> {:ok, user_id, "google", access_token}
-            other -> other
-          end
-
         other ->
           other
       end

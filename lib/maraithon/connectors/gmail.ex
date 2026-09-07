@@ -881,16 +881,10 @@ defmodule Maraithon.Connectors.Gmail do
     account = optional_attr(attrs, "account")
     provider = if is_binary(account) and account != "", do: "google:#{account}", else: "google"
 
-    case OAuth.get_valid_access_token(user_id, provider) do
-      {:ok, access_token} ->
-        {:ok, access_token, provider}
-
-      {:error, :no_token} when provider != "google" ->
-        get_access_token(user_id, nil) |> wrap_provider("google")
-
-      other ->
-        wrap_provider(other, provider)
-    end
+    # An explicit mailbox must not silently become the user's default account.
+    user_id
+    |> OAuth.get_valid_access_token(provider)
+    |> wrap_provider(provider)
   end
 
   defp wrap_provider({:ok, access_token}, provider), do: {:ok, access_token, provider}
