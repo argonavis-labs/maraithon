@@ -958,6 +958,16 @@ for `kent@runner.now`, using the manual-first development policy.
     `make build` passed; no automated tests were run. A read-only projection
     and the browser retry will verify the change against live account data.
 
+55. **Failed web chat replies leave a silent conversation.**
+    The manual check showed only the saved user question after its run
+    degraded; the working indicator disappeared and no error replaced it.
+    Chat now reads the latest durable run status for both polling and page
+    loads and shows a shared Catalyst alert for failed/degraded replies.
+    Starting a new conversation clears the previous reply state. No internal
+    errors or context payloads appear in the alert. `make build` passed; no
+    automated tests were run. The existing failed conversation provides the
+    live case for visual verification after deploy.
+
 ## Delivery state
 
 Current server: `maraithon-00225-twr`, code through `9e289360`, deployed by

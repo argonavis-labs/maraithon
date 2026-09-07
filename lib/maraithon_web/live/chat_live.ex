@@ -14,6 +14,7 @@ defmodule MaraithonWeb.ChatLive do
      socket
      |> assign(:current_path, "/chat")
      |> assign(:awaiting_reply, false)
+     |> assign(:reply_failed, false)
      |> assign(:polls_left, 0)
      |> assign(:message_form, to_form(%{"body" => ""}, as: :message))
      |> refresh_threads()}
@@ -49,12 +50,9 @@ defmodule MaraithonWeb.ChatLive do
       thread ->
         case AssistantChat.get_thread(socket.assigns.current_user.id, thread.id) do
           {:ok, refreshed} ->
-            awaiting = active_run?(refreshed)
-
             socket =
               socket
-              |> assign(:thread, refreshed)
-              |> assign(:awaiting_reply, awaiting)
+              |> assign_reply_state(refreshed)
               |> assign(:polls_left, max(socket.assigns.polls_left - 1, 0))
 
             {:noreply, maybe_schedule_poll(socket)}
@@ -79,6 +77,7 @@ defmodule MaraithonWeb.ChatLive do
        socket
        |> assign(:thread, thread)
        |> assign(:awaiting_reply, true)
+       |> assign(:reply_failed, false)
        |> assign(:polls_left, @max_polls)
        |> assign(:message_form, to_form(%{"body" => ""}, as: :message))
        |> refresh_threads()
@@ -100,6 +99,7 @@ defmodule MaraithonWeb.ChatLive do
          socket
          |> assign(:thread, thread)
          |> assign(:awaiting_reply, true)
+         |> assign(:reply_failed, false)
          |> assign(:polls_left, @max_polls)
          |> assign(:message_form, to_form(%{"body" => ""}, as: :message))
          |> maybe_schedule_poll()}
@@ -109,6 +109,7 @@ defmodule MaraithonWeb.ChatLive do
          socket
          |> assign(:thread, thread)
          |> assign(:awaiting_reply, true)
+         |> assign(:reply_failed, false)
          |> assign(:polls_left, @max_polls)
          |> maybe_schedule_poll()}
 
@@ -124,17 +125,21 @@ defmodule MaraithonWeb.ChatLive do
     assign(socket, :threads, threads)
   end
 
-  defp select_thread(socket, nil), do: assign(socket, :thread, nil)
+  defp select_thread(socket, nil) do
+    socket
+    |> assign(:thread, nil)
+    |> assign(:awaiting_reply, false)
+    |> assign(:reply_failed, false)
+    |> assign(:polls_left, 0)
+  end
 
   defp select_thread(socket, thread_id) do
     case AssistantChat.get_thread(socket.assigns.current_user.id, thread_id) do
       {:ok, thread} ->
-        awaiting = active_run?(thread)
+        socket = assign_reply_state(socket, thread)
 
         socket
-        |> assign(:thread, thread)
-        |> assign(:awaiting_reply, awaiting)
-        |> assign(:polls_left, if(awaiting, do: @max_polls, else: 0))
+        |> assign(:polls_left, if(socket.assigns.awaiting_reply, do: @max_polls, else: 0))
         |> maybe_schedule_poll()
 
       {:error, _reason} ->
@@ -152,8 +157,14 @@ defmodule MaraithonWeb.ChatLive do
     socket
   end
 
-  defp active_run?(thread) do
-    not is_nil(TelegramConversations.active_run_for_conversation(thread.id))
+  defp assign_reply_state(socket, thread) do
+    run = TelegramConversations.latest_run_for_conversation(thread.id)
+    status = if run, do: run.status
+
+    socket
+    |> assign(:thread, thread)
+    |> assign(:awaiting_reply, status in ["queued", "running", "waiting_confirmation"])
+    |> assign(:reply_failed, status in ["failed", "degraded"])
   end
 
   defp visible_messages(nil), do: []
@@ -237,6 +248,10 @@ defmodule MaraithonWeb.ChatLive do
               <span class="inline-block size-2 animate-pulse rounded-full bg-zinc-400"></span>
               Maraithon is working on it…
             </div>
+
+            <.alert :if={@reply_failed} color="red" title="Maraithon couldn’t finish this reply.">
+              Your message is saved. Send a new message to try again.
+            </.alert>
 
             <script :type={Phoenix.LiveView.ColocatedHook} name=".ChatScroll">
               export default {
