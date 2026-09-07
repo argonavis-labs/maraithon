@@ -924,6 +924,17 @@ for `kent@runner.now`, using the manual-first development policy.
     no records; actual provider cache hits remain to be measured after deploy.
     `make build` passed; no automated tests were run.
 
+53. **Closure settlement omitted the policy decision field mappings.**
+    At 03:05:55, Gmail account 2 reached finalization, but receipt selection
+    crashed in `SourceCycleSettlement.known_atom("evaluator")`. The shared
+    map reader eagerly resolves its atom-key fallback even for persisted
+    string-key maps. Finding 50 added reads of `evaluator` and `reason_code`
+    without adding their fixed mappings. Both are now included in the closed
+    key set. No dynamic atoms, settlement rules, or existing outcomes change.
+    The fenced finalizer can retry against the already-completed children.
+    `make build` passed; no automated tests were run. Live settlement remains
+    to be verified after deployment.
+
 ## Delivery state
 
 Current server: `maraithon-00225-twr`, code through `9e289360`, deployed by

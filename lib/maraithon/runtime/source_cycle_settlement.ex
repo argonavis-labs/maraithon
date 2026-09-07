@@ -521,10 +521,12 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
   defp known_atom("acquisition_job_id"), do: :acquisition_job_id
   defp known_atom("action"), do: :action
   defp known_atom("decision_manifest"), do: :decision_manifest
+  defp known_atom("evaluator"), do: :evaluator
   defp known_atom("id"), do: :id
   defp known_atom("kind"), do: :kind
   defp known_atom("persisted_todo_id"), do: :persisted_todo_id
   defp known_atom("provider_occurred_at"), do: :provider_occurred_at
+  defp known_atom("reason_code"), do: :reason_code
   defp known_atom("reason_job_ids"), do: :reason_job_ids
   defp known_atom("source_bundle"), do: :source_bundle
   defp known_atom("source_identity_digest"), do: :source_identity_digest
