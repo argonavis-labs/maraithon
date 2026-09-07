@@ -14,6 +14,22 @@ current revision's runtime cycle. Account 2 and Slack have completed catch-up
 and subsequent deltas. Browser and narrow compile checks passed; no test
 suites were run. Detailed findings and chronological evidence follow.
 
+## Completion audit against the original goal
+
+This is a current requirement check, not a declaration that the goal is complete.
+Historical “pending” notes below describe what was known at that point in the
+investigation; the remaining gaps are stated here.
+
+| Requirement | Authoritative evidence inspected | Current result |
+| --- | --- | --- |
+| Discover commitments and decisions from connected apps using deltas. | Current `PeriodicJobs`, `SourceAccountDiscovery`, and `SourceCycleSettlement` paths; production discovery cursors for both Gmail accounts and Slack; source-backed Chrome todo details. | Discovery is advancing. Gmail account 1 discovery was at September 7 04:13:28 UTC in observer 233's first sample. Its separate closure cursor still lags. |
+| Rank sourced work alongside manually entered todos and make it actionable. | Signed-in `/todos`, successful priority chat run `62321861`, original source threads in the Michael/Uride/DuraServ details, and the recorded Mac create/edit/complete round trip. Current shared reply routing and brief projections were inspected again. | Manually verified. Suggested dates/commitments still need the user's review; no third-party message was sent. |
+| Wake regularly and fan work out without blocking OTP ownership. | Current one-minute discovery/completion schedules, ten-minute Chief default, independent non-mailbox completion backstop, workload/account rotation, and live observer `74rhc`. | Revision 233 recovered at 04:15:00; its first two samples had 64 ready/live partitions and the second had six running tasks. Its complete scheduled Effect/checkpoint cycle is still being observed. |
+| Close work only on current, matching evidence and keep the list current. | Current quote/time/relationship checks, row-locked stale-result rejection, immutable source-cycle settlement, sampled Abe Choi closure evidence from `f7ztc`, completed account-2/Slack cycles, and current Gmail graph status. | Evidence-backed sampled closures and two accounts' settled deltas are verified. Gmail account 1's complete catch-up is still required; its fresh 276-child graph had 8 complete at 04:18:55. |
+| Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded card serialization and Mac refresh timings, bounded fanout/prompt packing, live provider cache counters, completed-child reuse, and timeout-recovery projection `btwjn`. | Implemented and measured where noted. The timeout projection retained 297 results and retried two children; production completion of the current recovered graph remains outstanding. |
+| Ship small changes to the test app without staging or added deployment gates. | All 53 actual Git commit IDs cited in the findings are ancestors of deployed code `51167f39`; current `Makefile` maps `make deploy` to `deploy-fast`; workflow `34082107360` completed with optional validation/replay steps skipped. | Shipped to revision 233 at 100% traffic. The worktree was clean at the start of this audit. Compile/manual checks followed `docs/development-mode.md`; no test suites were run. |
+| Update native clients where the todo loop needs changes. | Latest companion source change is `19e358dc`; the installed Mac executable was built September 6 at 20:53 local time. Latest iPhone source change is `1ba7bb51`, matching successful release workflow `34067357201`; current paging, manual-entry, and completion-display code was inspected. | Mac update is installed and previously exercised while paired. TestFlight 1.0.1 (20260906233635) is available to Kent. Physical iPhone behavior was not exercised in this session; no further native change is currently needed by the server fixes. |
+
 ## Architecture to retain
 
 - PostgreSQL owns runtime leases, task outcomes, and source progress. OTP
