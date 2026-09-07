@@ -1015,12 +1015,32 @@ for `kent@runner.now`, using the manual-first development policy.
 
     Completion now merges the same existing `route_summary/1` projection used
     at startup, eliminating the duplicate field-copy path. The reply, tool
-    results, and model routing stay intact. Browser verification remains open.
+    results, and model routing stay intact. Commit `b9a61e2f` passed
+    `make build` and deployed as revision 230 in successful workflow
+    `34080167164`; no tests were run. A fresh signed-in Chrome conversation
+    `2f8b091a-a119-4790-8084-0b8285ad8876` displayed the three requested
+    priorities, returned its Send button, and showed no failed-reply alert.
+    Reload retained the answer and successful display. The complete live
+    request compacted from 561,427 to 116,419 bytes at 03:40:09. The read-only
+    observer will confirm the durable completed status and recorded steps.
+
+58. **Cached todo briefs retain expired time-relative advice.**
+    Manual Chrome review of Michael Lippi's top-ranked todo showed a brief
+    generated August 29 still instructing Kent on September 6 to confirm
+    evenings by Monday August 31. The Uride brief also retained a passed
+    "about 3 hours from now" deadline. `Brief.current/1` checks the version
+    and todo-content fingerprint, with no time freshness check. These are
+    existing saved briefs, not new output from the priority-chat check.
+    Remaining work: make time-sensitive brief freshness explicit without
+    regenerating the full todo inventory on every scan or losing user edits.
+    The DuraServ detail points to a daily-brief source while offering a reply
+    to Tal; its exact recipient/thread resolution also needs read-only review
+    before any connected send is exercised. No send was attempted.
 
 ## Delivery state
 
-Current server: `maraithon-00229-qdq`, code through `cd9ab604`, deployed by
-successful workflow `34079790305`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00230-6p6`, code through `b9a61e2f`, deployed by
+successful workflow `34080167164`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -1894,3 +1914,15 @@ window showed one active instance, request concurrency 2–3, CPU mean 35.74%
 (max one-minute 46.81%), and memory near 24%. These samples do not establish
 CPU, memory, or configured concurrency exhaustion. The specific transient
 trigger remains unproven; no scaling changes were made.
+
+
+At 03:38:12, observer `mgfpq` showed Gmail account 1 at 196/299 completed
+closure children, including all 186 reused results, with two running and 101
+pending. Gmail account 2 had settled another delta and started its successor;
+Slack had 21/23 children complete for its seven-source delta. Revisions 229
+and 230 interrupted this observer's SQL interval, so it cannot establish a
+steady-state comparison. Revision 230's Chief recovered at 03:39:53.
+Read-only observer `vvs7d` is running a separate twelve-minute measurement
+on the current revision, including the fresh chat's durable status and the
+three visible todos' source-address metadata. It starts Vault and Repo only,
+uses pool size two, and performs no provider calls or data mutations.
