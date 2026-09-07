@@ -203,7 +203,12 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp actionable_evidence?(evidence) when is_list(evidence) do
     Enum.any?(evidence, fn item ->
-      read_string(item, "channel", nil) != "source_health" or source_health_actionable?(item)
+      if read_string(item, "channel", nil) == "source_health" do
+        source_health_actionable?(item)
+      else
+        not blank?(exact_string(item, "text", nil)) or
+          not blank?(read_string(item, "subject", nil))
+      end
     end)
   end
 
@@ -2310,10 +2315,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp evidence_item(_attrs), do: nil
 
   defp evidence_item(attrs, true) when is_map(attrs) do
-    text = read_string(attrs, "text", nil)
-    subject = read_string(attrs, "subject", nil)
-
-    if blank?(text) and blank?(subject), do: nil, else: compact_map(attrs)
+    # A successfully acquired blank message still belongs to the exact source
+    # window. Keep its identity for coverage; without text or a subject it
+    # cannot match a completion quote or justify a model call on its own.
+    compact_map(attrs)
   end
 
   defp evidence_item(attrs, false), do: evidence_item(attrs)
