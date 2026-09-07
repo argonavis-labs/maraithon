@@ -53,5 +53,12 @@ archives and exports the IPA, verifies the IPA contains that build number, and
 uploads it to App Store Connect/TestFlight. `make ship-mobile` is an alias for
 the same path.
 
+Release archives use the existing **Apple Distribution** identity and
+**Maraithon AppStore CI** profile with manual signing. Install both before a
+local release; GitHub Actions imports/downloads them automatically. Releases
+do not create or revoke development certificates. See
+[`../../.github/workflows/README.md`](../../.github/workflows/README.md)
+for the required secrets and signing-asset renewal procedure.
+
 Use `MARAITHON_MOBILE_BUILD_NUMBER=<number> make testflight-mobile` only when an
 exact build number is required.

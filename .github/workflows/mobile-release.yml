@@ -7,7 +7,6 @@ on:
     paths:
       - 'apps/mobile/**'
       - 'scripts/ci/assign-testflight-group.mjs'
-      - 'scripts/ci/cleanup-dev-certificates.mjs'
       - '.github/workflows/mobile-release.yml'
       - 'Makefile'
   workflow_dispatch:
@@ -21,9 +20,7 @@ on:
           - staging
           - production
 
-# Xcode cloud signing creates an account-wide development certificate on each
-# ephemeral runner. Serialize every ref so cleanup can never revoke a certificate
-# belonging to another mobile release that is still archiving.
+# Keep build uploads and TestFlight group assignment ordered across every ref.
 concurrency:
   group: mobile-release
   cancel-in-progress: false
@@ -68,10 +65,12 @@ jobs:
       - name: Check required secrets
         env:
           APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APPSTORE_CERTIFICATES_FILE_BASE64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          APPSTORE_CERTIFICATES_PASSWORD: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
         run: |
           set -euo pipefail
           missing=0
-          for key in ASC_KEY_ID ASC_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8; do
+          for key in ASC_KEY_ID ASC_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8 APPSTORE_CERTIFICATES_FILE_BASE64 APPSTORE_CERTIFICATES_PASSWORD; do
             if [ -z "${!key:-}" ]; then
               echo "::error title=Missing GitHub secret::${key} is required for mobile TestFlight releases"
               missing=1
@@ -87,21 +86,29 @@ jobs:
           chmod 600 "$KEY_PATH"
           echo "APP_STORE_CONNECT_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
+      # Reuse the team distribution identity. A fresh runner must not create
+      # development certificates or revoke other runners' signing assets.
+      - name: Import distribution certificate
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
+        with:
+          p12-file-base64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          p12-password: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+
+      - name: Download App Store provisioning profile
+        uses: apple-actions/download-provisioning-profiles@2126b5f86a0e2863cbf4d2d312112b22b943a594 # v6.1.0
+        with:
+          bundle-id: com.bliss.maraithonmobile
+          profile-type: IOS_APP_STORE
+          issuer-id: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          api-private-key: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+
       - name: Set build number from GitHub run
         working-directory: apps/mobile
         run: |
           set -euo pipefail
           BUILD_NUMBER="$(date -u +%Y%m%d%H%M%S)"
           echo "MARAITHON_MOBILE_BUILD_NUMBER=${BUILD_NUMBER}" >> "$GITHUB_ENV"
-
-      # App Store Connect API-key signing still mints a short-lived runner
-      # development certificate before export. Keep only a small newest set so
-      # bursty main pushes cannot exhaust Apple's account-wide certificate cap.
-      - name: Prune ephemeral CI development certificates
-        env:
-          ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
-          CERT_RETAIN_COUNT: '2'
-        run: node scripts/ci/cleanup-dev-certificates.mjs
 
       - name: Build and upload to TestFlight
         env:

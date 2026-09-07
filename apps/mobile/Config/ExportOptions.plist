@@ -11,7 +11,14 @@
 	<key>uploadBitcode</key>
 	<false/>
 	<key>signingStyle</key>
-	<string>automatic</string>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Apple Distribution</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.bliss.maraithonmobile</key>
+		<string>Maraithon AppStore CI</string>
+	</dict>
 	<key>destination</key>
 	<string>export</string>
 	<key>generateAppStoreInformation</key>
