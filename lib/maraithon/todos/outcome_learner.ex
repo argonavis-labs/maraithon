@@ -126,6 +126,11 @@ defmodule Maraithon.Todos.OutcomeLearner do
     - Keep patterns narrow. Preserve exceptions for family/personal impact,
       direct requests, deadlines, customer impact, close relationships, and
       concrete consequences when relevant.
+    - A completion or dismissal teaches relevance, not a new role assignment or
+      an instruction to track all similar team work. Generated todo wording is
+      not proof that the user owns a role or is the sole decision maker. Keep
+      personal ownership as a condition future sources must independently prove,
+      and preserve exceptions for tasks assigned to other people or unmapped roles.
     - Confidence must reflect the accumulated evidence and this outcome's
       signal strength. `ok` and `weak_bad` are weaker evidence than `great` and `bad`.
     - Pattern content must tell todo intelligence how to affect both admission

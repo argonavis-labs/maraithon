@@ -511,11 +511,21 @@ defmodule Maraithon.Todos.Intelligence do
        - Apply `todo_relevance_memories` as durable work-relevance steering. These
          patterns were learned from human completion and dismissal outcomes and
          may be positive, negative, or mixed.
+       - Relevance feedback is a model's generalization from those outcomes, not
+         a quoted user instruction or a verified assignment. This also applies
+         to relevance_feedback items in memory_context, even when author_type is
+         user: the human supplied the outcome, not the generalized wording.
+         Establish current personal ownership and an open obligation from source
+         evidence before applying a positive pattern. A past completion, a pattern
+         saying "the user is the sole bottleneck", or similar generated todos
+         cannot bind the operator to a team role or authorize tracking a channel.
        - Decide semantically whether a candidate matches a work-relevance pattern.
          Do not rely on exact keywords, sender, thread id, account, or source
          type alone. Compare the source evidence, ask/no-ask, owner, urgency,
          relationship, life domain, consequence, and whether someone is waiting.
-       - Positive matching patterns should raise admission confidence and rank.
+       - Match the whole pattern, including its ownership conditions and exceptions.
+         Positive matches can raise admission confidence and rank only after the
+         independent ownership and outstanding-action checks pass.
          Negative matching patterns should lower rank or return action "skip"
          when no exception applies. Explain material pattern matches in reasoning.
        - For chief_of_staff_commitment_tracker candidates, metadata.completion_check
@@ -653,6 +663,9 @@ defmodule Maraithon.Todos.Intelligence do
       role assignment, or the operator's explicit request to track that work.
       An automated team-task template saying "Do this" or "when you have done it"
       addresses that task's owner; those words alone do not identify the operator.
+      The operator publishing or forwarding a report does not make its assigned
+      work their own promise. A role such as support_team remains unbound until
+      the supplied evidence explicitly connects that role to the operator.
       The positive admission rules below apply only after this ownership check.
     - In this intake, an explicit outstanding obligation is a positive admission
       signal, not merely a reason to keep considering the item. Return create or
@@ -1058,6 +1071,11 @@ defmodule Maraithon.Todos.Intelligence do
   defp todo_relevance_memory_for_prompt(%{} = memory) do
     %{
       "id" => Map.get(memory, :id) || Map.get(memory, "id"),
+      "kind" => Map.get(memory, :kind) || Map.get(memory, "kind"),
+      "source" => Map.get(memory, :source) || Map.get(memory, "source"),
+      "source_ref_type" => Map.get(memory, :source_ref_type) || Map.get(memory, "source_ref_type"),
+      "source_ref_id" => Map.get(memory, :source_ref_id) || Map.get(memory, "source_ref_id"),
+      "evidence_scope" => "learned_relevance_only",
       "title" => Map.get(memory, :title) || Map.get(memory, "title"),
       "summary" => Map.get(memory, :summary) || Map.get(memory, "summary"),
       "content" => Map.get(memory, :content) || Map.get(memory, "content"),

@@ -1465,6 +1465,52 @@ investigation; the remaining gaps are stated here.
     recovery to idle at 06:22:27. No new database observer, full periodic runtime
     audit, or synthetic race exercise was run.
 
+67. **Learned relevance is being treated as proof of personal ownership.**
+    Read-only execution `d44mv` completed at 06:28:16 and found two fresh Slack
+    intake jobs: `483f040c` on revision 239 created Tasks #413–414, and `4ff7cb15`
+    on revision 240 created Tasks #415–417. All five source messages name
+    `recruitment_supervisor` as owner, have no personal mention, and were posted
+    under the connected operator's Slack identity. Publishing those automated
+    reports does not establish a personal promise or the role mapping.
+
+    Read-back `p6fxc` completed at 06:31:14. The saved explanations explicitly
+    cite the positive onboarding-feedback pattern and earlier generated todos
+    as proof of ownership; three claim the role itself names the operator.
+    This is contrary to the deployed ownership instructions, not successful
+    validation of finding 62. The active list grew from 499 to 504 items.
+
+    Read-only `drbv6` completed at 06:34:48. The onboarding relevance memory
+    `e19d7fcd` is a model generalization from five human outcomes (four `great`,
+    one `ok`), not a direct instruction to track all team work. Its content
+    requires the user to be the actual bottleneck, and its exceptions exclude
+    work owned by someone else. No active instruction memory was returned.
+    Intake nevertheless used a topical match while skipping those conditions.
+    Its prompt projection dropped the pattern's kind/source/evidence reference,
+    while the general guidance told positive matches to raise admission confidence.
+
+    Intake now preserves that provenance and labels its authority as learned
+    relevance only. Its instructions require independent source-backed ownership
+    and open work before applying a positive pattern, including recalled feedback
+    labeled `author_type: user` because the outcome came from a person. Matching
+    must include ownership conditions and exceptions; previous generated copy,
+    a generalized "sole bottleneck" claim, and posting a team report cannot
+    establish a role assignment. The outcome learner now preserves those limits
+    in future patterns. No stored feedback or existing todos were rewritten.
+    `make build` passed; no tests were run. Deployment and natural observation
+    of this follow-up are pending. Kent's intended Uride scope is still needed.
+
+    The same bounded review confirmed revision 240's normal brief-save path:
+    three new briefs completed at 06:24:25, 06:24:47, and 06:25:05 without errors.
+    One prior revision-239 brief completed; another interrupted during drain
+    retained `provider_outcome_ambiguous`, without a fabricated success or replay.
+    Closed-item skips and overlapping-generation rejection remain unobserved.
+    At 06:28:12 all 64 partitions were ready/live, no assignment was active or
+    awaiting termination, and all six source cursors had advanced through
+    06:27:23–26. The revision-239 Agent exit at 06:20:57 followed the deployment's
+    drain request at 06:20:54. The restart guard remained untripped, with its
+    existing count of one and unchanged 05:12:07 timestamp; the drain did not
+    add a crash. Revision 240 had already recovered its Chief at 06:22:27.
+
 ## Delivery state
 
 Current server: `maraithon-00240-hn2`, code through `054d214f`, deployed by
