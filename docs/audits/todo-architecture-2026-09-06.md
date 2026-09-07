@@ -5,11 +5,13 @@ rank them beside manually added work, and automatically close work when fresh
 evidence proves it was handled. Ship small changes to the single-user test app
 for `kent@runner.now`, using the manual-first development policy.
 
-Latest delivery (September 7): revision `maraithon-00240-hn2`,
-code `054d214f`, successful workflow `34090192946`. Intake retrieves older
+Latest delivery (September 7): revision `maraithon-00241-t2z`,
+code `7edb4abc`, successful workflow `34091591196`. Intake retrieves older
 matching work, requires source-backed personal ownership, and now retains
-connected provider participant IDs. A fresh Slack ownership case remains to
-be observed. Source revision hashes now survive JSON handoffs: normal Gmail
+connected provider participant IDs. Fresh Slack intake exposed a remaining
+ownership error: learned positive feedback and prior generated work were treated
+as a role assignment. Finding 67 records the follow-up and its validation limits.
+Source revision hashes now survive JSON handoffs: normal Gmail
 polls reuse settled evidence instead of repeating model jobs. Closed-todo brief
 jobs now retire without generating new advice; natural execution of that guard
 remains unobserved because the prior backlog finished before deployment.
@@ -20,8 +22,8 @@ are retained; exhausted model retries can reuse completed closure batches.
 Gmail account 1's 276-batch backlog settled at 05:18:49, advancing its closure
 cursor from September 2 to September 7 04:05:17 UTC. Its next deltas also
 settled, and the cursor was current by 05:21:19. The reviewed reminder cleanup
-is complete: 725 duplicates consolidated into 311 originals, with all 1,036 rows independently verified and 499 active todos
-remaining. The open scope question is whether routine team-owned Uride
+is complete: 725 duplicates consolidated into 311 originals, with all 1,036 rows independently verified. Five new Uride alerts subsequently raised the active
+list from 499 to 504. The open scope question is whether routine team-owned Uride
 escalations belong on Kent's personal list (finding 62).
 Revision 233's scheduled runtime cycle passed the production checks; revision
 235 passed its recovery, scheduled Effects, checkpoint, source-delta, and
@@ -37,12 +39,12 @@ investigation; the remaining gaps are stated here.
 
 | Requirement | Authoritative evidence inspected | Current result |
 | --- | --- | --- |
-| Discover commitments and decisions from connected apps using deltas. | Current `PeriodicJobs`, `SourceAccountDiscovery`, and `SourceCycleSettlement` paths; production discovery cursors for both Gmail accounts and Slack; source-backed Chrome todo details. | The closure backlog and following deltas settled. On revision 239, both Gmail accounts and Slack advanced their discovery and closure cursors between the 06:06:28 and 06:07:29 read-only samples. All were current within seconds of the final sample. |
-| Rank sourced work alongside manually entered todos and make it actionable. | Signed-in `/todos`, successful priority chat run `62321861`, original source threads in the Michael/Uride/DuraServ details, and the recorded Mac create/edit/complete round trip. Current shared reply routing and brief projections were inspected again. | Manual todo actions and sampled priorities were verified. The 725 reviewed reminders are consolidated, with notes and source links retained and zero read-back mismatches. The latest ownership prompt is deployed; the intended scope of team escalations and its natural intake behavior remain open. No third-party message was sent. |
+| Discover commitments and decisions from connected apps using deltas. | Current `PeriodicJobs`, `SourceAccountDiscovery`, and `SourceCycleSettlement` paths; production discovery cursors for both Gmail accounts and Slack; source-backed Chrome todo details. | The closure backlog and following deltas settled. Both Gmail accounts and Slack continued advancing their discovery and closure cursors. Revision 240 read-back `d44mv` at 06:28:12 found all six advanced through 06:27:23–26, with 64 ready/live partitions and no active or termination-requested assignments. |
+| Rank sourced work alongside manually entered todos and make it actionable. | Signed-in `/todos`, successful priority chat run `62321861`, original source threads in the Michael/Uride/DuraServ details, and the recorded Mac create/edit/complete round trip. Current shared reply routing and brief projections were inspected again. | Manual todo actions and sampled priorities were verified. The 725 reviewed reminders are consolidated, with notes and source links retained and zero read-back mismatches. Fresh intake created five team alerts by incorrectly treating learned feedback as ownership proof. The feedback-authority follow-up is deployed; its natural behavior and the intended scope of team escalations remain open. No third-party message was sent. |
 | Wake regularly and fan work out without blocking OTP ownership. | Current one-minute discovery/completion schedules, ten-minute Chief default, independent non-mailbox completion backstop, workload/account rotation, and completed observer `ltv7q`. | Revision 235 recovered at 05:12:07. Scheduled Effects completed at 05:16:06 and 05:26:41, and its checkpoint persisted at 05:22:07. All eight samples retained 64 ready/live partitions, with no pending termination and no missing Effect evidence. |
 | Close work only on current, matching evidence and keep the list current. | Current quote/time/relationship checks, row-locked stale-result rejection, immutable source-cycle settlement, sampled Abe Choi closure evidence from `f7ztc`, completed account-2/Slack cycles, and current Gmail graph status. | Evidence-backed sampled closures and two accounts' settled deltas are verified. Gmail account 1's 276-child backlog completed and its cursor advanced at 05:18:49. The following four-source, fifteen-child delta also settled; by 05:21:19 closure and discovery cursors were advancing through empty deltas. |
-| Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded serialization and refresh timings, bounded fanout/prompt packing, provider cache counters, completed-child reuse, and source-revision read-back `8rxjc` plus normal-poll observer `nn5qw`. | Recovery retained completed children and settled the 276-child catch-up graph. The corrected source hash preserves existing receipts: revision 237 advanced discovery/closure cursors through empty deltas with zero new reasoning jobs for the repeated email. The preceding unchanged-email closure cycle had thirteen children over 499 todos. Closed-brief queue suppression is also deployed, but its natural skip path remains unobserved. |
-| Ship small changes to the test app without staging or added deployment gates. | Semantic commits `e0aac126`, `0f97c8e6`, `623a9953`, and `054d214f` shipped through the normal keyless workflow; `make deploy` still uses the cached path. | Revision 240 serves 100% of traffic after successful workflow `34090192946`; its startup probe and deployment health request passed. The complete runtime cycle was verified on revision 235. Revision 237 normal delta scans verified receipt reuse; revision 239 observer `57pqw` had two samples with 64 ready/live partitions and all six cursors advancing. Those broader checks were not repeated on revision 240. All four changes passed `make build`; no test suites were run. |
+| Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded serialization and refresh timings, bounded fanout/prompt packing, provider cache counters, completed-child reuse, and source-revision read-back `8rxjc` plus normal-poll observer `nn5qw`. | Recovery retained completed children and settled the 276-child catch-up graph. The corrected source hash preserves existing receipts: revision 237 advanced discovery/closure cursors through empty deltas with zero new reasoning jobs for the repeated email. The preceding unchanged-email closure cycle had thirteen children over 499 todos. Closed-brief queue suppression is deployed. Revision 240 completed three fresh brief saves normally; closed-item skips and overlapping-generation rejection remain unobserved. |
+| Ship small changes to the test app without staging or added deployment gates. | Semantic commits `e0aac126`, `0f97c8e6`, `623a9953`, `054d214f`, and `7edb4abc` shipped through the normal keyless workflow; `make deploy` still uses the cached path. | Revision 241 serves 100% of traffic after successful workflow `34091591196` and its deployment health request. The complete runtime cycle was verified on revision 235. Revision 237 normal delta scans verified receipt reuse. Revision 240 read-back `d44mv` found 64 ready/live partitions, advancing cursors, and no drain-induced crash-guard increment. The full runtime audit was not repeated on revision 241. All five changes passed `make build`; no test suites were run. |
 | Update native clients where the todo loop needs changes. | Latest companion source change is `19e358dc`; the installed Mac executable was built September 6 at 20:53 local time. Latest iPhone source change is `1ba7bb51`, matching successful release workflow `34067357201`; current paging, manual-entry, and completion-display code was inspected. | Mac update is installed and previously exercised while paired. TestFlight 1.0.1 (20260906233635) is available to Kent. Physical iPhone behavior was not exercised in this session; no further native change is currently needed by the server fixes. |
 
 ## Architecture to retain
@@ -1496,8 +1498,10 @@ investigation; the remaining gaps are stated here.
     a generalized "sole bottleneck" claim, and posting a team report cannot
     establish a role assignment. The outcome learner now preserves those limits
     in future patterns. No stored feedback or existing todos were rewritten.
-    `make build` passed; no tests were run. Deployment and natural observation
-    of this follow-up are pending. Kent's intended Uride scope is still needed.
+    `make build` passed; no tests were run. Shipped as `7edb4abc` in revision
+    `maraithon-00241-t2z`, successful workflow `34091591196`, serving 100% of
+    traffic. Its Chief recovered to idle at 06:40:36. Natural intake behavior
+    remains to be observed. Kent's intended Uride scope is still needed.
 
     The same bounded review confirmed revision 240's normal brief-save path:
     three new briefs completed at 06:24:25, 06:24:47, and 06:25:05 without errors.
@@ -1513,8 +1517,8 @@ investigation; the remaining gaps are stated here.
 
 ## Delivery state
 
-Current server: `maraithon-00240-hn2`, code through `054d214f`, deployed by
-successful workflow `34090192946`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00241-t2z`, code through `7edb4abc`, deployed by
+successful workflow `34091591196`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
