@@ -2069,8 +2069,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     jobs =
       BackgroundJob
       |> where([job], job.id in ^reason_job_ids)
+      |> select([job], %{id: job.id, status: job.status})
       |> Repo.all()
-      |> Enum.map(&BackgroundJob.hydrate_payloads/1)
 
     cond do
       length(jobs) != length(reason_job_ids) ->
@@ -2083,11 +2083,23 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         {:pending, Enum.count(jobs, &(&1.status in @active_statuses))}
 
       Enum.all?(jobs, &(&1.status == "completed")) ->
-        ordered_results =
-          reason_job_ids
-          |> Enum.map(fn id -> Enum.find(jobs, &(&1.id == id)).result || %{} end)
+        # Pending finalizers only need lifecycle state. Load and verify the
+        # encrypted source bundles and results once every child is complete.
+        # The second status predicate also rejects a changed child snapshot.
+        results_by_id =
+          BackgroundJob
+          |> where([job], job.id in ^reason_job_ids and job.status == "completed")
+          |> Repo.all()
+          |> Map.new(fn stored ->
+            job = BackgroundJob.hydrate_payloads(stored)
+            {job.id, job.result || %{}}
+          end)
 
-        {:ok, ordered_results}
+        if map_size(results_by_id) == length(reason_job_ids) do
+          {:ok, Enum.map(reason_job_ids, &Map.fetch!(results_by_id, &1))}
+        else
+          {:error, :source_discovery_child_invalid_status}
+        end
 
       true ->
         {:error, :source_discovery_child_invalid_status}
