@@ -411,6 +411,12 @@ defmodule Maraithon.Todos.Intelligence do
          operator explicitly asked Maraithon to track. Describe that actual ask;
          do not assign the other person's entire task to the operator or invent
          claims such as "only you can unblock this". Unknown ownership means skip.
+       - Apply the ownership check to updates as well as creates. An existing
+         automatically generated todo, its owner_user_id, an earlier model
+         decision, or an inferred relationship memory is not proof of a personal
+         assignment or role. Matching saved work does not establish user approval.
+         A role mapping needs an explicit user instruction or a source statement
+         identifying the operator; do not infer it from previous generated copy.
        - Use source bodies and metadata when available. Do not infer finance, tax,
          urgency, or relationship context from an ambiguous subject token alone.
        - For Gmail and content-sourced candidates, distinguish actual work from
@@ -639,6 +645,8 @@ defmodule Maraithon.Todos.Intelligence do
       context. A channel-wide "please review" or "still open, owner: support_team"
       does not assign the work to the operator. Require a direct ask, a verified
       role assignment, or the operator's explicit request to track that work.
+      An automated team-task template saying "Do this" or "when you have done it"
+      addresses that task's owner; those words alone do not identify the operator.
       The positive admission rules below apply only after this ownership check.
     - In this intake, an explicit outstanding obligation is a positive admission
       signal, not merely a reason to keep considering the item. Return create or
