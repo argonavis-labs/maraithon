@@ -83,6 +83,7 @@ enum ProductionDataSync {
         }
 
         try modelContext.save()
+        ETagStore.shared.set(listing.etag, for: MobileAPIClient.ETagKey.todos(includeCards: includeCards))
         keepValidator = listing.isComplete
     }
 

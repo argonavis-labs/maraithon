@@ -119,6 +119,8 @@ struct MobileAPIClient: Sendable {
     struct TodoListing: Sendable {
         let todos: [RemoteTodo]
         let isComplete: Bool
+        /// The first page's collection validator, awaiting a successful local save.
+        let etag: String?
     }
 
     /// Endpoint keys for the ETag store. Todos keys vary by `include_cards`
@@ -131,8 +133,9 @@ struct MobileAPIClient: Sendable {
         static let chatThreads = "chat-threads-v2"
 
         static func todos(includeCards: Bool) -> String {
-            // Refetch once so existing completed rows acquire their resolution note.
-            includeCards ? "todos.v5.cards" : "todos.v5"
+            // Older builds persisted page one's validator before the full sync
+            // saved. Refetch once to repair caches interrupted by app termination.
+            includeCards ? "todos.v6.cards" : "todos.v6"
         }
     }
 
@@ -1157,6 +1160,8 @@ struct MobileAPIClient: Sendable {
     /// key; that single response is treated as the complete set.
     /// A page consumer receives smaller batches so refreshed work is usable
     /// while later pages, with their full decision context, are still loading.
+    /// The returned validator is not persisted here: the sync owner must save
+    /// the complete collection before committing `TodoListing.etag`.
     func listTodos(
         sessionToken: String,
         includeCards: Bool,
@@ -1169,6 +1174,7 @@ struct MobileAPIClient: Sendable {
         let maxPages = 5_000 / pageSize
         var offset = 0
         var todos: [RemoteTodo] = []
+        var collectionETag: String?
 
         for page in 0..<maxPages {
             try Task.checkCancellation()
@@ -1177,12 +1183,16 @@ struct MobileAPIClient: Sendable {
             // opt-in so older app builds retain full closed-item context.
             let offsetQuery = offset > 0 ? "&offset=\(offset)" : ""
             let cardScopeQuery = includeCards ? "&open_cards_only=true" : ""
-            let response: TodosResponse = try await send(
+            let result = try await sendResponse(
                 path: "/todos?limit=\(pageSize)\(offsetQuery)&status=all&sort=rank&dir=desc&include_cards=\(includeCards)\(cardScopeQuery)",
                 sessionToken: sessionToken,
                 etagKey: (conditional && page == 0) ? ETagKey.todos(includeCards: includeCards) : nil,
                 responseType: TodosResponse.self
             )
+            let response = result.value
+            if page == 0 {
+                collectionETag = result.etag
+            }
 
             try Task.checkCancellation()
             try await onPage?(response.todos)
@@ -1190,17 +1200,17 @@ struct MobileAPIClient: Sendable {
 
             // No pagination object -> old server; the response is the full set.
             guard response.pagination != nil else {
-                return TodoListing(todos: todos, isComplete: true)
+                return TodoListing(todos: todos, isComplete: true, etag: collectionETag)
             }
 
             if response.todos.count < pageSize {
-                return TodoListing(todos: todos, isComplete: true)
+                return TodoListing(todos: todos, isComplete: true, etag: collectionETag)
             }
 
             offset += pageSize
         }
 
-        return TodoListing(todos: todos, isComplete: false)
+        return TodoListing(todos: todos, isComplete: false, etag: nil)
     }
 
     func listGoals(
@@ -1465,6 +1475,31 @@ struct MobileAPIClient: Sendable {
         etagKey: String? = nil,
         responseType: Response.Type
     ) async throws -> Response {
+        let response = try await sendResponse(
+            path: path,
+            method: method,
+            sessionToken: sessionToken,
+            body: body,
+            etagKey: etagKey,
+            responseType: responseType
+        )
+        if let etagKey {
+            // A decoded 200 without a validator invalidates the previous one.
+            ETagStore.shared.set(response.etag, for: etagKey)
+        }
+        return response.value
+    }
+
+    /// Return the validator without persisting it. Paginated sync must commit
+    /// it only after every page and the final reconciliation have been saved.
+    private func sendResponse<Response: Decodable>(
+        path: String,
+        method: String = "GET",
+        sessionToken: String? = nil,
+        body: RequestBody? = nil,
+        etagKey: String? = nil,
+        responseType: Response.Type
+    ) async throws -> (value: Response, etag: String?) {
         let baseString = baseURL.absoluteString.hasSuffix("/")
             ? baseURL.absoluteString
             : baseURL.absoluteString + "/"
@@ -1510,13 +1545,7 @@ struct MobileAPIClient: Sendable {
             } else {
                 decoded = try Self.decoder.decode(Response.self, from: data)
             }
-            if let etagKey {
-                // Store the fresh validator; a 200 without one means the
-                // server stopped supporting ETags, so drop the stale value
-                // instead of replaying it forever.
-                ETagStore.shared.set(httpResponse.value(forHTTPHeaderField: "ETag"), for: etagKey)
-            }
-            return decoded
+            return (decoded, httpResponse.value(forHTTPHeaderField: "ETag"))
         case 304:
             throw MobileAPIError.notModified
         case 401:
