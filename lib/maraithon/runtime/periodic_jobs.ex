@@ -34,6 +34,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.SlackConversationReconciler
   alias Maraithon.Runtime.SourceAccountAdmission
   alias Maraithon.Runtime.SourceGraphCleanup
+  alias Maraithon.Runtime.SourceClosureRecovery
   alias Maraithon.Runtime.TodoCompletionSweep
   alias Maraithon.Runtime.TokenRefresher
   alias Maraithon.Runtime.WatchRenewer
@@ -1745,18 +1746,29 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          true <- account.user_id == job.user_id,
          {:ok, replay} <-
            source_replay_from_payload(account, job.payload || %{}, "closure"),
-         {:ok, result} <-
-           SourceAccountClosure.acquire(account,
-             acquisition_job_id: job.id,
-             defer_watermark_commit: true,
-             source_replay: replay
-           ) do
+         {:ok, result} <- acquire_or_resume_closure(account, job, replay) do
       maybe_enqueue_closure_reason(job, account, result)
     else
       nil -> {:error, :source_account_not_found}
       false -> {:error, :source_account_user_mismatch}
       {:error, _reason} = error -> error
       {:skip, _reason} = skip -> normalize_work_result(skip)
+    end
+  end
+
+  defp acquire_or_resume_closure(account, job, replay) do
+    recovery = if is_nil(replay), do: SourceClosureRecovery.recover(account, job), else: :none
+
+    case recovery do
+      {:ok, result} ->
+        {:ok, result}
+
+      :none ->
+        SourceAccountClosure.acquire(account,
+          acquisition_job_id: job.id,
+          defer_watermark_commit: true,
+          source_replay: replay
+        )
     end
   end
 
@@ -2163,49 +2175,53 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   defp enqueue_closure_fanouts(acquisition_job, account, handoffs) do
     handoffs
-    |> Enum.reduce_while({:ok, []}, fn handoff, {:ok, jobs} ->
-      fanout_index = Map.get(handoff, "fanout_index")
+    |> Enum.reduce_while({:ok, []}, fn
+      {:reuse, %BackgroundJob{status: "completed"} = job}, {:ok, jobs} ->
+        {:cont, {:ok, [job | jobs]}}
 
-      attrs = %{
-        user_id: account.user_id,
-        queue: @model_queue,
-        dedupe_key:
-          source_closure_reason_dedupe_key(
-            acquisition_job.id,
-            fanout_index,
-            Map.get(handoff, "fanout_count"),
-            Map.get(handoff, "source_partition_index"),
-            Map.get(handoff, "source_partition_count"),
-            Map.get(handoff, "todo_batch_index"),
-            Map.get(handoff, "todo_batch_count"),
-            account.id
-          ),
-        partition_key:
-          source_closure_reason_partition_key(
-            account.user_id,
-            acquisition_job.id,
-            fanout_index
-          ),
-        rate_limit_key: "model",
-        max_attempts: 3,
-        scheduled_at: database_now!(),
-        result: replay_activity_result(handoff),
-        payload: Map.put(handoff, "source_graph_publication", @source_graph_publication)
-      }
+      handoff, {:ok, jobs} ->
+        fanout_index = Map.get(handoff, "fanout_index")
 
-      case enqueue_cycle_job(@todo_account_closure_reason_job, attrs) do
-        {:ok, %BackgroundJob{} = reason_job} ->
-          valid? =
-            get_in(reason_job.payload || %{}, ["acquisition_job_id"]) == acquisition_job.id and
-              get_in(reason_job.payload || %{}, ["fanout_index"]) == fanout_index
+        attrs = %{
+          user_id: account.user_id,
+          queue: @model_queue,
+          dedupe_key:
+            source_closure_reason_dedupe_key(
+              acquisition_job.id,
+              fanout_index,
+              Map.get(handoff, "fanout_count"),
+              Map.get(handoff, "source_partition_index"),
+              Map.get(handoff, "source_partition_count"),
+              Map.get(handoff, "todo_batch_index"),
+              Map.get(handoff, "todo_batch_count"),
+              account.id
+            ),
+          partition_key:
+            source_closure_reason_partition_key(
+              account.user_id,
+              acquisition_job.id,
+              fanout_index
+            ),
+          rate_limit_key: "model",
+          max_attempts: 3,
+          scheduled_at: database_now!(),
+          result: replay_activity_result(handoff),
+          payload: Map.put(handoff, "source_graph_publication", @source_graph_publication)
+        }
 
-          if valid?,
-            do: {:cont, {:ok, [reason_job | jobs]}},
-            else: {:halt, {:error, :source_closure_stale_handoff}}
+        case enqueue_cycle_job(@todo_account_closure_reason_job, attrs) do
+          {:ok, %BackgroundJob{} = reason_job} ->
+            valid? =
+              get_in(reason_job.payload || %{}, ["acquisition_job_id"]) == acquisition_job.id and
+                get_in(reason_job.payload || %{}, ["fanout_index"]) == fanout_index
 
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
+            if valid?,
+              do: {:cont, {:ok, [reason_job | jobs]}},
+              else: {:halt, {:error, :source_closure_stale_handoff}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
     end)
     |> case do
       {:ok, jobs} -> {:ok, Enum.reverse(jobs)}

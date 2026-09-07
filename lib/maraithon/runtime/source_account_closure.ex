@@ -17,6 +17,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   alias Maraithon.Runtime.GmailSourceReplay
   alias Maraithon.Runtime.SlackSourceReplay
   alias Maraithon.Runtime.SourceAccountDiscovery
+  alias Maraithon.Runtime.SourceClosureRecovery
   alias Maraithon.Runtime.TodoCompletionSweep
   alias Maraithon.Todos.CrossSourceCompletion
   alias Maraithon.Todos.Todo
@@ -38,8 +39,10 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
 
   def acquire(%ConnectedAccount{status: "connected"} = account, opts) when is_list(opts) do
     with {:ok, _replay} <- validate_replay_opts(account, opts),
+         lower_cursor <- live_lower_cursor(account, opts),
          {:ok, bundle, proposals} <- TodoCompletionSweep.acquire_account_delta(account, opts),
          watermarks <- serialize_watermarks(proposals, account.id),
+         watermarks <- bind_lower_cursor(watermarks, lower_cursor),
          :ok <- validate_watermarks(watermarks),
          bundle <- maybe_filter_settled_source_items(bundle, account, opts),
          {:ok, source_partitions} <- SourceAccountDiscovery.partition_bundle(bundle),
@@ -144,6 +147,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
      %{
        outcome: "fanout_ready",
        closure_partitioning_version: @partitioning_version,
+       closure_evaluation_version: SourceClosureRecovery.evaluation_version(),
        account_id: account.id,
        source_items: length(source_refs),
        source_partition_count: length(source_partitions),
@@ -640,6 +644,25 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   end
 
   defp serialize_watermarks(_proposals, _account_id), do: []
+
+  defp live_lower_cursor(account, opts) do
+    if is_map(Keyword.get(opts, :source_replay)) do
+      :replay
+    else
+      kind =
+        if String.starts_with?(account.provider, "slack:"),
+          do: "slack_closure_watermark",
+          else: "gmail_closure_watermark"
+
+      cursor = SourceCursors.get(account.id, kind)
+      cursor && cursor.value
+    end
+  end
+
+  defp bind_lower_cursor(watermarks, :replay), do: watermarks
+
+  defp bind_lower_cursor(watermarks, lower),
+    do: Enum.map(watermarks, &Map.put(&1, "expected_lower_value", lower))
 
   defp validate_watermarks([
          %{"account_id" => account_id, "kind" => kind, "value" => value}
