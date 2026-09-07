@@ -789,8 +789,10 @@ for `kent@runner.now`, using the manual-first development policy.
     were run. Commit `0137657e` deployed in revision `maraithon-00223-9vh`
     through successful workflow `34074912781`. At 02:08:57, observer `ztf7l`
     verified account 2's new 184-child publication reused all seven completed
-    predecessor jobs and had completed three fresh children. Account 1's
-    replacement acquisition was still preparing. Full settlement remains open.
+    predecessor jobs and had completed three fresh children. At 02:10:57,
+    account 1 also published its replacement, reusing all 41 completed jobs.
+    Both graphs together preserved 48 completed batches and had finished nine
+    additional batches. Full settlement remains open.
 
 47. **Waiting finalizers repeatedly load encrypted child payloads.**
     `completed_child_results/1` loaded full background-job rows and verified
@@ -1584,7 +1586,7 @@ unchanged with seven completed, 171 cancelled, and six failed children,
 including two ambiguous provider outcomes. Account 1's predecessor retained
 41 completed children and was fully terminal; its replacement acquisition
 `1e5c5f04-bded-4823-b346-dff2e2eafc63` was running. Slack's existing 23-child
-scan completed and finalized normally at 02:06:38.
+scan completed and its closure cursor advanced at 02:06:43.911.
 
 The installed Mac app remained paired and showed 899 active work items.
 Opening `/chat` in Chrome redirected to the signed-out landing page, so the
@@ -1592,3 +1594,14 @@ interactive chat check remains pending; no login email or chat was sent.
 No request with HTTP status 429 or higher appeared in the request-log query
 from 01:46 through approximately 02:05. The earlier intermittent rejection
 cause remains unresolved.
+
+At 02:10:57, `ztf7l` verified both resumed Gmail publications. Account 1
+retained all 41 completed predecessor jobs and had 42/276 children complete,
+two running, and 232 pending. Account 2 retained all seven predecessor jobs
+and had 15/184 complete, three running, and 166 pending. Neither new graph
+had an error. The original jobs, including the four ambiguous outcomes,
+remained terminal and unchanged. All 64 partitions were ready/live, no task
+awaited termination, and 1,168 outcome-known Effects had matching evidence.
+The Gmail cursors still awaited full settlement. The observer remains live;
+its next samples include the new revision's scheduled checkpoint and SQL
+interval. No automated tests were run; `make build` passed for `0137657e`.
