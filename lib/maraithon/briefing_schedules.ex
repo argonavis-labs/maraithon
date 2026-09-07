@@ -12,7 +12,7 @@ defmodule Maraithon.BriefingSchedules do
 
   @briefing_behaviors ["ai_chief_of_staff", "founder_followthrough_agent"]
   @default_timezone_offset_hours -5
-  @default_morning_hour 8
+  @default_morning_hour 7
   @default_morning_minute 0
   @default_end_of_day_hour 18
   @default_end_of_day_minute 0

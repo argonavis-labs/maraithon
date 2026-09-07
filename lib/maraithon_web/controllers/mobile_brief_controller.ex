@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.MobileBriefController do
   use MaraithonWeb, :controller
 
+  alias Maraithon.BriefingSchedules
   alias Maraithon.Briefs
   alias MaraithonWeb.MobileJSON
 
@@ -13,11 +14,21 @@ defmodule MaraithonWeb.MobileBriefController do
 
     briefs =
       user_id
-      |> Briefs.list_recent_for_user(limit: limit * 2)
-      |> Enum.filter(&(cadence == "all" or &1.cadence == cadence))
-      |> Enum.take(limit)
+      |> Briefs.list_recent_for_user(limit: limit, cadence: cadence)
 
-    json(conn, %{briefs: Enum.map(briefs, &MobileJSON.brief/1)})
+    schedule = BriefingSchedules.summarize_for_prompt(user_id)
+
+    json(conn, %{
+      briefs: Enum.map(briefs, &MobileJSON.brief/1),
+      morning_schedule: %{
+        configured: schedule.configured,
+        hour: schedule.morning.hour_local,
+        minute: schedule.morning.minute_local,
+        display_time: schedule.morning.display_time_local,
+        timezone: schedule.timezone_name,
+        timezone_label: schedule.local_timezone
+      }
+    })
   end
 
   def show(conn, %{"id" => brief_id}) do

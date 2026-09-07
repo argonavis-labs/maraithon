@@ -217,8 +217,17 @@ defmodule Maraithon.Briefs do
   def list_recent_for_user(user_id, opts \\ []) when is_binary(user_id) do
     limit = Keyword.get(opts, :limit, 20)
 
-    Brief
-    |> where([b], b.user_id == ^user_id)
+    query = Brief |> where([b], b.user_id == ^user_id)
+
+    query =
+      case Keyword.get(opts, :cadence) do
+        cadence when is_binary(cadence) and cadence != "all" ->
+          where(query, [b], b.cadence == ^cadence)
+
+        _ -> query
+      end
+
+    query
     |> order_by([b], desc: b.scheduled_for, desc: b.inserted_at)
     |> limit(^limit)
     |> Repo.all()

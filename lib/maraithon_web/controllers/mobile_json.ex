@@ -76,6 +76,7 @@ defmodule MaraithonWeb.MobileJSON do
     %{
       id: brief.id,
       cadence: brief.cadence,
+      local_date: get_in(brief.metadata || %{}, ["brief_input", "date"]),
       title: brief.title,
       summary: brief.summary,
       body: brief.body,

@@ -18,7 +18,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   alias Maraithon.Todos
 
   @default_timezone_offset_hours -5
-  @default_morning_hour 8
+  @default_morning_hour 7
   @default_end_of_day_hour 18
   @default_weekly_day 5
   @default_weekly_hour 16

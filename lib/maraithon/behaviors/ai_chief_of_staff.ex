@@ -347,6 +347,21 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       Enum.reduce(keep_ids, %{}, fn skill_id, acc ->
         case Map.fetch(state.skill_states, skill_id) do
           {:ok, existing} ->
+            # Saved history survives a restart, but the daily clock follows the
+            # current persisted schedule, including its daylight-saving zone.
+            existing =
+              if skill_id == "morning_briefing" do
+                schedule =
+                  desired_configs
+                  |> Map.fetch!(skill_id)
+                  |> Maraithon.ChiefOfStaff.Skills.MorningBriefing.init()
+                  |> Map.take([:timezone, :timezone_offset_hours, :morning_hour, :morning_minute])
+
+                Map.merge(existing, schedule)
+              else
+                existing
+              end
+
             Map.put(acc, skill_id, existing)
 
           :error ->

@@ -37,7 +37,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   require Logger
 
   @default_timezone_offset_hours -5
-  @default_morning_hour 8
+  @default_morning_hour 7
   @default_morning_minute 0
   @default_email_scan_limit 100
   @default_slack_channel_scan_limit 16
@@ -894,6 +894,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "held_interruptions" => held_interruptions_for_prompt(user_id),
         "system_notices" => self_heal_notices_for_prompt(user_id)
       },
+      "todo_instructions" =>
+        user_id
+        |> Memory.list_items(kind: "instruction", tag: "todo_scope", limit: 16)
+        |> Enum.filter(&(&1.author_type == "user"))
+        |> Enum.map(&%{"title" => &1.title, "content" => &1.content}),
       "user_identity" => Maraithon.UserIdentity.prompt_block(user_id),
       "relationships" =>
         user_id
@@ -1431,6 +1436,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         sections. Do not list promotional email, sender-only guesses, or email with missing body
         evidence. Name account or channel counts only when those counts change what the operator
         should do.
+
+        Personal scope contract:
+        Apply todo_instructions before ranking or recommending work. Explicit user instructions
+        override learned relevance, old briefs, generated todos, and team/channel membership.
+        Never present team escalations as the user's own decisions without a source-backed
+        personal ask or commitment. These instructions govern the body and summary, not just todos.
+
+        Daily guide contract:
+        The summary gives an overall read of the day in two or three plain sentences using
+        the user's commitments, calendar, preferences, and current priorities. Always include
+        Today's Schedule in chronological order, distinguishing a verified empty calendar from
+        missing coverage. Add Who You're Meeting when meetings exist: relevant relationship
+        history, open promises, and a useful discussion point for internal and external attendees.
+        Use user_identity and saved context to explain why the meeting matters to this user.
+        Keep calendar rows concise; richer person context belongs in Who You're Meeting.
 
         Meeting enrichment rule:
         The brief input includes meeting_prep, which is prepared relationship-first. Use saved
@@ -5880,6 +5900,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {"generated_at", 300},
         {"timezone_offset_hours", 100},
         {"timezone", 300},
+        {"todo_instructions", 6_000},
         {"schedule_coverage", 5_500},
         {"meeting_prep", 5_500},
         {"commercial_coverage", 5_500},
@@ -5916,7 +5937,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp compact_prompt_sections(input) do
     base =
       input
-      |> Map.take(["date", "generated_at", "timezone_offset_hours", "timezone"])
+      |> Map.take(["date", "generated_at", "timezone_offset_hours", "timezone", "todo_instructions"])
       |> compact_prompt_value()
 
     section_inputs =

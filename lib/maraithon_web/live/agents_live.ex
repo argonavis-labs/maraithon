@@ -2179,7 +2179,7 @@ defmodule MaraithonWeb.AgentsLive do
   defp chief_source_labels, do: ["Gmail", "Calendar", "Slack", "News"]
 
   defp morning_brief_schedule(%{config: config}) when is_map(config) do
-    hour = config |> Map.get("morning_brief_hour_local") |> parse_integer(8) |> clamp_hour()
+    hour = config |> Map.get("morning_brief_hour_local") |> parse_integer(7) |> clamp_hour()
     minute = config |> Map.get("morning_brief_minute_local") |> parse_integer(0) |> clamp_minute()
     timezone_name = Map.get(config, "timezone") || Map.get(config, "timezone_name")
     timezone_offset = config |> Map.get("timezone_offset_hours") |> parse_integer(-5)
@@ -2195,9 +2195,9 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp morning_brief_schedule(_agent) do
     %{
-      hour: 8,
+      hour: 7,
       minute: 0,
-      display_time_local: "8:00 AM",
+      display_time_local: "7:00 AM",
       timezone: Timezones.selected_value(nil, -5),
       local_timezone: "UTC-05:00"
     }

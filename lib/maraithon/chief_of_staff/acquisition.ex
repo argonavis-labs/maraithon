@@ -4266,7 +4266,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
     hour =
       skill_ids
-      |> first_skill_integer(skill_configs, "morning_brief_hour_local", 8)
+      |> first_skill_integer(skill_configs, "morning_brief_hour_local", 7)
       |> then(fn value -> if value in 0..23, do: value, else: 8 end)
 
     minute =
