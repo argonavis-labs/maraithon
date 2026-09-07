@@ -17,7 +17,13 @@ defmodule Maraithon.Runtime.SourceClosureRecovery do
   @acquire "runtime_partition:source_account_closure_acquire"
   @reason "runtime_partition:source_account_closure_reason"
   @finalize "runtime_partition:source_account_closure_finalize"
-  @interrupted_errors ~w(provider_outcome_ambiguous source_graph_abandoned source_closure_child_failed)
+  # Exhausted model retries leave the same sealed source window unfinished.
+  # Recover those children in fresh jobs too, retaining the proven completed
+  # siblings instead of acquiring and evaluating the entire window again.
+  @interrupted_errors ~w(
+    provider_outcome_ambiguous source_graph_abandoned source_closure_child_failed
+    timeout cross_source_completion_incomplete_decisions
+  )
   @result_fields ~w(account_id source_items source_partition_count todo_count todo_batch_count fanout_count)a
 
   # Version 2 confines decisions to the sealed bundle. Version 1 could include

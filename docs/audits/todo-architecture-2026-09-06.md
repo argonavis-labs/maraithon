@@ -1081,6 +1081,23 @@ for `kent@runner.now`, using the manual-first development policy.
     were not run under the manual-first policy. Read-only projection of the
     changed resolver and live UI verification remain in progress.
 
+60. **Exhausted model retries discard completed closure batches.**
+    Gmail account 1 retained 296/299 results after revision 231's rollout.
+    One additional child completed, but two exhausted their three attempts
+    with `timeout`. The finalizer was abandoned. Recovery's error allowlist
+    recognized rollout interruptions but excluded model timeouts and the
+    observed `cross_source_completion_incomplete_decisions` failure. It
+    therefore rejected the reusable graph and acquired a fresh 305-source,
+    905-todo window with 276 children and zero reused results at 04:06 UTC.
+
+    Those two bounded evaluation failures now qualify for the existing
+    immutable recovery path. Only failed children get fresh jobs. Completed
+    siblings still require matching exact task outcome evidence; the sealed
+    source identities, unchanged lower cursor, and full finalizer coverage
+    remain mandatory. Nothing resets a failed task or advances a cursor by
+    assertion. `make build` passed; tests were not run. Deployment and live
+    recovery verification remain in progress.
+
 ## Delivery state
 
 Current server: `maraithon-00231-s8p`, code through `35d1c852`, deployed by
@@ -1986,3 +2003,29 @@ All 64 partitions remained ready/live and 1,188 outcome-known Effects had
 matching evidence. The Chief's 03:48:20 wake completed its Effects by 03:48:54.
 The current-revision observation continues through its checkpoint and SQL
 window.
+
+
+Observer `vvs7d` completed at 03:55:36 UTC. Gmail account 1 reached 296/299
+before revision 231 interrupted two running children. Its 03:45–03:55 SQL
+window totaled 96.78 seconds: claim renewal 13.70%, task activation 13.57%,
+node-authority locking 11.31%, and catalog readiness 2.04%. The final minute
+crossed the rollout, so this is not a steady-revision comparison.
+
+Revision 231 observer `4q4jm` sampled 03:59:08–04:07:12 UTC. All five samples
+had 64 ready partitions with live leases and no termination-requested tasks.
+The Chief completed Effects at 03:59:34 and checkpointed at 04:05:53 without
+a snapshot-persist failure; 1,190 outcome-known Effects had matching evidence.
+Recurring schedules advanced on their intervals. Slack processed a new
+23-child, two-source delta completely and returned to empty deltas, as did
+Gmail account 2. Account 1's timeout/reacquisition is finding 60; its closure
+cursor remains September 2, so whole-product catch-up is not complete.
+
+The 04:01:10–04:07:13 SQL interval stayed on revision 231 and totaled 111.21
+seconds. The leading categories were encrypted job reads (13.81%), task
+activation (12.34%), node-authority locking (10.11%), and user locks (9.74%).
+Claim renewal was 4.00%; catalog verification was outside the top ten.
+This includes the avoidable full reacquisition, so it is not an idle-load
+benchmark. The routing projection `99k5p` separately confirmed Michael's
+address, personal Gmail account, and original thread, while DuraServ resolved
+to no address with direct send disabled. It used only metadata GETs and pure
+routing helpers; no draft or message was created.
