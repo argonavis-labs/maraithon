@@ -697,8 +697,11 @@ for `kent@runner.now`, using the manual-first development policy.
     Read-only execution `4tqr2` confirmed three pairs for the same named work:
     each pair has one fractional Slack timestamp and another ending in
     `.000000`. The rows were inserted on September 5, about 45 minutes apart.
-    Current source discovery preserves the raw timestamp. Status: historical
-    source provenance and the creation path still need investigation before
+    Current source discovery preserves the raw timestamp. Execution `2m885`
+    traced the rounded identities to three CRM mutation observations inserted
+    at 14:19 on September 5. Their stored `metadata.ts` already ends in
+    `.000000`, their thread timestamps are absent, and their provider event
+    IDs are null. Status: historical ingress provenance and the creation path still need investigation before
     a repair can safely choose canonical identities. No todo was merged,
     dismissed, deleted, or marked complete during this inspection.
 
@@ -706,15 +709,50 @@ for `kent@runner.now`, using the manual-first development policy.
     ten-minute `h9k56` SQL window measured 3,640 calls to the full ranked
     contact-scan query, consuming 84.64 seconds (28.01% of SQL time).
     `Crm.people_for_contact_scan/1` is the matching query; single-contact
-    callers reload the full collection for every lookup. Status: tracing
-    ingestion and serializer callers and removing repeated reads. Separate
-    follow-up work is needed for CRM refresh jobs launched after failed or
-    already-completed relationship ingestion.
+    callers reload the full collection for every lookup. The first correction
+    batches message list/search/chat serialization, pending-reply observations,
+    and the identifiers within a person upsert. All use the existing ranked
+    matcher, retaining contact normalization and match ordering. Status:
+    `9403199d` passed `make build` and deployed in revision `maraithon-00221-npj`
+    through successful workflow `34071688696`. Execution `2m885` then identified
+    the principal workload: 163 new Calendar observations contained 3,586
+    participants, versus twelve Gmail participants and one Slack participant.
+    `01d41dc5` resolves existing participants once per observation, while misses
+    use the ordinary fresh lookup/upsert path and can see earlier creates.
+    This follow-up passed compile and is committed locally; its rollout is
+    held while the source scans recover from the preceding deployment.
+    Production savings are not yet measured. Tests were not run.
+
+45. **Relationship attempts enqueue follow-up work without a learned result.**
+    The handler unconditionally enqueued communication scoring, graph refresh,
+    person deduplication, goal discovery, and enrichment after attempting a
+    window. This includes failed attempts and already-completed replays.
+
+    Only a successful result with a positive observation count now triggers
+    those jobs. Failures keep their normal retry result, and completed-window
+    replays remain no-ops. Status: `4cfc45fc` passed compile and was pushed in
+    workflow `34071688696`, revision 221. No tests were run. Execution `2m885`
+    found all thirteen inspected relationship jobs had positive observation
+    counts, so this defect did not explain the measured refresh burst. It
+    remains a correction to failure and replay handling.
+
+46. **A rollout can restart an entire completion graph.** Revision 221's
+    rollout interrupted six closure model calls, all retained as
+    `provider_outcome_ambiguous` at 01:05:27. The existing graph-failure policy
+    abandons the siblings and reacquires the source window. The preceding
+    sample had Gmail at 38/300 and 36/175 and Slack at 22/25 completed children.
+    No cursor advanced. Previously persisted completions remain evidence-backed.
+
+    Status: no further server push is planned while the replacement scans
+    recover. Investigate retaining completed coverage and retrying only
+    interrupted reasoning under a new task assignment, while preserving the
+    immutable published graph, outcome evidence, and source-cycle proof rules.
+    No ambiguous outcome has been relabeled and no cursor has been forced.
 
 ## Delivery state
 
-Current server: `maraithon-00220-k78`, code through `e06dd8ae`, deployed by
-successful workflow `34070458277`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00221-npj`, code through `9403199d`, deployed by
+successful workflow `34071688696`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -1324,3 +1362,30 @@ uses the same model for primary, chat, and routing, which sends these calls
 through the same reasoning bucket under the current model-based selection.
 Capacity changes must account for interactive and Chief of Staff work as well
 as source workers. No concurrency setting has been changed in this check.
+
+Revision 220's observer `h9k56` completed successfully at 00:54:04. It retained
+64 live/ready partitions throughout and recorded the 00:53:02 checkpoint,
+with 1,154 outcome-known Effects and no missing evidence. The subsequent
+`rnsgx` watch confirmed another checkpoint at 01:03:03 and 1,156 proven Effects.
+Its final sample caught revision 221's rollout, with 52 draining and twelve
+unassigned partitions, and is not a steady-state health observation. Revision
+221 recovered the Chief at 01:06:46.657; recovery observer `z9zdf` is running.
+
+Read-only source proof `2m885` completed successfully at 01:06:11. Two more
+automatic completions have matching source identities, full stored quotes,
+and exact task outcome evidence. Slack todo `c98ae5dd-2450-45ff-ad85-95e02de06977`
+("Review the driver documents blocking Stalonne Kaze Fotsing (Sudbury)") closed
+at 01:00:47 with source Task #357's explicit closed message. Gmail todo
+`3b802a53-3e68-442f-9dfe-14e6ecb97481` (Loewith Greenberg onboarding) closed at
+01:00:16 with Charlie's meeting-invitation reply. Their completing jobs were
+`7dcb3c45-fd28-4b1f-a418-e18492d7675c` and
+`d63c23be-bfbf-4c5c-8b05-4d193507476e`. A different Gmail partition covering the
+same todo did not contain that quote; it was not the completing job.
+
+Cloud Run rejected eleven requests between 00:47 and 00:51, including the Mac
+page and health requests. The container maximum-request-concurrency metric
+reported only one or two concurrent requests in that interval, below the
+configured forty. One instance remained allocated to revision 220; the older
+219 instance also remained allocated. No further 429 appeared in the check
+from 00:54 onward. The rejection cause is still unresolved; increasing the
+concurrency setting is not supported by these observations.
