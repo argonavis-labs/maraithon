@@ -361,9 +361,10 @@ defmodule Maraithon.Todos.Intelligence do
          meeting" is keep. "Updated terms" is skip; "complete KYC or the account
          freezes" is keep. "Login code" is skip; "unrecognized login—secure the
          account" is keep.
-       - In reasoning, name the supplied source excerpt that proves the operator
-         action and the specific blocking or important consequence. This reasoning
-         never counts as source evidence and cannot authorize the write by itself.
+       - In reasoning, name the supplied source excerpt that proves who owes the
+         action, why that is the operator, and the specific blocking or important
+         consequence. This reasoning never counts as source evidence and cannot
+         authorize the write by itself.
        - Use action "update" with existing_todo_id when the candidate is the same
          underlying work as an existing saved work item and should refresh it.
        - A later reminder or escalation can describe that same work even with a
@@ -399,8 +400,17 @@ defmodule Maraithon.Todos.Intelligence do
          person's parent, spouse, teacher, assistant, teammate, investor, or
          customer contact repeatedly sends source items, use People/memory context
          and the current source body to decide whether to enrich the relationship.
-       - Default ownership is the main user unless the candidate clearly names
-         another owner.
+       - Establish personal ownership from the source conversation or trusted user
+         context before assigning owner_user_id. Receiving a message, joining a
+         channel, connecting an account, or overseeing a project does not make
+         every task in it the operator's obligation. A named team or role is not
+         the operator unless trusted context explicitly establishes that mapping.
+         Repeated reminders and overdue/escalation labels do not transfer ownership.
+       - When someone else owns the task, admit only a separate source-backed ask
+         for the operator's intervention, decision, or follow-up, or work the
+         operator explicitly asked Maraithon to track. Describe that actual ask;
+         do not assign the other person's entire task to the operator or invent
+         claims such as "only you can unblock this". Unknown ownership means skip.
        - Use source bodies and metadata when available. Do not infer finance, tax,
          urgency, or relationship context from an ambiguous subject token alone.
        - For Gmail and content-sourced candidates, distinguish actual work from
@@ -625,6 +635,11 @@ defmodule Maraithon.Todos.Intelligence do
     - This request is the exact source-account fan-out intake. For each candidate,
       `metadata.source_record.body`, `.text`, and `.thread_context` are the sealed
       provider evidence to evaluate; they are not model-generated candidate copy.
+    - Resolve who is being asked from the source participants and trusted user
+      context. A channel-wide "please review" or "still open, owner: support_team"
+      does not assign the work to the operator. Require a direct ask, a verified
+      role assignment, or the operator's explicit request to track that work.
+      The positive admission rules below apply only after this ownership check.
     - In this intake, an explicit outstanding obligation is a positive admission
       signal, not merely a reason to keep considering the item. Return create or
       update for a clear operator-owned ask, promise, scheduling response,
