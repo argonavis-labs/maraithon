@@ -5,14 +5,23 @@ rank them beside manually added work, and automatically close work when fresh
 evidence proves it was handled. Ship small changes to the single-user test app
 for `kent@runner.now`, using the manual-first development policy.
 
-Latest delivery (September 7): revision `maraithon-00234-g2q`,
-code `744ba7e1`, successful workflow `34084822177`. Intake now retrieves older
-matching work before deciding whether a reminder needs a new todo. Chat works; expired briefs
+Latest delivery (September 7): revision `maraithon-00236-cm5`,
+code `248bd58e`, successful workflow `34087225973`. Intake now retrieves older
+matching work before deciding whether a reminder needs a new todo, and requires
+source-backed personal ownership rather than defaulting team work to Kent.
+The latest prompt also excludes earlier generated copy as ownership proof; its
+natural model behavior remains to be observed. Chat works; expired briefs
 refresh; named email drafts no longer target digest senders; explicit mailboxes
 are retained; exhausted model retries can reuse completed closure batches.
-Remaining work includes Gmail account 1's full closure catch-up and repeated
-Slack escalation todos plus their personal ownership (findings 61–62). Revision 233's scheduled runtime cycle has
-passed the production checks. Account 2 and Slack have completed catch-up
+Gmail account 1's 276-batch backlog settled at 05:18:49, advancing its closure
+cursor from September 2 to September 7 04:05:17 UTC. Its next deltas also
+settled, and the cursor was current by 05:21:19. The reviewed reminder cleanup is complete: 725 duplicates consolidated into
+311 originals, with all 1,036 rows independently verified and 499 active todos
+remaining. The open scope question is whether routine team-owned Uride
+escalations belong on Kent's personal list (finding 62).
+Revision 233's scheduled runtime cycle passed the production checks; revision
+235 passed its recovery, scheduled Effects, checkpoint, source-delta, and
+SQL checks in observer `ltv7q`. Account 2 and Slack have completed catch-up
 and subsequent deltas. Browser and narrow compile checks passed; no test
 suites were run. Detailed findings and chronological evidence follow.
 
@@ -24,12 +33,12 @@ investigation; the remaining gaps are stated here.
 
 | Requirement | Authoritative evidence inspected | Current result |
 | --- | --- | --- |
-| Discover commitments and decisions from connected apps using deltas. | Current `PeriodicJobs`, `SourceAccountDiscovery`, and `SourceCycleSettlement` paths; production discovery cursors for both Gmail accounts and Slack; source-backed Chrome todo details. | Discovery is advancing. Gmail account 1 discovery was at September 7 04:13:28 UTC in observer 233's first sample. Its separate closure cursor still lags. |
-| Rank sourced work alongside manually entered todos and make it actionable. | Signed-in `/todos`, successful priority chat run `62321861`, original source threads in the Michael/Uride/DuraServ details, and the recorded Mac create/edit/complete round trip. Current shared reply routing and brief projections were inspected again. | Manual todo actions and sampled priorities were verified, but the Uride reminder review exposed duplicate and ownership gaps (61–62). Suggested commitments need the user's review; no third-party message was sent. |
-| Wake regularly and fan work out without blocking OTP ownership. | Current one-minute discovery/completion schedules, ten-minute Chief default, independent non-mailbox completion backstop, workload/account rotation, and live observer `74rhc`. | Revision 233 recovered at 04:15:00; its first two samples had 64 ready/live partitions and the second had six running tasks. Observer `74rhc` completed at 04:27:01 with a scheduled wake, two completed Effects, and the 04:25 checkpoint; all six samples retained 64 ready/live partitions. |
-| Close work only on current, matching evidence and keep the list current. | Current quote/time/relationship checks, row-locked stale-result rejection, immutable source-cycle settlement, sampled Abe Choi closure evidence from `f7ztc`, completed account-2/Slack cycles, and current Gmail graph status. | Evidence-backed sampled closures and two accounts' settled deltas are verified. Gmail account 1's complete catch-up is still required; its fresh 276-child graph had 46 complete at 04:26:57, with three pending timeout retries. |
-| Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded card serialization and Mac refresh timings, bounded fanout/prompt packing, live provider cache counters, completed-child reuse, and timeout-recovery projection `btwjn`. | Implemented and measured where noted. The timeout projection retained 297 results and retried two children; production completion of the current recovered graph remains outstanding. |
-| Ship small changes to the test app without staging or added deployment gates. | All 54 actual Git commit IDs cited in the findings are ancestors of deployed code `744ba7e1`; current `Makefile` maps `make deploy` to `deploy-fast`; workflow `34084822177` completed through the normal cached deployment path. | Shipped to revision 234 at 100% traffic. Compile/manual checks followed `docs/development-mode.md`; no test suites were run. |
+| Discover commitments and decisions from connected apps using deltas. | Current `PeriodicJobs`, `SourceAccountDiscovery`, and `SourceCycleSettlement` paths; production discovery cursors for both Gmail accounts and Slack; source-backed Chrome todo details. | Discovery is advancing. Gmail account 1 discovery is advancing in the September 7 05:19 window. Its closure backlog and following deltas settled, and its cursor is current. |
+| Rank sourced work alongside manually entered todos and make it actionable. | Signed-in `/todos`, successful priority chat run `62321861`, original source threads in the Michael/Uride/DuraServ details, and the recorded Mac create/edit/complete round trip. Current shared reply routing and brief projections were inspected again. | Manual todo actions and sampled priorities were verified. The 725 reviewed reminders are consolidated, with notes and source links retained and zero read-back mismatches. The latest ownership prompt is deployed; the intended scope of team escalations and its natural intake behavior remain open. No third-party message was sent. |
+| Wake regularly and fan work out without blocking OTP ownership. | Current one-minute discovery/completion schedules, ten-minute Chief default, independent non-mailbox completion backstop, workload/account rotation, and completed observer `ltv7q`. | Revision 235 recovered at 05:12:07. Scheduled Effects completed at 05:16:06 and 05:26:41, and its checkpoint persisted at 05:22:07. All eight samples retained 64 ready/live partitions, with no pending termination and no missing Effect evidence. |
+| Close work only on current, matching evidence and keep the list current. | Current quote/time/relationship checks, row-locked stale-result rejection, immutable source-cycle settlement, sampled Abe Choi closure evidence from `f7ztc`, completed account-2/Slack cycles, and current Gmail graph status. | Evidence-backed sampled closures and two accounts' settled deltas are verified. Gmail account 1's 276-child backlog completed and its cursor advanced at 05:18:49. The following four-source, fifteen-child delta also settled; by 05:21:19 closure and discovery cursors were advancing through empty deltas. |
+| Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded card serialization and Mac refresh timings, bounded fanout/prompt packing, live provider cache counters, completed-child reuse, and timeout-recovery projection `btwjn`. | Implemented and measured where noted. The timeout projection retained 297 results and retried two children; production recovery retained all 214 completed results at 05:06. The full 276-child recovered graph settled at 05:18:49; its successor uses a new delta and the smaller todo snapshot. |
+| Ship small changes to the test app without staging or added deployment gates. | All prior delivery commits plus ownership fixes `afeeb604` and `248bd58e` are in the deployed history; current `Makefile` maps `make deploy` to `deploy-fast`; workflow `34087225973` completed through the normal cached deployment path. | Shipped to revision 236 at 100% traffic; its Chief recovered at 05:36:54. The complete runtime cycle was verified on revision 235 immediately before this prompt-only deployment. Compile/manual checks followed `docs/development-mode.md`; no test suites were run. |
 | Update native clients where the todo loop needs changes. | Latest companion source change is `19e358dc`; the installed Mac executable was built September 6 at 20:53 local time. Latest iPhone source change is `1ba7bb51`, matching successful release workflow `34067357201`; current paging, manual-entry, and completion-display code was inspected. | Mac update is installed and previously exercised while paired. TestFlight 1.0.1 (20260906233635) is available to Kent. Physical iPhone behavior was not exercised in this session; no further native change is currently needed by the server fixes. |
 
 ## Architecture to retain
@@ -1204,7 +1213,62 @@ investigation; the remaining gaps are stated here.
     remain open, and all eight notes are retained. Chrome independently shows
     one Josue task and one Task #140 document-review row; distinct Tasks #325,
     #410, and #411 remain in the Kamaldeep search. No real-world completion
-    was asserted. Full consolidation remains outstanding.
+    was asserted.
+
+    Read-only `wb45x` retrieved all 290 targeted September 7 reminder bodies
+    from 70 sealed jobs across 15 cycles and a fresh snapshot of 1,168 active
+    escalation todos. Review compared external task reference, person, city,
+    work type, original request, repeated-reminder wording, account/channel,
+    and user activity. It selected 287 groups containing 687 later reminders.
+    Three groups were excluded: #160's original describes a move to Vancouver
+    Island while its reminders name North Bay; #149 has no city; and #158's
+    oldest todo describes Hardik in Edmonton while its reminders name Aakash
+    in Belleville. Task number alone cannot justify those merges.
+
+    `h987c` completed at 05:16:20 and consolidated 657 duplicates into 271
+    originals. All original and duplicate notes remain intact. It verifies the
+    sealed message again, locks each group with the user, compares SHA-256
+    fingerprints of all reviewed fields plus updated_at, checks current user
+    activity, preserves source links, and dismisses duplicates without outcome
+    learning. Sixteen groups (#204–219, thirty proposed duplicates) rolled back
+    because rows changed after the review; they require a fresh comparison.
+    Chrome's refreshed main list shows 561 active items, down from 1,218.
+    Its Kamaldeep search shows four distinct tasks, with one #325 and one #140.
+    Read-only `nv5nw` compared all 46 rows in the sixteen skipped groups:
+    task wording, notes, source IDs, owners, statuses, and user activity are
+    unchanged; only updated_at differs. A fresh fingerprint review therefore
+    permits retrying those thirty reminders without weakening the write fence.
+
+    `wffsm` corrected the CRM observation join to metadata channel/timestamp
+    plus workspace and recovered fourteen original source messages. The source
+    itself uses Task #158 for both Aakash's driving-schedule question and
+    Hardik's deadline extension, proving the ID is not globally unique even in
+    one channel. Aakash's three reminders can be consolidated into Aakash's
+    original while Hardik remains separate. The original #160 names Fabian in
+    North Bay and explicitly says he moved to Vancouver Island; #149 identifies
+    Gurdeep with city unknown, matching its reminders' null city. Their original
+    requests and repeated reminders are consistent. Follow-up `hww5v` is
+    consolidating these nine reminders plus the thirty freshly compared rows.
+    `hww5v` consolidated all thirty changed-row reminders. The three special
+    groups still had older fingerprints and rolled back again; `h5t5x` confirmed
+    their only changed fields are update timestamps, with no user activity.
+    Final special-case repair `94n2f` used those freshly reviewed snapshots
+    and consolidated all nine remaining reminders, with all notes retained.
+
+    `z88br` recovered all nineteen older reminder bodies from 149 sealed jobs
+    across six discovery cycles. Their task, person, city, work type, and
+    original requests match. `kqws8` consolidated their 23 duplicates at
+    05:29:31, preserving every note. Independent read-back `h5t5x` verified the
+    earlier 693 dismissals plus 289 retained originals (982 rows) with zero
+    status, parent-link, or note mismatches. Final read-back `jsqvf` completed
+    at 05:36:45 and independently verified all 725 dismissed reminders and
+    311 retained originals (1,036 rows), with zero status, parent-link, or note
+    mismatches. The only remaining repeated task reference is #158, where
+    source evidence proves two different people and requests. Those two
+    originals correctly remain separate. Chrome's original tab was refreshed
+    and visibly shows 499 active items (plus 27 done and 863 dismissed in the
+    database). This completes the reviewed reminder consolidation; no task was
+    falsely marked completed and no source cursor or runtime proof was altered.
 
     Revision 234 recovered its Chief at 04:59:04. The 04:59:59 observer sample
     had 60 ready and four preparing partitions, all with live leases, six running
@@ -1212,7 +1276,21 @@ investigation; the remaining gaps are stated here.
     evidence is complete (1,202 outcomes, zero missing). The interrupted Gmail
     graph retained 210 completed children; five ambiguous provider outcomes
     and the remaining abandoned work require recovery. That recovery and a
-    full scheduled cycle on revision 234 are not yet verified.
+    full scheduled cycle on revision 234 were not yet verified at that sample.
+
+    Gmail's next acquisition reused all 210 completed children. At 05:01:53,
+    a revision-234 instance received SIGTERM and four tasks stopped with
+    `:shutdown`; the reason for that instance shutdown is unproven. The Chief
+    recovered on the remaining instance at 05:02:31. The 05:02 sample briefly
+    showed 27 draining partitions and eight unassigned; all 64 were ready/live
+    again by 05:04, with no pending termination. Acquisition
+    `637d5d85-04e4-439f-bf29-5f1a9514b505` reused all 214 completed children
+    from the interrupted recovery graph. By 05:08, 237/276 were complete, two
+    running and 37 pending, without child errors. The Chief's next Effects
+    completed at 05:05:15; all 1,205 known Effect outcomes have matching
+    evidence. Its new checkpoint and account 1's final cursor advance remain
+    unverified. Cloud SQL showed two startup lock timeouts at 04:59:07, with
+    no matching database errors at the later SIGTERM.
 
 62. **Team escalation ownership is being inferred as personal obligation.**
     The exact sealed bodies for Tasks #126 and #140 name
@@ -1220,13 +1298,46 @@ investigation; the remaining gaps are stated here.
     Kent is the exclusive decision/review bottleneck. The current prompt requires
     operator ownership, but does not have evidence here binding that role to
     Kent. A focused clarification was requested about whether routine Uride
-    onboarding escalations belong on his personal list. Broader admission and
-    cleanup changes remain pending that context; duplicate repair is independent.
+    onboarding escalations belong on his personal list.
+
+    The prompt also contained a conflicting shortcut: default ownership to the
+    main user unless the generated candidate clearly names someone else.
+    `afeeb604` removes that shortcut, requires source-backed personal ownership
+    before the source-intake positive admission rules, and distinguishes a
+    separate intervention request from the team member's underlying task.
+    Channel membership, connected-account access, and overdue/escalation wording
+    do not transfer ownership. An explicit user request to track team work is
+    still supported. Reasoning must identify who owes the action and the source
+    evidence connecting them to the operator. `make build` passed; workflow
+    `34085600531` succeeded and `maraithon-00235-pk2` serves 100% of traffic.
+    No tests were run.
+
+    Read-only `h5t5x` inspected two naturally completed intake jobs on revision
+    235 (`1f94051c` and `85f165fd`). All seven decisions updated existing work;
+    none created another duplicate. The sealed messages describe five team-owned
+    tasks (#408–412), and their template wording says "Do this" and "when you
+    have done it". This confirms update routing, not personal ownership. The
+    model continued to refresh the existing team work after the first prompt
+    change. `248bd58e` additionally requires the ownership check for updates,
+    excludes previous generated todos/decisions and inferred relationship
+    memories as role-assignment proof, and explains that template "you" refers
+    to the named task owner. `make build` passed; workflow `34087225973` is
+    deploying this follow-up. It subsequently succeeded; revision
+    `maraithon-00236-cm5` serves 100% of traffic and recovered its Chief at
+    05:36:54. Its natural model behavior remains unverified.
+
+    Existing team-work cleanup remains pending Kent's intended scope;
+    source-verified duplicate repair is independent. Read-only execution
+    `wb45x` completed its read-only source review at 05:10:12. The subsequent
+    verified duplicate repair is recorded in finding 61. A direct CRM identity
+    join in read-only `bztqn` returned no observations for 55 remaining rows;
+    CRM mutation identity is separate from its metadata channel/timestamp, so
+    the follow-up uses those provider fields plus the exact workspace.
 
 ## Delivery state
 
-Current server: `maraithon-00233-r7s`, code through `51167f39`, deployed by
-successful workflow `34082107360`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00236-cm5`, code through `248bd58e`, deployed by
+successful workflow `34087225973`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -2178,3 +2289,73 @@ The list grew from 905 to 953 open todos while new Slack deltas arrived.
 Read-only execution `4qw77` samples the latest twelve additions and their
 stored source quotes to review quality and repeated work. It is still starting;
 follow this handle rather than restarting it.
+
+
+Observer `7bfjj` completed at 05:12:07. Its final sample crossed revision 235's
+rollout: 25 ready partitions, three preparing, and 36 unassigned. All known
+Effect outcomes still had matching evidence. Gmail account 1 retained 251/276
+completed children. Its 04:33:54–05:12:02 SQL window spanned revisions 233–235
+and the same-revision shutdown, so it is not a steady-state comparison. Of
+557.56 seconds total SQL execution time, node-authority locking was 14.61%,
+activation 8.78%, and background claim renewal 8.24%; catalog verification was
+outside the top eight.
+
+Revision 235 recovered its Chief at 05:12:07. Read-only observer `ltv7q`
+started at 05:15:31 and runs eight samples over fourteen minutes, with a
+per-execution timeout of 1,200 seconds and pool size two. Its first two samples
+had all 64 partitions ready/live with no pending termination. The scheduled
+Chief Effects completed at 05:16:06; all 1,207 outcomes have matching evidence.
+Gmail acquisition `425c2e63-ae42-4d4c-beed-63382b7b398b` reused all 251 completed
+children. At 05:17:33 all 276 children were complete without errors; finalizer
+`3c23dfd0-f514-40f5-9ff3-f768d755d952` was pending for 05:18:27. Its cursor
+settlement and the new Chief checkpoint remain to verify. Slack recovered its
+27 completed children, settled, and started a new 15-child delta for the
+reduced 561-todo list.
+
+
+At 05:18:49 the Gmail account-1 finalizer advanced its closure cursor from
+September 2 (`1788380231`) to September 7 04:05:17 UTC (`1788753917`). This
+is an actual persisted cursor advance, not a projected recovery. Its next
+acquisition `7867226b-d06a-4e41-9e0a-603af1d68063` has four new source messages
+and fifteen child partitions against the current 561-todo snapshot. At
+05:19:33 three children were complete, two running, and ten pending, without
+errors. All 64 runtime partitions remained ready/live and no task awaited
+termination.
+
+
+At 05:21:19 Gmail account 1's following delta settled and its closure cursor
+reached `1788758479` (05:21:19 UTC). All three source accounts then returned
+completed empty deltas. At 05:23:34 all 64 partitions remained ready/live,
+with no task awaiting termination; discovery and closure cursors continued to
+advance. The Chief persisted `checkpoint_created` at 05:22:07 with no
+`snapshot_persist_failed`. Its 1,207 outcome-known Effects all have matching
+storage evidence. The observer's SQL interval still runs through 05:29.
+
+
+Observer `ltv7q` completed successfully at 05:29:39. All eight samples retained
+64 ready/live partitions and no task awaiting termination. Both observed
+scheduled Chief cycles completed their Effects, its checkpoint persisted,
+all 18 recurring schedules had no error and their due source schedules advanced,
+and all 1,209 outcome-known Effects had matching storage evidence. Gmail's
+later one-message delta also settled by the final observation.
+
+The 05:17:33–05:29:36 SQL window remained entirely on revision 235 and totaled
+132.07 seconds. Node-authority locking accounted for 17.79%, assignment proof
+reads 11.64%, user locks 11.60%, task activation 7.68%, claim renewal 4.56%, and
+catalog readiness 2.82%. No verification or renewal query dominated. This
+includes the bounded source reviews and duplicate maintenance; it is not an
+idle-load or application-only benchmark.
+
+
+Final reminder read-back `jsqvf` completed at 05:36:45: all 1,036 reviewed
+rows matched their intended status, duplicate parent, and original note hash.
+The only repeated single task number in the active escalation list is #158,
+which the source reused for Hardik's extension and Aakash's schedule question.
+The original Chrome Todos tab visibly shows 499 active items after refresh.
+The latest prompt-only change `248bd58e` deployed successfully in workflow
+`34087225973`, serving revision `maraithon-00236-cm5` at 100% traffic. Its Chief
+recovered at 05:36:54. The full scheduled-cycle and SQL observations above
+belong to revision 235; they were not repeated after this prompt-only rollout.
+No tests were run or modified. Existing team-work scope and natural behavior
+of the final ownership instruction remain open; all submitted observer,
+source-review, and duplicate-repair executions have finished.
