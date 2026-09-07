@@ -5,14 +5,16 @@ rank them beside manually added work, and automatically close work when fresh
 evidence proves it was handled. Ship small changes to the single-user test app
 for `kent@runner.now`, using the manual-first development policy.
 
-Latest delivery (September 7): revision `maraithon-00239-d4s`,
-code `623a9953`, successful workflow `34088767335`. Intake retrieves older
+Latest delivery (September 7): revision `maraithon-00240-hn2`,
+code `054d214f`, successful workflow `34090192946`. Intake retrieves older
 matching work, requires source-backed personal ownership, and now retains
 connected provider participant IDs. A fresh Slack ownership case remains to
 be observed. Source revision hashes now survive JSON handoffs: normal Gmail
 polls reuse settled evidence instead of repeating model jobs. Closed-todo brief
 jobs now retire without generating new advice; natural execution of that guard
 remains unobserved because the prior backlog finished before deployment.
+Brief generation now fences claims, saves, and cleanup by snapshot and generation
+identity; a stale caller cannot overwrite or release a newer generation.
 Chat works; expired briefs refresh; named email drafts no longer target digest senders; explicit mailboxes
 are retained; exhausted model retries can reuse completed closure batches.
 Gmail account 1's 276-batch backlog settled at 05:18:49, advancing its closure
@@ -40,7 +42,7 @@ investigation; the remaining gaps are stated here.
 | Wake regularly and fan work out without blocking OTP ownership. | Current one-minute discovery/completion schedules, ten-minute Chief default, independent non-mailbox completion backstop, workload/account rotation, and completed observer `ltv7q`. | Revision 235 recovered at 05:12:07. Scheduled Effects completed at 05:16:06 and 05:26:41, and its checkpoint persisted at 05:22:07. All eight samples retained 64 ready/live partitions, with no pending termination and no missing Effect evidence. |
 | Close work only on current, matching evidence and keep the list current. | Current quote/time/relationship checks, row-locked stale-result rejection, immutable source-cycle settlement, sampled Abe Choi closure evidence from `f7ztc`, completed account-2/Slack cycles, and current Gmail graph status. | Evidence-backed sampled closures and two accounts' settled deltas are verified. Gmail account 1's 276-child backlog completed and its cursor advanced at 05:18:49. The following four-source, fifteen-child delta also settled; by 05:21:19 closure and discovery cursors were advancing through empty deltas. |
 | Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded serialization and refresh timings, bounded fanout/prompt packing, provider cache counters, completed-child reuse, and source-revision read-back `8rxjc` plus normal-poll observer `nn5qw`. | Recovery retained completed children and settled the 276-child catch-up graph. The corrected source hash preserves existing receipts: revision 237 advanced discovery/closure cursors through empty deltas with zero new reasoning jobs for the repeated email. The preceding unchanged-email closure cycle had thirteen children over 499 todos. Closed-brief queue suppression is also deployed, but its natural skip path remains unobserved. |
-| Ship small changes to the test app without staging or added deployment gates. | Semantic commits `e0aac126`, `0f97c8e6`, and `623a9953` were shipped by successful workflows `34088164690`, `34088440731`, and `34088767335`; `make deploy` still uses the normal cached path. | Revision 239 serves 100% of traffic. The complete runtime cycle was verified on revision 235; revision 237 normal delta scans and two ready/live partition samples verified the hash fix. Its third observation crossed the revision-238 rollout. The Chief recovered on revision 239 at 06:02:21. Corrected follow-up `57pqw` completed at 06:07:34: both samples had 64 ready/live partitions, no active assignments, and all six cursors advanced. The full periodic Effect/checkpoint/SQL audit was not repeated on revision 239. All three changes passed `make build`; no test suites were run. |
+| Ship small changes to the test app without staging or added deployment gates. | Semantic commits `e0aac126`, `0f97c8e6`, `623a9953`, and `054d214f` shipped through the normal keyless workflow; `make deploy` still uses the cached path. | Revision 240 serves 100% of traffic after successful workflow `34090192946`; its startup probe and deployment health request passed. The complete runtime cycle was verified on revision 235. Revision 237 normal delta scans verified receipt reuse; revision 239 observer `57pqw` had two samples with 64 ready/live partitions and all six cursors advancing. Those broader checks were not repeated on revision 240. All four changes passed `make build`; no test suites were run. |
 | Update native clients where the todo loop needs changes. | Latest companion source change is `19e358dc`; the installed Mac executable was built September 6 at 20:53 local time. Latest iPhone source change is `1ba7bb51`, matching successful release workflow `34067357201`; current paging, manual-entry, and completion-display code was inspected. | Mac update is installed and previously exercised while paired. TestFlight 1.0.1 (20260906233635) is available to Kent. Physical iPhone behavior was not exercised in this session; no further native change is currently needed by the server fixes. |
 
 ## Architecture to retain
@@ -1456,12 +1458,17 @@ investigation; the remaining gaps are stated here.
     `make build` passed. No tests or test edits were made under the manual-first
     policy. These races were found by code review; no concurrent generation or
     synthetic model request was started to manufacture production evidence.
-    Deployment is pending.
+    Shipped as `054d214f` in revision `maraithon-00240-hn2`, successful workflow
+    `34090192946`. The revision serves 100% of traffic; its startup probe and
+    deployment health request passed. The runtime registered its node at
+    06:21:48, background jobs were executing by 06:22:10, and the Chief logged
+    recovery to idle at 06:22:27. No new database observer, full periodic runtime
+    audit, or synthetic race exercise was run.
 
 ## Delivery state
 
-Current server: `maraithon-00239-d4s`, code through `623a9953`, deployed by
-successful workflow `34088767335`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00240-hn2`, code through `054d214f`, deployed by
+successful workflow `34090192946`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
