@@ -611,12 +611,21 @@ defmodule Maraithon.Todos do
   Merges top-level keys into the todo's metadata with a direct write. This
   skips the full update pipeline (insight sync, embedding refresh, outcome
   learning), so it is only for bookkeeping keys such as brief leases.
+  Optional `:expected_todo` and `:expected_metadata` checks run under the row lock.
   """
-  def merge_metadata(user_id, todo_id, metadata)
-      when is_binary(user_id) and is_binary(todo_id) and is_map(metadata) do
+  def merge_metadata(user_id, todo_id, metadata, opts \\ [])
+
+  def merge_metadata(user_id, todo_id, metadata, opts)
+      when is_binary(user_id) and is_binary(todo_id) and is_map(metadata) and is_list(opts) do
     Repo.transaction(fn ->
       case get_todo_for_update(user_id, todo_id) do
         %Todo{} = todo ->
+          case validate_todo_snapshot(todo, Keyword.get(opts, :expected_todo)) do
+            :ok -> :ok
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+          assert_metadata_matches!(todo, Keyword.get(opts, :expected_metadata, %{}))
           merged = Map.merge(todo.metadata || %{}, stringify_top_level_keys(metadata))
 
           case todo |> Todo.changeset(%{metadata: merged}) |> Repo.update() do
@@ -634,7 +643,15 @@ defmodule Maraithon.Todos do
     end
   end
 
-  def merge_metadata(_user_id, _todo_id, _metadata), do: {:error, :not_found}
+  def merge_metadata(_user_id, _todo_id, _metadata, _opts), do: {:error, :not_found}
+
+  defp assert_metadata_matches!(todo, expected) do
+    unless Enum.all?(expected, fn {key, value} ->
+             Map.get(todo.metadata || %{}, to_string(key)) == value
+           end) do
+      Repo.rollback(:metadata_changed)
+    end
+  end
 
   @doc """
   Stores a generated chief-of-staff brief on the todo and, when the brief
@@ -649,6 +666,14 @@ defmodule Maraithon.Todos do
     Repo.transaction(fn ->
       case get_todo_for_update(user_id, todo_id) do
         %Todo{} = todo ->
+          if generation = Keyword.get(opts, :expected_generation) do
+            assert_metadata_matches!(todo, %{"brief_generation" => generation})
+
+            unless Brief.generating?(todo) do
+              Repo.rollback(:brief_generation_expired)
+            end
+          end
+
           if Keyword.get(opts, :expected_status, todo.status) != todo.status do
             Repo.rollback(:todo_changed)
           end
@@ -1578,7 +1603,12 @@ defmodule Maraithon.Todos do
        when status not in ["open", "snoozed"],
        do: {:error, :todo_no_longer_open}
 
-  defp validate_status_snapshot(%Todo{} = current, %Todo{} = expected) do
+  defp validate_status_snapshot(%Todo{} = current, %Todo{} = expected),
+    do: validate_todo_snapshot(current, expected)
+
+  defp validate_todo_snapshot(_todo, nil), do: :ok
+
+  defp validate_todo_snapshot(%Todo{} = current, %Todo{} = expected) do
     if current.id == expected.id and current.user_id == expected.user_id and
          current.updated_at == expected.updated_at do
       :ok

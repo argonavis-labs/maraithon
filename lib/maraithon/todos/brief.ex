@@ -25,9 +25,10 @@ defmodule Maraithon.Todos.Brief do
   @sentinel "TODO_BRIEF_JSON_V1"
   @metadata_key "brief"
   @lease_key "brief_generation"
-  @lease_seconds 240
   @max_tokens 6_000
   @timeout_ms 240_000
+  # Cover the model deadline plus context gathering (28 seconds) and persistence.
+  @lease_seconds div(@timeout_ms, 1_000) + 60
   @reply_channels ~w(gmail slack imessage whatsapp)
   @efforts ~w(under_2_min under_15_min longer)
   @max_steps 8
@@ -215,31 +216,14 @@ defmodule Maraithon.Todos.Brief do
 
     with %Todo{} = todo <- Todos.get_for_user(user_id, todo_id),
          :ok <- ensure_generation_needed(todo, force?),
-         {:ok, todo} <- claim_lease(user_id, todo, force?),
-         {:ok, brief, model} <- generate(user_id, todo, opts) do
-      stored_brief =
-        brief
-        |> Map.put("version", @version)
-        |> Map.put(
-          "generated_at",
-          DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-        )
-        |> Map.put("model", model)
-        |> Map.put("fingerprint", fingerprint(todo))
-
-      Todos.put_brief(user_id, todo.id, stored_brief, action_draft_from_reply(brief["reply"]),
-        expected_action_draft: todo.action_draft,
-        expected_status: todo.status
-      )
+         {:ok, todo} <- claim_lease(user_id, todo, force?) do
+      generate_claimed_and_store(user_id, todo, opts)
     else
       {:error, reason} when reason in [:already_current, :not_actionable] ->
         {:ok, Todos.get_for_user(user_id, todo_id)}
 
       {:error, reason} = error ->
-        _ = release_lease(user_id, todo_id)
-
         log_generation_failure(todo_id, reason)
-
         error
 
       nil ->
@@ -248,6 +232,39 @@ defmodule Maraithon.Todos.Brief do
   end
 
   def generate_and_store(_user_id, _todo_id, _opts), do: {:error, :not_found}
+
+  defp generate_claimed_and_store(user_id, todo, opts) do
+    generation = Map.fetch!(todo.metadata, @lease_key)
+
+    result =
+      with {:ok, brief, model} <- generate(user_id, todo, opts) do
+        stored_brief =
+          brief
+          |> Map.put("version", @version)
+          |> Map.put(
+            "generated_at",
+            DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+          )
+          |> Map.put("model", model)
+          |> Map.put("fingerprint", fingerprint(todo))
+
+        Todos.put_brief(user_id, todo.id, stored_brief, action_draft_from_reply(brief["reply"]),
+          expected_action_draft: todo.action_draft,
+          expected_status: todo.status,
+          expected_generation: generation
+        )
+      end
+
+    case result do
+      {:error, reason} = error ->
+        _ = release_lease(user_id, todo.id, generation)
+        log_generation_failure(todo.id, reason)
+        error
+
+      success ->
+        success
+    end
+  end
 
   defp log_generation_failure(todo_id, reason) do
     metadata = [
@@ -369,6 +386,7 @@ defmodule Maraithon.Todos.Brief do
       {:error, :in_progress}
     else
       lease = %{
+        "token" => Ecto.UUID.generate(),
         "lease_until" =>
           DateTime.utc_now()
           |> DateTime.add(@lease_seconds, :second)
@@ -376,12 +394,14 @@ defmodule Maraithon.Todos.Brief do
           |> DateTime.to_iso8601()
       }
 
-      Todos.merge_metadata(user_id, todo.id, %{@lease_key => lease})
+      Todos.merge_metadata(user_id, todo.id, %{@lease_key => lease}, expected_todo: todo)
     end
   end
 
-  defp release_lease(user_id, todo_id) do
-    Todos.merge_metadata(user_id, todo_id, %{@lease_key => nil})
+  defp release_lease(user_id, todo_id, generation) do
+    Todos.merge_metadata(user_id, todo_id, %{@lease_key => nil},
+      expected_metadata: %{@lease_key => generation}
+    )
   end
 
   # ---------------------------------------------------------------------------

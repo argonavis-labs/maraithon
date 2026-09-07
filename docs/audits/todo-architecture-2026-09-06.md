@@ -1436,6 +1436,28 @@ investigation; the remaining gaps are stated here.
     The Chief recovered on revision 239 at 06:02:21. This does not repeat the
     full periodic Effect/checkpoint/SQL proof recorded earlier for revision 235.
 
+66. **Brief claims and cleanup can interfere with another generation.**
+    The closed/current check and active-lease check happen before claiming the
+    row. A todo can close in that gap, or two callers can claim the same stale
+    snapshot. Worse, the generic failure branch released the lease even when
+    the caller received `:in_progress` without acquiring it. An older failure
+    or response also had no generation identity to distinguish a newer claim.
+
+    Claims now compare the todo's update timestamp under the existing row lock
+    before writing a unique generation token. Only a caller that acquired a
+    claim performs cleanup, and cleanup compares that exact generation under
+    the lock. Saving checks both the same generation and its unexpired lease,
+    alongside the existing status, content fingerprint, and draft-edit checks.
+    Failed saves also release their own claim. An explicitly forced refresh
+    can supersede a generation without allowing the older response to overwrite
+    it or clear its lease. The lease lasts the four-minute model budget plus
+    one minute for context gathering (up to 28 seconds) and persistence.
+
+    `make build` passed. No tests or test edits were made under the manual-first
+    policy. These races were found by code review; no concurrent generation or
+    synthetic model request was started to manufacture production evidence.
+    Deployment is pending.
+
 ## Delivery state
 
 Current server: `maraithon-00239-d4s`, code through `623a9953`, deployed by
