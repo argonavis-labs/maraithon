@@ -1721,3 +1721,26 @@ states that revision-level min/max settings are ignored in this mode. Its
 classifies this response as an instance-availability/scaling problem. The
 specific transient trigger remains unproven; these findings do not establish
 that request concurrency forty was exhausted. No scaling setting was changed.
+
+Read-only source review `f7ztc` completed successfully at 02:48:20. All three
+Abe Choi completion entries cite Charlie's September 4 22:21:58 reply in
+thread `1a06875f0fd03a35`, after Abe's 09:15:26 request. The stored message
+`1a06e83e377e93f5` contains the recorded quote offering Monday or Tuesday
+meeting times. The oldest todo (`46775375-1ed7-4663-af57-af80d7ea25bc`) closed
+in job `ca51dfb1-00ee-4f8b-90b6-a97017067712` at 01:04:14. The other two
+(`5fe5193a-d2fc-4260-9d2b-54064a52e3ff` and
+`61cad9dd-762f-45a4-bfbc-83d729cab400`) closed in job
+`915211fc-d890-404b-9f7e-adb9f30f4dc2` at 02:29:24. Both completing jobs contain
+the quote in their stored source bundles and have matching exact completed
+task evidence. Other contemporaneous partitions lacked the quote and recorded
+zero completions. Charlie's response satisfies the reply/handoff request;
+it does not establish that the later meeting or pilot happened. No todo was
+changed by this review, and the Mac app was returned to its active view.
+
+At 02:47:33, `xvsn2` retained 64 live/ready partitions and 1,176 outcome-known
+Effects with no missing evidence. Gmail account 1 published its corrected
+version-2 graph with 299 children for 302 source items and 899 todos; three
+children were complete. Account 2 reached 83/184, including all fifty reused
+jobs. Neither graph had an error. Two discovery finalizers were waiting with
+zero attempts, no error, and ten-second deadlines; the model cooldown still
+had not changed since 02:41:40. Full Gmail settlement remains open.
