@@ -1363,6 +1363,16 @@ investigation; the remaining gaps are stated here.
     filters reduced that settled source from one item to zero. This read-back
     made no provider/model calls and changed no ledger rows or cursors.
 
+    Shipped as `e0aac126` in revision `maraithon-00237-mt4`, successful workflow
+    `34088164690`. Observer `nn5qw` completed at 05:55:39: account 1's next
+    discovery and closure cycles sealed empty deltas with zero reasoning jobs,
+    while their cursors advanced. Before deployment, its latest unchanged-email
+    closure cycle had thirteen children checking 499 todos. Repeat receipts
+    stopped at 26 discovery and 12 closure, both last written before the rollout.
+    The first two samples had 64 ready/live partitions and no pending termination.
+    The third crossed the revision-238 rollout (32 draining, 32 unassigned,
+    zero active assignments); it is not a steady runtime-health measurement.
+
 
 64. **Ownership intake drops authenticated Slack participant identity.**
     `SourceScope` and candidate account labels expose a Slack workspace, but
@@ -1381,6 +1391,27 @@ investigation; the remaining gaps are stated here.
     already-loaded account and source bundle, with no additional database,
     directory, or provider calls and no credential fields in the prompt.
     `make build` passed. No tests were run under the manual-first policy.
+    Shipped as `0f97c8e6` in revision `maraithon-00238-j2z`, successful workflow
+    `34088440731`. Read-only `nn5qw` confirmed that Slack account 6 contains
+    its authenticated human ID and both Gmail accounts contain their mailbox
+    addresses. Natural model behavior on a new personally assigned Slack ask
+    has not yet been observed.
+
+65. **Queued briefs keep generating advice after a todo is dismissed.**
+    Enqueueing rejects closed work, but `generate_and_store/3` only checks for
+    an existing current brief. A job queued while a todo was open can therefore
+    claim a generation lease and call the model after it has been dismissed or
+    completed. Recent dismissed reminder rows continued to receive updates after
+    consolidation; read-only `f5xph` is checking their generation timestamps.
+    The brief fingerprint intentionally preserves historical briefs across
+    closure and does not include status, so an in-flight result also needs a
+    separate status check before storing a new draft.
+
+    Default generation now returns the existing closed todo without a model
+    call; the background result reports `not_needed`. Explicit forced refresh
+    remains available. Generation passes its expected status to `put_brief/5`,
+    which checks it under the todo row lock and rejects a result after a status
+    change. `make build` passed; no tests were run under the manual-first policy.
 
 ## Delivery state
 

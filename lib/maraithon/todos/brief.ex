@@ -228,10 +228,11 @@ defmodule Maraithon.Todos.Brief do
         |> Map.put("fingerprint", fingerprint(todo))
 
       Todos.put_brief(user_id, todo.id, stored_brief, action_draft_from_reply(brief["reply"]),
-        expected_action_draft: todo.action_draft
+        expected_action_draft: todo.action_draft,
+        expected_status: todo.status
       )
     else
-      {:error, :already_current} ->
+      {:error, reason} when reason in [:already_current, :not_actionable] ->
         {:ok, Todos.get_for_user(user_id, todo_id)}
 
       {:error, reason} = error ->
@@ -352,6 +353,10 @@ defmodule Maraithon.Todos.Brief do
   # ---------------------------------------------------------------------------
   # Lease
   # ---------------------------------------------------------------------------
+
+  defp ensure_generation_needed(%Todo{status: status}, false)
+       when status not in ~w(open snoozed),
+       do: {:error, :not_actionable}
 
   defp ensure_generation_needed(todo, false) do
     if current(todo), do: {:error, :already_current}, else: :ok

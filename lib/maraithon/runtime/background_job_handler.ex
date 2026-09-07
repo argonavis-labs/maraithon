@@ -150,8 +150,9 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
       when is_binary(todo_id) do
     with {:ok, user_id} <- require_user_id(job) do
       case TodoBrief.generate_and_store(user_id, todo_id) do
-        {:ok, _todo} ->
-          {:ok, %{source: "todo_brief_generation", todo_id: todo_id, status: "ready"}}
+        {:ok, todo} ->
+          status = if todo && todo.status in ~w(open snoozed), do: "ready", else: "not_needed"
+          {:ok, %{source: "todo_brief_generation", todo_id: todo_id, status: status}}
 
         {:error, reason} ->
           defer_model_capacity(reason)

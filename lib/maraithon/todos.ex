@@ -649,6 +649,10 @@ defmodule Maraithon.Todos do
     Repo.transaction(fn ->
       case get_todo_for_update(user_id, todo_id) do
         %Todo{} = todo ->
+          if Keyword.get(opts, :expected_status, todo.status) != todo.status do
+            Repo.rollback(:todo_changed)
+          end
+
           if is_binary(brief["fingerprint"]) and
                brief["fingerprint"] != Brief.fingerprint(polish_todo_copy(todo)) do
             Repo.rollback(:todo_changed)
