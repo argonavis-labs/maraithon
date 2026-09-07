@@ -182,6 +182,10 @@ defmodule Maraithon.LLM do
   Complete a model request with the configured provider.
   """
   def complete(params) when is_map(params) do
+    complete_in_bucket(params, nil)
+  end
+
+  defp complete_in_bucket(params, bucket) do
     case provider() do
       nil ->
         {:error,
@@ -190,7 +194,7 @@ defmodule Maraithon.LLM do
 
       module ->
         with {:ok, bounded_params} <- RequestBudget.validate(params) do
-          run_provider_request(module, bounded_params, &module.complete/1)
+          run_provider_request(module, bounded_params, &module.complete/1, bucket)
         end
     end
   end
@@ -201,30 +205,29 @@ defmodule Maraithon.LLM do
   This is for cheap, latency-sensitive calls such as intent classification.
   Falls back to the primary model when no routing model is configured or
   when the caller already pinned a model in the params.
+  Routing capacity stays separate from background reasoning even when both
+  tiers use the same model.
   """
   def complete_routing(params) when is_map(params) do
-    case routing_model() do
-      nil ->
-        complete(params)
+    params =
+      case routing_model() do
+        nil -> params
+        routing -> Map.put_new(params, "model", routing)
+      end
 
-      _ when is_map_key(params, "model") ->
-        complete(params)
-
-      routing ->
-        complete(Map.put(params, "model", routing))
-    end
+    complete_in_bucket(params, :chat)
   end
 
   @doc """
   Complete a request using the chat-tier model. Used by the Telegram
   assistant chat runner so user-facing answers stay fast. Reasoning-heavy
-  callers should keep using `complete/1`.
+  callers should keep using `complete/1`. Uses chat capacity even when the
+  caller pins a model or the chat and primary models are identical.
   """
   def complete_chat(params) when is_map(params) do
-    cond do
-      is_map_key(params, "model") -> complete(params)
-      true -> complete(Map.put(params, "model", chat_model()))
-    end
+    params
+    |> Map.put_new("model", chat_model())
+    |> complete_in_bucket(:chat)
   end
 
   @doc """
@@ -294,21 +297,31 @@ defmodule Maraithon.LLM do
   implement `stream_complete/2` or when the streaming feature is disabled.
   """
   def stream_complete(params, on_chunk) when is_map(params) and is_function(on_chunk, 1) do
+    stream_complete_in_bucket(params, on_chunk, nil)
+  end
+
+  defp stream_complete_in_bucket(params, on_chunk, bucket) do
     cond do
       not stream_replies_enabled?() ->
-        complete(params)
+        complete_in_bucket(params, bucket)
 
       is_nil(provider()) ->
-        complete(params)
+        complete_in_bucket(params, bucket)
 
       function_exported?(provider(), :stream_complete, 2) ->
         with {:ok, bounded_params} <- RequestBudget.validate(params) do
           module = provider()
-          run_provider_request(module, bounded_params, &module.stream_complete(&1, on_chunk))
+
+          run_provider_request(
+            module,
+            bounded_params,
+            &module.stream_complete(&1, on_chunk),
+            bucket
+          )
         end
 
       true ->
-        complete(params)
+        complete_in_bucket(params, bucket)
     end
   end
 
@@ -317,11 +330,9 @@ defmodule Maraithon.LLM do
   """
   def stream_complete_chat(params, on_chunk)
       when is_map(params) and is_function(on_chunk, 1) do
-    if is_map_key(params, "model") do
-      stream_complete(params, on_chunk)
-    else
-      stream_complete(Map.put(params, "model", chat_model()), on_chunk)
-    end
+    params
+    |> Map.put_new("model", chat_model())
+    |> stream_complete_in_bucket(on_chunk, :chat)
   end
 
   defp stream_replies_enabled? do
@@ -329,7 +340,7 @@ defmodule Maraithon.LLM do
     |> Keyword.get(:openai_stream_replies, true)
   end
 
-  defp run_provider_request(module, params, fun) when is_function(fun, 1) do
+  defp run_provider_request(module, params, fun, bucket) when is_function(fun, 1) do
     timeout_ms =
       case params["timeout_ms"] do
         value when is_integer(value) and value > 0 -> min(value, 300_000)
@@ -339,9 +350,7 @@ defmodule Maraithon.LLM do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     if provider_backpressure_enabled?(module) do
-      params
-      |> rate_limit_bucket()
-      |> with_provider_slot(deadline, params, fun)
+      with_provider_slot(bucket || rate_limit_bucket(params), deadline, params, fun)
     else
       fun.(params)
     end

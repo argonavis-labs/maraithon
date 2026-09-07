@@ -933,7 +933,7 @@ defmodule Maraithon.AssistantHarness do
         configured_llm_complete()
 
       true ->
-        &LLM.complete/1
+        &LLM.complete_chat/1
     end
   end
 

@@ -72,7 +72,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
         end)
 
       try do
-        LLM.stream_complete(params, on_chunk)
+        LLM.stream_complete_chat(params, on_chunk)
       after
         LivenessSession.stream_done(run_id)
         :ets.delete(streamer_table)
