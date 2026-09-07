@@ -214,13 +214,31 @@ defmodule Maraithon.Crm.Ingest do
   end
 
   defp resolve_participants(user_id, %Observation{participants: participants}) do
-    participants = participants || []
+    identifiers =
+      (participants || [])
+      |> Enum.flat_map(&participant_to_identifiers/1)
+      |> Enum.uniq()
 
-    participants
-    |> Enum.flat_map(&participant_to_identifiers/1)
-    |> Enum.uniq()
+    # Calendar observations may contain dozens of attendees. Resolve existing
+    # contacts together instead of reloading the CRM for every participant.
+    # Misses still use the normal upsert path, so a later miss can see a person
+    # created earlier in this observation. Never cache misses across writes.
+    people_by_contact =
+      Crm.people_by_contact_values(
+        user_id,
+        Enum.flat_map(identifiers, fn {identifier, _name} -> Map.values(identifier) end)
+      )
+
+    identifiers
     |> Enum.reduce([], fn {identifier, display_name}, acc ->
-      case Crm.resolve_contact(user_id, identifier, display_name: display_name) do
+      existing = Enum.find_value(Map.values(identifier), &Map.get(people_by_contact, &1))
+
+      result =
+        if existing,
+          do: {:ok, existing},
+          else: Crm.resolve_contact(user_id, identifier, display_name: display_name)
+
+      case result do
         {:ok, person} -> [person.id | acc]
         _ -> acc
       end
