@@ -222,13 +222,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
            ),
          {:ok, status, summary} <-
            deliver_final_response(conversation, run, response, state, attrs) do
-      summary =
-        summary
-        |> Map.put(:model_tier, Map.get(runtime_context, :model_tier))
-        |> Map.put(:model_name, Map.get(runtime_context, :model_name))
-        |> Map.put(:model_reasoning_effort, Map.get(runtime_context, :model_reasoning_effort))
-        |> Map.put(:task_class, Map.get(runtime_context, :task_class))
-        |> Map.put(:route_reason, Map.get(runtime_context, :route_reason))
+      summary = Map.merge(summary, route_summary(model_profile))
 
       {:ok, _run} =
         TelegramAssistant.complete_run(run, %{status: status, result_summary: summary})

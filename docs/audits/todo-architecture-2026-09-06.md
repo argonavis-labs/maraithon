@@ -998,12 +998,29 @@ for `kent@runner.now`, using the manual-first development policy.
     exactly one content-free delta containing only content/role fields.
     Conflicting reasons, repeated content, provider errors, incomplete streams,
     and stream size limits retain their rejection paths. Delivery still waits
-    for `[DONE]`. Live verification remains open.
+    for `[DONE]`. Commit `cd9ab604` compiled and deployed as revision 229
+    through successful workflow `34079790305`. Chrome then displayed the
+    requested three-item priority answer after one streamed generation. Run
+    `9149bffb-7270-4e63-9734-49fffe35a411` recorded completed context,
+    request, and response steps, with the response at 03:34:01. It then hit
+    a separate completion-metadata failure (finding 57). No tests were run.
+
+57. **Successful chat delivery is marked failed by raw route enums.**
+    Revision 229 delivered the priority answer, but its run failed at 03:34:02
+    while updating `result_summary`. The completion path separately copied
+    raw `model_tier`, `task_class`, and `route_reason` atom values into the
+    summary; start-run already uses `route_summary/1` to serialize them as
+    strings. This violates the bounded JSON contract and produces a failure
+    alert even though the answer was saved.
+
+    Completion now merges the same existing `route_summary/1` projection used
+    at startup, eliminating the duplicate field-copy path. The reply, tool
+    results, and model routing stay intact. Browser verification remains open.
 
 ## Delivery state
 
-Current server: `maraithon-00228-jsb`, code through `dd90701e`, deployed by
-successful workflow `34079458681`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00229-qdq`, code through `cd9ab604`, deployed by
+successful workflow `34079790305`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes findings 32 and 42 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
