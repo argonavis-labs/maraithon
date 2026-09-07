@@ -5,7 +5,14 @@ rank them beside manually added work, and automatically close work when fresh
 evidence proves it was handled. Ship small changes to the single-user test app
 for `kent@runner.now`, using the manual-first development policy.
 
-Latest delivery (September 7): revision `maraithon-00242-m6s`,
+Latest follow-up (September 7): Today, Todos, Chat and Settings shipped in
+TestFlight 1.0.1 (20260907133540), source `eace8eb0`. The daily guide and 7:00 AM
+America/Toronto schedule are deployed in `maraithon-00244-zg7`, source `cad8262e`.
+Today's earlier briefing was corrected to exclude the reviewed team escalations.
+See [iOS and Today delivery](ios-todos-2026-09-07.md) for build, manual checks,
+release evidence, and the unobserved next-morning generation limit.
+
+Intake delivery (September 7): revision `maraithon-00242-m6s`,
 code `7f850b49`, successful workflow `34124567676`. Intake retrieves older
 matching work, requires source-backed personal ownership, and now retains
 connected provider participant IDs. Fresh Slack intake exposed a remaining
@@ -49,7 +56,7 @@ investigation; the remaining gaps are stated here.
 | Close work only on current, matching evidence and keep the list current. | Current quote/time/relationship checks, row-locked stale-result rejection, immutable source-cycle settlement, sampled Abe Choi closure evidence from `f7ztc`, completed account-2/Slack cycles, and current Gmail graph status. | Evidence-backed sampled closures and two accounts' settled deltas are verified. Gmail account 1's 276-child backlog completed and its cursor advanced at 05:18:49. The following four-source, fifteen-child delta also settled; by 05:21:19 closure and discovery cursors were advancing through empty deltas. |
 | Reduce repeated reads/model work and recover unfinished work efficiently. | Recorded serialization and refresh timings, bounded fanout/prompt packing, provider cache counters, completed-child reuse, and source-revision read-back `8rxjc` plus normal-poll observer `nn5qw`. | Recovery retained completed children and settled the 276-child catch-up graph. The corrected source hash preserves existing receipts: revision 237 advanced discovery/closure cursors through empty deltas with zero new reasoning jobs for the repeated email. The preceding unchanged-email closure cycle had thirteen children over 499 todos. Closed-brief queue suppression is deployed. Revision 240 completed three fresh brief saves normally; closed-item skips and overlapping-generation rejection remain unobserved. |
 | Ship small changes to the test app without staging or added deployment gates. | Semantic commits `e0aac126`, `0f97c8e6`, `623a9953`, `054d214f`, `7edb4abc`, and `7f850b49` shipped through the normal keyless workflow; `make deploy` still uses the cached path. | Revision 242 serves 100% of traffic after successful workflow `34124567676` and its deployment health request. The complete runtime cycle was verified on revision 235. Revision 237 normal delta scans verified receipt reuse. Revision 240 read-back `d44mv` found 64 ready/live partitions, advancing cursors, and no drain-induced crash-guard increment. Revision 242 read-back `wqqzk` found 64 ready/live partitions, no active or termination-requested assignments, and six advancing cursors. The full runtime audit was not repeated on revision 242. All six changes passed `make build`; no test suites were run. |
-| Update native clients where the todo loop needs changes. | Latest companion source change is `19e358dc`; the installed Mac executable was built September 6 at 20:53 local time. Latest iPhone source change is `1ba7bb51`, matching successful release workflow `34067357201`; current paging, manual-entry, and completion-display code was inspected. | Mac update is installed and previously exercised while paired. TestFlight 1.0.1 (20260906233635) is available to Kent. Physical iPhone behavior was not exercised in this session; no further native change is currently needed by the server fixes. |
+| Update native clients where the todo loop needs changes. | Latest companion source change is `19e358dc`; the installed Mac executable was built September 6 at 20:53 local time. Latest iPhone source change is `eace8eb0`, matching successful release workflow `34128234051`; Today, Todos, Chat, Settings, and corrected chat refresh were manually inspected in the signed-in simulator. | Mac update is installed and previously exercised while paired. TestFlight 1.0.1 (20260907133540) is available to Kent. The simulator loaded the corrected Today brief and 7:00 AM ET schedule; Todos and Chat loaded successfully. Physical iPhone behavior was not exercised in this session. See the September 7 iOS delivery report. |
 
 ## Architecture to retain
 
