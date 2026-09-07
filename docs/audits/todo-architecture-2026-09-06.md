@@ -935,6 +935,29 @@ for `kent@runner.now`, using the manual-first development policy.
     `make build` passed; no automated tests were run. Live settlement remains
     to be verified after deployment.
 
+54. **Interactive chat rejects its own context before replying.**
+    A signed-in Chrome question asking for three priority todos created run
+    `57532ecb-6814-49f7-ba0b-e4652a880a59`, then degraded at 03:05:13 without
+    recording a context step or displaying a reply. Read-only review `wq6lf`
+    confirmed the `context_fetch` request failed bounded JSON validation.
+    Field review `mcctk` found 382,365 bytes even without calendar/deep memory:
+    open loops used 225,470 bytes and twenty todos used 95,302. Insight detail
+    also contained atom values such as `deadline` and `source_evidence`, which
+    the durable JSON contract rejects. The complete 93-tool chat request with
+    empty context already used 89,841 encoded bytes in a local measurement.
+
+    Context snapshots now use the shared JSON compactor within a 96 KB budget
+    and explicitly mark compaction. Context steps use that same bounded
+    snapshot. Enum values normalize to JSON strings. Interactive loop payloads
+    now compact source context and tool evidence before both step recording
+    and provider dispatch, measuring the complete encoded request against a
+    120 KB target. Todo/open-loop projection preserves actionable fields;
+    the current user request and complete tool definitions remain intact.
+    Raw source records remain available through the existing tools. The
+    provider's final request validation remains authoritative.
+    `make build` passed; no automated tests were run. A read-only projection
+    and the browser retry will verify the change against live account data.
+
 ## Delivery state
 
 Current server: `maraithon-00225-twr`, code through `9e289360`, deployed by

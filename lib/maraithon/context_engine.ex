@@ -8,6 +8,11 @@ defmodule Maraithon.ContextEngine do
   changing call sites.
   """
 
+  alias Maraithon.DurablePayload
+  alias Maraithon.PromptBudget
+
+  @snapshot_bytes 96_000
+
   @callback build_context(map()) :: map()
   @callback tool_catalog(map()) :: list()
   @callback memory_context(map()) :: map()
@@ -44,7 +49,22 @@ defmodule Maraithon.ContextEngine do
     engine(opts).diagnostics(context)
   end
 
-  def prompt_snapshot(context) when is_map(context), do: context
+  def prompt_snapshot(context) when is_map(context) do
+    case DurablePayload.prepare_map(context, @snapshot_bytes, max_depth: 12) do
+      {:ok, snapshot} ->
+        snapshot
+
+      {:error, :invalid_payload} ->
+        context
+        |> PromptBudget.bounded(@snapshot_bytes - 100,
+          max_depth: 8,
+          list_items: 20,
+          map_entries: 64,
+          string_bytes: 16_384
+        )
+        |> Map.put("snapshot_compacted", true)
+    end
+  end
 
   defp engine(opts) do
     Keyword.get(opts, :engine) ||

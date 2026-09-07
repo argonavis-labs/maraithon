@@ -490,7 +490,14 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp record_context_fetch(run, context) do
     now = DateTime.utc_now()
 
-    with {:ok, step} <- build_step(run, "context_fetch", 1, %{context: context}, now),
+    with {:ok, step} <-
+           build_step(
+             run,
+             "context_fetch",
+             1,
+             %{context: ContextEngine.prompt_snapshot(context)},
+             now
+           ),
          {:ok, _completed_step} <-
            TelegramAssistant.complete_step(step, %{
              response_payload: %{context_loaded: true},
@@ -2622,6 +2629,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp normalize_payload(value) when is_pid(value), do: inspect(value)
   defp normalize_payload(value) when is_reference(value), do: inspect(value)
   defp normalize_payload(value) when is_function(value), do: inspect(value)
+
+  defp normalize_payload(value) when is_atom(value) and value not in [nil, true, false],
+    do: Atom.to_string(value)
+
   defp normalize_payload(value), do: value
 
   defp ensure_map(value) when is_map(value), do: value

@@ -203,6 +203,8 @@ defmodule Maraithon.PromptBudget do
        when is_float(value) or is_boolean(value) or is_nil(value),
        do: value
 
+  defp do_compact(value, _depth, _settings) when is_atom(value), do: Atom.to_string(value)
+
   defp do_compact(value, _depth, settings) do
     value
     |> inspect(pretty: false, limit: 20, printable_limit: settings.string_bytes)

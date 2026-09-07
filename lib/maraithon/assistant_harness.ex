@@ -34,6 +34,7 @@ defmodule Maraithon.AssistantHarness do
   @default_proactive_reasoning_effort "none"
   @max_proactive_prompt_bytes 64_000
   @max_delivery_plan_prompt_bytes 64_000
+  @max_chat_request_bytes 120_000
   @max_delivery_dispositions 12
   @max_normalized_message_bytes 4_000
   @max_plan_reason_bytes 1_900
@@ -183,6 +184,7 @@ defmodule Maraithon.AssistantHarness do
       llm_turns: map_value(state, "llm_turns", 0),
       tool_steps: map_value(state, "tool_steps", 0)
     }
+    |> bound_step_payload(opts)
   end
 
   def guard_loop(state, started_monotonic_ms, opts \\ [])
@@ -278,6 +280,65 @@ defmodule Maraithon.AssistantHarness do
   end
 
   def build_step_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
+    payload
+    |> bound_step_payload(opts)
+    |> step_request_params(opts)
+  end
+
+  # Bound the payload before both durable step recording and provider dispatch.
+  # Keep the current request and complete tool definitions intact; compact only
+  # fetched context and older tool evidence, which can be refreshed with tools.
+  defp bound_step_payload(payload, opts) do
+    original_bytes = payload |> step_request_params(opts) |> PromptBudget.encoded_bytes()
+
+    if original_bytes <= @max_chat_request_bytes do
+      payload
+    else
+      bounded = fit_step_payload(payload, opts, 24_000, 16_000)
+
+      Logger.info("Assistant chat context compacted",
+        prompt_kind: "chat",
+        base_prompt_bytes: original_bytes,
+        prompt_bytes: bounded |> step_request_params(opts) |> PromptBudget.encoded_bytes(),
+        prompt_byte_cap: @max_chat_request_bytes,
+        truncated: true
+      )
+
+      bounded
+    end
+  end
+
+  defp fit_step_payload(payload, opts, context_bytes, history_bytes) do
+    compact_opts = [max_depth: 8, list_items: 16, map_entries: 64, string_bytes: 4_000]
+
+    context =
+      payload
+      |> map_value("context", %{})
+      |> Maraithon.TelegramAssistant.Context.preproject_prompt_collections()
+      |> PromptBudget.bounded(context_bytes, compact_opts)
+      |> Map.put("prompt_context_compacted", true)
+
+    history =
+      payload
+      |> map_value("tool_history", [])
+      |> PromptBudget.bounded(history_bytes, compact_opts)
+
+    bounded =
+      payload
+      |> Map.drop(["context", "tool_history"])
+      |> Map.put(:context, context)
+      |> Map.put(:tool_history, history)
+
+    request_bytes = bounded |> step_request_params(opts) |> PromptBudget.encoded_bytes()
+
+    if request_bytes > @max_chat_request_bytes and context_bytes > 512 do
+      fit_step_payload(payload, opts, div(context_bytes, 2), div(history_bytes, 2))
+    else
+      bounded
+    end
+  end
+
+  defp step_request_params(payload, opts) do
     policy = runtime_policy(opts)
     prompt = payload |> Map.put_new(:runtime_policy, policy) |> build_prompt()
 
