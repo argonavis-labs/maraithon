@@ -241,8 +241,26 @@ defmodule Maraithon.Todos.Intelligence do
     %{
       "user_id" => user_id,
       "source" => Keyword.get(opts, :source, "todo_intelligence"),
+      "todo_instructions" => explicit_todo_instructions(user_id),
       "generated_at" => Keyword.get(opts, :now, DateTime.utc_now()) |> normalize_json_value()
     }
+  end
+
+  # Explicit scope is required context, independent of ranked semantic recall.
+  # A recall miss or a smaller prompt must not silently broaden the user's list.
+  defp explicit_todo_instructions(user_id) do
+    Memory.list_items(user_id, kind: "instruction", tag: "todo_scope", limit: 16)
+    |> Enum.filter(&(&1.author_type == "user"))
+    |> Enum.map(fn instruction ->
+      %{
+        "id" => instruction.id,
+        "title" => instruction.title,
+        "content" => instruction.content,
+        "source" => instruction.source,
+        "source_ref_type" => instruction.source_ref_type,
+        "source_ref_id" => instruction.source_ref_id
+      }
+    end)
   end
 
   defp validate_required_prompt(shared_seed, candidates, opts) do
@@ -301,6 +319,12 @@ defmodule Maraithon.Todos.Intelligence do
 
        Requirements:
        #{source_intake_guidance}
+       - Apply SHARED_CONTEXT_JSON.todo_instructions as explicit user scope for
+         this list. These instructions take precedence over learned relevance,
+         recalled generalizations, and previously generated todos. Apply each
+         instruction to the work it describes. If it requires explicit personal
+         involvement, a team-owned alert cannot become personal work without
+         source evidence establishing that involvement.
        - Return one decision for every candidate_todos item. `candidate_todos`,
          `existing_todo_id`, and the `todo` response object are internal JSON contract names.
        - Executive bar: admit a candidate only if a competent chief of staff
@@ -948,7 +972,7 @@ defmodule Maraithon.Todos.Intelligence do
   end
 
   defp project_shared_context(shared_context, max_bytes) when is_map(shared_context) do
-    required = Map.take(shared_context, ["user_id", "source", "generated_at"])
+    required = Map.take(shared_context, ["user_id", "source", "todo_instructions", "generated_at"])
 
     if max_bytes <= PromptBudget.encoded_bytes(required) do
       required
