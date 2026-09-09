@@ -31,7 +31,7 @@ The helper keeps `com.maraithon.companion`, its existing credential stores, encr
 
 A running companion is reused. Otherwise Electron starts the bundled helper with `--sync-helper`. `MARAITHON_NATIVE_HELPER` can point at a specific signed companion bundle. Closing or quitting Electron leaves native sync running. The helper's source window remains available from its menu bar.
 
-Desktop login and Mac pairing are separate existing sessions. If Mac sources shows **Connect to Maraithon**, pair the device there. Signing into the task window does not silently pair a device or grant access to local data. During verification on this Mac, both the installed companion and the rebuilt helper showed the same unpaired state. Live iMessage ingestion was therefore not verified.
+Desktop login and Mac pairing are separate existing sessions. If Mac sources shows **Connect to Maraithon**, pair the device there. Signing into the task window does not silently pair a device or grant access to local data. During verification on this Mac, both builds restored the existing account after the brief startup screen. All eight sources reported ready. The rebuilt helper completed a live iMessage check successfully, with existing context intact and no new pairing or privacy grants.
 
 ## Where the Runner design comes from
 
