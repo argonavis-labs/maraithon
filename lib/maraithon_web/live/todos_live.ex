@@ -905,25 +905,6 @@ defmodule MaraithonWeb.TodosLive do
 
         <div :if={@todos_loaded?} id="todo-ready-content">
           <%= if @selected_todo do %>
-            <div class="task-detail-layout">
-              <aside class="task-detail-rail" aria-label="Task list">
-                <.link patch={todos_path(@filters)} class="task-rail-heading">All tasks <span><%= @total_count %></span></.link>
-                <nav aria-label="Tasks in this view">
-                  <.link :for={todo <- @todos} patch={todo_detail_path(@filters, todo.id)}
-                    class={["task-rail-row", todo.id == @selected_todo.id && "is-active"]}
-                    aria-current={todo.id == @selected_todo.id && "page"}>
-                    <span class="task-rail-status" data-status={todo.status}></span>
-                    <span><span class="task-rail-title"><%= todo.title %></span>
-                      <span class="task-rail-meta"><%= todo_source_label(todo.source) %> · <%= todo_project_name(todo, @projects) %></span>
-                    </span>
-                  </.link>
-                </nav>
-                <nav :if={@total_pages > 1} class="task-rail-pagination" aria-label="Task list pages">
-                  <.link :if={@page > 1} patch={todos_path(@filters, %{"page" => Integer.to_string(@page - 1)})}>Previous</.link>
-                  <span><%= @page %> / <%= @total_pages %></span>
-                  <.link :if={@page < @total_pages} patch={todos_path(@filters, %{"page" => Integer.to_string(@page + 1)})}>Next</.link>
-                </nav>
-              </aside>
             <.todo_detail_panel
               todo={@selected_todo}
               detail_tab={@detail_tab}
@@ -942,7 +923,6 @@ defmodule MaraithonWeb.TodosLive do
               reply_sending?={@reply_sending?}
               reply_sent={@reply_sent}
             />
-            </div>
           <% else %>
             <div class="task-index">
               <header class="task-page-header">

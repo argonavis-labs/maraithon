@@ -56,7 +56,7 @@ defmodule MaraithonWeb.AdminNavigation do
           </div>
         </div>
       </aside>
-      <main id="workspace-content" class={["workspace-content", String.starts_with?(@path, "/todos/") && "workspace-content-detail"]} tabindex="-1">
+      <main id="workspace-content" class="workspace-content" tabindex="-1">
         <%= render_slot(@flash) %>
         <%= render_slot(@inner_block) %>
       </main>
