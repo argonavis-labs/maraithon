@@ -2,6 +2,8 @@
 @import 'tw-animate-css';
 @source '../vendor/runner';
 @source '../js/runner-cards.tsx';
+@source '../js/runner-conversation.tsx';
+@source '../node_modules/streamdown/dist';
 @custom-variant dark (&:where(.dark, .dark *));
 @theme inline {
   --color-background: var(--background);

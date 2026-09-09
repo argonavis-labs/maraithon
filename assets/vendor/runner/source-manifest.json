@@ -31,9 +31,28 @@
     "components/action-cards/calendar-draft.ts": "5b71d641cda53251cc91ccd00fab329d3d388bbffe229bf273461194ce4eb6ff",
     "components/ui/switch.tsx": "137c6c46a19f368bb2ecec86e86863b325ec4bad42ec01747eb8aed8321734c1",
     "lib/time-format.ts": "607d2c771248abef072a4dc2e77db6bbbc044f4911199ebb91cfb22dbc3fd020",
-    "time/index.ts": "7273e5d0f11972c452b959678f290457bb4a083a5ac1218ae2a045654470c336"
+    "time/index.ts": "7273e5d0f11972c452b959678f290457bb4a083a5ac1218ae2a045654470c336",
+    "components/ui/message.tsx": "e3a1ab2381206008b300e48b9226fe5e0b7f651dbd340c38175f034e06797eb3",
+    "components/ui/bubble.tsx": "e98eb59728c727183a0db19f28b0840692d70309e2d398f013c23bae9cd67aa2",
+    "components/ui/marker.tsx": "d2613403da76250d000044e7d7474e3eafc1eda0bf91a412ff86a5f3b8a115b1",
+    "components/ui/activity-group.tsx": "79c67589e5f242341af71d38c55346f55fa91a6ee2913699e1178ec5fd39a9dc",
+    "components/ui/collapsible.tsx": "4a57b800f96768a535aa910e13b32037de4194c5d0981fd4f4df8ac48fc2ac7a",
+    "components/markdown/markdown-preview.tsx": "8a442063efc1b53d03820ce36d06c7c1aefd563e0565d4bded0723cbeb73c840",
+    "routes/sessions/WorkingIndicator.tsx": "eef9ce6b3c2c807b6b67c097a88883d78dd5e63915bb172ac8c280dd2169f6f9",
+    "routes/sessions/activity-details.tsx": "684305e4676aaaf8928dcfb2ac6333bc975dfddce58175c6c4bac96ffd6f6abb",
+    "hooks/primitives/useElapsedSeconds.ts": "898e3e98c0bd5bcb88376ff05316fd6a7927b98750e6bfe4176255eeb0bb8e6f"
   },
   "extraSources": {
     "time/index.ts": "packages/time/src/index.ts"
+  },
+  "extractions": {
+    "routes/sessions/SessionToolCall.tsx": {
+      "source": "routes/sessions/FlueSessionTranscript.tsx",
+      "sha256": "a402b50811740e2ec6ca79551e63ba889b8688b875fdf8c414854cb60381d0ee",
+      "components": [
+        "SessionToolCall generic marker and dialog trigger",
+        "ToolErrorChip"
+      ]
+    }
   }
 }

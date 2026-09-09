@@ -1,5 +1,5 @@
 import {WorkspaceShell, TaskCreate} from "./workspace_shell"
-import {TodoWorkspace, TodoTimeline} from "./todo_workspace"
+import {TodoWorkspace, TodoTimeline, RunnerConversation} from "./todo_workspace"
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/maraithon"
@@ -11,7 +11,7 @@ const csrfToken = document
 
 const liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken},
-  hooks: {WorkspaceShell, TaskCreate, TodoWorkspace, TodoTimeline, ...colocatedHooks, PeopleGraph, PeopleDates}
+  hooks: {WorkspaceShell, TaskCreate, TodoWorkspace, TodoTimeline, RunnerConversation, ...colocatedHooks, PeopleGraph, PeopleDates}
 })
 
 // Show the slim top progress bar only when navigation takes noticeable time.

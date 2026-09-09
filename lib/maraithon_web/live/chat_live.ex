@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.ChatLive do
   use MaraithonWeb, :live_view
 
+  alias MaraithonWeb.{AssistantProgress, RunnerConversationComponents}
   alias Maraithon.AssistantChat
   alias Maraithon.TelegramConversations
 
@@ -13,6 +14,8 @@ defmodule MaraithonWeb.ChatLive do
     {:ok,
      socket
      |> assign(:current_path, "/chat")
+     |> assign(:stream_preview, nil)
+     |> assign(:progress_thread_id, nil)
      |> assign(:awaiting_reply, false)
      |> assign(:reply_failed, false)
      |> assign(:polls_left, 0)
@@ -22,7 +25,7 @@ defmodule MaraithonWeb.ChatLive do
 
   @impl true
   def handle_params(params, _uri, socket) do
-    {:noreply, select_thread(socket, params["thread_id"])}
+    {:noreply, socket |> select_thread(params["thread_id"]) |> subscribe_progress()}
   end
 
   @impl true
@@ -63,6 +66,41 @@ defmodule MaraithonWeb.ChatLive do
     end
   end
 
+  @impl true
+  def handle_info({:assistant_preview, thread_id, preview}, socket) do
+    if socket.assigns.thread && socket.assigns.thread.id == thread_id do
+      {:noreply, assign(socket, :stream_preview, preview)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:assistant_progress, thread_id}, socket) do
+    if socket.assigns.thread && socket.assigns.thread.id == thread_id &&
+         (not socket.assigns.awaiting_reply || socket.assigns.polls_left == 0) do
+      handle_info(:poll_thread, assign(socket, :polls_left, @max_polls))
+    else
+      {:noreply, socket}
+    end
+  end
+
+  defp subscribe_progress(socket) do
+    thread_id = socket.assigns.thread && socket.assigns.thread.id
+    previous = socket.assigns.progress_thread_id
+
+    if connected?(socket) && thread_id != previous do
+      if previous,
+        do: Maraithon.AssistantChat.Progress.unsubscribe(socket.assigns.current_user.id, previous)
+
+      if thread_id,
+        do: Maraithon.AssistantChat.Progress.subscribe(socket.assigns.current_user.id, thread_id)
+
+      socket |> assign(:progress_thread_id, thread_id) |> assign(:stream_preview, nil)
+    else
+      socket
+    end
+  end
+
   defp start_new_thread(socket, body) do
     user_id = socket.assigns.current_user.id
     title = body |> String.slice(0, 60) |> String.trim()
@@ -75,7 +113,7 @@ defmodule MaraithonWeb.ChatLive do
            }) do
       {:noreply,
        socket
-       |> assign(:thread, thread)
+       |> put_thread(thread)
        |> assign(:awaiting_reply, true)
        |> assign(:reply_failed, false)
        |> assign(:polls_left, @max_polls)
@@ -97,7 +135,7 @@ defmodule MaraithonWeb.ChatLive do
       {:ok, %{thread: thread}} ->
         {:noreply,
          socket
-         |> assign(:thread, thread)
+         |> put_thread(thread)
          |> assign(:awaiting_reply, true)
          |> assign(:reply_failed, false)
          |> assign(:polls_left, @max_polls)
@@ -107,7 +145,7 @@ defmodule MaraithonWeb.ChatLive do
       {:error, :assistant_run_in_progress, _run, thread} ->
         {:noreply,
          socket
-         |> assign(:thread, thread)
+         |> put_thread(thread)
          |> assign(:awaiting_reply, true)
          |> assign(:reply_failed, false)
          |> assign(:polls_left, @max_polls)
@@ -127,7 +165,7 @@ defmodule MaraithonWeb.ChatLive do
 
   defp select_thread(socket, nil) do
     socket
-    |> assign(:thread, nil)
+    |> put_thread(nil)
     |> assign(:awaiting_reply, false)
     |> assign(:reply_failed, false)
     |> assign(:polls_left, 0)
@@ -145,11 +183,13 @@ defmodule MaraithonWeb.ChatLive do
       {:error, _reason} ->
         socket
         |> put_flash(:error, "That conversation could not be found.")
-        |> assign(:thread, nil)
+        |> put_thread(nil)
     end
   end
 
   defp maybe_schedule_poll(socket) do
+    socket = subscribe_progress(socket)
+
     if connected?(socket) and socket.assigns.awaiting_reply and socket.assigns.polls_left > 0 do
       Process.send_after(self(), :poll_thread, @poll_ms)
     end
@@ -162,25 +202,17 @@ defmodule MaraithonWeb.ChatLive do
     status = if run, do: run.status
 
     socket
-    |> assign(:thread, thread)
+    |> put_thread(thread)
     |> assign(:awaiting_reply, status in ["queued", "running", "waiting_confirmation"])
     |> assign(:reply_failed, status in ["failed", "degraded"])
   end
 
-  defp visible_messages(nil), do: []
-
-  defp visible_messages(thread) do
-    thread
-    |> turns()
-    |> Enum.filter(fn turn ->
-      turn.role in ["user", "assistant"] and is_binary(turn.text) and
-        String.trim(turn.text) != ""
-    end)
-    |> Enum.sort_by(& &1.inserted_at, {:asc, DateTime})
+  # Project durable snapshots once. Stream events only overlay their text;
+  # they must not re-query or decrypt the conversation for every fragment.
+  defp put_thread(socket, thread) do
+    conversation = if thread, do: AssistantProgress.project(thread).thread
+    assign(socket, thread: thread, conversation: conversation)
   end
-
-  defp turns(%{turns: turns}) when is_list(turns), do: turns
-  defp turns(thread), do: Maraithon.Repo.preload(thread, :turns).turns || []
 
   defp thread_label(thread) do
     case thread.metadata do
@@ -191,6 +223,26 @@ defmodule MaraithonWeb.ChatLive do
 
   @impl true
   def render(assigns) do
+    conversation =
+      if assigns.conversation && assigns.stream_preview,
+        do: AssistantProgress.apply_preview(assigns.conversation, assigns.stream_preview),
+        else: assigns.conversation
+
+    messages = if conversation, do: conversation.messages, else: []
+
+    assigns =
+      assigns
+      |> assign(
+        :messages,
+        Enum.filter(
+          messages,
+          &(&1.role in ~w(user assistant) &&
+              (&1.body not in [nil, ""] ||
+                 get_in(&1, [:work_summary, "tool_calls"]) not in [nil, []]))
+        )
+      )
+      |> assign(:active_run, conversation && conversation.pending_run)
+
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="mx-auto flex h-[calc(100vh-10rem)] max-w-5xl gap-6 px-4 py-6 sm:px-6">
@@ -220,8 +272,10 @@ defmodule MaraithonWeb.ChatLive do
         <div class="flex min-w-0 flex-1 flex-col">
           <div
             id="chat-messages"
-            class="flex-1 space-y-3 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-4"
-            phx-hook=".ChatScroll"
+            class="min-h-0 flex-1 space-y-6 overflow-y-auto p-4"
+            role="log" aria-label="Conversation" tabindex="0"
+            data-last-message={List.last(@messages) && List.last(@messages).id}
+            phx-hook="RunnerConversation"
           >
             <div :if={@thread == nil} class="flex h-full flex-col items-center justify-center text-center">
               <p class="text-base font-semibold text-zinc-900">Chat with Maraithon</p>
@@ -231,34 +285,17 @@ defmodule MaraithonWeb.ChatLive do
               </p>
             </div>
 
-            <div
-              :for={message <- visible_messages(@thread)}
-              class={["flex", message.role == "user" && "justify-end"]}
-            >
-              <div class={[
-                "max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2 text-sm leading-6",
-                message.role == "user" && "bg-zinc-900 text-white",
-                message.role != "user" && "bg-zinc-100 text-zinc-800"
-              ]}>
-                {message.text}
-              </div>
-            </div>
-
-            <div :if={@awaiting_reply} class="flex items-center gap-2 text-xs text-zinc-400">
-              <span class="inline-block size-2 animate-pulse rounded-full bg-zinc-400"></span>
-              Maraithon is working on it…
-            </div>
+            <article :for={message <- @messages} id={"chat-message-#{message.id}"}>
+              <RunnerConversationComponents.turn message={message} />
+            </article>
+            <RunnerConversationComponents.run
+              :if={@active_run && @active_run.status in ~w(queued running)} run={@active_run} />
+            <p :if={@active_run && @active_run.status == "waiting_confirmation"}
+              role="status" class="text-sm text-zinc-500">Waiting for your review.</p>
 
             <.alert :if={@reply_failed} color="red" title="Maraithon couldn’t finish this reply.">
               Your message is saved. Send a new message to try again.
             </.alert>
-
-            <script :type={Phoenix.LiveView.ColocatedHook} name=".ChatScroll">
-              export default {
-                mounted() { this.el.scrollTop = this.el.scrollHeight },
-                updated() { this.el.scrollTop = this.el.scrollHeight }
-              }
-            </script>
           </div>
 
           <.form

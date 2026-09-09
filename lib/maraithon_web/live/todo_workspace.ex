@@ -165,7 +165,10 @@ defmodule MaraithonWeb.TodoWorkspace do
       socket =
         case result do
           {:ok, {:ok, thread}} ->
-            put(socket, thread: thread, error: nil)
+            put(socket,
+              thread: keep_live_preview(thread, socket.assigns.workspace.thread),
+              error: nil
+            )
 
           {:ok, {:error, :assistant_run_in_progress, thread}} ->
             put(socket,
@@ -193,6 +196,18 @@ defmodule MaraithonWeb.TodoWorkspace do
       {:noreply, socket |> subscribe() |> schedule_poll()}
     else
       {:noreply, socket}
+    end
+  end
+
+  # Reconciliation deliberately drops ephemeral text from its durable cursor.
+  # Keep the last streamed reply for this same live run between snapshots.
+  defp keep_live_preview(thread, previous) do
+    case get_in(previous || %{}, [:pending_run]) do
+      %{id: run_id, work_summary: %{"preview" => reply}} when is_binary(reply) ->
+        AssistantProgress.apply_preview(thread, %{run_id: run_id, reply: reply})
+
+      _ ->
+        thread
     end
   end
 
@@ -265,7 +280,8 @@ defmodule MaraithonWeb.TodoWorkspace do
       Enum.filter(
         messages,
         &(&1.role in ~w(user assistant) &&
-            (&1.body not in [nil, ""] || &1.structured_data["draft_card"]))
+            (&1.body not in [nil, ""] || &1.structured_data["draft_card"] ||
+               get_in(&1, [:work_summary, "tool_calls"]) not in [nil, []]))
       )
     end)
   end

@@ -1,6 +1,8 @@
 defmodule MaraithonWeb.TodoWorkspaceComponents do
   use MaraithonWeb, :html
 
+  alias MaraithonWeb.RunnerConversationComponents
+
   attr :todo, :any, required: true
   attr :brief, :any, default: nil
   attr :state, :map, required: true
@@ -99,18 +101,11 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
               <%= if @state.loading?, do: "Opening your conversation…", else: "Conversation unavailable. Refresh to try again." %>
             </p>
             <p :if={@state.thread && @messages == []} class="text-sm/6 text-zinc-500">Ask about this todo, its source, or the people involved.</p>
-            <article :for={message <- @messages} id={"workspace-message-#{message.id}"}
-              class={if(message.role == "user", do: "ml-6 rounded-lg bg-zinc-50 px-4 py-3", else: "min-w-0")}>
-              <p class="mb-1 text-xs/5 font-medium text-zinc-500"><%= if message.role == "user", do: "You", else: "Maraithon" %></p>
-              <p class="whitespace-pre-wrap break-words text-sm/6 text-zinc-800"><%= message.body %></p>
-              <p :if={message.work_summary && message.work_summary["headline"]} class="mt-2 text-xs/5 text-zinc-500"><%= message.work_summary["headline"] %></p>
+            <article :for={message <- @messages} id={"workspace-message-#{message.id}"} class="min-w-0">
+              <RunnerConversationComponents.turn message={message} />
               <.review_reference :if={message.structured_data["draft_card"]} message={message} reviews={@reviews} busy?={@state.busy? || @state.loading?} />
             </article>
-            <div :if={@run} role="status" class="text-sm/6 text-zinc-500">
-              <span class="mr-2 inline-block size-2 animate-pulse rounded-full bg-zinc-400" />
-              <%= get_in(@run, [:work_summary, "headline"]) || "Working on your todo…" %>
-              <p :if={get_in(@run, [:work_summary, "preview"])} class="mt-2 whitespace-pre-wrap text-zinc-800"><%= @run.work_summary["preview"] %></p>
-            </div>
+            <RunnerConversationComponents.run :if={@run} run={@run} />
           </div>
           <p :if={@state.error} role="alert" class="mt-3 text-sm/6 text-red-700"><%= @state.error %></p>
           <p data-workspace-status role="status" class="mt-2 text-sm/6 text-zinc-500" />

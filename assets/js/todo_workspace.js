@@ -1,4 +1,5 @@
 import {renderRunnerCards, destroyRunnerCards} from "./runner-cards"
+import {renderRunnerConversation, destroyRunnerConversation} from "./runner-conversation"
 // Web drafts stay tab-scoped. Electron drafts also survive an app restart.
 // Only a server receipt clears a submitted message. Retrying reuses its UUID.
 export const TodoWorkspace = {
@@ -42,15 +43,17 @@ export const TodoWorkspace = {
     this.restore()
   },
   updated() { this.restore() },
-  disconnected() { this.connected = false; this.el.querySelector('[data-workspace-connection]').hidden = false; renderRunnerCards(this) },
+  disconnected() { this.connected = false; this.el.querySelector('[data-workspace-connection]').hidden = false; renderRunnerCards(this); renderRunnerConversation(this) },
   reconnected() {
     this.connected = true
     renderRunnerCards(this)
+    renderRunnerConversation(this)
     this.el.querySelector('[data-workspace-connection]').hidden = true
     this.pushEvent('workspace_refresh', {})
   },
   destroyed() {
     destroyRunnerCards(this)
+    destroyRunnerConversation(this)
     this.el.removeEventListener('input', this.onInput)
     this.el.removeEventListener('submit', this.onSubmit)
     this.el.removeEventListener('click', this.onClick)
@@ -93,6 +96,7 @@ export const TodoWorkspace = {
     status.textContent = this.saved.request ? `Awaiting confirmation: ${this.saved.request.body.slice(0, 180)}` : ''
     this.el.querySelector('[data-retry-request]').hidden = !this.saved.request
     renderRunnerCards(this)
+    renderRunnerConversation(this)
     for (const time of this.el.querySelectorAll('[data-workspace-time]')) {
       try {
         time.textContent = new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short', timeZone: time.dataset.timezone || undefined}).format(new Date(time.dateTime))
@@ -102,12 +106,63 @@ export const TodoWorkspace = {
 }
 
 export const TodoTimeline = {
-  mounted() { this.el.scrollTop = this.el.scrollHeight; this.last = this.el.dataset.lastMessage },
-  beforeUpdate() { this.follow = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 80; this.height = this.el.scrollHeight },
+  mounted() {
+    this.last = this.el.dataset.lastMessage
+    this.first = this.el.querySelector('article')?.id
+    this.follow = true
+    this.onScroll = () => { this.follow = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 80 }
+    this.el.addEventListener('scroll', this.onScroll, {passive: true})
+    // Streamed Markdown and React disclosures can change height independently
+    // of a LiveView patch. Follow the bottom only while the reader is there.
+    this.observer = new ResizeObserver(() => {
+      if (this.follow) this.el.scrollTop = this.el.scrollHeight
+    })
+    this.observeTurns()
+    this.el.scrollTop = this.el.scrollHeight
+  },
+  observeTurns() {
+    this.observer.disconnect()
+    for (const child of this.el.children) this.observer.observe(child)
+  },
+  beforeUpdate() {
+    this.follow = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 80
+    this.height = this.el.scrollHeight
+    this.top = this.el.scrollTop
+  },
   updated() {
-    const last = this.el.dataset.lastMessage
-    if (last !== this.last && this.follow) this.el.scrollTop = this.el.scrollHeight
-    else if (last === this.last && this.el.scrollHeight > this.height && !this.follow) this.el.scrollTop += this.el.scrollHeight - this.height
-    this.last = last
+    const first = this.el.querySelector('article')?.id
+    // Preserve the anchor only when history is prepended. A live preview
+    // growing below someone reading history must not move their position.
+    if (this.follow) this.el.scrollTop = this.el.scrollHeight
+    else if (first !== this.first) this.el.scrollTop = this.top + this.el.scrollHeight - this.height
+    this.first = first
+    this.last = this.el.dataset.lastMessage
+    this.observeTurns()
+  },
+  destroyed() {
+    this.observer.disconnect()
+    this.el.removeEventListener('scroll', this.onScroll)
+  }
+}
+
+// The legacy conversation route shares the same presentation and scroll behavior.
+// Its existing Phoenix form and AssistantChat request handlers remain authoritative.
+export const RunnerConversation = {
+  mounted() {
+    this.connected = true
+    renderRunnerConversation(this)
+    TodoTimeline.mounted.call(this)
+  },
+  observeTurns: TodoTimeline.observeTurns,
+  beforeUpdate: TodoTimeline.beforeUpdate,
+  updated() {
+    renderRunnerConversation(this)
+    TodoTimeline.updated.call(this)
+  },
+  disconnected() { this.connected = false; renderRunnerConversation(this) },
+  reconnected() { this.connected = true; renderRunnerConversation(this) },
+  destroyed() {
+    destroyRunnerConversation(this)
+    TodoTimeline.destroyed.call(this)
   }
 }
