@@ -1054,10 +1054,6 @@ defmodule MaraithonWeb.TodosLive do
               </.c_select>
             </.field>
 
-            <div class="flex items-end">
-              <.button type="submit" phx-disable-with="Adding...">Add</.button>
-            </div>
-
             <.field label="Notes" for={@new_todo_form[:notes].id} class="task-create-notes">
               <.c_textarea
                 id={@new_todo_form[:notes].id}
@@ -1068,6 +1064,10 @@ defmodule MaraithonWeb.TodosLive do
                 placeholder="Context, source, or reply constraints"
               />
             </.field>
+
+            <div class="col-span-full flex justify-end">
+              <.button type="submit" phx-disable-with="Adding...">Add task</.button>
+            </div>
           </.form>
         </.panel>
 
