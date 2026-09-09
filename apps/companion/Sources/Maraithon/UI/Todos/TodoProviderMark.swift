@@ -18,7 +18,7 @@ struct TodoProviderMark: View {
     private var sourceImage: NSImage? {
         let name: String
         switch provider {
-        case "browser": name = "Chrome"
+        case "browser": name = "RunnerChrome"
         case "gmail": name = "Gmail"
         case "slack": name = "Slack"
         case "imessage", "messages", "local_patterns", "desktop": name = "Messages"

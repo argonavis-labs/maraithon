@@ -117,7 +117,7 @@ function CardReview({props, workspace, element, storeKey}: {props: Props; worksp
     onToggleMaximize={() => setExpanded(!expanded)}
     onDismiss={!terminal && card.prepared_action_id && !locked ? () => decide('reject') : undefined}
     dismissLabel="Cancel action" primary={primary}
-    pinnedHeader={card.provider === 'gmail' ? <EmailHeaderFields args={args} commandId={storeKey} editable={editable} fromAddress={card.from} locked={locked} /> : messaging ? <MessagingTargetRows args={args} /> : card.from ? <ReadOnlyRow label="Account" value={card.from} /> : undefined}
+    pinnedHeader={card.provider === 'browser' ? <ReadOnlyRow label="Browser" value="Local Chrome · on your Mac" /> : card.provider === 'gmail' ? <EmailHeaderFields args={args} commandId={storeKey} editable={editable} fromAddress={card.from} locked={locked} /> : messaging ? <MessagingTargetRows args={args} /> : card.from ? <ReadOnlyRow label="Account" value={card.from} /> : undefined}
     footerClassName="border-t border-border flex-wrap gap-y-2"
     footerStart={<>
       {card.body && <Button aria-label="Copy draft" size="small" variant="tertiary" onClick={copy}><CopyIcon />Copy</Button>}

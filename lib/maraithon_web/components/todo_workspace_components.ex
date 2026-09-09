@@ -229,7 +229,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
 
   defp icon(assigns), do: MaraithonWeb.CoreComponents.action_icon(assigns)
 
-  defp logo("browser"), do: "/images/connector-logos/chrome.png"
+  defp logo("browser"), do: "/images/connector-logos/runner-chrome.svg"
   defp logo("gmail"), do: "/images/connector-logos/gmail.png"
   defp logo("imessage"), do: "/images/connector-logos/messages.png"
   defp logo("slack"), do: "/images/connector-logos/slack.svg"
@@ -237,7 +237,7 @@ defmodule MaraithonWeb.TodoWorkspaceComponents do
   defp provider_label("gmail"), do: "Gmail"
   defp provider_label("imessage"), do: "Messages"
   defp provider_label("slack"), do: "Slack"
-  defp provider_label("browser"), do: "Chrome"
+  defp provider_label("browser"), do: "Local Chrome"
   defp provider_label("calendar"), do: "Calendar"
   defp provider_label(_), do: "Action"
 

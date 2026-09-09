@@ -53,7 +53,8 @@ actor TodoChromeBrowser {
             try await BrowserPage.waitForDocument(chrome, session: session, loaderID: outcome["loaderId"].string)
         case "show":
             _ = try await chrome.call("Target.activateTarget", ["targetId": .string(target)])
-            return ["status": "visible", "message": "The todo's Chrome tab is open on your Mac. Complete sign-in there, then ask Maraithon to inspect the page."]
+            try await showOwnedBrowser(chrome, target: target)
+            return ["status": "visible", "message": "The task's local Chrome tab is open on your Mac. Complete sign-in there, then ask Maraithon to inspect the page."]
         case "snapshot": break
         case "click", "fill", "press":
             guard let id = command.payload["element_id"], let reference = references[id],
@@ -81,6 +82,8 @@ actor TodoChromeBrowser {
             attributes: [.posixPermissions: 0o700])
         var endpoint = await endpointIfRunning()
         if endpoint == nil {
+            // Cosmetic setup is best-effort and runs off the main actor before launch.
+            try? ChromeProfileBranding.prepare(directory: directory)
             // LaunchServices creates a separate background instance using only Maraithon's profile.
             try await Self.launch(profile: directory.path)
             for _ in 0..<30 {
@@ -152,13 +155,35 @@ actor TodoChromeBrowser {
         return ["https", "http"].contains(url.scheme?.lowercased() ?? "") && url.user == nil && url.password == nil
     }
 
+    private func showOwnedBrowser(_ chrome: ChromeConnection, target: String) async throws {
+        let window = try await chrome.call("Browser.getWindowForTarget", ["targetId": .string(target)])
+        if window["bounds"]["windowState"].string == "minimized", let id = window["windowId"].integer {
+            _ = try await chrome.call("Browser.setWindowBounds", ["windowId": .number(Double(id)),
+                "bounds": .object(["windowState": .string("normal")])])
+        }
+        // Resolve the PID through this profile's verified connection, never by the shared Chrome bundle ID.
+        let processes = try await chrome.call("SystemInfo.getProcessInfo")
+        guard let process = processes["processInfo"].array.first(where: { $0["type"].string == "browser" }),
+              let rawPID = process["id"].integer, let pid = Int32(exactly: rawPID),
+              await Self.activate(pid: pid) else {
+            throw BrowserFailure("The task tab is ready. Bring the Runner Chrome window forward on your Mac.")
+        }
+    }
+
+    @MainActor private static func activate(pid: Int32) -> Bool {
+        guard let application = NSRunningApplication(processIdentifier: pid),
+              application.bundleURL?.standardizedFileURL == chromeApp.standardizedFileURL else { return false }
+        return application.activate(options: [])
+    }
+
     @MainActor private static func launch(profile: String) async throws {
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
         config.activates = false
         config.hides = true
         config.arguments = ["--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
-            "--user-data-dir=\(profile)", "--no-first-run", "--no-default-browser-check", "--no-startup-window"]
+            "--user-data-dir=\(profile)", "--profile-directory=Default",
+            "--no-first-run", "--no-default-browser-check", "--no-startup-window"]
         _ = try await NSWorkspace.shared.openApplication(at: chromeApp, configuration: config)
     }
 }
